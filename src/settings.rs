@@ -10,6 +10,7 @@
 
 use crate::archive::keep_backup;
 use crate::theme::{Theme, DEFAULT_ID};
+use crate::usertheme::Registry;
 use serde_json::{json, Map, Value};
 use std::{fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, time::{Duration, SystemTime}};
 
@@ -28,7 +29,7 @@ pub struct Settings {
     /// Idle stop doesn't count MCP servers as something running under the session. Off: any process does.
     pub idle_stop_ignores_mcp: bool,
     /// The id of the color theme, exactly as the file says. It may be one this version doesn't know (a newer
-    /// version's, or a user theme): that shows as the default theme (`Theme::by_id` finds none) but is kept
+    /// version's, or a user theme): that shows as the default theme (the registry finds none) but is kept
     /// on disk until the user picks another.
     pub theme: String,
 }
@@ -53,9 +54,10 @@ impl Settings {
         (self.idle_stop_minutes > 0).then(|| Duration::from_secs(self.idle_stop_minutes * secs_per_minute))
     }
 
-    /// The theme to draw with: the chosen one, or the default when the id isn't known.
-    pub fn theme(&self) -> Theme {
-        Theme::by_id(&self.theme).unwrap_or_default()
+    /// The theme to draw with: the chosen one (a built-in or one of the user's), or the default when the id isn't
+    /// known, for instance a user theme whose file has since been deleted.
+    pub fn theme(&self, themes: &Registry) -> Theme {
+        themes.by_id(&self.theme).unwrap_or_default()
     }
 
     /// The auto-archive age in seconds, or None when it is off.
@@ -145,12 +147,24 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     written
 }
 
+/// How an entry is changed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Kind {
+    /// One of a few steps: a number of minutes or days, or a choice between two things.
+    Steps,
+    /// The color theme. Its choices are the built-in and user themes, which are only known at run time, so
+    /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
+    /// `enter` opens the theme picker.
+    Theme,
+}
+
 /// One line of the settings screen. The screen is built from `ITEMS` alone, so a new setting is a new entry
 /// here (plus its field in `Settings`, `parse` and `save`).
 pub struct Item {
     pub name: &'static str,
     /// One plain-language sentence or two: what it does and why nothing is lost.
     pub explain: &'static str,
+    pub kind: Kind,
     /// The steps offered, ascending, in the setting's own unit. For a number 0 is "Off"; a choice between
     /// two things is 0 and 1.
     pub choices: &'static [u64],
@@ -181,9 +195,21 @@ pub fn days_label(d: u64) -> String {
 
 pub const ITEMS: &[Item] = &[
     Item {
+        name: "Theme",
+        explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
+                  enter keeps it, esc undoes it.",
+        kind: Kind::Theme,
+        choices: &[],
+        get: |_| 0,
+        set: |_, _| {},
+        label: |_| String::new(),
+        off: None,
+    },
+    Item {
         name: "Stop idle sessions after",
         explain: "A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. \
                   Nothing is lost: opening it again resumes it from its saved history.",
+        kind: Kind::Steps,
         choices: &[0, 30, 60, 120, 240, 480, 1440],
         get: |s| s.idle_stop_minutes,
         set: |s, v| s.idle_stop_minutes = v,
@@ -194,6 +220,7 @@ pub const ITEMS: &[Item] = &[
         name: "Archive conversations after",
         explain: "A conversation nobody has used for this long, with nothing running, moves to the Archived tab. \
                   You can restore it from there.",
+        kind: Kind::Steps,
         choices: &[0, 1, 2, 7, 14, 30],
         get: |s| s.auto_archive_days,
         set: |s, v| s.auto_archive_days = v,
@@ -205,6 +232,7 @@ pub const ITEMS: &[Item] = &[
         explain: "MCP servers are helper programs Claude starts with a session. By default they are ignored, so a session with only \
                   those running is still stopped: they close with it and start again when you open it. Choose \"Count MCP servers\" \
                   and they keep it alive like any other program.",
+        kind: Kind::Steps,
         choices: &[0, 1],
         get: |s| u64::from(s.idle_stop_ignores_mcp),
         set: |s, v| s.idle_stop_ignores_mcp = v != 0,
@@ -231,7 +259,7 @@ impl Item {
         match step {
             Step::Prev => prev.unwrap_or(value),
             Step::Next => next.unwrap_or(value),
-            Step::Cycle => next.unwrap_or(self.choices[0]),
+            Step::Cycle => next.or(self.choices.first().copied()).unwrap_or(value),
         }
     }
 }
@@ -434,7 +462,7 @@ mod tests {
 
     #[test]
     fn every_setting_offers_ascending_steps_starting_at_off_within_the_limits() {
-        for item in ITEMS {
+        for item in ITEMS.iter().filter(|i| i.kind == Kind::Steps) {
             assert_eq!(item.choices[0], 0, "{}", item.name);
             assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}", item.name);
             assert!(!item.explain.is_empty() && item.explain.len() < 300, "{}", item.name);
@@ -448,7 +476,7 @@ mod tests {
 
     #[test]
     fn stepping_goes_to_the_neighbouring_choice_from_a_step_or_from_between_steps() {
-        let idle = &ITEMS[0];
+        let idle = &ITEMS[1];
         assert_eq!(idle.step(120, Step::Next), 240);
         assert_eq!(idle.step(120, Step::Prev), 60);
         assert_eq!(idle.step(90, Step::Next), 120, "from a hand-edited value, the nearest step above");
@@ -501,7 +529,7 @@ mod tests {
 
     #[test]
     fn the_two_way_choice_steps_between_its_two_values_and_only_the_numbers_can_be_off() {
-        let mcp = &ITEMS[2];
+        let mcp = &ITEMS[3];
         assert_eq!(mcp.choices, [0, 1]);
         let mut s = Settings::default();
         assert_eq!((mcp.get)(&s), 1);
@@ -518,7 +546,7 @@ mod tests {
         (mcp.set)(&mut s, 1);
         assert!(s.idle_stop_ignores_mcp);
         assert_eq!(mcp.off, None, "neither choice is 'off'");
-        assert!(ITEMS[..2].iter().all(|i| i.off == Some(0)));
+        assert!(ITEMS[1..3].iter().all(|i| i.off == Some(0)));
     }
 
     #[test]
@@ -560,7 +588,7 @@ mod tests {
         write(&d, r#"{"theme": "my-own-theme", "idle_stop_minutes": 30}"#);
         let s = load(&d).0;
         assert_eq!(s.theme, "my-own-theme", "the id is carried as written");
-        assert_eq!(s.theme().id, "catppuccin-mocha", "and displays as the default");
+        assert_eq!(s.theme(&Registry::default()).id, "catppuccin-mocha", "and displays as the default");
         // Saving something else (what the settings screen does) keeps it.
         save(&d, &Settings { idle_stop_minutes: 60, ..s.clone() }).unwrap();
         assert_eq!(saved(&d)["theme"], "my-own-theme");
@@ -568,7 +596,7 @@ mod tests {
         // Picking another one replaces it.
         save(&d, &Settings { theme: "tokyo-night".into(), ..s }).unwrap();
         assert_eq!(saved(&d)["theme"], "tokyo-night");
-        assert_eq!(load(&d).0.theme().id, "tokyo-night");
+        assert_eq!(load(&d).0.theme(&Registry::default()).id, "tokyo-night");
     }
 
     #[test]
@@ -603,10 +631,42 @@ mod tests {
         let d = dir("theme-store");
         write(&d, r#"{"theme": "nord"}"#);
         let mut s = SettingsStore::open(&d);
-        assert_eq!(s.get().theme().id, "nord");
+        assert_eq!(s.get().theme(&Registry::default()).id, "nord");
         write(&d, r#"{"theme": "vesper", "note": "a longer file, so the size changes too"}"#);
         assert!(s.refresh());
-        assert_eq!(s.get().theme().id, "vesper");
+        assert_eq!(s.get().theme(&Registry::default()).id, "vesper");
         assert!(!s.refresh());
+    }
+
+    #[test]
+    fn the_theme_entry_is_first_and_a_kind_of_its_own_next_to_the_stepped_ones() {
+        assert_eq!(ITEMS[0].name, "Theme");
+        assert_eq!(ITEMS[0].kind, Kind::Theme);
+        assert!(ITEMS[1..].iter().all(|i| i.kind == Kind::Steps));
+        assert!(!ITEMS[0].explain.is_empty() && ITEMS[0].explain.len() < 300);
+        // Stepping the numbers is by choices; the theme has none, so it never moves by them.
+        assert_eq!((ITEMS[0].step(0, Step::Next), ITEMS[0].step(0, Step::Prev), ITEMS[0].step(0, Step::Cycle)), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_user_theme_id_is_found_through_the_registry_and_kept_when_its_file_is_gone() {
+        let d = dir("theme-user");
+        fs::create_dir_all(d.join("themes")).unwrap();
+        fs::write(d.join("themes/Deep Sea"), "background = #0a1622\nforeground = #dde6ee\n").unwrap();
+        write(&d, r#"{"theme": "user:deep-sea", "idle_stop_minutes": 30}"#);
+        let (s, corrupt) = load(&d);
+        assert!(!corrupt);
+        assert_eq!(s.theme, "user:deep-sea", "the id is carried as written");
+        let reg = Registry::open(&d);
+        assert_eq!(s.theme(&reg).name, "Deep Sea");
+        assert_eq!(s.theme(&Registry::default()).id, "catppuccin-mocha", "without the file it shows the default");
+        // Saving something else keeps the id, whether or not the file is there; choosing another replaces it.
+        save(&d, &Settings { idle_stop_minutes: 60, ..s.clone() }).unwrap();
+        assert_eq!(saved(&d)["theme"], "user:deep-sea");
+        fs::remove_file(d.join("themes/Deep Sea")).unwrap();
+        save(&d, &Settings { idle_stop_minutes: 90, theme: Settings::default().theme, ..s.clone() }).unwrap();
+        assert_eq!(saved(&d)["theme"], "catppuccin-mocha", "picking the default is a choice like any other");
+        save(&d, &Settings { theme: "user:deep-sea".into(), ..s }).unwrap();
+        assert_eq!(saved(&d)["theme"], "user:deep-sea");
     }
 }

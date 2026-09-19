@@ -15,6 +15,7 @@ mod setup;
 mod settings;
 mod theme;
 mod ui;
+mod usertheme;
 #[cfg(test)]
 mod perf;
 #[cfg(test)]
@@ -47,7 +48,7 @@ fn main() -> io::Result<()> {
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id] | themes]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the built-in color themes (choose one with \"theme\" in settings.json)\n  statusline, hook guard   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id] | themes]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the color themes, the built-in ones and your own\n  statusline, hook guard   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
@@ -99,10 +100,11 @@ fn use_color(stderr: bool) -> bool {
     std::env::var_os("NO_COLOR").is_none() && if stderr { io::stderr().is_terminal() } else { io::stdout().is_terminal() }
 }
 
-/// `platoon themes`: the built-in themes and their ids, with a swatch of each when stdout shows colors.
+/// `platoon themes`: the built-in themes and the user's own with their ids, with a swatch of each when stdout shows
+/// colors, and the theme files that were skipped, with the reason.
 fn themes() -> io::Result<()> {
     let depth = use_color(false).then(colordepth::Depth::detect);
-    print!("{}", theme::render_list(depth));
+    print!("{}", theme::render_list(depth, &usertheme::Registry::open(&archive::config_dir())));
     Ok(())
 }
 
@@ -182,6 +184,24 @@ mod tests {
     /// even where word wrapping split it across lines.
     fn flat(text: &str) -> String {
         text.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Only what is inside the settings popup, with line breaks collapsed: the list behind it shows at its sides
+    /// on a wide terminal, and its words would otherwise get mixed into the popup's wrapped lines.
+    fn popup_flat(shown: &str) -> String {
+        let lines: Vec<Vec<char>> = shown.lines().map(|l| l.chars().collect()).collect();
+        let top = lines.iter().position(|l| l.iter().collect::<String>().contains("╭ Settings")).expect("the popup");
+        let left = lines[top].iter().collect::<String>().find("╭ Settings").map(|b| lines[top].iter().collect::<String>()[..b].chars().count()).unwrap();
+        let right = lines[top].iter().rposition(|&c| c == '╮').unwrap();
+        let mut out = String::new();
+        for line in &lines[top + 1..] {
+            if line.get(left) == Some(&'╰') {
+                break;
+            }
+            out.extend(line.iter().skip(left + 1).take(right - left - 1));
+            out.push('\n');
+        }
+        flat(&out)
     }
 
     fn click(app: &mut App, x: u16, y: u16) {
@@ -997,10 +1017,20 @@ mod tests {
         app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: x, row: y, modifiers: KeyModifiers::NONE });
     }
 
-    /// A screen on which the settings are open, after `draw` so clicks have somewhere to land.
+    /// The settings open on "Stop idle sessions after", the first of the numeric entries (the Theme entry above
+    /// it is what the settings open on).
+    fn open_numeric_settings(app: &mut App) {
+        ch(app, 's');
+        assert_eq!(app.setting, 0, "the settings open on the Theme entry");
+        key(app, KeyCode::Down);
+        assert_eq!(app.setting, 1);
+    }
+
+    /// A screen on which the settings are open on the first numeric entry, after `draw` so clicks have
+    /// somewhere to land.
     fn settings_screen(w: &World, cols: u16, rows: u16) -> (App, Terminal<TestBackend>) {
         let mut app = w.app();
-        ch(&mut app, 's');
+        open_numeric_settings(&mut app);
         let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
         draw(&mut term, &app);
         (app, term)
@@ -1077,8 +1107,7 @@ mod tests {
         let w = World::new("set-keys");
         w.settings(120, 2);
         let mut app = w.app();
-        ch(&mut app, 's');
-        assert_eq!(app.setting, 0);
+        open_numeric_settings(&mut app);
 
         key(&mut app, KeyCode::Right);
         assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 240, auto_archive_days: 2, ..Settings::default() });
@@ -1107,19 +1136,24 @@ mod tests {
 
         // Down / j select the next setting, up / k the previous; the second one changes the other value.
         key(&mut app, KeyCode::Down);
-        assert_eq!(app.setting, 1);
+        assert_eq!(app.setting, 2);
         key(&mut app, KeyCode::Right);
         assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 0, auto_archive_days: 7, ..Settings::default() }, "the other setting is left alone");
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.setting, 0);
+        assert_eq!(app.setting, 1);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.setting, 0);
-        assert_eq!(ITEMS.len(), 3);
+        assert_eq!(app.setting, 1);
+        assert_eq!(ITEMS.len(), 4);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        assert_eq!(app.setting, 2, "no wrapping past the last");
+        assert_eq!(app.setting, 3, "no wrapping past the last");
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.setting, 0, "nor before the first");
     }
 
     #[test]
@@ -1133,7 +1167,7 @@ mod tests {
         for k in [KeyCode::Down, KeyCode::Up, KeyCode::Esc] {
             key(&mut app, k);
         }
-        ch(&mut app, 's');
+        open_numeric_settings(&mut app);
         assert_eq!(std::fs::read_to_string(config_file(&w)).unwrap(), text, "looking at the screen never rewrites the file");
 
         key(&mut app, KeyCode::Right);
@@ -1326,7 +1360,7 @@ mod tests {
     fn settings_float_over_a_faded_list_and_a_click_outside_closes_them() {
         let (_w, mut app) = mixed_app("popup");
         ch(&mut app, 's');
-        let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
         let shown = draw(&mut term, &app);
         // The list is still there behind it...
         assert!(shown.contains("platoon") && flat(&shown).contains("1 Active 3") && shown.contains("Settings"), "{shown}");
@@ -1361,11 +1395,25 @@ mod tests {
             shown.lines().enumerate().filter(|(_, l)| l.contains("esc back")).map(|(i, _)| i).last().unwrap(),
         );
         assert!(first > 1 && shown.lines().count() - last > 3, "not stretched to the screen:\n{shown}");
-        // 80x24: every explanation fits, which needs every row.
+        // 100x30 and 140x30: every explanation fits.
+        for cols in [100, 140] {
+            let mut term = Terminal::new(TestBackend::new(cols, 30)).unwrap();
+            let text = popup_flat(&draw(&mut term, &app));
+            for item in ITEMS.iter() {
+                assert!(text.contains(item.explain), "{}: cut off at {cols}x30", item.name);
+            }
+        }
+        // 80x24 has room for the entries and one explanation: the selected one, whole, and it moves with the selection.
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-        let text = flat(&draw(&mut term, &app));
-        for item in ITEMS.iter() {
-            assert!(text.contains(item.explain), "{}: cut off at 80x24", item.name);
+        for (i, item) in ITEMS.iter().enumerate() {
+            while app.setting < i {
+                key(&mut app, KeyCode::Down);
+            }
+            let text = popup_flat(&draw(&mut term, &app));
+            for (j, other) in ITEMS.iter().enumerate() {
+                assert!(text.contains(other.name), "{}: missing at 80x24", other.name);
+                assert_eq!(text.contains(other.explain), j == i, "{} is explained only while selected ({})", other.name, item.name);
+            }
         }
     }
 
@@ -1388,7 +1436,7 @@ mod tests {
         assert_eq!(cell_fg("Off"), Some(app.theme.dim), "Off is muted");
         assert_eq!(cell_fg("2 days"), Some(app.theme.accent), "an active value stands out");
         // Every step reads as words a person would say.
-        let labels: Vec<Vec<String>> = ITEMS.iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
+        let labels: Vec<Vec<String>> = ITEMS[1..].iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
         assert_eq!(labels[0], ["Off", "30 minutes", "1 hour", "2 hours", "4 hours", "8 hours", "1 day"]);
         assert_eq!(labels[1], ["Off", "1 day", "2 days", "7 days", "14 days", "30 days"]);
         w.settings(1440 * 3, 1);
@@ -1403,37 +1451,37 @@ mod tests {
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         let surface = app.theme.surface;
         let bg = app.theme.bg;
-        let row1 = hit_rect(&app, |h| matches!(h, Hit::Setting(1)));
+        let row1 = hit_rect(&app, |h| matches!(h, Hit::Setting(2)));
 
         // Hover lights the row up; the selected row is lit too.
         assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, bg);
         hover(&mut app, row1.x + 5, row1.y);
         draw(&mut term, &app);
         assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, surface, "hovered row");
-        let row0 = hit_rect(&app, |h| matches!(h, Hit::Setting(0)));
+        let row0 = hit_rect(&app, |h| matches!(h, Hit::Setting(1)));
         assert_eq!(term.backend().buffer()[(row0.x + 5, row0.y)].bg, surface, "selected row");
 
         // A click on a row selects it and changes nothing.
         click(&mut app, row1.x + 5, row1.y);
-        assert_eq!((app.setting, on_disk(&w)), (1, Settings { idle_stop_minutes: 120, auto_archive_days: 2, ..Settings::default() }));
+        assert_eq!((app.setting, on_disk(&w)), (2, Settings { idle_stop_minutes: 120, auto_archive_days: 2, ..Settings::default() }));
         draw(&mut term, &app);
 
         // The buttons step; clicking one on another row selects that row and steps it.
-        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)));
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
         click(&mut app, next0.x + 1, next0.y);
-        assert_eq!((app.setting, on_disk(&w).idle_stop_minutes), (0, 240));
+        assert_eq!((app.setting, on_disk(&w).idle_stop_minutes), (1, 240));
         draw(&mut term, &app);
-        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Prev)));
         click(&mut app, prev1.x + 1, prev1.y);
-        assert_eq!((app.setting, on_disk(&w).auto_archive_days), (1, 1));
+        assert_eq!((app.setting, on_disk(&w).auto_archive_days), (2, 1));
         draw(&mut term, &app);
-        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Prev)));
         click(&mut app, prev1.x + 1, prev1.y);
         assert_eq!(on_disk(&w).auto_archive_days, 0);
         draw(&mut term, &app);
 
         // Clicking the value cycles (and wraps).
-        let value1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Cycle)));
+        let value1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Cycle)));
         click(&mut app, value1.x + 1, value1.y);
         assert_eq!(on_disk(&w).auto_archive_days, 1);
         draw(&mut term, &app);
@@ -1444,7 +1492,7 @@ mod tests {
 
         // The wheel moves between the settings.
         app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 5, row: 5, modifiers: KeyModifiers::NONE });
-        assert_eq!(app.setting, 0);
+        assert_eq!(app.setting, 1);
     }
 
     #[test]
@@ -1455,9 +1503,9 @@ mod tests {
         let border = app.theme.border;
         let accent = app.theme.accent;
         let buf = term.backend().buffer();
-        let prev0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Prev)));
-        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)));
-        let next1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
+        let prev0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
+        let next1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Next)));
         assert_eq!(buf[(prev0.x + 1, prev0.y)].fg, border, "nothing below Off");
         assert_eq!(buf[(next0.x + 1, next0.y)].fg, accent);
         assert_eq!(buf[(next1.x + 1, next1.y)].fg, border, "nothing above 30 days");
@@ -1470,7 +1518,7 @@ mod tests {
         let blocker = w.base.join("blocker");
         std::fs::write(&blocker, "x").unwrap();
         let mut app = App::with_dirs(crate::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
-        ch(&mut app, 's');
+        open_numeric_settings(&mut app);
         key(&mut app, KeyCode::Right);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let shown = draw(&mut term, &app);
@@ -1483,7 +1531,7 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::write(config_file(&w), r#"{"idle_stop_minutes":60}"#).unwrap();
             let mut app = w.app();
-            ch(&mut app, 's');
+            open_numeric_settings(&mut app);
             std::fs::set_permissions(&w.config, std::fs::Permissions::from_mode(0o555)).unwrap();
             key(&mut app, KeyCode::Right);
             std::fs::set_permissions(&w.config, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -1562,7 +1610,7 @@ mod tests {
             w.transcript("recent", "/srv/a", "work", 25 * 60); // over a day old: 1 day would archive it, 2 days not yet
             let mut app = w.app();
             assert_eq!(app.counts, [1, 0]);
-            ch(&mut app, 's');
+            open_numeric_settings(&mut app);
             key(&mut app, KeyCode::Down);
             for k in steps {
                 key(&mut app, *k);
@@ -1590,10 +1638,10 @@ mod tests {
         for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (80, 20)] {
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
-            let text = flat(&shown);
+            let text = popup_flat(&shown);
             let ctx = format!("{cols}x{rows}\n{shown}");
             // Where every explanation doesn't fit with room to breathe, the selected one does (and is whole).
-            let roomy = rows >= 24;
+            let roomy = rows >= 30;
             for (i, item) in ITEMS.iter().enumerate() {
                 assert!(text.contains(item.name), "{ctx}");
                 let must_explain = roomy || i == 0;
@@ -1625,14 +1673,14 @@ mod tests {
         let w = World::new("set-mcp-render");
         let mut app = w.app();
         ch(&mut app, 's');
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (60, 16)] {
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (60, 18)] {
             ch(&mut app, 'G'); // the last entry is the one under test, and (small terminals) the one explained
             assert_eq!(app.setting, ITEMS.len() - 1);
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
-            let text = flat(&shown);
+            let text = popup_flat(&shown);
             let ctx = format!("{cols}x{rows}\n{shown}");
-            for want in ["Idle stop and MCP servers", "Ignore MCP servers", "helper programs", "they are ignored", "start again when you open it", "Count MCP servers", ITEMS[2].explain] {
+            for want in ["Idle stop and MCP servers", "Ignore MCP servers", "helper programs", "they are ignored", "start again when you open it", "Count MCP servers", ITEMS[3].explain] {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
             let lower = text.to_lowercase();
@@ -1653,7 +1701,7 @@ mod tests {
         let on_disk_flag = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["idle_stop_ignores_mcp"].clone();
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         ch(&mut app, 'G');
-        assert_eq!(app.setting, 2);
+        assert_eq!(app.setting, 3);
         assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "the default");
         assert!(!config_file(&w).exists() || on_disk(&w).idle_stop_ignores_mcp, "looking at it changes nothing");
 
@@ -1679,22 +1727,22 @@ mod tests {
         // The mouse: the buttons step, the value toggles, a click on the row selects it.
         ch(&mut app, 'g');
         draw(&mut term, &app);
-        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Prev)));
+        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Prev)));
         click(&mut app, prev.x + 1, prev.y);
-        assert_eq!((app.setting, on_disk(&w).idle_stop_ignores_mcp), (2, false), "a button on another row selects it and steps");
+        assert_eq!((app.setting, on_disk(&w).idle_stop_ignores_mcp), (3, false), "a button on another row selects it and steps");
         draw(&mut term, &app);
-        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Cycle)));
+        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Cycle)));
         click(&mut app, value.x + 1, value.y);
         assert!(on_disk(&w).idle_stop_ignores_mcp);
         draw(&mut term, &app);
-        let next = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Next)));
+        let next = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Next)));
         click(&mut app, next.x + 1, next.y);
         assert!(on_disk(&w).idle_stop_ignores_mcp, "already at the end");
         let buf = term.backend().buffer();
         assert_eq!(buf[(next.x + 1, next.y)].fg, app.theme.border, "the button that can't go further is muted");
         // Neither choice is drawn as "off": both read as a live value.
         let accent_of = |app: &App, term: &Terminal<TestBackend>| {
-            let row = hit_rect(app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Cycle)));
+            let row = hit_rect(app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Cycle)));
             term.backend().buffer()[(row.x + 2, row.y)].fg
         };
         assert_eq!(accent_of(&app, &term), app.theme.accent);
@@ -1727,7 +1775,10 @@ mod tests {
         for rows in [8, 10, 12, 14, 16] {
             let mut term = Terminal::new(TestBackend::new(60, rows)).unwrap();
             let text = draw(&mut term, &app); // must not panic
-            assert!(text.contains("Stop idle sessions after") && text.contains("esc back"), "60x{rows}\n{text}");
+            assert!(text.contains("Theme") && text.contains("esc back"), "60x{rows}\n{text}");
+            if rows >= 10 {
+                assert!(text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
+            }
             if rows >= 12 {
                 assert!(text.contains("Archive conversations after"), "60x{rows}\n{text}");
             }
@@ -1737,16 +1788,22 @@ mod tests {
         let first = flat(&draw(&mut term, &app));
         assert!(first.contains(ITEMS[0].explain) && !first.contains(ITEMS[1].explain), "{first}");
         key(&mut app, KeyCode::Down);
+        let mut term = Terminal::new(TestBackend::new(60, 15)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 16.
+        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 17.
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
+        key(&mut app, KeyCode::Down);
+        let mut term = Terminal::new(TestBackend::new(60, 17)).unwrap();
         let third = draw(&mut term, &app);
-        assert!(flat(&third).contains(ITEMS[2].explain) && !third.contains("apply immediately"), "{third}");
+        assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
+        // Too cramped to explain it: the entries and the way back are still whole.
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
-        assert!(cramped.contains(ITEMS[2].name) && cramped.contains("esc back"), "{cramped}");
+        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("esc back"), "{cramped}");
+        let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
+        let cramped = draw(&mut term, &app);
+        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
     }
 
     #[test]
@@ -1937,5 +1994,747 @@ mod tests {
         assert_eq!(screen_text(&term), truecolor);
         assert!(cells(&term).iter().all(|c| !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..))));
         assert!(cells(&term).iter().any(|c| matches!(c.bg, Color::Indexed(_))), "the theme's background is an index now");
+    }
+
+    // --- the theme list ------------------------------------------------------------------------------
+
+    /// Three conversations (one working) and two theme files of the user's: one that loads, one that is light.
+    fn theme_world(name: &str) -> World {
+        let mut w = World::new(name);
+        w.transcript("aaa", "/srv/alpha", "refactor the parser", 3 * 24 * 60);
+        w.transcript("bbb", "/srv/beta", "add a login page", 30);
+        w.transcript("ccc", "/srv/gamma", "write the docs", 3);
+        w.live("bbb", "/srv/beta", 1, "busy");
+        put_theme(&w, "My Theme", "background = #101820\nforeground = #e6e6e6\npalette = 12=#5fb3ff\npalette = 13=#ff8fd0\npalette = 10=#7fe28a\npalette = 11=#ffd866\npalette = 9=#ff6b6b\n");
+        put_theme(&w, "Nord Light", "background = #eceff4\nforeground = #2e3440\n");
+        w
+    }
+
+    fn put_theme(w: &World, name: &str, text: &str) {
+        std::fs::create_dir_all(w.config.join("themes")).unwrap();
+        std::fs::write(w.config.join("themes").join(name), text).unwrap();
+    }
+
+    fn open_themes(app: &mut App) {
+        if matches!(app.mode, Mode::List) {
+            ch(app, 's');
+        }
+        assert!(matches!(app.mode, Mode::Settings) && app.setting == 0, "the settings are open on the Theme entry");
+        key(app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Themes));
+    }
+
+    fn snapshot(term: &Terminal<TestBackend>) -> ratatui::buffer::Buffer {
+        term.backend().buffer().clone()
+    }
+
+    /// (column, row) of the first `needle` in the buffer.
+    fn locate(buf: &ratatui::buffer::Buffer, needle: &str) -> (u16, u16) {
+        (0..buf.area.height)
+            .find_map(|y| {
+                let text: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+                text.find(needle).map(|b| (text[..b].chars().count() as u16, y))
+            })
+            .unwrap_or_else(|| panic!("no {needle:?} on the screen"))
+    }
+
+    fn saved_theme(w: &World) -> Option<String> {
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(w)).ok()?).ok()?;
+        v.get("theme").and_then(|t| t.as_str()).map(str::to_string)
+    }
+
+    fn by_id(id: &str) -> Theme {
+        Theme::by_id(id).unwrap()
+    }
+
+    #[test]
+    fn enter_on_the_theme_row_opens_the_list_and_esc_closes_it_changing_nothing() {
+        let w = theme_world("tl-open");
+        let before = std::fs::read(config_file(&w)).unwrap();
+        let mut app = w.app();
+        open_themes(&mut app);
+        assert_eq!(app.tpick.list.len(), Theme::all().len() + 1, "the built-ins, then the one user theme that loaded");
+        assert_eq!(app.tpick.list.last().unwrap().id, "user:my-theme");
+        assert_eq!((app.tpick.selected, app.preview.is_none()), (0, true), "it opens on the theme in effect, previewing nothing");
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Settings), "esc goes back to the settings, not out of them");
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(std::fs::read(config_file(&w)).unwrap(), before, "looking never writes");
+
+        // Space opens it too, so does ctrl+c close it, and so does clicking the value.
+        ch(&mut app, 's');
+        ch(&mut app, ' ');
+        assert!(matches!(app.mode, Mode::Themes));
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Settings) && !app.quit);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        draw(&mut term, &app);
+        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Cycle)));
+        click(&mut app, value.x + 2, value.y);
+        assert!(matches!(app.mode, Mode::Themes), "the value is a button that opens the list");
+        // The other rows' Enter still steps their own value and never opens the list.
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Settings));
+    }
+
+    #[test]
+    fn the_theme_list_cannot_be_reached_from_any_other_mode() {
+        let w = theme_world("tl-unreachable");
+        let mut app = w.app();
+        // The list: Enter opens a conversation, nothing else.
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Themes));
+        app.mode = Mode::List;
+        ch(&mut app, '/');
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Themes));
+        app.mode = Mode::List;
+        ch(&mut app, 'n');
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Themes));
+        app.mode = Mode::Confirm(Confirm::Archive { id: "aaa".into(), name: "a".into(), busy: false, outside: false });
+        key(&mut app, KeyCode::Enter);
+        assert!(!matches!(app.mode, Mode::Themes));
+        app.mode = Mode::List;
+        app.view_conversation_for_test("aaa", 1);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Attached(_)));
+        // Even the step that opens it does nothing outside the settings.
+        app.mode = Mode::List;
+        let opened = |app: &mut App| matches!(app.mode, Mode::Themes);
+        app.act(Action::Confirm);
+        assert!(!opened(&mut app));
+        // And a stale click on the theme row's value can't open it from the list either.
+        app.hits.borrow_mut().push((ratatui::layout::Rect::new(0, 0, 200, 50), Hit::SettingStep(0, settings::Step::Cycle)));
+        click(&mut app, 3, 3);
+        assert!(!opened(&mut app));
+        // From the settings, only the Theme row opens it.
+        app.mode = Mode::List;
+        ch(&mut app, 's');
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert!(!opened(&mut app));
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Enter);
+        assert!(opened(&mut app));
+    }
+
+    #[test]
+    fn moving_previews_the_theme_on_the_whole_app_and_esc_puts_back_every_cell() {
+        let w = theme_world("tl-preview");
+        let mut app = w.app();
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let (mocha, macchiato, tokyo) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("tokyo-night"));
+
+        let list_before = { draw(&mut term, &app); snapshot(&term) };
+        ch(&mut app, 's');
+        let settings_before = { draw(&mut term, &app); snapshot(&term) };
+        key(&mut app, KeyCode::Enter);
+        let picker_before = { draw(&mut term, &app); snapshot(&term) };
+
+        for (moves, want) in [(1, &macchiato), (1, &tokyo)] {
+            for _ in 0..moves {
+                key(&mut app, KeyCode::Down);
+            }
+            assert_eq!(app.effective_theme().id, want.id);
+            draw(&mut term, &app);
+            let buf = snapshot(&term);
+            // The real list behind the panel, and the frame, in the previewed theme's colors...
+            let (x, y) = locate(&buf, "platoon");
+            assert_eq!(buf[(x, y)].fg, want.accent, "{}: the header title", want.id);
+            assert_eq!(buf[(0, 0)].fg, want.border, "{}: the frame", want.id);
+            let (gx, gy) = locate(&buf, "gamma");
+            assert_eq!((buf[(gx, gy)].fg, buf[(gx, gy)].bg), (want.text, want.surface), "{}: the selected row", want.id);
+            let (bx, by) = locate(&buf, "beta");
+            assert_eq!((buf[(bx, by)].fg, buf[(bx, by)].bg), (want.text, want.bg), "{}: another row", want.id);
+            let (wx, wy) = locate(&buf, "⠋");
+            assert_eq!(buf[(wx, wy)].fg, want.busy, "{}: the working marker", want.id);
+            // ...and the panel itself is drawn in them too, including its sample.
+            let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
+            assert_eq!(buf[(panel.x, panel.y)].fg, want.accent, "{}: the panel's border", want.id);
+            let (sx, sy) = locate(&buf, "docs-site");
+            assert_eq!(buf[(sx, sy)].fg, want.ok, "{}: the unread sample row", want.id);
+            assert_ne!(buf, picker_before, "the screen really changed");
+        }
+        // Not a byte of the old colors is left behind after esc: the settings popup is exactly as it was,
+        // and so is the list.
+        key(&mut app, KeyCode::Esc);
+        assert!(app.preview.is_none());
+        draw(&mut term, &app);
+        assert_eq!(snapshot(&term), settings_before, "cell for cell, colors included");
+        key(&mut app, KeyCode::Esc);
+        draw(&mut term, &app);
+        assert_eq!(snapshot(&term), list_before);
+        assert_eq!(app.effective_theme(), &mocha);
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
+
+        // Reopening starts from the same picture as the first time.
+        ch(&mut app, 's');
+        key(&mut app, KeyCode::Enter);
+        draw(&mut term, &app);
+        assert_eq!(snapshot(&term), picker_before);
+    }
+
+    #[test]
+    fn enter_keeps_the_theme_by_saving_its_id_and_the_rest_of_the_file_is_untouched() {
+        let w = theme_world("tl-keep");
+        std::fs::write(config_file(&w), r#"{"version":1,"note":"mine","nested":{"a":[1,{"b":null}]},"idle_stop_minutes":60,"theme":"catppuccin-mocha"}"#).unwrap();
+        let mut app = w.app();
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"), "moving saves nothing");
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Settings), "enter returns to the settings");
+        assert!(app.preview.is_none());
+        assert_eq!((app.theme.id.as_str(), saved_theme(&w).as_deref()), ("tokyo-night", Some("tokyo-night")));
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
+        assert_eq!(v["note"], "mine");
+        assert_eq!(v["nested"], serde_json::json!({"a":[1,{"b":null}]}));
+        assert_eq!(v["idle_stop_minutes"], 60);
+        assert!(!w.config.join("settings.json.bak").exists() && !w.config.join("settings.json.tmp").exists());
+        // The settings row shows what was kept, and the list marks it as the saved one.
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        assert!(draw(&mut term, &app).contains("Tokyo Night"));
+        key(&mut app, KeyCode::Enter);
+        let shown = draw(&mut term, &app);
+        let line = shown.lines().find(|l| l.contains("Tokyo Night")).unwrap();
+        assert!(line.contains("✓"), "the saved theme has a check: {line}");
+        assert_eq!(shown.matches('✓').count(), 1);
+
+        // Enter on the entry that is already in effect writes nothing at all.
+        let stamp = std::fs::metadata(config_file(&w)).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(std::fs::metadata(config_file(&w)).unwrap().modified().unwrap(), stamp);
+        // A damaged file is backed up first, like any other save.
+        std::fs::write(config_file(&w), "{ broken").unwrap();
+        let mut app = w.app();
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(std::fs::read_to_string(w.config.join("settings.json.bak")).unwrap(), "{ broken");
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-macchiato"));
+    }
+
+    #[test]
+    fn esc_after_wandering_leaves_the_file_byte_for_byte_and_moving_back_needs_no_preview() {
+        let w = theme_world("tl-revert");
+        let before = std::fs::read(config_file(&w)).unwrap();
+        let mut app = w.app();
+        open_themes(&mut app);
+        key(&mut app, KeyCode::End);
+        assert_eq!(app.effective_theme().id, "user:my-theme", "End jumps to the last entry and previews it");
+        key(&mut app, KeyCode::Home);
+        assert!(app.preview.is_none(), "back on the theme in effect there is nothing to preview");
+        ch(&mut app, 'G');
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::PageUp);
+        assert!(app.preview.is_some());
+        key(&mut app, KeyCode::Esc);
+        assert!(app.preview.is_none());
+        assert_eq!(app.effective_theme().id, "catppuccin-mocha");
+        assert_eq!(std::fs::read(config_file(&w)).unwrap(), before);
+        // Enter after coming back to where it started keeps that, i.e. changes nothing.
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Up);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(std::fs::read(config_file(&w)).unwrap(), before);
+        // The ends hold.
+        open_themes(&mut app);
+        for _ in 0..40 {
+            key(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.tpick.selected, app.tpick.list.len() - 1);
+        for _ in 0..40 {
+            key(&mut app, KeyCode::Up);
+        }
+        assert_eq!(app.tpick.selected, 0);
+    }
+
+    #[test]
+    fn a_failed_save_puts_the_saved_theme_back_and_says_why() {
+        let w = theme_world("tl-fail");
+        let blocker = w.base.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let mut app = App::with_dirs(crate::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.effective_theme().id, "catppuccin-macchiato");
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Settings));
+        assert_eq!((app.theme.id.as_str(), app.effective_theme().id.as_str()), ("catppuccin-mocha", "catppuccin-mocha"), "back to what is really saved");
+        assert!(app.preview.is_none());
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(flat(&shown).contains("Couldn't save the settings: Not a directory") && shown.contains("Catppuccin Mocha"), "{shown}");
+        assert!(!blocker.join("config").exists());
+    }
+
+    #[test]
+    fn the_arrow_keys_on_the_theme_row_save_the_neighbouring_theme_at_once() {
+        let w = theme_world("tl-arrows");
+        let mut app = w.app();
+        ch(&mut app, 's');
+        let stamp = std::fs::metadata(config_file(&w)).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        key(&mut app, KeyCode::Left);
+        assert_eq!(std::fs::metadata(config_file(&w)).unwrap().modified().unwrap(), stamp, "nothing before the first theme, so nothing is written");
+        key(&mut app, KeyCode::Right);
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("catppuccin-macchiato"), "catppuccin-macchiato"));
+        assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none(), "no preview and no list on this path");
+        for (k, want) in [('l', "tokyo-night"), ('+', "dracula"), ('=', "one-dark"), ('h', "dracula"), ('-', "tokyo-night")] {
+            ch(&mut app, k);
+            assert_eq!(saved_theme(&w).as_deref(), Some(want), "{k:?}");
+        }
+        key(&mut app, KeyCode::Left);
+        key(&mut app, KeyCode::Left);
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
+        // All the way to the end of the list, which is where the user's own themes are; and it stops there.
+        for _ in 0..30 {
+            key(&mut app, KeyCode::Right);
+        }
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.name.as_str()), (Some("user:my-theme"), "My Theme"));
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("My Theme"), "{shown}");
+        let (_, row) = locate(term.backend().buffer(), "My Theme");
+        assert_eq!(term.backend().buffer()[(locate(term.backend().buffer(), "My Theme").0, row)].fg, app.theme.accent);
+        // The buttons on the row do the same, and Enter still opens the list rather than stepping.
+        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Prev)));
+        click(&mut app, prev.x + 1, prev.y);
+        assert_eq!(saved_theme(&w).as_deref(), Some("terminal"));
+        let next = { draw(&mut term, &app); hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next))) };
+        click(&mut app, next.x + 1, next.y);
+        assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"));
+        assert!(matches!(app.mode, Mode::Settings));
+    }
+
+    #[test]
+    fn an_id_platoon_does_not_know_is_kept_by_the_arrows_until_a_theme_is_actually_chosen() {
+        let w = theme_world("tl-unknown-arrows");
+        std::fs::write(config_file(&w), r#"{"theme":"from-the-future","idle_stop_minutes":120}"#).unwrap();
+        let mut app = w.app();
+        assert_eq!(app.theme.id, "catppuccin-mocha", "shown as the default");
+        ch(&mut app, 's');
+        key(&mut app, KeyCode::Left);
+        assert_eq!(saved_theme(&w).as_deref(), Some("from-the-future"), "nothing lies before the default");
+        // Opening the list and leaving it, or keeping what it opened on, is not a choice either.
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Enter);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(saved_theme(&w).as_deref(), Some("from-the-future"));
+        key(&mut app, KeyCode::Right);
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-macchiato"));
+    }
+
+    #[test]
+    fn the_settings_popup_still_fades_the_list_but_the_theme_list_does_not() {
+        let w = theme_world("tl-fade");
+        let mut app = w.app();
+        let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        let t = app.theme.clone();
+        ch(&mut app, 's');
+        draw(&mut term, &app);
+        let buf = snapshot(&term);
+        let (gx, gy) = locate(&buf, "gamma");
+        let (px, py) = locate(&buf, "platoon");
+        assert_eq!((buf[(gx, gy)].fg, buf[(px, py)].fg), (t.border, t.border), "behind the ordinary popup everything is muted");
+
+        key(&mut app, KeyCode::Enter);
+        draw(&mut term, &app);
+        let buf = snapshot(&term);
+        let (gx, gy) = locate(&buf, "gamma");
+        let (px, py) = locate(&buf, "platoon");
+        assert_eq!((buf[(gx, gy)].fg, buf[(gx, gy)].bg), (t.text, t.surface), "behind the theme list a row keeps its colors");
+        assert_eq!(buf[(px, py)].fg, t.accent, "and the title its accent");
+        let (dx, dy) = locate(&buf, "/srv/gamma");
+        assert_eq!(buf[(dx, dy)].fg, t.subtext);
+        // Bold and underline survive too: the current tab is still underlined and bold.
+        let (ax, ay) = locate(&buf, "Active");
+        assert!(buf[(ax, ay)].modifier.contains(ratatui::style::Modifier::BOLD));
+        assert!(!draw(&mut term, &app).contains("Settings file:"), "the settings popup gives way to the list");
+        // The frame is the same one the list has.
+        assert_eq!(buf[(0, 0)].fg, t.border);
+    }
+
+    #[test]
+    fn the_sample_shows_every_color_role_of_the_theme_in_view_even_with_no_conversations() {
+        let w = World::new("tl-sample"); // nothing in the list at all
+        let mut app = w.app();
+        assert!(app.visible().is_empty());
+        open_themes(&mut app);
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20)] {
+            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            key(&mut app, KeyCode::Home);
+            for k in 0..app.tpick.list.len() {
+                let t = app.tpick.list[k].clone();
+                draw(&mut term, &app);
+                assert_eq!(app.effective_theme().id, t.id);
+                let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
+                let buf = snapshot(&term);
+                let cells: Vec<&ratatui::buffer::Cell> = (panel.y..panel.bottom()).flat_map(|y| (panel.x..panel.right()).map(move |x| (x, y))).map(|(x, y)| &buf[(x, y)]).collect();
+                let has_fg = |c: Color| cells.iter().any(|cell| cell.fg == c && cell.symbol().trim() != "");
+                let has_bg = |c: Color| cells.iter().any(|cell| cell.bg == c);
+                let ctx = format!("{} at {cols}x{rows}", t.id);
+                assert!(has_bg(t.bg) && has_bg(t.surface), "{ctx}: background and the selected row's surface");
+                assert!(has_fg(t.text) && has_fg(t.subtext) && has_fg(t.dim), "{ctx}: the three text colors");
+                assert!(has_fg(t.border), "{ctx}: the border of the frame and of the bars' tracks");
+                assert!(has_fg(t.accent) && has_fg(t.busy) && has_fg(t.ok) && has_fg(t.warn) && has_fg(t.err), "{ctx}: accent and the four status colors");
+                // The sample's parts are there in words, not only in colors.
+                let text: String = cells.iter().map(|c| c.symbol().to_string()).collect();
+                for want in ["Active", "docs-site", "notes", "5h", "enter open", "Archived"] {
+                    assert!(text.contains(want), "{ctx}: {want}");
+                }
+                if panel.width >= 40 {
+                    assert!(text.contains("working") && text.contains("done") && text.contains("idle"), "{ctx}: the status words");
+                }
+                assert!(text.contains('━') && text.contains("sample"), "{ctx}");
+                key(&mut app, KeyCode::Down);
+            }
+        }
+        // On the real screen behind it, an empty list previews nothing, which is why the sample exists.
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("No conversations yet"), "{shown}");
+    }
+
+    #[test]
+    fn the_theme_list_shows_names_swatches_a_check_the_users_marks_and_what_was_skipped() {
+        let w = theme_world("tl-content");
+        let mut app = w.app();
+        open_themes(&mut app);
+        let mut term = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        let shown = draw(&mut term, &app);
+        let buf = snapshot(&term);
+        for t in Theme::all() {
+            assert!(shown.contains(&t.name), "{} is listed\n{shown}", t.name);
+        }
+        let (mx, my) = locate(&buf, "My Theme");
+        let mine = app.tpick.list.last().unwrap().clone();
+        let row: String = (0..buf.area.width).map(|x| buf[(x, my)].symbol().to_string()).collect();
+        assert!(row.contains("yours"), "the user's own theme is marked: {row}");
+        // The swatch strip is that entry's own five colors, whatever theme is in effect.
+        let strip: Vec<Color> = (0..buf.area.width).filter(|&x| buf[(x, my)].symbol() == "█").map(|x| buf[(x, my)].fg).collect();
+        assert_eq!(strip, [mine.accent, mine.busy, mine.ok, mine.warn, mine.err]);
+        assert_eq!(buf[(mx, my)].fg, app.theme.subtext, "an entry that is not highlighted is quiet");
+        let (nx, ny) = locate(&buf, "Nord");
+        let nord = by_id("nord");
+        let nstrip: Vec<Color> = (0..buf.area.width).filter(|&x| buf[(x, ny)].symbol() == "█").map(|x| buf[(x, ny)].fg).collect();
+        assert_eq!(nstrip, [nord.accent, nord.busy, nord.ok, nord.warn, nord.err]);
+        assert_eq!(buf[(nx, ny)].bg, app.theme.bg);
+        // Exactly one check, on the saved theme.
+        assert_eq!(shown.matches('✓').count(), 1);
+        assert!(shown.lines().find(|l| l.contains("Catppuccin Mocha")).unwrap().contains('✓'));
+        // The light theme file was skipped, and the reason is in a dim note.
+        assert!(flat(&shown).contains("1 theme file skipped. Nord Light: light themes aren't supported"), "{shown}");
+        let (kx, ky) = locate(&buf, "1 theme file skipped");
+        assert_eq!(buf[(kx, ky)].fg, app.theme.dim);
+        // With nothing skipped there is no note.
+        std::fs::remove_file(w.config.join("themes/Nord Light")).unwrap();
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Esc);
+        app.refresh_for_test();
+        open_themes(&mut app);
+        assert!(!draw(&mut term, &app).contains("skipped"));
+    }
+
+    #[test]
+    fn the_theme_list_fits_and_never_panics_at_every_size() {
+        let w = theme_world("tl-sizes");
+        put_theme(&w, "Broken", "nothing here");
+        put_theme(&w, "Also Broken", "background = nope");
+        put_theme(&w, "Third", "");
+        let mut app = w.app();
+        open_themes(&mut app);
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (80, 20), (44, 12), (60, 10), (40, 8), (30, 6), (20, 5), (12, 4), (8, 3), (3, 3), (1, 1)] {
+            for sel in [0, 1, 7, 14] {
+                app.select_theme_for_test(sel);
+                let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                let shown = draw(&mut term, &app); // must not panic
+                let ctx = format!("{cols}x{rows} selecting {sel}\n{shown}");
+                if cols < 40 || rows < 8 {
+                    continue;
+                }
+                assert!(shown.contains("esc cancel") && shown.contains("enter use"), "{ctx}");
+                assert!(shown.contains(&app.tpick.list[sel].name) || rows < 12, "the highlighted entry is in view, whole: {ctx}");
+                // Nothing touches the panel's border on its right.
+                if cols >= 60 {
+                    let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
+                    for y in panel.y + 1..panel.bottom() - 1 {
+                        assert_eq!(term.backend().buffer()[(panel.right() - 2, y)].symbol(), " ", "text touches the panel's border at row {y}: {ctx}");
+                    }
+                }
+                if cols >= 60 && rows >= 18 {
+                    assert!(shown.contains("sample") && shown.contains("Active") && shown.contains("docs-site"), "{ctx}");
+                    assert!(flat(&shown).contains("3 theme files skipped") || flat(&shown).contains("4 theme files skipped"), "{ctx}");
+                }
+            }
+        }
+        // Ten skipped files can't take the panel over: at most three lines, the last one cut with an ellipsis.
+        for n in 0..10 {
+            put_theme(&w, &format!("Skip {n}"), "");
+        }
+        key(&mut app, KeyCode::Esc);
+        key(&mut app, KeyCode::Esc);
+        app.refresh_for_test();
+        open_themes(&mut app);
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(flat(&shown).contains("theme files skipped") && shown.contains("…"), "{shown}");
+        assert!(shown.contains("sample") && shown.contains("esc cancel"), "{shown}");
+    }
+
+    #[test]
+    fn the_mouse_hovers_previews_keeps_cancels_and_scrolls_the_theme_list() {
+        let w = theme_world("tl-mouse");
+        let mut app = w.app();
+        open_themes(&mut app);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        draw(&mut term, &app);
+        let (mocha, macchiato, tokyo) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("tokyo-night"));
+        let row = |app: &App, i: usize| hit_rect(app, |h| matches!(h, Hit::ThemeRow(x) if *x == i));
+
+        // Hovering lights an entry up but previews nothing.
+        let r2 = row(&app, 2);
+        hover(&mut app, r2.x + 4, r2.y);
+        draw(&mut term, &app);
+        assert_eq!(term.backend().buffer()[(r2.x + 4, r2.y)].bg, mocha.surface, "hovered entry");
+        assert!(app.preview.is_none() && app.tpick.selected == 0);
+
+        // A click previews it and saves nothing; the whole app is recolored.
+        click(&mut app, r2.x + 4, r2.y);
+        assert_eq!((app.tpick.selected, app.effective_theme().id.as_str()), (2, "tokyo-night"));
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
+        draw(&mut term, &app);
+        let (px, py) = locate(term.backend().buffer(), "platoon");
+        assert_eq!(term.backend().buffer()[(px, py)].fg, tokyo.accent);
+
+        // The wheel moves the highlight one entry at a time, previewing as it goes.
+        app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 5, row: 5, modifiers: KeyModifiers::NONE });
+        assert_eq!(app.effective_theme().id, macchiato.id);
+        app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 5, row: 5, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 5, row: 5, modifiers: KeyModifiers::NONE });
+        assert_eq!(app.effective_theme().id, "dracula");
+
+        // A click on the panel that is not an entry does nothing; an entry other than the previewed one previews it.
+        draw(&mut term, &app);
+        let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
+        click(&mut app, panel.x + 1, panel.y);
+        assert!(matches!(app.mode, Mode::Themes) && app.tpick.selected == 3);
+        // Clicking the previewed entry again keeps it, and returns to the settings.
+        let r = row(&app, 3);
+        click(&mut app, r.x + 4, r.y);
+        assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none());
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("dracula"), "dracula"));
+    }
+
+    #[test]
+    fn the_use_and_cancel_hints_and_a_click_outside_the_theme_list_are_buttons() {
+        let w = theme_world("tl-mouse2");
+        let mut app = w.app();
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let start = |app: &mut App, term: &mut Terminal<TestBackend>| {
+            app.mode = Mode::Settings;
+            open_themes(app);
+            draw(term, app);
+        };
+        start(&mut app, &mut term);
+        let r1 = hit_rect(&app, |h| matches!(h, Hit::ThemeRow(1)));
+        click(&mut app, r1.x + 4, r1.y);
+        assert_eq!(app.effective_theme().id, "catppuccin-macchiato");
+        draw(&mut term, &app);
+
+        // "enter use" is a visible control for the same thing as Enter.
+        click_action(&mut app, Action::Confirm);
+        assert!(matches!(app.mode, Mode::Settings));
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("catppuccin-macchiato"), "catppuccin-macchiato"));
+
+        // "esc cancel" reverts.
+        start(&mut app, &mut term);
+        let r5 = hit_rect(&app, |h| matches!(h, Hit::ThemeRow(5)));
+        click(&mut app, r5.x + 4, r5.y);
+        assert_eq!(app.effective_theme().id, "nord");
+        draw(&mut term, &app);
+        click_action(&mut app, Action::Cancel);
+        assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none());
+        assert_eq!((saved_theme(&w).as_deref(), app.effective_theme().id.as_str()), (Some("catppuccin-macchiato"), "catppuccin-macchiato"));
+
+        // A click outside the panel, on the real screen behind it, reverts and closes the list (not the settings).
+        start(&mut app, &mut term);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Down);
+        draw(&mut term, &app);
+        assert_ne!(app.effective_theme().id, "catppuccin-macchiato");
+        click(&mut app, 4, 4);
+        assert!(matches!(app.mode, Mode::Settings), "closed the list, still in the settings");
+        assert!(app.preview.is_none());
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-macchiato"));
+        assert_eq!(app.effective_theme().id, "catppuccin-macchiato");
+        // Hovering while a list is open never moves the highlight.
+        start(&mut app, &mut term);
+        let sel = app.tpick.selected;
+        hover(&mut app, 30, 10);
+        assert_eq!(app.tpick.selected, sel);
+    }
+
+    #[test]
+    fn a_change_of_the_file_on_disk_never_fights_a_preview_and_applies_when_the_list_closes() {
+        let w = theme_world("tl-disk");
+        let mut app = w.app();
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.effective_theme().id, "catppuccin-macchiato");
+        std::fs::write(config_file(&w), r#"{"theme":"nord","note":"edited by hand"}"#).unwrap();
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "nord", "what the file says is tracked");
+        assert_eq!(app.effective_theme().id, "catppuccin-macchiato", "but the preview wins while the list is open");
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        draw(&mut term, &app);
+        assert_eq!(term.backend().buffer()[(0, 0)].fg, by_id("catppuccin-macchiato").border);
+        key(&mut app, KeyCode::Esc);
+        assert_eq!(app.effective_theme().id, "nord", "an edited id applies as usual once the list is closed");
+        // Keeping works on top of the edited file, keeping its other keys.
+        open_themes(&mut app);
+        key(&mut app, KeyCode::Down);
+        std::fs::write(config_file(&w), r#"{"theme":"dracula","note":"edited again"}"#).unwrap();
+        app.refresh_for_test();
+        key(&mut app, KeyCode::Enter);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
+        assert_eq!((v["theme"].as_str(), v["note"].as_str()), (Some("gruvbox-dark"), Some("edited again")));
+    }
+
+    #[test]
+    fn a_previewed_theme_recolors_an_attached_session_too() {
+        use std::os::unix::net::UnixListener;
+        let w = World::new("tl-attached");
+        let sock = w.base.join("host.sock");
+        let listener = UnixListener::bind(&sock).unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let _ = crate::host::read_frame(&mut stream); // the client's size
+            crate::host::write_frame(&mut stream, crate::host::F_OUTPUT, b"\x1b[31mred\x1b[0m plain\x1b[44m blue").unwrap();
+            // Held open until the test is over.
+            let _ = crate::host::read_frame(&mut stream);
+        });
+        let mut app = w.app();
+        let client = crate::client::Client::connect(&sock, 20, 60).unwrap();
+        let until = std::time::Instant::now();
+        while client.parser.lock().unwrap().screen().contents().is_empty() && until.elapsed() < std::time::Duration::from_secs(5) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        app.client = Some(client);
+        app.mode = Mode::Attached(4242);
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let cell = |term: &Terminal<TestBackend>, x: u16, y: u16| term.backend().buffer()[(x, y)].clone();
+        // The terminal area starts inside the frame: (1, 1).
+        draw(&mut term, &app);
+        let mocha = by_id("catppuccin-mocha");
+        assert_eq!((cell(&term, 1, 1).fg, cell(&term, 1, 1).bg), (mocha.ansi.unwrap()[1], mocha.bg), "red is the saved theme's red");
+        for id in ["tokyo-night", "dracula", "nord"] {
+            let t = by_id(id);
+            app.preview = Some(t.clone());
+            draw(&mut term, &app);
+            assert_eq!(cell(&term, 1, 1).fg, t.ansi.unwrap()[1], "{id}: SGR 31 is the previewed theme's red");
+            assert_eq!(cell(&term, 6, 1).fg, t.text, "{id}: default text");
+            assert_eq!(cell(&term, 6, 1).bg, t.bg, "{id}: default background");
+            assert_eq!(cell(&term, 12, 1).bg, t.ansi.unwrap()[4], "{id}: SGR 44");
+            assert_eq!(cell(&term, 0, 0).fg, t.border, "{id}: the frame");
+        }
+        app.preview = None;
+        draw(&mut term, &app);
+        assert_eq!(cell(&term, 1, 1).fg, mocha.ansi.unwrap()[1], "back to the saved theme");
+        drop(app); // closes the connection, which lets the server thread finish
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn a_user_theme_is_chosen_by_its_id_which_survives_the_file_going_and_coming_back() {
+        let w = theme_world("tl-user-id");
+        let mut app = w.app();
+        open_themes(&mut app);
+        key(&mut app, KeyCode::End);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str(), app.theme.name.as_str()), (Some("user:my-theme"), "user:my-theme", "My Theme"));
+        // A new run reads it back.
+        assert_eq!(w.app().theme.id, "user:my-theme");
+        // The file goes: the default is shown, and the id is still on disk, even through another change.
+        std::fs::remove_file(w.config.join("themes/My Theme")).unwrap();
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "catppuccin-mocha");
+        assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"));
+        key(&mut app, KeyCode::Esc);
+        ch(&mut app, 's');
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Right);
+        assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"), "changing another setting keeps the id of a theme that is gone");
+        assert_eq!(on_disk(&w).idle_stop_minutes, 240);
+        // It comes back with the file, without a restart.
+        put_theme(&w, "My Theme", "background = #101820\nforeground = #e6e6e6\n");
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "user:my-theme");
+        // An edit to the file recolors a running platoon.
+        put_theme(&w, "My Theme", "background = #200000\nforeground = #e6e6e6\n");
+        app.refresh_for_test();
+        assert_eq!(app.theme.bg, Color::Rgb(0x20, 0, 0));
+        // A name that a built-in has gets its own id and is marked in the row.
+        put_theme(&w, "Nord", "background = #001020\nforeground = #e6e6e6\n");
+        app.refresh_for_test();
+        let ids: Vec<String> = app.themes().all().into_iter().map(|t| t.id).collect();
+        assert!(ids.contains(&"nord".to_string()) && ids.contains(&"user:nord".to_string()));
+        assert_eq!(app.themes().by_id("user:nord").unwrap().name, "Nord (yours)");
+    }
+
+    #[test]
+    fn every_theme_previewed_draws_the_list_in_its_own_colors_and_only_in_256_colors_when_asked() {
+        use crate::colordepth::Depth;
+        let w = theme_world("tl-sweep");
+        let mut app = w.app();
+        open_themes(&mut app);
+        for k in 0..app.tpick.list.len() {
+            app.select_theme_for_test(k);
+            let t = app.effective_theme().clone();
+            for (cols, rows) in [(100, 24), (80, 24), (60, 20), (44, 12)] {
+                let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                draw(&mut term, &app);
+                for c in cells(&term) {
+                    if t.ansi.is_some() {
+                        // (the entries' swatches are other themes' colors, but still fixed ones)
+                        assert!(matches!(c.bg, Color::Rgb(..)) && !matches!(c.fg, Color::Indexed(_)), "{}: {:?}/{:?}", t.id, c.fg, c.bg);
+                        assert!(c.symbol().trim().is_empty() || matches!(c.fg, Color::Rgb(..) | Color::Reset | Color::LightBlue | Color::LightMagenta | Color::LightGreen | Color::LightYellow | Color::LightRed), "{}: {:?} is unthemed text", t.id, c.symbol());
+                    } else {
+                        assert!(!matches!(c.bg, Color::Rgb(..)), "{}: {:?}", t.id, c.bg);
+                    }
+                }
+                if t.ansi.is_some() {
+                    assert_eq!(term.backend().buffer()[(0, 0)].fg, t.border, "{}: the frame", t.id);
+                }
+                term.draw(|f| {
+                    ui::draw(f, &app);
+                    Depth::Indexed256.apply(f.buffer_mut());
+                })
+                .unwrap();
+                assert!(cells(&term).iter().all(|c| !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..))), "{}: {cols}x{rows} in 256 colors", t.id);
+            }
+        }
+    }
+
+    #[test]
+    fn if_the_file_changes_under_an_untouched_list_the_highlighted_theme_is_still_what_enter_keeps() {
+        let w = theme_world("tl-disk2");
+        let mut app = w.app();
+        open_themes(&mut app);
+        std::fs::write(config_file(&w), r#"{"theme":"nord"}"#).unwrap();
+        app.refresh_for_test();
+        // The highlight is on Catppuccin Mocha, so that is what shows (the preview wins) and what Enter keeps.
+        assert_eq!((app.theme.id.as_str(), app.effective_theme().id.as_str()), ("nord", "catppuccin-mocha"));
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
+        assert_eq!(app.effective_theme().id, "catppuccin-mocha");
     }
 }

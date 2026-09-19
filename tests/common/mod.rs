@@ -110,6 +110,24 @@ impl Term {
         self.screen.screen().cell(row, col).map(|c| c.bgcolor()).unwrap()
     }
 
+    /// The foreground color of a screen cell.
+    pub fn fg_at(&mut self, row: u16, col: u16) -> vt100::Color {
+        self.text();
+        self.screen.screen().cell(row, col).map(|c| c.fgcolor()).unwrap()
+    }
+
+    /// Waits until a cell has the given foreground.
+    pub fn wait_fg(&mut self, row: u16, col: u16, want: vt100::Color) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            if self.fg_at(row, col) == want {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        panic!("cell ({row},{col}) never got foreground {want:?}; it is {:?}", self.fg_at(row, col));
+    }
+
     /// Waits until a cell has the given background.
     pub fn wait_bg(&mut self, row: u16, col: u16, want: vt100::Color) {
         let start = Instant::now();

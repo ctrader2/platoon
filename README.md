@@ -92,13 +92,15 @@ Details worth knowing:
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
+| Theme | The colors platoon is drawn in. `enter` on it opens a list that previews each theme on your real screen (see [Themes](#themes)). | The [built-in themes](#themes) (Catppuccin Mocha by default) and your own |
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
 
-`↑` `↓` (or `j` `k`) pick a setting; `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
-next choice and wraps around to the first one (Off, or Count MCP servers). With the mouse: click a row to select
-it, the `‹` `›` buttons to step, or the value itself to go to the next choice. Off is the same as `0` in the file.
+`↑` `↓` pick a setting (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
+next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter` opens the theme list
+instead, and `←` `→` switch to the previous or next theme and save it at once. With the mouse: click a row to select
+it, the `‹` `›` buttons to step, or the value itself to go to the next choice (on Theme, to open the list). Off is the same as `0` in the file.
 Choose Count MCP servers if you'd rather a session with any program running under it, MCP servers included, was
 never stopped: that is how idle stop worked before this choice existed.
 
@@ -119,14 +121,24 @@ by hand too:
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` is `true` or `false`; anything else there means the default
-(`true`). `theme` is one of the [theme](#themes) ids. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Themes
 
 platoon ships with dark color themes: Catppuccin Mocha (the default), Catppuccin Macchiato, Tokyo Night, Dracula,
 One Dark, Nord, Gruvbox Dark, Rosé Pine, Kanagawa Wave, Night Owl, Ayu Mirage, Vesper, Claude (Claude Code's own
-colors) and Terminal colors. For now you pick one by editing `theme` in `settings.json`; `platoon themes` lists the
-ids with a swatch of each:
+colors) and Terminal colors. `platoon themes` lists them with a swatch of each and their ids.
+
+**Picking one.** Press `s` (the settings open on the Theme row) and `enter`. A list of themes opens on the right,
+next to your real screen, each with a strip of its main colors and a check on the one you use now. Move with `↑` `↓`
+(`Home` `End` or `g` `G` jump to the first and last): the whole app is redrawn in the highlighted theme at once, and a
+small sample in the panel shows every color it uses even if you have no conversations yet. `enter` keeps the
+highlighted theme (it is saved), `esc` puts your old theme back. With the mouse: hover highlights an entry, a click
+previews it, a click on the previewed one (or on `enter use`) keeps it, the wheel moves the highlight, and a click
+outside the panel puts the old theme back. On the Theme row of the settings, `←` `→` skip the list: they switch to the
+previous or next theme and save it straight away.
+
+You can also set it by hand with `theme` in `settings.json`:
 
 ```json
 {"theme": "tokyo-night"}
@@ -135,6 +147,37 @@ ids with a swatch of each:
 A running platoon picks the change up within a couple of seconds. A theme id platoon doesn't know shows the default
 and is left in the file as it is. The theme also recolors the Claude session you view inside platoon (its 16
 terminal colors become the theme's); `platoon open` in a regular terminal is unaffected.
+
+**Your own themes.** platoon reads extra themes from the `themes` folder next to `settings.json`:
+`~/.config/platoon/themes/` (`$PLATOON_CONFIG_DIR/themes`, or `$XDG_CONFIG_HOME/platoon/themes`). It uses
+[Ghostty](https://ghostty.org)'s theme file format, one theme per file, and the file's name is the theme's name
+(`~/.config/platoon/themes/Deep Sea` is "Deep Sea"):
+
+```
+background = #0a1622
+foreground = #dde6ee
+palette = 12=#4fb0ff
+```
+
+That is all it needs: the background, the foreground, and any of the 16 `palette = N=#RRGGBB` colors (others are
+worked out; the other keys Ghostty themes carry are ignored). Ghostty's own themes are in this format, so borrowing one
+is a copy, for example `mkdir -p ~/.config/platoon/themes && cp /usr/share/ghostty/themes/Nord ~/.config/platoon/themes/`. Your themes appear in
+the list after the built-ins, marked `yours`, with the id `user:<file name>` (`user:deep-sea`) that goes in
+`settings.json`. Things to know:
+
+- Dark themes only. A file whose background is light is skipped, and so is anything that isn't a readable theme file
+  (too big, not text, no background or foreground). The picker says how many were skipped and why, and so does
+  `platoon themes`.
+- Contrast is adjusted for you. Text, the muted grays, the accent and the status colors are lightened as far as it
+  takes to read on your background (and kept clearly different from each other), so a sloppy file still gives a usable
+  theme. What the file says is used as it is wherever it already reads well.
+- A file named like a built-in (a copy of Nord, say) is its own theme, shown as `Nord (yours)`; two files whose names
+  differ only in capitals count as one (the first, in name order, is used). `platoon themes` prints every id.
+- Changes to the folder are noticed within a couple of seconds; nothing needs restarting. If you pick a user theme and
+  later delete its file, platoon shows the default theme and keeps the id in `settings.json`, so putting the file back
+  brings your theme back.
+- A folder with more than 300 files is read only as far as its first 300 (in name order); subfolders and names starting
+  with a dot are ignored.
 
 `terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
 whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the

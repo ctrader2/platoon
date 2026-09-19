@@ -27,6 +27,8 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         .args(args)
         .env("CLAUDE_CONFIG_DIR", claude)
         .env("PLATOON_CACHE_DIR", cache)
+        // Never the real one: `platoon themes` reads the user's theme files from here.
+        .env("PLATOON_CONFIG_DIR", cache.parent().unwrap().join("config"))
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .output()
@@ -143,4 +145,34 @@ fn themes_lists_the_built_ins_without_setup_and_touches_nothing() {
     assert!(shown.contains("Catppuccin Mocha  (default)") && shown.contains("Rosé Pine") && shown.contains("Terminal colors"), "{shown}");
     assert!(shown.contains("accent #b4befe"), "{shown}");
     assert!(fs::read_dir(&claude).unwrap().next().is_none() && fs::read_dir(&cache).unwrap().next().is_none(), "nothing is written");
+}
+
+#[test]
+fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_reason() {
+    let (claude, cache) = dirs("themes-user");
+    let themes = cache.parent().unwrap().join("config/themes");
+    fs::create_dir_all(&themes).unwrap();
+    fs::write(themes.join("Deep Sea"), "background = #0a1622\nforeground = #dde6ee\npalette = 12=#4fb0ff\n").unwrap();
+    fs::write(themes.join("Nord"), "background = #001020\nforeground = #e6e6e6\n").unwrap(); // a built-in's name
+    fs::write(themes.join("Nord Light"), "background = #eceff4\nforeground = #2e3440\n").unwrap();
+    fs::write(themes.join("Half"), "foreground = #ffffff\n").unwrap();
+    fs::write(themes.join("Noise"), [0u8, 159, 146, 150]).unwrap();
+    fs::create_dir(themes.join("A Folder")).unwrap();
+    let out = platoon(&claude, &cache, &["themes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let shown = text(&out.stdout);
+    let ids: Vec<&str> = shown.lines().filter(|l| !l.starts_with(' ') && l.contains("  ") && !l.contains("skipped")).filter_map(|l| l.split_whitespace().next()).collect();
+    assert_eq!(&ids[ids.len() - 2..], ["user:deep-sea", "user:nord"], "the built-ins first, then the user's own in file-name order:\n{shown}");
+    assert_eq!(ids[0], "catppuccin-mocha");
+    assert!(shown.contains("user:deep-sea") && shown.contains("Deep Sea  (yours)"), "{shown}");
+    assert!(shown.contains("Nord (yours)") && !shown.contains("Nord (yours)  (yours)"), "a name a built-in has is marked once: {shown}");
+    assert!(shown.contains("bg #0a1622"), "the roles are listed like a built-in's:\n{shown}");
+    assert!(shown.contains("3 theme files skipped in "), "{shown}");
+    for want in ["Nord Light: light themes aren't supported", "Half: no background color", "Noise: the file isn't text"] {
+        assert!(shown.lines().any(|l| l.trim() == want), "{want:?} in:\n{shown}");
+    }
+    assert!(!shown.contains("A Folder") && !shown.contains('\x1b'));
+    // Nothing is written anywhere, and the folder the user made is untouched.
+    assert!(fs::read_dir(&claude).unwrap().next().is_none() && fs::read_dir(&cache).unwrap().next().is_none());
+    assert_eq!(fs::read_dir(&themes).unwrap().count(), 6);
 }

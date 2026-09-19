@@ -52,7 +52,9 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
     assert!(text.contains("settings.json"), "the file's location is shown:\n{text}");
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "opening the screen writes nothing");
 
-    // A key: right arrow steps 2 hours -> 4 hours, saved straight away.
+    // A key: down to the first of the numeric settings (the Theme is above it), then right arrow steps 2 hours -> 4 hours,
+    // saved straight away.
+    t.send(b"\x1b[B");
     t.send(b"\x1b[C");
     t.wait_for("4 hours");
     until("the change to reach the file", || saved(&base)["idle_stop_minutes"] == 240);
@@ -116,7 +118,7 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     assert!(text.contains("Ignore MCP servers") && text.contains("helper programs") && text.contains("MCP servers are"), "{text}");
     assert!(!base.join("config/settings.json").exists(), "looking at the screen writes nothing");
 
-    t.send(b"\x1b[B\x1b[B"); // Down, Down: the third entry
+    t.send(b"\x1b[B\x1b[B\x1b[B"); // Down, Down, Down: the fourth entry (the theme is the first)
     t.send(b"\x1b[D"); // left: Count MCP servers
     t.wait_for("Count MCP servers");
     until("the choice to reach the file", || saved_ok(&base) && saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(false));
@@ -157,7 +159,7 @@ fn the_theme_in_settings_json_colors_the_running_ui_and_an_edit_applies_without_
     t.wait_bg(1, 1, Rgb(0x1e, 0x1e, 0x2e));
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
-    t.send(b"\x1b[C");
+    t.send(b"\x1b[B\x1b[C"); // down from the Theme row, then right
     until("the change to reach the file", || saved(&base)["idle_stop_minutes"] == 240);
     assert_eq!(saved(&base)["theme"], "one-i-made-up");
     assert_eq!(saved(&base)["keep"], "me");
@@ -187,4 +189,73 @@ fn without_truecolor_the_ui_is_drawn_in_256_colors_and_terminal_colors_uses_the_
     assert_eq!(t.bg_at(1, 1), Default, "the terminal's own background");
     t.send(b"q");
     t.wait_exit();
+}
+
+#[test]
+fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a_user_theme() {
+    use vt100::Color::Rgb;
+    let base = tmp("theme-list-e2e");
+    let mut env = env(&base);
+    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
+    fs::create_dir_all(base.join("config/themes")).unwrap();
+    fs::write(base.join("config/themes/Deep Sea"), "background = #0a1622\nforeground = #dde6ee\npalette = 12=#4fb0ff\n").unwrap();
+    fs::write(base.join("config/themes/Bright Day"), "background = #ffffff\nforeground = #000000\n").unwrap();
+    let file = base.join("config/settings.json");
+    fs::write(&file, r#"{"keep":{"me":[1,2]}}"#).unwrap();
+    let mocha = (Rgb(0x1e, 0x1e, 0x2e), Rgb(0xb4, 0xbe, 0xfe)); // background, and the header's accent
+    let macchiato = (Rgb(0x24, 0x27, 0x3a), Rgb(0xb7, 0xbd, 0xf8));
+    let mut t = Term::spawn(&[], &env, &base, 30, 100);
+    t.wait_for("enter open");
+    t.wait_bg(1, 1, mocha.0);
+    t.wait_fg(1, 3, mocha.1); // the "p" of the header's title
+
+    // s, then Enter on the Theme row (the first): the list opens beside the real screen, which stays as it was.
+    t.send(b"s");
+    t.wait_for("Settings file:");
+    t.send(b"\r");
+    t.wait_for("sample");
+    t.wait_for("1 theme file skipped");
+    let screen = t.text();
+    assert!(screen.contains("Deep Sea") && screen.contains("yours") && screen.contains("Bright Day:"), "{screen}");
+    t.wait_fg(1, 3, mocha.1); // not faded: still the accent, not the muted border color
+
+    // Down previews the next theme on the whole screen: the frame's inside and the header's title change...
+    t.send(b"\x1b[B");
+    t.wait_bg(1, 1, macchiato.0);
+    t.wait_fg(1, 3, macchiato.1);
+    assert!(!saved_theme_key(&file), "previewing saves nothing:\n{}", fs::read_to_string(&file).unwrap());
+
+    // ...and Esc puts everything back.
+    t.send(b"\x1b");
+    t.wait_gone("sample");
+    t.wait_bg(1, 1, mocha.0);
+    t.wait_fg(1, 3, Rgb(0x45, 0x47, 0x5a)); // the settings popup is back, and fades the list behind it to Mocha's border color
+    assert!(!saved_theme_key(&file));
+
+    // Enter keeps: open again, jump to the last entry (the user's theme), see it, keep it.
+    t.send(b"\r");
+    t.wait_for("sample");
+    t.send(b"G");
+    t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
+    t.send(b"\r");
+    t.wait_gone("sample");
+    until("the theme to reach the file", || fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some_and(|v| v["theme"] == "user:deep-sea"));
+    assert_eq!(saved(&base)["keep"], serde_json::json!({"me":[1,2]}), "the rest of the file is kept");
+    t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
+    t.wait_for("Deep Sea"); // the Theme row now shows it
+
+    t.send(b"\x1b");
+    t.wait_gone("Settings file:");
+    t.send(b"q");
+    t.wait_exit();
+    // A second run starts in it.
+    let mut t = Term::spawn(&[], &env, &base, 30, 100);
+    t.wait_for("enter open");
+    t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
+    t.send(b"q");
+    t.wait_exit();
+}
+
+fn saved_theme_key(file: &std::path::Path) -> bool {
+    serde_json::from_str::<serde_json::Value>(&fs::read_to_string(file).unwrap()).unwrap().get("theme").is_some()
 }

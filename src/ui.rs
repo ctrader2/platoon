@@ -2,7 +2,7 @@ use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::model::{Session, Status};
-use crate::settings::{Step, ITEMS};
+use crate::settings::{Kind, Step, ITEMS};
 use crate::usage::Usage;
 use crate::theme::Theme;
 use ratatui::{
@@ -19,7 +19,7 @@ const BAR_WIDTH: usize = 10;
 type Hint<'a> = (&'a str, &'a str, Option<Action>);
 
 pub fn draw(f: &mut Frame, app: &App) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     app.hits.borrow_mut().clear();
     f.render_widget(Block::default().style(Style::new().bg(t.bg)), f.area());
 
@@ -99,6 +99,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Picker => draw_picker(f, app, inner),
         Mode::Confirm(c) => draw_confirm(f, app, c, inner),
         Mode::Settings => draw_settings_modal(f, app, inner),
+        // No fade here: the point is to see the real screen in the colors being tried.
+        Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
     }
 }
@@ -121,7 +123,7 @@ fn draw_tab_rule(f: &mut Frame, t: &Theme, area: Rect, tabs: &[TabSpan]) {
 }
 
 fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let unread = app.unread_count();
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
@@ -133,38 +135,17 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         }
         // A chip: ` 1 Active ` with the count in a badge after a little air. Round caps where the terminal has the
         // glyphs, otherwise a padded square. Either way the text reads "1 Active 3".
+        let current = i == app.tab;
         let (key, label) = (format!("{}", i + 1), format!(" {} ", tab.label));
-        let count = if app.rounded { format!("{}", app.counts[i]) } else { format!(" {} ", app.counts[i]) };
-        let caps = if app.rounded { 2 } else { 0 };
-        let w = (1 + key.chars().count() + label.chars().count() + count.chars().count() + caps) as u16;
+        let w = chip_width(&key, &label, app.counts[i]);
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() {
             app.hits.borrow_mut().push((rect, Hit::Tab(i)));
         }
-        spans.push((x, w, i == app.tab));
+        spans.push((x, w, current));
         x += w;
-        let current = i == app.tab;
         let hover = !current && rect.contains(app.mouse.into());
-        let chip = if current || hover { t.surface } else { t.bg };
-        let (k, l, badge) = if current {
-            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
-        } else if hover {
-            (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
-        } else {
-            (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
-        };
-        left.push(Span::styled(" ", Style::new().bg(chip)));
-        left.push(Span::styled(key, k.bg(chip)));
-        left.push(Span::styled(label, l.bg(chip)));
-        if app.rounded {
-            // The caps are drawn in the badge color on the color beside them, so the block reads as a pill.
-            let pill = badge.bg.unwrap_or(t.surface);
-            left.push(Span::styled("\u{e0b6}", Style::new().fg(pill).bg(chip)));
-            left.push(Span::styled(count, badge));
-            left.push(Span::styled("\u{e0b4}", Style::new().fg(pill).bg(t.bg)));
-        } else {
-            left.push(Span::styled(count, badge));
-        }
+        left.extend(tab_chip(t, app.rounded, &key, &label, app.counts[i], current, hover));
     }
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
@@ -228,6 +209,36 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     f.render_widget(Paragraph::new(Line::from(left)), l);
     f.render_widget(Paragraph::new(Line::from(right)), r);
     spans
+}
+
+/// Width of `tab_chip`: a space, the key, the label, and the count (in a padded square, or between round caps).
+fn chip_width(key: &str, label: &str, count: usize) -> u16 {
+    // Round caps or padding: two cells either way.
+    (1 + key.chars().count() + label.chars().count() + count.to_string().chars().count() + 2) as u16
+}
+
+/// One tab of the header, ` 1 Active 3 `: the current tab is lit, a hovered one half lit, the rest quiet.
+fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, current: bool, hover: bool) -> Vec<Span<'static>> {
+    let count = if rounded { format!("{count}") } else { format!(" {count} ") };
+    let chip = if current || hover { t.surface } else { t.bg };
+    let (k, l, badge) = if current {
+        (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
+    } else if hover {
+        (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
+    } else {
+        (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
+    };
+    let mut out = vec![Span::styled(" ", Style::new().bg(chip)), Span::styled(key.to_string(), k.bg(chip)), Span::styled(label.to_string(), l.bg(chip))];
+    if rounded {
+        // The caps are drawn in the badge color on the color beside them, so the block reads as a pill.
+        let pill = badge.bg.unwrap_or(t.surface);
+        out.push(Span::styled("\u{e0b6}", Style::new().fg(pill).bg(chip)));
+        out.push(Span::styled(count, badge));
+        out.push(Span::styled("\u{e0b4}", Style::new().fg(pill).bg(t.bg)));
+    } else {
+        out.push(Span::styled(count, badge));
+    }
+    out
 }
 
 struct Cols {
@@ -299,8 +310,26 @@ pub fn ago(now_ms: u64, then_ms: u64) -> String {
     }
 }
 
+/// How a row shows what its conversation is doing: the marker before the name and the status word.
+struct Look {
+    marker: &'static str,
+    marker_color: Color,
+    status: &'static str,
+    status_color: Color,
+}
+
+fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
+    // Unread pulses between two shades about once a second.
+    let pulse_on = (tick / 5) % 2 == 0;
+    match (status, unread) {
+        (Status::Busy, _) => Look { marker: SPINNER[(tick % 10) as usize], marker_color: t.busy, status: "working", status_color: t.busy },
+        (Status::Idle, true) => Look { marker: "●", marker_color: if pulse_on { t.ok } else { t.dim }, status: "done", status_color: t.ok },
+        (Status::Idle, false) => Look { marker: "○", marker_color: t.dim, status: "idle", status_color: t.dim },
+    }
+}
+
 fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let c = cols(area.width);
     let bg = if selected || hover { t.surface } else { t.bg };
     let base = Style::new().bg(bg);
@@ -308,22 +337,11 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     let text = if s.archived { t.dim } else { t.text };
     let subtext = if s.archived { t.dim } else { t.subtext };
 
-    // Unread pulses between two shades about once a second.
-    let pulse_on = (app.tick / 5) % 2 == 0;
-    let (marker, marker_color) = match (s.status, s.unread) {
-        (Status::Busy, _) => (SPINNER[(app.tick % 10) as usize], t.busy),
-        (Status::Idle, true) => ("●", if pulse_on { t.ok } else { t.dim }),
-        (Status::Idle, false) => ("○", t.dim),
-    };
+    let Look { marker, marker_color, status: status_text, status_color } = row_look(t, s.status, s.unread, app.tick);
     let name_style = if s.unread {
         base.fg(t.ok).add_modifier(Modifier::BOLD)
     } else {
         base.fg(text)
-    };
-    let (status_text, status_color) = match (s.status, s.unread) {
-        (Status::Busy, _) => ("working", t.busy),
-        (Status::Idle, true) => ("done", t.ok),
-        (Status::Idle, false) => ("idle", t.dim),
     };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
@@ -372,7 +390,7 @@ fn fit_hints<'a>(mut hints: Vec<Hint<'a>>, width: usize, droppable: &[&str]) -> 
 
 /// Key hints along the bottom. Hints with an action are clickable and highlight on hover.
 fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: Option<(String, Color)>) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let mut spans = Vec::new();
     let mut x = area.x;
     for (i, (k, d, action)) in hints.iter().enumerate() {
@@ -447,7 +465,7 @@ fn fit_start(s: &str, n: usize) -> String {
 
 /// The settings screen: one entry per `ITEMS`, each with its explanation and a value that steps with `‹` `›`.
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let w = area.width as usize;
     let store = app.settings();
     let current = store.get();
@@ -499,7 +517,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
 /// What goes under the settings entries: a warning if the file was unreadable, then the latest notice or
 /// the reassurance that changes apply at once.
 fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let mut notes: Vec<(String, Color)> = Vec::new();
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
@@ -523,7 +541,7 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
 /// Settings float over the list, like the other dialogs: the list fades behind, the popup is sized to its contents,
 /// and a click outside it closes it.
 fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     // Everything behind reads as inactive: same layout, muted colors.
     f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
     app.hits.borrow_mut().clear();
@@ -560,7 +578,7 @@ fn explain_level(explained: &[Vec<String>], selected: usize, height: usize) -> u
 
 /// Draws the entries and returns the row below the last one.
 fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settings, area: Rect) -> u16 {
-    let t = &app.theme;
+    let t = app.effective_theme();
     if area.is_empty() {
         return area.y;
     }
@@ -591,16 +609,26 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         f.render_widget(Block::default().style(Style::new().bg(bg)), row);
 
         // The control is `‹ value ›` at the right end, the value centered in a width that fits every choice so
-        // the buttons stay put as it changes.
-        let value = (item.get)(current);
-        let label = (item.label)(value);
-        let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+        // the buttons stay put as it changes. Worked out here: the text of the value, that width, whether it can
+        // go no further either way, and whether it means "switched off".
+        let (label, vw, at_start, at_end, off) = match item.kind {
+            Kind::Steps => {
+                let value = (item.get)(current);
+                let label = (item.label)(value);
+                let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+                (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
+            }
+            Kind::Theme => {
+                let all = app.themes().all();
+                let at = all.iter().position(|t| t.id == app.theme.id).unwrap_or(0);
+                let vw = all.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(24);
+                (fit_end(&app.theme.name, vw), vw, at == 0, at + 1 >= all.len(), false)
+            }
+        };
         let ctrl_w = 2 + vw + 2;
         let cx = (row.right() as usize).saturating_sub(ctrl_w + 1).max(row.x as usize + 2) as u16;
         let button = |x: u16| Rect::new(x, row.y, 2, 1);
         let (prev, val, next) = (button(cx), Rect::new(cx + 2, row.y, vw as u16, 1), button(cx + 2 + vw as u16));
-        let at_start = item.step(value, Step::Prev) == value;
-        let at_end = item.step(value, Step::Next) == value;
         let mut hits = app.hits.borrow_mut();
         // Buttons first: the first region under the pointer wins, and the row covers them.
         hits.push((prev, Hit::SettingStep(i, Step::Prev)));
@@ -615,7 +643,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             Span::styled(symbol, Style::new().fg(fg).bg(cell_bg))
         };
         // "Off" reads as switched off: muted, where an active value is bold and colored.
-        let value_style = if item.off == Some(value) { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
+        let value_style = if off { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
         let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
         let control = Line::from(vec![
             arrow("‹ ", prev, at_start),
@@ -654,8 +682,203 @@ fn modal_block<'a>(t: &Theme, title: &'a str) -> Block<'a> {
         .style(Style::new().bg(t.bg))
 }
 
+/// The theme list: a panel docked to the right of the screen, so the header, the tabs and the left of the list
+/// stay in view in the colors being tried, and never a box across the middle. Nothing behind it is faded. It
+/// holds the entries (name and a strip of accent / busy / ok / warn / err, a check on the saved one), a note
+/// about theme files that were skipped, a small built-in sample that shows every color role whatever the list
+/// behind holds (even nothing at all), and the keys.
+fn draw_theme_list(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let pick = &app.tpick;
+    // The panel owns the clicks it covers; a click anywhere else (on the real screen) puts the old theme back.
+    app.hits.borrow_mut().clear();
+
+    let pw = (area.width * 47 / 100).clamp(34, 42).min(area.width);
+    let gap = u16::from(area.width > pw + 12);
+    let panel = Rect::new(area.right() - pw - gap, area.y, pw, area.height);
+    f.render_widget(Clear, panel);
+    let block = modal_block(t, "Theme");
+    let inner = block.inner(panel).inner(Margin::new(1, 0));
+    f.render_widget(block, panel);
+    let w = inner.width as usize;
+
+    // Heights, in order of importance: the keys, three entries, the sample (a rule and up to seven lines), the note
+    // about skipped files, and then everything left over goes to the entries.
+    let hints_h = u16::from(inner.height >= 2);
+    let mut left = inner.height.saturating_sub(hints_h);
+    let list_min = (pick.list.len() as u16).min(3).min(left);
+    left -= list_min;
+    let sample_lines = left.saturating_sub(1).min(SAMPLE_LINES as u16);
+    let sample_h = if sample_lines > 0 { sample_lines + 1 } else { 0 };
+    left -= sample_h;
+    let scan = app.themes().skipped();
+    let note = if scan.skipped_count() == 0 {
+        Vec::new()
+    } else {
+        let n = scan.skipped_count();
+        let text = format!("{n} theme file{} skipped. {}", if n == 1 { "" } else { "s" }, scan.reasons().join("; "));
+        let mut lines = wrap(&text, w);
+        if lines.len() > 3 {
+            lines.truncate(3);
+            let last = lines.pop().unwrap_or_default();
+            lines.push(fit_end(&format!("{last}…"), w));
+        }
+        lines
+    };
+    let note_h = (note.len() as u16).min(left);
+    let list_h = inner.height - hints_h - sample_h - note_h;
+
+    let list = Rect::new(inner.x, inner.y, inner.width, list_h);
+    let note_area = Rect::new(inner.x, list.bottom(), inner.width, note_h);
+    let sample = Rect::new(inner.x, note_area.bottom(), inner.width, sample_h);
+    let foot = Rect::new(inner.x, inner.bottom() - hints_h, inner.width, hints_h);
+
+    // The entries, scrolled only as far as it takes to keep the highlighted one in view.
+    let rows = list_h as usize;
+    let mut top = pick.top.get().min(pick.list.len().saturating_sub(rows));
+    if pick.selected < top {
+        top = pick.selected;
+    } else if rows > 0 && pick.selected >= top + rows {
+        top = pick.selected + 1 - rows;
+    }
+    pick.top.set(top);
+    for (k, th) in pick.list.iter().enumerate().skip(top).take(rows) {
+        let rect = Rect::new(list.x, list.y + (k - top) as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::ThemeRow(k)));
+        let selected = k == pick.selected;
+        let bg = if selected || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        // marker(2) name space swatch(5) check(2)
+        let name_w = w.saturating_sub(10);
+        let tag = if th.is_user() && !th.name.ends_with("(yours)") && name_w >= 14 { " yours" } else { "" };
+        let name_style = if selected { Style::new().fg(t.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.subtext) };
+        let mut spans = vec![
+            Span::styled(if selected { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
+            Span::styled(fit(&th.name, name_w - tag.len().min(name_w)), name_style.bg(bg)),
+            Span::styled(tag, Style::new().fg(t.dim).bg(bg)),
+            Span::styled(" ", Style::new().bg(bg)),
+        ];
+        // Each entry's own colors, whatever theme is being shown.
+        for c in [th.accent, th.busy, th.ok, th.warn, th.err] {
+            spans.push(Span::styled("█", Style::new().fg(c).bg(bg)));
+        }
+        spans.push(Span::styled(if th.id == app.theme.id { " ✓" } else { "  " }, Style::new().fg(t.accent).bg(bg)));
+        f.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(bg)), rect);
+    }
+    for (n, line) in note.iter().enumerate() {
+        f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(t.dim))), Rect::new(note_area.x, note_area.y + n as u16, note_area.width, 1));
+    }
+    if !sample.is_empty() {
+        draw_theme_sample(f, app, sample);
+    }
+    if !foot.is_empty() {
+        let hints = fit_hints(
+            vec![("↑↓", "preview", None), ("enter", "use", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))],
+            w,
+            &["preview"],
+        );
+        draw_footer(f, app, foot, &hints, None);
+    }
+    let mut hits = app.hits.borrow_mut();
+    hits.push((panel, Hit::Inert));
+    hits.push((area, Hit::Action(Action::Cancel)));
+}
+
+/// Lines of the sample, without its rule.
+const SAMPLE_LINES: usize = 7;
+
+/// A small stand-in for the main screen, drawn with the same pieces (tab chip, row markers and status words,
+/// context bar, usage bar, key hints) so that every color role shows however few or many conversations the real
+/// list has: text, subtext, dim, accent, busy, ok, warn and err on the background, the surface of a selected row
+/// and the border of a bar's track.
+fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let w = area.width as usize;
+    let rule = " sample ";
+    let dashes = w.saturating_sub(1 + rule.len());
+    let head = Line::from(vec![
+        Span::styled("─", Style::new().fg(t.border)),
+        Span::styled(rule, Style::new().fg(t.dim)),
+        Span::styled("─".repeat(dashes), Style::new().fg(t.border)),
+    ]);
+    f.render_widget(Paragraph::new(head), Rect::new(area.x, area.y, area.width, 1));
+
+    let row = |selected: bool, status: Status, unread: bool, name: &str, pct: u8| -> Line<'static> {
+        let bg = if selected { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let look = row_look(t, status, unread, app.tick);
+        // The status word goes first when the panel is narrow.
+        let status_w = if w >= 36 { 8 } else { 0 };
+        let name_w = w.saturating_sub(3 + status_w + BAR_WIDTH + 5);
+        let name_style = if unread { base.fg(t.ok).add_modifier(Modifier::BOLD) } else { base.fg(t.text) };
+        let mut spans = vec![
+            if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) },
+            Span::styled(format!("{} ", look.marker), base.fg(look.marker_color)),
+            Span::styled(fit(name, name_w), name_style),
+        ];
+        if status_w > 0 {
+            spans.push(Span::styled(fit(look.status, status_w), base.fg(look.status_color)));
+        }
+        spans.extend(bar_bg(t, pct, bg, true, false));
+        Line::from(spans)
+    };
+    let chips = {
+        let mut spans = tab_chip(t, app.rounded, "1", " Active ", 3, true, false);
+        let second = tab_chip(t, app.rounded, "2", " Archived ", 12, false, false);
+        let width = |spans: &[Span]| spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+        if width(&spans) + 1 + width(&second) <= w {
+            spans.push(Span::raw(" "));
+            spans.extend(second);
+        }
+        Line::from(spans)
+    };
+    let usage = {
+        let dim = Style::new().fg(t.dim);
+        let mut spans = vec![Span::styled("5h ", dim)];
+        spans.extend(bar(t, 47));
+        if w >= 3 + BAR_WIDTH + 5 + 9 {
+            spans.push(Span::styled("   7d ", dim));
+            spans.push(Span::styled("21%", Style::new().fg(t.subtext)));
+        }
+        Line::from(spans)
+    };
+    let hints: Vec<Hint> = fit_hints(vec![("enter", "open", None), ("n", "new", None), ("s", "settings", None)], w, &["settings", "new"]);
+    let notice = Line::from(Span::styled(fit_end("Archived \"docs-site\"", w), Style::new().fg(t.warn)));
+
+    // Every line the sample can have, in order. When there isn't room for all of them the least telling go first:
+    // the usage bars, the hints, the notice, the tab chips, and then the rows from the bottom up.
+    let mut lines: Vec<Option<Line>> = vec![
+        Some(chips),
+        Some(row(true, Status::Busy, false, "api-server", 40)),
+        Some(row(false, Status::Idle, true, "docs-site", 70)),
+        Some(row(false, Status::Idle, false, "notes", 92)),
+        Some(usage),
+        None, // the hints, drawn by `draw_footer`
+        Some(notice),
+    ];
+    let mut keep = [true; SAMPLE_LINES];
+    let room = area.height.saturating_sub(1) as usize;
+    for drop in [4, 5, 6, 0, 3, 2, 1] {
+        if keep.iter().filter(|k| **k).count() <= room {
+            break;
+        }
+        keep[drop] = false;
+    }
+    let mut y = area.y + 1;
+    for (i, line) in lines.iter_mut().enumerate() {
+        if !keep[i] {
+            continue;
+        }
+        let rect = Rect::new(area.x, y, area.width, 1);
+        match line.take() {
+            Some(l) => f.render_widget(Paragraph::new(l), rect),
+            None => draw_footer(f, app, rect, &hints, None),
+        }
+        y += 1;
+    }
+}
+
 fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let p = &app.picker;
     let r = centered(area, area.width.saturating_sub(8).clamp(24, 84), area.height.saturating_sub(4).clamp(8, 20));
     // The modal owns all clicks while it's open.
@@ -703,7 +926,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let (title, l1, l2, yes) = match c {
         Confirm::Archive { name, busy, outside, .. } => {
             let what = match (outside, busy) {
@@ -759,7 +982,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
 }
 
 fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let [term, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
     draw_terminal(f, t, client, term);
     if app.attached_paused() {
@@ -777,7 +1000,7 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rec
 
 /// Covers the session when this copy is no longer safe to write to. Keys aren't forwarded while it shows.
 pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
-    let t = &app.theme;
+    let t = app.effective_theme();
     let r = centered(area, area.width.saturating_sub(6).clamp(20, 72), 9.min(area.height));
     f.render_widget(Clear, r);
     let block = Block::default()

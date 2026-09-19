@@ -7,6 +7,7 @@
 //! Claude session shown inside platoon (`ansi`). "Terminal colors" has no palette of its own: it uses the
 //! terminal's own colors, so it follows whatever theme the terminal has.
 
+use crate::usertheme::Registry;
 use ratatui::style::Color;
 
 /// WCAG contrast floors against `bg` (dark themes only; see `lift_contrast`).
@@ -14,6 +15,12 @@ pub const MIN_TEXT: f64 = 7.0;
 pub const MIN_SUBTEXT: f64 = 4.5;
 pub const MIN_DIM: f64 = 3.0;
 pub const MIN_ROLE: f64 = 4.5;
+/// The least Lab distance (`delta_e`) between two of accent / busy / ok / warn / err. Set from the closest pair
+/// among the built-ins (Catppuccin Mocha's lavender accent and mauve busy, 19, whose values are fixed by the
+/// original design): every status is told from every other, and from the accent, by more than a hair. A
+/// pair whose difference is mostly lightness would still pass, which is why each role is also checked
+/// against the background. User themes are held to the same floor.
+pub const MIN_DELTA_E: f64 = 18.0;
 
 /// A palette. Every color the UI uses comes from here.
 #[derive(Clone, Debug, PartialEq)]
@@ -346,8 +353,14 @@ impl Theme {
         SPECS.iter().map(Spec::build).chain([Self::terminal()]).collect()
     }
 
+    /// A built-in by id. The user's own themes are found through `Registry::by_id`.
     pub fn by_id(id: &str) -> Option<Theme> {
         Self::all().into_iter().find(|t| t.id == id)
+    }
+
+    /// One of the user's own theme files rather than a built-in.
+    pub fn is_user(&self) -> bool {
+        self.id.starts_with(crate::usertheme::ID_PREFIX)
     }
 
     /// Whatever the terminal has: its default colors for the background and text, and its own ANSI colors for
@@ -450,14 +463,21 @@ fn describe(c: Color) -> String {
     }
 }
 
-/// The text of `platoon themes`: each built-in with its id and name, then its roles. With `depth` (a terminal
-/// that shows color) the roles are a line of colored blocks on the theme's own background, the way they read
-/// in platoon; without it, plain text with the values.
-pub fn render_list(depth: Option<crate::colordepth::Depth>) -> String {
+/// The text of `platoon themes`: each theme (the built-ins, then the user's own, marked) with its id and name, then
+/// its roles. With `depth` (a terminal that shows color) the roles are a line of colored blocks on the theme's own
+/// background, the way they read in platoon; without it, plain text with the values. Theme files that were
+/// skipped are listed at the end with the reason.
+pub fn render_list(depth: Option<crate::colordepth::Depth>, user: &Registry) -> String {
     let mut out = String::new();
-    for t in Theme::all() {
-        let default = if t.id == DEFAULT_ID { "  (default)" } else { "" };
-        out.push_str(&format!("{:<22} {}{default}\n", t.id, t.name));
+    for t in user.all() {
+        let tag = if t.id == DEFAULT_ID {
+            "  (default)"
+        } else if t.is_user() && !t.name.ends_with("(yours)") {
+            "  (yours)"
+        } else {
+            ""
+        };
+        out.push_str(&format!("{:<22} {}{tag}\n", t.id, t.name));
         match depth {
             Some(d) => {
                 let on = |c: Color| d.color(c);
@@ -472,6 +492,14 @@ pub fn render_list(depth: Option<crate::colordepth::Depth>) -> String {
                 let roles: Vec<String> = t.roles().iter().map(|(name, c)| format!("{name} {}", describe(*c))).collect();
                 out.push_str(&format!("  {}\n", roles.join("  ")));
             }
+        }
+    }
+    let skipped = user.skipped();
+    if skipped.skipped_count() > 0 {
+        let n = skipped.skipped_count();
+        out.push_str(&format!("\n{n} theme file{} skipped in {}:\n", if n == 1 { "" } else { "s" }, user.dir().display()));
+        for reason in skipped.reasons() {
+            out.push_str(&format!("  {reason}\n"));
         }
     }
     out
@@ -526,7 +554,6 @@ pub fn lift_contrast(color: Color, bg: Color, toward: Color, min: f64) -> Color 
 }
 
 /// CIE Lab (D65) of an sRGB color, for `delta_e`.
-#[cfg(test)]
 fn lab(c: Color) -> [f64; 3] {
     let lin = |v: f64| {
         let v = v / 255.0;
@@ -544,8 +571,7 @@ fn lab(c: Color) -> [f64; 3] {
 
 /// CIE76 color difference: the distance in Lab. About 2 is the smallest difference an eye notices side by
 /// side; 10-20 is "similar but different"; 30 and more reads as another color at a glance.
-#[cfg(test)]
-fn delta_e(a: Color, b: Color) -> f64 {
+pub fn delta_e(a: Color, b: Color) -> f64 {
     let (a, b) = (lab(a), lab(b));
     ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
@@ -557,13 +583,6 @@ mod tests {
     fn fixed() -> Vec<Theme> {
         Theme::all().into_iter().filter(|t| t.ansi.is_some()).collect()
     }
-
-    /// The least Lab distance between two of the five colors that carry meaning. Set from the closest pair
-    /// among the built-ins (Catppuccin Mocha's lavender accent and mauve busy, 19, whose values are fixed
-    /// by the original design): every status is told from every other, and from the accent, by more than
-    /// a hair. A pair whose difference is mostly lightness would still pass, which is why each role is also
-    /// checked against the background.
-    const MIN_DELTA_E: f64 = 18.0;
 
     #[test]
     fn the_registry_is_in_display_order_with_unique_slug_ids_and_the_default_first() {
@@ -755,7 +774,8 @@ mod tests {
     #[test]
     fn the_theme_list_is_plain_text_without_color_and_swatches_with_it() {
         use crate::colordepth::Depth;
-        let plain = render_list(None);
+        let none = Registry::default();
+        let plain = render_list(None, &none);
         assert!(!plain.contains('\x1b'));
         let lines: Vec<&str> = plain.lines().collect();
         assert_eq!(lines.len(), 2 * Theme::all().len(), "a name line and a roles line each");
@@ -766,11 +786,11 @@ mod tests {
         assert!(lines[last - 1].starts_with("terminal") && lines[last - 1].contains("Terminal colors"));
         assert_eq!(lines[last], "  bg default  surface ansi 0  border ansi 8  dim ansi 8  subtext ansi 7  text default  accent ansi 12  busy ansi 13  ok ansi 10  warn ansi 11  err ansi 9");
 
-        let color = render_list(Some(Depth::TrueColor));
+        let color = render_list(Some(Depth::TrueColor), &none);
         assert!(color.contains("\x1b[48;2;30;30;46m") && color.contains("\x1b[38;2;180;190;254m\u{2588}"), "truecolor escapes for a fixed theme");
         assert!(color.contains("\x1b[49m") && color.contains("\x1b[94m"), "the terminal's own colors by name");
         assert!(color.lines().all(|l| l.is_empty() || l.starts_with(char::is_alphabetic) || l.ends_with("\x1b[0m")), "every swatch line resets");
-        let limited = render_list(Some(Depth::Indexed256));
+        let limited = render_list(Some(Depth::Indexed256), &none);
         assert!(!limited.contains(";2;") && limited.contains("48;5;"), "no truecolor escapes on a 256-color terminal");
     }
 
@@ -782,5 +802,31 @@ mod tests {
         }
         assert!(notices.contains("iTerm2-Color-Schemes") && notices.contains("Ghostty"));
         assert!(!notices.to_lowercase().contains("monokai"));
+    }
+
+    #[test]
+    fn the_theme_list_includes_the_users_themes_marked_and_the_skipped_files_with_reasons() {
+        use crate::colordepth::Depth;
+        let dir = std::env::temp_dir().join(format!("platoon-theme-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("themes")).unwrap();
+        std::fs::write(dir.join("themes/Deep Sea"), "background = #0a1622\nforeground = #dde6ee\n").unwrap();
+        std::fs::write(dir.join("themes/Dracula"), "background = #101010\nforeground = #eeeeee\n").unwrap();
+        std::fs::write(dir.join("themes/Sunny"), "background = #ffffff\nforeground = #000000\n").unwrap();
+        let reg = Registry::open(&dir);
+        let plain = render_list(None, &reg);
+        let lines: Vec<&str> = plain.lines().collect();
+        let n = Theme::all().len();
+        assert_eq!(&lines[..2 * n], render_list(None, &Registry::default()).lines().collect::<Vec<_>>(), "the built-ins come first, exactly as before");
+        assert_eq!(lines[2 * n], "user:deep-sea          Deep Sea  (yours)");
+        assert!(lines[2 * n + 1].starts_with("  bg #0a1622  surface #"), "{}", lines[2 * n + 1]);
+        assert_eq!(lines[2 * n + 2], "user:dracula           Dracula (yours)", "a built-in's name is marked in the name, and not twice");
+        assert_eq!(lines[2 * n + 4], "");
+        assert!(lines[2 * n + 5].starts_with("1 theme file skipped in ") && lines[2 * n + 5].ends_with("themes:"), "{}", lines[2 * n + 5]);
+        assert_eq!(lines[2 * n + 6], "  Sunny: light themes aren't supported");
+        assert_eq!(lines.len(), 2 * n + 7);
+        let color = render_list(Some(Depth::TrueColor), &reg);
+        assert!(color.contains("48;2;10;22;34m"), "the user theme's swatch is on its own background");
+        assert!(color.contains("Sunny: light themes aren't supported") && !color.contains("skipped in \x1b"));
     }
 }

@@ -6,15 +6,16 @@ use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
 use crate::model::{Proc, Session, Status};
-use crate::settings::{SettingsStore, Step, ITEMS};
+use crate::settings::{Kind, SettingsStore, Step, ITEMS};
 use crate::setup;
 use crate::theme::Theme;
+use crate::usertheme::Registry;
 use crate::usage::{self, Usage};
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     collections::HashMap,
     io,
     path::{Path, PathBuf},
@@ -91,6 +92,10 @@ pub enum Hit {
     Setting(usize),
     /// A step button (or the value) of a setting: changes it.
     SettingStep(usize, Step),
+    /// An entry of the theme list: the first click previews it, a click on the previewed one keeps it.
+    ThemeRow(usize),
+    /// Part of a panel that does nothing when clicked, but is not "outside" it either.
+    Inert,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -130,6 +135,9 @@ pub enum Mode {
     Confirm(Confirm),
     /// The settings screen, which replaces the list.
     Settings,
+    /// The theme list, opened from the Theme row of the settings. Moving through it previews each theme on the
+    /// whole app; only `Enter` keeps one.
+    Themes,
     /// Full-screen view of a platoon-hosted session, by claude's pid.
     Attached(u32),
 }
@@ -170,6 +178,16 @@ impl Picker {
     }
 }
 
+/// The theme list while it is open.
+pub struct ThemePick {
+    /// Built-ins first, then the user's own, as they were when the list opened.
+    pub list: Vec<Theme>,
+    /// The highlighted entry: the one being previewed.
+    pub selected: usize,
+    /// The first entry on screen, kept between frames so that the list only scrolls when it has to.
+    pub top: Cell<usize>,
+}
+
 pub struct App {
     /// Every conversation, newest activity first, across all tabs.
     pub sessions: Vec<Session>,
@@ -200,7 +218,14 @@ pub struct App {
     pub cache: PathBuf,
     /// Animation frame counter, ~10 per second.
     pub tick: u64,
+    /// The theme the settings name: what the app looks like unless a preview is showing.
     pub theme: Theme,
+    /// A theme being tried in the theme list. Everything is drawn with `effective_theme`, so this recolors the
+    /// whole app at once; it is dropped as soon as the list closes, and the app is exactly as it was.
+    pub preview: Option<Theme>,
+    pub tpick: ThemePick,
+    /// The user's own themes, from `<config dir>/themes`.
+    themes: Registry,
     pub quit: bool,
     pub hits: RefCell<Vec<(Rect, Hit)>>,
     size: (u16, u16),
@@ -267,6 +292,9 @@ impl App {
             cache,
             tick: 0,
             theme: Theme::default(),
+            preview: None,
+            tpick: ThemePick { list: Vec::new(), selected: 0, top: Cell::new(0) },
+            themes: Registry::open(&config),
             quit: false,
             rounded: false,
             hits: RefCell::new(Vec::new()),
@@ -285,7 +313,7 @@ impl App {
             rev: 0,
             built: (0, Vec::new()),
         };
-        app.theme = app.settings.get().theme();
+        app.theme = app.settings.get().theme(&app.themes);
         // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
         app.refresh_with(Vec::new(), false);
         app
@@ -295,21 +323,38 @@ impl App {
         &self.settings
     }
 
-    /// Pick up an edit of settings.json, and with it a changed theme. True when the file was re-read.
+    /// Pick up an edit of settings.json and of the theme folder, and with them a changed theme. True when the
+    /// settings file was re-read.
     fn refresh_settings(&mut self) -> bool {
         let changed = self.settings.refresh();
-        if changed {
+        // The theme list keeps the entries it opened with, so the folder is looked at again once it has closed.
+        let themes_changed = !matches!(self.mode, Mode::Themes) && self.themes.refresh();
+        if changed || themes_changed {
             self.sync_theme();
         }
         changed
     }
 
-    /// The theme in effect is the one the settings name (the default when they name one platoon doesn't know).
+    /// The theme the settings name (the default when they name one platoon doesn't know, say a user theme whose
+    /// file is gone). A preview, if there is one, is left alone: it wins until the list closes.
     fn sync_theme(&mut self) {
-        let want = self.settings.get().theme();
-        if want.id != self.theme.id {
+        let want = self.settings.get().theme(&self.themes);
+        if want != self.theme {
             self.theme = want;
+            // The highlighted entry is what is previewed, unless it is the theme now in effect.
+            if matches!(self.mode, Mode::Themes) {
+                self.select_theme(self.tpick.selected);
+            }
         }
+    }
+
+    /// What everything is drawn with: the theme being previewed, else the one the settings name.
+    pub fn effective_theme(&self) -> &Theme {
+        self.preview.as_ref().unwrap_or(&self.theme)
+    }
+
+    pub fn themes(&self) -> &Registry {
+        &self.themes
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -639,6 +684,8 @@ impl App {
                     self.launch(dir, &[]);
                 }
             }
+            (Action::Confirm, Mode::Themes) => self.keep_theme(),
+            (Action::Cancel, Mode::Themes) => self.close_theme_list(),
             (Action::Confirm, Mode::Filter) => self.mode = Mode::List,
             (Action::Cancel, Mode::Filter) => {
                 self.filter.clear();
@@ -664,6 +711,76 @@ impl App {
         self.mode = Mode::Settings;
     }
 
+    /// Open the theme list on the theme in effect. Nothing changes until the highlight moves.
+    fn open_theme_list(&mut self) {
+        if !matches!(self.mode, Mode::Settings) {
+            return;
+        }
+        self.refresh_settings();
+        let list = self.themes.all();
+        let selected = list.iter().position(|t| t.id == self.theme.id).unwrap_or(0);
+        self.tpick = ThemePick { list, selected, top: Cell::new(0) };
+        self.preview = None;
+        self.mode = Mode::Themes;
+    }
+
+    /// Highlight entry `i` and preview it (the theme in effect needs no preview: the app already looks like it).
+    fn select_theme(&mut self, i: usize) {
+        let Some(t) = self.tpick.list.get(i) else { return };
+        self.preview = (t.id != self.theme.id).then(|| t.clone());
+        self.tpick.selected = i;
+    }
+
+    fn move_theme(&mut self, delta: i32) {
+        let last = self.tpick.list.len().saturating_sub(1) as i32;
+        self.select_theme((self.tpick.selected as i32 + delta).clamp(0, last) as usize);
+    }
+
+    /// Leave the theme list for the settings, with the app back in the theme it was in.
+    fn close_theme_list(&mut self) {
+        self.preview = None;
+        self.mode = Mode::Settings;
+    }
+
+    /// Enter: keep the previewed theme by saving it like any other setting. If the file can't be written the app
+    /// goes back to the theme that is really saved, and says so.
+    fn keep_theme(&mut self) {
+        let keep = self.preview.take().map(|t| t.id);
+        self.mode = Mode::Settings;
+        self.notice = None;
+        let Some(id) = keep else { return };
+        let mut next = self.settings.get();
+        next.theme = id;
+        let saved = self.settings.update(&next);
+        self.sync_theme();
+        self.report_save(saved);
+    }
+
+    /// `←` and `→` on the Theme row: the neighbouring theme in list order, saved at once, no preview.
+    fn step_theme(&mut self, step: Step) {
+        let list = self.themes.all();
+        let at = list.iter().position(|t| t.id == self.theme.id).unwrap_or(0);
+        let to = match step {
+            Step::Prev => at.checked_sub(1),
+            _ => Some(at + 1).filter(|&n| n < list.len()),
+        };
+        let Some(to) = to else { return };
+        let mut next = self.settings.get();
+        next.theme = list[to].id.clone();
+        let saved = self.settings.update(&next);
+        self.sync_theme();
+        self.report_save(saved);
+    }
+
+    /// A save that failed leaves the old value in effect: say why.
+    fn report_save(&mut self, saved: io::Result<()>) {
+        if let Err(e) = saved {
+            let why = e.to_string();
+            let why = why.split(" (os error").next().unwrap_or(&why);
+            self.notify(format!("Couldn't save the settings: {why}"));
+        }
+    }
+
     /// Move to another line of the settings screen.
     fn move_setting(&mut self, delta: i32) {
         self.setting = (self.setting as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
@@ -676,6 +793,13 @@ impl App {
         self.notice = None;
         // Start from the file as it is now, in case it was edited since the screen last looked.
         self.refresh_settings();
+        if item.kind == Kind::Theme {
+            match step {
+                Step::Cycle => self.open_theme_list(),
+                _ => self.step_theme(step),
+            }
+            return;
+        }
         let mut next = self.settings.get();
         let old = (item.get)(&next);
         let new = item.step(old, step);
@@ -685,10 +809,8 @@ impl App {
         (item.set)(&mut next, new);
         let saved = self.settings.update(&next);
         self.sync_theme();
-        if let Err(e) = saved {
-            let why = e.to_string();
-            let why = why.split(" (os error").next().unwrap_or(&why);
-            self.notify(format!("Couldn't save the settings: {why}"));
+        if saved.is_err() {
+            self.report_save(saved);
             return;
         }
         // The next refresh acts on it (auto-archive, the only thing platoon itself does with these, once the
@@ -920,6 +1042,11 @@ impl App {
     }
 
     #[cfg(test)]
+    pub fn select_theme_for_test(&mut self, i: usize) {
+        self.select_theme(i);
+    }
+
+    #[cfg(test)]
     pub fn refresh_for_test(&mut self) {
         self.refresh_with(Vec::new(), false);
     }
@@ -989,6 +1116,18 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
                 KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
                 KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
+                _ => {}
+            },
+            Mode::Themes => match key.code {
+                KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Enter | KeyCode::Char(' ') => self.act(Action::Confirm),
+                KeyCode::Up => self.move_theme(-1),
+                KeyCode::Down => self.move_theme(1),
+                KeyCode::PageUp => self.move_theme(-5),
+                KeyCode::PageDown => self.move_theme(5),
+                KeyCode::Home | KeyCode::Char('g') => self.select_theme(0),
+                KeyCode::End | KeyCode::Char('G') => self.select_theme(self.tpick.list.len().saturating_sub(1)),
                 _ => {}
             },
             Mode::Confirm(_) => match key.code {
@@ -1077,6 +1216,7 @@ impl App {
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
                     Mode::List | Mode::Filter => self.move_selection(if up { -1 } else { 1 }),
                     Mode::Settings => self.move_setting(if up { -1 } else { 1 }),
+                    Mode::Themes => self.move_theme(if up { -1 } else { 1 }),
                     Mode::Confirm(_) => {}
                 }
             }
@@ -1100,7 +1240,10 @@ impl App {
                     Some(Hit::Row(i)) => self.selected = i,
                     Some(Hit::PickerRow(i)) if i == self.picker.selected => self.act(Action::Confirm),
                     Some(Hit::PickerRow(i)) => self.picker.selected = i,
-                    None => {}
+                    // The previewed entry is the one that gets kept: clicking it again is "use this".
+                    Some(Hit::ThemeRow(i)) if i == self.tpick.selected => self.act(Action::Confirm),
+                    Some(Hit::ThemeRow(i)) => self.select_theme(i),
+                    Some(Hit::Inert) | None => {}
                 }
             }
             _ => {}
