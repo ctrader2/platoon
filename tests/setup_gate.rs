@@ -124,3 +124,23 @@ fn once_setup_is_done_platoon_starts_and_undoing_a_step_blocks_it_again() {
     let err = text(&out.stderr);
     assert!(err.contains("[✓]") && err.contains("[✗]") && err.contains("Session guard"), "{err}");
 }
+
+#[test]
+fn themes_lists_the_built_ins_without_setup_and_touches_nothing() {
+    let (claude, cache) = dirs("themes");
+    let out = platoon(&claude, &cache, &["themes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let shown = text(&out.stdout);
+    assert!(!shown.contains('\x1b'), "piped output is plain text");
+    let ids: Vec<&str> = shown.lines().filter(|l| !l.starts_with(' ')).filter_map(|l| l.split_whitespace().next()).collect();
+    assert_eq!(
+        ids,
+        [
+            "catppuccin-mocha", "catppuccin-macchiato", "tokyo-night", "dracula", "one-dark", "nord", "gruvbox-dark", "rose-pine",
+            "kanagawa-wave", "night-owl", "ayu-mirage", "vesper", "claude", "terminal"
+        ]
+    );
+    assert!(shown.contains("Catppuccin Mocha  (default)") && shown.contains("Rosé Pine") && shown.contains("Terminal colors"), "{shown}");
+    assert!(shown.contains("accent #b4befe"), "{shown}");
+    assert!(fs::read_dir(&claude).unwrap().next().is_none() && fs::read_dir(&cache).unwrap().next().is_none(), "nothing is written");
+}

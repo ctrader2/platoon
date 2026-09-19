@@ -771,11 +771,9 @@ mod tests {
         }
     }
 
-    const IGNORING: Settings = Settings { idle_stop_minutes: 120, auto_archive_days: 2, idle_stop_ignores_mcp: true };
-
     #[test]
     fn mcp_servers_directly_under_claude_do_not_prevent_a_stop_and_are_recorded_for_clean_up() {
-        let mut rig = Rig::new("mcp-ignored", IGNORING);
+        let mut rig = Rig::new("mcp-ignored", Settings::default());
         rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}, "b": {"command": "sleep", "args": ["612"]}}));
         let s = Session::start(&mut rig, "sleep 611 & sleep 612 & read x", 2);
         let d = rig.decide();
@@ -788,7 +786,7 @@ mod tests {
 
     #[test]
     fn an_unrelated_child_prevents_the_stop_even_beside_an_mcp_server() {
-        let mut rig = Rig::new("mcp-other", IGNORING);
+        let mut rig = Rig::new("mcp-other", Settings::default());
         rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
         let s = Session::start(&mut rig, "sleep 611 & sleep 612 & read x", 2);
         assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(s.pid_with("sleep 612"))));
@@ -797,7 +795,7 @@ mod tests {
 
     #[test]
     fn only_a_direct_child_is_an_mcp_server_the_same_command_deeper_down_is_work() {
-        let mut rig = Rig::new("mcp-deep", IGNORING);
+        let mut rig = Rig::new("mcp-deep", Settings::default());
         rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
         // claude -> sh (as a tool call would be) -> sleep 611, which is what the configured server looks like.
         let s = Session::start(&mut rig, "sh -c 'sleep 611; true' & read x", 2);
@@ -806,7 +804,7 @@ mod tests {
 
     #[test]
     fn a_wrapper_and_everything_it_started_are_ignored_together() {
-        let mut rig = Rig::new("mcp-wrapper", IGNORING);
+        let mut rig = Rig::new("mcp-wrapper", Settings::default());
         rig.mcp(json!({"w": {"command": "sh", "args": ["-c", "sleep 613; true"]}}));
         let s = Session::start(&mut rig, "sh -c 'sleep 613; true' & read x", 2);
         assert_eq!(pids(&rig.decide()), {
@@ -818,7 +816,7 @@ mod tests {
 
     #[test]
     fn without_readable_configuration_every_child_still_blocks() {
-        let mut rig = Rig::new("mcp-noconfig", IGNORING);
+        let mut rig = Rig::new("mcp-noconfig", Settings::default());
         let s = Session::start(&mut rig, "sleep 611 & read x", 1);
         let kid = s.pid_with("sleep 611");
         assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)), "no configuration at all");
@@ -830,7 +828,7 @@ mod tests {
 
     #[test]
     fn the_configuration_is_read_again_at_every_check() {
-        let mut rig = Rig::new("mcp-reread", IGNORING);
+        let mut rig = Rig::new("mcp-reread", Settings::default());
         let s = Session::start(&mut rig, "sleep 611 & read x", 1);
         let kid = s.pid_with("sleep 611");
         assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(kid)));
@@ -842,19 +840,19 @@ mod tests {
 
     #[test]
     fn choosing_to_count_mcp_servers_restores_blocking_and_a_change_applies_without_restarting() {
-        let mut rig = Rig::new("mcp-setting", IGNORING);
+        let mut rig = Rig::new("mcp-setting", Settings::default());
         rig.mcp(json!({"a": {"command": "sleep", "args": ["611"]}}));
         let s = Session::start(&mut rig, "sleep 611 & read x", 1);
         let kid = s.pid_with("sleep 611");
         let config = rig.dir.join("config");
         assert_eq!(pids(&rig.decide()), [kid]);
-        save(&config, &Settings { idle_stop_ignores_mcp: false, ..IGNORING }).unwrap();
+        save(&config, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
         assert_eq!(rig.decide(), Decision::Keep(Reason::AnyProcessBlocks(kid)), "the same server now counts");
         save(&config, &Settings::default()).unwrap();
         assert_eq!(pids(&rig.decide()), [kid], "and back");
         // Turned off, a session with nothing under it is still stopped.
-        save(&config, &Settings { idle_stop_ignores_mcp: false, ..IGNORING }).unwrap();
-        let mut plain = Rig::new("mcp-setting-plain", Settings { idle_stop_ignores_mcp: false, ..IGNORING });
+        save(&config, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
+        let mut plain = Rig::new("mcp-setting-plain", Settings { idle_stop_ignores_mcp: false, ..Settings::default() });
         plain.status("idle");
         assert_eq!(plain.decide(), Decision::Stop(Vec::new()));
         // A hand-edited file with a wrong type for the choice keeps ignoring MCP servers.
@@ -864,7 +862,7 @@ mod tests {
 
     #[test]
     fn every_reason_not_to_stop_is_reported_as_itself() {
-        let mut rig = Rig::new("reasons", IGNORING);
+        let mut rig = Rig::new("reasons", Settings::default());
         let (t0, later) = (Instant::now(), Instant::now() + 500 * MIN);
         rig.status("idle");
         assert_eq!(rig.dog.decide(later, 1, &mut { t0 }), Decision::Keep(Reason::Viewer));
@@ -873,9 +871,9 @@ mod tests {
         rig.status("idle");
         assert_eq!(rig.dog.decide(later, 0, &mut { later - MIN }), Decision::Keep(Reason::RecentOutput));
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Stop(Vec::new()));
-        save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, ..IGNORING }).unwrap();
+        save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, ..Settings::default() }).unwrap();
         assert_eq!(rig.dog.decide(later, 0, &mut { t0 }), Decision::Keep(Reason::IdleStopOff));
-        save(&rig.dir.join("config"), &IGNORING).unwrap();
+        save(&rig.dir.join("config"), &Settings::default()).unwrap();
         // A process table that can't say anything about claude.
         let mut gone = Command::new("true").spawn().unwrap();
         let dead = gone.id();

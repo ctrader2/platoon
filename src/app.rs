@@ -266,7 +266,7 @@ impl App {
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             tick: 0,
-            theme: Theme::catppuccin_mocha(),
+            theme: Theme::default(),
             quit: false,
             rounded: false,
             hits: RefCell::new(Vec::new()),
@@ -285,6 +285,7 @@ impl App {
             rev: 0,
             built: (0, Vec::new()),
         };
+        app.theme = app.settings.get().theme();
         // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
         app.refresh_with(Vec::new(), false);
         app
@@ -292,6 +293,23 @@ impl App {
 
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// Pick up an edit of settings.json, and with it a changed theme. True when the file was re-read.
+    fn refresh_settings(&mut self) -> bool {
+        let changed = self.settings.refresh();
+        if changed {
+            self.sync_theme();
+        }
+        changed
+    }
+
+    /// The theme in effect is the one the settings name (the default when they name one platoon doesn't know).
+    fn sync_theme(&mut self) {
+        let want = self.settings.get().theme();
+        if want.id != self.theme.id {
+            self.theme = want;
+        }
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -488,7 +506,7 @@ impl App {
     /// disk: a conversation used in another terminal since the last run must not look old just because
     /// the saved index says so. All of them go into one write, and one notice says how many.
     fn auto_archive(&mut self, sessions_changed: bool, now_secs: u64) {
-        let settings_changed = self.settings.refresh();
+        let settings_changed = self.refresh_settings();
         // A value is still being chosen on the settings screen: hold everything until it stops changing.
         let settled = match self.apply_after {
             Some(t) if Instant::now() < t => return,
@@ -641,7 +659,7 @@ impl App {
 
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
-        self.settings.refresh();
+        self.refresh_settings();
         self.setting = 0;
         self.mode = Mode::Settings;
     }
@@ -657,7 +675,7 @@ impl App {
         let Some(item) = ITEMS.get(i) else { return };
         self.notice = None;
         // Start from the file as it is now, in case it was edited since the screen last looked.
-        self.settings.refresh();
+        self.refresh_settings();
         let mut next = self.settings.get();
         let old = (item.get)(&next);
         let new = item.step(old, step);
@@ -665,7 +683,9 @@ impl App {
             return;
         }
         (item.set)(&mut next, new);
-        if let Err(e) = self.settings.update(&next) {
+        let saved = self.settings.update(&next);
+        self.sync_theme();
+        if let Err(e) = saved {
             let why = e.to_string();
             let why = why.split(" (os error").next().unwrap_or(&why);
             self.notify(format!("Couldn't save the settings: {why}"));

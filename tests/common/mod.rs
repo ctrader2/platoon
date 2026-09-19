@@ -64,6 +64,7 @@ impl Term {
         cmd.env("TERM", "xterm-256color");
         cmd.env("NO_COLOR", "1");
         cmd.env("PLATOON_BADGES", "square"); // the same text whatever terminal the tests run in
+        cmd.env("PLATOON_COLORS", "truecolor"); // and the same colors
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -101,6 +102,24 @@ impl Term {
             self.screen.process(&b);
         }
         self.screen.screen().contents()
+    }
+
+    /// The background color of a screen cell, as the terminal was told to draw it.
+    pub fn bg_at(&mut self, row: u16, col: u16) -> vt100::Color {
+        self.text();
+        self.screen.screen().cell(row, col).map(|c| c.bgcolor()).unwrap()
+    }
+
+    /// Waits until a cell has the given background.
+    pub fn wait_bg(&mut self, row: u16, col: u16, want: vt100::Color) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            if self.bg_at(row, col) == want {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        panic!("cell ({row},{col}) never got background {want:?}; it is {:?}", self.bg_at(row, col));
     }
 
     /// Waits for text to disappear, e.g. a popup closing.

@@ -113,13 +113,39 @@ the screen shows the exact path). platoon doesn't create it until you change som
 by hand too:
 
 ```json
-{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true}
+{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha"}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` is `true` or `false`; anything else there means the default
-(`true`). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). `theme` is one of the [theme](#themes) ids. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+
+### Themes
+
+platoon ships with dark color themes: Catppuccin Mocha (the default), Catppuccin Macchiato, Tokyo Night, Dracula,
+One Dark, Nord, Gruvbox Dark, Rosé Pine, Kanagawa Wave, Night Owl, Ayu Mirage, Vesper, Claude (Claude Code's own
+colors) and Terminal colors. For now you pick one by editing `theme` in `settings.json`; `platoon themes` lists the
+ids with a swatch of each:
+
+```json
+{"theme": "tokyo-night"}
+```
+
+A running platoon picks the change up within a couple of seconds. A theme id platoon doesn't know shows the default
+and is left in the file as it is. The theme also recolors the Claude session you view inside platoon (its 16
+terminal colors become the theme's); `platoon open` in a regular terminal is unaffected.
+
+`terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
+whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the
+background and a bright black that reads as grey; if your terminal theme's black is the same as its background, the
+highlighted row is shown only by the marker beside it.
+
+Themes use 24-bit color. Terminals that don't support it (macOS Terminal.app, some tmux setups) get the nearest of
+the 256 xterm colors instead, worked out for each cell as it is drawn. platoon decides from `COLORTERM`
+(`truecolor` or `24bit`) and a list of terminals known to support it; set `PLATOON_COLORS=truecolor` or
+`PLATOON_COLORS=256` to choose yourself. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for where the palettes
+come from.
 
 ### Big histories
 

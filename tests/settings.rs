@@ -134,3 +134,57 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     t.send(b"q");
     t.wait_exit();
 }
+
+#[test]
+fn the_theme_in_settings_json_colors_the_running_ui_and_an_edit_applies_without_a_restart() {
+    use vt100::Color::Rgb;
+    let base = tmp("theme-e2e");
+    let env = env(&base);
+    let file = base.join("config/settings.json");
+    fs::write(&file, r#"{"theme":"nord","keep":"me"}"#).unwrap();
+    let mut env = env;
+    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
+    let mut t = Term::spawn(&[], &env, &base, 24, 100);
+    t.wait_for("enter open");
+    t.wait_bg(1, 1, Rgb(0x2e, 0x34, 0x40)); // Nord's background, inside the frame
+
+    // An edit made by hand (or by a picker one day) shows within the normal refresh.
+    fs::write(&file, r#"{"theme":"tokyo-night","keep":"me"}"#).unwrap();
+    t.wait_bg(1, 1, Rgb(0x1a, 0x1b, 0x26));
+
+    // An id nothing knows shows the default theme, and opening the settings and changing a value keeps the id.
+    fs::write(&file, r#"{"theme":"one-i-made-up","keep":"me"}"#).unwrap();
+    t.wait_bg(1, 1, Rgb(0x1e, 0x1e, 0x2e));
+    t.send(b"s");
+    t.wait_for("Stop idle sessions after");
+    t.send(b"\x1b[C");
+    until("the change to reach the file", || saved(&base)["idle_stop_minutes"] == 240);
+    assert_eq!(saved(&base)["theme"], "one-i-made-up");
+    assert_eq!(saved(&base)["keep"], "me");
+    t.send(b"\x1b");
+    t.wait_gone("Settings file:");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn without_truecolor_the_ui_is_drawn_in_256_colors_and_terminal_colors_uses_the_terminals_own() {
+    use vt100::Color::{Default, Idx};
+    let base = tmp("theme-256-e2e");
+    let mut env = env(&base);
+    env.push(("PLATOON_COLORS", "256".into())); // later entries override the helper's truecolor
+    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
+    fs::write(base.join("config/settings.json"), r#"{"theme":"nord"}"#).unwrap();
+    let mut t = Term::spawn(&[], &env, &base, 24, 100);
+    t.wait_for("enter open");
+    t.wait_bg(1, 1, Idx(237)); // 2e3440 is nearest the gray ramp's 58,58,58
+    t.send(b"q");
+    t.wait_exit();
+
+    fs::write(base.join("config/settings.json"), r#"{"theme":"terminal"}"#).unwrap();
+    let mut t = Term::spawn(&[], &env, &base, 24, 100);
+    t.wait_for("enter open");
+    assert_eq!(t.bg_at(1, 1), Default, "the terminal's own background");
+    t.send(b"q");
+    t.wait_exit();
+}

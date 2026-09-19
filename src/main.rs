@@ -2,6 +2,7 @@ mod app;
 mod archive;
 mod claude;
 mod client;
+mod colordepth;
 mod dirs;
 mod guard;
 mod host;
@@ -34,6 +35,7 @@ fn main() -> io::Result<()> {
         None => {}
         Some("statusline") => return statusline(),
         Some("setup") => return setup(),
+        Some("themes") => return themes(),
         Some("open") => {
             require_setup();
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -45,7 +47,7 @@ fn main() -> io::Result<()> {
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id]]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  statusline, hook guard   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id] | themes]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the built-in color themes (choose one with \"theme\" in settings.json)\n  statusline, hook guard   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
@@ -97,6 +99,13 @@ fn use_color(stderr: bool) -> bool {
     std::env::var_os("NO_COLOR").is_none() && if stderr { io::stderr().is_terminal() } else { io::stdout().is_terminal() }
 }
 
+/// `platoon themes`: the built-in themes and their ids, with a swatch of each when stdout shows colors.
+fn themes() -> io::Result<()> {
+    let depth = use_color(false).then(colordepth::Depth::detect);
+    print!("{}", theme::render_list(depth));
+    Ok(())
+}
+
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
     match setup::run(&root) {
@@ -112,6 +121,7 @@ fn setup() -> io::Result<()> {
 /// Runs the UI. Returns how many platoon-hosted sessions are still running when it exits.
 fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut app = app::App::new();
+    let depth = colordepth::Depth::detect();
     let start = Instant::now();
     let mut last_refresh = Instant::now();
     while !app.quit {
@@ -125,7 +135,10 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         }
         let size = terminal.size()?;
         app.sync_size(size.width, size.height);
-        terminal.draw(|f| ui::draw(f, &app))?;
+        terminal.draw(|f| {
+            ui::draw(f, &app);
+            depth.apply(f.buffer_mut());
+        })?;
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
@@ -143,9 +156,11 @@ mod tests {
     use super::*;
     use crate::app::{Action, AdoptKind, App, Confirm, Hit, JumpPlan, Mode};
     use crate::model::Status;
+    use crate::theme::Theme;
     use crate::testkit::{alive, World};
     use ratatui::{
         backend::TestBackend,
+        style::Color,
         crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
         Terminal,
     };
@@ -1758,5 +1773,169 @@ mod tests {
         assert!(matches!(app.mode, Mode::Settings));
         key(&mut app, KeyCode::Esc);
         assert_eq!((app.tab, app.selected, ids(&app)), (0, 1, vec!["aaa", "bbb"]));
+    }
+
+    // --- themes -------------------------------------------------------------------------------------
+
+    fn choose_theme(w: &World, id: &str) {
+        settings::save(&w.config, &Settings { theme: id.into(), ..on_disk(w) }).unwrap();
+    }
+
+    fn cells(term: &Terminal<TestBackend>) -> Vec<ratatui::buffer::Cell> {
+        term.backend().buffer().content.clone()
+    }
+
+    #[test]
+    fn the_theme_follows_the_settings_file_within_a_normal_refresh() {
+        let w = World::new("theme-follow");
+        w.transcript("aaa", "/srv/a", "hello", 5);
+        let mut app = w.app();
+        assert_eq!(app.theme.id, "catppuccin-mocha");
+        choose_theme(&w, "nord");
+        assert_eq!(app.theme.id, "catppuccin-mocha", "nothing changes until the next refresh");
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "nord");
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        draw(&mut term, &app);
+        let buf = term.backend().buffer();
+        assert_eq!((buf[(0, 0)].fg, buf[(1, 1)].bg), (app.theme.border, app.theme.bg), "drawn with the new theme");
+        assert_ne!(app.theme.bg, Theme::default().bg);
+
+        choose_theme(&w, "terminal");
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "terminal");
+        draw(&mut term, &app);
+        assert_eq!(term.backend().buffer()[(1, 1)].bg, Color::Reset);
+
+        // A hand-edited file that says something else (or garbage) shows the default, never an error.
+        std::fs::write(config_file(&w), r#"{"theme": "tokyo-night"}"#).unwrap();
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "tokyo-night");
+        std::fs::write(config_file(&w), "{ not json").unwrap();
+        app.refresh_for_test();
+        assert_eq!(app.theme.id, "catppuccin-mocha");
+    }
+
+    #[test]
+    fn an_unknown_theme_shows_the_default_and_survives_changes_made_on_the_settings_screen() {
+        let w = World::new("theme-unknown");
+        std::fs::write(config_file(&w), r#"{"theme": "from-the-future", "idle_stop_minutes": 120}"#).unwrap();
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        assert_eq!(app.theme.id, "catppuccin-mocha");
+        assert!(draw(&mut term, &app).contains("Settings"), "the screen works as before");
+        key(&mut app, KeyCode::Right);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
+        assert_eq!((v["theme"].as_str(), v["idle_stop_minutes"].as_u64()), (Some("from-the-future"), Some(240)));
+        assert_eq!(app.theme.id, "catppuccin-mocha");
+    }
+
+    #[test]
+    fn every_theme_draws_the_list_the_settings_and_the_dialogs_with_its_own_colors() {
+        let mut w = World::new("theme-sweep");
+        w.transcript("aaa", "/srv/alpha", "refactor the parser", 3 * 24 * 60);
+        w.transcript("bbb", "/srv/beta", "add a login page", 30);
+        w.live("bbb", "/srv/beta", 1, "busy");
+        for t in Theme::all() {
+            choose_theme(&w, &t.id);
+            let mut app = w.app();
+            assert_eq!(app.theme.id, t.id);
+            let fixed = t.ansi.is_some();
+            let check = |term: &Terminal<TestBackend>, what: &str| {
+                for c in cells(term) {
+                    if fixed {
+                        assert!(matches!(c.bg, Color::Rgb(..)) && !matches!(c.fg, Color::Indexed(_)), "{}: {what}: {:?}/{:?}", t.id, c.fg, c.bg);
+                        assert!(c.symbol().trim().is_empty() || matches!(c.fg, Color::Rgb(..)), "{}: {what}: {:?} is unthemed text", t.id, c.symbol());
+                    } else {
+                        assert!(!matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..)), "{}: {what}: {:?}/{:?}", t.id, c.fg, c.bg);
+                    }
+                }
+            };
+            for (cols, rows) in [(100, 24), (80, 24), (60, 16), (44, 12)] {
+                let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+                app.mode = Mode::List;
+                let text = draw(&mut term, &app);
+                assert!(text.contains("platoon"), "{}: {cols}x{rows}\n{text}", t.id);
+                check(&term, "list");
+                assert_eq!(term.backend().buffer()[(0, 0)].fg, t.border, "{}: the frame", t.id);
+                ch(&mut app, 's');
+                draw(&mut term, &app);
+                check(&term, "settings");
+                key(&mut app, KeyCode::Esc);
+                ch(&mut app, 'n');
+                draw(&mut term, &app);
+                check(&term, "picker");
+                key(&mut app, KeyCode::Esc);
+                ch(&mut app, '/');
+                draw(&mut term, &app);
+                check(&term, "filter");
+                key(&mut app, KeyCode::Esc);
+            }
+        }
+    }
+
+    #[test]
+    fn the_selected_row_the_current_tab_and_the_bars_use_the_themes_own_roles() {
+        let mut w = World::new("theme-roles");
+        w.transcript("aaa", "/srv/alpha", "refactor the parser", 40);
+        w.transcript("bbb", "/srv/beta", "add a login page", 30);
+        w.live("bbb", "/srv/beta", 1, "busy");
+        for t in Theme::all() {
+            choose_theme(&w, &t.id);
+            let app = w.app();
+            let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            draw(&mut term, &app);
+            let all = cells(&term);
+            let has = |f: &dyn Fn(&ratatui::buffer::Cell) -> bool| all.iter().any(f);
+            assert!(has(&|c| c.bg == t.surface && c.symbol() != " "), "{}: the selected row has a surface band with text on it", t.id);
+            assert!(has(&|c| c.bg == t.accent && c.fg == t.on_accent), "{}: the current tab's count badge is on_accent on accent", t.id);
+            assert!(has(&|c| c.fg == t.busy), "{}: the working session is in the busy color", t.id);
+            assert!(has(&|c| c.fg == t.ok && c.symbol() == "━"), "{}: a low context bar is ok", t.id);
+            assert!(has(&|c| c.fg == t.dim), "{}", t.id);
+            assert!(has(&|c| c.fg == t.subtext), "{}", t.id);
+            assert!(has(&|c| c.fg == t.accent && c.symbol() == "━"), "{}: the current tab is underlined", t.id);
+        }
+    }
+
+    #[test]
+    fn the_paused_banner_and_the_dialogs_are_drawn_in_theme_colors() {
+        let mut w = World::new("theme-banner");
+        w.transcript("same-id", "/tmp", "shared", 1);
+        let (a, _b) = (w.live("same-id", "/tmp", 1, "idle"), w.live("same-id", "/tmp", 2, "idle"));
+        for id in ["tokyo-night", "terminal"] {
+            choose_theme(&w, id);
+            let mut app = w.app();
+            app.refresh_with(vec![hosted(a)], false);
+            app.mode = Mode::Attached(a);
+            assert!(app.attached_paused());
+            let t = app.theme.clone();
+            let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+            term.draw(|f| ui::draw_paused_banner(f, &app, f.area())).unwrap();
+            let buf = term.backend().buffer();
+            let corner = (0..30).flat_map(|y| (0..100).map(move |x| (x, y))).find(|&(x, y)| buf[(x, y)].symbol() == "╭").expect("the banner's frame");
+            assert_eq!((buf[corner].fg, buf[corner].bg), (t.warn, t.bg), "{id}: the frame is the warning color");
+            let title = (0..100).find(|&x| buf[(x, corner.1)].symbol() == "s" && buf[(x + 1, corner.1)].symbol() == "e").expect("title");
+            assert_eq!(buf[(title, corner.1)].fg, t.warn, "{id}");
+            let body = (0..100).find(|&x| buf[(x, corner.1 + 1)].symbol() == "T").expect("first line");
+            assert_eq!((buf[(body, corner.1 + 1)].fg, buf[(body, corner.1 + 1)].bg), (t.text, t.bg), "{id}: text on the theme's background");
+        }
+    }
+
+    #[test]
+    fn a_256_color_terminal_gets_only_indexed_colors_and_the_same_text() {
+        use crate::colordepth::Depth;
+        let w = World::new("theme-256");
+        w.transcript("aaa", "/srv/alpha", "refactor the parser", 40);
+        let app = w.app();
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        term.draw(|f| ui::draw(f, &app)).unwrap();
+        let truecolor = screen_text(&term);
+        term.draw(|f| {
+            ui::draw(f, &app);
+            Depth::Indexed256.apply(f.buffer_mut());
+        })
+        .unwrap();
+        assert_eq!(screen_text(&term), truecolor);
+        assert!(cells(&term).iter().all(|c| !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..))));
+        assert!(cells(&term).iter().any(|c| matches!(c.bg, Color::Indexed(_))), "the theme's background is an index now");
     }
 }

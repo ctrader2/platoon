@@ -1,5 +1,5 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
-//! clean-ups and how idle stop treats MCP servers. The settings screen edits them through `save`, and
+//! clean-ups, how idle stop treats MCP servers, and the color theme. The settings screen edits them through `save`, and
 //! `ITEMS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
@@ -9,6 +9,7 @@
 //! anything, including the session hosts that outlive platoon.
 
 use crate::archive::keep_backup;
+use crate::theme::{Theme, DEFAULT_ID};
 use serde_json::{json, Map, Value};
 use std::{fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, time::{Duration, SystemTime}};
 
@@ -18,7 +19,7 @@ pub const MAX_IDLE_STOP_MINUTES: u64 = 7 * 24 * 60;
 pub const MAX_AUTO_ARCHIVE_DAYS: u64 = 365;
 
 /// For both numbers, 0 means the feature is off.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// Stop a platoon-hosted session with no viewer, not working and silent for this many minutes.
     pub idle_stop_minutes: u64,
@@ -26,11 +27,15 @@ pub struct Settings {
     pub auto_archive_days: u64,
     /// Idle stop doesn't count MCP servers as something running under the session. Off: any process does.
     pub idle_stop_ignores_mcp: bool,
+    /// The id of the color theme, exactly as the file says. It may be one this version doesn't know (a newer
+    /// version's, or a user theme): that shows as the default theme (`Theme::by_id` finds none) but is kept
+    /// on disk until the user picks another.
+    pub theme: String,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { idle_stop_minutes: 120, auto_archive_days: 2, idle_stop_ignores_mcp: true }
+        Self { idle_stop_minutes: 120, auto_archive_days: 2, idle_stop_ignores_mcp: true, theme: DEFAULT_ID.into() }
     }
 }
 
@@ -46,6 +51,11 @@ impl Settings {
     /// The idle-stop threshold, or None when it is off. `secs_per_minute` is 60 outside of tests.
     pub fn idle_stop_after(&self, secs_per_minute: u64) -> Option<Duration> {
         (self.idle_stop_minutes > 0).then(|| Duration::from_secs(self.idle_stop_minutes * secs_per_minute))
+    }
+
+    /// The theme to draw with: the chosen one, or the default when the id isn't known.
+    pub fn theme(&self) -> Theme {
+        Theme::by_id(&self.theme).unwrap_or_default()
     }
 
     /// The auto-archive age in seconds, or None when it is off.
@@ -66,11 +76,13 @@ fn parse(text: &str) -> Option<Settings> {
     };
     // Only a real true/false counts: anything else (a number, text) is not a choice, so the default stays.
     let ignores_mcp = o.get("idle_stop_ignores_mcp").and_then(Value::as_bool).unwrap_or(d.idle_stop_ignores_mcp);
+    let theme = o.get("theme").and_then(Value::as_str).map_or(d.theme.clone(), str::to_string);
     Some(
         Settings {
             idle_stop_minutes: number("idle_stop_minutes", d.idle_stop_minutes),
             auto_archive_days: number("auto_archive_days", d.auto_archive_days),
             idle_stop_ignores_mcp: ignores_mcp,
+            theme,
         }
         .clamped(),
     )
@@ -113,11 +125,17 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
         keep_backup(&path)?;
     }
     let mut object = if corrupt { Map::new() } else { existing_object(&path).unwrap_or_default() };
-    let s = settings.clamped();
+    let s = settings.clone().clamped();
     object.entry("version").or_insert(json!(1));
     object.insert("idle_stop_minutes".into(), json!(s.idle_stop_minutes));
     object.insert("auto_archive_days".into(), json!(s.auto_archive_days));
     object.insert("idle_stop_ignores_mcp".into(), json!(s.idle_stop_ignores_mcp));
+    // The theme is only written when it is a different choice from what the file already says: a value platoon
+    // can't read (an id from another version, or something that isn't text) is the user's until they pick.
+    let same = object.get("theme").is_some_and(|v| v.as_str().map_or(s.theme == DEFAULT_ID, |on_disk| on_disk == s.theme));
+    if !same {
+        object.insert("theme".into(), json!(s.theme));
+    }
     let text = serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default();
     let tmp = path.with_extension("json.tmp");
     let written = fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &path));
@@ -238,7 +256,7 @@ impl SettingsStore {
     }
 
     pub fn get(&self) -> Settings {
-        self.settings
+        self.settings.clone()
     }
 
     /// The file exists but couldn't be understood, so `get` is the defaults.
@@ -392,7 +410,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -424,7 +442,7 @@ mod tests {
             assert!(item.choices.contains(&(item.get)(&defaults)), "the default is one of the steps for {}", item.name);
             let mut s = defaults;
             (item.set)(&mut s, *item.choices.last().unwrap());
-            assert_eq!(s.clamped(), s, "the last step is within the limits for {}", item.name);
+            assert_eq!(s.clone().clamped(), s, "the last step is within the limits for {}", item.name);
         }
     }
 
@@ -514,5 +532,81 @@ mod tests {
         fs::create_dir(path_in(&d)).unwrap(); // saving now fails
         assert!(store.update(&Settings { idle_stop_minutes: 240, auto_archive_days: 7, ..Settings::default() }).is_err());
         assert_eq!(store.get().idle_stop_minutes, 120, "the store says what is in effect, not what was asked for");
+    }
+
+    fn saved(d: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path_in(d)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_theme_defaults_to_catppuccin_mocha_and_only_a_string_changes_it() {
+        let d = dir("theme-read");
+        assert_eq!(Settings::default().theme, "catppuccin-mocha");
+        assert_eq!(load(&d).0.theme, "catppuccin-mocha", "no file");
+        write(&d, "{}");
+        assert_eq!(load(&d).0.theme, "catppuccin-mocha", "key missing");
+        write(&d, r#"{"theme": "nord", "auto_archive_days": 9}"#);
+        assert_eq!(load(&d), (Settings { theme: "nord".into(), auto_archive_days: 9, ..Settings::default() }, false));
+        // Wrong type: not a choice, so the default stays, and the rest of the file is still read.
+        for odd in ["1", "true", "null", "[]", r#"{"name":"latte"}"#, "1.5"] {
+            write(&d, &format!(r#"{{"theme": {odd}, "auto_archive_days": 9}}"#));
+            assert_eq!(load(&d), (Settings { auto_archive_days: 9, ..Settings::default() }, false), "{odd}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_theme_shows_as_the_default_but_is_kept_as_it_was_written() {
+        let d = dir("theme-unknown");
+        write(&d, r#"{"theme": "my-own-theme", "idle_stop_minutes": 30}"#);
+        let s = load(&d).0;
+        assert_eq!(s.theme, "my-own-theme", "the id is carried as written");
+        assert_eq!(s.theme().id, "catppuccin-mocha", "and displays as the default");
+        // Saving something else (what the settings screen does) keeps it.
+        save(&d, &Settings { idle_stop_minutes: 60, ..s.clone() }).unwrap();
+        assert_eq!(saved(&d)["theme"], "my-own-theme");
+        assert_eq!(saved(&d)["idle_stop_minutes"], 60);
+        // Picking another one replaces it.
+        save(&d, &Settings { theme: "tokyo-night".into(), ..s }).unwrap();
+        assert_eq!(saved(&d)["theme"], "tokyo-night");
+        assert_eq!(load(&d).0.theme().id, "tokyo-night");
+    }
+
+    #[test]
+    fn a_theme_value_that_is_not_text_survives_saves_until_a_theme_is_picked() {
+        let d = dir("theme-object");
+        write(&d, r#"{"theme": {"name": "latte", "tweaks": [1]}}"#);
+        let s = load(&d).0;
+        assert_eq!(s.theme, "catppuccin-mocha");
+        save(&d, &Settings { auto_archive_days: 7, ..s.clone() }).unwrap();
+        assert_eq!(saved(&d)["theme"], json!({"name": "latte", "tweaks": [1]}), "not ours to overwrite");
+        save(&d, &Settings { theme: "dracula".into(), ..s }).unwrap();
+        assert_eq!(saved(&d)["theme"], "dracula");
+    }
+
+    #[test]
+    fn a_first_save_writes_the_theme_and_picking_the_default_over_another_writes_it_back() {
+        let d = dir("theme-save");
+        save(&d, &Settings::default()).unwrap();
+        assert_eq!(saved(&d)["theme"], "catppuccin-mocha");
+        save(&d, &Settings { theme: "nord".into(), ..Settings::default() }).unwrap();
+        assert_eq!(saved(&d)["theme"], "nord");
+        save(&d, &Settings::default()).unwrap();
+        assert_eq!(saved(&d)["theme"], "catppuccin-mocha", "choosing the default is a choice like any other");
+        // A file without the key gets it when something else changes, like the other settings.
+        write(&d, r#"{"idle_stop_minutes": 5}"#);
+        save(&d, &Settings::default()).unwrap();
+        assert_eq!(saved(&d)["theme"], "catppuccin-mocha");
+    }
+
+    #[test]
+    fn the_store_notices_a_theme_edit() {
+        let d = dir("theme-store");
+        write(&d, r#"{"theme": "nord"}"#);
+        let mut s = SettingsStore::open(&d);
+        assert_eq!(s.get().theme().id, "nord");
+        write(&d, r#"{"theme": "vesper", "note": "a longer file, so the size changes too"}"#);
+        assert!(s.refresh());
+        assert_eq!(s.get().theme().id, "vesper");
+        assert!(!s.refresh());
     }
 }

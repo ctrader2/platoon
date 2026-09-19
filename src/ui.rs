@@ -147,7 +147,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         let hover = !current && rect.contains(app.mouse.into());
         let chip = if current || hover { t.surface } else { t.bg };
         let (k, l, badge) = if current {
-            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.bg).bg(t.accent).add_modifier(Modifier::BOLD))
+            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
         } else if hover {
             (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
         } else {
@@ -802,18 +802,28 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
-fn vt_color(c: vt100::Color, default: Color) -> Color {
+/// Paint the attached session into the buffer.
+fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect) {
+    let parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
+    draw_screen(f, t, parser.screen(), area);
+}
+
+/// The emulator's colors as the theme shows them: the 16 ANSI colors become the theme's palette (when it has
+/// one), the default foreground and background become its text and background, and the 256-color cube and
+/// truecolor values are the program's own and pass through.
+fn vt_color(c: vt100::Color, default: Color, ansi: Option<&[Color; 16]>) -> Color {
     match c {
         vt100::Color::Default => default,
-        vt100::Color::Idx(i) => Color::Indexed(i),
+        vt100::Color::Idx(i) => match ansi {
+            Some(palette) if i < 16 => palette[i as usize],
+            _ => Color::Indexed(i),
+        },
         vt100::Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
     }
 }
 
-/// Paint the emulator's screen into the buffer, cell by cell.
-fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect) {
-    let parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
-    let screen = parser.screen();
+/// Paint an emulator screen into the buffer, cell by cell.
+fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect) {
     let (rows, cols) = screen.size();
     let buf = f.buffer_mut();
     for r in 0..rows.min(area.height) {
@@ -822,12 +832,18 @@ fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect) {
             if cell.is_wide_continuation() {
                 continue;
             }
-            let mut fg = vt_color(cell.fgcolor(), t.text);
-            let mut bg = vt_color(cell.bgcolor(), t.bg);
-            if cell.inverse() {
-                std::mem::swap(&mut fg, &mut bg);
-            }
+            let mut fg = vt_color(cell.fgcolor(), t.text, t.ansi.as_ref());
+            let mut bg = vt_color(cell.bgcolor(), t.bg, t.ansi.as_ref());
             let mut m = Modifier::empty();
+            if cell.inverse() {
+                // Swapping is exact for colors we know. A default that is the terminal's own (Terminal colors) has
+                // no value to swap, so the terminal is asked to reverse the cell instead.
+                if fg == Color::Reset || bg == Color::Reset {
+                    m |= Modifier::REVERSED;
+                } else {
+                    std::mem::swap(&mut fg, &mut bg);
+                }
+            }
             if cell.bold() {
                 m |= Modifier::BOLD;
             }
@@ -900,7 +916,98 @@ fn fit_end(s: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::ago;
+    use super::*;
+    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+
+    /// What a session that printed `bytes` looks like under `theme` (one row per line, 12 columns).
+    fn shown(theme: &Theme, bytes: &[u8]) -> Buffer {
+        let mut parser = vt100::Parser::new(4, 12, 0);
+        parser.process(bytes);
+        let mut term = Terminal::new(TestBackend::new(12, 4)).unwrap();
+        term.draw(|f| draw_screen(f, theme, parser.screen(), f.area())).unwrap();
+        term.backend().buffer().clone()
+    }
+
+    fn fixed() -> Theme {
+        Theme::by_id("tokyo-night").unwrap()
+    }
+
+    #[test]
+    fn a_fixed_theme_recolors_the_sixteen_ansi_colors_with_its_palette() {
+        let t = fixed();
+        let p = t.ansi.unwrap();
+        let b = shown(&t, b"\x1b[31mR\x1b[92mG\x1b[0m\x1b[44m B\x1b[0m\x1b[1;33mY");
+        assert_eq!((b[(0, 0)].symbol(), b[(0, 0)].fg), ("R", p[1]), "SGR 31 is the theme's red");
+        assert_eq!((b[(1, 0)].symbol(), b[(1, 0)].fg), ("G", p[10]), "SGR 92 is the theme's bright green");
+        assert_eq!(b[(3, 0)].bg, p[4], "SGR 44 is the theme's blue background");
+        assert_eq!(b[(3, 0)].fg, t.text, "with the default foreground on it");
+        assert_eq!((b[(4, 0)].fg, b[(4, 0)].modifier.contains(Modifier::BOLD)), (p[3], true), "bold yellow keeps its weight");
+        // Black and white are palette entries too, not the emulator's.
+        let b = shown(&t, b"\x1b[30;47mK");
+        assert_eq!((b[(0, 0)].fg, b[(0, 0)].bg), (p[0], p[7]));
+    }
+
+    #[test]
+    fn defaults_become_the_themes_text_and_background_and_program_colors_pass_through() {
+        let t = fixed();
+        let b = shown(&t, b"plain\x1b[38;5;200mA\x1b[38;5;16mB\x1b[38;5;15mC\x1b[38;2;10;20;30mD\x1b[48;2;1;2;3mE");
+        assert_eq!((b[(0, 0)].fg, b[(0, 0)].bg), (t.text, t.bg));
+        assert_eq!(b[(5, 0)].fg, Color::Indexed(200), "a 256-color index is the program's own");
+        assert_eq!(b[(6, 0)].fg, Color::Indexed(16), "the first cube color is not remapped");
+        assert_eq!(b[(7, 0)].fg, t.ansi.unwrap()[15], "index 15 is still one of the sixteen");
+        assert_eq!(b[(8, 0)].fg, Color::Rgb(10, 20, 30), "truecolor is the program's own");
+        assert_eq!(b[(9, 0)].bg, Color::Rgb(1, 2, 3));
+        // Empty cells are painted with the theme's background too.
+        assert_eq!((b[(11, 3)].fg, b[(11, 3)].bg), (t.text, t.bg));
+    }
+
+    #[test]
+    fn reverse_video_swaps_the_recolored_colors() {
+        let t = fixed();
+        let p = t.ansi.unwrap();
+        let b = shown(&t, b"\x1b[7mX\x1b[0m\x1b[31;7mY\x1b[0m\x1b[32;44;7mZ");
+        assert_eq!((b[(0, 0)].fg, b[(0, 0)].bg), (t.bg, t.text), "the defaults swap");
+        assert!(!b[(0, 0)].modifier.contains(Modifier::REVERSED), "the colors are swapped here, not by the terminal");
+        assert_eq!((b[(1, 0)].fg, b[(1, 0)].bg), (t.bg, p[1]), "red text reversed is red behind the background color");
+        assert_eq!((b[(2, 0)].fg, b[(2, 0)].bg), (p[4], p[2]));
+    }
+
+    #[test]
+    fn terminal_colors_pass_the_emulators_colors_through_untouched() {
+        let t = Theme::by_id("terminal").unwrap();
+        let b = shown(&t, b"\x1b[31mR\x1b[92mG\x1b[0m\x1b[44m B\x1b[0m\x1b[38;5;200mA\x1b[38;2;10;20;30mD\x1b[0m plain");
+        assert_eq!(b[(0, 0)].fg, Color::Indexed(1), "the terminal's own red");
+        assert_eq!(b[(1, 0)].fg, Color::Indexed(10));
+        assert_eq!(b[(3, 0)].bg, Color::Indexed(4));
+        assert_eq!(b[(4, 0)].fg, Color::Indexed(200));
+        assert_eq!(b[(5, 0)].fg, Color::Rgb(10, 20, 30));
+        assert_eq!((b[(7, 0)].fg, b[(7, 0)].bg), (Color::Reset, Color::Reset), "defaults are the terminal's defaults");
+    }
+
+    #[test]
+    fn reverse_video_still_shows_under_terminal_colors() {
+        let t = Theme::by_id("terminal").unwrap();
+        // With both colors the terminal's own there is nothing to swap by hand, so the terminal is told to.
+        let b = shown(&t, b"\x1b[7mX\x1b[0m\x1b[31;7mY");
+        assert!(b[(0, 0)].modifier.contains(Modifier::REVERSED));
+        assert_eq!((b[(0, 0)].fg, b[(0, 0)].bg), (Color::Reset, Color::Reset));
+        assert!(b[(1, 0)].modifier.contains(Modifier::REVERSED), "red text on the default background, reversed by the terminal");
+        assert_eq!((b[(1, 0)].fg, b[(1, 0)].bg), (Color::Indexed(1), Color::Reset));
+        // Both explicit: swapped by hand, same as with a fixed theme.
+        let b = shown(&t, b"\x1b[32;44;7mZ");
+        assert_eq!((b[(0, 0)].fg, b[(0, 0)].bg), (Color::Indexed(4), Color::Indexed(2)));
+        assert!(!b[(0, 0)].modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn every_fixed_theme_paints_a_session_only_in_fixed_colors() {
+        for t in Theme::all().into_iter().filter(|t| t.ansi.is_some()) {
+            let b = shown(&t, b"\x1b[31mred\x1b[0m \x1b[7mrev\x1b[0m \x1b[42mgreen");
+            for cell in &b.content {
+                assert!(matches!(cell.fg, Color::Rgb(..)) && matches!(cell.bg, Color::Rgb(..)), "{}: {:?} {:?}", t.id, cell.fg, cell.bg);
+            }
+        }
+    }
 
     #[test]
     fn relative_times_read_at_a_glance() {
