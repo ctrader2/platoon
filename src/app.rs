@@ -2,6 +2,7 @@ use crate::claude::{pid_alive, Reader};
 use crate::client::{key_bytes, Client};
 use crate::dirs;
 use crate::guard;
+use crate::setup;
 use crate::host::{self, HostInfo};
 use crate::model::{Session, Status};
 use crate::usage::{self, Usage};
@@ -222,7 +223,7 @@ impl App {
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
     pub fn refresh(&mut self) {
         self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
-        let guard_on = usage::guard_installed(self.reader.root());
+        let guard_on = setup::guard_installed(self.reader.root());
         self.refresh_with(host::discover(), guard_on);
     }
 
@@ -281,7 +282,7 @@ impl App {
         }
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
-            None if usage::installed(self.reader.root()) => Usage::Waiting,
+            None if setup::statusline_installed(self.reader.root()) => Usage::Waiting,
             None => Usage::NotSetUp,
         };
         self.sessions = fresh;

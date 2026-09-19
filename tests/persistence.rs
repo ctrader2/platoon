@@ -152,6 +152,7 @@ fn quitting_the_ui_leaves_the_session_running() {
     let mut cmd = CommandBuilder::new(BIN);
     cmd.env("PLATOON_CACHE_DIR", &cache);
     cmd.env("PLATOON_CLAUDE_BIN", "sh");
+    cmd.env("PLATOON_SKIP_SETUP_CHECK", "1"); // this test is about sessions, not setup
     cmd.env("TERM", "xterm-256color");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
     drop(pair.slave);

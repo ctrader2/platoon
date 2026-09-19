@@ -5,6 +5,7 @@ mod dirs;
 mod guard;
 mod host;
 mod model;
+mod setup;
 mod theme;
 mod ui;
 mod usage;
@@ -33,7 +34,22 @@ fn main() -> io::Result<()> {
             std::process::exit(2);
         }
     }
-    let mut terminal = ratatui::init();
+    // Refuse to start until setup is complete. Only the UI is gated; the subcommands above never are.
+    // PLATOON_SKIP_SETUP_CHECK exists for tests and CI.
+    if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
+        let states = setup::check(&claude::claude_root());
+        if !setup::ready(&states) {
+            eprintln!("{}", setup::render_blocked(&states, use_color(true)));
+            std::process::exit(1);
+        }
+    }
+    let mut terminal = match ratatui::try_init() {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("platoon needs an interactive terminal ({e}).");
+            std::process::exit(1);
+        }
+    };
     let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = run(&mut terminal);
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
@@ -57,12 +73,17 @@ fn statusline() -> io::Result<()> {
     Ok(())
 }
 
+fn use_color(stderr: bool) -> bool {
+    use std::io::IsTerminal;
+    std::env::var_os("NO_COLOR").is_none() && if stderr { io::stderr().is_terminal() } else { io::stdout().is_terminal() }
+}
+
 fn setup() -> io::Result<()> {
-    let root = claude::Reader::new().root().to_path_buf();
-    match usage::setup(&root) {
-        Ok(msg) => println!("{msg}"),
+    let root = claude::claude_root();
+    match setup::run(&root) {
+        Ok(report) => println!("{}", setup::render_report(&report, &root, use_color(false))),
         Err(e) => {
-            eprintln!("{e}");
+            eprintln!("platoon setup failed: {e}");
             std::process::exit(1);
         }
     }
