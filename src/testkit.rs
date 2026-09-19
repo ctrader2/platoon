@@ -59,7 +59,7 @@ impl World {
 
     /// Write `settings.json` (0 turns a feature off).
     pub fn settings(&self, idle_stop_minutes: u64, auto_archive_days: u64) {
-        crate::settings::save(&self.config, &crate::settings::Settings { idle_stop_minutes, auto_archive_days }).unwrap();
+        crate::settings::save(&self.config, &crate::settings::Settings { idle_stop_minutes, auto_archive_days, ..Default::default() }).unwrap();
     }
 
     pub fn app(&self) -> App {

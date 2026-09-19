@@ -56,6 +56,28 @@ impl Rig {
         fs::rename(&tmp, self.config.join("settings.json")).unwrap();
     }
 
+    /// The settings file with the MCP choice too (`None`: left out, as an older file would be).
+    fn settings_mcp(&self, idle_stop_minutes: u64, ignores_mcp: Option<bool>) {
+        let extra = ignores_mcp.map(|b| format!(r#","idle_stop_ignores_mcp":{b}"#)).unwrap_or_default();
+        let tmp = self.config.join("settings.json.tmp");
+        fs::write(&tmp, format!(r#"{{"idle_stop_minutes":{idle_stop_minutes},"auto_archive_days":0{extra}}}"#)).unwrap();
+        fs::rename(&tmp, self.config.join("settings.json")).unwrap();
+    }
+
+    /// Claude Code's user config, where `claude mcp add` keeps servers (inside CLAUDE_CONFIG_DIR, which is set).
+    fn mcp_servers(&self, servers: serde_json::Value) {
+        fs::write(self.claude.join(".claude.json"), serde_json::json!({ "mcpServers": servers }).to_string()).unwrap();
+    }
+
+    /// A pid a stand-in wrote to `name` in the cache dir. Remembered so it is killed at the end if still there.
+    fn pid_file(&mut self, name: &str) -> u32 {
+        let file = self.cache.join(name);
+        until(&format!("{name} to be written"), || fs::read_to_string(&file).is_ok_and(|s| s.trim().parse::<u32>().is_ok()));
+        let pid = fs::read_to_string(&file).unwrap().trim().parse().unwrap();
+        self.pids.push(pid);
+        pid
+    }
+
     fn env(&self) -> Vec<(&'static str, String)> {
         vec![
             ("CLAUDE_CONFIG_DIR", self.claude.to_string_lossy().into()),
@@ -69,7 +91,9 @@ impl Rig {
     /// Start a host running `program args` and return claude's pid (the program's own pid).
     fn start(&mut self, program: &str, args: &[&str]) -> u32 {
         let mut cmd = Command::new(BIN);
-        cmd.args(["host", "--program", program, "--dir", "/tmp", "--rows", "24", "--cols", "80", "--"])
+        cmd.args(["host", "--program", program, "--dir"])
+            .arg(&self.work)
+            .args(["--rows", "24", "--cols", "80", "--"])
             .args(args)
             .envs(self.env())
             .stdin(Stdio::null())
@@ -352,4 +376,110 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
     assert!(text.contains("2 Archived 0") && text.contains("1 Active 2"), "{text}");
     t.send(b"q");
     t.wait_exit();
+}
+
+// --- MCP servers ---------------------------------------------------------------------------------------
+
+/// Gone, or a zombie waiting to be reaped: either way it is not running.
+fn gone(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |s| s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'))
+}
+
+fn wait_gone(what: &str, pid: u32) {
+    until(what, || gone(pid));
+}
+
+#[test]
+fn mcp_servers_do_not_keep_a_session_alive_and_the_ones_that_outlive_claude_are_cleaned_up_but_nothing_else() {
+    let mut r = Rig::new("mcp-happy", 1);
+    let (a, w) = (r.cache.join("mcp-a.pid"), r.cache.join("mcp-wrapped.pid"));
+    // A wrapper-style server: `sh -c '...'` that starts the real one and waits for it.
+    let wrapper = format!("sleep 612 & echo $! > {}; wait", w.display());
+    r.mcp_servers(serde_json::json!({
+        "plain": {"command": "sleep", "args": ["611"]},
+        "wrapped": {"type": "stdio", "command": "sh", "args": ["-c", wrapper]},
+        "remote": {"type": "http", "url": "https://example.invalid/mcp"},
+        "broken": {"command": 5},
+    }));
+    // Not under claude, and with exactly the configured server's command line: none of platoon's business.
+    let mut bystander = Command::new("sleep").arg("611").spawn().unwrap();
+    // Servers that ignore the hang-up a closing terminal sends (as anything that detaches itself does).
+    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; sh -c '{wrapper}' & echo $! > {}; read x", a.display(), r.cache.join("mcp-wrapper.pid").display());
+    let pid = r.start("sh", &["-c", &script]);
+    r.register(pid, "idle");
+    let (plain, sh, deep) = (r.pid_file("mcp-a.pid"), r.pid_file("mcp-wrapper.pid"), r.pid_file("mcp-wrapped.pid"));
+    let started = Instant::now();
+
+    r.stays_up(pid, Duration::from_millis(1000)); // the threshold still applies
+    r.wait_stopped(pid);
+    assert!(started.elapsed() >= Duration::from_millis(1500), "stopped after {:?}", started.elapsed());
+    // claude was ended; they don't end with it (nothing tells them to), so the host asked them to, after a moment.
+    for (what, p) in [("the plain server", plain), ("the wrapper", sh), ("what the wrapper started", deep)] {
+        wait_gone(&format!("{what} to be ended"), p);
+    }
+    assert!(r.host.as_mut().unwrap().wait().unwrap().success());
+    assert!(bystander.try_wait().unwrap().is_none(), "a look-alike outside the session was signalled");
+    let _ = bystander.kill();
+    let _ = bystander.wait();
+}
+
+#[test]
+fn a_server_that_is_not_configured_keeps_the_session_alive_even_beside_configured_ones() {
+    let mut r = Rig::new("mcp-other", 1);
+    r.mcp_servers(serde_json::json!({"plain": {"command": "sleep", "args": ["611"]}}));
+    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; sleep 612 & echo $! > {}; read x", r.cache.join("mcp.pid").display(), r.cache.join("job.pid").display());
+    let pid = r.start("sh", &["-c", &script]);
+    r.register(pid, "idle");
+    let (_mcp, job) = (r.pid_file("mcp.pid"), r.pid_file("job.pid")); // job: a dev server, say
+    r.stays_up(pid, STAY);
+    assert!(alive(job));
+    unsafe { libc::kill(job as i32, libc::SIGKILL) };
+    r.wait_stopped(pid);
+}
+
+#[test]
+fn the_same_command_line_below_a_direct_child_is_work_not_an_mcp_server() {
+    let mut r = Rig::new("mcp-deep", 1);
+    r.mcp_servers(serde_json::json!({"plain": {"command": "sleep", "args": ["611"]}}));
+    // claude -> sh (think: a tool call) -> sleep 611. The only direct child is not a configured server.
+    let inner = format!("sleep 611 & echo $! > {}; wait", r.cache.join("deep.pid").display());
+    let script = format!("sh -c '{inner}' & echo $! > {}; read x", r.cache.join("tool.pid").display());
+    let pid = r.start("sh", &["-c", &script]);
+    r.register(pid, "idle");
+    let (tool, deep) = (r.pid_file("tool.pid"), r.pid_file("deep.pid"));
+    r.stays_up(pid, STAY);
+    unsafe {
+        libc::kill(tool as i32, libc::SIGKILL);
+        libc::kill(deep as i32, libc::SIGKILL);
+    }
+    r.wait_stopped(pid);
+}
+
+#[test]
+fn counting_mcp_servers_keeps_such_a_session_alive_and_changing_it_applies_to_the_running_host() {
+    let mut r = Rig::new("mcp-setting", 1);
+    r.settings_mcp(1, Some(false)); // "Count MCP servers"
+    r.mcp_servers(serde_json::json!({"plain": {"command": "sleep", "args": ["611"]}}));
+    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; read x", r.cache.join("mcp.pid").display());
+    let pid = r.start("sh", &["-c", &script]);
+    r.register(pid, "idle");
+    let mcp = r.pid_file("mcp.pid");
+    r.stays_up(pid, STAY);
+    assert!(alive(mcp));
+
+    r.settings_mcp(1, Some(true)); // the default choice, set while the host runs
+    r.wait_stopped(pid);
+    wait_gone("the server to be cleaned up", mcp);
+}
+
+#[test]
+fn an_older_settings_file_without_the_choice_ignores_mcp_servers() {
+    let mut r = Rig::new("mcp-default", 1);
+    r.mcp_servers(serde_json::json!({"plain": {"command": "sleep", "args": ["611"]}}));
+    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; read x", r.cache.join("mcp.pid").display());
+    let pid = r.start("sh", &["-c", &script]);
+    r.register(pid, "idle");
+    let mcp = r.pid_file("mcp.pid");
+    r.wait_stopped(pid);
+    wait_gone("the server to be cleaned up", mcp);
 }

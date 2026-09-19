@@ -421,6 +421,16 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let hints_y = area.bottom().saturating_sub(1).max(area.y);
     let path_y = hints_y.saturating_sub(1).max(area.y);
     let top = area.y + 2.min(area.height);
+    // The reassurance line is the first thing to go when that lets the selected entry explain itself.
+    // A warning or an error is never dropped.
+    if !store.is_corrupt() && app.active_notice().is_none() {
+        let text_w = (area.width as usize).saturating_sub(4);
+        let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
+        let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top)) - top;
+        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(0) as usize) < 2 {
+            notes.clear();
+        }
+    }
     // The entries come before the notes: on a very short terminal the notes give way.
     let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top));
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
@@ -445,6 +455,18 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, Rect::new(area.x, hints_y, area.width, 1), &hints, None);
 }
 
+/// As much explanation as fits in `height` rows: every entry explained with air between them (0), else only
+/// the selected one (1), else none (2, a terminal a handful of lines tall).
+fn explain_level(explained: &[Vec<String>], selected: usize, height: usize) -> usize {
+    (0..2)
+        .find(|&level| {
+            let gap = usize::from(level == 0);
+            let total: usize = (0..explained.len()).map(|i| 1 + if level == 0 || i == selected { explained[i].len() } else { 0 }).sum();
+            total + gap * (explained.len() - 1) <= height
+        })
+        .unwrap_or(2)
+}
+
 /// Draws the entries and returns the row below the last one.
 fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settings, area: Rect) -> u16 {
     let t = &app.theme;
@@ -454,15 +476,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     let text_w = (area.width as usize).saturating_sub(4);
     let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
 
-    // As much explanation as fits: every entry explained with air between them, else only the selected one,
-    // else none (a terminal a handful of lines tall).
-    let level = (0..2)
-        .find(|&level| {
-            let gap = usize::from(level == 0);
-            let total: usize = (0..ITEMS.len()).map(|i| 1 + if level == 0 || i == app.setting { explained[i].len() } else { 0 }).sum();
-            total + gap * (ITEMS.len() - 1) <= area.height as usize
-        })
-        .unwrap_or(2);
+    let level = explain_level(&explained, app.setting, area.height as usize);
     let show = |i: usize| level == 0 || (level == 1 && i == app.setting);
     let height = |i: usize| 1 + if show(i) { explained[i].len() } else { 0 };
     let gap = u16::from(level == 0);
@@ -510,7 +524,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             Span::styled(format!(" {symbol} "), Style::new().fg(fg).bg(cell_bg))
         };
         // "Off" reads as switched off: muted, where an active value is bold and colored.
-        let value_style = if value == 0 { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
+        let value_style = if item.off == Some(value) { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
         let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
         let control = Line::from(vec![
             arrow("‹", prev, at_start),

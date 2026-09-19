@@ -1,5 +1,6 @@
-//! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`. Today that is the two
-//! automatic clean-ups; the settings screen edits them through `save`, and `ITEMS` describes what it shows.
+//! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
+//! clean-ups and how idle stop treats MCP servers. The settings screen edits them through `save`, and
+//! `ITEMS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
 //! just means the defaults, values that make no sense are clamped, writes are atomic, and a file that
@@ -23,11 +24,13 @@ pub struct Settings {
     pub idle_stop_minutes: u64,
     /// Archive a conversation with no running process and no activity for this many days.
     pub auto_archive_days: u64,
+    /// Idle stop doesn't count MCP servers as something running under the session. Off: any process does.
+    pub idle_stop_ignores_mcp: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { idle_stop_minutes: 120, auto_archive_days: 2 }
+        Self { idle_stop_minutes: 120, auto_archive_days: 2, idle_stop_ignores_mcp: true }
     }
 }
 
@@ -36,6 +39,7 @@ impl Settings {
         Self {
             idle_stop_minutes: self.idle_stop_minutes.min(MAX_IDLE_STOP_MINUTES),
             auto_archive_days: self.auto_archive_days.min(MAX_AUTO_ARCHIVE_DAYS),
+            ..self
         }
     }
 
@@ -50,8 +54,8 @@ impl Settings {
     }
 }
 
-/// None if the text isn't a JSON object. A key that is missing or isn't a non-negative number keeps its
-/// default (a negative number is nonsense, not "off"), and numbers past the limits are clamped.
+/// None if the text isn't a JSON object. A key that is missing or isn't a non-negative number (or, for the
+/// yes/no one, a boolean) keeps its default (a negative number is nonsense, not "off"), and numbers past the limits are clamped.
 fn parse(text: &str) -> Option<Settings> {
     let v: Value = serde_json::from_str(text).ok()?;
     let o = v.as_object()?;
@@ -60,7 +64,16 @@ fn parse(text: &str) -> Option<Settings> {
         Some(v) => v.as_u64().or_else(|| v.as_f64().filter(|f| f.is_finite() && *f >= 0.0).map(|f| f as u64)).unwrap_or(default),
         None => default,
     };
-    Some(Settings { idle_stop_minutes: number("idle_stop_minutes", d.idle_stop_minutes), auto_archive_days: number("auto_archive_days", d.auto_archive_days) }.clamped())
+    // Only a real true/false counts: anything else (a number, text) is not a choice, so the default stays.
+    let ignores_mcp = o.get("idle_stop_ignores_mcp").and_then(Value::as_bool).unwrap_or(d.idle_stop_ignores_mcp);
+    Some(
+        Settings {
+            idle_stop_minutes: number("idle_stop_minutes", d.idle_stop_minutes),
+            auto_archive_days: number("auto_archive_days", d.auto_archive_days),
+            idle_stop_ignores_mcp: ignores_mcp,
+        }
+        .clamped(),
+    )
 }
 
 pub fn path_in(dir: &Path) -> PathBuf {
@@ -104,6 +117,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.entry("version").or_insert(json!(1));
     object.insert("idle_stop_minutes".into(), json!(s.idle_stop_minutes));
     object.insert("auto_archive_days".into(), json!(s.auto_archive_days));
+    object.insert("idle_stop_ignores_mcp".into(), json!(s.idle_stop_ignores_mcp));
     let text = serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default();
     let tmp = path.with_extension("json.tmp");
     let written = fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &path));
@@ -119,12 +133,15 @@ pub struct Item {
     pub name: &'static str,
     /// One plain-language sentence or two: what it does and why nothing is lost.
     pub explain: &'static str,
-    /// The steps offered, ascending, in the setting's own unit. 0 is "Off".
+    /// The steps offered, ascending, in the setting's own unit. For a number 0 is "Off"; a choice between
+    /// two things is 0 and 1.
     pub choices: &'static [u64],
     pub get: fn(&Settings) -> u64,
     pub set: fn(&mut Settings, u64),
     /// How a value reads: "Off", "2 hours". Also used for a value that is not one of the steps.
     pub label: fn(u64) -> String,
+    /// The value that means "switched off" and is drawn muted, if there is one.
+    pub off: Option<u64>,
 }
 
 fn plural(n: u64, unit: &str) -> String {
@@ -153,6 +170,7 @@ pub const ITEMS: &[Item] = &[
         get: |s| s.idle_stop_minutes,
         set: |s, v| s.idle_stop_minutes = v,
         label: minutes_label,
+        off: Some(0),
     },
     Item {
         name: "Archive conversations after",
@@ -162,6 +180,18 @@ pub const ITEMS: &[Item] = &[
         get: |s| s.auto_archive_days,
         set: |s, v| s.auto_archive_days = v,
         label: days_label,
+        off: Some(0),
+    },
+    Item {
+        name: "Idle stop and MCP servers",
+        explain: "MCP servers are helper programs Claude starts with a session. By default they are ignored, so a session with only \
+                  those running is still stopped: they close with it and start again when you open it. Choose \"Count MCP servers\" \
+                  and they keep it alive like any other program.",
+        choices: &[0, 1],
+        get: |s| u64::from(s.idle_stop_ignores_mcp),
+        set: |s, v| s.idle_stop_ignores_mcp = v != 0,
+        label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
+        off: None,
     },
 ];
 
@@ -265,7 +295,7 @@ mod tests {
     #[test]
     fn a_missing_file_gives_the_defaults_and_creates_nothing() {
         let d = dir("missing");
-        assert_eq!(load(&d), (Settings { idle_stop_minutes: 120, auto_archive_days: 2 }, false));
+        assert_eq!(load(&d), (Settings { idle_stop_minutes: 120, auto_archive_days: 2, ..Settings::default() }, false));
         assert!(!d.exists(), "reading must not create the directory or the file");
     }
 
@@ -273,9 +303,9 @@ mod tests {
     fn values_are_read_and_a_missing_key_keeps_its_default() {
         let d = dir("read");
         write(&d, r#"{"idle_stop_minutes": 30, "auto_archive_days": 7}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 30, auto_archive_days: 7 });
+        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 30, auto_archive_days: 7, ..Settings::default() });
         write(&d, r#"{"auto_archive_days": 5}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 120, auto_archive_days: 5 });
+        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 120, auto_archive_days: 5, ..Settings::default() });
         write(&d, "{}");
         assert_eq!(load(&d), (Settings::default(), false), "an empty object is a valid file, not a corrupt one");
     }
@@ -295,11 +325,11 @@ mod tests {
     fn silly_values_are_clamped_or_ignored() {
         let d = dir("clamp");
         write(&d, r#"{"idle_stop_minutes": 99999999999, "auto_archive_days": 1e30}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: MAX_AUTO_ARCHIVE_DAYS });
+        assert_eq!(load(&d).0, Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: MAX_AUTO_ARCHIVE_DAYS, ..Settings::default() });
         write(&d, r#"{"idle_stop_minutes": -5, "auto_archive_days": "soon"}"#);
         assert_eq!(load(&d).0, Settings::default(), "negative numbers and text are nonsense, not 'off'");
         write(&d, r#"{"idle_stop_minutes": 45.9, "auto_archive_days": null}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 45, auto_archive_days: 2 });
+        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 45, auto_archive_days: 2, ..Settings::default() });
     }
 
     #[test]
@@ -311,9 +341,9 @@ mod tests {
             assert_eq!(fs::read_to_string(path_in(&d)).unwrap(), bad, "reading must never modify it");
         }
         write(&d, "{ not json");
-        save(&d, &Settings { idle_stop_minutes: 10, auto_archive_days: 3 }).unwrap();
+        save(&d, &Settings { idle_stop_minutes: 10, auto_archive_days: 3, ..Settings::default() }).unwrap();
         assert_eq!(fs::read_to_string(d.join("settings.json.bak")).unwrap(), "{ not json");
-        assert_eq!(load(&d), (Settings { idle_stop_minutes: 10, auto_archive_days: 3 }, false));
+        assert_eq!(load(&d), (Settings { idle_stop_minutes: 10, auto_archive_days: 3, ..Settings::default() }, false));
 
         // A healthy file is replaced without leaving a backup behind, and a second corruption keeps the first backup.
         save(&d, &Settings::default()).unwrap();
@@ -327,10 +357,10 @@ mod tests {
     #[test]
     fn save_is_atomic_creates_the_directory_and_clamps() {
         let d = dir("save");
-        save(&d, &Settings { idle_stop_minutes: u64::MAX, auto_archive_days: 0 }).unwrap();
+        save(&d, &Settings { idle_stop_minutes: u64::MAX, auto_archive_days: 0, ..Settings::default() }).unwrap();
         assert!(!d.join("settings.json.tmp").exists(), "the temp file is renamed away");
         assert!(!d.join("settings.json.bak").exists(), "nothing to back up on a first save");
-        assert_eq!(load(&d), (Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: 0 }, false));
+        assert_eq!(load(&d), (Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: 0, ..Settings::default() }, false));
         let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
         assert_eq!(v["version"], 1);
     }
@@ -341,9 +371,9 @@ mod tests {
         let mut s = SettingsStore::open(&d);
         assert_eq!(s.get(), Settings::default());
         assert!(!s.refresh(), "nothing changed");
-        save(&d, &Settings { idle_stop_minutes: 0, auto_archive_days: 9 }).unwrap();
+        save(&d, &Settings { idle_stop_minutes: 0, auto_archive_days: 9, ..Settings::default() }).unwrap();
         assert!(s.refresh());
-        assert_eq!(s.get(), Settings { idle_stop_minutes: 0, auto_archive_days: 9 });
+        assert_eq!(s.get(), Settings { idle_stop_minutes: 0, auto_archive_days: 9, ..Settings::default() });
         assert!(!s.refresh());
         write(&d, "garbage");
         assert!(s.refresh() && s.is_corrupt());
@@ -354,7 +384,7 @@ mod tests {
     fn save_keeps_every_key_it_does_not_know_including_nested_values_and_their_order() {
         let d = dir("keep-keys");
         write(&d, r#"{"note":"mine","idle_stop_minutes":5,"nested":{"a":[1,{"b":null}],"c":"d"},"version":7}"#);
-        save(&d, &Settings { idle_stop_minutes: 60, auto_archive_days: 9 }).unwrap();
+        save(&d, &Settings { idle_stop_minutes: 60, auto_archive_days: 9, ..Settings::default() }).unwrap();
         let text = fs::read_to_string(path_in(&d)).unwrap();
         let v: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(v["note"], "mine");
@@ -362,7 +392,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -415,15 +445,74 @@ mod tests {
     }
 
     #[test]
+    fn ignoring_mcp_servers_is_on_by_default_and_only_a_real_boolean_changes_it() {
+        let d = dir("mcp-flag");
+        assert!(Settings::default().idle_stop_ignores_mcp);
+        assert!(load(&d).0.idle_stop_ignores_mcp, "no file");
+        write(&d, "{}");
+        assert!(load(&d).0.idle_stop_ignores_mcp, "key missing");
+        write(&d, r#"{"idle_stop_ignores_mcp": false}"#);
+        assert_eq!(load(&d), (Settings { idle_stop_ignores_mcp: false, ..Settings::default() }, false));
+        write(&d, r#"{"idle_stop_ignores_mcp": true, "idle_stop_minutes": 30}"#);
+        assert_eq!(load(&d).0, Settings { idle_stop_minutes: 30, ..Settings::default() });
+        // Wrong type: not a choice, so the default stays (and the rest of the file is still read).
+        for odd in ["0", "1", "\"false\"", "\"no\"", "null", "[]", "{}", "-1", "0.0"] {
+            write(&d, &format!(r#"{{"idle_stop_ignores_mcp": {odd}, "auto_archive_days": 9}}"#));
+            assert_eq!(load(&d), (Settings { auto_archive_days: 9, ..Settings::default() }, false), "{odd}");
+        }
+        for bad in ["{ nope", "[true]", ""] {
+            write(&d, bad);
+            assert_eq!(load(&d), (Settings::default(), true), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn the_mcp_choice_is_saved_as_a_boolean_and_other_keys_survive() {
+        let d = dir("mcp-save");
+        write(&d, r#"{"mine":[1,{"x":null}],"idle_stop_ignores_mcp":true}"#);
+        save(&d, &Settings { idle_stop_ignores_mcp: false, ..Settings::default() }).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!(v["idle_stop_ignores_mcp"], json!(false), "a JSON boolean, not a number");
+        assert_eq!(v["mine"], json!([1, {"x": null}]));
+        assert!(!load(&d).0.idle_stop_ignores_mcp);
+        let mut s = SettingsStore::open(&d);
+        assert!(!s.get().idle_stop_ignores_mcp);
+        save(&d, &Settings::default()).unwrap();
+        assert!(s.refresh() && s.get().idle_stop_ignores_mcp, "a running host sees the change");
+    }
+
+    #[test]
+    fn the_two_way_choice_steps_between_its_two_values_and_only_the_numbers_can_be_off() {
+        let mcp = &ITEMS[2];
+        assert_eq!(mcp.choices, [0, 1]);
+        let mut s = Settings::default();
+        assert_eq!((mcp.get)(&s), 1);
+        assert_eq!((mcp.label)(1), "Ignore MCP servers");
+        assert_eq!((mcp.label)(0), "Count MCP servers");
+        assert_eq!(mcp.step(1, Step::Prev), 0);
+        assert_eq!(mcp.step(0, Step::Prev), 0);
+        assert_eq!(mcp.step(0, Step::Next), 1);
+        assert_eq!(mcp.step(1, Step::Next), 1, "the ends hold");
+        assert_eq!(mcp.step(1, Step::Cycle), 0, "cycling wraps");
+        assert_eq!(mcp.step(0, Step::Cycle), 1);
+        (mcp.set)(&mut s, 0);
+        assert!(!s.idle_stop_ignores_mcp);
+        (mcp.set)(&mut s, 1);
+        assert!(s.idle_stop_ignores_mcp);
+        assert_eq!(mcp.off, None, "neither choice is 'off'");
+        assert!(ITEMS[..2].iter().all(|i| i.off == Some(0)));
+    }
+
+    #[test]
     fn update_saves_and_shows_what_is_really_on_disk_even_when_the_save_fails() {
         let d = dir("update");
         let mut store = SettingsStore::open(&d);
-        store.update(&Settings { idle_stop_minutes: 30, auto_archive_days: 7 }).unwrap();
-        assert_eq!(store.get(), Settings { idle_stop_minutes: 30, auto_archive_days: 7 });
+        store.update(&Settings { idle_stop_minutes: 30, auto_archive_days: 7, ..Settings::default() }).unwrap();
+        assert_eq!(store.get(), Settings { idle_stop_minutes: 30, auto_archive_days: 7, ..Settings::default() });
         assert!(!store.refresh(), "our own save is already seen");
         fs::remove_file(path_in(&d)).unwrap();
         fs::create_dir(path_in(&d)).unwrap(); // saving now fails
-        assert!(store.update(&Settings { idle_stop_minutes: 240, auto_archive_days: 7 }).is_err());
+        assert!(store.update(&Settings { idle_stop_minutes: 240, auto_archive_days: 7, ..Settings::default() }).is_err());
         assert_eq!(store.get().idle_stop_minutes, 120, "the store says what is in effect, not what was asked for");
     }
 }

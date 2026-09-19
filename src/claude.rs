@@ -25,6 +25,20 @@ pub fn claude_root() -> PathBuf {
         .unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"))
 }
 
+/// Claude Code's user config file, which holds (among other things) the MCP servers added with
+/// `claude mcp add`: `.claude.json` inside `CLAUDE_CONFIG_DIR` when that is set, else `~/.claude.json`
+/// (next to `~/.claude`, not inside it).
+pub fn claude_json_path() -> PathBuf {
+    claude_json_in(std::env::var_os("CLAUDE_CONFIG_DIR"), &std::env::var("HOME").unwrap_or_default())
+}
+
+fn claude_json_in(config_dir: Option<std::ffi::OsString>, home: &str) -> PathBuf {
+    match config_dir {
+        Some(dir) => PathBuf::from(dir).join(".claude.json"),
+        None => Path::new(home).join(".claude.json"),
+    }
+}
+
 /// A live Claude Code process, from its registry file.
 pub struct Live {
     pub pid: u32,
@@ -384,6 +398,12 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
+        assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
+        assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
+    }
 
     #[test]
     fn model_names_are_shortened() {

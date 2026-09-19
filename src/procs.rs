@@ -2,7 +2,13 @@
 //! `/proc`; anywhere else (macOS) it asks `ps`. Both are best effort, so callers get None when the
 //! system couldn't say and must treat that as "unknown".
 
-use std::{collections::HashMap, fs, path::Path, process::Command};
+use std::{
+    collections::{hash_map::DefaultHasher, HashMap},
+    fs,
+    hash::{Hash, Hasher},
+    path::Path,
+    process::Command,
+};
 
 /// One row of the process table.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,13 +17,20 @@ pub struct Row {
     pub ppid: u32,
     /// Has exited but not been reaped yet: still listed, but running nothing.
     pub zombie: bool,
+    /// When the process started, in a unit that only means something next to another reading of the same
+    /// process (Linux: clock ticks after boot; elsewhere a hash of `ps`'s start time). 0 = unknown. A pid that
+    /// was reused by a new process has a different one, which is how "still the same process" is checked.
+    pub start: u64,
 }
 
 /// "pid (comm) S ppid ...": comm may contain spaces or parens, so split after the last ')'.
 fn parse_stat(pid: u32, stat: &str) -> Option<Row> {
     let mut rest = stat.rsplit_once(')')?.1.split_whitespace();
     let state = rest.next()?;
-    Some(Row { pid, ppid: rest.next()?.parse().ok()?, zombie: state.starts_with('Z') })
+    let ppid = rest.next()?.parse().ok()?;
+    // Field 22 of the line (fields 3 and 4, state and ppid, are already taken).
+    let start = rest.nth(17).and_then(|t| t.parse().ok()).unwrap_or(0);
+    Some(Row { pid, ppid, zombie: state.starts_with('Z'), start })
 }
 
 pub fn ppid(pid: u32) -> Option<u32> {
@@ -29,7 +42,7 @@ pub fn ppid(pid: u32) -> Option<u32> {
 }
 
 /// Every process on the machine, or None if the table can't be read at all.
-fn table() -> Option<Vec<Row>> {
+pub fn table() -> Option<Vec<Row>> {
     if Path::new("/proc/self/stat").exists() {
         let mut rows = Vec::new();
         for e in fs::read_dir("/proc").ok()?.flatten() {
@@ -41,7 +54,7 @@ fn table() -> Option<Vec<Row>> {
         }
         return Some(rows);
     }
-    let out = Command::new("ps").args(["-A", "-o", "pid=,ppid=,stat="]).output().ok().filter(|o| o.status.success())?;
+    let out = Command::new("ps").args(["-A", "-o", "pid=,ppid=,stat=,lstart="]).output().ok().filter(|o| o.status.success())?;
     Some(parse_ps(&String::from_utf8_lossy(&out.stdout)))
 }
 
@@ -49,7 +62,17 @@ fn parse_ps(text: &str) -> Vec<Row> {
     text.lines()
         .filter_map(|l| {
             let mut f = l.split_whitespace();
-            Some(Row { pid: f.next()?.parse().ok()?, ppid: f.next()?.parse().ok()?, zombie: f.next()?.starts_with('Z') })
+            let (pid, ppid, stat) = (f.next()?.parse().ok()?, f.next()?.parse().ok()?, f.next()?);
+            // The start time is several words ("Sat Sep 19 11:44:41 2026"); only equality matters.
+            let when = f.collect::<Vec<_>>().join(" ");
+            let start = if when.is_empty() {
+                0
+            } else {
+                let mut h = DefaultHasher::new();
+                when.hash(&mut h);
+                h.finish() | 1
+            };
+            Some(Row { pid, ppid, zombie: stat.starts_with('Z'), start })
         })
         .collect()
 }
@@ -78,7 +101,27 @@ pub fn descendants(rows: &[Row], root: u32) -> Option<Vec<u32>> {
     Some(out)
 }
 
+/// The command line of `pid` as separate arguments, or None if it can't be read (gone, or not ours). Where
+/// only `ps` can say (macOS) the arguments come back as one string, since `ps` doesn't keep them apart.
+pub fn cmdline(pid: u32) -> Option<Vec<String>> {
+    if let Ok(raw) = fs::read(format!("/proc/{pid}/cmdline")) {
+        let args: Vec<String> = raw.split(|&b| b == 0).map(|a| String::from_utf8_lossy(a).into_owned()).collect();
+        let args = match args.split_last() {
+            Some((last, rest)) if last.is_empty() => rest.to_vec(),
+            _ => args,
+        };
+        return (!args.is_empty()).then_some(args);
+    }
+    if Path::new("/proc/self/stat").exists() {
+        return None; // Linux, and this process is gone
+    }
+    let out = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok().filter(|o| o.status.success())?;
+    let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!line.is_empty()).then(|| vec![line])
+}
+
 /// What is running under `pid` right now (None: couldn't tell).
+#[cfg(test)]
 pub fn live_descendants(pid: u32) -> Option<Vec<u32>> {
     descendants(&table()?, pid)
 }
@@ -88,12 +131,15 @@ mod tests {
     use super::*;
 
     fn row(pid: u32, ppid: u32, zombie: bool) -> Row {
-        Row { pid, ppid, zombie }
+        Row { pid, ppid, zombie, start: 0 }
     }
 
     #[test]
     fn stat_lines_parse_even_when_the_name_has_spaces_and_parens() {
         assert_eq!(parse_stat(7, "7 (my (weird) name) S 42 7 7 0 -1"), Some(row(7, 42, false)));
+        // Field 22 is the start time, here 987654.
+        let full = "7 (a b) S 42 7 7 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 987654 1000 100 18446744073709551615";
+        assert_eq!(parse_stat(7, full), Some(Row { pid: 7, ppid: 42, zombie: false, start: 987654 }));
         assert_eq!(parse_stat(8, "8 (sh) Z 1 8 8 0 -1"), Some(row(8, 1, true)));
         assert_eq!(parse_stat(9, "garbage"), None);
     }
@@ -101,6 +147,9 @@ mod tests {
     #[test]
     fn ps_output_parses() {
         assert_eq!(parse_ps("  1     0 Ss\n 20     1 Z+\nbad line\n"), vec![row(1, 0, false), row(20, 1, true)]);
+        let rows = parse_ps("  5     1 S    Sat Sep 19 11:44:41 2026\n  6     1 S    Sat Sep 19 11:44:42 2026\n  7     1 S    Sat Sep 19 11:44:41 2026\n");
+        assert!(rows.iter().all(|r| r.start != 0));
+        assert_eq!((rows[0].start == rows[2].start, rows[0].start == rows[1].start), (true, false), "same start time = same reading");
     }
 
     #[test]
@@ -128,5 +177,20 @@ mod tests {
         let _ = child.wait();
         assert!(mine.contains(&child.id()), "{mine:?}");
         assert_eq!(ppid(child.id()), None, "a reaped process has no parent");
+        assert_eq!(cmdline(child.id()), None, "and no command line");
+    }
+
+    #[test]
+    fn a_live_process_shows_its_arguments_and_a_start_time_that_does_not_change() {
+        let mut child = Command::new("sleep").arg("31").spawn().unwrap();
+        let rows = table().unwrap();
+        let mine = rows.iter().find(|r| r.pid == child.id()).copied().unwrap();
+        let args = cmdline(child.id());
+        let again = table().unwrap().into_iter().find(|r| r.pid == child.id()).unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert_eq!(args, Some(vec!["sleep".to_string(), "31".to_string()]));
+        assert!(mine.start != 0 && mine.start == again.start, "{mine:?} {again:?}");
+        assert_eq!(mine.ppid, std::process::id());
     }
 }

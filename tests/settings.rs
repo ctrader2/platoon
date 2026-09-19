@@ -45,6 +45,7 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
 
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
+    t.wait_for("Changes are saved and apply immediately."); // the whole screen, not a half-drawn one
     let text = t.text();
     assert!(text.contains("2 hours") && text.contains("Off") && text.contains("Archive conversations after"), "{text}");
     assert!(text.contains("Changes are saved and apply immediately."), "{text}");
@@ -100,4 +101,36 @@ fn a_damaged_file_opens_on_the_standard_values_and_the_first_change_keeps_a_copy
 
 fn saved_ok(base: &std::path::Path) -> bool {
     fs::read_to_string(base.join("config/settings.json")).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some()
+}
+
+#[test]
+fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_columns() {
+    let base = tmp("settings-e2e-mcp");
+    let env = env(&base);
+    let mut t = Term::spawn(&[], &env, &base, 30, 80);
+    t.wait_for("enter open");
+    t.send(b"s");
+    t.wait_for("Idle stop and MCP servers");
+    t.wait_for("Changes are saved and apply immediately.");
+    let text = t.text();
+    assert!(text.contains("Ignore MCP servers") && text.contains("helper programs") && text.contains("MCP servers are"), "{text}");
+    assert!(!base.join("config/settings.json").exists(), "looking at the screen writes nothing");
+
+    t.send(b"jj"); // the third entry
+    t.send(b"\x1b[D"); // left: Count MCP servers
+    t.wait_for("Count MCP servers");
+    until("the choice to reach the file", || saved_ok(&base) && saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(false));
+    assert_eq!(saved(&base)["idle_stop_minutes"], 120, "the other settings are written as they were");
+
+    // The value itself is a button that goes to the other choice (and back).
+    let screen = t.text();
+    let (col, row) = find(&screen, "Count MCP servers");
+    t.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", col + 2, row + 1, col + 2, row + 1).as_bytes());
+    until("the click to reach the file", || saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(true));
+    t.wait_for("Ignore MCP servers");
+
+    t.send(b"\x1b");
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
 }

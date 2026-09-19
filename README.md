@@ -65,6 +65,17 @@ Details worth knowing:
 - A session is only stopped when Claude itself says it is idle. If anything is running under it (a dev
   server, a background job) it is left alone, because stopping Claude would end those too. Sessions started
   in a plain terminal, and anything with a window open on it, are never stopped.
+- The exception is MCP servers: the helper programs Claude starts with every session (the ones you added with
+  `claude mcp add`, put in a project's `.mcp.json`, or that come with a plugin). Almost every real session has
+  some, and they are closed when the session stops and started again when you open it, so by default they don't
+  count as "something running". platoon works out which processes are MCP servers from your Claude Code
+  configuration (`~/.claude.json`, or the one inside `$CLAUDE_CONFIG_DIR`; `.mcp.json` in the session's folder
+  and its parent folders; enabled plugins), re-reading it at every check. A process only counts as one if
+  Claude started it directly and its command matches a configured server (and everything a launcher such
+  as `npx` or `docker run` starts under it is treated the same way). A dev server or job Claude started from a
+  Bash tool is deeper than that, so it still keeps the session alive, and so does anything platoon is not
+  sure about, or can't read the configuration to check. Some MCP servers don't exit when Claude does: after
+  a stop, platoon asks the ones it saw before to exit too, and never any other process.
 - Auto-archive never touches a conversation that has a process running, or the one you are looking at.
   Opening or restoring a conversation counts as activity, so restoring an old one sticks: it is not archived
   again until it has sat unused for the full time.
@@ -79,10 +90,13 @@ Details worth knowing:
 | --- | --- | --- |
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
+| Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
 
 `↑` `↓` (or `j` `k`) pick a setting; `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
-next choice and wraps around to Off. With the mouse: click a row to select it, the `‹` `›` buttons to step, or
-the value itself to go to the next choice. Off is the same as `0` in the file.
+next choice and wraps around to the first one (Off, or Count MCP servers). With the mouse: click a row to select
+it, the `‹` `›` buttons to step, or the value itself to go to the next choice. Off is the same as `0` in the file.
+Choose Count MCP servers if you'd rather a session with any program running under it, MCP servers included, was
+never stopped: that is how idle stop worked before this choice existed.
 
 There is no save step: each change is written to the file at once and applies without restarting anything,
 to platoon and to sessions already running (a running session notices within about half a minute, and
@@ -95,13 +109,13 @@ the screen shows the exact path). platoon doesn't create it until you change som
 by hand too:
 
 ```json
-{"idle_stop_minutes": 120, "auto_archive_days": 2}
+{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
-(`auto_archive_days`). Anything else in the file is kept when platoon saves. A missing or damaged file just
-means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`auto_archive_days`). `idle_stop_ignores_mcp` is `true` or `false`; anything else there means the default
+(`true`). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Big histories
 
