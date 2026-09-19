@@ -13,6 +13,8 @@ pub struct Session {
     /// Absolute working directory.
     pub cwd: String,
     pub branch: Option<String>,
+    /// Short display name of the model in use, e.g. "Sonnet 5". None until the first reply.
+    pub model: Option<String>,
     pub status: Status,
     /// Claude finished and the user hasn't looked at the output yet.
     pub unread: bool,

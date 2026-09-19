@@ -127,17 +127,19 @@ struct Cols {
     name: usize,
     dir: usize,
     branch: usize,
+    model: usize,
     status: usize,
 }
 
 fn cols(width: u16) -> Cols {
-    // marker(3) + name + dir + branch + status + context bar(BAR_WIDTH + 5)
+    // marker(3) + name + dir + branch + model + status + context bar(BAR_WIDTH + 5)
     let fixed = 3 + BAR_WIDTH + 5;
     let w = width as usize;
     let branch = if w >= 90 { 16 } else { 0 };
+    let model = if w >= 100 { 12 } else { 0 };
     let status = 9;
-    let flex = w.saturating_sub(fixed + branch + status);
-    Cols { name: flex * 2 / 5, dir: flex - flex * 2 / 5, branch, status }
+    let flex = w.saturating_sub(fixed + branch + model + status);
+    Cols { name: flex * 2 / 5, dir: flex - flex * 2 / 5, branch, model, status }
 }
 
 fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
@@ -148,6 +150,7 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
         Span::styled(fit("NAME", c.name), s),
         Span::styled(fit("DIR", c.dir), s),
         Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch), s),
+        Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model), s),
         Span::styled(fit("STATUS", c.status), s),
         Span::styled("CONTEXT", s),
     ]);
@@ -204,6 +207,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         Span::styled(fit(&name, c.name), name_style),
         Span::styled(fit(&s.dir, c.dir), base.fg(t.subtext)),
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
+        Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(t.subtext)),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
     ];
     l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact));

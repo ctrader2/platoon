@@ -23,6 +23,8 @@ struct Cache {
     first_prompt: Option<String>,
     ai_title: Option<String>,
     branch: Option<String>,
+    /// Raw model id from the latest assistant message.
+    model: Option<String>,
     context_tokens: u64,
     /// Once a session has gone past 200k tokens it must have a large window. Never flips back.
     large_window: bool,
@@ -105,6 +107,7 @@ impl Reader {
             dir,
             cwd,
             branch: c.branch.clone().filter(|b| b != "HEAD"),
+            model: c.model.as_deref().map(pretty_model),
             status: if v["status"].as_str() == Some("busy") { Status::Busy } else { Status::Idle },
             unread: false,
             external: true,
@@ -120,6 +123,38 @@ impl Reader {
             Some(rest) if !self.home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
             _ => p.to_string(),
         }
+    }
+}
+
+/// `claude-sonnet-5` -> `Sonnet 5`, `claude-fable-5-1` -> `Fable 5.1`, `claude-haiku-4-5-20251001` -> `Haiku 4.5`.
+/// Handles the older `claude-3-5-sonnet-...` ordering too. Anything unrecognised is shown as-is.
+pub fn pretty_model(id: &str) -> String {
+    let (base, ext) = match id.split_once('[') {
+        Some((b, rest)) => (b, Some(rest.trim_end_matches(']').to_uppercase())),
+        None => (id, None),
+    };
+    let Some(rest) = base.strip_prefix("claude-") else { return id.to_string() };
+    let mut family = None;
+    let mut nums: Vec<&str> = Vec::new();
+    for t in rest.split('-') {
+        if t.len() == 8 && t.chars().all(|c| c.is_ascii_digit()) {
+            continue; // release date
+        }
+        if t.chars().all(|c| c.is_ascii_digit()) {
+            nums.push(t);
+        } else if family.is_none() {
+            family = Some(t);
+        }
+    }
+    let Some(family) = family else { return id.to_string() };
+    let mut name: String = family.chars().next().map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default();
+    name.push_str(&family[family.chars().next().map_or(0, char::len_utf8)..]);
+    if !nums.is_empty() {
+        name = format!("{name} {}", nums.join("."));
+    }
+    match ext {
+        Some(e) if !e.is_empty() => format!("{name} {e}"),
+        _ => name,
     }
 }
 
@@ -190,6 +225,9 @@ fn refresh_cache(c: &mut Cache, root: &Path, id: &str) {
             Some("assistant") if v["isSidechain"].as_bool() != Some(true) => {
                 let u = &v["message"]["usage"];
                 if u.is_object() && v["message"]["model"].as_str() != Some("<synthetic>") {
+                    if let Some(m) = v["message"]["model"].as_str() {
+                        c.model = Some(m.to_string());
+                    }
                     let n = |k: &str| u[k].as_u64().unwrap_or(0);
                     c.context_tokens = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
                 }
@@ -230,6 +268,18 @@ fn one_line(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_names_are_shortened() {
+        assert_eq!(pretty_model("claude-sonnet-5"), "Sonnet 5");
+        assert_eq!(pretty_model("claude-fable-5-1"), "Fable 5.1");
+        assert_eq!(pretty_model("claude-opus-5"), "Opus 5");
+        assert_eq!(pretty_model("claude-haiku-4-5-20251001"), "Haiku 4.5");
+        assert_eq!(pretty_model("claude-3-5-sonnet-20241022"), "Sonnet 3.5");
+        assert_eq!(pretty_model("claude-sonnet-5[1m]"), "Sonnet 5 1M");
+        assert_eq!(pretty_model("some-other-model"), "some-other-model");
+        assert_eq!(pretty_model("claude-"), "claude-");
+    }
 
     #[test]
     fn window_estimate_never_flips_back() {

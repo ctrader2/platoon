@@ -133,7 +133,9 @@ mod tests {
     fn render_snapshot() {
         let mut term = Terminal::new(TestBackend::new(110, 16)).unwrap();
         let app = app::App::new();
-        println!("{}", draw(&mut term, &app));
+        let text = draw(&mut term, &app);
+        assert!(text.contains("MODEL"), "{text}");
+        println!("{text}");
     }
 
     #[test]
