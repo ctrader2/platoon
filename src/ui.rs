@@ -1,4 +1,4 @@
-use crate::app::{Action, App, Confirm, Hit, Mode};
+use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::model::{Session, Status};
@@ -180,6 +180,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     // Unread pulses between two shades about once a second.
     let pulse_on = (app.tick / 5) % 2 == 0;
     let (marker, marker_color) = match (s.status, s.unread) {
+        _ if s.stale => ("⚠", t.warn),
         (Status::Busy, _) => (SPINNER[(app.tick % 10) as usize], t.busy),
         (Status::Idle, true) => ("●", if pulse_on { t.ok } else { t.dim }),
         (Status::Idle, false) => ("○", t.dim),
@@ -192,6 +193,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         base.fg(t.text)
     };
     let (status_text, status_color) = match (s.status, s.unread) {
+        _ if s.stale => ("paused", t.warn),
         (Status::Busy, _) => ("working", t.busy),
         (Status::Idle, true) => ("done", t.ok),
         (Status::Idle, false) => ("idle", t.dim),
@@ -334,24 +336,40 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("This makes it inactive; nothing is deleted. Resume it later from {dir} with `claude --resume`, or from platoon."),
             "kill",
         ),
-        Confirm::Adopt { pid, name, busy, .. } => (
-            "take over session",
-            format!("Take over \"{name}\"?"),
-            format!(
-                "Ends the claude in its terminal (pid {pid}) and resumes it here.{}",
-                if *busy { " It is working now: this interrupts it." } else { "" }
-            ),
-            "take over",
-        ),
+        Confirm::Adopt { pids, name, busy, kind, .. } => {
+            let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
+            match kind {
+                AdoptKind::TakeOver => (
+                    "take over session",
+                    format!("Take over \"{name}\"?"),
+                    format!("Ends the claude in its terminal (pid {}) and resumes it here.{interrupt}", pids[0]),
+                    "take over",
+                ),
+                AdoptKind::Reload => (
+                    "reload session",
+                    format!("Reload \"{name}\" from its saved history?"),
+                    format!(
+                        "It is open in {} place{}, or has fallen out of sync. platoon ends every copy and reopens it here, \
+                         so nothing is overwritten or out of sync.{interrupt}",
+                        pids.len(),
+                        if pids.len() == 1 { "" } else { "s" }
+                    ),
+                    "reload",
+                ),
+            }
+        }
     };
-    let w = (l2.chars().count() as u16 + 6).clamp(30, 64.min(area.width));
-    let r = centered(area, w, 9);
+    let w = (l2.chars().count() as u16 + 6).clamp(30, 72.min(area.width));
+    // Size the box to its wrapped text (+1 line of slack for word wrapping) so nothing is ever cut off.
+    let inner_w = w.saturating_sub(4).max(1) as usize;
+    let body_lines = (l2.chars().count().div_ceil(inner_w) + 1) as u16;
+    let r = centered(area, w, body_lines + 5);
     app.hits.borrow_mut().clear();
     f.render_widget(Clear, r);
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(3), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", "cancel", Some(Action::Cancel))];
@@ -362,6 +380,9 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rec
     let t = &app.theme;
     let [term, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
     draw_terminal(f, t, client, term);
+    if app.attached_paused() {
+        draw_paused_banner(f, app, term);
+    }
     let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
     let right = if scrolled > 0 {
         format!("↑ scrolled {scrolled} lines · type to return")
@@ -370,6 +391,33 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rec
     };
     let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
     draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, t.dim)));
+}
+
+/// Covers the session when this copy is no longer safe to write to. Keys aren't forwarded while it shows.
+pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
+    let r = centered(area, area.width.saturating_sub(6).clamp(20, 72), 9.min(area.height));
+    f.render_widget(Clear, r);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(t.warn))
+        .title(Span::styled(" session paused ", Style::new().fg(t.warn).add_modifier(Modifier::BOLD)))
+        .style(Style::new().bg(t.bg));
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let lines = vec![
+        Line::styled("This session was opened somewhere else too.", Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
+        Line::styled("To keep the conversation in sync and nothing overwritten, this copy is paused: what you type is not sent.", Style::new().fg(t.subtext)),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled("ctrl+space", Style::new().fg(t.accent)),
+            Span::styled(" go back, then press ", Style::new().fg(t.dim)),
+            Span::styled("enter", Style::new().fg(t.accent)),
+            Span::styled(" on it to reload", Style::new().fg(t.dim)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
 }
 
 fn vt_color(c: vt100::Color, default: Color) -> Color {

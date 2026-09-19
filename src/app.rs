@@ -1,6 +1,7 @@
 use crate::claude::{pid_alive, Reader};
 use crate::client::{key_bytes, Client};
 use crate::dirs;
+use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::model::{Session, Status};
 use crate::usage::{self, Usage};
@@ -10,7 +11,8 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, Mo
 use ratatui::layout::Rect;
 use std::{
     cell::RefCell,
-    path::Path,
+    collections::HashMap,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -36,11 +38,26 @@ pub enum Hit {
     Action(Action),
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AdoptKind {
+    /// One copy, running in another terminal.
+    TakeOver,
+    /// Several copies, or a copy that fell out of sync: end them all and reopen from the saved history.
+    Reload,
+}
+
+/// What pressing Enter on a row should do.
+#[derive(Debug, PartialEq, Eq)]
+pub enum JumpPlan {
+    Attach(u32),
+    Adopt { pids: Vec<u32>, kind: AdoptKind, busy: bool },
+}
+
 #[derive(Clone)]
 pub enum Confirm {
     Kill { pid: u32, name: String, dir: String },
     /// Take over a session started elsewhere: end it, then resume it inside platoon.
-    Adopt { pid: u32, id: String, name: String, cwd: String, busy: bool },
+    Adopt { pids: Vec<u32>, id: String, name: String, cwd: String, busy: bool, kind: AdoptKind },
 }
 
 #[derive(Clone)]
@@ -107,6 +124,8 @@ pub struct App {
     pub notice: Option<(String, Instant)>,
     pub mouse: (u16, u16),
     pub home: String,
+    /// Where platoon keeps its own state (`~/.cache/platoon`).
+    pub cache: PathBuf,
     /// Animation frame counter, ~10 per second.
     pub tick: u64,
     pub theme: Theme,
@@ -118,10 +137,11 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        Self::with_reader(Reader::new())
+        Self::with_reader(Reader::new(), usage::cache_dir())
     }
 
-    pub fn with_reader(reader: Reader) -> Self {
+    /// `cache` is where platoon keeps its own state; tests pass a temp dir so they never touch the real one.
+    pub fn with_reader(reader: Reader, cache: PathBuf) -> Self {
         let mut app = Self {
             sessions: Vec::new(),
             usage: Usage::NotSetUp,
@@ -135,6 +155,7 @@ impl App {
             notice: None,
             mouse: (0, 0),
             home: std::env::var("HOME").unwrap_or_default(),
+            cache,
             tick: 0,
             theme: Theme::catppuccin_mocha(),
             quit: false,
@@ -200,9 +221,16 @@ impl App {
 
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
     pub fn refresh(&mut self) {
-        let attached = if let Mode::Attached(p) = self.mode { Some(p) } else { None };
         self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
-        self.hosts = host::discover();
+        let guard_on = usage::guard_installed(self.reader.root());
+        self.refresh_with(host::discover(), guard_on);
+    }
+
+    /// `refresh` with its outside inputs supplied: which sessions platoon hosts, and whether the
+    /// guard hook is installed (so a second copy of a session gets refused at the source).
+    pub fn refresh_with(&mut self, hosts: Vec<HostInfo>, guard_on: bool) {
+        let attached = if let Mode::Attached(p) = self.mode { Some(p) } else { None };
+        self.hosts = hosts;
         if let Some(pid) = attached {
             if self.client.as_ref().map_or(true, |c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid) {
                 self.mode = Mode::List;
@@ -226,8 +254,25 @@ impl App {
             }
             s.external = !self.hosts.iter().any(|h| h.claude_pid == s.pid);
         }
+
+        // Two live processes on one conversation each hold their own memory of it and write to the same
+        // history. With the guard installed the later copy is refused at its first prompt; without it,
+        // all platoon can do is stop writing through its own copy, and require a reload from the history.
+        let mut copies: HashMap<String, usize> = HashMap::new();
+        for s in &fresh {
+            *copies.entry(s.id.clone()).or_default() += 1;
+        }
+        guard::prune_stale(&self.cache);
+        for s in &mut fresh {
+            s.shared = copies[&s.id] > 1;
+            if s.shared && !s.external && !guard_on {
+                guard::mark_stale(&self.cache, s.pid, s.started_at);
+            }
+            s.stale = guard::is_stale(&self.cache, s.pid, s.started_at);
+        }
+
         // Plan limits and exact context figures, saved by `platoon statusline`.
-        let snap = usage::load(&usage::cache_dir(), usage::now());
+        let snap = usage::load(&self.cache, usage::now());
         for s in &mut fresh {
             if let Some(p) = snap.context.get(&s.id) {
                 s.context_pct = *p;
@@ -266,9 +311,9 @@ impl App {
                 self.mode = Mode::List;
                 self.kill(pid, &name, &dir);
             }
-            (Action::Confirm, Mode::Confirm(Confirm::Adopt { pid, id, name, cwd, .. })) => {
+            (Action::Confirm, Mode::Confirm(Confirm::Adopt { pids, id, name, cwd, .. })) => {
                 self.mode = Mode::List;
-                self.adopt(pid, &id, &name, cwd);
+                self.adopt(&pids, &id, &name, cwd);
             }
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
@@ -316,40 +361,68 @@ impl App {
         }
     }
 
+    /// Decide what Enter does on the selected row. A copy that platoon hosts and that is still in sync
+    /// is simply attached to. Anything else (another terminal's copy, several copies, or a copy that
+    /// fell out of sync) means ending the process(es) and reopening from the saved history.
+    pub fn jump_plan(&self) -> Option<JumpPlan> {
+        let s = self.selected_session()?;
+        let group: Vec<&Session> = self.sessions.iter().filter(|o| o.id == s.id).collect();
+        if let Some(h) = group.iter().find(|o| !o.external && !o.stale) {
+            return Some(JumpPlan::Attach(h.pid));
+        }
+        let kind = if group.len() == 1 && s.external { AdoptKind::TakeOver } else { AdoptKind::Reload };
+        Some(JumpPlan::Adopt {
+            pids: group.iter().map(|o| o.pid).collect(),
+            kind,
+            busy: group.iter().any(|o| o.status == Status::Busy),
+        })
+    }
+
     fn jump(&mut self) {
-        let Some(s) = self.selected_session() else { return };
-        let pid = s.pid;
-        if self.hosts.iter().any(|h| h.claude_pid == pid) {
-            self.attach(pid);
-        } else {
-            // Another terminal owns this session's screen, so we can't attach to it. Offer to take it over.
-            self.mode = Mode::Confirm(Confirm::Adopt {
-                pid,
-                id: s.id.clone(),
-                name: s.name.clone(),
-                cwd: s.cwd.clone(),
-                busy: s.status == Status::Busy,
-            });
+        match self.jump_plan() {
+            Some(JumpPlan::Attach(pid)) => self.attach(pid),
+            Some(JumpPlan::Adopt { pids, kind, busy }) => {
+                let Some(s) = self.selected_session() else { return };
+                self.mode = Mode::Confirm(Confirm::Adopt {
+                    pids,
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    cwd: s.cwd.clone(),
+                    busy,
+                    kind,
+                });
+            }
+            None => {}
         }
     }
 
-    /// End the original process, wait for it to go, then resume its conversation under a platoon host.
-    fn adopt(&mut self, pid: u32, id: &str, name: &str, cwd: String) {
-        if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
-            self.notify(format!("Couldn't stop {name}"));
-            return;
+    /// End every live copy, wait for them to go, then resume the conversation under a platoon host.
+    /// Reopening from the saved history means the new copy's memory matches it exactly.
+    fn adopt(&mut self, pids: &[u32], id: &str, name: &str, cwd: String) {
+        for &pid in pids {
+            if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+                self.notify(format!("Couldn't stop {name}"));
+                return;
+            }
         }
         for _ in 0..100 {
-            if !pid_alive(pid) {
+            if !pids.iter().any(|&p| pid_alive(p)) {
                 break;
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        if pid_alive(pid) {
+        if pids.iter().any(|&p| pid_alive(p)) {
             self.notify(format!("{name} didn't exit; try kill (x) first"));
             return;
         }
         self.launch(cwd, &["--resume", id]);
+    }
+
+    /// True when the attached session must not receive input: it fell out of sync with its conversation.
+    pub fn attached_paused(&self) -> bool {
+        let Mode::Attached(pid) = self.mode else { return false };
+        // Check the marker directly too, so a copy refused a moment ago is paused before the next refresh.
+        self.sessions.iter().find(|s| s.pid == pid).is_some_and(|s| s.stale || guard::is_stale(&self.cache, s.pid, s.started_at))
     }
 
     fn launch(&mut self, dir: String, args: &[&str]) {
@@ -404,6 +477,8 @@ impl App {
                 // The prefix chord: everything else goes to Claude.
                 if ctrl && key.code == KeyCode::Char(' ') {
                     self.detach();
+                } else if self.attached_paused() {
+                    // Paused: nothing is forwarded, so this copy can't write to the conversation.
                 } else if let Some(c) = self.client.as_mut() {
                     c.reset_scroll();
                     let bytes = key_bytes(key, c.app_cursor());
@@ -473,6 +548,7 @@ impl App {
 
     pub fn on_paste(&mut self, text: &str) {
         match self.mode.clone() {
+            Mode::Attached(_) if self.attached_paused() => {}
             Mode::Attached(_) => {
                 if let Some(c) = self.client.as_mut() {
                     c.reset_scroll();

@@ -16,6 +16,10 @@ pub struct Session {
     /// Short display name of the model in use, e.g. "Sonnet 5". None until the first reply.
     pub model: Option<String>,
     pub status: Status,
+    /// Another live process is running this same conversation.
+    pub shared: bool,
+    /// This process must not write to the conversation any more: its memory can't be trusted to match it.
+    pub stale: bool,
     /// Claude finished and the user hasn't looked at the output yet.
     pub unread: bool,
     /// Started outside platoon: listed and killable, but can't be jumped into.

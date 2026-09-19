@@ -131,47 +131,88 @@ fn is_ours(v: &Value) -> bool {
     v["statusLine"]["command"].as_str().is_some_and(|c| c.contains("platoon") && c.contains("statusline"))
 }
 
-/// Whether Claude Code's settings already run `platoon statusline`.
-pub fn installed(claude_root: &Path) -> bool {
-    fs::read_to_string(claude_root.join("settings.json"))
-        .ok()
-        .and_then(|s| serde_json::from_str::<Value>(&s).ok())
-        .is_some_and(|v| is_ours(&v))
+fn guard_present(v: &Value) -> bool {
+    v["hooks"]["UserPromptSubmit"].as_array().is_some_and(|groups| {
+        groups.iter().any(|g| {
+            g["hooks"].as_array().is_some_and(|hs| {
+                hs.iter().any(|h| h["command"].as_str().is_some_and(|c| c.contains("platoon") && c.contains("hook guard")))
+            })
+        })
+    })
 }
 
-/// `platoon setup`: add the status line command to Claude Code's settings, changing nothing else.
+fn read_settings(claude_root: &Path) -> Option<Value> {
+    fs::read_to_string(claude_root.join("settings.json")).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok())
+}
+
+/// Whether Claude Code's settings already run `platoon statusline`.
+pub fn installed(claude_root: &Path) -> bool {
+    read_settings(claude_root).is_some_and(|v| is_ours(&v))
+}
+
+/// Whether the guard hook is installed, i.e. later copies of a running session get refused.
+pub fn guard_installed(claude_root: &Path) -> bool {
+    read_settings(claude_root).is_some_and(|v| guard_present(&v))
+}
+
+/// `platoon setup`: add the status line command and the guard hook to Claude Code's settings.
+/// Existing hooks and every other setting are left alone; someone else's status line is never replaced.
 pub fn setup(claude_root: &Path) -> Result<String, String> {
     let path = claude_root.join("settings.json");
     let mut v: Value = match fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{} isn't valid JSON: {e}", path.display()))?,
         Err(_) => json!({}),
     };
-    if is_ours(&v) {
-        return Ok("Already set up: Claude Code's status line runs platoon.".into());
-    }
-    if let Some(existing) = v["statusLine"]["command"].as_str() {
-        return Err(format!(
-            "{} already has a status line command:\n  {existing}\nplatoon won't overwrite it. \
-             To share it, make that script also run `platoon statusline` with the same stdin.",
-            path.display()
-        ));
+    if !v.is_object() {
+        return Err(format!("{} isn't a JSON object", path.display()));
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let exe = exe.to_string_lossy();
     let quoted = if exe.contains(' ') { format!("'{exe}'") } else { exe.to_string() };
-    v["statusLine"] = json!({ "type": "command", "command": format!("{quoted} statusline") });
+    let mut notes = Vec::new();
+    let mut changed = false;
 
-    if path.exists() {
-        fs::copy(&path, claude_root.join("settings.json.platoon-bak")).map_err(|e| format!("couldn't back up settings: {e}"))?;
+    if is_ours(&v) {
+        notes.push("status line: already set up".to_string());
+    } else if let Some(existing) = v["statusLine"]["command"].as_str() {
+        notes.push(format!(
+            "status line: skipped, you already have one ({existing}). Plan usage won't show in platoon unless that script also runs `platoon statusline` with the same stdin."
+        ));
+    } else {
+        v["statusLine"] = json!({ "type": "command", "command": format!("{quoted} statusline") });
+        notes.push(format!("status line: added ({quoted} statusline)"));
+        changed = true;
     }
-    fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n")
-        .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
-    let mut msg = format!("Added a status line command to {}\n  {quoted} statusline", path.display());
-    if exe.contains("/target/") {
-        msg.push_str("\nNote: that's a build directory path. Run `cargo install --path .` and then `platoon setup` again for a stable one.");
+
+    if guard_present(&v) {
+        notes.push("session guard: already installed".to_string());
+    } else {
+        let hooks = v.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({}));
+        let list = hooks
+            .as_object_mut()
+            .ok_or("\"hooks\" in settings.json isn't an object")?
+            .entry("UserPromptSubmit")
+            .or_insert_with(|| json!([]))
+            .as_array_mut()
+            .ok_or("\"hooks.UserPromptSubmit\" in settings.json isn't a list")?;
+        list.push(json!({ "hooks": [{ "type": "command", "command": format!("{quoted} hook guard") }] }));
+        notes.push(format!("session guard: added ({quoted} hook guard). Later copies of a running session are refused."));
+        changed = true;
     }
-    msg.push_str("\nRestart running Claude Code sessions to pick it up. Numbers appear after a session's first response.");
-    Ok(msg)
+
+    if changed {
+        if path.exists() {
+            fs::copy(&path, claude_root.join("settings.json.platoon-bak")).map_err(|e| format!("couldn't back up settings: {e}"))?;
+        }
+        fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n")
+            .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+        notes.push(format!("Saved {} (backup: settings.json.platoon-bak)", path.display()));
+        if exe.contains("/target/") {
+            notes.push("Note: that's a build directory path. Run `cargo install --path .` and then `platoon setup` again for a stable one.".into());
+        }
+        notes.push("Claude Code picks up hook changes live. Restart running sessions for the status line. Plan numbers appear after a session's first response.".into());
+    }
+    Ok(notes.join("\n"))
 }
 
 #[cfg(test)]
@@ -229,23 +270,33 @@ mod tests {
     }
 
     #[test]
-    fn setup_preserves_settings_and_refuses_to_overwrite() {
+    fn setup_adds_both_pieces_and_preserves_everything_else() {
         let root = tmp("setup");
-        let original = r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
+        let original = r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"x"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"mine"}]}]}}"#;
         fs::write(root.join("settings.json"), original).unwrap();
-        assert!(!installed(&root));
+        assert!(!installed(&root) && !guard_installed(&root));
         setup(&root).unwrap();
-        assert!(installed(&root));
+        assert!(installed(&root) && guard_installed(&root));
         let v: Value = serde_json::from_str(&fs::read_to_string(root.join("settings.json")).unwrap()).unwrap();
         assert_eq!(v["theme"], "dark");
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
+        // Their own prompt hook is still there, ours is added beside it.
+        assert_eq!(v["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], "mine");
+        assert_eq!(v["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 2);
         assert_eq!(fs::read_to_string(root.join("settings.json.platoon-bak")).unwrap(), original);
-        assert!(setup(&root).unwrap().starts_with("Already"));
+        // Running again changes nothing.
+        let before = fs::read_to_string(root.join("settings.json")).unwrap();
+        assert!(setup(&root).unwrap().contains("already"));
+        assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), before);
+    }
 
-        // Someone else's status line is never overwritten.
+    #[test]
+    fn setup_never_replaces_someone_elses_status_line_but_still_installs_the_guard() {
         let other = tmp("setup-other");
         fs::write(other.join("settings.json"), r#"{"statusLine":{"type":"command","command":"my-script"}}"#).unwrap();
-        assert!(setup(&other).is_err());
-        assert!(fs::read_to_string(other.join("settings.json")).unwrap().contains("my-script"));
+        let msg = setup(&other).unwrap();
+        assert!(msg.contains("skipped") && msg.contains("my-script"));
+        let text = fs::read_to_string(other.join("settings.json")).unwrap();
+        assert!(text.contains("my-script") && guard_installed(&other) && !installed(&other));
     }
 }

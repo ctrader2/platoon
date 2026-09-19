@@ -2,6 +2,7 @@ mod app;
 mod claude;
 mod client;
 mod dirs;
+mod guard;
 mod host;
 mod model;
 mod theme;
@@ -22,12 +23,13 @@ fn main() -> io::Result<()> {
         None => {}
         Some("statusline") => return statusline(),
         Some("setup") => return setup(),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
         Some("host") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup]\n  (no arguments)  open the session manager\n  setup           show plan usage: add platoon to Claude Code's status line\n  statusline      internal: run by Claude Code, reads its JSON on stdin");
+            eprintln!("usage: platoon [setup]\n  (no arguments)  open the session manager\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  statusline, hook guard   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
@@ -132,8 +134,8 @@ mod tests {
     #[test]
     fn render_snapshot() {
         let mut term = Terminal::new(TestBackend::new(110, 16)).unwrap();
-        let app = app::App::new();
-        let text = draw(&mut term, &app);
+        let d = dup("render", false);
+        let text = draw(&mut term, &d.app);
         assert!(text.contains("MODEL"), "{text}");
         println!("{text}");
     }
@@ -141,114 +143,202 @@ mod tests {
     #[test]
     fn footer_buttons_are_clickable() {
         let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
-        let mut app = App::new();
-        draw(&mut term, &app);
+        let mut d = dup("footer", false);
+        let app = &mut d.app;
+        draw(&mut term, app);
 
         // n -> picker opens, and shows candidate directories
-        click_action(&mut app, Action::New);
+        click_action(app, Action::New);
         assert!(matches!(app.mode, Mode::Picker));
-        let text = draw(&mut term, &app);
+        let text = draw(&mut term, app);
         assert!(text.contains("new session"), "{text}");
         // clicking cancel closes it
-        click_action(&mut app, Action::Cancel);
+        click_action(app, Action::Cancel);
         assert!(matches!(app.mode, Mode::List));
 
         // x -> confirm dialog (needs a session; this machine has at least the running one)
-        draw(&mut term, &app);
+        draw(&mut term, app);
         if !app.sessions.is_empty() {
-            click_action(&mut app, Action::Kill);
+            click_action(app, Action::Kill);
             assert!(matches!(app.mode, Mode::Confirm(_)));
-            let text = draw(&mut term, &app);
+            let text = draw(&mut term, app);
             assert!(text.contains("Kill") && text.contains("inactive") && text.contains("claude --resume"), "{text}");
             println!("{text}");
-            click_action(&mut app, Action::Cancel); // never confirm in a test
+            click_action(app, Action::Cancel); // never confirm in a test
             assert!(matches!(app.mode, Mode::List));
         }
 
         // / -> filter mode, typing filters, esc-button clears
-        draw(&mut term, &app);
-        click_action(&mut app, Action::Filter);
+        draw(&mut term, app);
+        click_action(app, Action::Filter);
         assert!(matches!(app.mode, Mode::Filter));
         for c in "zzzz-no-such".chars() {
-            key(&mut app, KeyCode::Char(c));
+            key(app, KeyCode::Char(c));
         }
         assert!(app.visible().is_empty());
-        assert!(draw(&mut term, &app).contains("No sessions match"));
-        click_action(&mut app, Action::Cancel);
+        assert!(draw(&mut term, app).contains("No sessions match"));
+        click_action(app, Action::Cancel);
         assert!(matches!(app.mode, Mode::List) && app.filter.is_empty());
 
         // q with nothing hosted quits
-        draw(&mut term, &app);
-        click_action(&mut app, Action::Quit);
+        draw(&mut term, app);
+        click_action(app, Action::Quit);
         assert!(app.quit);
     }
 
     #[test]
     fn jumping_into_external_session_offers_takeover() {
         let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
-        let mut app = App::new();
-        // Needs a session started outside platoon; skip on a machine that has none running.
-        let Some(pos) = app.visible().iter().position(|&i| app.sessions[i].external) else { return };
-        app.selected = pos;
-        key(&mut app, KeyCode::Enter);
-        assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::Adopt { .. })));
-        let text = draw(&mut term, &app);
+        let mut d = dup("takeover", false);
+        d.app.refresh_with(vec![], true);
+        key(&mut d.app, KeyCode::Enter);
+        assert!(matches!(d.app.mode, Mode::Confirm(crate::app::Confirm::Adopt { .. })));
+        let text = draw(&mut term, &d.app);
         assert!(text.contains("Take over") && text.contains("y take over") && text.contains("n cancel"), "{text}");
-        click_action(&mut app, Action::Cancel); // never confirm in a test: it would end a real session
-        assert!(matches!(app.mode, Mode::List));
+        click_action(&mut d.app, Action::Cancel); // never confirm in a test: it would end a real session
+        assert!(matches!(d.app.mode, Mode::List));
     }
 
-    /// Two live processes on the same conversation (e.g. resumed in a second terminal) share a session
-    /// id. Rows must still be told apart, or the selection snaps to the first one every refresh.
-    #[test]
-    fn duplicate_session_ids_keep_their_own_selection_and_unread_state() {
+    // --- two copies of one conversation ---------------------------------------------------------
+
+    struct Dup {
+        app: App,
+        a: std::process::Child, // started first
+        b: std::process::Child,
+        cache: std::path::PathBuf,
+    }
+
+    impl Drop for Dup {
+        fn drop(&mut self) {
+            let _ = self.a.kill();
+            let _ = self.b.kill();
+            let _ = self.a.wait();
+            let _ = self.b.wait();
+        }
+    }
+
+    /// Two live processes registered under the same session id, or just `b` when `both` is false.
+    fn dup(name: &str, both: bool) -> Dup {
         use std::process::Command;
-        let root = std::env::temp_dir().join(format!("platoon-dup-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
+        let base = std::env::temp_dir().join(format!("platoon-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (root, cache) = (base.join("claude"), base.join("cache"));
         std::fs::create_dir_all(root.join("sessions")).unwrap();
-        let mut a = Command::new("sleep").arg("30").spawn().unwrap();
-        let mut b = Command::new("sleep").arg("30").spawn().unwrap();
-        let write = |pid: u32, started: u64, status: &str| {
+        std::fs::create_dir_all(&cache).unwrap();
+        let a = Command::new("sleep").arg("60").spawn().unwrap();
+        let b = Command::new("sleep").arg("60").spawn().unwrap();
+        let reg = |pid: u32, started: u64| {
             std::fs::write(
                 root.join("sessions").join(format!("{pid}.json")),
-                format!(r#"{{"pid":{pid},"sessionId":"same-id","cwd":"/tmp","kind":"interactive","startedAt":{started},"status":"{status}"}}"#),
+                format!(r#"{{"pid":{pid},"sessionId":"same-id","cwd":"/tmp","kind":"interactive","startedAt":{started},"status":"idle"}}"#),
             )
             .unwrap();
         };
-        write(a.id(), 1, "busy");
-        write(b.id(), 2, "idle");
-
-        let mut app = App::with_reader(crate::claude::Reader::with_root(root.clone()));
-        assert_eq!(app.sessions.len(), 2);
-        key(&mut app, KeyCode::Char('j')); // move to the second row
-        for _ in 0..3 {
-            app.refresh(); // the app does this once a second
+        if both {
+            reg(a.id(), 1);
         }
-        assert_eq!(app.selected_session().unwrap().pid, b.id(), "selection snapped to the row above");
+        reg(b.id(), 2);
+        let app = App::with_reader(crate::claude::Reader::with_root(root), cache.clone());
+        Dup { app, a, b, cache }
+    }
 
-        // The first process finishes its turn; only that row becomes unread.
-        write(a.id(), 1, "idle");
-        app.refresh();
-        let unread: Vec<u32> = app.sessions.iter().filter(|s| s.unread).map(|s| s.pid).collect();
-        assert_eq!(unread, vec![a.id()], "unread state leaked between rows sharing a session id");
+    fn hosted(pid: u32) -> crate::host::HostInfo {
+        crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), sock: Default::default() }
+    }
 
-        let _ = a.kill();
-        let _ = b.kill();
-        let _ = a.wait();
-        let _ = b.wait();
-        let _ = std::fs::remove_dir_all(&root);
+    fn row_of(app: &App, pid: u32) -> usize {
+        app.visible().iter().position(|&i| app.sessions[i].pid == pid).unwrap()
+    }
+
+    #[test]
+    fn without_the_guard_platoon_pauses_its_own_copy_and_reload_is_offered_from_either_row() {
+        use crate::app::{AdoptKind, JumpPlan};
+        let mut d = dup("noguard", true);
+        d.app.refresh_with(vec![hosted(d.a.id())], false);
+        let (a, b) = (d.a.id(), d.b.id());
+        let sa = d.app.sessions.iter().find(|s| s.pid == a).unwrap();
+        let sb = d.app.sessions.iter().find(|s| s.pid == b).unwrap();
+        assert!(sa.shared && sb.shared);
+        assert!(sa.stale && !sa.external, "platoon's copy must be paused");
+        assert!(!sb.stale && sb.external, "platoon can't pause another terminal's copy");
+        assert!(d.cache.join("stale").join(a.to_string()).exists());
+        for pid in [a, b] {
+            d.app.selected = row_of(&d.app, pid);
+            match d.app.jump_plan().unwrap() {
+                JumpPlan::Adopt { mut pids, kind, .. } => {
+                    pids.sort();
+                    let mut want = vec![a, b];
+                    want.sort();
+                    assert_eq!((pids, kind), (want, AdoptKind::Reload));
+                }
+                other => panic!("expected a reload, got {other:?}"),
+            }
+        }
+        // The pause survives another refresh and even a restart of platoon (it is a marker on disk).
+        d.app.refresh_with(vec![hosted(a)], false);
+        assert!(d.app.sessions.iter().find(|s| s.pid == a).unwrap().stale);
+    }
+
+    #[test]
+    fn with_the_guard_the_platoon_copy_keeps_working_and_enter_on_either_row_attaches_to_it() {
+        use crate::app::JumpPlan;
+        let mut d = dup("guard", true);
+        d.app.refresh_with(vec![hosted(d.a.id())], true);
+        assert!(!d.app.sessions.iter().find(|s| s.pid == d.a.id()).unwrap().stale);
+        for pid in [d.a.id(), d.b.id()] {
+            d.app.selected = row_of(&d.app, pid);
+            assert_eq!(d.app.jump_plan(), Some(JumpPlan::Attach(d.a.id())));
+        }
+    }
+
+    #[test]
+    fn single_copies_behave_as_before() {
+        use crate::app::{AdoptKind, JumpPlan};
+        let mut d = dup("single", false);
+        d.app.refresh_with(vec![], true);
+        assert_eq!(d.app.jump_plan(), Some(JumpPlan::Adopt { pids: vec![d.b.id()], kind: AdoptKind::TakeOver, busy: false }));
+        d.app.refresh_with(vec![hosted(d.b.id())], true);
+        assert_eq!(d.app.jump_plan(), Some(JumpPlan::Attach(d.b.id())));
+    }
+
+    #[test]
+    fn paused_copy_shows_a_banner_and_the_reload_dialog_explains_itself() {
+        use crate::app::{AdoptKind, Confirm};
+        let mut d = dup("banner", true);
+        d.app.refresh_with(vec![hosted(d.a.id())], false);
+        d.app.mode = Mode::Attached(d.a.id());
+        assert!(d.app.attached_paused());
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        term.draw(|f| ui::draw_paused_banner(f, &d.app, f.area())).unwrap();
+        let text = screen_text(&term);
+        assert!(text.contains("session paused") && text.contains("not sent") && text.contains("reload"), "{text}");
+        // The other copy isn't paused.
+        d.app.mode = Mode::Attached(d.b.id());
+        assert!(!d.app.attached_paused());
+
+        d.app.mode = Mode::Confirm(Confirm::Adopt {
+            pids: vec![d.a.id(), d.b.id()],
+            id: "same-id".into(),
+            name: "x".into(),
+            cwd: "/tmp".into(),
+            busy: true,
+            kind: AdoptKind::Reload,
+        });
+        let text = draw(&mut term, &d.app);
+        assert!(text.contains("Reload") && text.contains("open in 2 places") && text.contains("interrupts it."), "the whole warning must be readable: {text}");
     }
 
     #[test]
     fn picker_filters_and_accepts_paths() {
         let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
-        let mut app = App::new();
-        key(&mut app, KeyCode::Char('n'));
+        let mut d = dup("picker", false);
+        let app = &mut d.app;
+        key(app, KeyCode::Char('n'));
         for c in "/tmp".chars() {
-            key(&mut app, KeyCode::Char(c));
+            key(app, KeyCode::Char(c));
         }
         assert_eq!(app.picker.results.first().map(String::as_str), Some("/tmp"));
-        assert!(draw(&mut term, &app).contains("/tmp"));
+        assert!(draw(&mut term, app).contains("/tmp"));
     }
 
     /// Starts a real `claude` (no prompt is sent). Needs a folder Claude already trusts (it registers

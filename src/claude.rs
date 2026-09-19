@@ -30,6 +30,13 @@ struct Cache {
     large_window: bool,
 }
 
+/// Where Claude Code keeps its state (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+pub fn claude_root() -> PathBuf {
+    std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"))
+}
+
 pub struct Reader {
     root: PathBuf,
     home: String,
@@ -38,11 +45,7 @@ pub struct Reader {
 
 impl Reader {
     pub fn new() -> Self {
-        let home = std::env::var("HOME").unwrap_or_default();
-        let root = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| Path::new(&home).join(".claude"));
-        Self::with_root(root)
+        Self::with_root(claude_root())
     }
 
     pub fn with_root(root: PathBuf) -> Self {
@@ -113,6 +116,8 @@ impl Reader {
             cwd,
             branch: c.branch.clone().filter(|b| b != "HEAD"),
             model: c.model.as_deref().map(pretty_model),
+            shared: false,
+            stale: false,
             status: if v["status"].as_str() == Some("busy") { Status::Busy } else { Status::Idle },
             unread: false,
             external: true,
