@@ -151,6 +151,9 @@ fn quitting_the_ui_leaves_the_session_running() {
     let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
     let mut cmd = CommandBuilder::new(BIN);
     cmd.env("PLATOON_CACHE_DIR", &cache);
+    // Nothing of the real ~/.claude or ~/.config/platoon is read or written.
+    cmd.env("CLAUDE_CONFIG_DIR", cache.join("claude"));
+    cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
     cmd.env("PLATOON_CLAUDE_BIN", "sh");
     cmd.env("PLATOON_SKIP_SETUP_CHECK", "1"); // this test is about sessions, not setup
     cmd.env("TERM", "xterm-256color");
@@ -189,7 +192,7 @@ fn quitting_the_ui_leaves_the_session_running() {
     writer.write_all(b"echo ui-$((6*7))\r").unwrap();
     wait_for("ui-42");
     writer.write_all(&[0]).unwrap(); // ctrl+space: back to the list
-    wait_for("enter jump");
+    wait_for("enter open");
     writer.write_all(b"q").unwrap();
     wait_for("still running in the background");
     child.wait().unwrap();

@@ -2,33 +2,21 @@
 //! formats (`~/.claude/sessions/<pid>.json` and `~/.claude/projects/*/<id>.jsonl`), so all
 //! knowledge of them lives in this file.
 
-use crate::model::{Session, Status};
 use serde_json::Value;
 use std::{
-    collections::HashMap,
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
 const TAIL_BYTES: u64 = 512 * 1024;
+/// How far into a transcript to look for its first real prompt and working directory.
+const HEAD_LINES: usize = 2000;
+const HEAD_BYTES: u64 = 2 * 1024 * 1024;
 const DEFAULT_WINDOW: u64 = 200_000;
 const LARGE_WINDOW: u64 = 1_000_000;
-
-#[derive(Default)]
-struct Cache {
-    transcript: Option<PathBuf>,
-    /// Transcript length at the last scan; skip rescanning if unchanged.
-    scanned_len: Option<u64>,
-    first_prompt: Option<String>,
-    ai_title: Option<String>,
-    branch: Option<String>,
-    /// Raw model id from the latest assistant message.
-    model: Option<String>,
-    context_tokens: u64,
-    /// Once a session has gone past 200k tokens it must have a large window. Never flips back.
-    large_window: bool,
-}
+/// Longest title or prompt kept per conversation, so the index stays small however long they are.
+const TEXT_MAX: usize = 300;
 
 /// Where Claude Code keeps its state (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
 pub fn claude_root() -> PathBuf {
@@ -37,10 +25,19 @@ pub fn claude_root() -> PathBuf {
         .unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"))
 }
 
+/// A live Claude Code process, from its registry file.
+pub struct Live {
+    pub pid: u32,
+    pub id: String,
+    pub cwd: String,
+    /// Only a name the user chose; Claude's derived placeholder is dropped.
+    pub name: Option<String>,
+    pub started_at: u64,
+    pub busy: bool,
+}
+
 pub struct Reader {
     root: PathBuf,
-    home: String,
-    cache: HashMap<String, Cache>,
 }
 
 impl Reader {
@@ -49,16 +46,15 @@ impl Reader {
     }
 
     pub fn with_root(root: PathBuf) -> Self {
-        let home = std::env::var("HOME").unwrap_or_default();
-        Self { root, home, cache: HashMap::new() }
+        Self { root }
     }
 
     pub fn root(&self) -> &Path {
         &self.root
     }
 
-    /// All live interactive sessions, oldest first. `unread` is left false; the app tracks it.
-    pub fn load(&mut self) -> Vec<Session> {
+    /// All live interactive processes, oldest first. Several can share one session id.
+    pub fn live(&self) -> Vec<Live> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(self.root.join("sessions")) else { return out };
         for path in entries.flatten().map(|e| e.path()) {
@@ -68,72 +64,35 @@ impl Reader {
             let Some(v) = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else {
                 continue;
             };
-            if let Some(s) = self.session(&v) {
-                out.push(s);
+            if let Some(l) = live_from(&v) {
+                out.push(l);
             }
         }
-        out.sort_by_key(|s| s.started_at);
-        let live: Vec<&String> = out.iter().map(|s| &s.id).collect();
-        self.cache.retain(|id, _| live.contains(&id));
+        out.sort_by_key(|l| (l.started_at, l.pid));
         out
     }
+}
 
-    fn session(&mut self, v: &Value) -> Option<Session> {
-        if v["kind"].as_str() != Some("interactive") {
-            return None;
-        }
-        let pid = v["pid"].as_u64()? as u32;
-        if !pid_alive(pid) {
-            return None; // stale registry file
-        }
-        let id = v["sessionId"].as_str()?.to_string();
-        let cwd = v["cwd"].as_str().unwrap_or("").to_string();
-
-        let root = self.root.clone();
-        let dir = self.tilde(&cwd);
-        let c = self.cache.entry(id.clone()).or_default();
-        refresh_cache(c, &root, &id);
-
-        // Claude Code derives a placeholder name; only trust names the user chose.
-        let name = match (v["nameSource"].as_str(), v["name"].as_str()) {
-            (Some("derived") | None, _) | (_, None) => {
-                Path::new(&cwd).file_name().and_then(|n| n.to_str()).unwrap_or(&cwd).to_string()
-            }
-            (_, Some(n)) => n.to_string(),
-        };
-        let description = c
-            .ai_title
-            .clone()
-            .or_else(|| c.first_prompt.clone())
-            .unwrap_or_default();
-        let window = window_size(c.context_tokens, &mut c.large_window);
-
-        Some(Session {
-            id,
-            pid,
-            name,
-            dir,
-            cwd,
-            branch: c.branch.clone().filter(|b| b != "HEAD"),
-            model: c.model.as_deref().map(pretty_model),
-            shared: false,
-            stale: false,
-            status: if v["status"].as_str() == Some("busy") { Status::Busy } else { Status::Idle },
-            unread: false,
-            external: true,
-            context_pct: (c.context_tokens * 100 / window).min(100) as u8,
-            context_exact: false,
-            description,
-            started_at: v["startedAt"].as_u64().unwrap_or(0),
-        })
+fn live_from(v: &Value) -> Option<Live> {
+    if v["kind"].as_str() != Some("interactive") {
+        return None;
     }
-
-    fn tilde(&self, p: &str) -> String {
-        match p.strip_prefix(&self.home) {
-            Some(rest) if !self.home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => format!("~{rest}"),
-            _ => p.to_string(),
-        }
+    let pid = v["pid"].as_u64()? as u32;
+    if !pid_alive(pid) {
+        return None; // stale registry file
     }
+    let name = match (v["nameSource"].as_str(), v["name"].as_str()) {
+        (Some("derived") | None, _) | (_, None) => None,
+        (_, Some(n)) => Some(n.to_string()),
+    };
+    Some(Live {
+        pid,
+        id: v["sessionId"].as_str()?.to_string(),
+        cwd: v["cwd"].as_str().unwrap_or("").to_string(),
+        name,
+        started_at: v["startedAt"].as_u64().unwrap_or(0),
+        busy: v["status"].as_str() == Some("busy"),
+    })
 }
 
 /// `claude-sonnet-5` -> `Sonnet 5`, `claude-fable-5-1` -> `Fable 5.1`, `claude-haiku-4-5-20251001` -> `Haiku 4.5`.
@@ -170,7 +129,7 @@ pub fn pretty_model(id: &str) -> String {
 
 /// The transcript doesn't record the model's window size, so infer it: 200k until the session is seen
 /// past 200k tokens, then 1M for good (compaction shrinks usage but not the window).
-fn window_size(tokens: u64, large: &mut bool) -> u64 {
+pub fn window_size(tokens: u64, large: &mut bool) -> u64 {
     if tokens > DEFAULT_WINDOW {
         *large = true;
     }
@@ -227,56 +186,135 @@ pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
         .find(|p| p.exists())
 }
 
-fn refresh_cache(c: &mut Cache, root: &Path, id: &str) {
-    if c.transcript.is_none() {
-        c.transcript = find_transcript(root, id);
-    }
-    let Some(path) = c.transcript.clone() else { return };
-    let Ok(mut file) = File::open(&path) else { return };
-    let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    if c.scanned_len == Some(len) {
-        return;
-    }
-    c.scanned_len = Some(len);
+/// What platoon knows about one saved conversation, read from its transcript.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Transcript {
+    /// Working directory the conversation started in (the first `cwd` recorded).
+    pub cwd: Option<String>,
+    pub branch: Option<String>,
+    /// Raw model id from the latest assistant message.
+    pub model: Option<String>,
+    pub context_tokens: u64,
+    /// Once a session has gone past 200k tokens it must have a large window. Never flips back.
+    pub large_window: bool,
+    pub ai_title: Option<String>,
+    /// First real user prompt. None means nothing but slash-command echoes and injected blocks: junk.
+    pub first_prompt: Option<String>,
+    /// Timestamp of the latest user or assistant entry, ms since the epoch.
+    pub last_active_ms: Option<u64>,
+}
 
-    if c.first_prompt.is_none() {
-        c.first_prompt = first_prompt(&file);
+/// Read a transcript cheaply, whatever its size: the first real prompt and cwd from the head, and the
+/// latest title, usage, model, branch and time from a bounded tail. `prev` is the earlier reading of
+/// the same file: what only the head or a distant title can tell us is kept when it isn't found again.
+pub fn read_transcript(path: &Path, prev: Option<&Transcript>) -> Option<Transcript> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut t = prev.cloned().unwrap_or_default();
+    if t.first_prompt.is_none() || t.cwd.is_none() {
+        scan_head(&file, &mut t);
     }
 
-    // Only the tail: it holds the latest usage, title and branch, and stays cheap on huge files.
     let start = len.saturating_sub(TAIL_BYTES);
-    if file.seek(SeekFrom::Start(start)).is_err() {
-        return;
-    }
+    file.seek(SeekFrom::Start(start)).ok()?;
     let mut buf = Vec::new();
-    if file.take(TAIL_BYTES).read_to_end(&mut buf).is_err() {
-        return;
-    }
+    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
     let text = String::from_utf8_lossy(&buf);
     let mut lines = text.lines();
     if start > 0 {
         lines.next(); // probably cut mid-line
     }
-    for line in lines {
-        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
-        if let Some(b) = v["gitBranch"].as_str() {
-            c.branch = Some(b.to_string());
+    scan_tail(lines.collect::<Vec<_>>().into_iter().rev(), &mut t);
+    Some(t)
+}
+
+fn scan_head(file: &File, t: &mut Transcript) {
+    let mut reader = BufReader::new(file.take(HEAD_BYTES));
+    let mut line = Vec::new();
+    for _ in 0..HEAD_LINES {
+        line.clear();
+        if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            break;
         }
+        let line = String::from_utf8_lossy(&line);
+        let want_cwd = t.cwd.is_none() && line.contains("\"cwd\"");
+        let want_prompt = t.first_prompt.is_none() && line.contains("\"type\":\"user\"");
+        if !want_cwd && !want_prompt {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if v["isSidechain"].as_bool() == Some(true) {
+            continue; // subagent content is not the conversation
+        }
+        if want_cwd {
+            t.cwd = v["cwd"].as_str().filter(|c| !c.is_empty()).map(String::from);
+        }
+        if want_prompt {
+            t.first_prompt = real_prompt(&v);
+        }
+        if t.cwd.is_some() && t.first_prompt.is_some() {
+            break;
+        }
+    }
+}
+
+/// `lines` run newest first, so the first hit for each fact is the latest one.
+fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
+    let (mut usage, mut branch, mut ts, mut title) = (false, false, false, false);
+    let mut need_prompt = t.first_prompt.is_none();
+    for line in lines {
+        if usage && branch && ts && title && !need_prompt {
+            break;
+        }
+        let is_title = line.contains("\"type\":\"ai-title\"");
+        let is_turn = line.contains("\"type\":\"assistant\"") || line.contains("\"type\":\"user\"");
+        // Once the cheap facts are in, only a title (or a fallback prompt) is worth another parse.
+        let done_turns = usage && branch && ts && !need_prompt;
+        if !(is_title && !title || is_turn && !done_turns) {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
         match v["type"].as_str() {
-            Some("ai-title") => {
-                if let Some(t) = v["aiTitle"].as_str() {
-                    c.ai_title = Some(one_line(t));
+            Some("ai-title") if !title => {
+                if let Some(x) = v["aiTitle"].as_str().map(one_line).filter(|x| !x.is_empty()) {
+                    t.ai_title = Some(truncate(x));
+                    title = true;
                 }
             }
-            // Subagent (sidechain) messages have their own context; ignore them.
-            Some("assistant") if v["isSidechain"].as_bool() != Some(true) => {
-                let u = &v["message"]["usage"];
-                if u.is_object() && v["message"]["model"].as_str() != Some("<synthetic>") {
-                    if let Some(m) = v["message"]["model"].as_str() {
-                        c.model = Some(m.to_string());
+            Some(kind @ ("assistant" | "user")) => {
+                if !ts {
+                    if let Some(ms) = v["timestamp"].as_str().and_then(parse_iso_ms) {
+                        t.last_active_ms = Some(ms);
+                        ts = true;
                     }
-                    let n = |k: &str| u[k].as_u64().unwrap_or(0);
-                    c.context_tokens = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+                }
+                let side = v["isSidechain"].as_bool() == Some(true);
+                if !branch && !side {
+                    if let Some(b) = v["gitBranch"].as_str() {
+                        t.branch = Some(b.to_string());
+                        branch = true;
+                    }
+                }
+                // Subagent (sidechain) messages have their own context; ignore them.
+                if kind == "assistant" && !usage && !side {
+                    let u = &v["message"]["usage"];
+                    if u.is_object() && v["message"]["model"].as_str() != Some("<synthetic>") {
+                        if let Some(m) = v["message"]["model"].as_str() {
+                            t.model = Some(m.to_string());
+                        }
+                        let n = |k: &str| u[k].as_u64().unwrap_or(0);
+                        t.context_tokens = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
+                        if t.context_tokens > DEFAULT_WINDOW {
+                            t.large_window = true;
+                        }
+                        usage = true;
+                    }
+                }
+                if kind == "user" && need_prompt && !side {
+                    if let Some(p) = real_prompt(&v) {
+                        t.first_prompt = Some(p);
+                        need_prompt = false;
+                    }
                 }
             }
             _ => {}
@@ -284,32 +322,53 @@ fn refresh_cache(c: &mut Cache, root: &Path, id: &str) {
     }
 }
 
-/// First real user prompt: skips slash-command echoes, caveats and other injected `<...>` blocks.
-fn first_prompt(file: &File) -> Option<String> {
-    for line in BufReader::new(file).lines().take(2000).map_while(Result::ok) {
-        if !line.contains("\"type\":\"user\"") {
-            continue;
-        }
-        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-        if v["type"].as_str() != Some("user") || v["isMeta"].as_bool() == Some(true) || v["isSidechain"].as_bool() == Some(true) {
-            continue;
-        }
-        let content = &v["message"]["content"];
-        let text = match content {
-            Value::String(s) => s.clone(),
-            Value::Array(a) => a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" "),
-            _ => continue,
-        };
-        let text = one_line(&text);
-        if !text.is_empty() && !text.starts_with('<') {
-            return Some(text);
-        }
+/// The text of a real user prompt: not a slash-command echo, caveat, compaction summary, interrupt marker
+/// or other injected `<...>` block.
+fn real_prompt(v: &Value) -> Option<String> {
+    let flag = |k: &str| v[k].as_bool() == Some(true);
+    if v["type"].as_str() != Some("user") || flag("isMeta") || flag("isSidechain") || flag("isCompactSummary") {
+        return None;
     }
-    None
+    let text = match &v["message"]["content"] {
+        Value::String(s) => one_line(s),
+        Value::Array(a) => one_line(&a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ")),
+        _ => return None,
+    };
+    (!text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted")).then(|| truncate(text))
 }
 
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate(s: String) -> String {
+    if s.chars().count() <= TEXT_MAX { s } else { s.chars().take(TEXT_MAX).collect() }
+}
+
+/// `2026-09-19T03:53:40.091Z` -> ms since the epoch. Only the UTC form Claude Code writes is understood.
+pub fn parse_iso_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, mo, d, h, mi, sec) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+    let frac: u64 = match b.get(19) {
+        Some(b'.') => {
+            let digits: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+            format!("{digits:0<3}").parse().ok()?
+        }
+        _ => 0,
+    };
+    // Days since 1970-01-01 (Howard Hinnant's civil-from-days, inverted).
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + h * 3600 + mi * 60 + sec;
+    u64::try_from(secs).ok().map(|s| s * 1000 + frac)
 }
 
 #[cfg(test)]
@@ -335,5 +394,38 @@ mod tests {
         assert_eq!(window_size(210_000, &mut large), 1_000_000);
         // After compaction the usage drops, but the window is still the large one.
         assert_eq!(window_size(60_000, &mut large), 1_000_000);
+    }
+}
+
+#[cfg(test)]
+mod transcript_tests {
+    use super::*;
+
+    #[test]
+    fn iso_timestamps_convert_to_epoch_ms() {
+        assert_eq!(parse_iso_ms("1970-01-01T00:00:00.000Z"), Some(0));
+        assert_eq!(parse_iso_ms("2026-09-19T03:53:40.091Z"), Some(1_789_790_020_091));
+        assert_eq!(parse_iso_ms("2024-02-29T12:00:00Z"), Some(1_709_208_000_000));
+        assert_eq!(parse_iso_ms("2026-09-19T03:53:40.5Z"), Some(1_789_790_020_500));
+        assert_eq!(parse_iso_ms("not a time"), None);
+    }
+
+    fn prompt(v: Value) -> Option<String> {
+        real_prompt(&v)
+    }
+
+    #[test]
+    fn only_real_prompts_count() {
+        use serde_json::json;
+        let user = |c: Value| json!({"type":"user","message":{"content":c}});
+        assert_eq!(prompt(user(json!("fix the bug"))).as_deref(), Some("fix the bug"));
+        assert_eq!(prompt(user(json!([{"type":"text","text":"a\n  b"}]))).as_deref(), Some("a b"));
+        assert_eq!(prompt(user(json!("<command-name>/clear</command-name>"))), None);
+        assert_eq!(prompt(user(json!("[Request interrupted by user]"))), None);
+        assert_eq!(prompt(user(json!([{"type":"tool_result","content":"x"}]))), None);
+        assert_eq!(prompt(json!({"type":"user","isMeta":true,"message":{"content":"Caveat: x"}})), None);
+        assert_eq!(prompt(json!({"type":"user","isSidechain":true,"message":{"content":"sub"}})), None);
+        assert_eq!(prompt(json!({"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued"}})), None);
+        assert_eq!(prompt(json!({"type":"assistant","message":{"content":"hi"}})), None);
     }
 }

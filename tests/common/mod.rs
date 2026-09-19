@@ -118,7 +118,10 @@ impl Term {
         let start = Instant::now();
         while start.elapsed() < WAIT {
             if let Ok(Some(status)) = self.child.try_wait() {
-                self.text();
+                // Its last output may still be in flight through the pty: take it before reading the screen.
+                while let Ok(b) = self.rx.recv_timeout(Duration::from_millis(100)) {
+                    self.screen.process(&b);
+                }
                 return status.exit_code();
             }
             self.drain(Duration::from_millis(50));

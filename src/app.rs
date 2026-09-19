@@ -1,12 +1,14 @@
-use crate::claude::Reader;
+use crate::archive::{self, Archive};
+use crate::claude::{self, Live, Reader};
 use crate::client::{key_bytes, Client};
 use crate::dirs;
 use crate::guard;
-use crate::setup;
 use crate::host::{self, HostInfo};
-use crate::model::{Session, Status};
-use crate::usage::{self, Usage};
+use crate::index::{Entry, Indexer};
+use crate::model::{Proc, Session, Status};
+use crate::setup;
 use crate::theme::Theme;
+use crate::usage::{self, Usage};
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -14,16 +16,31 @@ use std::{
     cell::RefCell,
     collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 
+/// A tab in the header. Adding one is adding an entry here: the header, the number keys (`1` is the
+/// first tab, `2` the second, ...) and the counts all follow.
+pub struct Tab {
+    pub label: &'static str,
+    /// Shown when the tab has nothing in it.
+    pub empty: &'static str,
+    pub shows: fn(&Session) -> bool,
+}
+
+pub const TABS: &[Tab] = &[
+    Tab { label: "Active", empty: "No conversations yet. Press n to start one.", shows: |s| !s.archived },
+    Tab { label: "Archived", empty: "Nothing archived. Press a on a conversation to archive it.", shows: |s| s.archived },
+];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Jump,
     New,
-    Kill,
+    Archive,
     Filter,
     Quit,
     Back,
@@ -37,6 +54,7 @@ pub enum Hit {
     Row(usize),
     PickerRow(usize),
     Action(Action),
+    Tab(usize),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -50,15 +68,20 @@ pub enum AdoptKind {
 /// What pressing Enter on a row should do.
 #[derive(Debug, PartialEq, Eq)]
 pub enum JumpPlan {
+    /// A copy platoon hosts and that is in sync: just show it.
     Attach(u32),
+    /// Nothing is running it: start it again from its saved history.
+    Resume,
+    /// Something platoon doesn't own (or can't trust) is running it, and ending that is destructive.
     Adopt { pids: Vec<u32>, kind: AdoptKind, busy: bool },
 }
 
 #[derive(Clone)]
 pub enum Confirm {
-    Kill { pid: u32, name: String, dir: String },
-    /// Take over a session started elsewhere: end it, then resume it inside platoon.
-    Adopt { pids: Vec<u32>, id: String, name: String, cwd: String, busy: bool, kind: AdoptKind },
+    /// Take over a conversation running elsewhere: end it, then resume it inside platoon.
+    Adopt { pids: Vec<u32>, id: String, name: String, cwd: String, busy: bool, kind: AdoptKind, restore: bool },
+    /// Archiving stops the process; only asked when it is in the middle of working.
+    Archive { id: String, name: String },
 }
 
 #[derive(Clone)]
@@ -109,7 +132,14 @@ impl Picker {
 }
 
 pub struct App {
+    /// Every conversation, newest activity first, across all tabs.
     pub sessions: Vec<Session>,
+    /// Indices into `sessions` shown now: the current tab, narrowed by the filter.
+    view: Vec<usize>,
+    /// How many conversations each tab holds (unfiltered), parallel to `TABS`.
+    pub counts: Vec<usize>,
+    /// Which of `TABS` is showing.
+    pub tab: usize,
     pub usage: Usage,
     /// Index into `visible()`.
     pub selected: usize,
@@ -134,17 +164,42 @@ pub struct App {
     pub hits: RefCell<Vec<(Rect, Hit)>>,
     size: (u16, u16),
     reader: Reader,
+    indexer: Indexer,
+    archive: Archive,
+    /// The program that runs a conversation: `claude`, or PLATOON_CLAUDE_BIN (a wrapper, or a stand-in in tests).
+    program: String,
+    guard_on: bool,
+    /// What `view` and `counts` were computed from: (filter, tab, generation). Recomputed when it changes.
+    view_for: (String, usize, u64),
+    /// Bumped on every refresh.
+    rev: u64,
+    /// The index generation and live session ids `sessions` was built from.
+    built: (u64, Vec<String>),
 }
 
 impl App {
+    /// The real thing: rows appear as the background index reads them.
     pub fn new() -> Self {
-        Self::with_reader(Reader::new(), usage::cache_dir())
+        let reader = Reader::new();
+        let cache = usage::cache_dir();
+        let indexer = Indexer::spawn(reader.root(), &cache);
+        Self::build(reader, cache, archive::config_dir(), indexer)
     }
 
-    /// `cache` is where platoon keeps its own state; tests pass a temp dir so they never touch the real one.
-    pub fn with_reader(reader: Reader, cache: PathBuf) -> Self {
+    /// `cache` and `config` are where platoon keeps its own state; tests pass temp dirs so they never touch
+    /// the real ones. The index is read on the calling thread, so tests see rows straight away.
+    #[cfg(test)]
+    pub fn with_dirs(reader: Reader, cache: PathBuf, config: PathBuf) -> Self {
+        let indexer = Indexer::inline(reader.root(), &cache);
+        Self::build(reader, cache, config, indexer)
+    }
+
+    fn build(reader: Reader, cache: PathBuf, config: PathBuf, indexer: Indexer) -> Self {
         let mut app = Self {
             sessions: Vec::new(),
+            view: Vec::new(),
+            counts: vec![0; TABS.len()],
+            tab: 0,
             usage: Usage::NotSetUp,
             selected: 0,
             filter: String::new(),
@@ -163,8 +218,16 @@ impl App {
             hits: RefCell::new(Vec::new()),
             size: (80, 24),
             reader,
+            indexer,
+            archive: Archive::open(&config),
+            program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+            guard_on: false,
+            view_for: (String::new(), usize::MAX, 0),
+            rev: 0,
+            built: (0, Vec::new()),
         };
-        app.refresh();
+        // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
+        app.refresh_with(Vec::new(), false);
         app
     }
 
@@ -176,32 +239,59 @@ impl App {
         self.notice.as_ref().filter(|(_, t)| t.elapsed() < NOTICE_FOR).map(|(m, _)| m.as_str())
     }
 
-    /// Indices into `sessions` that match the filter.
-    pub fn visible(&self) -> Vec<usize> {
+    /// Indices into `sessions` for the rows on screen: current tab, narrowed by the filter.
+    pub fn visible(&self) -> &[usize] {
+        &self.view
+    }
+
+    /// Recompute the rows on screen if the filter, tab or data changed. Called after every event and
+    /// refresh, and does nothing (one comparison) when nothing moved.
+    fn update_view(&mut self) {
+        if self.view_for.0 == self.filter && self.view_for.1 == self.tab && self.view_for.2 == self.rev {
+            return;
+        }
+        self.view_for = (self.filter.clone(), self.tab, self.rev);
         let q = self.filter.to_lowercase();
-        self.sessions
+        let shows = TABS[self.tab.min(TABS.len() - 1)].shows;
+        self.view = self
+            .sessions
             .iter()
             .enumerate()
-            .filter(|(_, s)| {
-                q.is_empty()
-                    || [s.name.as_str(), s.dir.as_str(), s.branch.as_deref().unwrap_or(""), s.description.as_str()]
-                        .iter()
-                        .any(|f| f.to_lowercase().contains(&q))
-            })
+            .filter(|(_, s)| shows(s) && (q.is_empty() || s.haystack.contains(&q)))
             .map(|(i, _)| i)
-            .collect()
+            .collect();
+        self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| (t.shows)(s)).count()).collect();
+        self.clamp_selected();
     }
 
     pub fn selected_session(&self) -> Option<&Session> {
-        self.visible().get(self.selected).map(|&i| &self.sessions[i])
+        self.view.get(self.selected).map(|&i| &self.sessions[i])
     }
 
     fn clamp_selected(&mut self) {
-        self.selected = self.selected.min(self.visible().len().saturating_sub(1));
+        self.selected = self.selected.min(self.view.len().saturating_sub(1));
     }
 
     pub fn unread_count(&self) -> usize {
         self.sessions.iter().filter(|s| s.unread).count()
+    }
+
+    /// Transcripts still being read by the background index, or Some(0) while the very first pass is
+    /// still listing files. None once it's caught up.
+    pub fn indexing(&self) -> Option<usize> {
+        match self.indexer.remaining {
+            0 if self.sessions.is_empty() && self.indexer.scanning() => Some(0),
+            0 => None,
+            n => Some(n),
+        }
+    }
+
+    pub fn switch_tab(&mut self, i: usize) {
+        if i < TABS.len() && i != self.tab {
+            self.tab = i;
+            self.selected = 0;
+            self.update_view();
+        }
     }
 
     /// (rows, cols) of the terminal area inside the attached view.
@@ -227,11 +317,21 @@ impl App {
         self.refresh_with(host::discover(), guard_on);
     }
 
+    /// `refresh` with the same outside inputs as last time (after an action that changed our own state).
+    fn reload(&mut self) {
+        self.refresh_with(self.hosts.clone(), self.guard_on);
+    }
+
+    fn attached_pid(&self) -> Option<u32> {
+        if let Mode::Attached(p) = self.mode { Some(p) } else { None }
+    }
+
     /// `refresh` with its outside inputs supplied: which sessions platoon hosts, and whether the
     /// guard hook is installed (so a second copy of a session gets refused at the source).
     pub fn refresh_with(&mut self, hosts: Vec<HostInfo>, guard_on: bool) {
-        let attached = if let Mode::Attached(p) = self.mode { Some(p) } else { None };
+        let attached = self.attached_pid();
         self.hosts = hosts;
+        self.guard_on = guard_on;
         if let Some(pid) = attached {
             if self.client.as_ref().map_or(true, |c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid) {
                 self.mode = Mode::List;
@@ -240,44 +340,61 @@ impl App {
             }
         }
 
-        // Rows are identified by pid, not session id: resuming a conversation elsewhere while it's
-        // still running gives two live processes the same session id.
-        let selected_pid = self.selected_session().map(|s| s.pid);
-        let mut fresh = self.reader.load();
-        for s in &mut fresh {
-            // Unread = Claude went busy -> idle while we were watching. Starting work again clears it.
-            // Sessions already idle when first seen count as read; so do ones we're looking at.
-            if let Some(old) = self.sessions.iter().find(|o| o.pid == s.pid) {
-                s.unread = s.status == Status::Idle && (old.unread || old.status == Status::Busy);
-            }
-            if attached == Some(s.pid) {
-                s.unread = false;
-            }
-            s.external = !self.hosts.iter().any(|h| h.claude_pid == s.pid);
+        // What we knew about running conversations, for spotting busy -> idle across the rebuild.
+        let prev: HashMap<String, (Status, bool)> =
+            self.sessions.iter().filter(|s| !s.procs.is_empty()).map(|s| (s.id.clone(), (s.status, s.unread))).collect();
+        let selected_id = self.selected_session().map(|s| s.id.clone());
+
+        let index_changed = self.indexer.poll();
+        self.archive.reload_if_changed();
+        let live = self.reader.live();
+
+        // One row per conversation, however many processes run it.
+        let mut by_id: HashMap<&str, Vec<&Live>> = HashMap::new();
+        for l in &live {
+            by_id.entry(l.id.as_str()).or_default().push(l);
+        }
+        let mut live_ids: Vec<String> = by_id.keys().map(|k| k.to_string()).collect();
+        live_ids.sort();
+        if index_changed || self.built.0 != self.indexer.generation || self.built.1 != live_ids || self.rev == 0 {
+            self.sessions = self.build_sessions(&by_id);
+            self.built = (self.indexer.generation, live_ids);
         }
 
         // Two live processes on one conversation each hold their own memory of it and write to the same
         // history. With the guard installed the later copy is refused at its first prompt; without it,
         // all platoon can do is stop writing through its own copy, and require a reload from the history.
-        let mut copies: HashMap<String, usize> = HashMap::new();
-        for s in &fresh {
-            *copies.entry(s.id.clone()).or_default() += 1;
-        }
         guard::prune_stale(&self.cache);
-        for s in &mut fresh {
-            s.shared = copies[&s.id] > 1;
-            if s.shared && !s.external && !guard_on {
-                guard::mark_stale(&self.cache, s.pid, s.started_at);
-            }
-            s.stale = guard::is_stale(&self.cache, s.pid, s.started_at);
-        }
-
         // Plan limits and exact context figures, saved by `platoon statusline`.
         let snap = usage::load(&self.cache, usage::now());
-        for s in &mut fresh {
-            if let Some(p) = snap.context.get(&s.id) {
-                s.context_pct = *p;
-                s.context_exact = true;
+        for s in &mut self.sessions {
+            s.archived = self.archive.contains(&s.id);
+            s.context_exact = snap.context.contains_key(&s.id);
+            s.context_pct = snap.context.get(&s.id).copied().unwrap_or(s.context_est);
+            s.procs.clear();
+            let Some(ls) = by_id.get(s.id.as_str()) else {
+                s.status = Status::Idle;
+                s.unread = false;
+                continue;
+            };
+            let shared = ls.len() > 1;
+            for l in ls {
+                let hosted = self.hosts.iter().any(|h| h.claude_pid == l.pid);
+                if shared && hosted && !guard_on {
+                    guard::mark_stale(&self.cache, l.pid, l.started_at);
+                }
+                let stale = guard::is_stale(&self.cache, l.pid, l.started_at);
+                s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, stale });
+            }
+            if let Some(n) = ls.iter().find_map(|l| l.name.as_ref()) {
+                s.name.clone_from(n);
+            }
+            s.status = if ls.iter().any(|l| l.busy) { Status::Busy } else { Status::Idle };
+            // Unread = Claude went busy -> idle while we were watching. Starting work again clears it.
+            // Sessions already idle when first seen count as read; so do ones we're looking at.
+            s.unread = s.status == Status::Idle && prev.get(&s.id).is_some_and(|(st, unread)| *unread || *st == Status::Busy);
+            if attached.is_some_and(|pid| s.procs.iter().any(|p| p.pid == pid)) {
+                s.unread = false;
             }
         }
         self.usage = match snap.plan {
@@ -285,13 +402,81 @@ impl App {
             None if setup::statusline_installed(self.reader.root()) => Usage::Waiting,
             None => Usage::NotSetUp,
         };
-        self.sessions = fresh;
-        if let Some(pid) = selected_pid {
-            if let Some(pos) = self.visible().iter().position(|&i| self.sessions[i].pid == pid) {
+        self.rev += 1;
+        self.update_view();
+        if let Some(id) = selected_id {
+            if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
                 self.selected = pos;
             }
         }
         self.clamp_selected();
+    }
+
+    /// The conversations to list: every saved one that has a real prompt, plus anything running (even before
+    /// its first prompt is saved), newest activity first. Running-state fields are filled in by the caller.
+    fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
+        // The same id can be saved under two project folders; the most recently active file wins.
+        let mut latest: HashMap<&str, &Arc<Entry>> = HashMap::new();
+        for e in self.indexer.entries.values() {
+            let slot = latest.entry(e.id.as_str()).or_insert(e);
+            if (e.last_active_ms(), e.mtime) > (slot.last_active_ms(), slot.mtime) {
+                *slot = e;
+            }
+        }
+        let mut out: Vec<Session> = latest
+            .values()
+            .filter(|e| e.t.first_prompt.is_some() || live.contains_key(e.id.as_str()))
+            .map(|e| self.session_from(e))
+            .collect();
+        for (id, ls) in live {
+            if !latest.contains_key(id) {
+                out.push(self.session_from_live(ls[0]));
+            }
+        }
+        out.sort_by(|a, b| b.last_active.cmp(&a.last_active).then_with(|| a.id.cmp(&b.id)));
+        out
+    }
+
+    fn session_from(&self, e: &Entry) -> Session {
+        let t = &e.t;
+        let cwd = t.cwd.clone().unwrap_or_default();
+        let mut large = t.large_window;
+        let window = claude::window_size(t.context_tokens, &mut large);
+        let est = (t.context_tokens * 100 / window).min(100) as u8;
+        let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
+        let branch = t.branch.clone().filter(|b| b != "HEAD");
+        self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms())
+    }
+
+    /// A running conversation whose transcript isn't saved yet (nothing sent), described by its registry entry.
+    fn session_from_live(&self, l: &Live) -> Session {
+        self.session(l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn session(&self, id: String, cwd: String, branch: Option<String>, model: Option<String>, est: u8, description: String, last_active: u64) -> Session {
+        // Claude Code derives a placeholder name; only a name the user chose (set from the registry) replaces this.
+        let name = Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string();
+        let dir = dirs::tilde(&cwd, &self.home);
+        let haystack = [name.as_str(), dir.as_str(), branch.as_deref().unwrap_or(""), description.as_str()].join("\n").to_lowercase();
+        Session {
+            id,
+            name,
+            dir,
+            cwd,
+            branch,
+            model,
+            status: Status::Idle,
+            unread: false,
+            context_pct: est,
+            context_exact: false,
+            context_est: est,
+            description,
+            last_active,
+            archived: false,
+            procs: Vec::new(),
+            haystack,
+        }
     }
 
     pub fn act(&mut self, action: Action) {
@@ -299,22 +484,17 @@ impl App {
             // Sessions started here keep running in their hosts, so quitting never ends them.
             (Action::Quit, Mode::List) => self.quit = true,
             (Action::New, Mode::List) => self.open_picker(),
-            (Action::Kill, Mode::List) => match self.selected_session() {
-                Some(s) => {
-                    self.mode = Mode::Confirm(Confirm::Kill { pid: s.pid, name: s.name.clone(), dir: s.dir.clone() })
-                }
-                None => self.notify("No session selected"),
-            },
+            (Action::Archive, Mode::List) => self.toggle_archive(),
             (Action::Filter, Mode::List) => self.mode = Mode::Filter,
             (Action::Jump, Mode::List | Mode::Filter) => self.jump(),
             (Action::Back, Mode::Attached(_)) => self.detach(),
-            (Action::Confirm, Mode::Confirm(Confirm::Kill { pid, name, dir })) => {
+            (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name })) => {
                 self.mode = Mode::List;
-                self.kill(pid, &name, &dir);
+                self.archive_conversation(&id, &name);
             }
-            (Action::Confirm, Mode::Confirm(Confirm::Adopt { pids, id, name, cwd, .. })) => {
+            (Action::Confirm, Mode::Confirm(Confirm::Adopt { pids, id, name, cwd, restore, .. })) => {
                 self.mode = Mode::List;
-                self.adopt(&pids, &id, &name, cwd);
+                self.adopt(&pids, &id, &name, cwd, restore);
             }
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
@@ -329,6 +509,7 @@ impl App {
             (Action::Cancel, _) => self.mode = Mode::List,
             _ => {}
         }
+        self.update_view();
     }
 
     fn open_picker(&mut self) {
@@ -354,7 +535,7 @@ impl App {
             Ok(c) => {
                 self.client = Some(c);
                 self.mode = Mode::Attached(pid);
-                if let Some(s) = self.sessions.iter_mut().find(|s| s.pid == pid) {
+                if let Some(s) = self.sessions.iter_mut().find(|s| s.procs.iter().any(|p| p.pid == pid)) {
                     s.unread = false;
                 }
             }
@@ -362,75 +543,160 @@ impl App {
         }
     }
 
-    /// Decide what Enter does on the selected row. A copy that platoon hosts and that is still in sync
-    /// is simply attached to. Anything else (another terminal's copy, several copies, or a copy that
-    /// fell out of sync) means ending the process(es) and reopening from the saved history.
+    /// Decide what Enter does on the selected row. Nothing running it: resume it from the saved history.
+    /// A copy that platoon hosts and that is still in sync is simply attached to. Anything else (another
+    /// terminal's copy, several copies, or a copy that fell out of sync) means ending the process(es)
+    /// and reopening from the saved history, which is destructive, so it is confirmed first.
     pub fn jump_plan(&self) -> Option<JumpPlan> {
         let s = self.selected_session()?;
-        let group: Vec<&Session> = self.sessions.iter().filter(|o| o.id == s.id).collect();
-        if let Some(h) = group.iter().find(|o| !o.external && !o.stale) {
-            return Some(JumpPlan::Attach(h.pid));
+        if s.procs.is_empty() {
+            return Some(JumpPlan::Resume);
         }
-        let kind = if group.len() == 1 && s.external { AdoptKind::TakeOver } else { AdoptKind::Reload };
-        Some(JumpPlan::Adopt {
-            pids: group.iter().map(|o| o.pid).collect(),
-            kind,
-            busy: group.iter().any(|o| o.status == Status::Busy),
-        })
+        if let Some(p) = s.procs.iter().find(|p| p.hosted && !p.stale) {
+            return Some(JumpPlan::Attach(p.pid));
+        }
+        let kind = if s.procs.len() == 1 && !s.procs[0].hosted { AdoptKind::TakeOver } else { AdoptKind::Reload };
+        Some(JumpPlan::Adopt { pids: s.procs.iter().map(|p| p.pid).collect(), kind, busy: s.status == Status::Busy })
     }
 
     fn jump(&mut self) {
-        match self.jump_plan() {
-            Some(JumpPlan::Attach(pid)) => self.attach(pid),
-            Some(JumpPlan::Adopt { pids, kind, busy }) => {
-                let Some(s) = self.selected_session() else { return };
-                self.mode = Mode::Confirm(Confirm::Adopt {
-                    pids,
-                    id: s.id.clone(),
-                    name: s.name.clone(),
-                    cwd: s.cwd.clone(),
-                    busy,
-                    kind,
-                });
+        let Some(plan) = self.jump_plan() else { return };
+        let Some(s) = self.selected_session() else { return };
+        let (id, name, cwd, restore) = (s.id.clone(), s.name.clone(), s.cwd.clone(), s.archived);
+        match plan {
+            JumpPlan::Attach(pid) => {
+                self.attach(pid);
+                if restore && self.attached_pid().is_some() {
+                    self.restore_quietly(&id);
+                }
             }
-            None => {}
+            JumpPlan::Resume => {
+                if !self.cwd_exists(&name, &cwd) {
+                    return;
+                }
+                if self.launch(cwd, &["--resume", &id]) && restore {
+                    self.restore_quietly(&id);
+                }
+            }
+            JumpPlan::Adopt { pids, kind, busy } => {
+                self.mode = Mode::Confirm(Confirm::Adopt { pids, id, name, cwd, busy, kind, restore });
+            }
         }
+    }
+
+    /// A conversation can only be resumed where it was run. Says so, rather than failing later, if that's gone.
+    fn cwd_exists(&mut self, name: &str, cwd: &str) -> bool {
+        if !cwd.is_empty() && Path::new(cwd).is_dir() {
+            return true;
+        }
+        let msg = if cwd.is_empty() {
+            format!("Can't open \"{name}\": its working directory isn't recorded")
+        } else {
+            format!("Can't open \"{name}\": {cwd} no longer exists")
+        };
+        self.notify(msg);
+        false
     }
 
     /// End every live copy, wait for them to go, then resume the conversation under a platoon host.
     /// Reopening from the saved history means the new copy's memory matches it exactly.
-    fn adopt(&mut self, pids: &[u32], id: &str, name: &str, cwd: String) {
+    fn adopt(&mut self, pids: &[u32], id: &str, name: &str, cwd: String, restore: bool) {
+        // Check first: ending the process and then failing to reopen it would be the worst outcome.
+        if !self.cwd_exists(name, &cwd) {
+            return;
+        }
         if let Err(e) = host::end_processes(pids) {
             self.notify(format!("Couldn't end {name}: {e}. Try again in a moment."));
             return;
         }
-        self.launch(cwd, &["--resume", id]);
+        if self.launch(cwd, &["--resume", id]) && restore {
+            self.restore_quietly(id);
+        }
+    }
+
+    fn toggle_archive(&mut self) {
+        let Some(s) = self.selected_session() else {
+            self.notify("No conversation selected");
+            return;
+        };
+        let (id, name) = (s.id.clone(), s.name.clone());
+        if s.archived {
+            match self.archive.restore(&id) {
+                Ok(()) => self.notify(format!("Restored \"{name}\"")),
+                Err(e) => self.notify(format!("Couldn't save the archive: {e}")),
+            }
+            self.reload();
+        } else if s.status == Status::Busy && !s.procs.is_empty() {
+            // Working right now: stopping it would throw away what it is in the middle of.
+            self.mode = Mode::Confirm(Confirm::Archive { id, name });
+        } else {
+            self.archive_conversation(&id, &name);
+        }
+    }
+
+    /// Stop whatever runs the conversation (SIGTERM, so Claude shuts down cleanly) and move it to Archived.
+    /// The transcript stays, so restoring it resumes from the saved history.
+    fn archive_conversation(&mut self, id: &str, name: &str) {
+        let pids: Vec<u32> = self.sessions.iter().filter(|s| s.id == id).flat_map(|s| s.procs.iter().map(|p| p.pid)).collect();
+        if !pids.is_empty() {
+            if let Err(e) = host::end_processes(&pids) {
+                self.notify(format!("Couldn't stop \"{name}\": {e}. Try again in a moment."));
+                return;
+            }
+        }
+        match self.archive.archive(id, usage::now()) {
+            Ok(()) => self.notify(format!("Archived \"{name}\"")),
+            Err(e) => self.notify(format!("Couldn't save the archive: {e}")),
+        }
+        self.reload();
+    }
+
+    fn restore_quietly(&mut self, id: &str) {
+        if let Err(e) = self.archive.restore(id) {
+            self.notify(format!("Couldn't save the archive: {e}"));
+        }
+        self.reload();
     }
 
     /// True when the attached session must not receive input: it fell out of sync with its conversation.
     pub fn attached_paused(&self) -> bool {
-        let Mode::Attached(pid) = self.mode else { return false };
+        let Some(pid) = self.attached_pid() else { return false };
         // Check the marker directly too, so a copy refused a moment ago is paused before the next refresh.
-        self.sessions.iter().find(|s| s.pid == pid).is_some_and(|s| s.stale || guard::is_stale(&self.cache, s.pid, s.started_at))
+        self.sessions
+            .iter()
+            .flat_map(|s| &s.procs)
+            .find(|p| p.pid == pid)
+            .is_some_and(|p| p.stale || guard::is_stale(&self.cache, p.pid, p.started_at))
     }
 
-    fn launch(&mut self, dir: String, args: &[&str]) {
+    /// Start `args` under a new host in `dir` and attach to it. False if it couldn't be started.
+    fn launch(&mut self, dir: String, args: &[&str]) -> bool {
         let (rows, cols) = self.pty_size();
-        // PLATOON_CLAUDE_BIN overrides which program runs (a wrapper script, or a stand-in for tests).
-        let program = std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
-        match host::launch(&program, &dir, args, rows, cols) {
+        match host::launch(&self.program, &dir, args, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 self.spawned.push(child);
                 self.hosts.push(info);
                 self.filter.clear();
                 self.attach(pid);
+                true
             }
             Err(e) => {
                 self.mode = Mode::List;
                 self.notify(format!("Couldn't start claude: {e}"));
+                false
             }
         }
+    }
+
+    #[cfg(test)]
+    pub fn refresh_for_test(&mut self) {
+        self.refresh_with(Vec::new(), false);
+    }
+
+    #[cfg(test)]
+    pub fn reload_for_test(&mut self) {
+        self.reload();
     }
 
     #[cfg(test)]
@@ -438,18 +704,8 @@ impl App {
         self.launch(dir, &[]);
     }
 
-    /// Stop the process. The conversation stays on disk, so the session is inactive, not deleted.
-    fn kill(&mut self, pid: u32, name: &str, dir: &str) {
-        // SIGTERM lets Claude Code shut down cleanly. Guard against nonsense pids.
-        if pid > 1 && unsafe { libc::kill(pid as i32, libc::SIGTERM) } == 0 {
-            self.notify(format!("\"{name}\" is now inactive. Resume it from {dir} with `claude --resume`."));
-        } else {
-            self.notify(format!("Couldn't signal {name}"));
-        }
-    }
-
     fn move_selection(&mut self, delta: i32) {
-        let last = self.visible().len().saturating_sub(1) as i32;
+        let last = self.view.len().saturating_sub(1) as i32;
         self.selected = (self.selected as i32 + delta).clamp(0, last) as usize;
     }
 
@@ -518,8 +774,10 @@ impl App {
                 KeyCode::Char('c') if ctrl => self.act(Action::Quit),
                 KeyCode::Char('q') => self.act(Action::Quit),
                 KeyCode::Char('n') => self.act(Action::New),
-                KeyCode::Char('x') => self.act(Action::Kill),
+                KeyCode::Char('a') => self.act(Action::Archive),
                 KeyCode::Char('/') => self.act(Action::Filter),
+                // 1 is the first tab, 2 the second; a number with no tab does nothing.
+                KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => self.switch_tab(c as usize - '1' as usize),
                 KeyCode::Enter => self.act(Action::Jump),
                 KeyCode::Esc => {
                     self.filter.clear();
@@ -528,10 +786,11 @@ impl App {
                 KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
                 KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
                 KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
-                KeyCode::Char('G') | KeyCode::End => self.selected = self.visible().len().saturating_sub(1),
+                KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
                 _ => {}
             },
         }
+        self.update_view();
         self.clamp_selected();
     }
 
@@ -554,6 +813,7 @@ impl App {
             }
             _ => {}
         }
+        self.update_view();
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
@@ -581,6 +841,7 @@ impl App {
                     .map(|(_, h)| *h);
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
+                    Some(Hit::Tab(i)) => self.switch_tab(i),
                     // Clicking the selected row again acts like Enter.
                     Some(Hit::Row(i)) if i == self.selected => self.act(Action::Jump),
                     Some(Hit::Row(i)) => self.selected = i,
@@ -591,5 +852,6 @@ impl App {
             }
             _ => {}
         }
+        self.update_view();
     }
 }

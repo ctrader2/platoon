@@ -1,4 +1,4 @@
-use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode};
+use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::model::{Session, Status};
@@ -15,7 +15,7 @@ use ratatui::{
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BAR_WIDTH: usize = 10;
 
-type Hint = (&'static str, &'static str, Option<Action>);
+type Hint<'a> = (&'a str, &'a str, Option<Action>);
 
 pub fn draw(f: &mut Frame, app: &App) {
     let t = &app.theme;
@@ -49,24 +49,40 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_columns(f, t, cols);
     let visible = app.visible();
     if visible.is_empty() {
-        let msg = if app.sessions.is_empty() { "No active Claude Code sessions. Press n to start one." } else { "No sessions match the filter" };
+        let tab = &TABS[app.tab.min(TABS.len() - 1)];
+        let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
+            "No sessions match the filter"
+        } else if app.indexing().is_some() {
+            "Reading your conversations…"
+        } else {
+            tab.empty
+        };
         let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
         f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
     } else {
-        draw_list(f, app, &visible, list);
+        draw_list(f, app, visible, list);
     }
+    let tab_keys = format!("1-{}", TABS.len());
+    let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
     let hints: &[Hint] = match app.mode {
         Mode::Filter => &[("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
         _ => &[
-            ("enter", "jump", Some(Action::Jump)),
+            ("enter", "open", Some(Action::Jump)),
             ("n", "new", Some(Action::New)),
-            ("x", "kill", Some(Action::Kill)),
+            ("a", archive_verb, Some(Action::Archive)),
             ("/", "filter", Some(Action::Filter)),
+            (&tab_keys, "tabs", None),
             ("j/k ↑↓", "move", None),
             ("q", "quit", Some(Action::Quit)),
         ],
     };
-    draw_footer(f, app, footer, hints, app.active_notice().map(|n| (n.to_string(), t.warn)));
+    match app.active_notice() {
+        // A message that can't share the line with the key hints gets the whole line rather than being cut off.
+        Some(n) if n.chars().count() + hints_width(hints) + 6 > footer.width as usize => {
+            f.render_widget(Paragraph::new(Span::styled(fit_end(n, footer.width as usize), Style::new().fg(t.warn))), footer);
+        }
+        notice => draw_footer(f, app, footer, hints, notice.map(|n| (n.to_string(), t.warn))),
+    }
 
     match &app.mode {
         Mode::Picker => draw_picker(f, app, inner),
@@ -78,15 +94,33 @@ pub fn draw(f: &mut Frame, app: &App) {
 fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     let t = &app.theme;
     let unread = app.unread_count();
-    let shown = app.visible().len();
-    let total = app.sessions.len();
-    let count = if shown == total { format!("  {total} session{}", if total == 1 { "" } else { "s" }) } else { format!("  {shown}/{total} sessions") };
-    let mut left = vec![
-        Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(count, Style::new().fg(t.dim)),
-    ];
+    let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
+    let mut x = area.x + 10;
+    for (i, tab) in TABS.iter().enumerate() {
+        if i > 0 {
+            left.push(Span::raw("   "));
+            x += 3;
+        }
+        let (key, label, count) = (format!("{}", i + 1), format!(" {} ", tab.label), format!("{}", app.counts[i]));
+        let w = (key.chars().count() + label.chars().count() + count.chars().count()) as u16;
+        let rect = Rect::new(x, area.y, w, 1).intersection(area);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::Tab(i)));
+        }
+        x += w;
+        let current = i == app.tab;
+        let bg = if !current && rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let (k, l, c) = if current {
+            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD | Modifier::UNDERLINED), Style::new().fg(t.subtext))
+        } else {
+            (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim))
+        };
+        left.push(Span::styled(key, k.bg(bg)));
+        left.push(Span::styled(label, l.bg(bg)));
+        left.push(Span::styled(count, c.bg(bg)));
+    }
     if unread > 0 {
-        left.push(Span::styled(format!("  ● {unread} unread"), Style::new().fg(t.ok)));
+        left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
     }
     match app.mode {
         Mode::Filter => {
@@ -99,6 +133,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
             left.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
         }
         _ => {}
+    }
+    if let Some(n) = app.indexing() {
+        let spin = SPINNER[(app.tick % 10) as usize];
+        let text = if n > 0 { format!("   {spin} indexing {n}…") } else { format!("   {spin} indexing…") };
+        left.push(Span::styled(text, Style::new().fg(t.dim)));
     }
 
     let mut right = Vec::new();
@@ -131,9 +170,12 @@ struct Cols {
     status: usize,
 }
 
+/// Width of the "last active" column, right-aligned, at the end of the row.
+const LAST_W: usize = 6;
+
 fn cols(width: u16) -> Cols {
-    // marker(3) + name + dir + branch + model + status + context bar(BAR_WIDTH + 5)
-    let fixed = 3 + BAR_WIDTH + 5;
+    // marker(3) + name + dir + branch + model + status + context bar(BAR_WIDTH + 5) + last active
+    let fixed = 3 + BAR_WIDTH + 5 + LAST_W;
     let w = width as usize;
     let branch = if w >= 90 { 16 } else { 0 };
     let model = if w >= 100 { 12 } else { 0 };
@@ -152,7 +194,8 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
         Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch), s),
         Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model), s),
         Span::styled(fit("STATUS", c.status), s),
-        Span::styled("CONTEXT", s),
+        Span::styled(fit("CONTEXT", BAR_WIDTH + 5), s),
+        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -160,6 +203,7 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
 fn draw_list(f: &mut Frame, app: &App, visible: &[usize], area: Rect) {
     const ROW_H: u16 = 3; // two text lines + one spacer
     let rows = (area.height / ROW_H) as usize;
+    let now = crate::usage::now() * 1000;
     // Keep the selection in view.
     let start = app.selected.saturating_sub(rows.saturating_sub(1));
     for (i, &idx) in visible.iter().enumerate().skip(start).take(rows) {
@@ -167,52 +211,65 @@ fn draw_list(f: &mut Frame, app: &App, visible: &[usize], area: Rect) {
         let row = Rect::new(area.x, y, area.width, ROW_H.min(area.bottom() - y));
         app.hits.borrow_mut().push((row, Hit::Row(i)));
         let hover = row.contains(app.mouse.into());
-        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, row);
+        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, now, row);
     }
 }
 
-fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, area: Rect) {
+/// `3m`, `5h`, `2d`, `3mo`, `1y`: how long ago, at a glance. `-` when unknown.
+pub fn ago(now_ms: u64, then_ms: u64) -> String {
+    if then_ms == 0 {
+        return "-".into();
+    }
+    let s = now_ms.saturating_sub(then_ms) / 1000;
+    match s {
+        0..=59 => "now".into(),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=86_399 => format!("{}h", s / 3600),
+        86_400..=5_183_999 => format!("{}d", s / 86_400),
+        5_184_000..=31_535_999 => format!("{}mo", s / 2_592_000),
+        _ => format!("{}y", s / 31_536_000),
+    }
+}
+
+fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, area: Rect) {
     let t = &app.theme;
     let c = cols(area.width);
     let bg = if selected || hover { t.surface } else { t.bg };
     let base = Style::new().bg(bg);
+    // Archived rows are dimmed so the tab reads as "put away" at a glance.
+    let text = if s.archived { t.dim } else { t.text };
+    let subtext = if s.archived { t.dim } else { t.subtext };
 
     // Unread pulses between two shades about once a second.
     let pulse_on = (app.tick / 5) % 2 == 0;
     let (marker, marker_color) = match (s.status, s.unread) {
-        _ if s.stale => ("⚠", t.warn),
         (Status::Busy, _) => (SPINNER[(app.tick % 10) as usize], t.busy),
         (Status::Idle, true) => ("●", if pulse_on { t.ok } else { t.dim }),
         (Status::Idle, false) => ("○", t.dim),
     };
     let name_style = if s.unread {
         base.fg(t.ok).add_modifier(Modifier::BOLD)
-    } else if s.external {
-        base.fg(t.subtext)
     } else {
-        base.fg(t.text)
+        base.fg(text)
     };
     let (status_text, status_color) = match (s.status, s.unread) {
-        _ if s.stale => ("paused", t.warn),
         (Status::Busy, _) => ("working", t.busy),
         (Status::Idle, true) => ("done", t.ok),
         (Status::Idle, false) => ("idle", t.dim),
     };
-    // Only tag external sessions once some sessions are hosted by platoon.
-    let mixed = app.sessions.iter().any(|o| !o.external);
-    let name = if s.external && mixed { format!("{} ext", s.name) } else { s.name.clone() };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
     let mut l1 = vec![
         lead.clone(),
         Span::styled(format!("{marker} "), base.fg(marker_color)),
-        Span::styled(fit(&name, c.name), name_style),
-        Span::styled(fit(&s.dir, c.dir), base.fg(t.subtext)),
+        Span::styled(fit(&s.name, c.name), name_style),
+        Span::styled(fit(&s.dir, c.dir), base.fg(subtext)),
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
-        Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(t.subtext)),
+        Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(subtext)),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
     ];
-    l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact));
+    l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
+    l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1), base.fg(t.dim)));
 
     let desc_w = (area.width as usize).saturating_sub(3);
     let l2 = vec![
@@ -229,8 +286,13 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     }
 }
 
+fn hints_width(hints: &[Hint<'_>]) -> usize {
+    let words: usize = hints.iter().map(|(k, d, _)| k.chars().count() + 1 + d.chars().count()).sum();
+    words + 3 * hints.len().saturating_sub(1)
+}
+
 /// Key hints along the bottom. Hints with an action are clickable and highlight on hover.
-fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint], right: Option<(String, Color)>) {
+fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: Option<(String, Color)>) {
     let t = &app.theme;
     let mut spans = Vec::new();
     let mut x = area.x;
@@ -330,11 +392,13 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
 fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let t = &app.theme;
     let (title, l1, l2, yes) = match c {
-        Confirm::Kill { name, dir, .. } => (
-            "kill session",
-            format!("Kill \"{name}\"?"),
-            format!("This makes it inactive; nothing is deleted. Resume it later from {dir} with `claude --resume`, or from platoon."),
-            "kill",
+        Confirm::Archive { name, .. } => (
+            "archive conversation",
+            format!("Archive \"{name}\"?"),
+            "It is working right now. Archiving stops it, which interrupts what it is doing. The conversation is kept: \
+             find it under Archived and press enter to pick it up again."
+                .to_string(),
+            "archive",
         ),
         Confirm::Adopt { pids, name, busy, kind, .. } => {
             let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
@@ -359,7 +423,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             }
         }
     };
-    let w = (l2.chars().count() as u16 + 6).clamp(30, 72.min(area.width));
+    let w = (l2.chars().count() as u16 + 6).min(72).max(30).min(area.width);
     // Size the box to its wrapped text (+1 line of slack for word wrapping) so nothing is ever cut off.
     let inner_w = w.saturating_sub(4).max(1) as usize;
     let body_lines = (l2.chars().count().div_ceil(inner_w) + 1) as u16;
@@ -477,14 +541,14 @@ fn pct_color(t: &Theme, pct: u8) -> Color {
 }
 
 fn bar(t: &Theme, pct: u8) -> Vec<Span<'static>> {
-    bar_bg(t, pct, t.bg, true)
+    bar_bg(t, pct, t.bg, true, false)
 }
 
 /// `━━━━━━────  62%`, colored by how full it is. A `~` marks an estimate rather than Claude's own figure.
-fn bar_bg(t: &Theme, pct: u8, bg: Color, exact: bool) -> Vec<Span<'static>> {
+fn bar_bg(t: &Theme, pct: u8, bg: Color, exact: bool, dimmed: bool) -> Vec<Span<'static>> {
     let filled = (pct as usize * BAR_WIDTH + 50) / 100;
     vec![
-        Span::styled("━".repeat(filled), Style::new().fg(pct_color(t, pct)).bg(bg)),
+        Span::styled("━".repeat(filled), Style::new().fg(if dimmed { t.dim } else { pct_color(t, pct) }).bg(bg)),
         Span::styled("━".repeat(BAR_WIDTH - filled), Style::new().fg(t.border).bg(bg)),
         Span::styled(format!("{}{pct:>3}%", if exact { " " } else { "~" }), Style::new().fg(t.subtext).bg(bg)),
     ]
@@ -513,5 +577,28 @@ fn fit_end(s: &str, n: usize) -> String {
         let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
         out.push('…');
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ago;
+
+    #[test]
+    fn relative_times_read_at_a_glance() {
+        let now = 100_000_000_000u64;
+        let back = |secs: u64| ago(now, now - secs * 1000);
+        assert_eq!(back(5), "now");
+        assert_eq!(back(60), "1m");
+        assert_eq!(back(3 * 60 + 20), "3m");
+        assert_eq!(back(59 * 60), "59m");
+        assert_eq!(back(3600), "1h");
+        assert_eq!(back(23 * 3600), "23h");
+        assert_eq!(back(2 * 86_400 + 100), "2d");
+        assert_eq!(back(45 * 86_400), "45d");
+        assert_eq!(back(90 * 86_400), "3mo");
+        assert_eq!(back(400 * 86_400), "1y");
+        assert_eq!(ago(now, 0), "-");
+        assert_eq!(ago(now, now + 5000), "now", "a clock a little ahead never goes negative");
     }
 }

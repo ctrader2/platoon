@@ -73,6 +73,7 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     let mut cmd = CommandBuilder::new(BIN);
     cmd.env("CLAUDE_CONFIG_DIR", claude);
     cmd.env("PLATOON_CACHE_DIR", cache);
+    cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
@@ -110,8 +111,8 @@ fn once_setup_is_done_platoon_starts_and_undoing_a_step_blocks_it_again() {
     let (claude, cache) = dirs("start");
     assert!(platoon(&claude, &cache, &["setup"]).status.success());
 
-    let screen = run_in_terminal(&claude, &cache, "No active Claude Code sessions");
-    assert!(screen.contains("No active Claude Code sessions"), "the UI should have started:\n{screen}");
+    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
+    assert!(screen.contains("No conversations yet"), "the UI should have started:\n{screen}");
 
     // Someone removes the guard hook: platoon notices and refuses again.
     let path = claude.join("settings.json");
