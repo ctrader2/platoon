@@ -2,6 +2,7 @@ use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::model::{Session, Status};
+use crate::settings::{Step, ITEMS};
 use crate::usage::Usage;
 use crate::theme::Theme;
 use ratatui::{
@@ -36,6 +37,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
+    if matches!(app.mode, Mode::Settings) {
+        draw_settings(f, app, inner.inner(Margin::new(2, 0)));
+        return;
+    }
+
     let [header, _, cols, list, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -64,21 +70,28 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
     let tab_keys = format!("1-{}", TABS.len());
     let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
-    let hints: &[Hint] = match app.mode {
-        Mode::Filter => &[("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
-        _ => &[
+    let hints: Vec<Hint> = match app.mode {
+        Mode::Filter => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
+        _ => vec![
             ("enter", "open", Some(Action::Jump)),
             ("n", "new", Some(Action::New)),
             ("a", archive_verb, Some(Action::Archive)),
             ("/", "filter", Some(Action::Filter)),
             (&tab_keys, "tabs", None),
             ("j/k ↑↓", "move", None),
+            ("s", "settings", Some(Action::Settings)),
             ("q", "quit", Some(Action::Quit)),
         ],
     };
-    match app.active_notice() {
+    // The mouse and the obvious keys need no reminder: when the line is short of room (a narrow terminal, or a
+    // notice sharing it) those hints go first.
+    let notice = app.active_notice();
+    let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
+    let hints = fit_hints(hints, room, &["move", "tabs"]);
+    let hints = hints.as_slice();
+    match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
-        Some(n) if n.chars().count() + hints_width(hints) + 6 > footer.width as usize => {
+        Some(n) if hints_width(hints) > room => {
             // It may use the footer's side margin too: a notice that says something happened shouldn't be cut off for want of a column.
             let wide = Rect::new(footer.x.saturating_sub(1), footer.y, footer.width + 2, 1);
             f.render_widget(Paragraph::new(Span::styled(fit_end(n, wide.width as usize), Style::new().fg(t.warn))), wide);
@@ -293,6 +306,17 @@ fn hints_width(hints: &[Hint<'_>]) -> usize {
     words + 3 * hints.len().saturating_sub(1)
 }
 
+/// Drop the hints described by `droppable`, in that order, until the rest fit in `width`.
+fn fit_hints<'a>(mut hints: Vec<Hint<'a>>, width: usize, droppable: &[&str]) -> Vec<Hint<'a>> {
+    for d in droppable {
+        if hints_width(&hints) <= width {
+            break;
+        }
+        hints.retain(|h| h.1 != *d);
+    }
+    hints
+}
+
 /// Key hints along the bottom. Hints with an action are clickable and highlight on hover.
 fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: Option<(String, Color)>) {
     let t = &app.theme;
@@ -326,6 +350,188 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: 
             f.render_widget(Paragraph::new(Span::styled(msg, Style::new().fg(color))), r);
         }
     }
+}
+
+/// Break `text` into lines of at most `width` chars at word boundaries (a word longer than a line is split).
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines: Vec<String> = Vec::new();
+    let mut line = String::new();
+    for word in text.split_whitespace() {
+        let mut word = word;
+        while word.chars().count() > width {
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            let cut = word.char_indices().nth(width).map_or(word.len(), |(i, _)| i);
+            lines.push(word[..cut].to_string());
+            word = &word[cut..];
+        }
+        let len = line.chars().count();
+        if len > 0 && len + 1 + word.chars().count() > width {
+            lines.push(std::mem::take(&mut line));
+        }
+        if !line.is_empty() {
+            line.push(' ');
+        }
+        line.push_str(word);
+    }
+    if !line.is_empty() {
+        lines.push(line);
+    }
+    lines
+}
+
+/// Keep the end of `s` (the file name of a path), with an ellipsis in front, when it is longer than `n`.
+fn fit_start(s: &str, n: usize) -> String {
+    let len = s.chars().count();
+    if len <= n {
+        return s.to_string();
+    }
+    let tail: String = s.chars().skip(len - n.saturating_sub(1)).collect();
+    format!("…{tail}")
+}
+
+/// The settings screen: one entry per `ITEMS`, each with its explanation and a value that steps with `‹` `›`.
+fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
+    let w = area.width as usize;
+    let store = app.settings();
+    let current = store.get();
+
+    // What goes under the entries, worked out first because its height decides how much room they get.
+    let mut notes: Vec<(String, Color)> = Vec::new();
+    if store.is_corrupt() {
+        let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
+        notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
+    }
+    match app.active_notice() {
+        Some(n) => notes.extend(wrap(n, w).into_iter().map(|l| (l, t.warn))),
+        None => notes.push(("Changes are saved and apply immediately.".into(), t.dim)),
+    }
+    let label = "Settings file: ";
+    let file = tilde(&store.path().to_string_lossy(), &app.home);
+    let hints = fit_hints(
+        vec![("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
+        w,
+        &["move"],
+    );
+
+    // The file and the key hints sit at the bottom, always. The entries get what is left after the notes.
+    let hints_y = area.bottom().saturating_sub(1).max(area.y);
+    let path_y = hints_y.saturating_sub(1).max(area.y);
+    let top = area.y + 2.min(area.height);
+    // The entries come before the notes: on a very short terminal the notes give way.
+    let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top));
+    let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
+
+    let mut title = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
+    title.push(Span::styled("Settings", Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
+    f.render_widget(Paragraph::new(Line::from(title)), Rect::new(area.x, area.y, area.width, 1.min(area.height)));
+
+    // The notes follow the entries directly.
+    let mut y = draw_setting_rows(f, app, &current, rows_area) + 1;
+    for (line, color) in &notes {
+        if y < path_y {
+            f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(*color))), Rect::new(area.x, y, area.width, 1));
+        }
+        y += 1;
+    }
+    let path = Line::from(vec![
+        Span::styled(label, Style::new().fg(t.dim)),
+        Span::styled(fit_start(&file, w.saturating_sub(label.len())), Style::new().fg(t.subtext)),
+    ]);
+    f.render_widget(Paragraph::new(path), Rect::new(area.x, path_y, area.width, 1));
+    draw_footer(f, app, Rect::new(area.x, hints_y, area.width, 1), &hints, None);
+}
+
+/// Draws the entries and returns the row below the last one.
+fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settings, area: Rect) -> u16 {
+    let t = &app.theme;
+    if area.is_empty() {
+        return area.y;
+    }
+    let text_w = (area.width as usize).saturating_sub(4);
+    let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
+
+    // As much explanation as fits: every entry explained with air between them, else only the selected one,
+    // else none (a terminal a handful of lines tall).
+    let level = (0..2)
+        .find(|&level| {
+            let gap = usize::from(level == 0);
+            let total: usize = (0..ITEMS.len()).map(|i| 1 + if level == 0 || i == app.setting { explained[i].len() } else { 0 }).sum();
+            total + gap * (ITEMS.len() - 1) <= area.height as usize
+        })
+        .unwrap_or(2);
+    let show = |i: usize| level == 0 || (level == 1 && i == app.setting);
+    let height = |i: usize| 1 + if show(i) { explained[i].len() } else { 0 };
+    let gap = u16::from(level == 0);
+
+    // Scroll only if even that doesn't fit: keep the selected entry in view.
+    let mut start = 0;
+    while start < app.setting && (start..=app.setting).map(|i| height(i) + gap as usize).sum::<usize>() > area.height as usize + gap as usize {
+        start += 1;
+    }
+
+    let mut y = area.y;
+    for (i, item) in ITEMS.iter().enumerate().skip(start) {
+        let h = height(i) as u16;
+        if y + h > area.bottom() {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, h);
+        let selected = i == app.setting;
+        let hover = row.contains(app.mouse.into());
+        let bg = if selected || hover { t.surface } else { t.bg };
+        f.render_widget(Block::default().style(Style::new().bg(bg)), row);
+
+        // The control is `‹ value ›` at the right end, the value centered in a width that fits every choice so
+        // the buttons stay put as it changes.
+        let value = (item.get)(current);
+        let label = (item.label)(value);
+        let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+        let ctrl_w = 3 + vw + 3;
+        let cx = (row.right() as usize).saturating_sub(ctrl_w + 1).max(row.x as usize + 2) as u16;
+        let button = |x: u16| Rect::new(x, row.y, 3, 1);
+        let (prev, val, next) = (button(cx), Rect::new(cx + 3, row.y, vw as u16, 1), button(cx + 3 + vw as u16));
+        let at_start = item.step(value, Step::Prev) == value;
+        let at_end = item.step(value, Step::Next) == value;
+        let mut hits = app.hits.borrow_mut();
+        // Buttons first: the first region under the pointer wins, and the row covers them.
+        hits.push((prev, Hit::SettingStep(i, Step::Prev)));
+        hits.push((next, Hit::SettingStep(i, Step::Next)));
+        hits.push((val, Hit::SettingStep(i, Step::Cycle)));
+        hits.push((row, Hit::Setting(i)));
+        drop(hits);
+
+        let arrow = |symbol: &'static str, rect: Rect, disabled: bool| {
+            let hot = !disabled && rect.contains(app.mouse.into());
+            let (fg, cell_bg) = if disabled { (t.border, bg) } else if hot { (t.text, t.border) } else { (t.accent, bg) };
+            Span::styled(format!(" {symbol} "), Style::new().fg(fg).bg(cell_bg))
+        };
+        // "Off" reads as switched off: muted, where an active value is bold and colored.
+        let value_style = if value == 0 { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
+        let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
+        let control = Line::from(vec![
+            arrow("‹", prev, at_start),
+            Span::styled(format!("{label:^vw$}"), value_style.patch(hot_value)),
+            arrow("›", next, at_end),
+        ]);
+        f.render_widget(Paragraph::new(control), Rect::new(cx, row.y, ctrl_w as u16, 1));
+
+        let name_w = (cx as usize).saturating_sub(row.x as usize + 3);
+        let lead = Span::styled(if selected { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg));
+        let name = Span::styled(fit_end(item.name, name_w), Style::new().fg(t.text).bg(bg).add_modifier(Modifier::BOLD));
+        f.render_widget(Paragraph::new(Line::from(vec![lead, name])), Rect::new(row.x, row.y, (cx - row.x).max(1), 1));
+        if show(i) {
+            for (n, line) in explained[i].iter().enumerate() {
+                let r = Rect::new(row.x + 2, row.y + 1 + n as u16, row.width.saturating_sub(4), 1);
+                f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(t.subtext).bg(bg))), r);
+            }
+        }
+        y += h + gap;
+    }
+    y.saturating_sub(gap)
 }
 
 fn centered(area: Rect, w: u16, h: u16) -> Rect {

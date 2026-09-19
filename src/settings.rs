@@ -1,5 +1,5 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`. Today that is the two
-//! automatic clean-ups; the settings screen (later) edits them through `save`.
+//! automatic clean-ups; the settings screen edits them through `save`, and `ITEMS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
 //! just means the defaults, values that make no sense are clamped, writes are atomic, and a file that
@@ -8,7 +8,7 @@
 //! anything, including the session hosts that outlive platoon.
 
 use crate::archive::keep_backup;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::{fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, time::{Duration, SystemTime}};
 
 /// A session nobody is looking at is stopped after this long, at most. A week is far past any sane use.
@@ -80,20 +80,112 @@ pub fn load(dir: &Path) -> (Settings, bool) {
     }
 }
 
+/// The top-level object of the file as it is now, if it holds one. `save` starts from it so that keys
+/// platoon doesn't know about (a newer version's, or the user's own notes) survive an edit.
+fn existing_object(path: &Path) -> Option<Map<String, Value>> {
+    match serde_json::from_str(&fs::read_to_string(path).ok()?).ok()? {
+        Value::Object(o) => Some(o),
+        _ => None,
+    }
+}
+
 /// Write the settings (clamped) atomically: a temp file, then a rename, so a crash never leaves half a
-/// file. A file that was there but couldn't be understood is kept as `settings.json.bak` first.
-#[allow(dead_code)] // the settings screen (a later step) is its caller
+/// file. Keys other than the settings themselves are kept as they were. A file that was there but couldn't
+/// be understood is kept as `settings.json.bak` first, and replaced by a fresh one.
 pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     fs::create_dir_all(dir)?;
     let path = path_in(dir);
-    if load(dir).1 {
+    let corrupt = load(dir).1;
+    if corrupt {
         keep_backup(&path)?;
     }
+    let mut object = if corrupt { Map::new() } else { existing_object(&path).unwrap_or_default() };
     let s = settings.clamped();
-    let text = serde_json::to_string_pretty(&json!({ "version": 1, "idle_stop_minutes": s.idle_stop_minutes, "auto_archive_days": s.auto_archive_days })).unwrap_or_default();
+    object.entry("version").or_insert(json!(1));
+    object.insert("idle_stop_minutes".into(), json!(s.idle_stop_minutes));
+    object.insert("auto_archive_days".into(), json!(s.auto_archive_days));
+    let text = serde_json::to_string_pretty(&Value::Object(object)).unwrap_or_default();
     let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, text)?;
-    fs::rename(&tmp, &path)
+    let written = fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, &path));
+    if written.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    written
+}
+
+/// One line of the settings screen. The screen is built from `ITEMS` alone, so a new setting is a new entry
+/// here (plus its field in `Settings`, `parse` and `save`).
+pub struct Item {
+    pub name: &'static str,
+    /// One plain-language sentence or two: what it does and why nothing is lost.
+    pub explain: &'static str,
+    /// The steps offered, ascending, in the setting's own unit. 0 is "Off".
+    pub choices: &'static [u64],
+    pub get: fn(&Settings) -> u64,
+    pub set: fn(&mut Settings, u64),
+    /// How a value reads: "Off", "2 hours". Also used for a value that is not one of the steps.
+    pub label: fn(u64) -> String,
+}
+
+fn plural(n: u64, unit: &str) -> String {
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
+pub fn minutes_label(m: u64) -> String {
+    match m {
+        0 => "Off".into(),
+        m if m % 1440 == 0 => plural(m / 1440, "day"),
+        m if m % 60 == 0 => plural(m / 60, "hour"),
+        m => plural(m, "minute"),
+    }
+}
+
+pub fn days_label(d: u64) -> String {
+    if d == 0 { "Off".into() } else { plural(d, "day") }
+}
+
+pub const ITEMS: &[Item] = &[
+    Item {
+        name: "Stop idle sessions after",
+        explain: "A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. \
+                  Nothing is lost: opening it again resumes it from its saved history.",
+        choices: &[0, 30, 60, 120, 240, 480, 1440],
+        get: |s| s.idle_stop_minutes,
+        set: |s, v| s.idle_stop_minutes = v,
+        label: minutes_label,
+    },
+    Item {
+        name: "Archive conversations after",
+        explain: "A conversation nobody has used for this long, with nothing running, moves to the Archived tab. \
+                  You can restore it from there.",
+        choices: &[0, 1, 2, 7, 14, 30],
+        get: |s| s.auto_archive_days,
+        set: |s, v| s.auto_archive_days = v,
+        label: days_label,
+    },
+];
+
+/// Which way to move through an item's choices.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Step {
+    Prev,
+    Next,
+    /// Next, and back to the first after the last.
+    Cycle,
+}
+
+impl Item {
+    /// The choice `step` leads to from `value`, which needn't be one of the choices (a hand-edited file):
+    /// it goes to the nearest step in that direction. Prev and Next stop at the ends; Cycle wraps.
+    pub fn step(&self, value: u64, step: Step) -> u64 {
+        let next = self.choices.iter().copied().find(|&c| c > value);
+        let prev = self.choices.iter().rev().copied().find(|&c| c < value);
+        match step {
+            Step::Prev => prev.unwrap_or(value),
+            Step::Next => next.unwrap_or(value),
+            Step::Cycle => next.unwrap_or(self.choices[0]),
+        }
+    }
 }
 
 /// (modified time, size, inode): the inode changes on every atomic save, so an edit made within the file
@@ -119,9 +211,21 @@ impl SettingsStore {
         self.settings
     }
 
-    #[cfg(test)]
+    /// The file exists but couldn't be understood, so `get` is the defaults.
     pub fn is_corrupt(&self) -> bool {
         self.corrupt
+    }
+
+    pub fn path(&self) -> PathBuf {
+        path_in(&self.dir)
+    }
+
+    /// Save, then read the file back either way, so what `get` says is what is on disk (after a failed
+    /// save that is the old value) and the change counts as seen: nothing waits for a polling interval.
+    pub fn update(&mut self, settings: &Settings) -> io::Result<()> {
+        let saved = save(&self.dir, settings);
+        self.reload();
+        saved
     }
 
     fn stamp(&self) -> Option<Stamp> {
@@ -244,5 +348,82 @@ mod tests {
         write(&d, "garbage");
         assert!(s.refresh() && s.is_corrupt());
         assert_eq!(s.get(), Settings::default());
+    }
+
+    #[test]
+    fn save_keeps_every_key_it_does_not_know_including_nested_values_and_their_order() {
+        let d = dir("keep-keys");
+        write(&d, r#"{"note":"mine","idle_stop_minutes":5,"nested":{"a":[1,{"b":null}],"c":"d"},"version":7}"#);
+        save(&d, &Settings { idle_stop_minutes: 60, auto_archive_days: 9 }).unwrap();
+        let text = fs::read_to_string(path_in(&d)).unwrap();
+        let v: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v["note"], "mine");
+        assert_eq!(v["nested"], json!({"a":[1,{"b":null}],"c":"d"}));
+        assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
+        assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
+        let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days"], "the file keeps its shape");
+        assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
+    }
+
+    #[test]
+    fn a_failed_save_leaves_the_file_and_no_temp_file_behind() {
+        let d = dir("fail");
+        write(&d, r#"{"idle_stop_minutes":45}"#);
+        // The rename target is a directory, so the write succeeds and the rename fails.
+        fs::remove_file(path_in(&d)).unwrap();
+        fs::create_dir(path_in(&d)).unwrap();
+        assert!(save(&d, &Settings::default()).is_err());
+        assert!(!d.join("settings.json.tmp").exists());
+    }
+
+    #[test]
+    fn labels_read_in_the_largest_whole_unit() {
+        let l: Vec<String> = [0, 1, 30, 60, 90, 120, 1440, 2880, 1500].map(minutes_label).into();
+        assert_eq!(l, ["Off", "1 minute", "30 minutes", "1 hour", "90 minutes", "2 hours", "1 day", "2 days", "25 hours"]);
+        assert_eq!([0, 1, 2, 90].map(days_label), ["Off", "1 day", "2 days", "90 days"]);
+    }
+
+    #[test]
+    fn every_setting_offers_ascending_steps_starting_at_off_within_the_limits() {
+        for item in ITEMS {
+            assert_eq!(item.choices[0], 0, "{}", item.name);
+            assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}", item.name);
+            assert!(!item.explain.is_empty() && item.explain.len() < 300, "{}", item.name);
+            let defaults = Settings::default();
+            assert!(item.choices.contains(&(item.get)(&defaults)), "the default is one of the steps for {}", item.name);
+            let mut s = defaults;
+            (item.set)(&mut s, *item.choices.last().unwrap());
+            assert_eq!(s.clamped(), s, "the last step is within the limits for {}", item.name);
+        }
+    }
+
+    #[test]
+    fn stepping_goes_to_the_neighbouring_choice_from_a_step_or_from_between_steps() {
+        let idle = &ITEMS[0];
+        assert_eq!(idle.step(120, Step::Next), 240);
+        assert_eq!(idle.step(120, Step::Prev), 60);
+        assert_eq!(idle.step(90, Step::Next), 120, "from a hand-edited value, the nearest step above");
+        assert_eq!(idle.step(90, Step::Prev), 60, "and below");
+        assert_eq!(idle.step(90, Step::Cycle), 120);
+        assert_eq!(idle.step(0, Step::Prev), 0, "the ends hold");
+        assert_eq!(idle.step(1440, Step::Next), 1440);
+        assert_eq!(idle.step(1440, Step::Cycle), 0, "cycling wraps to Off");
+        assert_eq!(idle.step(5000, Step::Cycle), 0);
+        assert_eq!(idle.step(5000, Step::Prev), 1440);
+        assert_eq!(idle.step(10, Step::Prev), 0);
+    }
+
+    #[test]
+    fn update_saves_and_shows_what_is_really_on_disk_even_when_the_save_fails() {
+        let d = dir("update");
+        let mut store = SettingsStore::open(&d);
+        store.update(&Settings { idle_stop_minutes: 30, auto_archive_days: 7 }).unwrap();
+        assert_eq!(store.get(), Settings { idle_stop_minutes: 30, auto_archive_days: 7 });
+        assert!(!store.refresh(), "our own save is already seen");
+        fs::remove_file(path_in(&d)).unwrap();
+        fs::create_dir(path_in(&d)).unwrap(); // saving now fails
+        assert!(store.update(&Settings { idle_stop_minutes: 240, auto_archive_days: 7 }).is_err());
+        assert_eq!(store.get().idle_stop_minutes, 120, "the store says what is in effect, not what was asked for");
     }
 }

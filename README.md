@@ -39,6 +39,7 @@ ever held slash commands are hidden.
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `1` `2` | switch between the Active and Archived tabs (or click their labels) |
 | `/` | filter the current tab; `esc` clears it |
+| `s` | [settings](#settings) |
 | `j` `k` `↑` `↓` `g` `G` | move; the mouse works too |
 | `q` | quit (sessions keep running) |
 
@@ -68,17 +69,39 @@ Details worth knowing:
   Opening or restoring a conversation counts as activity, so restoring an old one sticks: it is not archived
   again until it has sat unused for the full time.
 - Restoring is the same as always: the Archived tab, `a` (or `enter` to restore and open).
-- Both times are in `~/.config/platoon/settings.json` (`$PLATOON_CONFIG_DIR`, or `$XDG_CONFIG_HOME/platoon`),
-  which platoon never creates by itself. A settings screen is planned; until then, edit the file:
+- Both are set on the [settings screen](#settings): press `s`.
 
-  ```json
-  {"idle_stop_minutes": 120, "auto_archive_days": 2}
-  ```
+### Settings
 
-  `0` turns that clean-up off. Changes apply within about half a minute, to platoon and to sessions already running,
-  with no restart. A missing or damaged file just means the defaults (a damaged one is never overwritten
-  without keeping a `.bak` copy). Values are limited to 7 days (`idle_stop_minutes`) and 365 days
-  (`auto_archive_days`).
+`s` opens the settings; `esc`, `s` or `q` goes back to the list.
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
+| Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
+| Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
+
+`↑` `↓` (or `j` `k`) pick a setting; `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
+next choice and wraps around to Off. With the mouse: click a row to select it, the `‹` `›` buttons to step, or
+the value itself to go to the next choice. Off is the same as `0` in the file.
+
+There is no save step: each change is written to the file at once and applies without restarting anything,
+to platoon and to sessions already running (a running session notices within about half a minute, and
+platoon within a couple of seconds; auto-archive waits a moment after your last key press so that stepping
+past a value on the way to another one doesn't act on it). If the file can't be written, the screen says so
+and keeps showing the value that is really in effect.
+
+The settings live in `~/.config/platoon/settings.json` (`$PLATOON_CONFIG_DIR`, or `$XDG_CONFIG_HOME/platoon`;
+the screen shows the exact path). platoon doesn't create it until you change something, and you can edit it
+by hand too:
+
+```json
+{"idle_stop_minutes": 120, "auto_archive_days": 2}
+```
+
+A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
+setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
+(`auto_archive_days`). Anything else in the file is kept when platoon saves. A missing or damaged file just
+means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Big histories
 

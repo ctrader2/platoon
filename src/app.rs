@@ -6,7 +6,7 @@ use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
 use crate::model::{Proc, Session, Status};
-use crate::settings::SettingsStore;
+use crate::settings::{SettingsStore, Step, ITEMS};
 use crate::setup;
 use crate::theme::Theme;
 use crate::usage::{self, Usage};
@@ -27,6 +27,10 @@ const NOTICE_FOR: Duration = Duration::from_secs(5);
 const AUTO_ARCHIVE_NOTICE_FOR: Duration = Duration::from_secs(60);
 /// Auto-archive is also re-checked this often, so a conversation that turns old while platoon stays open is caught.
 const AUTO_ARCHIVE_EVERY: Duration = Duration::from_secs(60);
+/// After a change on the settings screen, auto-archive waits this long for the next one before acting. The
+/// steps are one key press apart, so getting from 2 days to Off passes through 1 day, and archiving at that
+/// stop would put away conversations the user was on the way to keeping.
+const SETTLE: Duration = Duration::from_millis(1200);
 
 /// A tab in the header. Adding one is adding an entry here: the header, the number keys (`1` is the
 /// first tab, `2` the second, ...) and the counts all follow.
@@ -48,6 +52,7 @@ pub enum Action {
     New,
     Archive,
     Filter,
+    Settings,
     Quit,
     Back,
     Confirm,
@@ -61,6 +66,10 @@ pub enum Hit {
     PickerRow(usize),
     Action(Action),
     Tab(usize),
+    /// A row of the settings screen: selects it.
+    Setting(usize),
+    /// A step button (or the value) of a setting: changes it.
+    SettingStep(usize, Step),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -98,6 +107,8 @@ pub enum Mode {
     Filter,
     Picker,
     Confirm(Confirm),
+    /// The settings screen, which replaces the list.
+    Settings,
     /// Full-screen view of a platoon-hosted session, by claude's pid.
     Attached(u32),
 }
@@ -175,10 +186,14 @@ pub struct App {
     archive: Archive,
     /// Automatic clean-up settings, re-read when the file changes.
     settings: SettingsStore,
+    /// The selected line of the settings screen, an index into `ITEMS`.
+    pub setting: usize,
     /// The conversation opened in the attached view: never auto-archived, even before its process registers.
     viewing: Option<String>,
     /// When auto-archive last ran (None: not yet).
     last_auto_archive: Option<Instant>,
+    /// A settings change is waiting to take effect in auto-archive, which is on hold until then.
+    apply_after: Option<Instant>,
     /// The program that runs a conversation: `claude`, or PLATOON_CLAUDE_BIN (a wrapper, or a stand-in in tests).
     program: String,
     guard_on: bool,
@@ -234,8 +249,10 @@ impl App {
             indexer,
             archive: Archive::open(&config),
             settings: SettingsStore::open(&config),
+            setting: 0,
             viewing: None,
             last_auto_archive: None,
+            apply_after: None,
             program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
             guard_on: false,
             view_for: (String::new(), usize::MAX, 0),
@@ -245,6 +262,10 @@ impl App {
         // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
         app.refresh_with(Vec::new(), false);
         app
+    }
+
+    pub fn settings(&self) -> &SettingsStore {
+        &self.settings
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -442,7 +463,16 @@ impl App {
     /// the saved index says so. All of them go into one write, and one notice says how many.
     fn auto_archive(&mut self, sessions_changed: bool, now_secs: u64) {
         let settings_changed = self.settings.refresh();
-        let due = sessions_changed || settings_changed || self.last_auto_archive.is_none_or(|t| t.elapsed() >= AUTO_ARCHIVE_EVERY);
+        // A value is still being chosen on the settings screen: hold everything until it stops changing.
+        let settled = match self.apply_after {
+            Some(t) if Instant::now() < t => return,
+            Some(_) => {
+                self.apply_after = None;
+                true
+            }
+            None => false,
+        };
+        let due = settled || sessions_changed || settings_changed || self.last_auto_archive.is_none_or(|t| t.elapsed() >= AUTO_ARCHIVE_EVERY);
         if !due || !self.indexer.first_scan_done || self.indexer.remaining > 0 {
             return;
         }
@@ -549,6 +579,7 @@ impl App {
             (Action::New, Mode::List) => self.open_picker(),
             (Action::Archive, Mode::List) => self.toggle_archive(),
             (Action::Filter, Mode::List) => self.mode = Mode::Filter,
+            (Action::Settings, Mode::List) => self.open_settings(),
             (Action::Jump, Mode::List | Mode::Filter) => self.jump(),
             (Action::Back, Mode::Attached(_)) => self.detach(),
             (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name, .. })) => {
@@ -580,6 +611,48 @@ impl App {
         self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0 };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
+    }
+
+    /// Show the settings screen, starting from what is on disk now.
+    fn open_settings(&mut self) {
+        self.settings.refresh();
+        self.setting = 0;
+        self.mode = Mode::Settings;
+    }
+
+    /// Move to another line of the settings screen.
+    fn move_setting(&mut self, delta: i32) {
+        self.setting = (self.setting as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
+    }
+
+    /// Change one setting a step and save it at once. What the screen shows afterwards is read back from
+    /// the file, so a save that failed leaves the old value on screen with a notice saying why.
+    fn change_setting(&mut self, i: usize, step: Step) {
+        let Some(item) = ITEMS.get(i) else { return };
+        self.notice = None;
+        // Start from the file as it is now, in case it was edited since the screen last looked.
+        self.settings.refresh();
+        let mut next = self.settings.get();
+        let old = (item.get)(&next);
+        let new = item.step(old, step);
+        if new == old {
+            return;
+        }
+        (item.set)(&mut next, new);
+        if let Err(e) = self.settings.update(&next) {
+            let why = e.to_string();
+            let why = why.split(" (os error").next().unwrap_or(&why);
+            self.notify(format!("Couldn't save the settings: {why}"));
+            return;
+        }
+        // The next refresh acts on it (auto-archive, the only thing platoon itself does with these, once the
+        // value has settled); sessions pick it up from the file on their own.
+        self.apply_after = Some(Instant::now() + SETTLE);
+    }
+
+    /// A change is waiting to take effect, so the next refresh should come soon rather than in a second.
+    pub fn settling(&self) -> bool {
+        self.apply_after.is_some()
     }
 
     /// Leave the attached view. Only our connection closes; the session keeps running.
@@ -781,6 +854,14 @@ impl App {
         self.update_view();
     }
 
+    /// Let a pending settings change take effect at the next refresh, as if the settle time had passed.
+    #[cfg(test)]
+    pub fn settle_for_test(&mut self) {
+        if self.apply_after.is_some() {
+            self.apply_after = Some(Instant::now());
+        }
+    }
+
     #[cfg(test)]
     pub fn view_conversation_for_test(&mut self, id: &str, pid: u32) {
         self.viewing = Some(id.to_string());
@@ -852,6 +933,18 @@ impl App {
                 }
                 _ => {}
             },
+            Mode::Settings => match key.code {
+                KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Up | KeyCode::Char('k') => self.move_setting(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_setting(1),
+                KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
+                KeyCode::End | KeyCode::Char('G') => self.setting = ITEMS.len() - 1,
+                KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
+                KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
+                KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
+                _ => {}
+            },
             Mode::Confirm(_) => match key.code {
                 KeyCode::Char('y') | KeyCode::Enter => self.act(Action::Confirm),
                 KeyCode::Char('n') | KeyCode::Esc => self.act(Action::Cancel),
@@ -880,6 +973,7 @@ impl App {
                 KeyCode::Char('n') => self.act(Action::New),
                 KeyCode::Char('a') => self.act(Action::Archive),
                 KeyCode::Char('/') => self.act(Action::Filter),
+                KeyCode::Char('s') => self.act(Action::Settings),
                 // 1 is the first tab, 2 the second; a number with no tab does nothing.
                 KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => self.switch_tab(c as usize - '1' as usize),
                 KeyCode::Enter => self.act(Action::Jump),
@@ -936,6 +1030,7 @@ impl App {
                     }
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
                     Mode::List | Mode::Filter => self.move_selection(if up { -1 } else { 1 }),
+                    Mode::Settings => self.move_setting(if up { -1 } else { 1 }),
                     Mode::Confirm(_) => {}
                 }
             }
@@ -949,6 +1044,11 @@ impl App {
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
+                    Some(Hit::Setting(i)) => self.setting = i,
+                    Some(Hit::SettingStep(i, step)) => {
+                        self.setting = i;
+                        self.change_setting(i, step);
+                    }
                     // Clicking the selected row again acts like Enter.
                     Some(Hit::Row(i)) if i == self.selected => self.act(Action::Jump),
                     Some(Hit::Row(i)) => self.selected = i,

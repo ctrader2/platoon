@@ -115,8 +115,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut last_refresh = Instant::now();
     while !app.quit {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
-        // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly.
-        let every = if app.indexing().is_some() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
+        // (and, likewise, a settings change that is about to take effect).
+        let every = if app.indexing().is_some() || app.settling() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
@@ -958,5 +959,480 @@ mod tests {
             }
         }
         assert!(app.hosts.is_empty(), "claude didn't exit after SIGTERM");
+    }
+
+    // --- the settings screen ------------------------------------------------------------------------
+
+    use crate::settings::{self, Settings, ITEMS};
+
+    fn config_file(w: &World) -> std::path::PathBuf {
+        w.config.join("settings.json")
+    }
+
+    fn on_disk(w: &World) -> Settings {
+        settings::load(&w.config).0
+    }
+
+    fn hit_rect(app: &App, want: impl Fn(&Hit) -> bool) -> ratatui::layout::Rect {
+        app.hits.borrow().iter().find(|(_, h)| want(h)).map(|(r, _)| *r).expect("not drawn")
+    }
+
+    fn hover(app: &mut App, x: u16, y: u16) {
+        app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: x, row: y, modifiers: KeyModifiers::NONE });
+    }
+
+    /// A screen on which the settings are open, after `draw` so clicks have somewhere to land.
+    fn settings_screen(w: &World, cols: u16, rows: u16) -> (App, Terminal<TestBackend>) {
+        let mut app = w.app();
+        ch(&mut app, 's');
+        let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+        draw(&mut term, &app);
+        (app, term)
+    }
+
+    #[test]
+    fn s_opens_the_settings_and_esc_s_q_and_ctrl_c_go_back_without_quitting() {
+        let w = World::new("set-open");
+        let mut app = w.app();
+        assert!(matches!(app.mode, Mode::List));
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::Settings));
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::List));
+        ch(&mut app, 's');
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::List), "s again goes back");
+        ch(&mut app, 's');
+        ch(&mut app, 'q');
+        assert!(matches!(app.mode, Mode::List) && !app.quit, "q goes back, it does not quit");
+        ch(&mut app, 's');
+        app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::List) && !app.quit, "ctrl+c goes back");
+        ch(&mut app, 'q');
+        assert!(app.quit, "and on the list q still quits");
+    }
+
+    #[test]
+    fn the_footer_hint_opens_the_settings_and_the_screen_has_a_back_button() {
+        let w = World::new("set-footer");
+        let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+        let mut app = w.app();
+        draw(&mut term, &app);
+        click_action(&mut app, Action::Settings);
+        assert!(matches!(app.mode, Mode::Settings));
+        assert!(draw(&mut term, &app).contains("Settings"));
+        click_action(&mut app, Action::Cancel);
+        assert!(matches!(app.mode, Mode::List));
+        assert!(draw(&mut term, &app).contains("s settings"));
+    }
+
+    #[test]
+    fn the_settings_are_not_reachable_while_filtering_in_a_dialog_the_picker_or_an_attached_session() {
+        let w = World::new("set-unreachable");
+        w.transcript("aaa", "/srv/a", "hello", 5);
+        let mut app = w.app();
+
+        ch(&mut app, '/');
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::Filter) && app.filter == "s", "an s typed into the filter is text");
+        key(&mut app, KeyCode::Esc);
+
+        ch(&mut app, 'n');
+        assert!(matches!(app.mode, Mode::Picker));
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::Picker) && app.picker.input == "s");
+        key(&mut app, KeyCode::Esc);
+
+        app.mode = Mode::Confirm(Confirm::Archive { id: "aaa".into(), name: "a".into(), busy: false, outside: false });
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::Confirm(_)));
+        key(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::List));
+
+        app.view_conversation_for_test("aaa", 1);
+        ch(&mut app, 's');
+        assert!(matches!(app.mode, Mode::Attached(_)), "in a session the key belongs to Claude");
+        // The footer button can't be clicked from a dialog either: the dialog owns the clicks.
+        assert!(app.hits.borrow().iter().all(|(_, h)| !matches!(h, Hit::Action(Action::Settings))));
+    }
+
+    #[test]
+    fn keys_step_through_the_choices_and_each_change_is_saved_at_once() {
+        let w = World::new("set-keys");
+        w.settings(120, 2);
+        let mut app = w.app();
+        ch(&mut app, 's');
+        assert_eq!(app.setting, 0);
+
+        key(&mut app, KeyCode::Right);
+        assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 240, auto_archive_days: 2 });
+        ch(&mut app, 'l');
+        ch(&mut app, '+');
+        ch(&mut app, '=');
+        assert_eq!(on_disk(&w).idle_stop_minutes, 1440, "right, l, + and = all step forward, and stop at the last choice");
+        key(&mut app, KeyCode::Left);
+        ch(&mut app, 'h');
+        ch(&mut app, '-');
+        assert_eq!(on_disk(&w).idle_stop_minutes, 120, "left, h and - step back");
+        for _ in 0..9 {
+            key(&mut app, KeyCode::Left);
+        }
+        assert_eq!(on_disk(&w).idle_stop_minutes, 0, "Off is the first choice; the arrows stop there");
+
+        // Enter goes to the next choice and wraps from the last back to Off.
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(on_disk(&w).idle_stop_minutes, 30);
+        for _ in 0..5 {
+            key(&mut app, KeyCode::Enter);
+        }
+        assert_eq!(on_disk(&w).idle_stop_minutes, 1440);
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(on_disk(&w).idle_stop_minutes, 0, "enter wraps");
+
+        // Down / j select the next setting, up / k the previous; the second one changes the other value.
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.setting, 1);
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.setting, 1, "no wrapping past the last");
+        key(&mut app, KeyCode::Right);
+        assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 0, auto_archive_days: 7 }, "the other setting is left alone");
+        ch(&mut app, 'k');
+        assert_eq!(app.setting, 0);
+        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.setting, 0);
+        assert_eq!(ITEMS.len(), 2);
+    }
+
+    #[test]
+    fn a_value_that_is_not_a_step_is_shown_as_it_is_kept_on_open_and_stepped_to_the_nearest() {
+        let w = World::new("set-odd");
+        let text = "{\n  \"idle_stop_minutes\": 90,\n  \"auto_archive_days\": 5,\n  \"mine\": true\n}\n";
+        std::fs::write(config_file(&w), text).unwrap();
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("90 minutes") && shown.contains("5 days"), "{shown}");
+        for k in [KeyCode::Down, KeyCode::Up, KeyCode::Esc] {
+            key(&mut app, k);
+        }
+        ch(&mut app, 's');
+        assert_eq!(std::fs::read_to_string(config_file(&w)).unwrap(), text, "looking at the screen never rewrites the file");
+
+        key(&mut app, KeyCode::Right);
+        assert_eq!(on_disk(&w).idle_stop_minutes, 120, "90 goes up to the next step");
+        std::fs::write(config_file(&w), text).unwrap();
+        key(&mut app, KeyCode::Left);
+        assert_eq!(on_disk(&w).idle_stop_minutes, 60, "and down to the previous one");
+        std::fs::write(config_file(&w), text).unwrap();
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(on_disk(&w).idle_stop_minutes, 120, "enter goes to the next step too");
+        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Left);
+        assert_eq!(on_disk(&w).auto_archive_days, 2, "5 days steps down to 2");
+    }
+
+    #[test]
+    fn the_file_keeps_keys_platoon_does_not_know_including_nested_ones() {
+        let w = World::new("set-unknown");
+        std::fs::write(config_file(&w), r#"{"version":1,"theme":{"name":"latte","tweaks":[1,{"a":null}]},"idle_stop_minutes":120,"note":"hi"}"#).unwrap();
+        let (mut app, _) = settings_screen(&w, 100, 30);
+        key(&mut app, KeyCode::Right);
+        let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
+        assert_eq!(v["theme"], serde_json::json!({"name":"latte","tweaks":[1,{"a":null}]}));
+        assert_eq!((v["note"].as_str(), v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some("hi"), Some(240), Some(2)));
+    }
+
+    #[test]
+    fn values_read_plainly_and_off_is_muted() {
+        let w = World::new("set-values");
+        w.settings(0, 2);
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("Off") && shown.contains("2 days"), "{shown}");
+        let buf = term.backend().buffer().clone();
+        let cell_fg = |word: &str| {
+            (0..buf.area.height).find_map(|y| {
+                let line: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+                line.join("").find(word).map(|i| buf[(line[..i].len() as u16, y)].fg)
+            })
+        };
+        assert_eq!(cell_fg("Off"), Some(app.theme.dim), "Off is muted");
+        assert_eq!(cell_fg("2 days"), Some(app.theme.accent), "an active value stands out");
+        // Every step reads as words a person would say.
+        let labels: Vec<Vec<String>> = ITEMS.iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
+        assert_eq!(labels[0], ["Off", "30 minutes", "1 hour", "2 hours", "4 hours", "8 hours", "1 day"]);
+        assert_eq!(labels[1], ["Off", "1 day", "2 days", "7 days", "14 days", "30 days"]);
+        w.settings(1440 * 3, 1);
+        app.refresh_for_test();
+        assert!(draw(&mut term, &app).contains("3 days"), "a value from the file in other units still reads naturally");
+    }
+
+    #[test]
+    fn the_mouse_hovers_selects_and_steps() {
+        let w = World::new("set-mouse");
+        w.settings(120, 2);
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        let surface = app.theme.surface;
+        let bg = app.theme.bg;
+        let row1 = hit_rect(&app, |h| matches!(h, Hit::Setting(1)));
+
+        // Hover lights the row up; the selected row is lit too.
+        assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, bg);
+        hover(&mut app, row1.x + 5, row1.y);
+        draw(&mut term, &app);
+        assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, surface, "hovered row");
+        let row0 = hit_rect(&app, |h| matches!(h, Hit::Setting(0)));
+        assert_eq!(term.backend().buffer()[(row0.x + 5, row0.y)].bg, surface, "selected row");
+
+        // A click on a row selects it and changes nothing.
+        click(&mut app, row1.x + 5, row1.y);
+        assert_eq!((app.setting, on_disk(&w)), (1, Settings { idle_stop_minutes: 120, auto_archive_days: 2 }));
+        draw(&mut term, &app);
+
+        // The buttons step; clicking one on another row selects that row and steps it.
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)));
+        click(&mut app, next0.x + 1, next0.y);
+        assert_eq!((app.setting, on_disk(&w).idle_stop_minutes), (0, 240));
+        draw(&mut term, &app);
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
+        click(&mut app, prev1.x + 1, prev1.y);
+        assert_eq!((app.setting, on_disk(&w).auto_archive_days), (1, 1));
+        draw(&mut term, &app);
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
+        click(&mut app, prev1.x + 1, prev1.y);
+        assert_eq!(on_disk(&w).auto_archive_days, 0);
+        draw(&mut term, &app);
+
+        // Clicking the value cycles (and wraps).
+        let value1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Cycle)));
+        click(&mut app, value1.x + 1, value1.y);
+        assert_eq!(on_disk(&w).auto_archive_days, 1);
+        draw(&mut term, &app);
+        for _ in 0..5 {
+            click(&mut app, value1.x + 1, value1.y);
+        }
+        assert_eq!(on_disk(&w).auto_archive_days, 0, "wrapped back to Off");
+
+        // The wheel moves between the settings.
+        app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 5, row: 5, modifiers: KeyModifiers::NONE });
+        assert_eq!(app.setting, 0);
+    }
+
+    #[test]
+    fn the_step_buttons_of_the_first_and_last_choice_are_muted() {
+        let w = World::new("set-ends");
+        w.settings(0, 30);
+        let (app, term) = settings_screen(&w, 100, 30);
+        let border = app.theme.border;
+        let accent = app.theme.accent;
+        let buf = term.backend().buffer();
+        let prev0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Prev)));
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)));
+        let next1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
+        assert_eq!(buf[(prev0.x + 1, prev0.y)].fg, border, "nothing below Off");
+        assert_eq!(buf[(next0.x + 1, next0.y)].fg, accent);
+        assert_eq!(buf[(next1.x + 1, next1.y)].fg, border, "nothing above 30 days");
+    }
+
+    #[test]
+    fn a_failed_save_says_why_and_keeps_showing_what_is_on_disk() {
+        let w = World::new("set-fail");
+        // The settings directory can't be created: something that isn't a directory is in the way.
+        let blocker = w.base.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let mut app = App::with_dirs(crate::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
+        ch(&mut app, 's');
+        key(&mut app, KeyCode::Right);
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(flat(&shown).contains("Couldn't save the settings: Not a directory"), "{shown}");
+        assert!(shown.contains("2 hours") && !shown.contains("4 hours"), "the value that is really in effect stays on screen:\n{shown}");
+        assert!(!blocker.join("config").exists());
+
+        // A read-only directory with a file in it: the old value is what stays.
+        if unsafe { libc::geteuid() } != 0 {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::write(config_file(&w), r#"{"idle_stop_minutes":60}"#).unwrap();
+            let mut app = w.app();
+            ch(&mut app, 's');
+            std::fs::set_permissions(&w.config, std::fs::Permissions::from_mode(0o555)).unwrap();
+            key(&mut app, KeyCode::Right);
+            std::fs::set_permissions(&w.config, std::fs::Permissions::from_mode(0o755)).unwrap();
+            let shown = draw(&mut term, &app);
+            assert!(flat(&shown).contains("Couldn't save the settings: Permission denied"), "{shown}");
+            assert!(shown.contains("1 hour") && !shown.contains("2 hours"), "{shown}");
+            assert_eq!(on_disk(&w).idle_stop_minutes, 60);
+            assert!(!w.config.join("settings.json.tmp").exists());
+            // The next change that can be saved clears the message.
+            key(&mut app, KeyCode::Right);
+            assert_eq!(on_disk(&w).idle_stop_minutes, 120);
+            assert!(!draw(&mut term, &app).contains("Couldn't save"));
+        }
+    }
+
+    #[test]
+    fn a_corrupt_file_opens_on_the_standard_values_and_the_first_change_keeps_a_copy() {
+        let w = World::new("set-corrupt");
+        std::fs::write(config_file(&w), "{ this is not json").unwrap();
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("2 hours") && shown.contains("2 days"), "{shown}");
+        assert!(flat(&shown).contains("settings file couldn't be read"), "the user is told why:\n{shown}");
+        assert_eq!(std::fs::read_to_string(config_file(&w)).unwrap(), "{ this is not json", "opening changes nothing");
+        assert!(!w.config.join("settings.json.bak").exists());
+
+        key(&mut app, KeyCode::Right);
+        assert_eq!(std::fs::read_to_string(w.config.join("settings.json.bak")).unwrap(), "{ this is not json");
+        assert_eq!(settings::load(&w.config), (Settings { idle_stop_minutes: 240, auto_archive_days: 2 }, false));
+        assert!(!flat(&draw(&mut term, &app)).contains("couldn't be read"), "healthy again");
+    }
+
+    #[test]
+    fn an_edit_made_elsewhere_shows_up_while_the_screen_is_open() {
+        let w = World::new("set-external");
+        w.settings(120, 2);
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        w.settings(480, 14);
+        app.refresh_for_test();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("8 hours") && shown.contains("14 days"), "{shown}");
+    }
+
+    const THREE_DAYS_MINS: u64 = 3 * 24 * 60;
+
+    #[test]
+    fn turning_auto_archive_on_from_the_screen_takes_effect_without_a_restart_and_says_so_there() {
+        let w = World::new("set-live-on");
+        w.settings(120, 0);
+        w.transcript("old", "/srv/a", "old work", THREE_DAYS_MINS);
+        w.transcript("fresh", "/srv/a", "new work", 30);
+        let (mut app, mut term) = settings_screen(&w, 100, 30);
+        assert_eq!(app.counts, [2, 0]);
+        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Right); // Off -> 1 day
+        assert!(app.settling());
+        app.refresh_for_test();
+        assert_eq!(app.counts, [2, 0], "held while the value may still be changing");
+        app.settle_for_test();
+        app.refresh_for_test(); // the very next refresh, not a timed check a minute later
+        assert_eq!(app.counts, [1, 1]);
+        assert!(!app.settling());
+        let shown = draw(&mut term, &app);
+        assert!(flat(&shown).contains("Auto-archived 1 conversation idle for 1+ day. Find it under Archived."), "{shown}");
+        key(&mut app, KeyCode::Esc);
+        ch(&mut app, '2');
+        assert_eq!(ids(&app), ["old"]);
+    }
+
+    #[test]
+    fn turning_auto_archive_off_from_the_screen_stops_it_archiving_even_though_the_way_passes_through_1_day() {
+        let later = crate::usage::now() + 5 * 86_400;
+        let run = |steps: &[KeyCode]| {
+            let w = World::new("set-live-off");
+            w.settings(120, 2);
+            w.transcript("recent", "/srv/a", "work", 25 * 60); // over a day old: 1 day would archive it, 2 days not yet
+            let mut app = w.app();
+            assert_eq!(app.counts, [1, 0]);
+            ch(&mut app, 's');
+            ch(&mut app, 'j');
+            for k in steps {
+                key(&mut app, *k);
+                app.refresh_for_test(); // platoon refreshes every second while the user is choosing
+            }
+            app.settle_for_test();
+            app.auto_archive_at_for_test(later);
+            (app.counts.clone(), on_disk(&w).auto_archive_days)
+        };
+        assert_eq!(run(&[]), (vec![0, 1], 2), "control: time passes and the conversation is archived");
+        assert_eq!(run(&[KeyCode::Left, KeyCode::Left]), (vec![1, 0], 0), "Off: nothing is archived, not even at the stop on the way");
+        assert_eq!(run(&[KeyCode::Left]), (vec![0, 1], 1), "stopping at 1 day does archive, once it has settled");
+    }
+
+    #[test]
+    fn the_settings_screen_reads_well_at_every_size() {
+        let w = World::new("set-render");
+        w.settings(120, 2);
+        let app = {
+            let mut a = w.app();
+            ch(&mut a, 's');
+            a
+        };
+        let file = "settings.json";
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (80, 20)] {
+            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            let shown = draw(&mut term, &app);
+            let text = flat(&shown);
+            let ctx = format!("{cols}x{rows}\n{shown}");
+            for item in ITEMS {
+                assert!(text.contains(item.name), "{ctx}");
+                assert!(text.contains(item.explain), "explanation cut off or mangled at {ctx}");
+            }
+            for want in ["2 hours", "2 days", "‹", "›", "Changes are saved and apply immediately.", "enter next choice", "esc back", file] {
+                assert!(text.contains(want), "{want:?} missing at {ctx}");
+            }
+            let lower = text.to_lowercase();
+            for jargon in ["sigterm", "host", "index", "pid", "json:"] {
+                assert!(!lower.contains(jargon), "{jargon:?} in {ctx}");
+            }
+            // Nothing runs into the frame: every text line keeps a blank before the right border.
+            for line in shown.lines().filter(|l| l.starts_with('│')) {
+                assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border at {ctx}");
+            }
+        }
+        // The path is written with ~ for the home directory.
+        let mut under_home = w.app();
+        under_home.home = w.config.parent().unwrap().to_string_lossy().into_owned();
+        ch(&mut under_home, 's');
+        let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+        let text = draw(&mut term, &under_home);
+        assert!(text.contains("Settings file: ~/config/settings.json"), "{text}");
+    }
+
+    #[test]
+    fn a_very_short_terminal_still_shows_the_settings_and_the_way_back() {
+        let w = World::new("set-short");
+        let mut app = w.app();
+        ch(&mut app, 's');
+        for rows in [8, 10, 12, 14, 16] {
+            let mut term = Terminal::new(TestBackend::new(60, rows)).unwrap();
+            let text = draw(&mut term, &app); // must not panic
+            assert!(text.contains("Stop idle sessions after") && text.contains("esc back"), "60x{rows}\n{text}");
+            if rows >= 12 {
+                assert!(text.contains("Archive conversations after"), "60x{rows}\n{text}");
+            }
+        }
+        // With little room only the selected setting explains itself, and moving on moves the explanation.
+        let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        let first = flat(&draw(&mut term, &app));
+        assert!(first.contains(ITEMS[0].explain) && !first.contains(ITEMS[1].explain), "{first}");
+        ch(&mut app, 'j');
+        let second = flat(&draw(&mut term, &app));
+        assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
+    }
+
+    #[test]
+    fn the_list_footer_offers_settings_and_stays_whole_at_80_columns() {
+        let w = World::new("set-footer80");
+        w.transcript("aaa", "/srv/a", "hello", 5);
+        let app = w.app();
+        for cols in [80, 100, 140] {
+            let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
+            let text = draw(&mut term, &app);
+            assert!(text.contains("s settings") && text.contains("q quit") && text.contains("enter open"), "{cols}\n{text}");
+        }
+    }
+
+    #[test]
+    fn three_still_does_nothing_and_the_list_is_unchanged_by_visiting_the_settings() {
+        let w = World::new("set-list");
+        w.transcript("aaa", "/srv/a", "hello", 5);
+        w.transcript("bbb", "/srv/a", "again", 9);
+        let mut app = w.app();
+        ch(&mut app, 'j');
+        ch(&mut app, 's');
+        ch(&mut app, '3');
+        assert!(matches!(app.mode, Mode::Settings));
+        key(&mut app, KeyCode::Esc);
+        assert_eq!((app.tab, app.selected, ids(&app)), (0, 1, vec!["aaa", "bbb"]));
     }
 }
