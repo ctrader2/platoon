@@ -80,8 +80,9 @@ pub enum JumpPlan {
 pub enum Confirm {
     /// Take over a conversation running elsewhere: end it, then resume it inside platoon.
     Adopt { pids: Vec<u32>, id: String, name: String, cwd: String, busy: bool, kind: AdoptKind, restore: bool },
-    /// Archiving stops the process; only asked when it is in the middle of working.
-    Archive { id: String, name: String },
+    /// Archiving stops the process. Only asked when that is destructive: it is in the middle of working,
+    /// or it runs in a terminal platoon doesn't own (so its owner didn't choose this).
+    Archive { id: String, name: String, busy: bool, outside: bool },
 }
 
 #[derive(Clone)]
@@ -488,7 +489,7 @@ impl App {
             (Action::Filter, Mode::List) => self.mode = Mode::Filter,
             (Action::Jump, Mode::List | Mode::Filter) => self.jump(),
             (Action::Back, Mode::Attached(_)) => self.detach(),
-            (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name })) => {
+            (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name, .. })) => {
                 self.mode = Mode::List;
                 self.archive_conversation(&id, &name);
             }
@@ -626,9 +627,10 @@ impl App {
                 Err(e) => self.notify(format!("Couldn't save the archive: {e}")),
             }
             self.reload();
-        } else if s.status == Status::Busy && !s.procs.is_empty() {
-            // Working right now: stopping it would throw away what it is in the middle of.
-            self.mode = Mode::Confirm(Confirm::Archive { id, name });
+        } else if (s.status == Status::Busy && !s.procs.is_empty()) || s.procs.iter().any(|p| !p.hosted) {
+            // Stopping it is destructive if it is mid-turn, or if it lives in a terminal platoon didn't start.
+            let (busy, outside) = (s.status == Status::Busy, s.procs.iter().any(|p| !p.hosted));
+            self.mode = Mode::Confirm(Confirm::Archive { id, name, busy, outside });
         } else {
             self.archive_conversation(&id, &name);
         }

@@ -45,7 +45,8 @@ ever held slash commands are hidden.
 ### Archive
 
 Archiving is platoon's own (Claude Code has no archive): it moves a conversation to the Archived tab and
-stops it if something is running it (asking first only if it is in the middle of working). The conversation
+stops it if something is running it. It asks first if the conversation is in the middle of working, or if it
+is running in a terminal platoon didn't start (that copy isn't platoon's to end unasked). The conversation
 itself is untouched, and `enter` on an archived one restores it and opens it. The list of archived ids lives
 in `~/.config/platoon/archive.json` (`$PLATOON_CONFIG_DIR`, or `$XDG_CONFIG_HOME/platoon`).
 

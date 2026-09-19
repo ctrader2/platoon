@@ -479,13 +479,38 @@ mod tests {
     }
 
     #[test]
-    fn archiving_an_idle_running_conversation_stops_it_without_asking() {
-        let (w, pid) = mixed("archive-idle");
+    fn archiving_an_idle_conversation_running_in_a_plain_terminal_asks_first() {
+        let (w, pid) = mixed("archive-outside");
         let mut app = w.app();
         app.selected = row_of(&app, "mid-2");
         ch(&mut app, 'a');
-        assert!(matches!(app.mode, Mode::List), "idle: no confirmation");
+        assert!(matches!(app.mode, Mode::Confirm(Confirm::Archive { outside: true, busy: false, .. })), "it isn't platoon's process to end unasked");
+        let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+        let text = flat(&draw(&mut term, &app));
+        for phrase in ["outside platoon", "Archiving ends that copy.", "The conversation is kept", "y archive", "n cancel"] {
+            assert!(text.contains(phrase), "{phrase:?} cut off in:\n{text}");
+        }
+        assert!(!text.contains("working right now"), "it's idle: {text}");
+
+        ch(&mut app, 'n');
+        assert!(matches!(app.mode, Mode::List) && alive(pid) && w.archive_file().is_none(), "cancel touches nothing");
+
+        ch(&mut app, 'a');
+        ch(&mut app, 'y');
+        assert!(matches!(app.mode, Mode::List));
         assert!(!alive(pid), "SIGTERM must have ended it");
+        assert!(w.archive_file().unwrap()["archived"].get("mid-2").is_some());
+    }
+
+    #[test]
+    fn archiving_an_idle_conversation_platoon_runs_stops_it_without_asking() {
+        let (w, pid) = mixed("archive-hosted");
+        let mut app = w.app();
+        app.refresh_with(vec![hosted(pid)], true); // now it runs under a platoon host
+        app.selected = row_of(&app, "mid-2");
+        ch(&mut app, 'a');
+        assert!(matches!(app.mode, Mode::List), "platoon's own idle process: nothing to protect");
+        assert!(!alive(pid));
         assert!(w.archive_file().unwrap()["archived"].get("mid-2").is_some());
     }
 
@@ -500,7 +525,7 @@ mod tests {
         for size in [(110, 30), (60, 24)] {
             let mut term = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
             let text = flat(&draw(&mut term, &app));
-            for phrase in ["Archive \"tmp\"?", "It is working right now.", "interrupts what it is doing.", "press enter to pick it up again.", "y archive", "n cancel"] {
+            for phrase in ["Archive \"tmp\"?", "outside platoon", "working right now.", "interrupts what it is doing.", "press enter to pick it up again.", "y archive", "n cancel"] {
                 assert!(text.contains(phrase), "{size:?}: {phrase:?} cut off in:\n{text}");
             }
         }

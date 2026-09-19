@@ -392,14 +392,19 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
 fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let t = &app.theme;
     let (title, l1, l2, yes) = match c {
-        Confirm::Archive { name, .. } => (
-            "archive conversation",
-            format!("Archive \"{name}\"?"),
-            "It is working right now. Archiving stops it, which interrupts what it is doing. The conversation is kept: \
-             find it under Archived and press enter to pick it up again."
-                .to_string(),
-            "archive",
-        ),
+        Confirm::Archive { name, busy, outside, .. } => {
+            let what = match (outside, busy) {
+                (true, true) => "It is running in a terminal outside platoon and is working right now. Archiving ends that copy, which interrupts what it is doing.",
+                (true, false) => "It is running in a terminal outside platoon. Archiving ends that copy.",
+                _ => "It is working right now. Archiving stops it, which interrupts what it is doing.",
+            };
+            (
+                "archive conversation",
+                format!("Archive \"{name}\"?"),
+                format!("{what} The conversation is kept: find it under Archived and press enter to pick it up again."),
+                "archive",
+            )
+        }
         Confirm::Adopt { pids, name, busy, kind, .. } => {
             let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
             match kind {
