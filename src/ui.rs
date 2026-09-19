@@ -1,6 +1,6 @@
 use crate::app::{Action, App, Confirm, Hit, Mode};
 use crate::dirs::tilde;
-use crate::host::Hosted;
+use crate::client::Client;
 use crate::model::{Session, Status};
 use crate::usage::Usage;
 use crate::theme::Theme;
@@ -30,11 +30,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     let inner = frame.inner(f.area());
     f.render_widget(frame, f.area());
 
-    if let Mode::Attached(pid) = app.mode {
-        if let Some(h) = app.hosted.iter().find(|h| h.pid == pid) {
-            draw_attached(f, app, h, inner);
-            return;
-        }
+    if let (Mode::Attached(pid), Some(client)) = (&app.mode, &app.client) {
+        let dir = app.hosts.iter().find(|h| h.claude_pid == *pid).map(|h| h.dir.as_str()).unwrap_or("");
+        draw_attached(f, app, client, dir, inner);
+        return;
     }
 
     let [header, _, cols, list, footer] = Layout::vertical([
@@ -325,10 +324,10 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
 fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let t = &app.theme;
     let (title, l1, l2, yes) = match c {
-        Confirm::Kill { pid, name } => (
+        Confirm::Kill { name, dir, .. } => (
             "kill session",
             format!("Kill \"{name}\"?"),
-            format!("Sends SIGTERM to pid {pid}. The conversation stays on disk."),
+            format!("This makes it inactive; nothing is deleted. Resume it later from {dir} with `claude --resume`, or from platoon."),
             "kill",
         ),
         Confirm::Adopt { pid, name, busy, .. } => (
@@ -340,36 +339,30 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             ),
             "take over",
         ),
-        Confirm::Quit => (
-            "quit platoon",
-            "Quit platoon?".to_string(),
-            format!("The {} session(s) started here will end.", app.hosted.len()),
-            "quit",
-        ),
     };
     let w = (l2.chars().count() as u16 + 6).clamp(30, 64.min(area.width));
-    let r = centered(area, w, 8);
+    let r = centered(area, w, 9);
     app.hits.borrow_mut().clear();
     f.render_widget(Clear, r);
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(3), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", "cancel", Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }
 
-fn draw_attached(f: &mut Frame, app: &App, h: &Hosted, area: Rect) {
+fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rect) {
     let t = &app.theme;
     let [term, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
-    draw_terminal(f, t, h, term);
-    let scrolled = h.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
+    draw_terminal(f, t, client, term);
+    let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
     let right = if scrolled > 0 {
         format!("↑ scrolled {scrolled} lines · type to return")
     } else {
-        tilde(&h.dir, &app.home)
+        tilde(dir, &app.home)
     };
     let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
     draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, t.dim)));
@@ -384,8 +377,8 @@ fn vt_color(c: vt100::Color, default: Color) -> Color {
 }
 
 /// Paint the emulator's screen into the buffer, cell by cell.
-fn draw_terminal(f: &mut Frame, t: &Theme, h: &Hosted, area: Rect) {
-    let parser = h.parser.lock().unwrap_or_else(|x| x.into_inner());
+fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect) {
+    let parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
     let screen = parser.screen();
     let (rows, cols) = screen.size();
     let buf = f.buffer_mut();

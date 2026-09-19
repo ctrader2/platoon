@@ -1,6 +1,7 @@
 use crate::claude::{pid_alive, Reader};
+use crate::client::{key_bytes, Client};
 use crate::dirs;
-use crate::host::{key_bytes, Hosted};
+use crate::host::{self, HostInfo};
 use crate::model::{Session, Status};
 use crate::usage::{self, Usage};
 use crate::theme::Theme;
@@ -37,10 +38,9 @@ pub enum Hit {
 
 #[derive(Clone)]
 pub enum Confirm {
-    Kill { pid: u32, name: String },
+    Kill { pid: u32, name: String, dir: String },
     /// Take over a session started elsewhere: end it, then resume it inside platoon.
     Adopt { pid: u32, id: String, name: String, cwd: String, busy: bool },
-    Quit,
 }
 
 #[derive(Clone)]
@@ -50,7 +50,7 @@ pub enum Mode {
     Filter,
     Picker,
     Confirm(Confirm),
-    /// Full-screen view of a platoon-hosted session, by pid.
+    /// Full-screen view of a platoon-hosted session, by claude's pid.
     Attached(u32),
 }
 
@@ -98,7 +98,12 @@ pub struct App {
     pub filter: String,
     pub mode: Mode,
     pub picker: Picker,
-    pub hosted: Vec<Hosted>,
+    /// Sessions running under a platoon host. They outlive platoon.
+    pub hosts: Vec<HostInfo>,
+    /// Connection to the session being viewed, if any.
+    pub client: Option<Client>,
+    /// Host processes we started, kept only so they get reaped when they exit.
+    spawned: Vec<std::process::Child>,
     pub notice: Option<(String, Instant)>,
     pub mouse: (u16, u16),
     pub home: String,
@@ -121,7 +126,9 @@ impl App {
             filter: String::new(),
             mode: Mode::List,
             picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0 },
-            hosted: Vec::new(),
+            hosts: Vec::new(),
+            client: None,
+            spawned: Vec::new(),
             notice: None,
             mouse: (0, 0),
             home: std::env::var("HOME").unwrap_or_default(),
@@ -183,23 +190,22 @@ impl App {
         }
         self.size = (w, h);
         let (rows, cols) = self.pty_size();
-        for h in &mut self.hosted {
-            h.resize(rows, cols);
+        if let Some(c) = &mut self.client {
+            c.resize(rows, cols);
         }
     }
 
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
     pub fn refresh(&mut self) {
         let attached = if let Mode::Attached(p) = self.mode { Some(p) } else { None };
-        let mut ended = false;
-        self.hosted.retain_mut(|h| {
-            let dead = h.exited();
-            ended |= dead && Some(h.pid) == attached;
-            !dead
-        });
-        if ended {
-            self.mode = Mode::List;
-            self.notify("Session ended");
+        self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
+        self.hosts = host::discover();
+        if let Some(pid) = attached {
+            if self.client.as_ref().map_or(true, |c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid) {
+                self.mode = Mode::List;
+                self.client = None;
+                self.notify("Session ended");
+            }
         }
 
         let selected_id = self.selected_session().map(|s| s.id.clone());
@@ -213,7 +219,7 @@ impl App {
             if attached == Some(s.pid) {
                 s.unread = false;
             }
-            s.external = !self.hosted.iter().any(|h| h.pid == s.pid);
+            s.external = !self.hosts.iter().any(|h| h.claude_pid == s.pid);
         }
         // Plan limits and exact context figures, saved by `platoon statusline`.
         let snap = usage::load(&usage::cache_dir(), usage::now());
@@ -238,25 +244,21 @@ impl App {
 
     pub fn act(&mut self, action: Action) {
         match (action, self.mode.clone()) {
-            (Action::Quit, Mode::List) => {
-                if self.hosted.is_empty() {
-                    self.quit = true;
-                } else {
-                    self.mode = Mode::Confirm(Confirm::Quit);
-                }
-            }
+            // Sessions started here keep running in their hosts, so quitting never ends them.
+            (Action::Quit, Mode::List) => self.quit = true,
             (Action::New, Mode::List) => self.open_picker(),
             (Action::Kill, Mode::List) => match self.selected_session() {
-                Some(s) => self.mode = Mode::Confirm(Confirm::Kill { pid: s.pid, name: s.name.clone() }),
+                Some(s) => {
+                    self.mode = Mode::Confirm(Confirm::Kill { pid: s.pid, name: s.name.clone(), dir: s.dir.clone() })
+                }
                 None => self.notify("No session selected"),
             },
             (Action::Filter, Mode::List) => self.mode = Mode::Filter,
             (Action::Jump, Mode::List | Mode::Filter) => self.jump(),
-            (Action::Back, Mode::Attached(_)) => self.mode = Mode::List,
-            (Action::Confirm, Mode::Confirm(Confirm::Quit)) => self.quit = true,
-            (Action::Confirm, Mode::Confirm(Confirm::Kill { pid, name })) => {
+            (Action::Back, Mode::Attached(_)) => self.detach(),
+            (Action::Confirm, Mode::Confirm(Confirm::Kill { pid, name, dir })) => {
                 self.mode = Mode::List;
-                self.kill(pid, &name);
+                self.kill(pid, &name, &dir);
             }
             (Action::Confirm, Mode::Confirm(Confirm::Adopt { pid, id, name, cwd, .. })) => {
                 self.mode = Mode::List;
@@ -284,14 +286,35 @@ impl App {
         self.mode = Mode::Picker;
     }
 
+    /// Leave the attached view. Only our connection closes; the session keeps running.
+    fn detach(&mut self) {
+        self.client = None;
+        self.mode = Mode::List;
+    }
+
+    fn attach(&mut self, pid: u32) {
+        let Some(info) = self.hosts.iter().find(|h| h.claude_pid == pid).cloned() else {
+            self.notify("That session's host isn't running");
+            return;
+        };
+        let (rows, cols) = self.pty_size();
+        match Client::connect(&info.sock, rows, cols) {
+            Ok(c) => {
+                self.client = Some(c);
+                self.mode = Mode::Attached(pid);
+                if let Some(s) = self.sessions.iter_mut().find(|s| s.pid == pid) {
+                    s.unread = false;
+                }
+            }
+            Err(e) => self.notify(format!("Couldn't connect to the session: {e}")),
+        }
+    }
+
     fn jump(&mut self) {
         let Some(s) = self.selected_session() else { return };
         let pid = s.pid;
-        if self.hosted.iter().any(|h| h.pid == pid) {
-            if let Some(s) = self.sessions.iter_mut().find(|s| s.pid == pid) {
-                s.unread = false;
-            }
-            self.mode = Mode::Attached(pid);
+        if self.hosts.iter().any(|h| h.claude_pid == pid) {
+            self.attach(pid);
         } else {
             // Another terminal owns this session's screen, so we can't attach to it. Offer to take it over.
             self.mode = Mode::Confirm(Confirm::Adopt {
@@ -304,12 +327,7 @@ impl App {
         }
     }
 
-    #[cfg(test)]
-    pub fn picker_launch_for_test(&mut self, dir: String) {
-        self.launch(dir, &[]);
-    }
-
-    /// End the original process, wait for it to go, then resume its conversation in a platoon-owned PTY.
+    /// End the original process, wait for it to go, then resume its conversation under a platoon host.
     fn adopt(&mut self, pid: u32, id: &str, name: &str, cwd: String) {
         if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
             self.notify(format!("Couldn't stop {name}"));
@@ -330,12 +348,15 @@ impl App {
 
     fn launch(&mut self, dir: String, args: &[&str]) {
         let (rows, cols) = self.pty_size();
-        match Hosted::spawn("claude", args, Path::new(&dir), rows, cols) {
-            Ok(h) => {
-                let pid = h.pid;
-                self.hosted.push(h);
-                self.mode = Mode::Attached(pid);
+        // PLATOON_CLAUDE_BIN overrides which program runs (a wrapper script, or a stand-in for tests).
+        let program = std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into());
+        match host::launch(&program, &dir, args, rows, cols) {
+            Ok((info, child)) => {
+                let pid = info.claude_pid;
+                self.spawned.push(child);
+                self.hosts.push(info);
                 self.filter.clear();
+                self.attach(pid);
             }
             Err(e) => {
                 self.mode = Mode::List;
@@ -344,10 +365,16 @@ impl App {
         }
     }
 
-    fn kill(&mut self, pid: u32, name: &str) {
+    #[cfg(test)]
+    pub fn picker_launch_for_test(&mut self, dir: String) {
+        self.launch(dir, &[]);
+    }
+
+    /// Stop the process. The conversation stays on disk, so the session is inactive, not deleted.
+    fn kill(&mut self, pid: u32, name: &str, dir: &str) {
         // SIGTERM lets Claude Code shut down cleanly. Guard against nonsense pids.
         if pid > 1 && unsafe { libc::kill(pid as i32, libc::SIGTERM) } == 0 {
-            self.notify(format!("Sent SIGTERM to {name}"));
+            self.notify(format!("\"{name}\" is now inactive. Resume it from {dir} with `claude --resume`."));
         } else {
             self.notify(format!("Couldn't signal {name}"));
         }
@@ -363,22 +390,18 @@ impl App {
         self.picker.selected = (self.picker.selected as i32 + delta).clamp(0, last) as usize;
     }
 
-    fn hosted_mut(&mut self, pid: u32) -> Option<&mut Hosted> {
-        self.hosted.iter_mut().find(|h| h.pid == pid)
-    }
-
     pub fn on_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match self.mode.clone() {
-            Mode::Attached(pid) => {
+            Mode::Attached(_) => {
                 // The prefix chord: everything else goes to Claude.
                 if ctrl && key.code == KeyCode::Char(' ') {
-                    self.mode = Mode::List;
-                } else if let Some(h) = self.hosted_mut(pid) {
-                    h.reset_scroll();
-                    let bytes = key_bytes(key, h.app_cursor());
-                    h.write(&bytes);
+                    self.detach();
+                } else if let Some(c) = self.client.as_mut() {
+                    c.reset_scroll();
+                    let bytes = key_bytes(key, c.app_cursor());
+                    c.write(&bytes);
                 }
             }
             Mode::Picker => match key.code {
@@ -444,10 +467,10 @@ impl App {
 
     pub fn on_paste(&mut self, text: &str) {
         match self.mode.clone() {
-            Mode::Attached(pid) => {
-                if let Some(h) = self.hosted_mut(pid) {
-                    h.reset_scroll();
-                    h.write(format!("\x1b[200~{text}\x1b[201~").as_bytes());
+            Mode::Attached(_) => {
+                if let Some(c) = self.client.as_mut() {
+                    c.reset_scroll();
+                    c.write(format!("\x1b[200~{text}\x1b[201~").as_bytes());
                 }
             }
             Mode::Picker => {
@@ -468,9 +491,9 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
-                    Mode::Attached(pid) => {
-                        if let Some(h) = self.hosted_mut(pid) {
-                            h.scroll(if up { 3 } else { -3 });
+                    Mode::Attached(_) => {
+                        if let Some(c) = &self.client {
+                            c.scroll(if up { 3 } else { -3 });
                         }
                     }
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),

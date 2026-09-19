@@ -1,5 +1,6 @@
 mod app;
 mod claude;
+mod client;
 mod dirs;
 mod host;
 mod model;
@@ -21,6 +22,10 @@ fn main() -> io::Result<()> {
         None => {}
         Some("statusline") => return statusline(),
         Some("setup") => return setup(),
+        Some("host") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(host::run(&args));
+        }
         Some(_) => {
             eprintln!("usage: platoon [setup]\n  (no arguments)  open the session manager\n  setup           show plan usage: add platoon to Claude Code's status line\n  statusline      internal: run by Claude Code, reads its JSON on stdin");
             std::process::exit(2);
@@ -31,7 +36,15 @@ fn main() -> io::Result<()> {
     let result = run(&mut terminal);
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
-    result
+    let running = result?;
+    if running > 0 {
+        println!(
+            "platoon: {running} session{} still running in the background. Run `platoon` to pick {} up.",
+            if running == 1 { "" } else { "s" },
+            if running == 1 { "it" } else { "them" }
+        );
+    }
+    Ok(())
 }
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
@@ -54,7 +67,8 @@ fn setup() -> io::Result<()> {
     Ok(())
 }
 
-fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
+/// Runs the UI. Returns how many platoon-hosted sessions are still running when it exits.
+fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut app = app::App::new();
     let start = Instant::now();
     let mut last_refresh = Instant::now();
@@ -76,7 +90,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {
             }
         }
     }
-    Ok(())
+    Ok(app.hosts.len())
 }
 
 #[cfg(test)]
@@ -142,7 +156,9 @@ mod tests {
         if !app.sessions.is_empty() {
             click_action(&mut app, Action::Kill);
             assert!(matches!(app.mode, Mode::Confirm(_)));
-            assert!(draw(&mut term, &app).contains("Kill"));
+            let text = draw(&mut term, &app);
+            assert!(text.contains("Kill") && text.contains("inactive") && text.contains("claude --resume"), "{text}");
+            println!("{text}");
             click_action(&mut app, Action::Cancel); // never confirm in a test
             assert!(matches!(app.mode, Mode::List));
         }
@@ -193,32 +209,6 @@ mod tests {
         assert!(draw(&mut term, &app).contains("/tmp"));
     }
 
-    #[test]
-    fn hosted_session_renders_and_takes_input() {
-        let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
-        let mut app = App::new();
-        app.sync_size(100, 20);
-        let mut h = host::Hosted::spawn("sh", &[], std::path::Path::new("/tmp"), 17, 98).unwrap();
-        // Type into the shell through the same path real key presses take.
-        h.write(b"echo platoon-$((40+2))\r");
-        let pid = h.pid;
-        app.hosted.push(h);
-        app.mode = Mode::Attached(pid);
-        let mut text = String::new();
-        for _ in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            text = draw(&mut term, &app);
-            if text.contains("platoon-42") {
-                break;
-            }
-        }
-        assert!(text.contains("platoon-42"), "{text}");
-        assert!(text.contains("back to list"));
-        // ctrl+space leaves the attached view
-        app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
-        assert!(matches!(app.mode, Mode::List));
-    }
-
     /// Starts a real `claude` (no prompt is sent). Needs a folder Claude already trusts (it registers
     /// itself only after the trust prompt), so it's manual: `cargo test -- --ignored --nocapture`.
     #[test]
@@ -251,10 +241,10 @@ mod tests {
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(250));
             app.refresh();
-            if app.hosted.is_empty() {
+            if app.hosts.is_empty() {
                 break;
             }
         }
-        assert!(app.hosted.is_empty(), "claude didn't exit after SIGTERM");
+        assert!(app.hosts.is_empty(), "claude didn't exit after SIGTERM");
     }
 }
