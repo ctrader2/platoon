@@ -146,7 +146,7 @@ mod tests {
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::Adopt { .. })));
         let text = draw(&mut term, &app);
-        assert!(text.contains("Take over") && text.contains("resumes it here"), "{text}");
+        assert!(text.contains("Take over") && text.contains("y take over") && text.contains("n cancel"), "{text}");
         click_action(&mut app, Action::Cancel); // never confirm in a test: it would end a real session
         assert!(matches!(app.mode, Mode::List));
     }
