@@ -42,6 +42,11 @@ impl Reader {
         let root = std::env::var_os("CLAUDE_CONFIG_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| Path::new(&home).join(".claude"));
+        Self::with_root(root)
+    }
+
+    pub fn with_root(root: PathBuf) -> Self {
+        let home = std::env::var("HOME").unwrap_or_default();
         Self { root, home, cache: HashMap::new() }
     }
 

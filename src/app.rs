@@ -118,7 +118,10 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
-        let reader = Reader::new();
+        Self::with_reader(Reader::new())
+    }
+
+    pub fn with_reader(reader: Reader) -> Self {
         let mut app = Self {
             sessions: Vec::new(),
             usage: Usage::NotSetUp,
@@ -208,12 +211,14 @@ impl App {
             }
         }
 
-        let selected_id = self.selected_session().map(|s| s.id.clone());
+        // Rows are identified by pid, not session id: resuming a conversation elsewhere while it's
+        // still running gives two live processes the same session id.
+        let selected_pid = self.selected_session().map(|s| s.pid);
         let mut fresh = self.reader.load();
         for s in &mut fresh {
             // Unread = Claude went busy -> idle while we were watching. Starting work again clears it.
             // Sessions already idle when first seen count as read; so do ones we're looking at.
-            if let Some(old) = self.sessions.iter().find(|o| o.id == s.id) {
+            if let Some(old) = self.sessions.iter().find(|o| o.pid == s.pid) {
                 s.unread = s.status == Status::Idle && (old.unread || old.status == Status::Busy);
             }
             if attached == Some(s.pid) {
@@ -235,8 +240,8 @@ impl App {
             None => Usage::NotSetUp,
         };
         self.sessions = fresh;
-        if let Some(id) = selected_id {
-            if let Some(pos) = self.visible().iter().position(|&i| self.sessions[i].id == id) {
+        if let Some(pid) = selected_pid {
+            if let Some(pos) = self.visible().iter().position(|&i| self.sessions[i].pid == pid) {
                 self.selected = pos;
             }
         }

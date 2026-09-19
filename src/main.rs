@@ -187,16 +187,56 @@ mod tests {
     fn jumping_into_external_session_offers_takeover() {
         let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
         let mut app = App::new();
-        if app.sessions.is_empty() {
-            return; // nothing running on this machine to click on
-        }
-        assert!(app.sessions[0].external);
+        // Needs a session started outside platoon; skip on a machine that has none running.
+        let Some(pos) = app.visible().iter().position(|&i| app.sessions[i].external) else { return };
+        app.selected = pos;
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::Adopt { .. })));
         let text = draw(&mut term, &app);
         assert!(text.contains("Take over") && text.contains("y take over") && text.contains("n cancel"), "{text}");
         click_action(&mut app, Action::Cancel); // never confirm in a test: it would end a real session
         assert!(matches!(app.mode, Mode::List));
+    }
+
+    /// Two live processes on the same conversation (e.g. resumed in a second terminal) share a session
+    /// id. Rows must still be told apart, or the selection snaps to the first one every refresh.
+    #[test]
+    fn duplicate_session_ids_keep_their_own_selection_and_unread_state() {
+        use std::process::Command;
+        let root = std::env::temp_dir().join(format!("platoon-dup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("sessions")).unwrap();
+        let mut a = Command::new("sleep").arg("30").spawn().unwrap();
+        let mut b = Command::new("sleep").arg("30").spawn().unwrap();
+        let write = |pid: u32, started: u64, status: &str| {
+            std::fs::write(
+                root.join("sessions").join(format!("{pid}.json")),
+                format!(r#"{{"pid":{pid},"sessionId":"same-id","cwd":"/tmp","kind":"interactive","startedAt":{started},"status":"{status}"}}"#),
+            )
+            .unwrap();
+        };
+        write(a.id(), 1, "busy");
+        write(b.id(), 2, "idle");
+
+        let mut app = App::with_reader(crate::claude::Reader::with_root(root.clone()));
+        assert_eq!(app.sessions.len(), 2);
+        key(&mut app, KeyCode::Char('j')); // move to the second row
+        for _ in 0..3 {
+            app.refresh(); // the app does this once a second
+        }
+        assert_eq!(app.selected_session().unwrap().pid, b.id(), "selection snapped to the row above");
+
+        // The first process finishes its turn; only that row becomes unread.
+        write(a.id(), 1, "idle");
+        app.refresh();
+        let unread: Vec<u32> = app.sessions.iter().filter(|s| s.unread).map(|s| s.pid).collect();
+        assert_eq!(unread, vec![a.id()], "unread state leaked between rows sharing a session id");
+
+        let _ = a.kill();
+        let _ = b.kill();
+        let _ = a.wait();
+        let _ = b.wait();
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
