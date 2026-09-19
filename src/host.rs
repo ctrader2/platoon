@@ -22,7 +22,7 @@ use std::{
     },
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex, MutexGuard},
     thread,
     time::Duration,
 };
@@ -197,17 +197,21 @@ pub fn run(args: &[String]) -> i32 {
     };
     let _ = fs::set_permissions(&sock_path, fs::Permissions::from_mode(0o600));
 
-    let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
-    let clients: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
-    let master: Arc<Mutex<Box<dyn MasterPty + Send>>> = Arc::new(Mutex::new(pair.master));
-    let writer = Arc::new(Mutex::new(writer));
+    let shared = Arc::new(Shared {
+        parser: Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)),
+        clients: Mutex::new(Vec::new()),
+        master: Mutex::new(pair.master),
+        writer: Mutex::new(writer),
+        size: Mutex::new((rows, cols)),
+        next_id: AtomicU64::new(1),
+    });
 
     {
-        let (parser, clients, master, writer) = (parser.clone(), clients.clone(), master.clone(), writer.clone());
+        let shared = shared.clone();
         thread::spawn(move || {
             for stream in listener.incoming().flatten() {
-                let (parser, clients, master, writer) = (parser.clone(), clients.clone(), master.clone(), writer.clone());
-                thread::spawn(move || serve_client(stream, parser, clients, master, writer));
+                let shared = shared.clone();
+                thread::spawn(move || serve_client(stream, &shared));
             }
         });
     }
@@ -219,15 +223,15 @@ pub fn run(args: &[String]) -> i32 {
         return fail("couldn't write host info".into());
     }
 
-    // Output loop: feed the emulator, then fan out to whoever is attached.
+    // Output loop: feed the emulator, then fan out to every window that already has its snapshot.
     let mut buf = [0u8; 8192];
     while let Ok(n) = reader.read(&mut buf) {
         if n == 0 {
             break;
         }
-        let mut p = lock(&parser);
+        let mut p = lock(&shared.parser);
         p.process(&buf[..n]);
-        lock(&clients).retain_mut(|c| write_frame(c, F_OUTPUT, &buf[..n]).is_ok());
+        lock(&shared.clients).retain_mut(|c| !c.ready || write_frame(&mut c.stream, F_OUTPUT, &buf[..n]).is_ok());
     }
     let _ = child.wait();
     let _ = fs::remove_file(&info_path);
@@ -235,52 +239,108 @@ pub fn run(args: &[String]) -> i32 {
     0
 }
 
-fn apply_resize(payload: &[u8], parser: &Mutex<vt100::Parser>, master: &Mutex<Box<dyn MasterPty + Send>>) {
-    if payload.len() != 4 {
-        return;
-    }
-    let rows = u16::from_be_bytes([payload[0], payload[1]]).max(1);
-    let cols = u16::from_be_bytes([payload[2], payload[3]]).max(1);
-    let _ = lock(master).resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
-    lock(parser).screen_mut().set_size(rows, cols);
+/// One connected window.
+struct Viewer {
+    id: u64,
+    stream: UnixStream,
+    rows: u16,
+    cols: u16,
+    /// Gets live output only once its snapshot has been sent, so nothing arrives out of order.
+    ready: bool,
 }
 
-fn serve_client(
-    mut stream: UnixStream,
-    parser: Arc<Mutex<vt100::Parser>>,
-    clients: Arc<Mutex<Vec<UnixStream>>>,
-    master: Arc<Mutex<Box<dyn MasterPty + Send>>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
-) {
-    // The first frame is the client's size, so the snapshot below is made at that size.
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    match read_frame(&mut stream) {
-        Ok((F_RESIZE, payload)) => apply_resize(&payload, &parser, &master),
-        _ => return,
+struct Shared {
+    parser: Mutex<vt100::Parser>,
+    clients: Mutex<Vec<Viewer>>,
+    master: Mutex<Box<dyn MasterPty + Send>>,
+    writer: Mutex<Box<dyn Write + Send>>,
+    /// Size currently applied to the terminal.
+    size: Mutex<(u16, u16)>,
+    next_id: AtomicU64,
+}
+
+/// One terminal can only be one size. Fit the smallest attached window so every window shows everything
+/// (this is what tmux does). With nobody attached, the last size stays.
+fn fit_smallest_viewer(sh: &Shared) {
+    let want = {
+        let clients = lock(&sh.clients);
+        clients.iter().map(|c| (c.rows, c.cols)).reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)))
+    };
+    let Some((rows, cols)) = want else { return };
+    let (rows, cols) = (rows.max(1), cols.max(1));
+    let mut cur = lock(&sh.size);
+    if *cur == (rows, cols) {
+        return; // resizing to the same size would make claude redraw for nothing
     }
+    *cur = (rows, cols);
+    let _ = lock(&sh.master).resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+    lock(&sh.parser).screen_mut().set_size(rows, cols);
+}
+
+fn parse_size(payload: &[u8]) -> Option<(u16, u16)> {
+    (payload.len() == 4).then(|| (u16::from_be_bytes([payload[0], payload[1]]), u16::from_be_bytes([payload[2], payload[3]])))
+}
+
+fn serve_client(mut stream: UnixStream, sh: &Shared) {
+    // The first frame is the window's size, so the snapshot below is made at the right size.
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let Ok((F_RESIZE, payload)) = read_frame(&mut stream) else { return };
+    let Some((rows, cols)) = parse_size(&payload) else { return };
     let _ = stream.set_read_timeout(None);
     let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+    let Ok(writer_half) = stream.try_clone() else { return };
+
+    let id = sh.next_id.fetch_add(1, Ordering::Relaxed);
+    lock(&sh.clients).push(Viewer { id, stream: writer_half, rows, cols, ready: false });
+    fit_smallest_viewer(sh);
     {
-        // Snapshot and registration under the parser lock: no output can slip in between.
-        let p = lock(&parser);
+        // Snapshot, then start live output, under the parser lock: no output can slip in between.
+        let p = lock(&sh.parser);
         let snapshot = p.screen().state_formatted();
-        if write_frame(&mut stream, F_OUTPUT, &snapshot).is_err() {
+        let mut clients = lock(&sh.clients);
+        let Some(me) = clients.iter_mut().find(|c| c.id == id) else { return };
+        if write_frame(&mut me.stream, F_OUTPUT, &snapshot).is_err() {
+            clients.retain(|c| c.id != id);
             return;
         }
-        match stream.try_clone() {
-            Ok(c) => lock(&clients).push(c),
-            Err(_) => return,
-        }
+        me.ready = true;
     }
     while let Ok((kind, payload)) = read_frame(&mut stream) {
         match kind {
             F_INPUT => {
-                let mut w = lock(&writer);
+                let mut w = lock(&sh.writer);
                 let _ = w.write_all(&payload);
                 let _ = w.flush();
             }
-            F_RESIZE => apply_resize(&payload, &parser, &master),
+            F_RESIZE => {
+                if let Some((r, c)) = parse_size(&payload) {
+                    if let Some(me) = lock(&sh.clients).iter_mut().find(|c| c.id == id) {
+                        me.rows = r;
+                        me.cols = c;
+                    }
+                    fit_smallest_viewer(sh);
+                }
+            }
             _ => {}
         }
     }
+    // This window left: forget it, and let the terminal grow back if it was the smallest.
+    lock(&sh.clients).retain(|c| c.id != id);
+    fit_smallest_viewer(sh);
+}
+
+/// SIGTERM each process and wait for all of them to exit. Used when ending copies before reopening.
+pub fn end_processes(pids: &[u32]) -> Result<(), String> {
+    for &pid in pids {
+        if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            return Err(format!("couldn't stop pid {pid}"));
+        }
+    }
+    for _ in 0..100 {
+        if !pids.iter().any(|&p| pid_alive(p)) {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Err("it didn't exit in time".into())
 }

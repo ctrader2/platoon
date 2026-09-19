@@ -177,12 +177,49 @@ fn window_size(tokens: u64, large: &mut bool) -> u64 {
     if *large { LARGE_WINDOW } else { DEFAULT_WINDOW }
 }
 
-pub fn pid_alive(pid: u32) -> bool {
-    // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
-    unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+/// Working directory a conversation was run in: the first `cwd` recorded in its transcript.
+pub fn transcript_cwd(path: &Path) -> Option<String> {
+    let file = File::open(path).ok()?;
+    for line in BufReader::new(file).lines().take(400).map_while(Result::ok) {
+        if let Some(cwd) = serde_json::from_str::<Value>(&line).ok().and_then(|v| v["cwd"].as_str().map(String::from)) {
+            return Some(cwd);
+        }
+    }
+    None
 }
 
-fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
+/// Every conversation id with a saved transcript, for looking a session up by (a prefix of) its id.
+pub fn saved_session_ids(root: &Path) -> Vec<String> {
+    let mut ids = Vec::new();
+    for dir in fs::read_dir(root.join("projects")).into_iter().flatten().flatten() {
+        for f in fs::read_dir(dir.path()).into_iter().flatten().flatten() {
+            let p = f.path();
+            if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
+                    ids.push(stem.to_string());
+                }
+            }
+        }
+    }
+    ids
+}
+
+pub fn pid_alive(pid: u32) -> bool {
+    // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
+    let exists = unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) };
+    exists && !is_zombie(pid)
+}
+
+/// A process that has exited but not yet been reaped by its parent still answers signal 0, though it
+/// is gone as far as anyone using it is concerned. (Linux only; elsewhere it counts as alive.)
+fn is_zombie(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| s.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next().map(|st| st == "Z")))
+        .unwrap_or(false)
+}
+
+pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
     fs::read_dir(root.join("projects"))
         .ok()?
         .flatten()

@@ -1,4 +1,4 @@
-use crate::claude::{pid_alive, Reader};
+use crate::claude::Reader;
 use crate::client::{key_bytes, Client};
 use crate::dirs;
 use crate::guard;
@@ -400,20 +400,8 @@ impl App {
     /// End every live copy, wait for them to go, then resume the conversation under a platoon host.
     /// Reopening from the saved history means the new copy's memory matches it exactly.
     fn adopt(&mut self, pids: &[u32], id: &str, name: &str, cwd: String) {
-        for &pid in pids {
-            if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
-                self.notify(format!("Couldn't stop {name}"));
-                return;
-            }
-        }
-        for _ in 0..100 {
-            if !pids.iter().any(|&p| pid_alive(p)) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        if pids.iter().any(|&p| pid_alive(p)) {
-            self.notify(format!("{name} didn't exit; try kill (x) first"));
+        if let Err(e) = host::end_processes(pids) {
+            self.notify(format!("Couldn't end {name}: {e}. Try again in a moment."));
             return;
         }
         self.launch(cwd, &["--resume", id]);

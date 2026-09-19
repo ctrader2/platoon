@@ -5,6 +5,7 @@ mod dirs;
 mod guard;
 mod host;
 mod model;
+mod open;
 mod setup;
 mod theme;
 mod ui;
@@ -24,25 +25,22 @@ fn main() -> io::Result<()> {
         None => {}
         Some("statusline") => return statusline(),
         Some("setup") => return setup(),
+        Some("open") => {
+            require_setup();
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(open::run(&args));
+        }
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
         Some("host") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup]\n  (no arguments)  open the session manager\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  statusline, hook guard   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id]]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  statusline, hook guard   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
-    // Refuse to start until setup is complete. Only the UI is gated; the subcommands above never are.
-    // PLATOON_SKIP_SETUP_CHECK exists for tests and CI.
-    if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
-        let states = setup::check(&claude::claude_root());
-        if !setup::ready(&states) {
-            eprintln!("{}", setup::render_blocked(&states, use_color(true)));
-            std::process::exit(1);
-        }
-    }
+    require_setup();
     let mut terminal = match ratatui::try_init() {
         Ok(t) => t,
         Err(e) => {
@@ -71,6 +69,18 @@ fn statusline() -> io::Result<()> {
     io::Read::read_to_string(&mut io::stdin(), &mut input)?;
     println!("{}", usage::record(&input, &usage::cache_dir(), usage::now()));
     Ok(())
+}
+
+/// Refuse to continue until setup is complete. Only the UI and `open` are gated; the commands Claude
+/// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
+fn require_setup() {
+    if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
+        let states = setup::check(&claude::claude_root());
+        if !setup::ready(&states) {
+            eprintln!("{}", setup::render_blocked(&states, use_color(true)));
+            std::process::exit(1);
+        }
+    }
 }
 
 fn use_color(stderr: bool) -> bool {

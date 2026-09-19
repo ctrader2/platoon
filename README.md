@@ -26,3 +26,15 @@ already done, and a step whose command points at a platoon that no longer exists
 
 Each one runs under a small background host, so quitting platoon (or closing its terminal) never ends it.
 `Ctrl+Space` leaves a session without stopping it.
+
+## See a session live from a regular terminal
+
+```
+platoon open            # start a new session in this directory
+platoon open a1b2       # join a session by (a prefix of) its id, resuming it if nothing is running
+```
+
+The session is shared, tmux-style: every window shows it live and any of them can type. The session is
+sized to the smallest window attached. `Ctrl+Space` detaches; the session keeps running. A session running
+in a plain `claude` platoon doesn't own can't be shared, so `platoon open` asks before ending it and
+reopening the same conversation from its saved history.

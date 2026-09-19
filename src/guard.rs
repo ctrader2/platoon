@@ -123,12 +123,19 @@ pub fn ancestors(pid: u32) -> Vec<u32> {
 fn message(v: &Verdict, sid: &str) -> String {
     match v {
         Verdict::Blocked { owner, owner_in_platoon } => {
-            let place = if *owner_in_platoon { "open in platoon".to_string() } else { "open in another terminal".to_string() };
-            format!(
-                "This session is already {place} (pid {owner}). Two copies would overwrite each other's history, so this one is paused.\n\
-                 Exit this copy (/exit){} To work on a separate copy instead, run:\n  claude --resume {sid} --fork-session",
-                if *owner_in_platoon { " and open the session from platoon." } else { ", or close the other one first." },
-            )
+            let fork = format!("To work on a separate copy instead, run:\n  claude --resume {sid} --fork-session");
+            if *owner_in_platoon {
+                format!(
+                    "This session is already open in platoon (pid {owner}). Two copies would overwrite each other's history, so this one is paused.\n\
+                     Exit this copy (/exit). To see the live session in a terminal, run:\n  platoon open {}\n{fork}",
+                    &sid[..sid.len().min(8)]
+                )
+            } else {
+                format!(
+                    "This session is already open in another terminal (pid {owner}). Two copies would overwrite each other's history, so this one is paused.\n\
+                     Exit this copy (/exit), or close the other one first. {fork}"
+                )
+            }
         }
         Verdict::Stale => "This copy is out of sync with the saved conversation: it was opened while the session was running elsewhere. \
              Exit it (/exit) and resume the session again."
@@ -201,6 +208,15 @@ mod tests {
         assert_eq!(decide(&entries, 10, &none, false), Verdict::Allow);
         assert!(matches!(decide(&entries, 20, &none, false), Verdict::Blocked { owner: 10, .. }));
         assert!(matches!(decide(&entries, 30, &none, false), Verdict::Blocked { owner: 10, .. }));
+    }
+
+    #[test]
+    fn refusal_messages_say_what_to_do() {
+        let in_platoon = message(&Verdict::Blocked { owner: 7, owner_in_platoon: true }, "abcdef12-3456");
+        assert!(in_platoon.contains("open in platoon") && in_platoon.contains("platoon open abcdef12"), "{in_platoon}");
+        assert!(in_platoon.contains("--fork-session"), "{in_platoon}");
+        let elsewhere = message(&Verdict::Blocked { owner: 7, owner_in_platoon: false }, "abcdef12-3456");
+        assert!(elsewhere.contains("another terminal") && !elsewhere.contains("platoon open"), "{elsewhere}");
     }
 
     #[test]
