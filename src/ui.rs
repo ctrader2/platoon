@@ -79,7 +79,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     match app.active_notice() {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
         Some(n) if n.chars().count() + hints_width(hints) + 6 > footer.width as usize => {
-            f.render_widget(Paragraph::new(Span::styled(fit_end(n, footer.width as usize), Style::new().fg(t.warn))), footer);
+            // It may use the footer's side margin too: a notice that says something happened shouldn't be cut off for want of a column.
+            let wide = Rect::new(footer.x.saturating_sub(1), footer.y, footer.width + 2, 1);
+            f.render_widget(Paragraph::new(Span::styled(fit_end(n, wide.width as usize), Style::new().fg(t.warn))), wide);
         }
         notice => draw_footer(f, app, footer, hints, notice.map(|n| (n.to_string(), t.warn))),
     }

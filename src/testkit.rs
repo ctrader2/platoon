@@ -51,7 +51,15 @@ impl World {
         for d in [root.join("sessions"), root.join("projects"), cache.clone()] {
             fs::create_dir_all(d).unwrap();
         }
-        Self { base, root, cache, config, procs: Vec::new() }
+        let w = Self { base, root, cache, config, procs: Vec::new() };
+        // Most tests use conversations days old to check the list, not auto-archive: switch it off unless a test asks.
+        w.settings(120, 0);
+        w
+    }
+
+    /// Write `settings.json` (0 turns a feature off).
+    pub fn settings(&self, idle_stop_minutes: u64, auto_archive_days: u64) {
+        crate::settings::save(&self.config, &crate::settings::Settings { idle_stop_minutes, auto_archive_days }).unwrap();
     }
 
     pub fn app(&self) -> App {

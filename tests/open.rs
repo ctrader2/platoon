@@ -16,6 +16,9 @@ fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
     let mut cmd = Command::new(BIN);
     cmd.args(["host", "--program", program, "--dir", "/tmp", "--rows", "24", "--cols", "80", "--"])
         .env("PLATOON_CACHE_DIR", cache)
+        // The host reads Claude's registry and platoon's settings: point them at nothing real.
+        .env("CLAUDE_CONFIG_DIR", cache.join("claude"))
+        .env("PLATOON_CONFIG_DIR", cache.join("config"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -97,6 +100,7 @@ impl World {
         vec![
             ("CLAUDE_CONFIG_DIR", self.claude.to_string_lossy().into()),
             ("PLATOON_CACHE_DIR", self.cache.to_string_lossy().into()),
+            ("PLATOON_CONFIG_DIR", self.cache.join("config").to_string_lossy().into()),
             ("PLATOON_CLAUDE_BIN", program.into()),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
         ]

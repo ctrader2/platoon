@@ -32,6 +32,9 @@ impl World {
         for d in [&w.claude, &w.cache, &w.work, &w.claude.join("sessions")] {
             fs::create_dir_all(d).unwrap();
         }
+        // These conversations carry fixed dates that will be old one day: this file is about the list, not auto-archive.
+        fs::create_dir_all(&w.config).unwrap();
+        fs::write(w.config.join("settings.json"), r#"{"auto_archive_days":0}"#).unwrap();
         w
     }
 

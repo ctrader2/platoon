@@ -10,9 +10,10 @@
 
 use crate::claude::{claude_root, pid_alive};
 use crate::host;
+use crate::procs::ppid;
 use crate::usage::cache_dir;
 use serde_json::Value;
-use std::{collections::HashSet, fs, io::Read, path::{Path, PathBuf}, process::Command};
+use std::{collections::HashSet, fs, io::Read, path::{Path, PathBuf}};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -93,15 +94,6 @@ pub fn prune_stale(cache: &Path) {
             }
         }
     }
-}
-
-fn ppid(pid: u32) -> Option<u32> {
-    if let Ok(s) = fs::read_to_string(format!("/proc/{pid}/stat")) {
-        // "pid (comm) S ppid ...": comm may contain spaces or parens, so split after the last ')'.
-        return s.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok();
-    }
-    let out = Command::new("ps").args(["-o", "ppid=", "-p", &pid.to_string()]).output().ok()?;
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
 }
 
 /// `pid` and its ancestors, nearest first.

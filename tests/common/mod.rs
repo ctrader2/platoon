@@ -182,6 +182,11 @@ impl Viewer {
         v
     }
 
+    /// Leave now. (Dropping a Viewer doesn't close the socket while its reader thread still holds it.)
+    pub fn close(self) {
+        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+    }
+
     pub fn type_line(&mut self, text: &str) {
         write_frame(&mut self.stream, b'I', format!("{text}\r").as_bytes()).unwrap();
     }

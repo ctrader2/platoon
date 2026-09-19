@@ -114,6 +114,8 @@ fn host_outlives_clients_and_reattach_restores_the_screen() {
     let mut cmd = Command::new(BIN);
     cmd.args(["host", "--program", "sh", "--dir", "/tmp", "--rows", "24", "--cols", "80", "--"])
         .env("PLATOON_CACHE_DIR", &cache)
+        .env("CLAUDE_CONFIG_DIR", cache.join("claude"))
+        .env("PLATOON_CONFIG_DIR", cache.join("config"))
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

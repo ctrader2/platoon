@@ -248,6 +248,9 @@ pub struct Indexer {
     pub generation: u64,
     /// Transcripts the running scan still has to read.
     pub remaining: usize,
+    /// The first scan of this run has finished and been taken in: `entries` now matches the disk, rather
+    /// than what an older run saved. Anything that acts on how old a conversation is waits for this.
+    pub first_scan_done: bool,
 }
 
 impl Indexer {
@@ -273,7 +276,7 @@ impl Indexer {
                 while woken.try_recv().is_ok() {}
             }
         });
-        Self { backend: Backend::Thread { rx, wake, busy }, entries, generation: 1, remaining: 0 }
+        Self { backend: Backend::Thread { rx, wake, busy }, entries, generation: 1, remaining: 0, first_scan_done: false }
     }
 
     /// Scan on the calling thread on every poll.
@@ -281,7 +284,7 @@ impl Indexer {
     pub fn inline(claude_root: &Path, cache: &Path) -> Self {
         let scanner = Scanner::load(claude_root, cache);
         let entries = scanner.entries().into_iter().map(|e| (e.path.clone(), e)).collect();
-        Self { backend: Backend::Inline(scanner), entries, generation: 1, remaining: 0 }
+        Self { backend: Backend::Inline(scanner), entries, generation: 1, remaining: 0, first_scan_done: false }
     }
 
     /// True while a scan is reading files (or the first one is still listing them).
@@ -300,9 +303,12 @@ impl Indexer {
         let mut updates = Vec::new();
         match &mut self.backend {
             Backend::Thread { rx, wake, busy } => {
+                // Ask before draining: a scan that had already finished has sent everything we are about to take.
+                let finished = !busy.load(Ordering::SeqCst);
                 while let Ok(u) = rx.try_recv() {
                     updates.push(u);
                 }
+                self.first_scan_done |= finished;
                 // Whenever the worker has finished, ask for the next scan: that is the once-a-second stat pass.
                 if !busy.swap(true, Ordering::SeqCst) {
                     let _ = wake.send(());
@@ -314,6 +320,7 @@ impl Indexer {
                     updates.push(u);
                     true
                 });
+                self.first_scan_done = true;
             }
         }
         for u in updates {
@@ -398,6 +405,31 @@ mod tests {
         assert_eq!(e.t.ai_title.as_deref(), Some("Parser fix"));
         assert_eq!((e.t.branch.as_deref(), e.t.model.as_deref(), e.t.context_tokens), (Some("main"), Some("claude-sonnet-5"), 50_000));
         assert_eq!(e.last_active_ms(), crate::claude::parse_iso_ms("2026-09-19T01:05:00.000Z").unwrap());
+    }
+
+    #[test]
+    fn the_first_scan_is_reported_done_only_once_its_results_have_been_taken_in() {
+        let (root, cache) = (tmp("first-c"), tmp("first-i"));
+        for i in 0..5 {
+            write(&root, "-work-x", &format!("id{i}"), &[user("hello", "2026-09-19T01:00:00.000Z")]);
+        }
+        // An older run's saved index describes conversations as they were then, not as they are now.
+        let mut idx = Indexer::spawn(&root, &cache);
+        assert!(!idx.first_scan_done, "nothing has been scanned yet");
+        let start = Instant::now();
+        while !idx.first_scan_done {
+            assert!(start.elapsed() < Duration::from_secs(10), "the scan never finished");
+            idx.poll();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!((idx.entries.len(), idx.remaining), (5, 0), "done means every result is already in");
+        let inline = {
+            let mut i = Indexer::inline(&root, &cache);
+            assert!(!i.first_scan_done);
+            i.poll();
+            i.first_scan_done
+        };
+        assert!(inline);
     }
 
     #[test]

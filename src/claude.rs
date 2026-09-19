@@ -73,6 +73,16 @@ impl Reader {
     }
 }
 
+/// What Claude Code's registry says a process is doing (`busy`, `idle`, ...). None if there is no entry or
+/// it can't be read: callers must treat that as "not known to be idle".
+pub fn registry_status(root: &Path, pid: u32) -> Option<String> {
+    let v: Value = serde_json::from_str(&fs::read_to_string(root.join("sessions").join(format!("{pid}.json"))).ok()?).ok()?;
+    if v["pid"].as_u64().is_some_and(|p| p != pid as u64) {
+        return None; // not this process's entry
+    }
+    v["status"].as_str().map(String::from)
+}
+
 fn live_from(v: &Value) -> Option<Live> {
     if v["kind"].as_str() != Some("interactive") {
         return None;

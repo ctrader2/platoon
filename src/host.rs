@@ -7,8 +7,14 @@
 //! Files per session, named by claude's pid, in a directory only the current user can enter:
 //!   `<pid>.json`  who/where (removed when claude exits)
 //!   `<pid>.sock`  the socket clients connect to
+//!
+//! A host also stops its own session when nobody has used it for a while (see `Watchdog`), so forgotten
+//! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
 
-use crate::claude::pid_alive;
+use crate::archive::config_dir;
+use crate::claude::{claude_root, pid_alive, registry_status};
+use crate::procs;
+use crate::settings::SettingsStore;
 use crate::usage::cache_dir;
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde_json::{json, Value};
@@ -24,8 +30,11 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex, MutexGuard},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+/// How often a host asks whether its session has been idle long enough to stop.
+const IDLE_CHECK_EVERY: Duration = Duration::from_secs(30);
 
 pub const SCROLLBACK: usize = 5000;
 pub const F_INPUT: u8 = b'I';
@@ -204,6 +213,7 @@ pub fn run(args: &[String]) -> i32 {
         writer: Mutex::new(writer),
         size: Mutex::new((rows, cols)),
         next_id: AtomicU64::new(1),
+        quiet_since: Mutex::new(Instant::now()),
     });
 
     {
@@ -223,12 +233,19 @@ pub fn run(args: &[String]) -> i32 {
         return fail("couldn't write host info".into());
     }
 
+    {
+        let shared = shared.clone();
+        let dog = Watchdog::new(claude_pid, me);
+        thread::spawn(move || watch(&shared, dog));
+    }
+
     // Output loop: feed the emulator, then fan out to every window that already has its snapshot.
     let mut buf = [0u8; 8192];
     while let Ok(n) = reader.read(&mut buf) {
         if n == 0 {
             break;
         }
+        *lock(&shared.quiet_since) = Instant::now();
         let mut p = lock(&shared.parser);
         p.process(&buf[..n]);
         lock(&shared.clients).retain_mut(|c| !c.ready || write_frame(&mut c.stream, F_OUTPUT, &buf[..n]).is_ok());
@@ -257,6 +274,83 @@ struct Shared {
     /// Size currently applied to the terminal.
     size: Mutex<(u16, u16)>,
     next_id: AtomicU64,
+    /// The latest of: the last output from claude, the last window leaving, the last time claude was
+    /// seen doing anything but idling. The idle-stop clock runs from here.
+    quiet_since: Mutex<Instant>,
+}
+
+/// Decides when this host's session has been idle long enough to stop, and stops it.
+///
+/// Idle means all of: no window attached for the whole threshold, claude's own registry entry saying
+/// `idle` the whole time (missing, unreadable or any other status is NOT idle, so uncertainty never
+/// stops anything), no output from claude for the threshold, and nothing running under claude.
+/// Stopping is SIGTERM to claude, which shuts down cleanly; the host then exits like it always does.
+/// The conversation is untouched, and Enter resumes it.
+///
+/// The threshold comes from `settings.json` (`idle_stop_minutes`, 0 = off) and is re-read as it changes.
+/// Tests can shrink time with `PLATOON_IDLE_SECS_PER_MINUTE=N`: a "minute" of the setting then lasts N
+/// seconds and the check runs every 200 ms instead of every 30 s.
+struct Watchdog {
+    claude_pid: u32,
+    host_pid: u32,
+    root: PathBuf,
+    settings: SettingsStore,
+    secs_per_minute: u64,
+    check_every: Duration,
+}
+
+impl Watchdog {
+    fn new(claude_pid: u32, host_pid: u32) -> Self {
+        let scaled = std::env::var("PLATOON_IDLE_SECS_PER_MINUTE").ok().and_then(|v| v.parse::<u64>().ok());
+        Self {
+            claude_pid,
+            host_pid,
+            root: claude_root(),
+            settings: SettingsStore::open(&config_dir()),
+            secs_per_minute: scaled.unwrap_or(60),
+            check_every: if scaled.is_some() { Duration::from_millis(200) } else { IDLE_CHECK_EVERY },
+        }
+    }
+
+    /// True when the session should be stopped now. `quiet_since` is moved forward whenever claude is
+    /// seen not idle. `now` and the window count are passed in so the decision can be tested.
+    fn should_stop(&mut self, now: Instant, viewers: usize, quiet_since: &mut Instant) -> bool {
+        self.settings.refresh();
+        let idle = registry_status(&self.root, self.claude_pid).as_deref() == Some("idle");
+        if !idle {
+            *quiet_since = (*quiet_since).max(now);
+        }
+        let Some(threshold) = self.settings.get().idle_stop_after(self.secs_per_minute) else { return false };
+        if viewers > 0 || !idle || now.saturating_duration_since(*quiet_since) < threshold {
+            return false;
+        }
+        // Stopping claude would kill whatever it started (a dev server, a shell, ...). Unknown counts as busy.
+        matches!(procs::live_descendants(self.claude_pid), Some(kids) if kids.is_empty())
+    }
+}
+
+fn watch(sh: &Shared, mut dog: Watchdog) {
+    loop {
+        thread::sleep(dog.check_every);
+        let viewers = lock(&sh.clients).len();
+        let mut since = *lock(&sh.quiet_since);
+        let stop = dog.should_stop(Instant::now(), viewers, &mut since);
+        // Output or a window leaving during the decision means it is not idle after all.
+        let stop = {
+            let mut shared_since = lock(&sh.quiet_since);
+            let moved = *shared_since > since;
+            *shared_since = (*shared_since).max(since);
+            stop && !moved
+        };
+        // A window may have joined while we were deciding. Only ever signal our own child: pid must still
+        // be a direct child of this host, so a reused pid is never touched.
+        let ours = dog.claude_pid > 1 && procs::ppid(dog.claude_pid) == Some(dog.host_pid);
+        if stop && ours && lock(&sh.clients).is_empty() {
+            unsafe { libc::kill(dog.claude_pid as i32, libc::SIGTERM) };
+            // If it doesn't go (something ignoring SIGTERM), try again after another full quiet period, not every check.
+            *lock(&sh.quiet_since) = Instant::now();
+        }
+    }
 }
 
 /// One terminal can only be one size. Fit the smallest attached window so every window shows everything
@@ -326,6 +420,7 @@ fn serve_client(mut stream: UnixStream, sh: &Shared) {
     }
     // This window left: forget it, and let the terminal grow back if it was the smallest.
     lock(&sh.clients).retain(|c| c.id != id);
+    *lock(&sh.quiet_since) = Instant::now();
     fit_smallest_viewer(sh);
 }
 
@@ -343,4 +438,155 @@ pub fn end_processes(pids: &[u32]) -> Result<(), String> {
         thread::sleep(Duration::from_millis(50));
     }
     Err("it didn't exit in time".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::{save, Settings};
+    use std::process::Child;
+
+    /// A watchdog watching a real `sleep` (standing in for claude) with a fake registry and settings.
+    struct Rig {
+        dog: Watchdog,
+        dir: PathBuf,
+        child: Child,
+    }
+
+    impl Rig {
+        fn new(name: &str, settings: Settings) -> Self {
+            let dir = std::env::temp_dir().join(format!("platoon-host-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(dir.join("claude/sessions")).unwrap();
+            save(&dir.join("config"), &settings).unwrap();
+            let child = Command::new("sleep").arg("60").spawn().unwrap();
+            let dog = Watchdog {
+                claude_pid: child.id(),
+                host_pid: std::process::id(),
+                root: dir.join("claude"),
+                settings: SettingsStore::open(&dir.join("config")),
+                secs_per_minute: 60,
+                check_every: IDLE_CHECK_EVERY,
+            };
+            Rig { dog, dir, child }
+        }
+
+        fn status(&self, status: &str) {
+            let v = json!({"pid": self.child.id(), "sessionId": "s", "kind": "interactive", "status": status});
+            fs::write(self.dir.join("claude/sessions").join(format!("{}.json", self.child.id())), v.to_string()).unwrap();
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+            let _ = fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    const MIN: Duration = Duration::from_secs(60);
+
+    #[test]
+    fn stops_only_after_the_whole_threshold_of_quiet_idle_time_with_nobody_attached() {
+        let mut rig = Rig::new("decide", Settings { idle_stop_minutes: 120, auto_archive_days: 2 });
+        rig.status("idle");
+        let t0 = Instant::now();
+        let mut since = t0;
+        assert!(!rig.dog.should_stop(t0 + 119 * MIN, 0, &mut since), "one minute short");
+        assert!(rig.dog.should_stop(t0 + 120 * MIN, 0, &mut since), "exactly the threshold");
+        assert_eq!(since, t0, "being idle doesn't move the clock");
+    }
+
+    #[test]
+    fn each_blocker_alone_prevents_a_stop() {
+        let mut rig = Rig::new("blockers", Settings { idle_stop_minutes: 120, auto_archive_days: 2 });
+        let t0 = Instant::now();
+        let later = t0 + 500 * MIN;
+
+        rig.status("idle");
+        assert!(!rig.dog.should_stop(later, 1, &mut { t0 }), "a window is attached");
+
+        for other in ["busy", "waiting", "", "IDLE"] {
+            rig.status(other);
+            let mut since = t0;
+            assert!(!rig.dog.should_stop(later, 0, &mut since), "status {other:?} is not idle");
+            assert_eq!(since, later, "and it restarts the quiet period");
+        }
+
+        // No registry entry, or one that can't be read: not known to be idle.
+        let file = rig.dir.join("claude/sessions").join(format!("{}.json", rig.child.id()));
+        fs::write(&file, "{ not json").unwrap();
+        assert!(!rig.dog.should_stop(later, 0, &mut { t0 }));
+        fs::remove_file(&file).unwrap();
+        assert!(!rig.dog.should_stop(later, 0, &mut { t0 }));
+        // An entry that belongs to a different pid isn't this process's status.
+        fs::write(&file, json!({"pid": rig.child.id() + 1, "status": "idle"}).to_string()).unwrap();
+        assert!(!rig.dog.should_stop(later, 0, &mut { t0 }));
+
+        // Recent output/detach: the quiet period hasn't run its course.
+        rig.status("idle");
+        assert!(!rig.dog.should_stop(later, 0, &mut { later - MIN }));
+        // Everything clear: it does stop.
+        assert!(rig.dog.should_stop(later, 0, &mut { t0 }));
+    }
+
+    #[test]
+    fn a_live_child_process_prevents_a_stop_and_a_finished_one_does_not() {
+        let mut rig = Rig::new("children", Settings { idle_stop_minutes: 1, auto_archive_days: 2 });
+        // `sleep` has no children, so watch a shell that starts a background job and then waits for input.
+        let mut shell = Command::new("sh").args(["-c", "sleep 60 & read x"]).stdin(Stdio::piped()).spawn().unwrap();
+        rig.dog.claude_pid = shell.id();
+        let v = json!({"pid": shell.id(), "status": "idle"});
+        fs::write(rig.dir.join(format!("claude/sessions/{}.json", shell.id())), v.to_string()).unwrap();
+
+        let kids = loop {
+            match procs::live_descendants(shell.id()) {
+                Some(k) if !k.is_empty() => break k,
+                _ => thread::sleep(Duration::from_millis(20)), // the shell needs a moment to start its job
+            }
+        };
+        let t0 = Instant::now();
+        let blocked = !rig.dog.should_stop(t0 + 10 * MIN, 0, &mut { t0 });
+
+        // The job ends (it is ours): now nothing runs under the shell, so it may be stopped.
+        for k in kids {
+            unsafe { libc::kill(k as i32, libc::SIGKILL) };
+        }
+        let mut freed = false;
+        for _ in 0..100 {
+            freed = rig.dog.should_stop(t0 + 10 * MIN, 0, &mut { t0 });
+            if freed {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        drop(shell.stdin.take()); // the shell's `read` ends and it exits
+        let _ = shell.wait();
+        assert!(blocked, "claude has a child running: stopping it would kill that");
+        assert!(freed, "once the child is gone (a zombie doesn't count) the session may stop");
+    }
+
+    #[test]
+    fn threshold_zero_is_off_and_an_edit_to_the_settings_applies_at_once() {
+        let mut rig = Rig::new("off", Settings { idle_stop_minutes: 0, auto_archive_days: 2 });
+        rig.status("idle");
+        let t0 = Instant::now();
+        assert!(!rig.dog.should_stop(t0 + 10_000 * MIN, 0, &mut { t0 }), "0 = never stop");
+        save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 30, auto_archive_days: 2 }).unwrap();
+        assert!(!rig.dog.should_stop(t0 + 29 * MIN, 0, &mut { t0 }));
+        assert!(rig.dog.should_stop(t0 + 30 * MIN, 0, &mut { t0 }), "the new value is used without restarting the host");
+        save(&rig.dir.join("config"), &Settings { idle_stop_minutes: 0, auto_archive_days: 2 }).unwrap();
+        assert!(!rig.dog.should_stop(t0 + 30 * MIN, 0, &mut { t0 }), "and switching it off applies too");
+    }
+
+    #[test]
+    fn a_missing_or_corrupt_settings_file_means_the_default_two_hours() {
+        let mut rig = Rig::new("default", Settings::default());
+        fs::write(rig.dir.join("config/settings.json"), "{ nope").unwrap();
+        rig.status("idle");
+        let t0 = Instant::now();
+        assert!(!rig.dog.should_stop(t0 + 119 * MIN, 0, &mut { t0 }));
+        assert!(rig.dog.should_stop(t0 + 120 * MIN, 0, &mut { t0 }));
+    }
 }

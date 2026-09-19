@@ -8,7 +8,9 @@ mod host;
 mod index;
 mod model;
 mod open;
+mod procs;
 mod setup;
+mod settings;
 mod theme;
 mod ui;
 #[cfg(test)]
@@ -360,6 +362,25 @@ mod tests {
     }
 
     #[test]
+    fn enter_on_a_session_whose_host_just_stopped_says_so_and_the_next_enter_resumes_it() {
+        let mut w = World::new("just-stopped");
+        w.transcript("stopped-1", "/tmp", "hello", 5);
+        let pid = w.live("stopped-1", "/tmp", 1, "idle");
+        let mut app = w.app();
+        let gone = crate::host::HostInfo { sock: w.cache.join("hosts/gone.sock"), ..hosted(pid) };
+        app.refresh_with(vec![gone], true); // platoon still believes in the host...
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) }; // ...but it has just ended (our own stand-in process)
+        while alive(pid) {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::List));
+        assert_eq!(app.active_notice(), Some("That session just stopped. Press enter to open it again."));
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Resume), "the row is an ordinary conversation again");
+        assert!(app.hosts.is_empty() && app.sessions[0].procs.is_empty());
+    }
+
+    #[test]
     fn take_over_dialog_is_shown_for_a_plain_terminal_copy_and_readable() {
         let mut w = World::new("takeover");
         w.transcript("out", "/tmp", "outside", 5);
@@ -537,6 +558,204 @@ mod tests {
         assert!(matches!(app.mode, Mode::List));
         assert!(!alive(pid) && w.archive_file().unwrap()["archived"].get("busy-1").is_some());
         assert_eq!(app.counts, [0, 1]);
+    }
+
+    // --- automatic clean-up ---------------------------------------------------------------------------
+
+    const THREE_DAYS: u64 = 3 * 24 * 60;
+
+    /// The one-time notice, as it must read.
+    fn notice_of(n: usize) -> String {
+        format!("Auto-archived {n} conversations idle for 2+ days. Find them under Archived.")
+    }
+
+    #[test]
+    fn a_first_run_archives_every_old_idle_conversation_in_one_write_and_says_so_once() {
+        let mut w = World::new("auto-first");
+        w.settings(120, 2); // the defaults
+        for i in 0..143 {
+            w.transcript(&format!("old-{i:03}"), "/srv/old", &format!("old work {i}"), THREE_DAYS + i);
+        }
+        w.transcript("fresh", "/srv/fresh", "today's work", 30);
+        w.transcript("runs", "/srv/run", "long ago but still running", THREE_DAYS * 2);
+        let pid = w.live("runs", "/srv/run", 1, "idle");
+        let app = w.app();
+
+        assert_eq!(app.counts, [2, 143], "only the fresh one and the running one stay");
+        assert_eq!(ids(&app), ["fresh", "runs"]);
+        assert_eq!(app.archive_writes_for_test(), 1, "143 conversations must be one write, not 143");
+        assert_eq!(w.archive_file().unwrap()["archived"].as_object().unwrap().len(), 143);
+        assert!(!w.config.join("archive.json.tmp").exists());
+        assert!(alive(pid), "archiving never touches a process");
+        assert_eq!(app.active_notice(), Some(notice_of(143).as_str()));
+        // Nothing was deleted: the transcripts are all still there.
+        assert!(w.root.join("projects/-some-project/old-000.jsonl").exists());
+    }
+
+    #[test]
+    fn the_notice_is_readable_in_full_on_ordinary_terminals() {
+        let w = World::new("auto-render");
+        w.settings(120, 2);
+        for i in 0..143 {
+            w.transcript(&format!("old-{i:03}"), "/srv/old", "old work", THREE_DAYS);
+        }
+        w.transcript("fresh", "/srv/fresh", "today's work", 30);
+        let app = w.app();
+        for (cols, rows) in [(80, 24), (100, 24), (140, 30)] {
+            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            let text = draw(&mut term, &app);
+            assert!(text.contains(&notice_of(143)), "{cols}x{rows}: notice cut off:\n{text}");
+            assert!(text.contains("1 Active 1") && text.contains("2 Archived 143"), "{text}");
+        }
+        // It covers the key hints, so it goes as soon as the user does anything.
+        let mut app = app;
+        let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
+        assert!(!draw(&mut term, &app).contains("enter open"));
+        ch(&mut app, 'j');
+        let text = draw(&mut term, &app);
+        assert!(text.contains("enter open") && !text.contains("Auto-archived"), "{text}");
+    }
+
+    #[test]
+    fn the_notice_is_singular_for_one_and_names_the_configured_age() {
+        let w = World::new("auto-one");
+        w.settings(120, 1);
+        w.transcript("old", "/srv/old", "old work", 25 * 60);
+        let app = w.app();
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 conversation idle for 1+ day. Find it under Archived."));
+    }
+
+    #[test]
+    fn nothing_is_archived_and_nothing_said_when_nothing_qualifies_or_it_is_off() {
+        let w = World::new("auto-none");
+        w.settings(120, 2);
+        w.transcript("recent", "/srv/a", "hello", 47 * 60);
+        let app = w.app();
+        assert_eq!((app.counts.clone(), app.active_notice(), w.archive_file().is_none()), (vec![1, 0], None, true));
+
+        w.settings(120, 0); // 0 = off
+        w.transcript("ancient", "/srv/a", "hello", 400 * 24 * 60);
+        let app = w.app();
+        assert_eq!((app.counts.clone(), app.active_notice(), w.archive_file().is_none()), (vec![2, 0], None, true));
+    }
+
+    #[test]
+    fn a_settings_change_applies_to_a_running_platoon_without_a_restart() {
+        let w = World::new("auto-live");
+        w.settings(120, 0);
+        w.transcript("old", "/srv/a", "old work", THREE_DAYS);
+        let mut app = w.app();
+        app.refresh_for_test();
+        assert_eq!(app.counts, [1, 0]);
+
+        w.settings(120, 2);
+        app.refresh_for_test();
+        assert_eq!(app.counts, [0, 1], "the edited file is picked up on the next refresh");
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 conversation idle for 2+ days. Find it under Archived."));
+
+        // A longer age puts nothing back (archiving is not undone by settings), but archives nothing more.
+        w.settings(120, 30);
+        w.transcript("newer", "/srv/a", "work", THREE_DAYS);
+        app.refresh_for_test();
+        assert_eq!(app.counts, [1, 1]);
+    }
+
+    #[test]
+    fn a_conversation_that_turns_old_while_platoon_is_open_is_caught_by_the_periodic_check() {
+        let w = World::new("auto-periodic");
+        w.settings(120, 2);
+        w.transcript("aging", "/srv/a", "work", 47 * 60 + 59); // 2 minutes short of 2 days
+        let mut app = w.app();
+        assert_eq!(app.counts, [1, 0]);
+        // Time moving on is simulated by the injected clock: the same list, evaluated 3 minutes later.
+        app.auto_archive_at_for_test(crate::usage::now() + 180);
+        assert_eq!(app.counts, [0, 1]);
+    }
+
+    #[test]
+    fn restoring_an_old_conversation_sticks_across_evaluations_and_restarts() {
+        let w = World::new("auto-restore");
+        w.settings(120, 2);
+        w.transcript("old", "/srv/a", "old work", THREE_DAYS);
+        w.transcript("keep", "/srv/a", "recent work", 10);
+        let mut app = w.app();
+        assert_eq!(app.counts, [1, 1]);
+
+        ch(&mut app, '2');
+        assert_eq!(ids(&app), ["old"]);
+        ch(&mut app, 'a'); // restore without opening it
+        assert_eq!(app.counts, [2, 0]);
+        for _ in 0..3 {
+            app.refresh_for_test();
+            app.auto_archive_at_for_test(crate::usage::now() + 3600);
+        }
+        assert_eq!(app.counts.clone(), [2, 0], "restored means restored");
+
+        let app2 = w.app(); // a fresh start reads the remembered restore time from disk
+        assert_eq!(app2.counts, [2, 0]);
+        assert!(w.archive_file().unwrap()["touched"]["old"].as_u64().is_some());
+
+        // ...until it has again gone unused for the full age from the restore.
+        let mut app3 = w.app();
+        app3.auto_archive_at_for_test(crate::usage::now() + 2 * 86_400 + 60);
+        assert_eq!(app3.counts.clone(), [0, 2]);
+    }
+
+    #[test]
+    fn a_conversation_with_a_running_process_is_never_auto_archived_however_old() {
+        let mut w = World::new("auto-running");
+        w.settings(120, 2);
+        w.transcript("busy-old", "/srv/a", "work", THREE_DAYS);
+        w.transcript("idle-old", "/srv/a", "work", THREE_DAYS);
+        let (a, b) = (w.live("busy-old", "/srv/a", 1, "busy"), w.live("idle-old", "/srv/a", 2, "idle"));
+        let mut app = w.app();
+        assert_eq!(app.counts, [2, 0]);
+        app.auto_archive_at_for_test(crate::usage::now() + 30 * 86_400);
+        assert_eq!(app.counts.clone(), [2, 0]);
+        assert!(alive(a) && alive(b));
+        assert!(w.archive_file().is_none());
+    }
+
+    #[test]
+    fn a_conversation_being_viewed_is_never_auto_archived_even_before_its_process_registers() {
+        let w = World::new("auto-viewing");
+        w.settings(120, 0);
+        w.transcript("resumed", "/srv/a", "work", THREE_DAYS * 10);
+        w.transcript("other", "/srv/a", "work", THREE_DAYS * 10);
+        let mut app = w.app();
+        assert_eq!(app.counts, [2, 0]);
+        // Just resumed: platoon knows the conversation, but claude hasn't registered a process yet.
+        app.view_conversation_for_test("resumed", 4242);
+        w.settings(120, 2);
+        app.auto_archive_at_for_test(crate::usage::now());
+        assert_eq!(app.counts, [1, 1]);
+        assert_eq!(ids(&app), ["resumed"], "only the one being viewed stays");
+    }
+
+    #[test]
+    fn an_unreadable_archive_file_is_never_overwritten_automatically() {
+        let w = World::new("auto-corrupt");
+        w.settings(120, 2);
+        std::fs::create_dir_all(&w.config).unwrap();
+        std::fs::write(w.config.join("archive.json"), "garbage{").unwrap();
+        w.transcript("old", "/srv/a", "old work", THREE_DAYS);
+        let app = w.app();
+        assert_eq!(app.counts, [1, 0]);
+        assert_eq!(std::fs::read_to_string(w.config.join("archive.json")).unwrap(), "garbage{");
+        assert!(!w.config.join("archive.json.bak").exists());
+    }
+
+    #[test]
+    fn opening_a_conversation_counts_as_activity() {
+        let w = World::new("auto-open");
+        w.settings(120, 0); // off while we set up, so it shows in the list
+        w.transcript("old", "/srv/a", "old work", THREE_DAYS);
+        let mut app = w.app();
+        app.opened_for_test("old"); // what a successful Enter records
+        w.settings(120, 2);
+        app.refresh_for_test();
+        assert_eq!(app.counts, [1, 0], "opened just now, so not idle for 2 days");
+        assert!(w.archive_file().unwrap()["touched"]["old"].as_u64().is_some());
     }
 
     #[test]
