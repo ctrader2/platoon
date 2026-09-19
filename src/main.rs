@@ -5,6 +5,7 @@ mod host;
 mod model;
 mod theme;
 mod ui;
+mod usage;
 
 use ratatui::crossterm::{
     event::{
@@ -16,12 +17,41 @@ use ratatui::crossterm::{
 use std::{io, time::{Duration, Instant}};
 
 fn main() -> io::Result<()> {
+    match std::env::args().nth(1).as_deref() {
+        None => {}
+        Some("statusline") => return statusline(),
+        Some("setup") => return setup(),
+        Some(_) => {
+            eprintln!("usage: platoon [setup]\n  (no arguments)  open the session manager\n  setup           show plan usage: add platoon to Claude Code's status line\n  statusline      internal: run by Claude Code, reads its JSON on stdin");
+            std::process::exit(2);
+        }
+    }
     let mut terminal = ratatui::init();
     let _ = execute!(io::stdout(), EnableMouseCapture, EnableBracketedPaste);
     let result = run(&mut terminal);
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
     result
+}
+
+/// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
+fn statusline() -> io::Result<()> {
+    let mut input = String::new();
+    io::Read::read_to_string(&mut io::stdin(), &mut input)?;
+    println!("{}", usage::record(&input, &usage::cache_dir(), usage::now()));
+    Ok(())
+}
+
+fn setup() -> io::Result<()> {
+    let root = claude::Reader::new().root().to_path_buf();
+    match usage::setup(&root) {
+        Ok(msg) => println!("{msg}"),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+    Ok(())
 }
 
 fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<()> {

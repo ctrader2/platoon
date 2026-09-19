@@ -1,7 +1,8 @@
 use crate::claude::{pid_alive, Reader};
 use crate::dirs;
 use crate::host::{key_bytes, Hosted};
-use crate::model::{PlanUsage, Session, Status};
+use crate::model::{Session, Status};
+use crate::usage::{self, Usage};
 use crate::theme::Theme;
 use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
@@ -91,8 +92,7 @@ impl Picker {
 
 pub struct App {
     pub sessions: Vec<Session>,
-    /// None until we have a sanctioned source for plan limits.
-    pub usage: Option<PlanUsage>,
+    pub usage: Usage,
     /// Index into `visible()`.
     pub selected: usize,
     pub filter: String,
@@ -116,7 +116,7 @@ impl App {
         let reader = Reader::new();
         let mut app = Self {
             sessions: Vec::new(),
-            usage: None,
+            usage: Usage::NotSetUp,
             selected: 0,
             filter: String::new(),
             mode: Mode::List,
@@ -215,6 +215,18 @@ impl App {
             }
             s.external = !self.hosted.iter().any(|h| h.pid == s.pid);
         }
+        // Plan limits and exact context figures, saved by `platoon statusline`.
+        let snap = usage::load(&usage::cache_dir(), usage::now());
+        for s in &mut fresh {
+            if let Some(p) = snap.context.get(&s.id) {
+                s.context_pct = *p;
+            }
+        }
+        self.usage = match snap.plan {
+            Some(p) => Usage::Ready(p),
+            None if usage::installed(self.reader.root()) => Usage::Waiting,
+            None => Usage::NotSetUp,
+        };
         self.sessions = fresh;
         if let Some(id) = selected_id {
             if let Some(pos) = self.visible().iter().position(|&i| self.sessions[i].id == id) {

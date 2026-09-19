@@ -25,8 +25,16 @@ pub struct Session {
     pub started_at: u64,
 }
 
-#[allow(dead_code)] // Source for these numbers is still an open question.
+/// One rate-limit window as reported by Claude Code.
+#[derive(Clone, Copy)]
+pub struct Window {
+    pub pct: u8,
+    /// Unix epoch seconds when it resets.
+    #[allow(dead_code)] // Will be shown as a countdown.
+    pub resets_at: u64,
+}
+
 pub struct PlanUsage {
-    pub five_hour_pct: u8,
-    pub seven_day_pct: u8,
+    pub five_hour: Option<Window>,
+    pub seven_day: Option<Window>,
 }

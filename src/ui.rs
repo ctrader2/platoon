@@ -2,6 +2,7 @@ use crate::app::{Action, App, Confirm, Hit, Mode};
 use crate::dirs::tilde;
 use crate::host::Hosted;
 use crate::model::{Session, Status};
+use crate::usage::Usage;
 use crate::theme::Theme;
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
@@ -102,14 +103,19 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let mut right = Vec::new();
+    let dim = Style::new().fg(t.dim);
     match &app.usage {
-        Some(u) => {
-            right.push(Span::styled("5h ", Style::new().fg(t.dim)));
-            right.extend(bar(t, u.five_hour_pct));
-            right.push(Span::styled("   7d ", Style::new().fg(t.dim)));
-            right.extend(bar(t, u.seven_day_pct));
+        Usage::Ready(u) => {
+            for (i, (label, w)) in [("5h", u.five_hour), ("7d", u.seven_day)].into_iter().enumerate() {
+                right.push(Span::styled(if i == 0 { format!("{label} ") } else { format!("   {label} ") }, dim));
+                match w {
+                    Some(w) => right.extend(bar(t, w.pct)),
+                    None => right.push(Span::styled("n/a", dim)),
+                }
+            }
         }
-        None => right.push(Span::styled("plan usage n/a", Style::new().fg(t.dim))),
+        Usage::Waiting => right.push(Span::styled("plan usage: waiting for a session to report", dim)),
+        Usage::NotSetUp => right.push(Span::styled("plan usage: off · run `platoon setup`", dim)),
     }
 
     let right_w = right.iter().map(|s| s.content.chars().count()).sum::<usize>() as u16;
