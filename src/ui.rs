@@ -206,7 +206,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
     ];
-    l1.extend(bar_bg(t, s.context_pct, bg));
+    l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact));
 
     let desc_w = (area.width as usize).saturating_sub(3);
     let l2 = vec![
@@ -425,16 +425,16 @@ fn pct_color(t: &Theme, pct: u8) -> Color {
 }
 
 fn bar(t: &Theme, pct: u8) -> Vec<Span<'static>> {
-    bar_bg(t, pct, t.bg)
+    bar_bg(t, pct, t.bg, true)
 }
 
-/// `━━━━━━────  62%`, colored by how full it is.
-fn bar_bg(t: &Theme, pct: u8, bg: Color) -> Vec<Span<'static>> {
+/// `━━━━━━────  62%`, colored by how full it is. A `~` marks an estimate rather than Claude's own figure.
+fn bar_bg(t: &Theme, pct: u8, bg: Color, exact: bool) -> Vec<Span<'static>> {
     let filled = (pct as usize * BAR_WIDTH + 50) / 100;
     vec![
         Span::styled("━".repeat(filled), Style::new().fg(pct_color(t, pct)).bg(bg)),
         Span::styled("━".repeat(BAR_WIDTH - filled), Style::new().fg(t.border).bg(bg)),
-        Span::styled(format!(" {pct:>3}%"), Style::new().fg(t.subtext).bg(bg)),
+        Span::styled(format!("{}{pct:>3}%", if exact { " " } else { "~" }), Style::new().fg(t.subtext).bg(bg)),
     ]
 }
 

@@ -24,6 +24,8 @@ struct Cache {
     ai_title: Option<String>,
     branch: Option<String>,
     context_tokens: u64,
+    /// Once a session has gone past 200k tokens it must have a large window. Never flips back.
+    large_window: bool,
 }
 
 pub struct Reader {
@@ -94,7 +96,7 @@ impl Reader {
             .clone()
             .or_else(|| c.first_prompt.clone())
             .unwrap_or_default();
-        let window = if c.context_tokens > DEFAULT_WINDOW { LARGE_WINDOW } else { DEFAULT_WINDOW };
+        let window = window_size(c.context_tokens, &mut c.large_window);
 
         Some(Session {
             id,
@@ -107,6 +109,7 @@ impl Reader {
             unread: false,
             external: true,
             context_pct: (c.context_tokens * 100 / window).min(100) as u8,
+            context_exact: false,
             description,
             started_at: v["startedAt"].as_u64().unwrap_or(0),
         })
@@ -118,6 +121,15 @@ impl Reader {
             _ => p.to_string(),
         }
     }
+}
+
+/// The transcript doesn't record the model's window size, so infer it: 200k until the session is seen
+/// past 200k tokens, then 1M for good (compaction shrinks usage but not the window).
+fn window_size(tokens: u64, large: &mut bool) -> u64 {
+    if tokens > DEFAULT_WINDOW {
+        *large = true;
+    }
+    if *large { LARGE_WINDOW } else { DEFAULT_WINDOW }
 }
 
 pub fn pid_alive(pid: u32) -> bool {
@@ -213,4 +225,18 @@ fn first_prompt(file: &File) -> Option<String> {
 
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn window_estimate_never_flips_back() {
+        let mut large = false;
+        assert_eq!(window_size(190_000, &mut large), 200_000);
+        assert_eq!(window_size(210_000, &mut large), 1_000_000);
+        // After compaction the usage drops, but the window is still the large one.
+        assert_eq!(window_size(60_000, &mut large), 1_000_000);
+    }
 }

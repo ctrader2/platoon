@@ -20,6 +20,8 @@ pub struct Session {
     /// Everything is external until platoon hosts sessions itself.
     pub external: bool,
     pub context_pct: u8,
+    /// True when the percentage comes from Claude Code itself, false when platoon estimated it.
+    pub context_exact: bool,
     pub description: String,
     /// Start time in ms since the epoch, used for a stable ordering.
     pub started_at: u64,

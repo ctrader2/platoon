@@ -226,6 +226,7 @@ impl App {
         for s in &mut fresh {
             if let Some(p) = snap.context.get(&s.id) {
                 s.context_pct = *p;
+                s.context_exact = true;
             }
         }
         self.usage = match snap.plan {
