@@ -101,6 +101,7 @@ impl Reader {
             pid,
             name,
             dir,
+            cwd,
             branch: c.branch.clone().filter(|b| b != "HEAD"),
             status: if v["status"].as_str() == Some("busy") { Status::Busy } else { Status::Idle },
             unread: false,
@@ -119,7 +120,7 @@ impl Reader {
     }
 }
 
-fn pid_alive(pid: u32) -> bool {
+pub fn pid_alive(pid: u32) -> bool {
     // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
     unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
 }

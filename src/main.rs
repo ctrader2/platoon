@@ -136,6 +136,22 @@ mod tests {
     }
 
     #[test]
+    fn jumping_into_external_session_offers_takeover() {
+        let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+        let mut app = App::new();
+        if app.sessions.is_empty() {
+            return; // nothing running on this machine to click on
+        }
+        assert!(app.sessions[0].external);
+        key(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::Adopt { .. })));
+        let text = draw(&mut term, &app);
+        assert!(text.contains("Take over") && text.contains("resumes it here"), "{text}");
+        click_action(&mut app, Action::Cancel); // never confirm in a test: it would end a real session
+        assert!(matches!(app.mode, Mode::List));
+    }
+
+    #[test]
     fn picker_filters_and_accepts_paths() {
         let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
         let mut app = App::new();
@@ -152,7 +168,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
         let mut app = App::new();
         app.sync_size(100, 20);
-        let mut h = host::Hosted::spawn("sh", std::path::Path::new("/tmp"), 17, 98).unwrap();
+        let mut h = host::Hosted::spawn("sh", &[], std::path::Path::new("/tmp"), 17, 98).unwrap();
         // Type into the shell through the same path real key presses take.
         h.write(b"echo platoon-$((40+2))\r");
         let pid = h.pid;

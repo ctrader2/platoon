@@ -8,7 +8,10 @@ pub struct Session {
     pub id: String,
     pub pid: u32,
     pub name: String,
+    /// Home-abbreviated, for display.
     pub dir: String,
+    /// Absolute working directory.
+    pub cwd: String,
     pub branch: Option<String>,
     pub status: Status,
     /// Claude finished and the user hasn't looked at the output yet.

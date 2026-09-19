@@ -1,4 +1,4 @@
-use crate::claude::Reader;
+use crate::claude::{pid_alive, Reader};
 use crate::dirs;
 use crate::host::{key_bytes, Hosted};
 use crate::model::{PlanUsage, Session, Status};
@@ -37,6 +37,8 @@ pub enum Hit {
 #[derive(Clone)]
 pub enum Confirm {
     Kill { pid: u32, name: String },
+    /// Take over a session started elsewhere: end it, then resume it inside platoon.
+    Adopt { pid: u32, id: String, name: String, cwd: String, busy: bool },
     Quit,
 }
 
@@ -244,9 +246,13 @@ impl App {
                 self.mode = Mode::List;
                 self.kill(pid, &name);
             }
+            (Action::Confirm, Mode::Confirm(Confirm::Adopt { pid, id, name, cwd, .. })) => {
+                self.mode = Mode::List;
+                self.adopt(pid, &id, &name, cwd);
+            }
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
-                    self.launch(dir);
+                    self.launch(dir, &[]);
                 }
             }
             (Action::Confirm, Mode::Filter) => self.mode = Mode::List,
@@ -267,27 +273,52 @@ impl App {
     }
 
     fn jump(&mut self) {
-        let Some((pid, name)) = self.selected_session().map(|s| (s.pid, s.name.clone())) else {
-            return;
-        };
+        let Some(s) = self.selected_session() else { return };
+        let pid = s.pid;
         if self.hosted.iter().any(|h| h.pid == pid) {
             if let Some(s) = self.sessions.iter_mut().find(|s| s.pid == pid) {
                 s.unread = false;
             }
             self.mode = Mode::Attached(pid);
         } else {
-            self.notify(format!("{name} was started outside platoon and can't be jumped into (n starts one you can)"));
+            // Another terminal owns this session's screen, so we can't attach to it. Offer to take it over.
+            self.mode = Mode::Confirm(Confirm::Adopt {
+                pid,
+                id: s.id.clone(),
+                name: s.name.clone(),
+                cwd: s.cwd.clone(),
+                busy: s.status == Status::Busy,
+            });
         }
     }
 
     #[cfg(test)]
     pub fn picker_launch_for_test(&mut self, dir: String) {
-        self.launch(dir);
+        self.launch(dir, &[]);
     }
 
-    fn launch(&mut self, dir: String) {
+    /// End the original process, wait for it to go, then resume its conversation in a platoon-owned PTY.
+    fn adopt(&mut self, pid: u32, id: &str, name: &str, cwd: String) {
+        if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+            self.notify(format!("Couldn't stop {name}"));
+            return;
+        }
+        for _ in 0..100 {
+            if !pid_alive(pid) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if pid_alive(pid) {
+            self.notify(format!("{name} didn't exit; try kill (x) first"));
+            return;
+        }
+        self.launch(cwd, &["--resume", id]);
+    }
+
+    fn launch(&mut self, dir: String, args: &[&str]) {
         let (rows, cols) = self.pty_size();
-        match Hosted::spawn("claude", Path::new(&dir), rows, cols) {
+        match Hosted::spawn("claude", args, Path::new(&dir), rows, cols) {
             Ok(h) => {
                 let pid = h.pid;
                 self.hosted.push(h);

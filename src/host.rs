@@ -24,11 +24,12 @@ pub struct Hosted {
 }
 
 impl Hosted {
-    pub fn spawn(program: &str, cwd: &Path, rows: u16, cols: u16) -> Result<Self, String> {
+    pub fn spawn(program: &str, args: &[&str], cwd: &Path, rows: u16, cols: u16) -> Result<Self, String> {
         let pair = native_pty_system()
             .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
             .map_err(|e| e.to_string())?;
         let mut cmd = CommandBuilder::new(program);
+        cmd.args(args);
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");

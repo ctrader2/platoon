@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
     Frame,
 };
 
@@ -325,6 +325,15 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("Sends SIGTERM to pid {pid}. The conversation stays on disk."),
             "kill",
         ),
+        Confirm::Adopt { pid, name, busy, .. } => (
+            "take over session",
+            format!("Take over \"{name}\"?"),
+            format!(
+                "Ends the claude in its terminal (pid {pid}) and resumes it here.{}",
+                if *busy { " It is working now: this interrupts it." } else { "" }
+            ),
+            "take over",
+        ),
         Confirm::Quit => (
             "quit platoon",
             "Quit platoon?".to_string(),
@@ -332,16 +341,16 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "quit",
         ),
     };
-    let w = (l2.chars().count() as u16 + 6).clamp(30, area.width);
-    let r = centered(area, w, 7);
+    let w = (l2.chars().count() as u16 + 6).clamp(30, 64.min(area.width));
+    let r = centered(area, w, 8);
     app.hits.borrow_mut().clear();
     f.render_widget(Clear, r);
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(2), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
-    f.render_widget(Paragraph::new(l2).style(Style::new().fg(t.dim)), b);
+    f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", "cancel", Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }
