@@ -46,6 +46,27 @@ pub const TABS: &[Tab] = &[
     Tab { label: "Archived", empty: "Nothing archived. Press a on a conversation to archive it.", shows: |s| s.archived },
 ];
 
+/// Round badge caps are Powerline/Nerd Font glyphs. Terminals that bring their own symbol fallback (Ghostty, Kitty,
+/// WezTerm) draw them with any font; elsewhere they can show as empty boxes, so those get square badges.
+/// `PLATOON_BADGES=rounded` or `square` overrides the guess.
+fn detect_rounded() -> bool {
+    detect_rounded_with(&|k| std::env::var(k).ok())
+}
+
+pub fn detect_rounded_with(env: &dyn Fn(&str) -> Option<String>) -> bool {
+    match env("PLATOON_BADGES").as_deref() {
+        Some("rounded") => return true,
+        Some("square") => return false,
+        _ => {}
+    }
+    let (program, term) = (env("TERM_PROGRAM").unwrap_or_default(), env("TERM").unwrap_or_default());
+    program.eq_ignore_ascii_case("ghostty")
+        || program.eq_ignore_ascii_case("wezterm")
+        || term.contains("ghostty")
+        || term.contains("kitty")
+        || ["KITTY_WINDOW_ID", "WEZTERM_EXECUTABLE", "GHOSTTY_RESOURCES_DIR"].iter().any(|k| env(k).is_some())
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Action {
     Jump,
@@ -172,6 +193,8 @@ pub struct App {
     spawned: Vec<std::process::Child>,
     pub notice: Option<(String, Instant, Duration)>,
     pub mouse: (u16, u16),
+    /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
+    pub rounded: bool,
     pub home: String,
     /// Where platoon keeps its own state (`~/.cache/platoon`).
     pub cache: PathBuf,
@@ -211,7 +234,9 @@ impl App {
         let reader = Reader::new();
         let cache = usage::cache_dir();
         let indexer = Indexer::spawn(reader.root(), &cache);
-        Self::build(reader, cache, archive::config_dir(), indexer)
+        let mut app = Self::build(reader, cache, archive::config_dir(), indexer);
+        app.rounded = detect_rounded();
+        app
     }
 
     /// `cache` and `config` are where platoon keeps its own state; tests pass temp dirs so they never touch
@@ -243,6 +268,7 @@ impl App {
             tick: 0,
             theme: Theme::catppuccin_mocha(),
             quit: false,
+            rounded: false,
             hits: RefCell::new(Vec::new()),
             size: (80, 24),
             reader,
@@ -936,8 +962,8 @@ impl App {
             Mode::Settings => match key.code {
                 KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
-                KeyCode::Up | KeyCode::Char('k') => self.move_setting(-1),
-                KeyCode::Down | KeyCode::Char('j') => self.move_setting(1),
+                KeyCode::Up => self.move_setting(-1),
+                KeyCode::Down => self.move_setting(1),
                 KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
                 KeyCode::End | KeyCode::Char('G') => self.setting = ITEMS.len() - 1,
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
@@ -981,8 +1007,8 @@ impl App {
                     self.filter.clear();
                     self.selected = 0;
                 }
-                KeyCode::Char('j') | KeyCode::Down => self.move_selection(1),
-                KeyCode::Char('k') | KeyCode::Up => self.move_selection(-1),
+                KeyCode::Down => self.move_selection(1),
+                KeyCode::Up => self.move_selection(-1),
                 KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
                 KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
                 _ => {}

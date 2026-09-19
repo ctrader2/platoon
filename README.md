@@ -40,8 +40,12 @@ ever held slash commands are hidden.
 | `1` `2` | switch between the Active and Archived tabs (or click them); the current tab is underlined and each shows a count badge |
 | `/` | filter the current tab; `esc` clears it |
 | `s` | [settings](#settings) |
-| `j` `k` `↑` `↓` `g` `G` | move; the mouse works too |
+| `↑` `↓` `g` `G` | move (`g`/`G` jump to the first/last); the mouse works too |
 | `q` | quit (sessions keep running) |
+
+Count badges are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
+WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set `PLATOON_BADGES=rounded` or
+`PLATOON_BADGES=square` to choose yourself.
 
 ### Archive
 

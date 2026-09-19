@@ -63,6 +63,7 @@ impl Term {
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");
         cmd.env("NO_COLOR", "1");
+        cmd.env("PLATOON_BADGES", "square"); // the same text whatever terminal the tests run in
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -100,6 +101,34 @@ impl Term {
             self.screen.process(&b);
         }
         self.screen.screen().contents()
+    }
+
+    /// Waits for text to disappear, e.g. a popup closing.
+    pub fn wait_gone(&mut self, text: &str) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            if !self.text().contains(text) {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        panic!("{text:?} never went away; screen was:\n{}", self.text());
+    }
+
+    /// The screen with runs of spaces collapsed, for text whose spacing is styling ("1 Active  3").
+    pub fn flat(&mut self) -> String {
+        self.text().split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    pub fn wait_for_flat(&mut self, text: &str) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            if self.flat().contains(text) {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        panic!("never saw {text:?}; screen was:\n{}", self.text());
     }
 
     pub fn wait_for(&mut self, text: &str) {

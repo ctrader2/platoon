@@ -249,7 +249,7 @@ mod tests {
         let text = draw(&mut term, &app);
         println!("{text}");
         for want in ["NAME", "DIR", "LAST", "1 Active 3", "2 Archived 0", "working", "idle", "3m", "30m", "3d", "gamma", "write the docs", "Sonnet 5", "main", "~ 25%"] {
-            assert!(text.contains(want), "missing {want:?}:\n{text}");
+            assert!(flat(&text).contains(want), "missing {want:?}:\n{text}");
         }
         for banned in ["ext", "paused", "2 places", "kill", "x kill", "not open", "open elsewhere", "in platoon"] {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
@@ -422,7 +422,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         assert_eq!(app.tab, 0);
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
-        assert!(draw(&mut term, &app).contains("1 Active 2   2 Archived 1"));
+        assert!(flat(&draw(&mut term, &app)).contains("1 Active 2 2 Archived 1"));
 
         ch(&mut app, '2');
         assert_eq!((app.tab, ids(&app)), (1, vec!["old-1"]));
@@ -453,7 +453,7 @@ mod tests {
         ch(&mut app, 'G');
         assert_eq!(app.selected_session().unwrap().id, "mid-2");
         ch(&mut app, 'g');
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         assert_eq!(app.selected_session().unwrap().id, "mid-2");
         // Filtering only searches the tab you're on.
         ch(&mut app, '/');
@@ -607,13 +607,13 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let text = draw(&mut term, &app);
             assert!(text.contains(&notice_of(143)), "{cols}x{rows}: notice cut off:\n{text}");
-            assert!(text.contains("1 Active 1") && text.contains("2 Archived 143"), "{text}");
+            assert!(flat(&text).contains("1 Active 1") && flat(&text).contains("2 Archived 143"), "{text}");
         }
         // It covers the key hints, so it goes as soon as the user does anything.
         let mut app = app;
         let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
         assert!(!draw(&mut term, &app).contains("enter open"));
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         let text = draw(&mut term, &app);
         assert!(text.contains("enter open") && !text.contains("Auto-archived"), "{text}");
     }
@@ -1095,9 +1095,9 @@ mod tests {
         assert_eq!(app.setting, 1);
         key(&mut app, KeyCode::Right);
         assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 0, auto_archive_days: 7, ..Settings::default() }, "the other setting is left alone");
-        ch(&mut app, 'k');
+        key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 0);
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 0);
         assert_eq!(ITEMS.len(), 3);
@@ -1129,7 +1129,7 @@ mod tests {
         std::fs::write(config_file(&w), text).unwrap();
         key(&mut app, KeyCode::Enter);
         assert_eq!(on_disk(&w).idle_stop_minutes, 120, "enter goes to the next step too");
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Left);
         assert_eq!(on_disk(&w).auto_archive_days, 2, "5 days steps down to 2");
     }
@@ -1167,17 +1167,17 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(shown.contains("1 Active 3") && shown.contains("2 Archived 0"), "{shown}");
+        assert!(flat(&shown).contains("1 Active 3") && flat(&shown).contains("2 Archived 0"), "{shown}");
         let rule = shown.lines().nth(2).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
-        // The underline sits under "1 Active", not under the other tab.
+        // The underline covers the whole first tab, name and badge, and not the other tab.
         let header: Vec<char> = shown.lines().nth(1).unwrap().chars().collect();
         let col_of = |needle: &str| {
             let text: String = header.iter().collect();
             text[..text.find(needle).unwrap()].chars().count()
         };
-        assert!(a_first <= col_of("1 Active") && a_last >= col_of("1 Active") + "1 Active 3".len() - 1, "{shown}");
+        assert!(a_first <= col_of("1 Active") && a_last > col_of("1 Active") + "1 Active".len(), "{shown}");
         assert!(a_last < col_of("2 Archived"), "the other tab is not underlined: {shown}");
 
         ch(&mut app, '2');
@@ -1187,25 +1187,100 @@ mod tests {
         assert!(b_first > a_last, "{shown2}");
     }
 
+    /// The header cell for a character, searching one header row.
+    fn header_cells(term: &Terminal<TestBackend>) -> Vec<ratatui::buffer::Cell> {
+        let buf = term.backend().buffer();
+        (0..buf.area.width).map(|x| buf[(x, 1)].clone()).collect()
+    }
+
+    fn cell_index(cells: &[ratatui::buffer::Cell], text: &str) -> usize {
+        let joined: String = cells.iter().map(|c| c.symbol().to_string()).collect();
+        joined[..joined.find(text).unwrap()].chars().count()
+    }
+
     #[test]
-    fn the_count_is_a_badge_with_its_own_color_and_the_tab_still_clicks() {
+    fn the_count_is_a_badge_set_apart_from_the_name_and_the_tab_still_clicks() {
         let (_w, mut app) = mixed_app("tabs-badge");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         draw(&mut term, &app);
-        let buf = term.backend().buffer().clone();
         let t = app.theme.clone();
-        // Find the "3" of "1 Active 3": its cell is the badge, drawn dark on the accent color.
-        let row: String = (0..buf.area.width).map(|x| buf[(x, 1)].symbol().to_string()).collect();
-        let at = row.find("1 Active 3").unwrap();
-        let x = row[..at].chars().count() + "1 Active ".len();
-        assert_eq!((buf[(x as u16, 1)].symbol(), buf[(x as u16, 1)].bg, buf[(x as u16, 1)].fg), ("3", t.accent, t.bg));
+        let cells = header_cells(&term);
+        let name_end = cell_index(&cells, "1 Active") + "1 Active".len();
+        // Between the name and the badge there is air: cells on the tab's own background, not the badge's.
+        let badge_at = (name_end..cells.len()).find(|&i| cells[i].bg == t.accent).expect("the badge");
+        assert!(badge_at - name_end >= 1, "a gap between the name and the badge");
+        assert!(cells[name_end..badge_at].iter().all(|c| c.symbol() == " " && c.bg != t.accent));
+        // Square badge: a padded block, the count dark on the accent color.
+        let three = (name_end..cells.len()).find(|&i| cells[i].symbol() == "3").unwrap();
+        assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg));
+        assert_eq!((cells[three - 1].symbol(), cells[three + 1].symbol()), (" ", " "), "padded");
         // The badge on the tab you're not on is quieter.
-        let at2 = row.find("2 Archived 0").unwrap();
-        let x2 = row[..at2].chars().count() + "2 Archived ".len();
-        assert_eq!(buf[(x2 as u16, 1)].bg, t.surface);
+        let arch_end = cell_index(&cells, "2 Archived") + "2 Archived".len();
+        let zero = (arch_end..cells.len()).find(|&i| cells[i].symbol() == "0").unwrap();
+        assert_eq!(cells[zero].bg, t.surface);
         // Clicking anywhere on a tab, badge included, switches to it.
-        click(&mut app, x2 as u16, 1);
+        click(&mut app, zero as u16, 1);
         assert_eq!(app.tab, 1);
+    }
+
+    #[test]
+    fn where_the_terminal_can_draw_them_badges_are_round() {
+        let (_w, mut app) = mixed_app("tabs-round");
+        app.rounded = true;
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        draw(&mut term, &app);
+        let t = app.theme.clone();
+        let cells = header_cells(&term);
+        let (left, right) = ('\u{e0b6}'.to_string(), '\u{e0b4}'.to_string());
+        let three = cells.iter().position(|c| c.symbol() == "3").unwrap();
+        // Round caps hug the count: the left cap is accent on the tab's color, the right one accent on the page.
+        assert_eq!((cells[three - 1].symbol(), cells[three + 1].symbol()), (left.as_str(), right.as_str()));
+        assert_eq!((cells[three - 1].fg, cells[three + 1].fg, cells[three + 1].bg), (t.accent, t.accent, t.bg));
+        assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg), "the count sits on the badge color");
+        // Same air before the badge, and the text still reads as before.
+        let name_end = cell_index(&cells, "1 Active") + "1 Active".len();
+        assert!(three - 1 - name_end >= 1 && cells[name_end].symbol() == " ");
+        let plain: String = cells.iter().map(|c| c.symbol()).collect::<String>().replace(['\u{e0b6}', '\u{e0b4}'], "");
+        assert!(flat(&plain).contains("1 Active 3") && flat(&plain).contains("2 Archived 0"), "{plain}");
+        // The underline still spans the whole tab, caps included, and a click on the cap switches tabs.
+        let shown = draw(&mut term, &app);
+        let (first, last) = underline(&shown).unwrap();
+        assert!(first <= cell_index(&cells, "1 Active") && last > three, "{shown}");
+        let arch_cap = cells.iter().rposition(|c| c.symbol() == left).unwrap();
+        click(&mut app, arch_cap as u16, 1);
+        assert_eq!(app.tab, 1);
+    }
+
+    #[test]
+    fn terminals_that_bring_their_own_symbols_get_round_badges_and_others_do_not() {
+        // The detection is a pure function of the environment; check its rules without touching ours.
+        let g = |pairs: &[(&str, &str)]| crate::app::detect_rounded_with(&|k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()));
+        assert!(g(&[("TERM_PROGRAM", "ghostty")]) && g(&[("TERM", "xterm-kitty")]) && g(&[("WEZTERM_EXECUTABLE", "/x")]));
+        assert!(!g(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]) && !g(&[]));
+        assert!(g(&[("PLATOON_BADGES", "rounded")]) && !g(&[("PLATOON_BADGES", "square"), ("TERM_PROGRAM", "ghostty")]));
+    }
+
+    #[test]
+    fn j_and_k_no_longer_move_and_the_arrows_do() {
+        let (_w, mut app) = mixed_app("no-jk");
+        assert_eq!(app.selected, 0);
+        ch(&mut app, 'j');
+        assert_eq!(app.selected, 0, "j does nothing now");
+        key(&mut app, KeyCode::Down);
+        assert_eq!(app.selected, 1);
+        ch(&mut app, 'k');
+        assert_eq!(app.selected, 1, "k does nothing now");
+        key(&mut app, KeyCode::Up);
+        assert_eq!(app.selected, 0);
+        // Typing them into the filter still works: they are just letters there.
+        ch(&mut app, '/');
+        ch(&mut app, 'j');
+        assert_eq!(app.filter, "j");
+        // And the footer no longer advertises them.
+        key(&mut app, KeyCode::Esc);
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(!shown.contains("j/k") && shown.contains("↑↓"), "{shown}");
     }
 
     #[test]
@@ -1221,7 +1296,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
             let header = shown.lines().nth(1).unwrap();
-            assert!(header.contains("1 Active 1234") && header.contains("2 Archived 5678"), "{cols}: {header}");
+            assert!(flat(header).contains("1 Active 1234") && flat(header).contains("2 Archived 5678"), "{cols}: {header}");
             assert!(header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"), "{cols}: usage still readable: {header}");
             assert_eq!(header.contains('━'), bars, "{cols}: full bars only when there is room: {header}");
         }
@@ -1229,7 +1304,7 @@ mod tests {
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
         let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
-        assert!(header.contains("1 Active 1234") && header.contains("2 Archived 5678"), "{header}");
+        assert!(flat(&header).contains("1 Active 1234") && flat(&header).contains("2 Archived 5678"), "{header}");
     }
 
     #[test]
@@ -1239,7 +1314,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
         let shown = draw(&mut term, &app);
         // The list is still there behind it...
-        assert!(shown.contains("platoon") && shown.contains("1 Active 3") && shown.contains("Settings"), "{shown}");
+        assert!(shown.contains("platoon") && flat(&shown).contains("1 Active 3") && shown.contains("Settings"), "{shown}");
         // ...the popup is a window with room around it, not the whole screen...
         let top = shown.lines().position(|l| l.contains("Settings")).unwrap();
         assert!(top >= 1, "{shown}");
@@ -1447,7 +1522,7 @@ mod tests {
         w.transcript("fresh", "/srv/a", "new work", 30);
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         assert_eq!(app.counts, [2, 0]);
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Right); // Off -> 1 day
         assert!(app.settling());
         app.refresh_for_test();
@@ -1473,7 +1548,7 @@ mod tests {
             let mut app = w.app();
             assert_eq!(app.counts, [1, 0]);
             ch(&mut app, 's');
-            ch(&mut app, 'j');
+            key(&mut app, KeyCode::Down);
             for k in steps {
                 key(&mut app, *k);
                 app.refresh_for_test(); // platoon refreshes every second while the user is choosing
@@ -1646,11 +1721,11 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
         let first = flat(&draw(&mut term, &app));
         assert!(first.contains(ITEMS[0].explain) && !first.contains(ITEMS[1].explain), "{first}");
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
         // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 16.
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
         let third = draw(&mut term, &app);
         assert!(flat(&third).contains(ITEMS[2].explain) && !third.contains("apply immediately"), "{third}");
@@ -1677,7 +1752,7 @@ mod tests {
         w.transcript("aaa", "/srv/a", "hello", 5);
         w.transcript("bbb", "/srv/a", "again", 9);
         let mut app = w.app();
-        ch(&mut app, 'j');
+        key(&mut app, KeyCode::Down);
         ch(&mut app, 's');
         ch(&mut app, '3');
         assert!(matches!(app.mode, Mode::Settings));

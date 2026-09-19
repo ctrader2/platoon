@@ -74,7 +74,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             ("a", archive_verb, Some(Action::Archive)),
             ("/", "filter", Some(Action::Filter)),
             (&tab_keys, "tabs", None),
-            ("j/k ↑↓", "move", None),
+            ("↑↓", "move", None),
             ("s", "settings", Some(Action::Settings)),
             ("q", "quit", Some(Action::Quit)),
         ],
@@ -131,9 +131,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
             left.push(Span::raw(" "));
             x += 1;
         }
-        // A chip: ` 1 Active` and the count as a badge ` 3 `. The text stays "1 Active 3" so it reads and copies naturally.
-        let (key, label, count) = (format!("{}", i + 1), format!(" {}", tab.label), format!(" {} ", app.counts[i]));
-        let w = (1 + key.chars().count() + label.chars().count() + count.chars().count()) as u16;
+        // A chip: ` 1 Active ` with the count in a badge after a little air. Round caps where the terminal has the
+        // glyphs, otherwise a padded square. Either way the text reads "1 Active 3".
+        let (key, label) = (format!("{}", i + 1), format!(" {} ", tab.label));
+        let count = if app.rounded { format!("{}", app.counts[i]) } else { format!(" {} ", app.counts[i]) };
+        let caps = if app.rounded { 2 } else { 0 };
+        let w = (1 + key.chars().count() + label.chars().count() + count.chars().count() + caps) as u16;
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() {
             app.hits.borrow_mut().push((rect, Hit::Tab(i)));
@@ -153,7 +156,15 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         left.push(Span::styled(" ", Style::new().bg(chip)));
         left.push(Span::styled(key, k.bg(chip)));
         left.push(Span::styled(label, l.bg(chip)));
-        left.push(Span::styled(count, badge));
+        if app.rounded {
+            // The caps are drawn in the badge color on the color beside them, so the block reads as a pill.
+            let pill = badge.bg.unwrap_or(t.surface);
+            left.push(Span::styled("\u{e0b6}", Style::new().fg(pill).bg(chip)));
+            left.push(Span::styled(count, badge));
+            left.push(Span::styled("\u{e0b4}", Style::new().fg(pill).bg(t.bg)));
+        } else {
+            left.push(Span::styled(count, badge));
+        }
     }
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));

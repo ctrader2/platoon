@@ -84,7 +84,7 @@ fn enter_on_a_saved_conversation_resumes_it_in_its_own_directory_with_no_dialog(
     w.save("beef-0001-aaaa", "refactor the widget", 5);
     let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
     t.wait_for("refactor the widget"); // listed although nothing is running it
-    assert!(t.text().contains("idle") && t.text().contains("1 Active 1"), "{}", t.text());
+    assert!(t.text().contains("idle") && t.flat().contains("1 Active 1"), "{}", t.text());
     t.send(b"\r");
     t.wait_for("fake-claude args:--resume beef-0001-aaaa");
     let text = t.text();
@@ -106,12 +106,12 @@ fn archive_from_the_list_then_open_from_the_archive_restores_and_resumes() {
     w.save("aaaa-0001", "older conversation", 10);
     w.save("bbbb-0002", "newer conversation", 1);
     let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
-    t.wait_for("1 Active 2");
+    t.wait_for_flat("1 Active 2");
 
     // Archive whichever row is selected, then see the counts and the file change.
     t.send(b"a");
-    t.wait_for("1 Active 1");
-    assert!(t.text().contains("2 Archived 1"), "{}", t.text());
+    t.wait_for_flat("1 Active 1");
+    assert!(t.flat().contains("2 Archived 1"), "{}", t.text());
     let gone = w.archived();
     assert_eq!(gone.len(), 1);
 
@@ -123,7 +123,7 @@ fn archive_from_the_list_then_open_from_the_archive_restores_and_resumes() {
     until("the archive file to drop it", || w.archived().is_empty());
 
     t.send(&[0]);
-    t.wait_for("1 Active 2");
+    t.wait_for_flat("1 Active 2");
     t.send(b"q");
     t.wait_exit();
     w.cleanup();

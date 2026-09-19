@@ -723,11 +723,18 @@ mod tests {
 
         /// The pid of the process under the shell whose command line starts with `word`.
         fn pid_with(&self, word: &str) -> u32 {
-            procs::live_descendants(self.shell.id())
-                .unwrap()
-                .into_iter()
-                .find(|&p| procs::cmdline(p).is_some_and(|a| a.join(" ").starts_with(word)))
-                .unwrap_or_else(|| panic!("nothing running with {word:?}"))
+            // The process table can be momentarily unreadable when the machine is busy (the whole suite runs at
+            // once), so look again for a moment before deciding it isn't there.
+            for _ in 0..100 {
+                let found = procs::live_descendants(self.shell.id()).and_then(|kids| {
+                    kids.into_iter().find(|&p| procs::cmdline(p).is_some_and(|a| a.join(" ").starts_with(word)))
+                });
+                if let Some(pid) = found {
+                    return pid;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            panic!("nothing running with {word:?}")
         }
     }
 

@@ -72,9 +72,9 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
 
     // Back to the list with esc; q on the settings screen also goes back rather than quitting.
     t.send(b"\x1b");
-    t.wait_for("enter open");
+    t.wait_gone("Settings file:"); // the list's footer shows behind the popup, so wait for the popup itself to go
     t.send(b"sq");
-    t.wait_for("enter open");
+    t.wait_gone("Settings file:");
     t.send(b"q");
     t.wait_exit();
     assert_eq!(saved(&base)["idle_stop_minutes"], 240);
@@ -94,7 +94,7 @@ fn a_damaged_file_opens_on_the_standard_values_and_the_first_change_keeps_a_copy
     until("a fresh file", || base.join("config/settings.json").exists() && saved_ok(&base));
     assert_eq!(fs::read_to_string(base.join("config/settings.json.bak")).unwrap(), "{ oops");
     t.send(b"\x1b");
-    t.wait_for("enter open"); // (esc then q sent together would read as alt+q)
+    t.wait_gone("Settings file:"); // (esc then q sent together would read as alt+q)
     t.send(b"q");
     t.wait_exit();
 }
@@ -116,7 +116,7 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     assert!(text.contains("Ignore MCP servers") && text.contains("helper programs") && text.contains("MCP servers are"), "{text}");
     assert!(!base.join("config/settings.json").exists(), "looking at the screen writes nothing");
 
-    t.send(b"jj"); // the third entry
+    t.send(b"\x1b[B\x1b[B"); // Down, Down: the third entry
     t.send(b"\x1b[D"); // left: Count MCP servers
     t.wait_for("Count MCP servers");
     until("the choice to reach the file", || saved_ok(&base) && saved(&base)["idle_stop_ignores_mcp"] == serde_json::json!(false));
@@ -130,7 +130,7 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     t.wait_for("Ignore MCP servers");
 
     t.send(b"\x1b");
-    t.wait_for("enter open");
+    t.wait_gone("Settings file:");
     t.send(b"q");
     t.wait_exit();
 }
