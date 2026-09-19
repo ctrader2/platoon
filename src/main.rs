@@ -1145,6 +1145,140 @@ mod tests {
         assert_eq!((v["note"].as_str(), v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some("hi"), Some(240), Some(2)));
     }
 
+    // --- tabs as chips, and settings as a popup ---------------------------------------------------
+
+    fn mixed_app(name: &str) -> (World, App) {
+        let (w, _) = mixed(name);
+        let app = w.app();
+        (w, app)
+    }
+
+    /// Column ranges of the heavy underline (`━`) on the rule row.
+    fn underline(shown: &str) -> Option<(usize, usize)> {
+        let row = shown.lines().nth(2)?; // frame, header, rule
+        let cells: Vec<char> = row.chars().collect();
+        let first = cells.iter().position(|&c| c == '━')?;
+        let last = cells.iter().rposition(|&c| c == '━')?;
+        Some((first, last))
+    }
+
+    #[test]
+    fn the_current_tab_is_underlined_and_the_underline_follows_the_tab() {
+        let (_w, mut app) = mixed_app("tabs-rule");
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains("1 Active 3") && shown.contains("2 Archived 0"), "{shown}");
+        let rule = shown.lines().nth(2).unwrap().to_string();
+        assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
+        let (a_first, a_last) = underline(&shown).unwrap();
+        // The underline sits under "1 Active", not under the other tab.
+        let header: Vec<char> = shown.lines().nth(1).unwrap().chars().collect();
+        let col_of = |needle: &str| {
+            let text: String = header.iter().collect();
+            text[..text.find(needle).unwrap()].chars().count()
+        };
+        assert!(a_first <= col_of("1 Active") && a_last >= col_of("1 Active") + "1 Active 3".len() - 1, "{shown}");
+        assert!(a_last < col_of("2 Archived"), "the other tab is not underlined: {shown}");
+
+        ch(&mut app, '2');
+        let shown2 = draw(&mut term, &app);
+        let (b_first, _) = underline(&shown2).unwrap();
+        assert!(b_first >= col_of("2 Archived") - 1, "the underline moved to the Archived tab: {shown2}");
+        assert!(b_first > a_last, "{shown2}");
+    }
+
+    #[test]
+    fn the_count_is_a_badge_with_its_own_color_and_the_tab_still_clicks() {
+        let (_w, mut app) = mixed_app("tabs-badge");
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        draw(&mut term, &app);
+        let buf = term.backend().buffer().clone();
+        let t = app.theme.clone();
+        // Find the "3" of "1 Active 3": its cell is the badge, drawn dark on the accent color.
+        let row: String = (0..buf.area.width).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        let at = row.find("1 Active 3").unwrap();
+        let x = row[..at].chars().count() + "1 Active ".len();
+        assert_eq!((buf[(x as u16, 1)].symbol(), buf[(x as u16, 1)].bg, buf[(x as u16, 1)].fg), ("3", t.accent, t.bg));
+        // The badge on the tab you're not on is quieter.
+        let at2 = row.find("2 Archived 0").unwrap();
+        let x2 = row[..at2].chars().count() + "2 Archived ".len();
+        assert_eq!(buf[(x2 as u16, 1)].bg, t.surface);
+        // Clicking anywhere on a tab, badge included, switches to it.
+        click(&mut app, x2 as u16, 1);
+        assert_eq!(app.tab, 1);
+    }
+
+    #[test]
+    fn big_counts_and_the_usage_readout_share_a_narrow_header_without_clipping_either_tab() {
+        use crate::model::{PlanUsage, Window};
+        let (_w, mut app) = mixed_app("tabs-narrow");
+        app.counts = vec![1234, 5678];
+        for (cols, bars) in [(80u16, false), (100, true), (140, true)] {
+            app.usage = crate::usage::Usage::Ready(PlanUsage {
+                five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
+                seven_day: Some(Window { pct: 21, resets_at: 9_999_999_999 }),
+            });
+            let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
+            let shown = draw(&mut term, &app);
+            let header = shown.lines().nth(1).unwrap();
+            assert!(header.contains("1 Active 1234") && header.contains("2 Archived 5678"), "{cols}: {header}");
+            assert!(header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"), "{cols}: usage still readable: {header}");
+            assert_eq!(header.contains('━'), bars, "{cols}: full bars only when there is room: {header}");
+        }
+        // With nothing to spare the readout gives way, never the tabs.
+        app.usage = crate::usage::Usage::NotSetUp;
+        let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
+        let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
+        assert!(header.contains("1 Active 1234") && header.contains("2 Archived 5678"), "{header}");
+    }
+
+    #[test]
+    fn settings_float_over_a_faded_list_and_a_click_outside_closes_them() {
+        let (_w, mut app) = mixed_app("popup");
+        ch(&mut app, 's');
+        let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
+        let shown = draw(&mut term, &app);
+        // The list is still there behind it...
+        assert!(shown.contains("platoon") && shown.contains("1 Active 3") && shown.contains("Settings"), "{shown}");
+        // ...the popup is a window with room around it, not the whole screen...
+        let top = shown.lines().position(|l| l.contains("Settings")).unwrap();
+        assert!(top >= 1, "{shown}");
+        let border = shown.lines().nth(top).unwrap();
+        assert!(border.trim_start_matches('│').starts_with("  "), "the popup keeps clear of the frame:\n{shown}");
+        assert!(shown.lines().last().unwrap().starts_with('╰'), "{shown}");
+        // ...and what is behind it has faded: the header's accent title is now the muted border color.
+        let buf = term.backend().buffer().clone();
+        let row: String = (0..buf.area.width).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        let x = row[..row.find("platoon").unwrap()].chars().count() as u16;
+        assert_eq!(buf[(x, 1)].fg, app.theme.border, "the backdrop is muted");
+        // Clicking the faded list behind the popup closes it; clicking inside does not.
+        let inside = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Setting(0))).map(|(r, _)| *r).unwrap();
+        click(&mut app, inside.x + 2, inside.y);
+        assert!(matches!(app.mode, Mode::Settings), "a click inside the popup keeps it open");
+        click(&mut app, 3, 1);
+        assert!(matches!(app.mode, Mode::List), "a click outside closes it");
+    }
+
+    #[test]
+    fn the_popup_is_sized_to_its_contents_and_uses_every_row_on_a_short_terminal() {
+        let (_w, mut app) = mixed_app("popup-size");
+        ch(&mut app, 's');
+        // Tall terminal: floats with air above and below.
+        let mut tall = Terminal::new(TestBackend::new(110, 50)).unwrap();
+        let shown = draw(&mut tall, &app);
+        let (first, last) = (
+            shown.lines().position(|l| l.contains("Settings")).unwrap(),
+            shown.lines().enumerate().filter(|(_, l)| l.contains("esc back")).map(|(i, _)| i).last().unwrap(),
+        );
+        assert!(first > 1 && shown.lines().count() - last > 3, "not stretched to the screen:\n{shown}");
+        // 80x24: every explanation fits, which needs every row.
+        let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        let text = flat(&draw(&mut term, &app));
+        for item in ITEMS.iter() {
+            assert!(text.contains(item.explain), "{}: cut off at 80x24", item.name);
+        }
+    }
+
     #[test]
     fn values_read_plainly_and_off_is_muted() {
         let w = World::new("set-values");
@@ -1156,7 +1290,9 @@ mod tests {
         let cell_fg = |word: &str| {
             (0..buf.area.height).find_map(|y| {
                 let line: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
-                line.join("").find(word).map(|i| buf[(line[..i].len() as u16, y)].fg)
+                // `find` gives a byte offset; a cell is one char, and box-drawing characters take three bytes.
+                let text = line.join("");
+                text.find(word).map(|i| buf[(text[..i].chars().count() as u16, y)].fg)
             })
         };
         assert_eq!(cell_fg("Off"), Some(app.theme.dim), "Off is muted");

@@ -37,12 +37,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
-    if matches!(app.mode, Mode::Settings) {
-        draw_settings(f, app, inner.inner(Margin::new(2, 0)));
-        return;
-    }
-
-    let [header, _, cols, list, footer] = Layout::vertical([
+    let [header, rule, cols, list, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -51,7 +46,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     ])
     .areas(inner.inner(Margin::new(2, 0)));
 
-    draw_header(f, app, header);
+    let tabs = draw_header(f, app, header);
+    draw_tab_rule(f, t, rule, &tabs);
     draw_columns(f, t, cols);
     let visible = app.visible();
     if visible.is_empty() {
@@ -102,37 +98,62 @@ pub fn draw(f: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Picker => draw_picker(f, app, inner),
         Mode::Confirm(c) => draw_confirm(f, app, c, inner),
+        Mode::Settings => draw_settings_modal(f, app, inner),
         _ => {}
     }
 }
 
-fn draw_header(f: &mut Frame, app: &App, area: Rect) {
+/// Where a tab was drawn: (x, width, is the current tab). The rule under the header follows these.
+type TabSpan = (u16, u16, bool);
+
+/// The line under the header: a quiet rule, with the current tab underlined in the accent color.
+fn draw_tab_rule(f: &mut Frame, t: &Theme, area: Rect, tabs: &[TabSpan]) {
+    f.render_widget(Paragraph::new(Span::styled("─".repeat(area.width as usize), Style::new().fg(t.border))), area);
+    // A heavy accent segment over it, under the current tab.
+    for &(x, w, current) in tabs {
+        if current {
+            let seg = Rect::new(x, area.y, w, 1).intersection(area);
+            if !seg.is_empty() {
+                f.render_widget(Paragraph::new(Span::styled("━".repeat(seg.width as usize), Style::new().fg(t.accent))), seg);
+            }
+        }
+    }
+}
+
+fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let t = &app.theme;
     let unread = app.unread_count();
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
+    let mut spans = Vec::new();
     for (i, tab) in TABS.iter().enumerate() {
         if i > 0 {
-            left.push(Span::raw("   "));
-            x += 3;
+            left.push(Span::raw(" "));
+            x += 1;
         }
-        let (key, label, count) = (format!("{}", i + 1), format!(" {} ", tab.label), format!("{}", app.counts[i]));
-        let w = (key.chars().count() + label.chars().count() + count.chars().count()) as u16;
+        // A chip: ` 1 Active` and the count as a badge ` 3 `. The text stays "1 Active 3" so it reads and copies naturally.
+        let (key, label, count) = (format!("{}", i + 1), format!(" {}", tab.label), format!(" {} ", app.counts[i]));
+        let w = (1 + key.chars().count() + label.chars().count() + count.chars().count()) as u16;
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() {
             app.hits.borrow_mut().push((rect, Hit::Tab(i)));
         }
+        spans.push((x, w, i == app.tab));
         x += w;
         let current = i == app.tab;
-        let bg = if !current && rect.contains(app.mouse.into()) { t.surface } else { t.bg };
-        let (k, l, c) = if current {
-            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD | Modifier::UNDERLINED), Style::new().fg(t.subtext))
+        let hover = !current && rect.contains(app.mouse.into());
+        let chip = if current || hover { t.surface } else { t.bg };
+        let (k, l, badge) = if current {
+            (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.bg).bg(t.accent).add_modifier(Modifier::BOLD))
+        } else if hover {
+            (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
         } else {
-            (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim))
+            (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
         };
-        left.push(Span::styled(key, k.bg(bg)));
-        left.push(Span::styled(label, l.bg(bg)));
-        left.push(Span::styled(count, c.bg(bg)));
+        left.push(Span::styled(" ", Style::new().bg(chip)));
+        left.push(Span::styled(key, k.bg(chip)));
+        left.push(Span::styled(label, l.bg(chip)));
+        left.push(Span::styled(count, badge));
     }
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
@@ -171,10 +192,31 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
         Usage::NotSetUp => right.push(Span::styled("plan usage: off · run `platoon setup`", dim)),
     }
 
-    let right_w = right.iter().map(|s| s.content.chars().count()).sum::<usize>() as u16;
+    let width = |spans: &[Span]| spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    // The tabs matter most. When the usage readout doesn't fit beside them it shrinks to bare percentages, then goes.
+    let room = (area.width as usize).saturating_sub(width(&left) + 2);
+    if width(&right) > room {
+        right = match &app.usage {
+            Usage::Ready(u) => {
+                let mut compact = Vec::new();
+                for (label, w) in [("5h", u.five_hour), ("7d", u.seven_day)] {
+                    let pct = w.map_or("n/a".to_string(), |w| format!("{}%", w.pct));
+                    compact.push(Span::styled(format!("{}{label} ", if compact.is_empty() { "" } else { "  " }), dim));
+                    compact.push(Span::styled(pct, Style::new().fg(t.subtext)));
+                }
+                compact
+            }
+            _ => Vec::new(),
+        };
+        if width(&right) > room {
+            right.clear();
+        }
+    }
+    let right_w = width(&right) as u16;
     let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right_w)]).areas(area);
     f.render_widget(Paragraph::new(Line::from(left)), l);
     f.render_widget(Paragraph::new(Line::from(right)), r);
+    spans
 }
 
 struct Cols {
@@ -400,15 +442,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let current = store.get();
 
     // What goes under the entries, worked out first because its height decides how much room they get.
-    let mut notes: Vec<(String, Color)> = Vec::new();
-    if store.is_corrupt() {
-        let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
-        notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
-    }
-    match app.active_notice() {
-        Some(n) => notes.extend(wrap(n, w).into_iter().map(|l| (l, t.warn))),
-        None => notes.push(("Changes are saved and apply immediately.".into(), t.dim)),
-    }
+    let mut notes = settings_notes(app, w);
     let label = "Settings file: ";
     let file = tilde(&store.path().to_string_lossy(), &app.home);
     let hints = fit_hints(
@@ -420,7 +454,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     // The file and the key hints sit at the bottom, always. The entries get what is left after the notes.
     let hints_y = area.bottom().saturating_sub(1).max(area.y);
     let path_y = hints_y.saturating_sub(1).max(area.y);
-    let top = area.y + 2.min(area.height);
+    let top = area.y;
     // The reassurance line is the first thing to go when that lets the selected entry explain itself.
     // A warning or an error is never dropped.
     if !store.is_corrupt() && app.active_notice().is_none() {
@@ -434,10 +468,6 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     // The entries come before the notes: on a very short terminal the notes give way.
     let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top));
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
-
-    let mut title = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
-    title.push(Span::styled("Settings", Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
-    f.render_widget(Paragraph::new(Line::from(title)), Rect::new(area.x, area.y, area.width, 1.min(area.height)));
 
     // The notes follow the entries directly.
     let mut y = draw_setting_rows(f, app, &current, rows_area) + 1;
@@ -453,6 +483,56 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     ]);
     f.render_widget(Paragraph::new(path), Rect::new(area.x, path_y, area.width, 1));
     draw_footer(f, app, Rect::new(area.x, hints_y, area.width, 1), &hints, None);
+}
+
+/// What goes under the settings entries: a warning if the file was unreadable, then the latest notice or
+/// the reassurance that changes apply at once.
+fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
+    let t = &app.theme;
+    let mut notes: Vec<(String, Color)> = Vec::new();
+    if app.settings().is_corrupt() {
+        let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
+        notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
+    }
+    match app.active_notice() {
+        Some(n) => notes.extend(wrap(n, w).into_iter().map(|l| (l, t.warn))),
+        None => notes.push(("Changes are saved and apply immediately.".into(), t.dim)),
+    }
+    notes
+}
+
+/// Rows the popup's contents need when nothing has to be left out: every entry explained, the notes, the file
+/// path and the key hints.
+fn settings_content_height(app: &App, w: usize) -> u16 {
+    let text_w = w.saturating_sub(4);
+    let entries: usize = ITEMS.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + ITEMS.len().saturating_sub(1);
+    (entries + 1 + settings_notes(app, w).len() + 1 + 2) as u16
+}
+
+/// Settings float over the list, like the other dialogs: the list fades behind, the popup is sized to its contents,
+/// and a click outside it closes it.
+fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
+    let t = &app.theme;
+    // Everything behind reads as inactive: same layout, muted colors.
+    f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
+    app.hits.borrow_mut().clear();
+
+    // Floating with room around it on ordinary terminals; nearly the full width on a narrow one, where every column counts.
+    let w = if area.width < 70 { area.width.saturating_sub(2) } else { (area.width - 4).min(76) };
+    // A margin of 2 each side inside the borders; 1 when the terminal is narrow, so entry names aren't clipped.
+    let hpad = if w < 64 { 1 } else { 2 };
+    let inner_w = w.saturating_sub(2 + 2 * hpad) as usize;
+    let need = settings_content_height(app, inner_w) + 2; // plus the borders
+    // A row of air above and below when the terminal can spare it; on a short one the popup uses every row it can.
+    let vpad = u16::from(need + 2 <= area.height);
+    let r = centered(area, w, (need + 2 * vpad).min(area.height).max(1));
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "Settings");
+    let inner = block.inner(r).inner(Margin::new(hpad, vpad));
+    f.render_widget(block, r);
+    draw_settings(f, app, inner);
+    // Last, so it only catches clicks the popup didn't: outside it, a click closes settings.
+    app.hits.borrow_mut().push((area, Hit::Action(Action::Cancel)));
 }
 
 /// As much explanation as fits in `height` rows: every entry explained with air between them (0), else only
@@ -504,10 +584,10 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         let value = (item.get)(current);
         let label = (item.label)(value);
         let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
-        let ctrl_w = 3 + vw + 3;
+        let ctrl_w = 2 + vw + 2;
         let cx = (row.right() as usize).saturating_sub(ctrl_w + 1).max(row.x as usize + 2) as u16;
-        let button = |x: u16| Rect::new(x, row.y, 3, 1);
-        let (prev, val, next) = (button(cx), Rect::new(cx + 3, row.y, vw as u16, 1), button(cx + 3 + vw as u16));
+        let button = |x: u16| Rect::new(x, row.y, 2, 1);
+        let (prev, val, next) = (button(cx), Rect::new(cx + 2, row.y, vw as u16, 1), button(cx + 2 + vw as u16));
         let at_start = item.step(value, Step::Prev) == value;
         let at_end = item.step(value, Step::Next) == value;
         let mut hits = app.hits.borrow_mut();
@@ -521,15 +601,15 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         let arrow = |symbol: &'static str, rect: Rect, disabled: bool| {
             let hot = !disabled && rect.contains(app.mouse.into());
             let (fg, cell_bg) = if disabled { (t.border, bg) } else if hot { (t.text, t.border) } else { (t.accent, bg) };
-            Span::styled(format!(" {symbol} "), Style::new().fg(fg).bg(cell_bg))
+            Span::styled(symbol, Style::new().fg(fg).bg(cell_bg))
         };
         // "Off" reads as switched off: muted, where an active value is bold and colored.
         let value_style = if item.off == Some(value) { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
         let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
         let control = Line::from(vec![
-            arrow("‹", prev, at_start),
+            arrow("‹ ", prev, at_start),
             Span::styled(format!("{label:^vw$}"), value_style.patch(hot_value)),
-            arrow("›", next, at_end),
+            arrow(" ›", next, at_end),
         ]);
         f.render_widget(Paragraph::new(control), Rect::new(cx, row.y, ctrl_w as u16, 1));
 

@@ -37,7 +37,7 @@ ever held slash commands are hidden.
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory |
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
-| `1` `2` | switch between the Active and Archived tabs (or click their labels) |
+| `1` `2` | switch between the Active and Archived tabs (or click them); the current tab is underlined and each shows a count badge |
 | `/` | filter the current tab; `esc` clears it |
 | `s` | [settings](#settings) |
 | `j` `k` `↑` `↓` `g` `G` | move; the mouse works too |
@@ -84,7 +84,7 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings; `esc`, `s` or `q` goes back to the list.
+`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it.
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
