@@ -150,7 +150,8 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
     // Back to the list: the row is still Background; opening it again joins the same host, no second launch.
     t.send(&[0]);
     t.wait_for("enter open");
-    assert!(t.text().contains("Background"), "{}", t.text());
+    // The footer can arrive before the rows of the same frame: wait for the row, don't read the screen once.
+    t.wait_for("Background");
     t.send(b"\r");
     t.wait_for("fake-claude args:attach dffac639");
     assert_eq!((w.launches().len(), w.hosts()), (1, 1), "the second Enter joins the host that shows it");

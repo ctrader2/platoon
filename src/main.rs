@@ -25,6 +25,8 @@ mod select_app_tests;
 #[cfg(test)]
 mod testkit;
 mod usage;
+#[cfg(test)]
+mod wheel_app_tests;
 
 use ratatui::crossterm::{
     event::{

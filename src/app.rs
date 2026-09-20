@@ -1290,8 +1290,27 @@ impl App {
                         // Scrolling changes which text is under the highlight, and a selection is only of what is
                         // on screen, so it is dropped.
                         self.clear_selection();
-                        if let Some(c) = &self.client {
-                            c.scroll(if up { 3 } else { -3 });
+                        // A session that asked for mouse reports (Claude's full screen mode does) gets the wheel
+                        // as a report and scrolls itself; ours would have nothing to scroll there. Never a paused
+                        // one, which must not be written to.
+                        let area = self.term_area();
+                        let over_screen = area.contains((m.column, m.row).into());
+                        let report = match &self.client {
+                            Some(c) if over_screen && !self.attached_paused() => {
+                                c.wheel_report(up, m.column - area.x + 1, m.row - area.y + 1)
+                            }
+                            _ => None,
+                        };
+                        if let Some(c) = self.client.as_mut() {
+                            match report {
+                                Some(bytes) => {
+                                    c.reset_scroll();
+                                    if !bytes.is_empty() {
+                                        c.write(&bytes);
+                                    }
+                                }
+                                None => c.scroll(if up { 3 } else { -3 }),
+                            }
                         }
                     }
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
