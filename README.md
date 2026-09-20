@@ -141,6 +141,13 @@ Details worth knowing:
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
+| Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
+| Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
+| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
+| Pause above plan usage | They stop asking Claude while your plan is used more than this much. | Never, 50%, 60%, 70%, 80% (default), 90% |
+| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
+| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
+| Refresh a summary after | How many new messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
 
 `↑` `↓` pick a setting (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
 next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter` opens the theme list
@@ -161,13 +168,42 @@ by hand too:
 
 ```json
 {"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
- "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000}
+ "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000,
+ "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
+ "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+
+With the token entries the popup has 16 lines, so on a short terminal (80x24) it shows a window of them and scrolls as you move,
+explaining the selected one. Under the entries a line says `Used today: N of M tokens`.
+
+### Features that use tokens
+
+Some features (smart names and summaries, finding a session by description; they arrive after this plumbing does) need to
+ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which require
+tokens** in the settings plus the switch of each feature. `platoon setup` asks once, in a terminal, with the default "no": it lists the
+features and says that platoon would send Claude the prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and
+that you can switch it off any time (`s`, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one line
+saying how to turn them on. Turning a switch off stops a call already in progress and throws its answer away; summaries already saved stay.
+
+What keeps it safe, all enforced in one place before any call starts:
+
+- **Daily limit** (default 500K tokens; every number Claude reports counts, input, cache writes, cache reads and output). The day is your local calendar day.
+  Every call is added to `~/.cache/platoon/ai-usage.json` (numbers only, kept for 30 days; nothing you typed or Claude answered is ever saved there).
+- **Pause above plan usage** (default 80%), using the figure Claude Code's status line reports. With no figure yet, nothing pauses.
+- **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls for a while (30 seconds doubling up
+  to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed out or over the plan limit). A success ends it. The footer says
+  `Smart features paused: <reason>` once, not once per failed call.
+- **Small calls**: `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and low effort, run in
+  `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only one), with `PLATOON_AI=1` set.
+
+`platoon tokens` shows whether the features are on and today's total. `platoon tokens test` makes one tiny call the same way a feature would
+(master switch on, the daily limit, the plan pause and back-off all apply) and prints the reply, the tokens, the cost Claude reports and today's total; if a
+gate refuses it says why and how to switch it on.
 
 ### Themes
 

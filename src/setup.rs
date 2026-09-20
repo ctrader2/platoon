@@ -4,8 +4,9 @@
 //! files as they are now: `platoon` refuses to start until every step is done, running `setup` again
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists.
 
+use crate::{ai, settings};
 use serde_json::{json, Value};
-use std::{fs, path::{Path, PathBuf}};
+use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}};
 
 pub struct Step {
     pub name: &'static str,
@@ -205,6 +206,72 @@ pub fn run(root: &Path) -> Result<Report, String> {
     Ok(Report { outcomes, saved, notes })
 }
 
+/// What became of the question about the features that use tokens.
+#[derive(Debug, PartialEq, Eq)]
+pub enum TokenQuestion {
+    /// Asked before (the answer is in the settings): nothing is printed.
+    AlreadyAsked,
+    /// Not in a terminal: nothing changed, one line says how to turn them on.
+    NotInteractive,
+    /// The settings file couldn't be read, so it was left alone.
+    SettingsUnreadable,
+    /// The person answered and it was saved (true = yes).
+    Answered(bool),
+    /// No answer came (the input ended): nothing saved, it will be asked again next time.
+    NoAnswer,
+    /// Answered, but the settings couldn't be written.
+    NotSaved,
+}
+
+/// The one question `platoon setup` adds to the checklist: may platoon use the person's Claude tokens for smart
+/// features? Asked only in a terminal and only until it has been answered; the default is no; nothing else in
+/// setup, and nothing about starting platoon, depends on it. `interactive` is whether both stdin and stdout are a
+/// terminal (a parameter so tests can give it a script).
+pub fn ask_about_tokens(config: &Path, interactive: bool, input: &mut dyn BufRead, out: &mut dyn Write) -> TokenQuestion {
+    let (mut current, corrupt) = settings::load(config);
+    if corrupt {
+        let _ = writeln!(out, "\nYour settings file couldn't be read, so platoon left the smart features (which use your Claude tokens) off and didn't ask about them.");
+        return TokenQuestion::SettingsUnreadable;
+    }
+    if current.tokens_asked {
+        return TokenQuestion::AlreadyAsked;
+    }
+    if !interactive {
+        let _ = writeln!(out, "\n{}", ai::setup_hint());
+        return TokenQuestion::NotInteractive;
+    }
+    let _ = write!(out, "\n{} [y/N] ", ai::consent_text());
+    let _ = out.flush();
+    let mut line = String::new();
+    if input.read_line(&mut line).unwrap_or(0) == 0 {
+        let _ = writeln!(out, "\nNo answer, so they stay off. `platoon setup` will ask again.");
+        return TokenQuestion::NoAnswer;
+    }
+    // Anything but a clear yes is a no.
+    let yes = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
+    current.tokens_asked = true;
+    current.tokens_enabled = yes;
+    if yes {
+        for f in ai::FEATURES {
+            current.set_feature(f.id, true);
+        }
+    }
+    match settings::save(config, &current) {
+        Ok(()) if yes => {
+            let _ = writeln!(out, "Smart features are on. Turn them off any time: press s in platoon and switch off \"{}\".", ai::MASTER_LABEL);
+            TokenQuestion::Answered(true)
+        }
+        Ok(()) => {
+            let _ = writeln!(out, "Smart features stay off. {}", ai::enable_hint(&settings::path_in(config)));
+            TokenQuestion::Answered(false)
+        }
+        Err(e) => {
+            let _ = writeln!(out, "Couldn't save your answer ({e}); the smart features stay off. `platoon setup` will ask again.");
+            TokenQuestion::NotSaved
+        }
+    }
+}
+
 fn paint(text: &str, code: &str, color: bool) -> String {
     if color { format!("\x1b[{code}m{text}\x1b[0m") } else { text.to_string() }
 }
@@ -363,5 +430,117 @@ mod tests {
         assert!(!ready(&check(&root)));
         assert!(run(&root).is_err());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), "{ not json");
+    }
+
+    fn ask(config: &Path, interactive: bool, typed: &str) -> (TokenQuestion, String) {
+        let mut out = Vec::new();
+        let q = ask_about_tokens(config, interactive, &mut std::io::Cursor::new(typed.as_bytes().to_vec()), &mut out);
+        (q, String::from_utf8(out).unwrap())
+    }
+
+    fn cfg(name: &str) -> PathBuf {
+        tmp(name).join("config")
+    }
+
+    #[test]
+    fn the_question_lists_the_features_in_plain_words_and_says_what_is_sent_and_how_to_switch_off() {
+        let c = cfg("ask-text");
+        let (q, shown) = ask(&c, true, "\n");
+        assert_eq!(q, TokenQuestion::Answered(false));
+        for f in ai::FEATURES {
+            assert!(shown.contains(f.label) && shown.contains(f.description), "{}: {shown}", f.id);
+        }
+        for want in ["your own Claude plan", "the prompts you typed", "one line of Claude's last reply", "small batches", "press s in platoon", ai::MASTER_LABEL, "[y/N]"] {
+            assert!(shown.contains(want), "{want:?}: {shown}");
+        }
+        let lower = shown.split("[y/N]").next().unwrap().to_lowercase();
+        for jargon in ["json", "api", "index", "stdin", "usd", "$"] {
+            assert!(!lower.contains(jargon), "{jargon}: {shown}");
+        }
+    }
+
+    #[test]
+    fn yes_turns_the_master_and_the_listed_features_on_and_remembers_it_was_asked() {
+        for typed in ["y\n", "yes\n", "  YES \n", "Y"] {
+            let c = cfg("ask-yes");
+            let (q, _) = ask(&c, true, typed);
+            assert_eq!(q, TokenQuestion::Answered(true), "{typed:?}");
+            let s = settings::load(&c).0;
+            assert!(s.tokens_enabled && s.tokens_asked, "{typed:?}");
+            assert!(ai::FEATURES.iter().all(|f| s.feature_on(f.id)));
+        }
+    }
+
+    #[test]
+    fn no_and_enter_and_anything_else_leave_everything_off_but_still_count_as_answered() {
+        for typed in ["n\n", "no\n", "\n", "maybe\n", "yep\n", "y e s\n"] {
+            let c = cfg("ask-no");
+            let (q, shown) = ask(&c, true, typed);
+            assert_eq!(q, TokenQuestion::Answered(false), "{typed:?}");
+            let s = settings::load(&c).0;
+            assert!(!s.tokens_enabled && s.tokens_asked && s.token_features.is_empty(), "{typed:?}");
+            assert!(shown.contains("stay off") && shown.contains("tokens_enabled"), "{shown}");
+        }
+    }
+
+    #[test]
+    fn it_is_asked_only_once() {
+        let c = cfg("ask-once");
+        assert_eq!(ask(&c, true, "n\n").0, TokenQuestion::Answered(false));
+        let (q, shown) = ask(&c, true, "y\n");
+        assert_eq!(q, TokenQuestion::AlreadyAsked);
+        assert_eq!(shown, "", "nothing is printed the second time");
+        assert!(!settings::load(&c).0.tokens_enabled, "the second answer was never read");
+        // A yes that was given stays given when setup runs again.
+        let c = cfg("ask-once-yes");
+        ask(&c, true, "y\n");
+        assert_eq!(ask(&c, true, "n\n").0, TokenQuestion::AlreadyAsked);
+        assert!(settings::load(&c).0.tokens_enabled);
+    }
+
+    #[test]
+    fn without_a_terminal_nothing_is_asked_nothing_is_saved_and_one_line_says_how_to_enable() {
+        let c = cfg("ask-noninteractive");
+        let (q, shown) = ask(&c, false, "y\n");
+        assert_eq!(q, TokenQuestion::NotInteractive);
+        assert!(!c.exists(), "nothing written");
+        assert_eq!(shown.trim().lines().count(), 1, "{shown}");
+        assert!(shown.contains("off") && shown.contains("platoon setup") && shown.contains(ai::MASTER_LABEL), "{shown}");
+        // ...so a later run in a terminal still asks.
+        assert_eq!(ask(&c, true, "y\n").0, TokenQuestion::Answered(true));
+    }
+
+    #[test]
+    fn an_input_that_ends_without_an_answer_saves_nothing() {
+        let c = cfg("ask-eof");
+        let (q, shown) = ask(&c, true, "");
+        assert_eq!(q, TokenQuestion::NoAnswer);
+        assert!(!c.exists() && shown.contains("ask again"), "{shown}");
+    }
+
+    #[test]
+    fn an_unreadable_settings_file_is_left_alone_and_nothing_is_asked() {
+        let c = cfg("ask-corrupt");
+        fs::create_dir_all(&c).unwrap();
+        fs::write(c.join("settings.json"), "{ nope").unwrap();
+        let (q, shown) = ask(&c, true, "y\n");
+        assert_eq!(q, TokenQuestion::SettingsUnreadable);
+        assert_eq!(fs::read_to_string(c.join("settings.json")).unwrap(), "{ nope");
+        assert!(shown.contains("off"), "{shown}");
+    }
+
+    #[test]
+    fn an_answer_keeps_the_rest_of_the_settings_and_a_failed_save_is_reported_not_fatal() {
+        let c = cfg("ask-keep");
+        fs::create_dir_all(&c).unwrap();
+        fs::write(c.join("settings.json"), r#"{"idle_stop_minutes":30,"mine":{"a":1}}"#).unwrap();
+        ask(&c, true, "y\n");
+        let v: Value = serde_json::from_str(&fs::read_to_string(c.join("settings.json")).unwrap()).unwrap();
+        assert_eq!((v["idle_stop_minutes"].as_u64(), v["mine"].clone(), v["tokens_enabled"].clone()), (Some(30), json!({"a":1}), json!(true)));
+        // The settings file can't be replaced (it is a folder here): the question reports it and carries on.
+        let c = cfg("ask-fail");
+        fs::create_dir_all(c.join("settings.json")).unwrap();
+        let (q, _) = ask(&c, true, "");
+        assert_eq!(q, TokenQuestion::SettingsUnreadable, "a folder where the file should be reads as unreadable");
     }
 }

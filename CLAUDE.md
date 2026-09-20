@@ -72,6 +72,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `archive.rs`, `settings.rs`, `dirs.rs` | archive list, settings file and the settings screen catalog, directory picker sources |
 | `mcp.rs`, `procs.rs` | telling MCP servers from other child processes (idle stop), process table |
 | `theme.rs`, `usertheme.rs`, `colordepth.rs` | built-in themes and contrast rules, user theme files, 256-color fallback |
+| `ai.rs`, `ledger.rs` | the token plumbing: feature table, gate (switches, daily limit, plan pause, back-off), the `claude -p` runner, `platoon tokens`; the numbers-only usage ledger (`ai-usage.json`) |
 | `select.rs`, `clipboard.rs` | text selection and copy in the attached view (in progress, see "Where we are") |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
 

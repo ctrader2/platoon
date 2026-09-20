@@ -1,5 +1,6 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
-//! clean-ups, how idle stop treats MCP servers, the color theme, and the four limits of the word search. The
+//! clean-ups, how idle stop treats MCP servers, the color theme, the four limits of the word search, and everything
+//! about the features that use the user's Claude tokens (see `ai.rs`). The
 //! settings screen edits them through `save`, and `ITEMS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
@@ -8,11 +9,12 @@
 //! re-reads the file when it changes (`SettingsStore::refresh`), so an edit applies without restarting
 //! anything, including the session hosts that outlive platoon.
 
+use crate::ai::{FEATURES, MASTER_LABEL};
 use crate::archive::keep_backup;
 use crate::theme::{Theme, DEFAULT_ID};
 use crate::usertheme::Registry;
 use serde_json::{json, Map, Value};
-use std::{fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, time::{Duration, SystemTime}};
+use std::{collections::BTreeMap, fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::LazyLock, time::{Duration, SystemTime}};
 
 /// A session nobody is looking at is stopped after this long, at most. A week is far past any sane use.
 pub const MAX_IDLE_STOP_MINUTES: u64 = 7 * 24 * 60;
@@ -31,6 +33,26 @@ pub const MAX_SNIPPET_CHARS: u64 = 400;
 pub const DEFAULT_SEARCH_RESULTS: u64 = 50;
 pub const MIN_SEARCH_RESULTS: u64 = 5;
 pub const MAX_SEARCH_RESULTS: u64 = 500;
+
+/// Token features: how many new messages from you a conversation gathers before its summary is refreshed.
+pub const DEFAULT_REFRESH_MESSAGES: u64 = 5;
+pub const MIN_REFRESH_MESSAGES: u64 = 1;
+pub const MAX_REFRESH_MESSAGES: u64 = 100;
+/// Token features: how many conversations one call to Claude covers.
+pub const DEFAULT_BATCH: u64 = 30;
+pub const MIN_BATCH: u64 = 1;
+pub const MAX_BATCH: u64 = 100;
+/// Token features: the most tokens (all four numbers Claude reports, added up) platoon may use in a day. There is
+/// no "unlimited": a bug or a busy day must not be able to empty the plan, so this has a floor as well.
+pub const DEFAULT_DAILY_TOKENS: u64 = 500_000;
+pub const MIN_DAILY_TOKENS: u64 = 20_000;
+pub const MAX_DAILY_TOKENS: u64 = 100_000_000;
+/// Token features: background work pauses while the plan is more than this percent used. 0 means never pause.
+pub const DEFAULT_PAUSE_PERCENT: u64 = 80;
+pub const MIN_PAUSE_PERCENT: u64 = 10;
+pub const MAX_PAUSE_PERCENT: u64 = 100;
+/// The models the token features can use, cheapest first: what the file says, and the first is the default.
+pub const MODELS: [&str; 2] = ["haiku", "sonnet"];
 
 /// For the two automatic clean-ups, 0 means the feature is off.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,6 +75,23 @@ pub struct Settings {
     pub search_results: u64,
     /// The full-text search looks in archived conversations too.
     pub search_archived: bool,
+    /// The master switch for everything that spends the user's Claude tokens. Off unless the user turned it on.
+    pub tokens_enabled: bool,
+    /// One switch per token feature, by the feature's id (see `ai::FEATURES`). A feature that is missing is off.
+    /// Ids this version doesn't know are kept as they are.
+    pub token_features: BTreeMap<String, bool>,
+    /// `platoon setup` has already asked about the token features, so it doesn't ask again.
+    pub tokens_asked: bool,
+    /// New messages from you before a conversation's summary is refreshed.
+    pub ai_refresh_messages: u64,
+    /// Conversations covered by one call.
+    pub ai_batch_size: u64,
+    /// The most tokens used in one (local calendar) day.
+    pub ai_daily_tokens: u64,
+    /// Background token work pauses above this percent of the plan; 0 means never.
+    pub ai_pause_percent: u64,
+    /// Which model does the work: one of `MODELS`.
+    pub ai_model: String,
 }
 
 impl Default for Settings {
@@ -66,6 +105,14 @@ impl Default for Settings {
             search_snippet_chars: DEFAULT_SNIPPET_CHARS,
             search_results: DEFAULT_SEARCH_RESULTS,
             search_archived: true,
+            tokens_enabled: false,
+            token_features: BTreeMap::new(),
+            tokens_asked: false,
+            ai_refresh_messages: DEFAULT_REFRESH_MESSAGES,
+            ai_batch_size: DEFAULT_BATCH,
+            ai_daily_tokens: DEFAULT_DAILY_TOKENS,
+            ai_pause_percent: DEFAULT_PAUSE_PERCENT,
+            ai_model: MODELS[0].into(),
         }
     }
 }
@@ -78,8 +125,27 @@ impl Settings {
             search_prompt_chars: self.search_prompt_chars.clamp(MIN_PROMPT_CHARS, MAX_PROMPT_CHARS),
             search_snippet_chars: self.search_snippet_chars.clamp(MIN_SNIPPET_CHARS, MAX_SNIPPET_CHARS),
             search_results: self.search_results.clamp(MIN_SEARCH_RESULTS, MAX_SEARCH_RESULTS),
+            ai_refresh_messages: self.ai_refresh_messages.clamp(MIN_REFRESH_MESSAGES, MAX_REFRESH_MESSAGES),
+            ai_batch_size: self.ai_batch_size.clamp(MIN_BATCH, MAX_BATCH),
+            ai_daily_tokens: self.ai_daily_tokens.clamp(MIN_DAILY_TOKENS, MAX_DAILY_TOKENS),
+            ai_pause_percent: if self.ai_pause_percent == 0 { 0 } else { self.ai_pause_percent.clamp(MIN_PAUSE_PERCENT, MAX_PAUSE_PERCENT) },
+            ai_model: if MODELS.contains(&self.ai_model.as_str()) { self.ai_model } else { MODELS[0].into() },
             ..self
         }
+    }
+
+    /// The feature's own switch, whatever the master says.
+    pub fn feature_toggle(&self, id: &str) -> bool {
+        self.token_features.get(id).copied().unwrap_or(false)
+    }
+
+    pub fn set_feature(&mut self, id: &str, on: bool) {
+        self.token_features.insert(id.to_string(), on);
+    }
+
+    /// A feature may spend tokens only when the master switch AND its own switch are on.
+    pub fn feature_on(&self, id: &str) -> bool {
+        self.tokens_enabled && self.feature_toggle(id)
     }
 
     /// The idle-stop threshold, or None when it is off. `secs_per_minute` is 60 outside of tests.
@@ -122,6 +188,18 @@ fn parse(text: &str) -> Option<Settings> {
             search_snippet_chars: number("search_snippet_chars", d.search_snippet_chars),
             search_results: number("search_results", d.search_results),
             search_archived: o.get("search_archived").and_then(Value::as_bool).unwrap_or(d.search_archived),
+            tokens_enabled: o.get("tokens_enabled").and_then(Value::as_bool).unwrap_or(d.tokens_enabled),
+            token_features: o
+                .get("token_features")
+                .and_then(Value::as_object)
+                .map(|f| f.iter().filter_map(|(k, v)| Some((k.clone(), v.as_bool()?))).collect())
+                .unwrap_or_default(),
+            tokens_asked: o.get("tokens_asked").and_then(Value::as_bool).unwrap_or(d.tokens_asked),
+            ai_refresh_messages: number("ai_refresh_messages", d.ai_refresh_messages),
+            ai_batch_size: number("ai_batch_size", d.ai_batch_size),
+            ai_daily_tokens: number("ai_daily_tokens", d.ai_daily_tokens),
+            ai_pause_percent: number("ai_pause_percent", d.ai_pause_percent),
+            ai_model: o.get("ai_model").and_then(Value::as_str).map_or(d.ai_model.clone(), str::to_string),
         }
         .clamped(),
     )
@@ -173,6 +251,23 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("search_snippet_chars".into(), json!(s.search_snippet_chars));
     object.insert("search_results".into(), json!(s.search_results));
     object.insert("search_archived".into(), json!(s.search_archived));
+    object.insert("tokens_enabled".into(), json!(s.tokens_enabled));
+    object.insert("tokens_asked".into(), json!(s.tokens_asked));
+    object.insert("ai_refresh_messages".into(), json!(s.ai_refresh_messages));
+    object.insert("ai_batch_size".into(), json!(s.ai_batch_size));
+    object.insert("ai_daily_tokens".into(), json!(s.ai_daily_tokens));
+    object.insert("ai_pause_percent".into(), json!(s.ai_pause_percent));
+    object.insert("ai_model".into(), json!(s.ai_model));
+    // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
+    // (a feature of a newer version) stay.
+    let mut features = match object.get("token_features") {
+        Some(Value::Object(f)) => f.clone(),
+        _ => Map::new(),
+    };
+    for (id, on) in &s.token_features {
+        features.insert(id.clone(), json!(on));
+    }
+    object.insert("token_features".into(), Value::Object(features));
     // The theme is only written when it is a different choice from what the file already says: a value platoon
     // can't read (an id from another version, or something that isn't text) is the user's until they pick.
     let same = object.get("theme").is_some_and(|v| v.as_str().map_or(s.theme == DEFAULT_ID, |on_disk| on_disk == s.theme));
@@ -197,6 +292,9 @@ pub enum Kind {
     /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
     /// `enter` opens the theme picker.
     Theme,
+    /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
+    /// instead of a field, so a new feature is a new row in that table and nothing else here.
+    Feature(&'static str),
 }
 
 /// One line of the settings screen. The screen is built from `ITEMS` alone, so a new setting is a new entry
@@ -242,7 +340,49 @@ pub fn results_label(n: u64) -> String {
     plural(n, "result")
 }
 
-pub const ITEMS: &[Item] = &[
+pub fn on_off(v: u64) -> String {
+    if v == 0 { "Off".into() } else { "On".into() }
+}
+
+/// A count of tokens as a person says it: 250K, 1M, and the exact number when it is neither.
+pub fn tokens_label(n: u64) -> String {
+    match n {
+        n if n >= 1_000_000 && n % 1_000_000 == 0 => format!("{}M tokens", n / 1_000_000),
+        n if n >= 1000 && n % 1000 == 0 => format!("{}K tokens", n / 1000),
+        n => plural(n, "token"),
+    }
+}
+
+pub fn percent_label(n: u64) -> String {
+    if n == 0 { "Never".into() } else { format!("{n}%") }
+}
+
+pub fn messages_label(n: u64) -> String {
+    plural(n, "message")
+}
+
+pub fn conversations_label(n: u64) -> String {
+    plural(n, "conversation")
+}
+
+/// 1234567 -> "1,234,567".
+pub fn thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The entries of the settings screen, in order. Built once: the token features come from `ai::FEATURES`.
+pub static ITEMS: LazyLock<Vec<Item>> = LazyLock::new(items);
+
+fn items() -> Vec<Item> {
+    let mut v = vec![
     Item {
         name: "Theme",
         explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
@@ -331,7 +471,88 @@ pub const ITEMS: &[Item] = &[
         label: chars_label,
         off: None,
     },
-];
+    ];
+    // Everything that spends the user's Claude tokens comes last, together: the master switch, one switch per
+    // feature (from the feature table), then the numbers that limit them.
+    v.push(Item {
+        name: MASTER_LABEL,
+        explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus one line \
+                  of Claude's last reply, in small batches. While this is Off nothing is sent, and turning it Off stops any call in progress.",
+        kind: Kind::Steps,
+        choices: &[0, 1],
+        get: |s| u64::from(s.tokens_enabled),
+        set: |s, v| s.tokens_enabled = v != 0,
+        label: on_off,
+        off: Some(0),
+    });
+    for f in FEATURES {
+        v.push(Item {
+            name: f.label,
+            explain: f.description,
+            kind: Kind::Feature(f.id),
+            choices: &[0, 1],
+            get: |_| 0,
+            set: |_, _| {},
+            label: on_off,
+            off: Some(0),
+        });
+    }
+    v.extend([
+        Item {
+            name: "Daily token limit",
+            explain: "The most tokens the smart features may use in one day, counting everything Claude reports. \
+                      When it is reached they wait until tomorrow. Saved summaries stay.",
+            kind: Kind::Steps,
+            choices: &[100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000],
+            get: |s| s.ai_daily_tokens,
+            set: |s, v| s.ai_daily_tokens = v,
+            label: tokens_label,
+            off: None,
+        },
+        Item {
+            name: "Pause above plan usage",
+            explain: "Smart features stop asking Claude while your plan is used more than this much, so your own work isn't held up. \
+                      This needs a Claude session that has reported its usage.",
+            kind: Kind::Steps,
+            choices: &[0, 50, 60, 70, 80, 90],
+            get: |s| s.ai_pause_percent,
+            set: |s, v| s.ai_pause_percent = v,
+            label: percent_label,
+            off: Some(0),
+        },
+        Item {
+            name: "Model for smart features",
+            explain: "Haiku is the smallest and uses the least of your plan. Sonnet writes better names but costs more.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| MODELS.iter().position(|m| *m == s.ai_model).unwrap_or(0) as u64,
+            set: |s, v| s.ai_model = MODELS[(v as usize).min(MODELS.len() - 1)].into(),
+            label: |v| if v == 0 { "Haiku".into() } else { "Sonnet".into() },
+            off: None,
+        },
+        Item {
+            name: "Conversations per call",
+            explain: "How many conversations one request to Claude covers. Larger batches use less of your plan overall.",
+            kind: Kind::Steps,
+            choices: &[5, 10, 20, 30, 50, 100],
+            get: |s| s.ai_batch_size,
+            set: |s, v| s.ai_batch_size = v,
+            label: conversations_label,
+            off: None,
+        },
+        Item {
+            name: "Refresh a summary after",
+            explain: "How many new messages from you a conversation gets before its name and summary are made again.",
+            kind: Kind::Steps,
+            choices: &[1, 3, 5, 10, 20, 50],
+            get: |s| s.ai_refresh_messages,
+            set: |s, v| s.ai_refresh_messages = v,
+            label: messages_label,
+            off: None,
+        },
+    ]);
+    v
+}
 
 /// Which way to move through an item's choices.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -343,6 +564,21 @@ pub enum Step {
 }
 
 impl Item {
+    /// The entry's current value in the numbers `choices` are written in (a switch is 0 or 1).
+    pub fn value(&self, settings: &Settings) -> u64 {
+        match self.kind {
+            Kind::Feature(id) => u64::from(settings.feature_toggle(id)),
+            _ => (self.get)(settings),
+        }
+    }
+
+    pub fn assign(&self, settings: &mut Settings, value: u64) {
+        match self.kind {
+            Kind::Feature(id) => settings.set_feature(id, value != 0),
+            _ => (self.set)(settings, value),
+        }
+    }
+
     /// The choice `step` leads to from `value`, which needn't be one of the choices (a hand-edited file):
     /// it goes to the nearest step in that direction. Prev and Next stop at the ends; Cycle wraps.
     pub fn step(&self, value: u64, step: Step) -> u64 {
@@ -530,7 +766,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -734,7 +970,7 @@ mod tests {
     fn the_theme_entry_is_first_and_a_kind_of_its_own_next_to_the_stepped_ones() {
         assert_eq!(ITEMS[0].name, "Theme");
         assert_eq!(ITEMS[0].kind, Kind::Theme);
-        assert!(ITEMS[1..].iter().all(|i| i.kind == Kind::Steps));
+        assert!(ITEMS[1..].iter().all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))));
         assert!(!ITEMS[0].explain.is_empty() && ITEMS[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
         assert_eq!((ITEMS[0].step(0, Step::Next), ITEMS[0].step(0, Step::Prev), ITEMS[0].step(0, Step::Cycle)), (0, 0, 0));
@@ -798,14 +1034,14 @@ mod tests {
     #[test]
     fn every_search_entry_is_listed_with_plain_words_and_its_default_among_the_steps() {
         let names: Vec<&str> = ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[4..], ["Search archived", "Search results shown", "Search preview length", "Longest message kept"]);
+        assert_eq!(names[4..8], ["Search archived", "Search results shown", "Search preview length", "Longest message kept"]);
         let d = Settings::default();
         assert_eq!((ITEMS[4].label)((ITEMS[4].get)(&d)), "Include archived");
         assert_eq!((ITEMS[5].label)((ITEMS[5].get)(&d)), "50 results");
         assert_eq!((ITEMS[6].label)((ITEMS[6].get)(&d)), "120 characters");
         assert_eq!((ITEMS[7].label)((ITEMS[7].get)(&d)), "2000 characters");
         assert_eq!((results_label(1), chars_label(1)), ("1 result".to_string(), "1 character".to_string()));
-        for item in &ITEMS[4..] {
+        for item in &ITEMS[4..8] {
             let lower = item.explain.to_lowercase();
             for jargon in ["index", "json", "cache", "byte", "token", "thread"] {
                 assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
@@ -817,5 +1053,141 @@ mod tests {
                 assert_eq!(s.clone().clamped(), s, "{}: step {c}", item.name);
             }
         }
+    }
+
+    #[test]
+    fn the_token_settings_default_to_off_with_a_daily_limit_that_is_never_unlimited() {
+        let d = Settings::default();
+        assert!(!d.tokens_enabled && d.token_features.is_empty() && !d.tokens_asked);
+        assert_eq!((d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent, d.ai_model.as_str()), (5, 30, 500_000, 80, "haiku"));
+        for f in FEATURES {
+            assert!(!d.feature_on(f.id) && !d.feature_toggle(f.id), "{}", f.id);
+        }
+        let dir = dir("tokens-default");
+        assert_eq!(load(&dir).0, d, "no file");
+        write(&dir, "{}");
+        assert_eq!(load(&dir).0, d);
+    }
+
+    #[test]
+    fn the_token_settings_are_read_clamped_and_wrong_types_keep_the_default() {
+        let d = dir("tokens-read");
+        write(&d, r#"{"tokens_enabled":true,"tokens_asked":true,"token_features":{"names":true,"find":false},"ai_refresh_messages":10,"ai_batch_size":50,"ai_daily_tokens":1000000,"ai_pause_percent":90,"ai_model":"sonnet"}"#);
+        let s = load(&d).0;
+        assert!(s.tokens_enabled && s.tokens_asked && s.feature_on("names") && !s.feature_on("find"));
+        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent, s.ai_model.as_str()), (10, 50, 1_000_000, 90, "sonnet"));
+        // Silly numbers are clamped: never zero messages or conversations, and never an unlimited day.
+        write(&d, r#"{"ai_refresh_messages":0,"ai_batch_size":0,"ai_daily_tokens":0,"ai_pause_percent":3}"#);
+        let s = load(&d).0;
+        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent), (MIN_REFRESH_MESSAGES, MIN_BATCH, MIN_DAILY_TOKENS, MIN_PAUSE_PERCENT));
+        write(&d, r#"{"ai_refresh_messages":1e30,"ai_batch_size":99999,"ai_daily_tokens":1e30,"ai_pause_percent":500}"#);
+        let s = load(&d).0;
+        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent), (MAX_REFRESH_MESSAGES, MAX_BATCH, MAX_DAILY_TOKENS, MAX_PAUSE_PERCENT));
+        // 0 for the pause point means "never pause" and stays 0.
+        write(&d, r#"{"ai_pause_percent":0}"#);
+        assert_eq!(load(&d).0.ai_pause_percent, 0);
+        // A model that is not on the list is the default one; wrong types keep every default.
+        write(&d, r#"{"ai_model":"gpt-9"}"#);
+        assert_eq!(load(&d).0.ai_model, "haiku");
+        for odd in ["\"yes\"", "1", "null", "[]", "{}"] {
+            write(&d, &format!(r#"{{"tokens_enabled":{odd},"tokens_asked":{odd},"token_features":{odd},"ai_model":{odd},"ai_batch_size":{odd},"auto_archive_days":9}}"#));
+            let s = load(&d).0;
+            assert_eq!((s.tokens_enabled, s.tokens_asked, s.token_features.len(), s.ai_model.as_str(), s.auto_archive_days), (false, false, 0, "haiku", 9), "{odd}");
+        }
+        write(&d, r#"{"token_features":{"names":"yes","find":true,"future":true}}"#);
+        let s = load(&d).0;
+        assert_eq!(s.token_features.into_iter().collect::<Vec<_>>(), [("find".to_string(), true), ("future".to_string(), true)], "only real booleans count");
+    }
+
+    #[test]
+    fn the_master_switch_off_turns_every_feature_off_whatever_their_own_switches_say() {
+        let mut s = Settings { tokens_enabled: true, ..Settings::default() };
+        for f in FEATURES {
+            s.set_feature(f.id, true);
+            assert!(s.feature_on(f.id));
+        }
+        s.tokens_enabled = false;
+        for f in FEATURES {
+            assert!(!s.feature_on(f.id), "{}", f.id);
+        }
+        // ...through a save and a load, too.
+        let d = dir("tokens-master");
+        save(&d, &s).unwrap();
+        let back = load(&d).0;
+        assert!(FEATURES.iter().all(|f| !back.feature_on(f.id) && back.feature_toggle(f.id)));
+        // A feature that was never mentioned is off even with the master on.
+        assert!(!Settings { tokens_enabled: true, ..Settings::default() }.feature_on("names"));
+    }
+
+    #[test]
+    fn saving_the_token_settings_keeps_unknown_features_and_keys_and_writes_real_booleans() {
+        let d = dir("tokens-save");
+        write(&d, r#"{"mine":[1],"token_features":{"future":true,"names":false,"note":"x"}}"#);
+        let mut s = load(&d).0;
+        assert_eq!(s.token_features.get("future"), Some(&true));
+        s.tokens_enabled = true;
+        s.set_feature("names", true);
+        s.ai_model = "sonnet".into();
+        save(&d, &s).unwrap();
+        let v = saved(&d);
+        assert_eq!(v["token_features"], json!({"future": true, "names": true, "note": "x"}), "a newer version's feature and a non-boolean entry stay");
+        assert_eq!((v["tokens_enabled"].clone(), v["ai_model"].clone(), v["mine"].clone()), (json!(true), json!("sonnet"), json!([1])));
+        // Clamped on the way out.
+        save(&d, &Settings { ai_daily_tokens: 5, ai_batch_size: 0, ..s }).unwrap();
+        let v = saved(&d);
+        assert_eq!((v["ai_daily_tokens"].as_u64(), v["ai_batch_size"].as_u64()), (Some(MIN_DAILY_TOKENS), Some(MIN_BATCH)));
+    }
+
+    #[test]
+    fn a_feature_gets_a_switch_on_the_settings_screen_from_the_table_alone() {
+        let names: Vec<&str> = ITEMS.iter().map(|i| i.name).collect();
+        assert_eq!(
+            names[8..],
+            ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call", "Refresh a summary after"]
+        );
+        for (f, item) in FEATURES.iter().zip(&ITEMS[9..]) {
+            assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
+            let mut s = Settings::default();
+            assert_eq!(item.value(&s), 0);
+            item.assign(&mut s, 1);
+            assert!(s.feature_toggle(f.id) && item.value(&s) == 1);
+            assert!(!s.feature_on(f.id), "its own switch is not enough");
+            assert_eq!((item.label)(1), "On");
+            assert_eq!(item.step(0, Step::Cycle), 1);
+        }
+    }
+
+    #[test]
+    fn the_token_entries_read_plainly_and_every_step_is_within_the_limits() {
+        for item in &ITEMS[8..] {
+            let lower = item.explain.to_lowercase();
+            for jargon in ["index", "json", "cache", "byte", "thread", "api", "cli", "stdin", "process"] {
+                assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
+            }
+            assert!(item.explain.len() < 300, "{}", item.name);
+            for &c in item.choices {
+                let mut s = Settings::default();
+                item.assign(&mut s, c);
+                assert_eq!(s.clone().clamped(), s, "{}: step {c}", item.name);
+            }
+            let d = Settings::default();
+            assert!(item.choices.contains(&item.value(&d)), "the default is one of the steps for {}", item.name);
+        }
+        let d = Settings::default();
+        assert_eq!(ITEMS[8].name, MASTER_LABEL);
+        let label = |i: usize| (ITEMS[i].label)(ITEMS[i].value(&d));
+        assert_eq!([label(8), label(9), label(10), label(11), label(12), label(13), label(14), label(15)], ["Off", "Off", "Off", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages"]);
+        assert_eq!(ITEMS[12].step(0, Step::Cycle), 50, "Never is the first step");
+        assert_eq!(percent_label(0), "Never");
+        assert_eq!([tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)], ["1M tokens", "250K tokens", "1234 tokens", "1 token"]);
+        assert_eq!([thousands(0), thousands(999), thousands(1000), thousands(1_234_567)], ["0", "999", "1,000", "1,234,567"]);
+        // The model entry goes both ways.
+        let mut s = Settings::default();
+        ITEMS[13].assign(&mut s, 1);
+        assert_eq!(s.ai_model, "sonnet");
+        ITEMS[13].assign(&mut s, 0);
+        assert_eq!(s.ai_model, "haiku");
+        s.ai_model = "unknown".into();
+        assert_eq!(ITEMS[13].value(&s), 0);
     }
 }

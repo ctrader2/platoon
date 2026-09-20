@@ -1,3 +1,4 @@
+use crate::ai;
 use crate::archive::{self, Archive};
 use crate::claude::{self, Live, Reader};
 use crate::client::{key_bytes, Client};
@@ -6,6 +7,7 @@ use crate::dirs;
 use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
+use crate::ledger::Ledger;
 use crate::model::{Proc, Session, Status};
 use crate::names::{self, Names};
 use crate::prompts::{self, PromptIndex};
@@ -338,6 +340,15 @@ pub struct App {
     settings: SettingsStore,
     /// The selected line of the settings screen, an index into `ITEMS`.
     pub setting: usize,
+    /// The first entry of the settings screen in view, when the entries don't all fit. Kept between frames so the list
+    /// scrolls only as far as the selection needs, like the other lists.
+    pub setting_top: Cell<usize>,
+    /// The cancel flags of calls to Claude in flight (step C's features): a switch turned off in settings cancels them.
+    switchboard: Arc<ai::Switchboard>,
+    /// Tokens the smart features have used today, as the ledger says (shown in the settings).
+    pub tokens_today: u64,
+    /// The run of failures whose "paused" notice was already shown, so it appears once.
+    ai_notice_seen: Option<String>,
     /// The conversation opened in the attached view: never auto-archived, even before its process registers.
     viewing: Option<String>,
     /// When auto-archive last ran (None: not yet).
@@ -425,6 +436,10 @@ impl App {
             names: Names::open(&config),
             settings,
             setting: 0,
+            setting_top: Cell::new(0),
+            switchboard: Arc::new(ai::Switchboard::new()),
+            tokens_today: 0,
+            ai_notice_seen: None,
             viewing: None,
             last_auto_archive: None,
             apply_after: None,
@@ -442,6 +457,22 @@ impl App {
 
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// Everything about the token features that follows the settings and the ledger: calls whose switch was turned
+    /// off are cancelled, today's count is read for the settings screen, and a failure that paused the features is
+    /// said once in the footer.
+    fn sync_ai(&mut self) {
+        let settings = self.settings.get();
+        self.switchboard.apply(&settings);
+        let now = usage::now();
+        self.tokens_today = Ledger::open(&self.cache).today(now).tokens();
+        if let Some((run, text)) = ai::backoff_notice(&settings, &self.cache, now) {
+            if self.ai_notice_seen.as_deref() != Some(run.as_str()) {
+                self.ai_notice_seen = Some(run);
+                self.notify(text);
+            }
+        }
     }
 
     /// Pick up an edit of settings.json and of the theme folder, and with them a changed theme. True when the
@@ -685,6 +716,8 @@ impl App {
             }
         }
         self.auto_archive(index_changed, usage::now());
+        // After the settings were re-read (auto_archive does that first), so an edit of the file is seen at once.
+        self.sync_ai();
         self.refresh_prompts();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
@@ -1070,6 +1103,7 @@ impl App {
     fn open_settings(&mut self) {
         self.refresh_settings();
         self.setting = 0;
+        self.setting_top.set(0);
         self.mode = Mode::Settings;
     }
 
@@ -1163,14 +1197,15 @@ impl App {
             return;
         }
         let mut next = self.settings.get();
-        let old = (item.get)(&next);
+        let old = item.value(&next);
         let new = item.step(old, step);
         if new == old {
             return;
         }
-        (item.set)(&mut next, new);
+        item.assign(&mut next, new);
         let saved = self.settings.update(&next);
         self.sync_theme();
+        self.sync_ai();
         if saved.is_err() {
             self.report_save(saved);
             return;
@@ -1432,6 +1467,11 @@ impl App {
     #[cfg(test)]
     pub fn select_theme_for_test(&mut self, i: usize) {
         self.select_theme(i);
+    }
+
+    #[cfg(test)]
+    pub fn switchboard_for_test(&self) -> Arc<ai::Switchboard> {
+        self.switchboard.clone()
     }
 
     #[cfg(test)]

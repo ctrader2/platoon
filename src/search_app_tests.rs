@@ -722,11 +722,8 @@ fn a_new_prompt_length_reaches_the_index_only_once_the_settings_have_settled() {
     // A change on the settings screen holds the rebuild until it stops moving.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('s'));
-    for _ in 0..5 {
-        key(&mut app, KeyCode::Down);
-    }
-    // (the entry that sets the longest message kept is the last one)
-    for _ in 0..5 {
+    let longest = crate::settings::ITEMS.iter().position(|i| i.name == "Longest message kept").unwrap();
+    for _ in 0..longest {
         key(&mut app, KeyCode::Down);
     }
     key(&mut app, KeyCode::Right);

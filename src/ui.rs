@@ -487,12 +487,13 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let top = area.y;
     // The reassurance line is the first thing to go when that lets the selected entry explain itself.
     // A warning or an error is never dropped.
+    // The first note is the day's token count: it stays, and only what follows it is dropped.
     if !store.is_corrupt() && app.active_notice().is_none() {
         let text_w = (area.width as usize).saturating_sub(4);
         let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
         let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top)) - top;
-        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(0) as usize) < 2 {
-            notes.clear();
+        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(1) as usize) < 2 {
+            notes.truncate(1);
         }
     }
     // The entries come before the notes: on a very short terminal the notes give way.
@@ -515,11 +516,14 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, Rect::new(area.x, hints_y, area.width, 1), &hints, None);
 }
 
-/// What goes under the settings entries: a warning if the file was unreadable, then the latest notice or
-/// the reassurance that changes apply at once.
+/// What goes under the settings entries: how many tokens the smart features used today, a warning if the file was
+/// unreadable, then the latest notice or the reassurance that changes apply at once.
 fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
     let t = app.effective_theme();
     let mut notes: Vec<(String, Color)> = Vec::new();
+    let (used, cap) = (app.tokens_today, app.settings().get().ai_daily_tokens);
+    let line = format!("Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(cap));
+    notes.push((line, if used >= cap { t.warn } else { t.subtext }));
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
@@ -565,16 +569,23 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().push((area, Hit::Action(Action::Cancel)));
 }
 
-/// As much explanation as fits in `height` rows: every entry explained with air between them (0), else only
-/// the selected one (1), else none (2, a terminal a handful of lines tall).
+/// The fewest entries the settings list still shows, together with the selected entry's explanation, before the
+/// explanations are given up (a terminal a handful of lines tall).
+const SETTINGS_MIN_WINDOW: usize = 6;
+
+/// As much explanation as fits in `height` rows: every entry explained with air between them (0), else the selected
+/// one only (1) - with the list scrolling if it is too long to be shown whole beside it - else none (2).
 fn explain_level(explained: &[Vec<String>], selected: usize, height: usize) -> usize {
-    (0..2)
-        .find(|&level| {
-            let gap = usize::from(level == 0);
-            let total: usize = (0..explained.len()).map(|i| 1 + if level == 0 || i == selected { explained[i].len() } else { 0 }).sum();
-            total + gap * (explained.len() - 1) <= height
-        })
-        .unwrap_or(2)
+    let whole = (0..2).find(|&level| {
+        let gap = usize::from(level == 0);
+        let total: usize = (0..explained.len()).map(|i| 1 + if level == 0 || i == selected { explained[i].len() } else { 0 }).sum();
+        total + gap * (explained.len() - 1) <= height
+    });
+    match whole {
+        Some(level) => level,
+        None if explained.get(selected).is_some_and(|e| e.len() + SETTINGS_MIN_WINDOW.min(explained.len()) <= height) => 1,
+        None => 2,
+    }
 }
 
 /// Draws the entries and returns the row below the last one.
@@ -591,11 +602,13 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     let height = |i: usize| 1 + if show(i) { explained[i].len() } else { 0 };
     let gap = u16::from(level == 0);
 
-    // Scroll only if even that doesn't fit: keep the selected entry in view.
-    let mut start = 0;
+    // Scroll only if even that doesn't fit, and only as far as it takes to keep the selected entry (with its
+    // explanation) in view.
+    let mut start = app.setting_top.get().min(app.setting);
     while start < app.setting && (start..=app.setting).map(|i| height(i) + gap as usize).sum::<usize>() > area.height as usize + gap as usize {
         start += 1;
     }
+    app.setting_top.set(start);
 
     let mut y = area.y;
     for (i, item) in ITEMS.iter().enumerate().skip(start) {
@@ -613,8 +626,8 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         // the buttons stay put as it changes. Worked out here: the text of the value, that width, whether it can
         // go no further either way, and whether it means "switched off".
         let (label, vw, at_start, at_end, off) = match item.kind {
-            Kind::Steps => {
-                let value = (item.get)(current);
+            Kind::Steps | Kind::Feature(_) => {
+                let value = item.value(current);
                 let label = (item.label)(value);
                 let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))

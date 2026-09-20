@@ -1,3 +1,4 @@
+mod ai;
 mod app;
 mod archive;
 mod claude;
@@ -8,6 +9,7 @@ mod dirs;
 mod guard;
 mod host;
 mod index;
+mod ledger;
 mod mcp;
 mod model;
 mod names;
@@ -28,6 +30,8 @@ mod search_app_tests;
 mod select_app_tests;
 #[cfg(test)]
 mod testkit;
+#[cfg(test)]
+mod tokens_app_tests;
 mod usage;
 #[cfg(test)]
 mod wheel_app_tests;
@@ -47,6 +51,11 @@ fn main() -> io::Result<()> {
         Some("statusline") => return statusline(),
         Some("setup") => return setup(),
         Some("themes") => return themes(),
+        Some("tokens") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let (mut out, mut err) = (io::stdout(), io::stderr());
+            std::process::exit(ai::tokens_cli(&args, &usage::cache_dir(), &archive::config_dir(), &mut out, &mut err));
+        }
         Some("open") => {
             require_setup();
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -58,7 +67,7 @@ fn main() -> io::Result<()> {
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id] | themes]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the color themes, the built-in ones and your own\n  statusline, hook guard   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id] | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
@@ -127,6 +136,10 @@ fn setup() -> io::Result<()> {
             std::process::exit(1);
         }
     }
+    // The one extra question. It never changes what setup did or the exit code.
+    use std::io::IsTerminal;
+    let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
+    setup::ask_about_tokens(&archive::config_dir(), interactive, &mut io::stdin().lock(), &mut io::stdout());
     Ok(())
 }
 
@@ -1349,7 +1362,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 8);
+        assert_eq!(ITEMS.len(), 16, "eight entries, the master switch, one per token feature, and five limits");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -1564,7 +1577,7 @@ mod tests {
     fn settings_float_over_a_faded_list_and_a_click_outside_closes_them() {
         let (_w, mut app) = mixed_app("popup");
         ch(&mut app, 's');
-        let mut term = Terminal::new(TestBackend::new(120, 60)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 100)).unwrap();
         let shown = draw(&mut term, &app);
         // The list is still there behind it...
         assert!(shown.contains("platoon") && flat(&shown).contains("1 Active 3") && shown.contains("Settings"), "{shown}");
@@ -1592,32 +1605,36 @@ mod tests {
         let (_w, mut app) = mixed_app("popup-size");
         ch(&mut app, 's');
         // Tall terminal: floats with air above and below.
-        let mut tall = Terminal::new(TestBackend::new(110, 70)).unwrap();
+        let mut tall = Terminal::new(TestBackend::new(110, 110)).unwrap();
         let shown = draw(&mut tall, &app);
         let (first, last) = (
             shown.lines().position(|l| l.contains("Settings")).unwrap(),
             shown.lines().enumerate().filter(|(_, l)| l.contains("esc back")).map(|(i, _)| i).last().unwrap(),
         );
         assert!(first > 1 && shown.lines().count() - last > 3, "not stretched to the screen:\n{shown}");
-        // 100x60 and 140x60: every explanation fits.
+        // 100x100 and 140x100: every explanation fits.
         for cols in [100, 140] {
-            let mut term = Terminal::new(TestBackend::new(cols, 60)).unwrap();
+            let mut term = Terminal::new(TestBackend::new(cols, 100)).unwrap();
             let text = popup_flat(&draw(&mut term, &app));
             for item in ITEMS.iter() {
-                assert!(text.contains(item.explain), "{}: cut off at {cols}x60", item.name);
+                assert!(text.contains(item.explain), "{}: cut off at {cols}x100", item.name);
             }
         }
-        // 80x24 has room for the entries and one explanation: the selected one, whole, and it moves with the selection.
+        // 80x24 has room for the selected entry and its explanation, whole, and a window of the others: the list
+        // scrolls as the selection moves, and only the selected entry is explained.
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
         for (i, item) in ITEMS.iter().enumerate() {
             while app.setting < i {
                 key(&mut app, KeyCode::Down);
             }
-            let text = popup_flat(&draw(&mut term, &app));
-            for (j, other) in ITEMS.iter().enumerate() {
-                assert!(text.contains(other.name), "{}: missing at 80x24", other.name);
-                assert_eq!(text.contains(other.explain), j == i, "{} is explained only while selected ({})", other.name, item.name);
+            let shown = draw(&mut term, &app);
+            let text = popup_flat(&shown);
+            assert!(text.contains(item.name) && text.contains(item.explain), "{} is shown with its explanation at 80x24:\n{shown}", item.name);
+            assert!(text.contains("esc back") && text.contains("Used today"), "{shown}");
+            for (j, other) in ITEMS.iter().enumerate().filter(|(j, _)| *j != i) {
+                assert!(!text.contains(other.explain), "{} is explained only while selected ({}, {j})", other.name, item.name);
             }
+            assert!(shown.matches('›').count() >= 7, "a window of entries stays in view:\n{shown}");
         }
     }
 
@@ -1839,21 +1856,25 @@ mod tests {
             a
         };
         let file = "settings.json";
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (100, 60), (140, 60), (60, 20), (80, 20)] {
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (100, 100), (140, 100), (60, 20), (80, 20)] {
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
             let ctx = format!("{cols}x{rows}\n{shown}");
             // Where every explanation doesn't fit with room to breathe, the selected one does (and is whole).
-            let roomy = rows >= 60;
+            let roomy = rows >= 100;
+            // Below 30 rows the list scrolls: the selected entry (the first) is whole, the others come as far as there is room.
+            let all_names = rows >= 30;
             for (i, item) in ITEMS.iter().enumerate() {
-                assert!(text.contains(item.name), "{ctx}");
+                assert!(text.contains(item.name) || !(all_names || i == 0), "{ctx}");
                 let must_explain = roomy || i == 0;
                 assert!(!must_explain || text.contains(item.explain), "explanation cut off or mangled at {ctx}");
             }
-            for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "Changes are saved and apply immediately.", "enter next choice", "esc back", file] {
+            for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "enter next choice", "esc back", file] {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
+            assert!(rows < 30 || text.contains("Changes are saved and apply immediately."), "{ctx}");
+            assert!(rows < 24 || text.contains("Used today: 0 of 500,000 tokens"), "{ctx}");
             let lower = text.to_lowercase();
             for jargon in ["sigterm", "host", "index", "pid", "json:"] {
                 assert!(!lower.contains(jargon), "{jargon:?} in {ctx}");
