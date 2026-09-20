@@ -2,6 +2,7 @@ mod app;
 mod archive;
 mod claude;
 mod client;
+mod clipboard;
 mod colordepth;
 mod dirs;
 mod guard;
@@ -11,6 +12,7 @@ mod mcp;
 mod model;
 mod open;
 mod procs;
+mod select;
 mod setup;
 mod settings;
 mod theme;
@@ -18,6 +20,8 @@ mod ui;
 mod usertheme;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod select_app_tests;
 #[cfg(test)]
 mod testkit;
 mod usage;

@@ -186,16 +186,18 @@ fn a_background_index_of_thousands_fills_progressively_without_blocking_the_call
     let t = Instant::now();
     let mut ix = Indexer::spawn(&w.root, &w.cache);
     assert!(t.elapsed() < Duration::from_millis(500), "spawn must return at once, took {:?}", t.elapsed());
-    let (mut first_seen, mut polls) = (None, 0);
     while ix.entries.len() < 1500 {
         ix.poll();
-        polls += 1;
-        if first_seen.is_none() && !ix.entries.is_empty() {
-            first_seen = Some(ix.entries.len());
-        }
         assert!(t.elapsed() < Duration::from_secs(60), "indexed {} of 1500", ix.entries.len());
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert!(first_seen.unwrap() < 1500, "rows must arrive in batches, not all at the end");
-    assert!(polls > 1);
+    // That rows arrive in batches is checked on the scanner itself. Watching for a half-filled index from here
+    // depends on this thread being scheduled between two batches, which a busy machine does not promise.
+    let mut batches = Vec::new();
+    Scanner::load(&w.root, &w.base.join("cache-batches")).scan(&mut |u| {
+        batches.push(u.upserts.len());
+        true
+    });
+    assert!(batches.len() > 1 && batches[0] < 1500, "rows must arrive in batches, not all at the end: {batches:?}");
+    assert_eq!(batches.iter().sum::<usize>(), 1500);
 }

@@ -44,6 +44,15 @@ impl Client {
         Ok(Self { parser, stream, closed, size: (rows, cols) })
     }
 
+    /// A client with nothing behind it, for tests: the emulator is fed by hand, and what the client writes
+    /// can be read from the other end of the pair (the "host").
+    #[cfg(test)]
+    pub fn for_test(rows: u16, cols: u16) -> (Self, UnixStream) {
+        let (stream, host) = UnixStream::pair().unwrap();
+        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, SCROLLBACK)));
+        (Self { parser, stream, closed: Arc::new(AtomicBool::new(false)), size: (rows, cols) }, host)
+    }
+
     pub fn closed(&self) -> bool {
         self.closed.load(Ordering::Relaxed)
     }

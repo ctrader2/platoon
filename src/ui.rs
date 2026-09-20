@@ -1,10 +1,11 @@
 use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
+use crate::select::{Selection, Span as Cells};
 use crate::model::{Session, Status};
 use crate::settings::{Kind, Step, ITEMS};
 use crate::usage::Usage;
-use crate::theme::Theme;
+use crate::theme::{contrast, Theme};
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -15,6 +16,8 @@ use ratatui::{
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const BAR_WIDTH: usize = 10;
+/// The session's own text color is kept on a selected cell as long as it reads this well against the highlight.
+const SELECTION_MIN_FG_CONTRAST: f64 = 3.0;
 
 type Hint<'a> = (&'a str, &'a str, Option<Action>);
 
@@ -984,18 +987,23 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
 fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rect) {
     let t = app.effective_theme();
     let [term, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
-    draw_terminal(f, t, client, term);
-    if app.attached_paused() {
+    let paused = app.attached_paused();
+    draw_terminal(f, t, client, term, if paused { None } else { app.selection });
+    if paused {
         draw_paused_banner(f, app, term);
     }
     let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
-    let right = if scrolled > 0 {
+    let right = if let Some(notice) = app.active_notice() {
+        // "Copied 3 lines": what just happened wins over the standing text.
+        notice.to_string()
+    } else if scrolled > 0 {
         format!("↑ scrolled {scrolled} lines · type to return")
     } else {
         tilde(dir, &app.home)
     };
     let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
-    draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, t.dim)));
+    let color = if app.active_notice().is_some() { t.warn } else { t.dim };
+    draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }
 
 /// Covers the session when this copy is no longer safe to write to. Keys aren't forwarded while it shows.
@@ -1026,9 +1034,10 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// Paint the attached session into the buffer.
-fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect) {
+fn draw_terminal(f: &mut Frame, t: &Theme, client: &Client, area: Rect, selection: Option<Selection>) {
     let parser = client.parser.lock().unwrap_or_else(|x| x.into_inner());
-    draw_screen(f, t, parser.screen(), area);
+    let screen = parser.screen();
+    draw_screen(f, t, screen, area, selection.and_then(|s| s.span(screen)));
 }
 
 /// The emulator's colors as the theme shows them: the 16 ANSI colors become the theme's palette (when it has
@@ -1045,9 +1054,12 @@ fn vt_color(c: vt100::Color, default: Color, ansi: Option<&[Color; 16]>) -> Colo
     }
 }
 
-/// Paint an emulator screen into the buffer, cell by cell.
-fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect) {
+/// Paint an emulator screen into the buffer, cell by cell. Cells in `selected` are drawn as selected text on
+/// top of the session's own colors: on the theme's selection color (see `Theme::selection_bg`), keeping the
+/// text's color unless that would not read on it, or reversed where the theme has no colors of its own.
+fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, selected: Option<Cells>) {
     let (rows, cols) = screen.size();
+    let selection_bg = t.selection_bg();
     let buf = f.buffer_mut();
     for r in 0..rows.min(area.height) {
         for c in 0..cols.min(area.width) {
@@ -1065,6 +1077,20 @@ fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect) {
                     m |= Modifier::REVERSED;
                 } else {
                     std::mem::swap(&mut fg, &mut bg);
+                }
+            }
+            if selected.is_some_and(|s| s.contains(r, c)) {
+                match selection_bg {
+                    Some(sel) => {
+                        bg = sel;
+                        // A dim gray or a color close to the highlight would vanish on it. (Only colors with
+                        // numbers can be measured; the session's 256-color ones are left as they are.)
+                        if matches!(fg, Color::Rgb(..)) && contrast(fg, sel) < SELECTION_MIN_FG_CONTRAST {
+                            fg = t.text;
+                        }
+                    }
+                    // Toggled, so a cell that was already reversed (inverse video) changes too.
+                    None => m ^= Modifier::REVERSED,
                 }
             }
             if cell.bold() {
@@ -1147,7 +1173,7 @@ mod tests {
         let mut parser = vt100::Parser::new(4, 12, 0);
         parser.process(bytes);
         let mut term = Terminal::new(TestBackend::new(12, 4)).unwrap();
-        term.draw(|f| draw_screen(f, theme, parser.screen(), f.area())).unwrap();
+        term.draw(|f| draw_screen(f, theme, parser.screen(), f.area(), None)).unwrap();
         term.backend().buffer().clone()
     }
 

@@ -53,6 +53,8 @@ pub struct Term {
     writer: Box<dyn Write + Send>,
     rx: Receiver<Vec<u8>>,
     screen: vt100::Parser,
+    /// Every byte the program wrote, for what the screen model cannot show (an OSC 52 clipboard write).
+    raw: Vec<u8>,
 }
 
 impl Term {
@@ -65,6 +67,7 @@ impl Term {
         cmd.env("NO_COLOR", "1");
         cmd.env("PLATOON_BADGES", "square"); // the same text whatever terminal the tests run in
         cmd.env("PLATOON_COLORS", "truecolor"); // and the same colors
+        cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -83,7 +86,7 @@ impl Term {
         });
         // Keep the master alive for the life of the Term by leaking it into a thread-less holder.
         std::mem::forget(pair.master);
-        Self { child, writer, rx, screen: vt100::Parser::new(rows, cols, 200) }
+        Self { child, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new() }
     }
 
     pub fn send(&mut self, bytes: &[u8]) {
@@ -94,14 +97,22 @@ impl Term {
     fn drain(&mut self, wait: Duration) {
         if let Ok(b) = self.rx.recv_timeout(wait) {
             self.screen.process(&b);
+            self.raw.extend_from_slice(&b);
         }
     }
 
     pub fn text(&mut self) -> String {
         while let Ok(b) = self.rx.try_recv() {
             self.screen.process(&b);
+            self.raw.extend_from_slice(&b);
         }
         self.screen.screen().contents()
+    }
+
+    /// Everything the program has written so far, byte for byte.
+    pub fn raw(&mut self) -> Vec<u8> {
+        self.text();
+        self.raw.clone()
     }
 
     /// The background color of a screen cell, as the terminal was told to draw it.
@@ -187,6 +198,7 @@ impl Term {
                 // Its last output may still be in flight through the pty: take it before reading the screen.
                 while let Ok(b) = self.rx.recv_timeout(Duration::from_millis(100)) {
                     self.screen.process(&b);
+                    self.raw.extend_from_slice(&b);
                 }
                 return status.exit_code();
             }

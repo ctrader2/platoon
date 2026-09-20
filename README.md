@@ -202,6 +202,49 @@ Each one runs under a small background host, so quitting platoon (or closing its
 `Ctrl+Space` leaves a session without stopping it. A session nobody has looked at for a while does stop
 itself (see [Automatic clean-up](#automatic-clean-up)); `enter` picks the conversation up again.
 
+## Copying text from a session
+
+platoon takes over the mouse while you look at a session (that is what makes the wheel scroll it and the
+`ctrl+space back to list` hint clickable), so the terminal's own drag-to-select does not get the drag. platoon
+does the selecting itself instead:
+
+| Do | Result |
+| --- | --- |
+| Drag with the left button | highlights the text under the drag; letting go copies it (like tmux) |
+| Double-click | selects a word and copies it; drag on after the second click to add more words |
+| Triple-click | selects the whole line (all the rows of it, if the terminal wrapped it) and copies it |
+| Click | clears the highlight; copies nothing |
+| Hold `shift` and drag | the terminal's own selection, as in any terminal (in Ghostty, Xfce Terminal and most others) |
+
+A note in the status bar says what was copied (`Copied 3 lines`, `Copied 12 characters`), or that nothing could
+be, in which case hold `shift` and drag.
+
+- The selection is of what is on screen, in reading order: the rest of the first row, whole rows in between, the start
+  of the last. Rows the terminal wrapped are joined without a line break, real line breaks stay, trailing spaces are
+  dropped, and a selection of nothing but blanks copies nothing. Dragging past the edge of the session sticks to that
+  edge (it does not scroll).
+- A word is letters, digits and the characters that live inside paths and URLs (`_ - . / : ~ @ % + = # ? &`), so a
+  path, a URL or `--flag=value` is one word. Quotes, brackets, commas, `|`, `$` and box-drawing characters end a
+  word, and a full stop, colon or question mark right at its end is left off unless you clicked on it.
+- The highlight is drawn in a color made from your theme (its background moved toward its accent; Terminal colors
+  draws selected text reversed). It goes away when you type, paste, scroll the wheel, resize the window or leave the
+  session. The wheel scrolls as before, and turning it drops the selection.
+- The text goes to the **system clipboard and the primary selection** (so middle-click pastes it, too), through
+  platoon itself: nothing like `xclip` or `wl-copy` needs to be installed. It is also sent to the terminal as an
+  **OSC 52** sequence, which Ghostty, kitty, WezTerm and iTerm2 turn into a copy of their own, and which is what makes
+  copying work over SSH. Terminals without OSC 52 (Xfce Terminal, for one) ignore it.
+- **On X11** the program that put text on the clipboard is the one that hands it to whoever pastes, so what
+  platoon copied stays pasteable while platoon runs and goes away when it quits, unless a clipboard manager (Xfce's
+  Clipman, for example, if it is running) took a copy. On Wayland arboard leaves a small background process to do the
+  same. Copies made through OSC 52 belong to the terminal and stay.
+- `PLATOON_CLIPBOARD` chooses where copies go: `system` (the default: system clipboard and OSC 52), `osc52` (only
+  the terminal sequence) or `none` (nothing is copied; selecting still highlights and says what was selected).
+- Text over 512 KiB is cut at that size, and one over about 100 KB is not sent as OSC 52 (some terminals refuse
+  sequences that long), only to the system clipboard; the status bar says when either happened.
+
+`platoon open` in a regular terminal does not take over the mouse: platoon passes the session's output straight
+through, so the terminal's own selection and copy work as usual.
+
 ## See a session live from a regular terminal
 
 ```

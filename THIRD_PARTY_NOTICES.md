@@ -42,3 +42,15 @@ platoon's own hand-tuned selection from the Catppuccin palette.
 
 Claude and Claude Code are trademarks of Anthropic. The Claude theme only borrows the look of Claude Code's
 interface; it is not an official Anthropic product.
+
+## Libraries
+
+platoon copies selected text to the system clipboard with [arboard](https://github.com/1Password/arboard) (1Password),
+which is dual-licensed MIT OR Apache-2.0 (its `Cargo.toml` says `license = "MIT OR Apache-2.0"`, and both license
+texts ship in the crate). It is used as a library, built without its image support and with its Wayland support.
+
+What that adds to the build, by the license each crate declares in its metadata: MIT OR Apache-2.0 (arboard, x11rb,
+x11rb-protocol, percent-encoding, petgraph, cc, pkg-config, shlex, find-msvc-tools), MIT (wayland-backend,
+wayland-client, wayland-protocols, wayland-protocols-wlr, wayland-scanner, wayland-sys, os_pipe, quick-xml,
+tree_magic_mini), MIT/Apache-2.0 (wl-clipboard-rs) and Apache-2.0 (gethostname). Versions are pinned in `Cargo.lock`.
+(The macOS and Windows crates arboard uses on those systems are not part of a Linux build.)

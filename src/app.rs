@@ -1,11 +1,13 @@
 use crate::archive::{self, Archive};
 use crate::claude::{self, Live, Reader};
 use crate::client::{key_bytes, Client};
+use crate::clipboard::Clipboard;
 use crate::dirs;
 use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
 use crate::model::{Proc, Session, Status};
+use crate::select::{click_count, extract, Click, Point, Selection, Unit};
 use crate::settings::{Kind, SettingsStore, Step, ITEMS};
 use crate::setup;
 use crate::theme::Theme;
@@ -211,6 +213,16 @@ pub struct App {
     spawned: Vec<std::process::Child>,
     pub notice: Option<(String, Instant, Duration)>,
     pub mouse: (u16, u16),
+    /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
+    /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
+    pub selection: Option<Selection>,
+    /// The left button is held and the selection follows the mouse.
+    dragging: bool,
+    /// The last press in the session's screen, for double and triple clicks.
+    last_click: Option<Click>,
+    /// Where copied text goes. Lives as long as the app: on X11 the program that set the clipboard is the one
+    /// that hands it to whoever pastes, so it has to stay around for the text to stay pasteable.
+    clipboard: Clipboard,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
     pub rounded: bool,
     pub home: String,
@@ -261,6 +273,7 @@ impl App {
         let indexer = Indexer::spawn(reader.root(), &cache);
         let mut app = Self::build(reader, cache, archive::config_dir(), indexer);
         app.rounded = detect_rounded();
+        app.clipboard = Clipboard::from_env();
         app
     }
 
@@ -288,6 +301,11 @@ impl App {
             spawned: Vec::new(),
             notice: None,
             mouse: (0, 0),
+            selection: None,
+            dragging: false,
+            last_click: None,
+            // Nothing is ever copied by an App that was not asked to: `new` and tests choose.
+            clipboard: Clipboard::off(),
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             tick: 0,
@@ -441,6 +459,14 @@ impl App {
         if let Some(c) = &mut self.client {
             c.resize(rows, cols);
         }
+        self.clear_selection();
+    }
+
+    /// Where the session's screen is drawn in the attached view: inside the frame and above the status bar.
+    /// The same numbers as `pty_size` and `ui::draw_attached`.
+    pub fn term_area(&self) -> Rect {
+        let (rows, cols) = self.pty_size();
+        Rect::new(1, 1, cols, rows)
     }
 
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
@@ -469,6 +495,7 @@ impl App {
             if self.client.as_ref().map_or(true, |c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid) {
                 self.mode = Mode::List;
                 self.client = None;
+                self.clear_selection();
                 self.notify("Session ended");
             }
         }
@@ -827,6 +854,7 @@ impl App {
     fn detach(&mut self) {
         self.client = None;
         self.mode = Mode::List;
+        self.clear_selection();
     }
 
     fn attach(&mut self, pid: u32) {
@@ -839,6 +867,7 @@ impl App {
             Ok(c) => {
                 self.client = Some(c);
                 self.mode = Mode::Attached(pid);
+                self.clear_selection();
                 if let Some(s) = self.sessions.iter_mut().find(|s| s.procs.iter().any(|p| p.pid == pid)) {
                     s.unread = false;
                 }
@@ -1077,6 +1106,8 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match self.mode.clone() {
             Mode::Attached(_) => {
+                // Typing moves the screen on (and the highlight would no longer be over what was selected).
+                self.clear_selection();
                 // The prefix chord: everything else goes to Claude.
                 if ctrl && key.code == KeyCode::Char(' ') {
                     self.detach();
@@ -1181,6 +1212,7 @@ impl App {
         match self.mode.clone() {
             Mode::Attached(_) if self.attached_paused() => {}
             Mode::Attached(_) => {
+                self.clear_selection();
                 if let Some(c) = self.client.as_mut() {
                     c.reset_scroll();
                     c.write(format!("\x1b[200~{text}\x1b[201~").as_bytes());
@@ -1209,6 +1241,9 @@ impl App {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
                     Mode::Attached(_) => {
+                        // Scrolling changes which text is under the highlight, and a selection is only of what is
+                        // on screen, so it is dropped.
+                        self.clear_selection();
                         if let Some(c) = &self.client {
                             c.scroll(if up { 3 } else { -3 });
                         }
@@ -1243,11 +1278,83 @@ impl App {
                     // The previewed entry is the one that gets kept: clicking it again is "use this".
                     Some(Hit::ThemeRow(i)) if i == self.tpick.selected => self.act(Action::Confirm),
                     Some(Hit::ThemeRow(i)) => self.select_theme(i),
-                    Some(Hit::Inert) | None => {}
+                    Some(Hit::Inert) => {}
+                    // Nothing clickable here: in the attached view that is the session's own text.
+                    None => self.begin_selection(m),
                 }
             }
+            MouseEventKind::Drag(MouseButton::Left) => self.extend_selection(m),
+            MouseEventKind::Up(MouseButton::Left) => self.finish_selection(),
             _ => {}
         }
         self.update_view();
+    }
+
+    fn clear_selection(&mut self) {
+        self.selection = None;
+        self.dragging = false;
+    }
+
+    /// A press on the session's text starts a selection (a double or triple click one by word or line). It only
+    /// counts as a selection once it covers something: a plain click just clears the old one. Never on the status
+    /// bar, the frame, or a session that is paused (its text is under the banner).
+    fn begin_selection(&mut self, m: MouseEvent) {
+        self.clear_selection();
+        if !matches!(self.mode, Mode::Attached(_)) || self.client.is_none() || self.attached_paused() {
+            return;
+        }
+        let area = self.term_area();
+        if !area.contains((m.column, m.row).into()) {
+            return;
+        }
+        let at = Point::new(m.row - area.y, m.column - area.x);
+        let now = Instant::now();
+        let count = click_count(self.last_click, now, at);
+        self.last_click = Some(Click { at: now, point: at, count });
+        let unit = match count {
+            1 => Unit::Char,
+            2 => Unit::Word,
+            _ => Unit::Line,
+        };
+        self.selection = Some(Selection::new(at, unit));
+        self.dragging = true;
+    }
+
+    /// Dragging past an edge of the session's screen sticks to that edge (no scrolling in v1).
+    fn extend_selection(&mut self, m: MouseEvent) {
+        if !self.dragging {
+            return;
+        }
+        let area = self.term_area();
+        let col = m.column.clamp(area.x, area.right().saturating_sub(1)) - area.x;
+        let row = m.row.clamp(area.y, area.bottom().saturating_sub(1)) - area.y;
+        if let Some(sel) = &mut self.selection {
+            sel.head = Point::new(row, col);
+        }
+    }
+
+    /// Letting go copies what is selected, once. A press that never moved (a click) copies nothing, and neither
+    /// does a selection of only blanks: both are dropped.
+    fn finish_selection(&mut self) {
+        if !std::mem::take(&mut self.dragging) {
+            return;
+        }
+        let (Some(sel), Some(client)) = (self.selection, &self.client) else { return };
+        let text = {
+            let parser = client.parser.lock().unwrap_or_else(|e| e.into_inner());
+            sel.span(parser.screen()).map(|span| extract(parser.screen(), span))
+        };
+        match text {
+            Some(text) if !text.is_empty() => {
+                let outcome = self.clipboard.copy(&text);
+                self.notify(outcome.notice());
+            }
+            _ => self.selection = None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn set_clipboard_for_test(&mut self, clipboard: Clipboard) {
+        self.clipboard = clipboard;
     }
 }

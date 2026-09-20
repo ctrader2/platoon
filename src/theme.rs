@@ -55,6 +55,11 @@ impl Default for Theme {
 
 pub const DEFAULT_ID: &str = "catppuccin-mocha";
 
+/// How far the selection color is from the background toward the accent.
+const SELECTION_MIX: f64 = 0.30;
+/// What the theme's text must reach on the selection color (WCAG's floor for normal text).
+pub const SELECTION_TEXT_CONTRAST: f64 = 4.5;
+
 /// Where a role's color comes from.
 #[derive(Clone, Copy)]
 enum Pick {
@@ -361,6 +366,17 @@ impl Theme {
     /// One of the user's own theme files rather than a built-in.
     pub fn is_user(&self) -> bool {
         self.id.starts_with(crate::usertheme::ID_PREFIX)
+    }
+
+    /// The background of selected text in an attached session: the theme's background moved part of the way
+    /// to its accent, so it is recognisably this theme's and clearly not the background, then darkened as far
+    /// as it takes for the theme's text to keep `SELECTION_TEXT_CONTRAST` on it. None when the theme has no
+    /// colors of its own to mix (Terminal colors), where selected cells are drawn reversed instead.
+    pub fn selection_bg(&self) -> Option<Color> {
+        if ![self.bg, self.text, self.accent].iter().all(|c| matches!(c, Color::Rgb(..))) {
+            return None;
+        }
+        Some(lift_contrast(mix(self.bg, self.accent, SELECTION_MIX), self.text, self.bg, SELECTION_TEXT_CONTRAST))
     }
 
     /// Whatever the terminal has: its default colors for the background and text, and its own ANSI colors for
@@ -828,5 +844,43 @@ mod tests {
         let color = render_list(Some(Depth::TrueColor), &reg);
         assert!(color.contains("48;2;10;22;34m"), "the user theme's swatch is on its own background");
         assert!(color.contains("Sunny: light themes aren't supported") && !color.contains("skipped in \x1b"));
+    }
+    #[test]
+    fn the_selection_color_keeps_the_themes_text_readable_and_is_clearly_not_the_background() {
+        for t in fixed() {
+            let sel = t.selection_bg().unwrap_or_else(|| panic!("{} has colors of its own", t.id));
+            assert!(contrast(t.text, sel) >= SELECTION_TEXT_CONTRAST, "{}: text on the selection is {:.2}", t.id, contrast(t.text, sel));
+            // (Session text that reads worse than 3:1 on the selection is swapped for `text` when drawn.)
+            assert!(contrast(t.subtext, sel) >= 2.5, "{}: the muted text is still there on it ({:.2})", t.id, contrast(t.subtext, sel));
+            assert!(contrast(sel, t.bg) >= 1.5, "{}: the selection stands out from the background ({:.2})", t.id, contrast(sel, t.bg));
+            assert!(delta_e(sel, t.bg) >= 15.0, "{}: and is a different color, not just a different lightness ({:.1})", t.id, delta_e(sel, t.bg));
+            assert_ne!(sel, t.bg);
+        }
+    }
+
+    #[test]
+    fn the_selection_color_is_still_distinct_and_readable_after_the_256_color_pass() {
+        use crate::colordepth::rgb_to_256;
+        let xterm = |i: u8| -> Color {
+            let cube = [0u8, 95, 135, 175, 215, 255];
+            match i {
+                16..=231 => Color::Rgb(cube[usize::from((i - 16) / 36)], cube[usize::from((i - 16) / 6 % 6)], cube[usize::from((i - 16) % 6)]),
+                _ => Color::Rgb(8 + 10 * (i - 232), 8 + 10 * (i - 232), 8 + 10 * (i - 232)),
+            }
+        };
+        let quantized = |c: Color| match c {
+            Color::Rgb(r, g, b) => xterm(rgb_to_256(r, g, b)),
+            other => other,
+        };
+        for t in fixed() {
+            let (sel, bg, text) = (quantized(t.selection_bg().unwrap()), quantized(t.bg), quantized(t.text));
+            assert_ne!(sel, bg, "{}: the highlight must not vanish into the background", t.id);
+            assert!(contrast(text, sel) >= 4.0, "{}: text on the selection in 256 colors is {:.2}", t.id, contrast(text, sel));
+        }
+    }
+
+    #[test]
+    fn terminal_colors_has_no_selection_color_because_it_has_no_colors_to_mix() {
+        assert_eq!(Theme::by_id("terminal").unwrap().selection_bg(), None);
     }
 }
