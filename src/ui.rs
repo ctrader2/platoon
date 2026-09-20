@@ -261,7 +261,7 @@ fn cols(width: u16) -> Cols {
     let w = width as usize;
     let branch = if w >= 90 { 16 } else { 0 };
     let model = if w >= 100 { 12 } else { 0 };
-    let status = 9;
+    let status = 11; // room for "Background" and a space
     let flex = w.saturating_sub(fixed + branch + model + status);
     Cols { name: flex * 2 / 5, dir: flex - flex * 2 / 5, branch, model, status }
 }
@@ -328,6 +328,9 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
         (Status::Busy, _) => Look { marker: SPINNER[(tick % 10) as usize], marker_color: t.busy, status: "working", status_color: t.busy },
         (Status::Idle, true) => Look { marker: "●", marker_color: if pulse_on { t.ok } else { t.dim }, status: "done", status_color: t.ok },
         (Status::Idle, false) => Look { marker: "○", marker_color: t.dim, status: "idle", status_color: t.dim },
+        // The accent: every theme keeps it apart from the working, done and warning colors (`MIN_DELTA_E`) and
+        // readable on the background (`MIN_ROLE`), so a running-in-the-background row can't be mistaken for those.
+        (Status::Background, _) => Look { marker: "◆", marker_color: t.accent, status: "Background", status_color: t.accent },
     }
 }
 

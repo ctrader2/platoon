@@ -231,7 +231,7 @@ mod tests {
     }
 
     fn hosted(pid: u32) -> crate::host::HostInfo {
-        crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), sock: Default::default() }
+        crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() }
     }
 
     fn row_of(app: &App, id: &str) -> usize {
@@ -999,6 +999,201 @@ mod tests {
             }
         }
         assert!(app.hosts.is_empty(), "claude didn't exit after SIGTERM");
+    }
+
+    // --- background sessions (run by Claude's own service) -------------------------------------------
+
+    const BG_ID: &str = "dffac639-c805-47ba-b57c-3767f4f768d8";
+
+    /// A saved conversation that Claude's service is running in the background (attach id `dffac639`), an ordinary
+    /// idle one next to it, and the real process standing in for the background one.
+    fn bg_world(name: &str) -> (World, u32) {
+        let mut w = World::new(name);
+        w.transcript(BG_ID, "/srv/alpha", "continue the release", 30);
+        w.transcript("plain-1", "/srv/beta", "write the docs", 40);
+        let pid = w.live_bg(BG_ID, "/srv/alpha", 1);
+        (w, pid)
+    }
+
+    fn session<'a>(app: &'a App, id: &str) -> &'a crate::model::Session {
+        &app.sessions[app.sessions.iter().position(|s| s.id == id).unwrap()]
+    }
+
+    #[test]
+    fn a_background_session_is_listed_as_background_on_the_active_tab_instead_of_idle() {
+        let (w, pid) = bg_world("bg-listed");
+        let app = w.app();
+        let s = session(&app, BG_ID);
+        assert_eq!(s.status, Status::Background);
+        assert_eq!(s.procs.iter().map(|p| (p.pid, p.background.as_deref(), p.hosted, p.stale)).collect::<Vec<_>>(), [(pid, Some("dffac639"), false, false)]);
+        assert!(!s.unread && !s.archived);
+        assert_eq!(session(&app, "plain-1").status, Status::Idle, "everything else is as before");
+        assert_eq!(ids(&app), [BG_ID, "plain-1"]);
+        assert_eq!(app.counts, [2, 0]);
+        assert!(alive(pid));
+    }
+
+    #[test]
+    fn a_background_session_stays_on_the_active_tab_even_if_the_archive_lists_it() {
+        let (w, _pid) = bg_world("bg-archived");
+        std::fs::create_dir_all(&w.config).unwrap();
+        std::fs::write(w.config.join("archive.json"), format!(r#"{{"version":1,"archived":{{"{BG_ID}":5,"plain-1":5}}}}"#)).unwrap();
+        let app = w.app();
+        assert!(!session(&app, BG_ID).archived && session(&app, "plain-1").archived);
+        assert_eq!((app.counts.clone(), ids(&app)), (vec![1, 1], vec![BG_ID]));
+    }
+
+    #[test]
+    fn the_services_idle_spare_processes_are_not_conversations_and_get_no_row() {
+        let mut w = World::new("bg-spare");
+        w.transcript("plain-1", "/srv/beta", "write the docs", 40);
+        let _keep = w.live("plain-1", "/srv/beta", 1, "idle");
+        let child = std::process::Command::new("sleep").arg("30").spawn();
+        let mut child = child.unwrap();
+        w.register_bg(child.id(), "e418370e-da3f-4c80-a610-e00ad633d874", "/srv/beta", 2, "e418370e", true);
+        let app = w.app();
+        assert_eq!(ids(&app), ["plain-1"]);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_background_row_opens_with_attach_and_never_resume() {
+        let (w, _pid) = bg_world("bg-plan");
+        let mut app = w.app();
+        app.selected = row_of(&app, BG_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("dffac639".into())));
+        // Nothing platoon would confirm or end: no dialog, no process to take over.
+        app.selected = row_of(&app, "plain-1");
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Resume), "an idle conversation is resumed as always");
+    }
+
+    #[test]
+    fn once_a_platoon_host_shows_it_the_row_joins_that_host_and_the_attach_client_is_not_a_second_copy() {
+        let (w, pid) = bg_world("bg-host");
+        let mut app = w.app();
+        // The host's own process is a plain `claude attach dffac639`: it has no registry entry (not among the live
+        // processes) but its arguments say which background session it shows.
+        let host = crate::host::HostInfo { args: vec!["attach".into(), "dffac639".into()], ..hosted(4_000_000) };
+        app.refresh_with(vec![host], false);
+        app.selected = row_of(&app, BG_ID);
+        let s = session(&app, BG_ID);
+        assert_eq!((s.status, s.procs.len(), s.procs[0].hosted, s.procs[0].stale, s.procs[0].pid), (Status::Background, 1, true, false, pid));
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(4_000_000)));
+        assert_eq!(ids(&app), [BG_ID, "plain-1"], "the attach client adds no row of its own");
+
+        // A host showing some other background session, or resuming one, is not this one.
+        let other = crate::host::HostInfo { args: vec!["attach".into(), "12345678".into()], ..hosted(4_000_001) };
+        let resumed = crate::host::HostInfo { args: vec!["--resume".into(), BG_ID.into()], ..hosted(4_000_002) };
+        app.refresh_with(vec![other, resumed], false);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("dffac639".into())));
+        assert!(!session(&app, BG_ID).procs[0].hosted);
+    }
+
+    #[test]
+    fn a_background_session_never_marks_a_terminal_copy_of_the_same_conversation_out_of_sync() {
+        let mut w = World::new("bg-shared");
+        w.transcript(BG_ID, "/srv/alpha", "continue the release", 30);
+        let (bg, term) = (w.live_bg(BG_ID, "/srv/alpha", 1), w.live(BG_ID, "/srv/alpha", 2, "idle"));
+        let mut app = w.app();
+        app.refresh_with(vec![hosted(term)], false); // no guard installed: two interactive copies WOULD be marked
+        let s = session(&app, BG_ID);
+        assert_eq!(s.procs.len(), 2);
+        assert!(s.procs.iter().all(|p| !p.stale), "{:?}", s.procs);
+        assert!(!w.cache.join("stale").join(term.to_string()).exists() && !w.cache.join("stale").join(bg.to_string()).exists());
+    }
+
+    #[test]
+    fn archiving_a_background_row_is_refused_and_touches_nothing() {
+        let (w, pid) = bg_world("bg-archive-key");
+        let mut app = w.app();
+        app.selected = row_of(&app, BG_ID);
+        ch(&mut app, 'a');
+        assert!(matches!(app.mode, Mode::List), "no dialog either: there is nothing to confirm");
+        assert!(alive(pid), "Claude's own process must not be signalled");
+        assert!(w.archive_file().is_none(), "and nothing is archived");
+        assert!(app.notice.as_ref().is_some_and(|(m, ..)| m.contains("runs in the background") && m.contains("can't archive it")), "{:?}", app.notice.as_ref().map(|n| &n.0));
+        assert!(!session(&app, BG_ID).archived);
+    }
+
+    #[test]
+    fn auto_archive_leaves_a_background_session_alone_however_old_and_never_signals_it() {
+        let mut w = World::new("bg-auto");
+        w.settings(120, 2);
+        w.transcript(BG_ID, "/srv/alpha", "started long ago", THREE_DAYS * 3);
+        w.transcript("old-plain", "/srv/beta", "also old", THREE_DAYS);
+        let pid = w.live_bg(BG_ID, "/srv/alpha", 1);
+        let mut app = w.app();
+        assert_eq!(ids(&app), [BG_ID], "the old idle conversation went to Archived; the background one stayed");
+        assert!(w.archive_file().unwrap()["archived"].get("old-plain").is_some(), "auto-archive did run");
+        assert!(w.archive_file().unwrap()["archived"].get(BG_ID).is_none());
+        // Later passes do not change their mind.
+        app.auto_archive_at_for_test(crate::usage::now() + 30 * 24 * 3600);
+        assert!(w.archive_file().unwrap()["archived"].get(BG_ID).is_none());
+        assert!(alive(pid));
+        assert!(!session(&app, BG_ID).archived && session(&app, BG_ID).status == Status::Background);
+    }
+
+    fn find_text(term: &Terminal<TestBackend>, needle: &str) -> Vec<ratatui::buffer::Cell> {
+        let buf = term.backend().buffer();
+        for y in 0..buf.area.height {
+            let row: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+            let line = row.concat();
+            if let Some(at) = line.find(needle) {
+                let x0 = line[..at].chars().count();
+                return (x0..x0 + needle.chars().count()).map(|x| buf[(x as u16, y)].clone()).collect();
+            }
+        }
+        panic!("{needle:?} is not on screen");
+    }
+
+    #[test]
+    fn the_background_status_is_drawn_in_its_own_color_in_every_theme() {
+        let (w, _pid) = bg_world("bg-colors");
+        let mut w = w;
+        w.transcript("working", "/srv/gamma", "busy one", 3);
+        let _busy = w.live("working", "/srv/gamma", 3, "busy");
+        for t in Theme::all() {
+            choose_theme(&w, &t.id);
+            let app = w.app();
+            let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            let shown = draw(&mut term, &app);
+            assert!(shown.contains("Background"), "{}: {shown}", t.id);
+            // The word and the marker before the name are in the accent, which every theme already keeps apart from
+            // the working, done and warning colors and readable on the background.
+            for c in find_text(&term, "Background") {
+                assert_eq!(c.fg, t.accent, "{}: {:?}", t.id, c.symbol());
+            }
+            let marker = find_text(&term, "◆");
+            assert_eq!(marker[0].fg, t.accent, "{}", t.id);
+            // Not mistaken for the other statuses on the same screen.
+            for (word, color) in [("working", t.busy), ("idle", t.dim)] {
+                let cell = &find_text(&term, word)[0];
+                assert_eq!(cell.fg, color, "{}: {word}", t.id);
+                assert_ne!(cell.fg, t.accent, "{}: {word} must differ from Background", t.id);
+            }
+            if t.ansi.is_some() {
+                assert!(crate::theme::contrast(t.accent, t.bg) >= crate::theme::MIN_ROLE, "{}", t.id);
+                for (name, other) in [("busy", t.busy), ("ok", t.ok), ("warn", t.warn), ("err", t.err), ("dim", t.dim)] {
+                    assert!(crate::theme::delta_e(t.accent, other) >= crate::theme::MIN_DELTA_E, "{}: Background (accent) vs {name}", t.id);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_word_background_fits_whole_on_narrow_terminals_and_the_header_still_lines_up() {
+        let (w, _pid) = bg_world("bg-narrow");
+        let app = w.app();
+        for (cols, rows) in [(110, 24), (80, 24), (60, 16)] {
+            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            let shown = draw(&mut term, &app);
+            assert!(shown.contains("Background"), "{cols}x{rows}\n{shown}");
+            let header = shown.lines().find(|l| l.contains("STATUS")).unwrap();
+            let row = shown.lines().find(|l| l.contains("Background")).unwrap();
+            let col = |l: &str, needle: &str| l[..l.find(needle).unwrap()].chars().count();
+            assert_eq!(col(header, "STATUS"), col(row, "Background"), "{cols}x{rows}: the word sits under its heading");
+        }
     }
 
     // --- the settings screen ------------------------------------------------------------------------

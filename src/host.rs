@@ -90,7 +90,18 @@ pub struct HostInfo {
     pub claude_pid: u32,
     pub host_pid: u32,
     pub dir: String,
+    /// What was run inside: the arguments after the program (`--resume <id>`, `attach <id>`, none for a new session).
+    pub args: Vec<String>,
     pub sock: PathBuf,
+}
+
+impl HostInfo {
+    /// True when this host is showing the background session `attach_id` (running `claude attach <id>`).
+    /// Such a host's own process is only an attach client: it has no registry entry, and the session it shows
+    /// is run by Claude's service, which nothing here ever signals.
+    pub fn attaches_to(&self, attach_id: &str) -> bool {
+        self.args == crate::claude::attach_args(attach_id)
+    }
 }
 
 /// Live hosts. Entries whose claude has gone are cleaned up.
@@ -110,7 +121,8 @@ pub fn discover() -> Vec<HostInfo> {
             let _ = fs::remove_file(&sock);
             continue;
         }
-        out.push(HostInfo { claude_pid: claude_pid as u32, host_pid: host_pid as u32, dir: v["dir"].as_str().unwrap_or("").to_string(), sock });
+        let args = v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        out.push(HostInfo { claude_pid: claude_pid as u32, host_pid: host_pid as u32, dir: v["dir"].as_str().unwrap_or("").to_string(), args, sock });
     }
     out
 }
@@ -234,7 +246,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // Publish only once the socket is listening, so a discovered host is always connectable.
-    let info = json!({ "claude_pid": claude_pid, "host_pid": me, "dir": dir });
+    let info = json!({ "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
     let tmp = hdir.join(format!(".{claude_pid}.tmp"));
     if fs::write(&tmp, info.to_string()).and_then(|_| fs::rename(&tmp, &info_path)).is_err() {
         return fail("couldn't write host info".into());
@@ -637,6 +649,32 @@ mod tests {
         assert!(!rig.dog.should_stop(later, 0, &mut { later - MIN }));
         // Everything clear: it does stop.
         assert!(rig.dog.should_stop(later, 0, &mut { t0 }));
+    }
+
+    #[test]
+    fn a_host_showing_a_background_session_is_never_stopped_and_only_ever_targets_its_own_child() {
+        // The host's child is a `claude attach`: no registry entry of its own. Claude's service runs the session,
+        // and its entry (kind "bg", idle) belongs to another pid. Neither may make the host stop anything.
+        let mut rig = Rig::new("bg-attach", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
+        let mut daemon_child = Command::new("sleep").arg("60").spawn().unwrap(); // stands in for the service's process
+        let v = json!({"pid": daemon_child.id(), "sessionId": "dffac639-x", "kind": "bg", "status": "idle", "jobId": "dffac639"});
+        fs::write(rig.dir.join("claude/sessions").join(format!("{}.json", daemon_child.id())), v.to_string()).unwrap();
+        let t0 = Instant::now();
+        let mut since = t0;
+        assert_eq!(rig.dog.decide(t0 + 10_000 * MIN, 0, &mut since), Decision::Keep(Reason::NotIdle), "no entry of its own: not known to be idle");
+        // Even a stray entry naming the service's pid is not this host's status: the lookup is by the host's own child.
+        assert_eq!(registry_status(&rig.dir.join("claude"), rig.child.id()), None);
+        let _ = daemon_child.kill();
+        let _ = daemon_child.wait();
+    }
+
+    #[test]
+    fn a_host_knows_which_background_session_it_shows_from_its_arguments() {
+        let info = |args: &[&str]| HostInfo { claude_pid: 1, host_pid: 2, dir: String::new(), args: args.iter().map(|a| a.to_string()).collect(), sock: PathBuf::new() };
+        assert!(info(&["attach", "dffac639"]).attaches_to("dffac639"));
+        assert!(!info(&["attach", "dffac639"]).attaches_to("dffac63"));
+        assert!(!info(&["--resume", "dffac639"]).attaches_to("dffac639"));
+        assert!(!info(&[]).attaches_to("dffac639"));
     }
 
     #[test]

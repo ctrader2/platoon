@@ -40,6 +40,7 @@ fn claude_json_in(config_dir: Option<std::ffi::OsString>, home: &str) -> PathBuf
 }
 
 /// A live Claude Code process, from its registry file.
+#[derive(Debug)]
 pub struct Live {
     pub pid: u32,
     pub id: String,
@@ -48,6 +49,26 @@ pub struct Live {
     pub name: Option<String>,
     pub started_at: u64,
     pub busy: bool,
+    /// Set for a background session: one run by Claude's own service (`claude --bg`, `claude agents`) rather than in
+    /// a terminal. It is `claude attach <id>`, never `claude --resume`, that opens it. Holds that id.
+    pub background: Option<String>,
+}
+
+impl Live {
+    pub fn is_background(&self) -> bool {
+        self.background.is_some()
+    }
+}
+
+/// The arguments that open a background session's screen: `claude attach <id>`.
+pub fn attach_args(attach_id: &str) -> [String; 2] {
+    ["attach".to_string(), attach_id.to_string()]
+}
+
+/// The id `claude attach` takes when the registry doesn't say: the first 8 characters of the session id,
+/// which is how Claude itself prints it.
+pub fn short_id(session_id: &str) -> String {
+    session_id.chars().take(8).collect()
 }
 
 pub struct Reader {
@@ -67,7 +88,8 @@ impl Reader {
         &self.root
     }
 
-    /// All live interactive processes, oldest first. Several can share one session id.
+    /// All live processes that run a conversation, oldest first: interactive ones and background sessions (see
+    /// `Live::background`). Several can share one session id.
     pub fn live(&self) -> Vec<Live> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(self.root.join("sessions")) else { return out };
@@ -98,24 +120,32 @@ pub fn registry_status(root: &Path, pid: u32) -> Option<String> {
 }
 
 fn live_from(v: &Value) -> Option<Live> {
-    if v["kind"].as_str() != Some("interactive") {
-        return None;
-    }
+    let background = match v["kind"].as_str() {
+        Some("interactive") => false,
+        // Claude's own service runs these. Its idle, pre-started spares (`"spare": true`) hold no conversation yet.
+        Some("bg") if v["spare"].as_bool() != Some(true) => true,
+        _ => return None,
+    };
     let pid = v["pid"].as_u64()? as u32;
     if !pid_alive(pid) {
         return None; // stale registry file
     }
     let name = match (v["nameSource"].as_str(), v["name"].as_str()) {
-        (Some("derived") | None, _) | (_, None) => None,
+        // "derived" is the placeholder; a background session's "auto" name is Claude's own title for it.
+        (Some("derived" | "auto") | None, _) | (_, None) => None,
         (_, Some(n)) => Some(n.to_string()),
     };
+    let id = v["sessionId"].as_str()?.to_string();
+    // The short form Claude prints and `claude attach` takes is the registry's `jobId` when it has one.
+    let background = background.then(|| v["jobId"].as_str().filter(|j| !j.is_empty()).map_or_else(|| short_id(&id), String::from));
     Some(Live {
         pid,
-        id: v["sessionId"].as_str()?.to_string(),
+        id,
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         name,
         started_at: v["startedAt"].as_u64().unwrap_or(0),
         busy: v["status"].as_str() == Some("busy"),
+        background,
     })
 }
 
@@ -403,6 +433,87 @@ mod tests {
     fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
         assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
         assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
+    }
+
+    /// A pid that certainly belongs to no live process: a child that has been waited for.
+    fn dead_pid() -> u32 {
+        let mut c = std::process::Command::new("true").spawn().unwrap();
+        let pid = c.id();
+        c.wait().unwrap();
+        pid
+    }
+
+    fn entry(kind: &str, pid: u32, extra: Value) -> Value {
+        let mut v = serde_json::json!({"pid":pid,"sessionId":"dffac639-c805-47ba-b57c-3767f4f768d8","cwd":"/work","kind":kind,"startedAt":7,"status":"busy"});
+        for (k, x) in extra.as_object().unwrap() {
+            v.as_object_mut().unwrap().insert(k.clone(), x.clone());
+        }
+        v
+    }
+
+    #[test]
+    fn a_background_entry_is_a_live_process_told_apart_from_an_interactive_one() {
+        let me = std::process::id();
+        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"dffac639"}))).unwrap();
+        assert_eq!((bg.pid, bg.id.as_str(), bg.cwd.as_str(), bg.started_at, bg.busy), (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work", 7, true));
+        assert_eq!(bg.background.as_deref(), Some("dffac639"));
+        assert!(bg.is_background());
+
+        let inter = live_from(&entry("interactive", me, serde_json::json!({}))).unwrap();
+        assert!(!inter.is_background() && inter.background.is_none());
+    }
+
+    #[test]
+    fn the_attach_id_is_the_registrys_job_id_or_else_the_first_eight_characters() {
+        let me = std::process::id();
+        let job = live_from(&entry("bg", me, serde_json::json!({"jobId":"abc12345"}))).unwrap();
+        assert_eq!(job.background.as_deref(), Some("abc12345"), "what Claude itself says wins");
+        let plain = live_from(&entry("bg", me, serde_json::json!({}))).unwrap();
+        assert_eq!(plain.background.as_deref(), Some("dffac639"));
+        let empty = live_from(&entry("bg", me, serde_json::json!({"jobId":""}))).unwrap();
+        assert_eq!(empty.background.as_deref(), Some("dffac639"));
+        assert_eq!(short_id("xyz"), "xyz");
+        assert_eq!(attach_args("dffac639"), ["attach", "dffac639"]);
+    }
+
+    #[test]
+    fn a_stale_background_entry_or_one_of_the_services_idle_spares_or_another_kind_is_not_live() {
+        let me = std::process::id();
+        assert!(live_from(&entry("bg", dead_pid(), serde_json::json!({}))).is_none(), "its process has gone");
+        assert!(live_from(&entry("interactive", dead_pid(), serde_json::json!({}))).is_none());
+        // Claude keeps pre-started processes waiting for work; they hold no conversation.
+        assert!(live_from(&entry("bg", me, serde_json::json!({"spare":true,"jobId":"e418370e"}))).is_none());
+        assert!(live_from(&entry("bg", me, serde_json::json!({"spare":false}))).is_some());
+        assert!(live_from(&entry("daemon", me, serde_json::json!({}))).is_none());
+        assert!(live_from(&serde_json::json!({"pid":me,"kind":"bg"})).is_none(), "no session id");
+    }
+
+    #[test]
+    fn a_background_sessions_own_title_is_not_taken_for_a_name_the_user_chose() {
+        let me = std::process::id();
+        let auto = live_from(&entry("bg", me, serde_json::json!({"name":"Continue work and release","nameSource":"auto"}))).unwrap();
+        assert_eq!(auto.name, None);
+        let derived = live_from(&entry("interactive", me, serde_json::json!({"name":"platoon-40","nameSource":"derived"}))).unwrap();
+        assert_eq!(derived.name, None);
+        let chosen = live_from(&entry("interactive", me, serde_json::json!({"name":"my work","nameSource":"user"}))).unwrap();
+        assert_eq!(chosen.name.as_deref(), Some("my work"));
+    }
+
+    #[test]
+    fn the_reader_lists_interactive_and_background_processes_oldest_first_from_a_registry_folder() {
+        let dir = std::env::temp_dir().join(format!("platoon-claude-live-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        let me = std::process::id();
+        let put = |name: &str, v: Value| fs::write(dir.join("sessions").join(name), v.to_string()).unwrap();
+        put("1.json", entry("bg", me, serde_json::json!({"startedAt":5})));
+        put("2.json", entry("interactive", me, serde_json::json!({"startedAt":3,"sessionId":"other"})));
+        put("3.json", entry("bg", me, serde_json::json!({"startedAt":1,"spare":true,"sessionId":"spare-one"})));
+        fs::write(dir.join("sessions/4.json"), "not json").unwrap();
+        fs::write(dir.join("sessions/5.key"), "secret").unwrap();
+        let live = Reader::with_root(dir.clone()).live();
+        assert_eq!(live.iter().map(|l| (l.id.as_str(), l.is_background())).collect::<Vec<_>>(), [("other", false), ("dffac639-c805-47ba-b57c-3767f4f768d8", true)]);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

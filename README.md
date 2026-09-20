@@ -29,12 +29,12 @@ whether or not it's running. Each row shows the name, directory, branch, model, 
 context is (`~` marks platoon's estimate rather than Claude's own figure), when it was last active, and a
 one-line description. Newest activity first.
 
-Status is `working`, `done` (Claude finished and you haven't looked yet) or `idle`. Conversations that only
-ever held slash commands are hidden.
+Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, or `Background` (see
+[Background sessions](#background-sessions)). Conversations that only ever held slash commands are hidden.
 
 | Key | Does |
 | --- | --- |
-| `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory |
+| `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `1` `2` | switch between the Active and Archived tabs (or click them); the current tab is underlined and each shows a count badge |
@@ -46,6 +46,17 @@ ever held slash commands are hidden.
 Count badges are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
 WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set `PLATOON_BADGES=rounded` or
 `PLATOON_BADGES=square` to choose yourself.
+
+### Background sessions
+
+Claude Code can run a session in the background on its own (`claude --bg`, `claude agents`). Platoon reads
+those from Claude's registry (`~/.claude/sessions/*.json`, `"kind":"bg"`) and shows the row with the status
+`Background` (on the Active tab) instead of `idle`. `enter` (or `platoon open <id>`) opens it with
+`claude attach <id>` inside a platoon session window, never `claude --resume`, which Claude refuses for a
+session it is running. Leaving the window or quitting platoon ends only that window: the background session keeps
+running. Platoon never stops or archives one: the `a` key says so and does nothing, auto-archive skips it, and idle
+stop never applies to it. To end one yourself use Claude's own `claude stop <id>`. A background session is often a
+copy of another conversation, so you can see two rows with the same title; platoon doesn't try to tell them apart.
 
 ### Archive
 
@@ -62,7 +73,7 @@ Two things happen on their own, so you don't have to think about them. Nothing i
 | What | When | What you see |
 | --- | --- | --- |
 | A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
-| A conversation is archived | nothing is running it and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 conversations idle for 2+ days. Find them under Archived.`) that stays until you press a key; the first time you run this version, many old conversations can be archived at once |
+| A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 conversations idle for 2+ days. Find them under Archived.`) that stays until you press a key; the first time you run this version, many old conversations can be archived at once |
 
 Details worth knowing:
 

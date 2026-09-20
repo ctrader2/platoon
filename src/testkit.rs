@@ -100,6 +100,25 @@ impl World {
         pid
     }
 
+    /// Write the registry file of a background session (`"kind":"bg"`), shaped like Claude's own: its `jobId` is
+    /// what `claude attach` takes. `spare` makes it one of the service's idle pre-started spares.
+    pub fn register_bg(&self, pid: u32, id: &str, cwd: &str, started: u64, job_id: &str, spare: bool) {
+        let mut v = json!({"pid":pid,"sessionId":id,"cwd":cwd,"kind":"bg","startedAt":started,"status":"busy","jobId":job_id,"nameSource":"auto","name":"A title Claude made"});
+        if spare {
+            v.as_object_mut().unwrap().insert("spare".into(), json!(true));
+        }
+        fs::write(self.root.join("sessions").join(format!("{pid}.json")), v.to_string()).unwrap();
+    }
+
+    /// Like `live`, for a background session whose attach id is the first 8 characters of `id`.
+    pub fn live_bg(&mut self, id: &str, cwd: &str, started: u64) -> u32 {
+        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        self.procs.push(child);
+        self.register_bg(pid, id, cwd, started, &id[..8], false);
+        pid
+    }
+
     /// The archive file, as parsed JSON (None if it doesn't exist).
     pub fn archive_file(&self) -> Option<serde_json::Value> {
         serde_json::from_str(&fs::read_to_string(self.config.join("archive.json")).ok()?).ok()

@@ -115,6 +115,9 @@ pub enum JumpPlan {
     Attach(u32),
     /// Nothing is running it: start it again from its saved history.
     Resume,
+    /// Claude's own service runs it in the background and no platoon host is showing it yet: start one running
+    /// `claude attach <id>` (with this id). Never `--resume`, which Claude refuses for a background session.
+    AttachBackground(String),
     /// Something platoon doesn't own (or can't trust) is running it, and ending that is destructive.
     Adopt { pids: Vec<u32>, kind: AdoptKind, busy: bool },
 }
@@ -537,19 +540,38 @@ impl App {
                 s.unread = false;
                 continue;
             };
-            let shared = ls.len() > 1;
+            // Only interactive copies can fall out of sync with each other. A background session is run by
+            // Claude's own service: it is never marked stale and never counts toward "several copies".
+            let shared = ls.iter().filter(|l| !l.is_background()).count() > 1;
             for l in ls {
+                if let Some(attach_id) = &l.background {
+                    // `hosted`: a platoon host is showing it right now (its process is a `claude attach`, which has no
+                    // registry entry of its own, so it never appears among `live`).
+                    let hosted = self.hosts.iter().any(|h| h.attaches_to(attach_id));
+                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: Some(attach_id.clone()), stale: false });
+                    continue;
+                }
                 let hosted = self.hosts.iter().any(|h| h.claude_pid == l.pid);
                 if shared && hosted && !guard_on {
                     guard::mark_stale(&self.cache, l.pid, l.started_at);
                 }
                 let stale = guard::is_stale(&self.cache, l.pid, l.started_at);
-                s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, stale });
+                s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale });
             }
             if let Some(n) = ls.iter().find_map(|l| l.name.as_ref()) {
                 s.name.clone_from(n);
             }
-            s.status = if ls.iter().any(|l| l.busy) { Status::Busy } else { Status::Idle };
+            s.status = if ls.iter().any(|l| l.busy && !l.is_background()) {
+                Status::Busy
+            } else if ls.iter().any(|l| l.is_background()) {
+                Status::Background
+            } else {
+                Status::Idle
+            };
+            // A background session is on the Active tab whatever the archive says: it is running right now.
+            if s.status == Status::Background {
+                s.archived = false;
+            }
             // Unread = Claude went busy -> idle while we were watching. Starting work again clears it.
             // Sessions already idle when first seen count as read; so do ones we're looking at.
             s.unread = s.status == Status::Idle && prev.get(&s.id).is_some_and(|(st, unread)| *unread || *st == Status::Busy);
@@ -895,6 +917,14 @@ impl App {
         if s.procs.is_empty() {
             return Some(JumpPlan::Resume);
         }
+        // Claude's own service runs it: open its screen with `claude attach`, in a platoon host of our own (or
+        // the one already showing it). Ending or resuming it is not on offer.
+        if let Some(attach_id) = s.procs.iter().find_map(|p| p.background.as_ref()) {
+            return Some(match self.hosts.iter().find(|h| h.attaches_to(attach_id)) {
+                Some(h) => JumpPlan::Attach(h.claude_pid),
+                None => JumpPlan::AttachBackground(attach_id.clone()),
+            });
+        }
         if let Some(p) = s.procs.iter().find(|p| p.hosted && !p.stale) {
             return Some(JumpPlan::Attach(p.pid));
         }
@@ -918,6 +948,15 @@ impl App {
                     return;
                 }
                 if self.launch(cwd, &["--resume", &id]) {
+                    self.note_opened(&id, restore);
+                }
+            }
+            JumpPlan::AttachBackground(attach_id) => {
+                if !self.cwd_exists(&name, &cwd) {
+                    return;
+                }
+                let args = claude::attach_args(&attach_id);
+                if self.launch(cwd, &[args[0].as_str(), args[1].as_str()]) {
                     self.note_opened(&id, restore);
                 }
             }
@@ -963,6 +1002,11 @@ impl App {
             return;
         };
         let (id, name) = (s.id.clone(), s.name.clone());
+        if s.procs.iter().any(|p| p.background.is_some()) {
+            // Archiving stops what runs the conversation, and this one is run by Claude's own service.
+            self.notify(format!("\"{name}\" runs in the background, so platoon can't archive it"));
+            return;
+        }
         if s.archived {
             match self.archive.restore(&id, usage::now()) {
                 Ok(()) => self.notify(format!("Restored \"{name}\"")),
@@ -981,7 +1025,9 @@ impl App {
     /// Stop whatever runs the conversation (SIGTERM, so Claude shuts down cleanly) and move it to Archived.
     /// The transcript stays, so restoring it resumes from the saved history.
     fn archive_conversation(&mut self, id: &str, name: &str) {
-        let pids: Vec<u32> = self.sessions.iter().filter(|s| s.id == id).flat_map(|s| s.procs.iter().map(|p| p.pid)).collect();
+        // Never a background session's process: Claude's own service owns it (the archive key refuses those rows).
+        let pids: Vec<u32> =
+            self.sessions.iter().filter(|s| s.id == id).flat_map(|s| s.procs.iter().filter(|p| p.background.is_none()).map(|p| p.pid)).collect();
         if !pids.is_empty() {
             if let Err(e) = host::end_processes(&pids) {
                 self.notify(format!("Couldn't stop \"{name}\": {e}. Try again in a moment."));

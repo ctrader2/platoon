@@ -2,6 +2,9 @@
 pub enum Status {
     Busy,
     Idle,
+    /// Claude's own service runs it (`claude --bg`): platoon shows it and can open it, but never stops, archives or
+    /// otherwise touches it.
+    Background,
 }
 
 /// A live Claude Code process running a conversation. Several can share one conversation (the guard
@@ -10,8 +13,13 @@ pub enum Status {
 pub struct Proc {
     pub pid: u32,
     pub started_at: u64,
-    /// Runs under a platoon host, so platoon can attach to it.
+    /// Runs under a platoon host, so platoon can attach to it. For a background session: a platoon host is
+    /// showing it (running `claude attach`), so opening the row joins that host.
     pub hosted: bool,
+    /// Set for a background session (run by Claude's own service, not by platoon or a terminal); holds the id
+    /// `claude attach` takes. Such a process is only ever attached to: never signalled, never counted as a
+    /// copy that could fall out of sync.
+    pub background: Option<String>,
     /// This process must not write to the conversation any more: its memory can't be trusted to match it.
     pub stale: bool,
 }

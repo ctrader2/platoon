@@ -212,6 +212,22 @@ mod tests {
     }
 
     #[test]
+    fn the_guard_only_sees_interactive_processes_never_a_background_session() {
+        // Deliberate: Claude's own service owns a background session and refuses to resume it elsewhere, so it can
+        // never be a second copy; counting it here could refuse the wrong process.
+        let w = crate::testkit::World::new("guard-bg");
+        w.register(std::process::id(), "sess", "/tmp", 5, "idle");
+        let me = std::process::id();
+        let child = std::process::Command::new("sleep").arg("30").spawn();
+        let mut child = child.unwrap();
+        w.register_bg(child.id(), "sess", "/tmp", 1, "sess", false);
+        let entries = live_entries(&w.root);
+        assert_eq!(entries.iter().map(|e| e.pid).collect::<Vec<_>>(), [me]);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
     fn ancestry_finds_the_parent_chain() {
         let chain = ancestors(std::process::id());
         assert_eq!(chain[0], std::process::id());

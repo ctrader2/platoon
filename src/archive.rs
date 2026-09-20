@@ -196,14 +196,17 @@ impl Archive {
     }
 }
 
-/// Conversations to archive automatically: nothing running them, not the one being viewed (which may not
+/// Conversations to archive automatically: nothing running them (nor Claude's own service, for a background session), not the one being viewed (which may not
 /// have registered its process yet), not already
 /// archived, and no activity for `age_secs`. Activity is the later of the transcript's last entry and the
 /// last time the user restored or opened it. A conversation with no known time is never archived.
 pub fn auto_archive_ids(sessions: &[Session], archive: &Archive, now_secs: u64, age_secs: u64, viewing: Option<&str>) -> Vec<String> {
     sessions
         .iter()
-        .filter(|s| !archive.contains(&s.id) && s.procs.is_empty() && viewing != Some(s.id.as_str()))
+        // A background session is run by Claude's own service and shows as a process, so `procs` already keeps it
+        // out; the status is checked as well so that stays true whatever happens to `procs`.
+        .filter(|s| !archive.contains(&s.id) && s.procs.is_empty() && s.status != crate::model::Status::Background)
+        .filter(|s| viewing != Some(s.id.as_str()))
         .filter(|s| {
             let active = (s.last_active / 1000).max(archive.touched_at(&s.id).unwrap_or(0));
             active > 0 && now_secs.saturating_sub(active) >= age_secs
@@ -334,7 +337,7 @@ mod tests {
             description: String::new(),
             last_active: last_active_secs * 1000,
             archived: false,
-            procs: if running { vec![crate::model::Proc { pid: 1, started_at: 0, hosted: true, stale: false }] } else { vec![] },
+            procs: if running { vec![crate::model::Proc { pid: 1, started_at: 0, hosted: true, background: None, stale: false }] } else { vec![] },
             haystack: String::new(),
         }
     }
@@ -362,6 +365,20 @@ mod tests {
         ];
         assert_eq!(picked(&sessions, &a, Some("watched")), ["old", "exactly-2-days"]);
         assert!(picked(&sessions, &a, None).contains(&"watched".to_string()), "only being viewed protects it");
+    }
+
+    #[test]
+    fn a_background_session_is_never_picked_whatever_its_process_list_says() {
+        let d = dir("bg");
+        let a = Archive::open(&d);
+        let mut bg = session("bg", NOW - 30 * DAY, false);
+        bg.status = crate::model::Status::Background;
+        let with_proc = {
+            let mut s = session("bg-proc", NOW - 30 * DAY, true);
+            s.status = crate::model::Status::Background;
+            s
+        };
+        assert!(picked(&[bg, with_proc, session("old", NOW - 30 * DAY, false)], &a, None) == ["old"]);
     }
 
     #[test]

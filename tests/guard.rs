@@ -153,3 +153,30 @@ fn uncertainty_fails_open() {
     let mut garbage = Fake::start(&env, "b", 1, true);
     assert_eq!(garbage.prompt().0, 0);
 }
+
+/// Write a registry entry of the given kind for a process.
+fn register_as(env: &Env, pid: u32, kind: &str, started_at: u64) {
+    fs::write(
+        env.root.join("sessions").join(format!("{pid}.json")),
+        format!(r#"{{"pid":{pid},"sessionId":"sess-1","cwd":"/tmp","kind":"{kind}","startedAt":{started_at},"status":"idle","jobId":"sess-1"}}"#),
+    )
+    .unwrap();
+}
+
+#[test]
+fn claudes_own_background_session_is_never_blocked_and_never_blocks_anything() {
+    // The guard only knows interactive processes. A background session (run by Claude's own service) writing to
+    // its own conversation is allowed even when another copy of that conversation is registered, and it does not
+    // count as an owner that would make a terminal copy of the same id a refused "second copy".
+    let env = Env::new("bg");
+    let mut bg = Fake::start(&env, "bg", 1, false);
+    register_as(&env, bg.pid(), "bg", 1);
+    assert_eq!(bg.prompt().0, 0, "a lone background session must be allowed");
+
+    let mut terminal = Fake::start(&env, "t", 2, false);
+    register_as(&env, terminal.pid(), "interactive", 2);
+    assert_eq!(terminal.prompt().0, 0, "a later interactive copy is not refused because of a background entry");
+    assert_eq!(bg.prompt().0, 0, "and the background session is not refused because of an interactive copy");
+    assert!(!env.cache.join("stale").join(bg.pid().to_string()).exists(), "a background session is never marked stale");
+    assert!(!env.cache.join("stale").join(terminal.pid().to_string()).exists());
+}

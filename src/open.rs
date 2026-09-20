@@ -4,7 +4,7 @@
 //! attach. Output bytes go straight to your terminal, so its own scrollback and features keep
 //! working, and the session keeps running when you detach (Ctrl+Space).
 
-use crate::claude::{claude_root, find_transcript, saved_session_ids, transcript_cwd};
+use crate::claude::{self, claude_root, find_transcript, saved_session_ids, transcript_cwd, Reader};
 use crate::guard;
 use crate::host::{self, read_frame, size_payload, write_frame, HostInfo, F_INPUT, F_OUTPUT, F_RESIZE};
 use ratatui::crossterm::terminal;
@@ -63,9 +63,22 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     };
 
     let live = guard::live_entries(&root);
+    // Sessions Claude's own service runs in the background: opened with `claude attach`, never `--resume`.
+    let background: Vec<claude::Live> = Reader::with_root(root.clone()).live().into_iter().filter(|l| l.is_background()).collect();
     let mut known: Vec<String> = saved_session_ids(&root);
     known.extend(live.iter().map(|e| e.id.clone()));
+    known.extend(background.iter().map(|l| l.id.clone()));
     let id = resolve_id(arg, known)?;
+
+    if let Some(attach_id) = background.iter().find(|l| l.id == id).and_then(|l| l.background.clone()) {
+        if let Some(h) = hosts.iter().find(|h| h.attaches_to(&attach_id)) {
+            return Ok(h.clone()); // already shown under platoon: just join it
+        }
+        let cwd = background.iter().find(|l| l.id == id).map(|l| l.cwd.clone()).filter(|c| Path::new(c).is_dir());
+        let cwd = cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
+        let args = claude::attach_args(&attach_id);
+        return host::launch(&program(), &cwd, &[args[0].as_str(), args[1].as_str()], rows, cols).map(|(h, _)| h);
+    }
 
     let copies: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id).collect();
     if let Some(h) = hosts.iter().find(|h| copies.iter().any(|e| e.pid == h.claude_pid)) {
