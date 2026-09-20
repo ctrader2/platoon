@@ -1,4 +1,4 @@
-use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, TABS};
+use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, SEARCH_KINDS, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::select::{Selection, Span as Cells};
@@ -70,12 +70,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     let tab_keys = format!("1-{}", TABS.len());
     let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
     let hints: Vec<Hint> = match app.mode {
-        Mode::Filter => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
+        Mode::Search => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
         _ => vec![
             ("enter", "open", Some(Action::Jump)),
             ("n", "new", Some(Action::New)),
             ("a", archive_verb, Some(Action::Archive)),
-            ("/", "filter", Some(Action::Filter)),
+            ("/", "search", Some(Action::Search)),
+            ("r", "rename", Some(Action::Rename)),
             (&tab_keys, "tabs", None),
             ("↑↓", "move", None),
             ("s", "settings", Some(Action::Settings)),
@@ -102,6 +103,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Picker => draw_picker(f, app, inner),
         Mode::Confirm(c) => draw_confirm(f, app, c, inner),
         Mode::Settings => draw_settings_modal(f, app, inner),
+        Mode::Search => draw_search(f, app, inner),
+        Mode::Rename => draw_rename(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -153,17 +156,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
     }
-    match app.mode {
-        Mode::Filter => {
-            left.push(Span::styled("   / ", Style::new().fg(t.accent)));
-            left.push(Span::styled(app.filter.clone(), Style::new().fg(t.text)));
-            left.push(Span::styled("▏", Style::new().fg(t.accent)));
-        }
-        _ if !app.filter.is_empty() => {
-            left.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
-            left.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
-        }
-        _ => {}
+    if !app.filter.is_empty() {
+        left.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
+        left.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
     }
     if let Some(n) = app.indexing() {
         let spin = SPINNER[(app.tick % 10) as usize];
@@ -881,6 +876,198 @@ fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
         }
         y += 1;
     }
+}
+
+/// The search dialog: a chip per kind of search, the words being typed, and what they find. It floats like the
+/// settings, but the list behind is left as it is (not faded): the quick filter narrows it as you type.
+fn draw_search(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let s = &app.search;
+    let kind = &SEARCH_KINDS[s.kind.min(SEARCH_KINDS.len() - 1)];
+    app.hits.borrow_mut().clear();
+    let w = if area.width < 70 { area.width.saturating_sub(2) } else { (area.width - 4).min(76) };
+    let r = centered(area, w, area.height.saturating_sub(2).clamp(10, 22));
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "Search");
+    let hpad = if w < 64 { 1 } else { 2 };
+    let inner = block.inner(r).inner(Margin::new(hpad, 0));
+    f.render_widget(block, r);
+    let [chips, explain, input, sep, list, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+
+    // One chip per kind: the showing one is lit, a hovered one half lit.
+    let mut x = chips.x;
+    let mut spans = Vec::new();
+    for (i, k) in SEARCH_KINDS.iter().enumerate() {
+        let label = format!(" {} ", k.label);
+        let cw = label.chars().count() as u16;
+        let rect = Rect::new(x, chips.y, cw, 1).intersection(chips);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::SearchKind(i)));
+        }
+        let style = if i == s.kind {
+            Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD)
+        } else if rect.contains(app.mouse.into()) {
+            Style::new().fg(t.text).bg(t.border)
+        } else {
+            Style::new().fg(t.dim).bg(t.surface)
+        };
+        spans.push(Span::styled(label, style));
+        spans.push(Span::raw(" "));
+        x += cw + 1;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), chips);
+    f.render_widget(Paragraph::new(Span::styled(fit_end(kind.explain, explain.width as usize), Style::new().fg(t.dim))), explain);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(s.text.clone(), Style::new().fg(t.text))])),
+        input,
+    );
+    f.set_cursor_position((input.x + 2 + (s.text.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+
+    let count = if kind.narrows_list {
+        draw_quick_rows(f, app, list);
+        format!("{} shown", app.visible().len())
+    } else {
+        draw_result_rows(f, app, list);
+        match (s.results.len(), s.total) {
+            (0, _) => String::new(),
+            (n, total) if n < total => format!("first {n} of {total}"),
+            (n, _) => format!("{n} found"),
+        }
+    };
+    let enter = if kind.narrows_list { "keep filter" } else { "open" };
+    let esc = if kind.narrows_list { "clear" } else { "close" };
+    let hints: [Hint; 3] = [("enter", enter, Some(Action::Confirm)), ("tab", "switch", None), ("esc", esc, Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, Some((count, t.dim)));
+    // Last, so it only catches clicks the dialog didn't: outside it, a click closes it like esc.
+    app.hits.borrow_mut().push((area, Hit::Action(Action::Cancel)));
+}
+
+/// The quick filter's rows: the conversations the list behind is narrowed to, one line each.
+fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let visible = app.visible();
+    if visible.is_empty() {
+        let msg = if app.search.text.trim().is_empty() { SEARCH_KINDS[0].prompt } else { "No sessions match the filter" };
+        f.render_widget(Paragraph::new(msg).style(Style::new().fg(t.dim)), area);
+        return;
+    }
+    let rows = area.height as usize;
+    let start = app.selected.saturating_sub(rows.saturating_sub(1));
+    let now = crate::usage::now() * 1000;
+    for (i, &idx) in visible.iter().enumerate().skip(start).take(rows) {
+        let s = &app.sessions[idx];
+        let rect = Rect::new(area.x, area.y + (i - start) as u16, area.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::SearchRow(i)));
+        let sel = i == app.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let name_w = (area.width as usize * 2 / 5).max(8);
+        let dir_w = (area.width as usize).saturating_sub(name_w + 2 + LAST_W);
+        let line = Line::from(vec![
+            Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
+            Span::styled(fit(&s.name, name_w.saturating_sub(2)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
+            Span::styled(fit(&s.dir, dir_w), Style::new().fg(t.dim).bg(bg)),
+            Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), Style::new().fg(t.dim).bg(bg)),
+        ]);
+        f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
+    }
+}
+
+/// The word search's results: the conversation's name and when it was used, and under it the matching message with the
+/// words in the accent color.
+fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
+    const H: u16 = 2;
+    let t = app.effective_theme();
+    let s = &app.search;
+    if s.results.is_empty() {
+        let msg = if s.text.trim().is_empty() {
+            SEARCH_KINDS[s.kind].prompt
+        } else if app.search_catching_up() {
+            "Still reading your conversations…"
+        } else {
+            "Nothing found"
+        };
+        f.render_widget(Paragraph::new(msg).style(Style::new().fg(t.dim)), area);
+        return;
+    }
+    let rows = ((area.height / H) as usize).max(1);
+    // Scroll only when the highlight would leave the screen.
+    let mut top = s.top.get().min(s.results.len().saturating_sub(1));
+    if s.selected < top {
+        top = s.selected;
+    } else if s.selected >= top + rows {
+        top = s.selected + 1 - rows;
+    }
+    s.top.set(top);
+    let now = crate::usage::now() * 1000;
+    let snippet_max = app.settings().get().search_snippet_chars as usize;
+    for (n, r) in s.results.iter().enumerate().skip(top).take(rows) {
+        let rect = Rect::new(area.x, area.y + (n - top) as u16 * H, area.width, H.min(area.bottom() - (area.y + (n - top) as u16 * H)));
+        app.hits.borrow_mut().push((rect, Hit::SearchRow(n)));
+        let sel = n == s.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let lead = Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent));
+        let (name_w, tail) = (area.width as usize * 2 / 5, if r.archived { "archived" } else { "" });
+        let l1 = Line::from(vec![
+            lead.clone(),
+            Span::styled(fit(&r.name, name_w.saturating_sub(2)), base.fg(t.text).add_modifier(Modifier::BOLD)),
+            Span::styled(fit(&r.dir, (area.width as usize).saturating_sub(name_w + LAST_W + 10)), base.fg(t.dim)),
+            Span::styled(format!("{tail:>9}"), base.fg(t.warn)),
+            Span::styled(format!("{:>w$}", ago(now, r.last_active), w = LAST_W), base.fg(t.dim)),
+        ]);
+        f.render_widget(Paragraph::new(l1).style(base), Rect::new(rect.x, rect.y, rect.width, 1));
+        if rect.height > 1 {
+            let width = (area.width as usize).saturating_sub(2).min(snippet_max);
+            let (text, marks) = crate::prompts::snippet(&r.detail, &r.marks, width);
+            let mut spans = vec![lead.clone().content("  ")];
+            let chars: Vec<char> = text.chars().collect();
+            let mut at = 0;
+            for m in marks.iter().filter(|m| m.start < chars.len()) {
+                let end = m.end.min(chars.len());
+                if m.start > at {
+                    spans.push(Span::styled(chars[at..m.start].iter().collect::<String>(), base.fg(t.subtext)));
+                }
+                spans.push(Span::styled(chars[m.start.max(at)..end].iter().collect::<String>(), base.fg(t.accent).add_modifier(Modifier::BOLD)));
+                at = end;
+            }
+            if at < chars.len() {
+                spans.push(Span::styled(chars[at..].iter().collect::<String>(), base.fg(t.subtext)));
+            }
+            f.render_widget(Paragraph::new(Line::from(spans)).style(base), Rect::new(rect.x, rect.y + 1, rect.width, 1));
+        }
+    }
+}
+
+/// The small box for naming a conversation.
+fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let rn = &app.rename;
+    app.hits.borrow_mut().clear();
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 7);
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "rename conversation");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [input, sep, note, _, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(rn.input.clone(), Style::new().fg(t.text))])),
+        input,
+    );
+    f.set_cursor_position((input.x + 2 + (rn.input.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    f.render_widget(Paragraph::new(fit_end("Leave it empty to go back to the automatic name.", note.width as usize)).style(Style::new().fg(t.dim)), note);
+    let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, None);
 }
 
 fn draw_picker(f: &mut Frame, app: &App, area: Rect) {

@@ -379,6 +379,11 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
 /// The text of a real user prompt: not a slash-command echo, caveat, compaction summary, interrupt marker
 /// or other injected `<...>` block.
 fn real_prompt(v: &Value) -> Option<String> {
+    real_prompt_capped(v, TEXT_MAX)
+}
+
+/// `real_prompt`, keeping at most `cap` characters.
+fn real_prompt_capped(v: &Value, cap: usize) -> Option<String> {
     let flag = |k: &str| v[k].as_bool() == Some(true);
     if v["type"].as_str() != Some("user") || flag("isMeta") || flag("isSidechain") || flag("isCompactSummary") {
         return None;
@@ -388,7 +393,18 @@ fn real_prompt(v: &Value) -> Option<String> {
         Value::Array(a) => one_line(&a.iter().filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ")),
         _ => return None,
     };
-    (!text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted")).then(|| truncate(text))
+    (!text.is_empty() && !text.starts_with('<') && !text.starts_with("[Request interrupted")).then(|| truncate_to(text, cap))
+}
+
+/// The real user prompt in one line of a transcript, if it holds one (same rules as the description of a row),
+/// cut to `cap` characters. Built for reading a whole transcript, most of which is tool output: a line that
+/// isn't a user entry, that carries a tool result, or that belongs to a subagent is turned down by a substring
+/// test alone, without being parsed.
+pub fn prompt_in_line(line: &str, cap: usize) -> Option<String> {
+    if !line.contains("\"type\":\"user\"") || line.contains("\"type\":\"tool_result\"") || line.contains("\"isSidechain\":true") {
+        return None;
+    }
+    real_prompt_capped(&serde_json::from_str::<Value>(line).ok()?, cap)
 }
 
 fn one_line(s: &str) -> String {
@@ -396,7 +412,14 @@ fn one_line(s: &str) -> String {
 }
 
 fn truncate(s: String) -> String {
-    if s.chars().count() <= TEXT_MAX { s } else { s.chars().take(TEXT_MAX).collect() }
+    truncate_to(s, TEXT_MAX)
+}
+
+fn truncate_to(s: String, cap: usize) -> String {
+    match s.char_indices().nth(cap) {
+        Some((at, _)) => s[..at].to_string(),
+        None => s,
+    }
 }
 
 /// `2026-09-19T03:53:40.091Z` -> ms since the epoch. Only the UTC form Claude Code writes is understood.
@@ -568,5 +591,19 @@ mod transcript_tests {
         assert_eq!(prompt(json!({"type":"user","isSidechain":true,"message":{"content":"sub"}})), None);
         assert_eq!(prompt(json!({"type":"user","isCompactSummary":true,"message":{"content":"This session is being continued"}})), None);
         assert_eq!(prompt(json!({"type":"assistant","message":{"content":"hi"}})), None);
+    }
+
+    #[test]
+    fn a_prompt_in_a_line_follows_the_same_rules_and_takes_its_own_length() {
+        let line = |c: &str| serde_json::json!({"type":"user","message":{"content":c}}).to_string();
+        assert_eq!(prompt_in_line(&line("fix   the\nbug"), 100).as_deref(), Some("fix the bug"));
+        assert_eq!(prompt_in_line(&line("abcdefghij"), 4).as_deref(), Some("abcd"));
+        assert_eq!(prompt_in_line(&line("é".repeat(10).as_str()), 3).as_deref(), Some("ééé"), "characters, not bytes");
+        assert_eq!(prompt_in_line(&line("<command-name>/x</command-name>"), 100), None);
+        assert_eq!(prompt_in_line(r#"{"type":"assistant","message":{"content":"hi"}}"#, 100), None);
+        assert_eq!(prompt_in_line(r#"{"type":"user","isSidechain":true,"message":{"content":"sub"}}"#, 100), None);
+        assert_eq!(prompt_in_line(r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]}}"#, 100), None);
+        assert_eq!(prompt_in_line("not json but \"type\":\"user\"", 100), None);
+        assert_eq!(prompt_in_line("", 100), None);
     }
 }

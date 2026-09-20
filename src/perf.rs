@@ -201,3 +201,156 @@ fn a_background_index_of_thousands_fills_progressively_without_blocking_the_call
     assert!(batches.len() > 1 && batches[0] < 1500, "rows must arrive in batches, not all at the end: {batches:?}");
     assert_eq!(batches.iter().sum::<usize>(), 1500);
 }
+
+/// A user entry that carries a tool result of about `kb` KB: what most of a real transcript is made of.
+fn tool_result_line(cwd: &str, kb: usize, at: u64) -> String {
+    json!({"type":"user","cwd":cwd,"timestamp":iso(at),"toolUseResult":{},"message":{"role":"user","content":[{"tool_use_id":"toolu_1","type":"tool_result","content":"output line of a command\n".repeat(kb * 40)}]}}).to_string()
+}
+
+#[test]
+fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stays_instant() {
+    use crate::prompts::{self, PromptIndex, Store};
+    let w = World::new("perf-prompts");
+    let paths = generate(&w.root, CONVERSATIONS);
+    // Real transcripts are mostly tool output: make the three huge files (and 200 more) that way, on top of the
+    // fat assistant text of `generate`, and give 500 conversations a hundred typed prompts each so there is
+    // something to search (about 15MB of prompt text).
+    let now = now_ms();
+    for p in paths.iter().skip(100).take(3) {
+        let mut f = fs::OpenOptions::new().append(true).open(p).unwrap();
+        for _ in 0..500 {
+            writeln!(f, "{}", tool_result_line("/work/big", 20, now)).unwrap();
+        }
+    }
+    let words = ["alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet", "kilo", "lima"];
+    for (n, p) in paths.iter().skip(JUNK).take(500).enumerate() {
+        let mut f = fs::OpenOptions::new().append(true).open(p).unwrap();
+        for k in 0..100 {
+            let text: Vec<&str> = (0..45).map(|j| words[(n * 7 + k * 3 + j * 5) % words.len()]).collect();
+            writeln!(f, "{}", line_user("/work/x", &format!("{} marker{n}x{k}", text.join(" ")), now)).unwrap();
+        }
+    }
+    let total: u64 = paths.iter().map(|p| fs::metadata(p).unwrap().len()).sum();
+
+    // The conversation index, as the app would have it.
+    let mut entries = Vec::new();
+    Scanner::load(&w.root, &w.base.join("cache-index")).scan(&mut |u| {
+        entries.extend(u.upserts);
+        true
+    });
+    assert_eq!(entries.len(), CONVERSATIONS);
+
+    // Cold: every transcript read once, each byte once.
+    let t = Instant::now();
+    let mut store = Store::load(&w.cache, 2000);
+    let cold = store.scan(&entries, 2000, true, &mut |_| true);
+    let cold_time = t.elapsed();
+    store.save();
+    let file = fs::metadata(w.cache.join("prompts.jsonl")).unwrap().len();
+    println!("prompt index, cold: {} transcripts, {} MB read in {cold_time:?}; prompts.jsonl is {} KB", cold.read, cold.bytes / 1_000_000, file / 1000);
+    assert_eq!((cold.listed, cold.read, cold.rebuilt), (CONVERSATIONS, CONVERSATIONS - JUNK + JUNK, 0));
+    assert!(cold.bytes <= total && cold.bytes > total - 1000 * CONVERSATIONS as u64, "each byte once: {} of {total}", cold.bytes);
+    assert!(cold_time < Duration::from_secs(120), "cold prompt index took {cold_time:?}");
+    assert!(file < 30 * 1024 * 1024, "prompts.jsonl is {file} bytes");
+
+    // Warm, in a new process's shoes: load the saved file and check every file's size: nothing is read.
+    let t = Instant::now();
+    let mut store = Store::load(&w.cache, 2000);
+    let load_time = t.elapsed();
+    let warm = store.scan(&entries, 2000, true, &mut |_| true);
+    println!("prompt index, warm: load {load_time:?}, pass {:?}, bytes read {}", t.elapsed() - load_time, warm.bytes);
+    assert_eq!((warm.read, warm.bytes), (0, 0));
+    assert!(t.elapsed() < Duration::from_secs(5), "warm prompt pass took {:?}", t.elapsed());
+
+    // An append to one of the 10MB+ files reads only the appended bytes.
+    let big = &paths[100];
+    let before = fs::metadata(big).unwrap().len();
+    assert!(before > 10 * 1024 * 1024);
+    let mut f = fs::OpenOptions::new().append(true).open(big).unwrap();
+    writeln!(f, "{}", line_user("/work/x", "one more thing about quebec", now_ms())).unwrap();
+    drop(f);
+    let after = fs::metadata(big).unwrap().len();
+    let mut fresh = entries.clone();
+    let stamp = |p: &Path| std::sync::Arc::new(crate::index::Entry {
+        mtime: fs::metadata(p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+        size: fs::metadata(p).unwrap().len(),
+        ..(**entries.iter().find(|e| e.path == *p).unwrap()).clone()
+    });
+    let at = fresh.iter().position(|e| e.path == *big).unwrap();
+    fresh[at] = stamp(big);
+    let t = Instant::now();
+    let mut got = Vec::new();
+    let append = store.scan(&fresh, 2000, true, &mut |u| {
+        got.extend(u.upserts);
+        true
+    });
+    println!("prompt index, one appended line of a {} MB file: {:?}, {} bytes read", before / 1_000_000, t.elapsed(), append.bytes);
+    assert_eq!((append.read, append.rebuilt, append.bytes), (1, 0, after - before));
+    assert!(got[0].prompts.last().unwrap().contains("quebec"));
+
+    // Search over all of it, through the app, as typed: every key is a search.
+    let mut ix = PromptIndex::inline(&w.cache, 2000);
+    let map: std::collections::HashMap<_, _> = entries.iter().map(|e| (e.path.clone(), e.clone())).collect();
+    ix.refresh(&map, 1, 2000, true);
+    let (mut worst, mut hits) = (Duration::ZERO, 0);
+    let t = Instant::now();
+    for q in ["alpha bravo charlie", "marker7x9", "zzzz nothing", "kilo lima alpha delta echo", "task number 4999"] {
+        let words = prompts::words(q);
+        let t = Instant::now();
+        let mut n = 0;
+        for e in entries.iter() {
+            n += usize::from(prompts::find(ix.get(&e.id).map(|d| &**d), "", &words).is_some());
+        }
+        worst = worst.max(t.elapsed());
+        hits += n;
+        println!("search {q:?}: {n} conversations in {:?}", t.elapsed());
+    }
+    println!("5 searches over {CONVERSATIONS} conversations: {:?} in all, slowest {worst:?}; {hits} hits", t.elapsed());
+    assert!(hits > 0);
+    assert!(worst < Duration::from_secs(2), "a search took {worst:?}");
+
+    // And through the real dialog: typing eight keys into the word search over the same data.
+    let mut app = w.app();
+    let mut typing = Duration::ZERO;
+    let mut press = |app: &mut crate::app::App, c: KeyCode| {
+        let t = Instant::now();
+        app.on_key(KeyEvent::new(c, KeyModifiers::NONE));
+        typing = typing.max(t.elapsed());
+    };
+    press(&mut app, KeyCode::Char('/'));
+    press(&mut app, KeyCode::Tab);
+    for c in "alpha br".chars() {
+        press(&mut app, KeyCode::Char(c));
+    }
+    println!("word search dialog: {} results of {}, slowest key {typing:?}", app.search.results.len(), app.search.total);
+    assert!(app.search.total > 0 && app.search.results.len() <= 50);
+    assert!(typing < Duration::from_secs(2), "a key took {typing:?}");
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let t = Instant::now();
+    term.draw(|f| crate::ui::draw(f, &app)).unwrap();
+    assert!(t.elapsed() < Duration::from_secs(1), "frame {:?}", t.elapsed());
+}
+
+#[test]
+fn a_background_prompt_index_never_blocks_the_caller_and_fills_in() {
+    use crate::prompts::PromptIndex;
+    let w = World::new("perf-prompts-bg");
+    generate(&w.root, 1500);
+    let mut entries = Vec::new();
+    Scanner::load(&w.root, &w.base.join("cache-index")).scan(&mut |u| {
+        entries.extend(u.upserts);
+        true
+    });
+    let map: std::collections::HashMap<_, _> = entries.into_iter().map(|e| (e.path.clone(), e)).collect();
+    let t = Instant::now();
+    let mut ix = PromptIndex::spawn(&w.cache, 2000);
+    assert!(t.elapsed() < Duration::from_millis(200), "spawn must return at once, took {:?}", t.elapsed());
+    let t = Instant::now();
+    ix.refresh(&map, 1, 2000, true);
+    assert!(t.elapsed() < Duration::from_millis(200), "asking must return at once, took {:?}", t.elapsed());
+    while ix.len() < 1500 - JUNK || ix.catching_up() {
+        ix.refresh(&map, 1, 2000, true);
+        assert!(t.elapsed() < Duration::from_secs(60), "indexed {} of {}", ix.len(), 1500 - JUNK);
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}

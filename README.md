@@ -38,7 +38,8 @@ Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `1` `2` | switch between the Active and Archived tabs (or click them); the current tab is underlined and each shows a count badge |
-| `/` | filter the current tab; `esc` clears it |
+| `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
+| `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
 | `↑` `↓` `g` `G` | move (`g`/`G` jump to the first/last); the mouse works too |
 | `q` | quit (sessions keep running) |
@@ -46,6 +47,35 @@ Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`
 Count badges are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
 WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set `PLATOON_BADGES=rounded` or
 `PLATOON_BADGES=square` to choose yourself.
+
+### Search
+
+`/` opens a search dialog over the list. It has two kinds of search; `tab` (or a click on its name) switches between them
+and keeps what you typed.
+
+- **Quick filter** (the one it opens on): narrows the list as you type, by name, folder, branch and description. `enter` keeps the
+  filter and closes the dialog; `esc` clears it and closes. (In the list, `esc` also clears a kept filter.)
+- **Full-text**: finds conversations by the words you typed in them, in every conversation, archived ones too. Every word must be
+  there, in any order and in any case, and a word matches inside a longer one (`migrat` finds `migration`). Words spread over
+  different messages of the same conversation count. Each result shows the conversation's name and, under it, the matching message
+  with your words in the accent color. `↑` `↓` (or `PgUp` `PgDn`, or the wheel) pick a result and `enter` (or a second click)
+  closes the dialog and selects that conversation in the list, on the Archived tab if that is where it is. Only what you typed is
+  searched: Claude's answers and the output of tools are not.
+
+Results come best first: conversations whose name has all the words, then those where one single message has all of them, then
+those where more messages mention them, then the most recently used. `ctrl+u` empties the box.
+
+Behind the scenes platoon keeps a small list of the messages you sent in `~/.cache/platoon/prompts.jsonl`
+(`$PLATOON_CACHE_DIR`). It reads only what is new at the end of each transcript, in the background, so a search never waits
+for it and starting platoon is not slower; the first time it reads everything once, and while it does the dialog says "Still
+reading your conversations…" if nothing is found yet. Deleting the file is harmless: it is rebuilt. Nothing here uses Claude or
+any tokens.
+
+### Renaming
+
+`r` on a conversation opens a small box with its current name: `enter` saves, `esc` cancels, and an empty name gives the automatic one
+back. A name you give is kept in platoon's own file, `~/.config/platoon/names.json` (`$PLATOON_CONFIG_DIR`), never in Claude's files,
+and other things in that file are left alone when platoon writes it. It shows in the NAME column and is found by both searches.
 
 ### Background sessions
 
@@ -107,6 +137,10 @@ Details worth knowing:
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
+| Search archived | Whether the [Full-text search](#search) also looks in archived conversations. | Include archived (default), Skip archived |
+| Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
+| Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
+| Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
 
 `↑` `↓` pick a setting (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
 next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter` opens the theme list
@@ -126,13 +160,14 @@ the screen shows the exact path). platoon doesn't create it until you change som
 by hand too:
 
 ```json
-{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha"}
+{"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
+ "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
-(`auto_archive_days`). `idle_stop_ignores_mcp` is `true` or `false`; anything else there means the default
-(`true`). `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Themes
 
@@ -205,7 +240,9 @@ come from.
 
 platoon keeps an index of your transcripts in `~/.cache/platoon/index.json` and only re-reads files that
 changed, in the background, so it opens at once even with thousands of conversations (a small
-`indexing N…` shows in the header while it catches up). Deleting the file is harmless: it is rebuilt.
+`indexing N…` shows in the header while it catches up). Deleting the file is harmless: it is rebuilt. The words for the
+[full-text search](#search) are kept the same way in `prompts.jsonl` next to it, by remembering how far into each transcript
+it has read.
 
 ## Sessions started in platoon keep running
 

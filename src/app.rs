@@ -7,6 +7,8 @@ use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
 use crate::model::{Proc, Session, Status};
+use crate::names::{self, Names};
+use crate::prompts::{self, PromptIndex};
 use crate::select::{click_count, extract, Click, Point, Selection, Unit};
 use crate::settings::{Kind, SettingsStore, Step, ITEMS};
 use crate::setup;
@@ -18,8 +20,10 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, Mo
 use ratatui::layout::Rect;
 use std::{
     cell::{Cell, RefCell},
+    cmp::Reverse,
     collections::HashMap,
     io,
+    ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
@@ -75,7 +79,9 @@ pub enum Action {
     Jump,
     New,
     Archive,
-    Filter,
+    /// Open the search dialog (`/`).
+    Search,
+    Rename,
     Settings,
     Quit,
     Back,
@@ -90,6 +96,10 @@ pub enum Hit {
     PickerRow(usize),
     Action(Action),
     Tab(usize),
+    /// One kind of search in the search dialog: switches to it.
+    SearchKind(usize),
+    /// A row of the search dialog's list: selects it, and a click on the selected one takes it.
+    SearchRow(usize),
     /// A row of the settings screen: selects it.
     Setting(usize),
     /// A step button (or the value) of a setting: changes it.
@@ -134,8 +144,10 @@ pub enum Confirm {
 #[derive(Clone)]
 pub enum Mode {
     List,
-    /// Typing into the filter box.
-    Filter,
+    /// The search dialog (`/`): a kind of search (`SEARCH_KINDS`), the words being typed and what they find.
+    Search,
+    /// Typing a new name for the selected conversation.
+    Rename,
     Picker,
     Confirm(Confirm),
     /// The settings screen, which replaces the list.
@@ -183,6 +195,72 @@ impl Picker {
     }
 }
 
+/// One kind of search in the `/` dialog. A new kind is a new entry here (and, if it lists its own results, a new arm
+/// in `App::run_search`): the dialog's chips, the Tab key and the clicks all follow.
+pub struct SearchKind {
+    pub label: &'static str,
+    /// One line under the chips: what this search looks at.
+    pub explain: &'static str,
+    /// What the results area says before anything is typed.
+    pub prompt: &'static str,
+    /// It narrows the list behind the dialog as you type (and Enter keeps that), rather than listing results of its own.
+    pub narrows_list: bool,
+}
+
+pub const SEARCH_KINDS: &[SearchKind] = &[
+    SearchKind {
+        label: "Quick filter",
+        explain: "Narrows the list by name, folder, branch and description.",
+        prompt: "Type to narrow the list.",
+        narrows_list: true,
+    },
+    SearchKind {
+        label: "Full-text",
+        explain: "Finds conversations by the words you typed in them, archived ones too.",
+        prompt: "Type words you asked Claude about, in any order.",
+        narrows_list: false,
+    },
+];
+
+/// One conversation a search found.
+pub struct SearchResult {
+    pub id: String,
+    pub name: String,
+    pub dir: String,
+    pub archived: bool,
+    pub last_active: u64,
+    /// The text to show under the name: the matching message, or (when only the name matched) the description.
+    pub detail: String,
+    /// Where the words are in `detail`, as character ranges.
+    pub marks: Vec<Range<usize>>,
+}
+
+/// The search dialog while it is open.
+pub struct Search {
+    /// Which of `SEARCH_KINDS` is showing.
+    pub kind: usize,
+    /// What has been typed. Kept when the kind changes.
+    pub text: String,
+    /// The conversations a kind that lists its own results found, best first.
+    pub results: Vec<SearchResult>,
+    /// How many matched before the limit on results was applied.
+    pub total: usize,
+    /// The highlighted result.
+    pub selected: usize,
+    /// The first result on screen, kept between frames so that the list only scrolls when it has to.
+    pub top: Cell<usize>,
+    /// What `results` was worked out from, so nothing is redone when nothing changed.
+    computed_for: Option<(usize, String, u64, u64, bool, u64)>,
+}
+
+/// A conversation being renamed.
+pub struct Rename {
+    pub id: String,
+    pub input: String,
+    /// The name it had when the box opened: saving the same text changes nothing.
+    original: String,
+}
+
 /// The theme list while it is open.
 pub struct ThemePick {
     /// Built-ins first, then the user's own, as they were when the list opened.
@@ -205,8 +283,11 @@ pub struct App {
     pub usage: Usage,
     /// Index into `visible()`.
     pub selected: usize,
+    /// The words the list is narrowed by (the quick filter). Kept after the dialog closes, until Esc clears it.
     pub filter: String,
     pub mode: Mode,
+    pub search: Search,
+    pub rename: Rename,
     pub picker: Picker,
     /// Sessions running under a platoon host. They outlive platoon.
     pub hosts: Vec<HostInfo>,
@@ -246,7 +327,13 @@ pub struct App {
     size: (u16, u16),
     reader: Reader,
     indexer: Indexer,
+    /// What the user typed in every conversation, for the full-text search. Step C's names and summaries come from it.
+    prompts: PromptIndex,
+    /// The prompt length `prompts` was last asked to keep. It follows the setting once the setting has stopped changing.
+    prompt_cap: usize,
     archive: Archive,
+    /// The names the user gave conversations (`names.json`).
+    names: Names,
     /// Automatic clean-up settings, re-read when the file changes.
     settings: SettingsStore,
     /// The selected line of the settings screen, an index into `ITEMS`.
@@ -274,7 +361,7 @@ impl App {
         let reader = Reader::new();
         let cache = usage::cache_dir();
         let indexer = Indexer::spawn(reader.root(), &cache);
-        let mut app = Self::build(reader, cache, archive::config_dir(), indexer);
+        let mut app = Self::build(reader, cache, archive::config_dir(), indexer, true);
         app.rounded = detect_rounded();
         app.clipboard = Clipboard::from_env();
         app
@@ -285,10 +372,18 @@ impl App {
     #[cfg(test)]
     pub fn with_dirs(reader: Reader, cache: PathBuf, config: PathBuf) -> Self {
         let indexer = Indexer::inline(reader.root(), &cache);
-        Self::build(reader, cache, config, indexer)
+        Self::build(reader, cache, config, indexer, false)
     }
 
-    fn build(reader: Reader, cache: PathBuf, config: PathBuf, indexer: Indexer) -> Self {
+    /// `threaded`: the prompt index reads in the background (the real thing) rather than on the calling thread (tests).
+    fn build(reader: Reader, cache: PathBuf, config: PathBuf, indexer: Indexer, threaded: bool) -> Self {
+        let settings = SettingsStore::open(&config);
+        let prompt_cap = settings.get().search_prompt_chars as usize;
+        #[cfg(test)]
+        let prompts = if threaded { PromptIndex::spawn(&cache, prompt_cap) } else { PromptIndex::inline(&cache, prompt_cap) };
+        #[cfg(not(test))]
+        let prompts = PromptIndex::spawn(&cache, prompt_cap);
+        let _ = threaded;
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
@@ -298,6 +393,8 @@ impl App {
             selected: 0,
             filter: String::new(),
             mode: Mode::List,
+            search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None },
+            rename: Rename { id: String::new(), input: String::new(), original: String::new() },
             picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0 },
             hosts: Vec::new(),
             client: None,
@@ -322,8 +419,11 @@ impl App {
             size: (80, 24),
             reader,
             indexer,
+            prompts,
+            prompt_cap,
             archive: Archive::open(&config),
-            settings: SettingsStore::open(&config),
+            names: Names::open(&config),
+            settings,
             setting: 0,
             viewing: None,
             last_auto_archive: None,
@@ -510,6 +610,10 @@ impl App {
 
         let index_changed = self.indexer.poll();
         self.archive.reload_if_changed();
+        // A name given in another platoon window shows here too.
+        if self.names.reload_if_changed() {
+            self.built.0 = u64::MAX;
+        }
         let live = self.reader.live();
 
         // One row per conversation, however many processes run it.
@@ -558,7 +662,8 @@ impl App {
                 let stale = guard::is_stale(&self.cache, l.pid, l.started_at);
                 s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale });
             }
-            if let Some(n) = ls.iter().find_map(|l| l.name.as_ref()) {
+            // The name the user gave it in platoon wins over the one Claude was told.
+            if let (Some(n), None) = (ls.iter().find_map(|l| l.name.as_ref()), self.names.get(&s.id)) {
                 s.name.clone_from(n);
             }
             s.status = if ls.iter().any(|l| l.busy && !l.is_background()) {
@@ -580,6 +685,7 @@ impl App {
             }
         }
         self.auto_archive(index_changed, usage::now());
+        self.refresh_prompts();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
             None if setup::statusline_installed(self.reader.root()) => Usage::Waiting,
@@ -593,6 +699,20 @@ impl App {
             }
         }
         self.clamp_selected();
+    }
+
+    /// Tell the prompt index which transcripts there are (when the conversation index has news), and take in what it
+    /// has read. A new prompt length is only handed on once the settings screen has stopped changing it: every
+    /// step on the way would otherwise read everything again.
+    fn refresh_prompts(&mut self) {
+        if self.apply_after.is_none() {
+            self.prompt_cap = self.settings.get().search_prompt_chars as usize;
+        }
+        let complete = self.indexer.first_scan_done && self.indexer.remaining == 0;
+        self.prompts.refresh(&self.indexer.entries, self.indexer.generation, self.prompt_cap, complete);
+        if matches!(self.mode, Mode::Search) {
+            self.update_search();
+        }
     }
 
     /// Archive conversations that have sat unused for the configured number of days (default 2, 0 = off).
@@ -686,8 +806,12 @@ impl App {
 
     #[allow(clippy::too_many_arguments)]
     fn session(&self, id: String, cwd: String, branch: Option<String>, model: Option<String>, est: u8, description: String, last_active: u64) -> Session {
-        // Claude Code derives a placeholder name; only a name the user chose (set from the registry) replaces this.
-        let name = Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string();
+        // Claude Code derives a placeholder name; only a name the user chose (set from the registry) replaces this, and
+        // a name the user gave it in platoon replaces both.
+        let name = match self.names.get(&id) {
+            Some(n) => n.to_string(),
+            None => Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string(),
+        };
         let dir = dirs::tilde(&cwd, &self.home);
         let haystack = [name.as_str(), dir.as_str(), branch.as_deref().unwrap_or(""), description.as_str()].join("\n").to_lowercase();
         Session {
@@ -716,9 +840,10 @@ impl App {
             (Action::Quit, Mode::List) => self.quit = true,
             (Action::New, Mode::List) => self.open_picker(),
             (Action::Archive, Mode::List) => self.toggle_archive(),
-            (Action::Filter, Mode::List) => self.mode = Mode::Filter,
+            (Action::Search, Mode::List) => self.open_search(),
+            (Action::Rename, Mode::List) => self.open_rename(),
             (Action::Settings, Mode::List) => self.open_settings(),
-            (Action::Jump, Mode::List | Mode::Filter) => self.jump(),
+            (Action::Jump, Mode::List) => self.jump(),
             (Action::Back, Mode::Attached(_)) => self.detach(),
             (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name, .. })) => {
                 self.mode = Mode::List;
@@ -735,15 +860,203 @@ impl App {
             }
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
             (Action::Cancel, Mode::Themes) => self.close_theme_list(),
-            (Action::Confirm, Mode::Filter) => self.mode = Mode::List,
-            (Action::Cancel, Mode::Filter) => {
-                self.filter.clear();
-                self.mode = Mode::List;
-            }
+            (Action::Confirm, Mode::Search) => self.confirm_search(),
+            (Action::Cancel, Mode::Search) => self.cancel_search(),
+            (Action::Confirm, Mode::Rename) => self.save_rename(),
             (Action::Cancel, _) => self.mode = Mode::List,
             _ => {}
         }
         self.update_view();
+    }
+
+    /// Open the search dialog on the quick filter, with what the list is already narrowed by (if anything) typed in.
+    fn open_search(&mut self) {
+        self.search = Search {
+            kind: 0,
+            text: self.filter.clone(),
+            results: Vec::new(),
+            total: 0,
+            selected: 0,
+            top: Cell::new(0),
+            computed_for: None,
+        };
+        self.mode = Mode::Search;
+        self.update_search();
+    }
+
+    /// Show another kind of search with the same words. The list behind is narrowed only while a kind that narrows
+    /// it is showing.
+    pub fn set_search_kind(&mut self, kind: usize) {
+        if kind >= SEARCH_KINDS.len() || kind == self.search.kind {
+            return;
+        }
+        self.search.kind = kind;
+        self.search.selected = 0;
+        self.selected = 0;
+        self.search.top.set(0);
+        self.update_search();
+    }
+
+    fn step_search_kind(&mut self, delta: i32) {
+        let n = SEARCH_KINDS.len() as i32;
+        self.set_search_kind((self.search.kind as i32 + delta).rem_euclid(n) as usize);
+    }
+
+    /// The words changed: narrow the list, or work out the results.
+    fn search_text_changed(&mut self) {
+        self.selected = 0;
+        self.search.selected = 0;
+        self.search.top.set(0);
+        self.update_search();
+    }
+
+    /// Bring what the dialog shows up to date with its words, the conversations, and the settings that shape it.
+    fn update_search(&mut self) {
+        let kind = &SEARCH_KINDS[self.search.kind.min(SEARCH_KINDS.len() - 1)];
+        if kind.narrows_list {
+            self.filter.clone_from(&self.search.text);
+            self.search.computed_for = None;
+            return;
+        }
+        self.filter.clear();
+        let settings = self.settings.get();
+        let key = (self.search.kind, self.search.text.clone(), self.prompts.generation, self.rev, settings.search_archived, settings.search_results);
+        if self.search.computed_for.as_ref() == Some(&key) {
+            return;
+        }
+        self.search.computed_for = Some(key);
+        let (results, total) = self.run_search(&settings);
+        self.search.results = results;
+        self.search.total = total;
+        self.search.selected = self.search.selected.min(self.search.results.len().saturating_sub(1));
+    }
+
+    /// The conversations whose words match, best first, at most `search_results` of them, and how many there were.
+    /// Best: the name the user gave has all the words, then one message has all of them, then more messages
+    /// mention them, then the most recently used.
+    fn run_search(&self, settings: &crate::settings::Settings) -> (Vec<SearchResult>, usize) {
+        let words = prompts::words(&self.search.text);
+        if words.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let mut found: Vec<(&Session, prompts::Found, Option<&Arc<prompts::FilePrompts>>)> = Vec::new();
+        for s in &self.sessions {
+            if s.archived && !settings.search_archived {
+                continue;
+            }
+            let name = self.names.get(&s.id).map(str::to_lowercase).unwrap_or_default();
+            let data = self.prompts.get(&s.id);
+            if let Some(f) = prompts::find(data.map(|d| &**d), &name, &words) {
+                found.push((s, f, data));
+            }
+        }
+        found.sort_by(|a, b| {
+            let key = |x: &(&Session, prompts::Found, _)| (Reverse(x.1.in_name), Reverse(x.1.in_one_prompt), Reverse(x.1.hits), Reverse(x.0.last_active));
+            key(a).cmp(&key(b)).then_with(|| a.0.id.cmp(&b.0.id))
+        });
+        let total = found.len();
+        let results = found
+            .into_iter()
+            .take(settings.search_results as usize)
+            .map(|(s, f, data)| {
+                let detail = match (f.prompt, data) {
+                    (Some(i), Some(d)) => d.prompts[i].clone(),
+                    _ => s.description.clone(),
+                };
+                let marks = prompts::spans(&detail, &words);
+                SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), archived: s.archived, last_active: s.last_active, detail, marks }
+            })
+            .collect();
+        (results, total)
+    }
+
+    /// Enter in the dialog: the quick filter keeps its words and closes; a kind with results takes the highlighted one.
+    fn confirm_search(&mut self) {
+        if SEARCH_KINDS[self.search.kind].narrows_list {
+            self.mode = Mode::List;
+        } else if let Some(id) = self.search.results.get(self.search.selected).map(|r| r.id.clone()) {
+            self.show_conversation(&id);
+        }
+    }
+
+    /// Esc in the dialog: closes it, and nothing stays narrowed.
+    fn cancel_search(&mut self) {
+        self.filter.clear();
+        self.selected = 0;
+        self.mode = Mode::List;
+    }
+
+    /// Close the dialog and select a conversation in the list: on the tab it belongs to, with nothing narrowing the
+    /// list (a filter would hide it).
+    fn show_conversation(&mut self, id: &str) {
+        self.mode = Mode::List;
+        let Some(s) = self.sessions.iter().find(|s| s.id == id) else { return };
+        let Some(tab) = TABS.iter().position(|t| (t.shows)(s)) else { return };
+        self.filter.clear();
+        self.tab = tab;
+        self.update_view();
+        if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
+            self.selected = pos;
+        }
+    }
+
+    /// The word index is still being filled in, so a search may miss things for now.
+    pub fn search_catching_up(&self) -> bool {
+        self.prompts.catching_up()
+    }
+
+    /// The highlighted row of the dialog: in the list behind for a kind that narrows it, else among its results.
+    pub fn search_selected(&self) -> usize {
+        if SEARCH_KINDS[self.search.kind].narrows_list { self.selected } else { self.search.selected }
+    }
+
+    fn select_search_row(&mut self, i: usize) {
+        if SEARCH_KINDS[self.search.kind].narrows_list {
+            self.selected = i;
+        } else {
+            self.search.selected = i;
+        }
+    }
+
+    fn move_search(&mut self, delta: i32) {
+        if SEARCH_KINDS[self.search.kind].narrows_list {
+            self.move_selection(delta);
+        } else {
+            let last = self.search.results.len().saturating_sub(1) as i32;
+            self.search.selected = (self.search.selected as i32 + delta).clamp(0, last) as usize;
+        }
+    }
+
+    /// Open the box for renaming the selected conversation, with the name it shows now.
+    fn open_rename(&mut self) {
+        let Some(s) = self.selected_session() else {
+            self.notify("No conversation selected");
+            return;
+        };
+        self.rename = Rename { id: s.id.clone(), input: s.name.clone(), original: s.name.clone() };
+        self.mode = Mode::Rename;
+    }
+
+    /// Enter in the rename box. The same text as before changes nothing; an empty one gives the conversation back its
+    /// automatic name.
+    fn save_rename(&mut self) {
+        self.mode = Mode::List;
+        let Rename { id, input, original } = std::mem::replace(&mut self.rename, Rename { id: String::new(), input: String::new(), original: String::new() });
+        let text = names::clean(&input);
+        let has_own = self.names.get(&id).is_some();
+        if text == names::clean(&original) || (text.is_empty() && !has_own) {
+            return;
+        }
+        match self.names.set(&id, &text) {
+            Ok(()) if text.is_empty() => self.notify("Name cleared"),
+            Ok(()) => self.notify(format!("Renamed to \"{text}\"")),
+            Err(e) => {
+                let why = e.to_string();
+                self.notify(format!("Couldn't save the name: {}", why.split(" (os error").next().unwrap_or(&why)));
+            }
+        }
+        self.built.0 = u64::MAX; // rows are built again with the new name
+        self.reload();
     }
 
     fn open_picker(&mut self) {
@@ -1213,20 +1526,39 @@ impl App {
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
                 _ => {}
             },
-            Mode::Filter => match key.code {
+            Mode::Search => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
-                KeyCode::Up => self.move_selection(-1),
-                KeyCode::Down => self.move_selection(1),
+                KeyCode::Tab => self.step_search_kind(1),
+                KeyCode::BackTab => self.step_search_kind(-1),
+                KeyCode::Up => self.move_search(-1),
+                KeyCode::Down => self.move_search(1),
+                KeyCode::PageUp => self.move_search(-5),
+                KeyCode::PageDown => self.move_search(5),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Char('u') if ctrl => {
+                    self.search.text.clear();
+                    self.search_text_changed();
+                }
                 KeyCode::Backspace => {
-                    self.filter.pop();
-                    self.selected = 0;
+                    self.search.text.pop();
+                    self.search_text_changed();
                 }
                 KeyCode::Char(c) if !ctrl && !alt => {
-                    self.filter.push(c);
-                    self.selected = 0;
+                    self.search.text.push(c);
+                    self.search_text_changed();
                 }
+                _ => {}
+            },
+            Mode::Rename => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Char('u') if ctrl => self.rename.input.clear(),
+                KeyCode::Backspace => {
+                    self.rename.input.pop();
+                }
+                KeyCode::Char(c) if !ctrl && !alt => self.type_name(&c.to_string()),
                 _ => {}
             },
             Mode::List => match key.code {
@@ -1234,7 +1566,8 @@ impl App {
                 KeyCode::Char('q') => self.act(Action::Quit),
                 KeyCode::Char('n') => self.act(Action::New),
                 KeyCode::Char('a') => self.act(Action::Archive),
-                KeyCode::Char('/') => self.act(Action::Filter),
+                KeyCode::Char('/') => self.act(Action::Search),
+                KeyCode::Char('r') => self.act(Action::Rename),
                 KeyCode::Char('s') => self.act(Action::Settings),
                 // 1 is the first tab, 2 the second; a number with no tab does nothing.
                 KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => self.switch_tab(c as usize - '1' as usize),
@@ -1268,13 +1601,20 @@ impl App {
                 self.picker.input.push_str(&text.replace('\n', ""));
                 self.picker.update(&self.home);
             }
-            Mode::Filter => {
-                self.filter.push_str(&text.replace('\n', ""));
-                self.selected = 0;
+            Mode::Search => {
+                self.search.text.push_str(&text.replace(['\n', '\r'], ""));
+                self.search_text_changed();
             }
+            Mode::Rename => self.type_name(&text.replace(['\n', '\r'], "")),
             _ => {}
         }
         self.update_view();
+    }
+
+    /// Add typed or pasted text to the name being written, up to the longest a name may be.
+    fn type_name(&mut self, text: &str) {
+        let room = names::NAME_MAX.saturating_sub(self.rename.input.chars().count());
+        self.rename.input.extend(text.chars().take(room));
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
@@ -1314,7 +1654,9 @@ impl App {
                         }
                     }
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
-                    Mode::List | Mode::Filter => self.move_selection(if up { -1 } else { 1 }),
+                    Mode::List => self.move_selection(if up { -1 } else { 1 }),
+                    Mode::Search => self.move_search(if up { -1 } else { 1 }),
+                    Mode::Rename => {}
                     Mode::Settings => self.move_setting(if up { -1 } else { 1 }),
                     Mode::Themes => self.move_theme(if up { -1 } else { 1 }),
                     Mode::Confirm(_) => {}
@@ -1330,6 +1672,10 @@ impl App {
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
+                    Some(Hit::SearchKind(i)) => self.set_search_kind(i),
+                    // As in the list: clicking the highlighted result again takes it.
+                    Some(Hit::SearchRow(i)) if i == self.search_selected() => self.act(Action::Confirm),
+                    Some(Hit::SearchRow(i)) => self.select_search_row(i),
                     Some(Hit::Setting(i)) => self.setting = i,
                     Some(Hit::SettingStep(i, step)) => {
                         self.setting = i;

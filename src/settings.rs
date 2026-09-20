@@ -1,6 +1,6 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
-//! clean-ups, how idle stop treats MCP servers, and the color theme. The settings screen edits them through `save`, and
-//! `ITEMS` describes what it shows.
+//! clean-ups, how idle stop treats MCP servers, the color theme, and the four limits of the word search. The
+//! settings screen edits them through `save`, and `ITEMS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
 //! just means the defaults, values that make no sense are clamped, writes are atomic, and a file that
@@ -19,7 +19,20 @@ pub const MAX_IDLE_STOP_MINUTES: u64 = 7 * 24 * 60;
 /// Longest auto-archive age. Also how long the archive file remembers restores (see archive.rs).
 pub const MAX_AUTO_ARCHIVE_DAYS: u64 = 365;
 
-/// For both numbers, 0 means the feature is off.
+/// Search: the longest message kept per conversation for searching, in characters (default, then limits).
+pub const DEFAULT_PROMPT_CHARS: u64 = 2000;
+pub const MIN_PROMPT_CHARS: u64 = 200;
+pub const MAX_PROMPT_CHARS: u64 = 20_000;
+/// Search: the longest preview of a matching message shown in a result, in characters.
+pub const DEFAULT_SNIPPET_CHARS: u64 = 120;
+pub const MIN_SNIPPET_CHARS: u64 = 30;
+pub const MAX_SNIPPET_CHARS: u64 = 400;
+/// Search: how many results the full-text search shows.
+pub const DEFAULT_SEARCH_RESULTS: u64 = 50;
+pub const MIN_SEARCH_RESULTS: u64 = 5;
+pub const MAX_SEARCH_RESULTS: u64 = 500;
+
+/// For the two automatic clean-ups, 0 means the feature is off.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// Stop a platoon-hosted session with no viewer, not working and silent for this many minutes.
@@ -32,11 +45,28 @@ pub struct Settings {
     /// version's, or a user theme): that shows as the default theme (the registry finds none) but is kept
     /// on disk until the user picks another.
     pub theme: String,
+    /// Full-text search keeps at most this many characters of each message you sent (see `prompts.rs`).
+    pub search_prompt_chars: u64,
+    /// A result of the full-text search shows at most this many characters of the matching message.
+    pub search_snippet_chars: u64,
+    /// The full-text search shows at most this many conversations.
+    pub search_results: u64,
+    /// The full-text search looks in archived conversations too.
+    pub search_archived: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { idle_stop_minutes: 120, auto_archive_days: 2, idle_stop_ignores_mcp: true, theme: DEFAULT_ID.into() }
+        Self {
+            idle_stop_minutes: 120,
+            auto_archive_days: 2,
+            idle_stop_ignores_mcp: true,
+            theme: DEFAULT_ID.into(),
+            search_prompt_chars: DEFAULT_PROMPT_CHARS,
+            search_snippet_chars: DEFAULT_SNIPPET_CHARS,
+            search_results: DEFAULT_SEARCH_RESULTS,
+            search_archived: true,
+        }
     }
 }
 
@@ -45,6 +75,9 @@ impl Settings {
         Self {
             idle_stop_minutes: self.idle_stop_minutes.min(MAX_IDLE_STOP_MINUTES),
             auto_archive_days: self.auto_archive_days.min(MAX_AUTO_ARCHIVE_DAYS),
+            search_prompt_chars: self.search_prompt_chars.clamp(MIN_PROMPT_CHARS, MAX_PROMPT_CHARS),
+            search_snippet_chars: self.search_snippet_chars.clamp(MIN_SNIPPET_CHARS, MAX_SNIPPET_CHARS),
+            search_results: self.search_results.clamp(MIN_SEARCH_RESULTS, MAX_SEARCH_RESULTS),
             ..self
         }
     }
@@ -85,6 +118,10 @@ fn parse(text: &str) -> Option<Settings> {
             auto_archive_days: number("auto_archive_days", d.auto_archive_days),
             idle_stop_ignores_mcp: ignores_mcp,
             theme,
+            search_prompt_chars: number("search_prompt_chars", d.search_prompt_chars),
+            search_snippet_chars: number("search_snippet_chars", d.search_snippet_chars),
+            search_results: number("search_results", d.search_results),
+            search_archived: o.get("search_archived").and_then(Value::as_bool).unwrap_or(d.search_archived),
         }
         .clamped(),
     )
@@ -132,6 +169,10 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("idle_stop_minutes".into(), json!(s.idle_stop_minutes));
     object.insert("auto_archive_days".into(), json!(s.auto_archive_days));
     object.insert("idle_stop_ignores_mcp".into(), json!(s.idle_stop_ignores_mcp));
+    object.insert("search_prompt_chars".into(), json!(s.search_prompt_chars));
+    object.insert("search_snippet_chars".into(), json!(s.search_snippet_chars));
+    object.insert("search_results".into(), json!(s.search_results));
+    object.insert("search_archived".into(), json!(s.search_archived));
     // The theme is only written when it is a different choice from what the file already says: a value platoon
     // can't read (an id from another version, or something that isn't text) is the user's until they pick.
     let same = object.get("theme").is_some_and(|v| v.as_str().map_or(s.theme == DEFAULT_ID, |on_disk| on_disk == s.theme));
@@ -193,6 +234,14 @@ pub fn days_label(d: u64) -> String {
     if d == 0 { "Off".into() } else { plural(d, "day") }
 }
 
+pub fn chars_label(n: u64) -> String {
+    plural(n, "character")
+}
+
+pub fn results_label(n: u64) -> String {
+    plural(n, "result")
+}
+
 pub const ITEMS: &[Item] = &[
     Item {
         name: "Theme",
@@ -237,6 +286,49 @@ pub const ITEMS: &[Item] = &[
         get: |s| u64::from(s.idle_stop_ignores_mcp),
         set: |s, v| s.idle_stop_ignores_mcp = v != 0,
         label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
+        off: None,
+    },
+    Item {
+        name: "Search archived",
+        explain: "Whether searching by the words you typed (press / then tab) also looks in conversations on the Archived tab. \
+                  Choosing one from the results opens the Archived tab for you.",
+        kind: Kind::Steps,
+        choices: &[0, 1],
+        get: |s| u64::from(s.search_archived),
+        set: |s, v| s.search_archived = v != 0,
+        label: |v| if v == 0 { "Skip archived".into() } else { "Include archived".into() },
+        off: None,
+    },
+    Item {
+        name: "Search results shown",
+        explain: "The most conversations a word search lists. A narrower search finds what you want among fewer.",
+        kind: Kind::Steps,
+        choices: &[10, 20, 50, 100, 200],
+        get: |s| s.search_results,
+        set: |s, v| s.search_results = v,
+        label: results_label,
+        off: None,
+    },
+    Item {
+        name: "Search preview length",
+        explain: "The most of a matching message a search result shows around the words you typed. \
+                  It is also cut to fit the window.",
+        kind: Kind::Steps,
+        choices: &[40, 80, 120, 200, 400],
+        get: |s| s.search_snippet_chars,
+        set: |s, v| s.search_snippet_chars = v,
+        label: chars_label,
+        off: None,
+    },
+    Item {
+        name: "Longest message kept",
+        explain: "How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. \
+                  Changing it makes platoon read your conversations again in the background.",
+        kind: Kind::Steps,
+        choices: &[300, 1000, 2000, 5000, 20_000],
+        get: |s| s.search_prompt_chars,
+        set: |s, v| s.search_prompt_chars = v,
+        label: chars_label,
         off: None,
     },
 ];
@@ -438,7 +530,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -463,7 +555,7 @@ mod tests {
     #[test]
     fn every_setting_offers_ascending_steps_starting_at_off_within_the_limits() {
         for item in ITEMS.iter().filter(|i| i.kind == Kind::Steps) {
-            assert_eq!(item.choices[0], 0, "{}", item.name);
+            assert!(item.choices[0] == 0 || item.off.is_none(), "only an item that can be off starts at 0: {}", item.name);
             assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}", item.name);
             assert!(!item.explain.is_empty() && item.explain.len() < 300, "{}", item.name);
             let defaults = Settings::default();
@@ -668,5 +760,62 @@ mod tests {
         assert_eq!(saved(&d)["theme"], "catppuccin-mocha", "picking the default is a choice like any other");
         save(&d, &Settings { theme: "user:deep-sea".into(), ..s }).unwrap();
         assert_eq!(saved(&d)["theme"], "user:deep-sea");
+    }
+
+    #[test]
+    fn the_search_settings_default_are_read_clamped_and_kept_with_the_rest_of_the_file() {
+        let d = dir("search");
+        let def = Settings::default();
+        assert_eq!((def.search_prompt_chars, def.search_snippet_chars, def.search_results, def.search_archived), (2000, 120, 50, true));
+        assert_eq!(load(&d).0, def, "no file");
+        write(&d, r#"{"search_prompt_chars": 5000, "search_snippet_chars": 80, "search_results": 100, "search_archived": false}"#);
+        let s = load(&d).0;
+        assert_eq!((s.search_prompt_chars, s.search_snippet_chars, s.search_results, s.search_archived), (5000, 80, 100, false));
+        // Silly numbers are clamped to what makes sense, not turned into "off".
+        write(&d, r#"{"search_prompt_chars": 1, "search_snippet_chars": 0, "search_results": 99999999}"#);
+        let s = load(&d).0;
+        assert_eq!((s.search_prompt_chars, s.search_snippet_chars, s.search_results), (MIN_PROMPT_CHARS, MIN_SNIPPET_CHARS, MAX_SEARCH_RESULTS));
+        write(&d, r#"{"search_prompt_chars": 1e30, "search_snippet_chars": 1e30, "search_results": 0}"#);
+        let s = load(&d).0;
+        assert_eq!((s.search_prompt_chars, s.search_snippet_chars, s.search_results), (MAX_PROMPT_CHARS, MAX_SNIPPET_CHARS, MIN_SEARCH_RESULTS));
+        // Wrong types keep the default, and the rest of the file is still read.
+        for odd in ["\"lots\"", "-5", "null", "[]", "true"] {
+            write(&d, &format!(r#"{{"search_prompt_chars": {odd}, "search_results": {odd}, "search_archived": {odd}, "auto_archive_days": 9}}"#));
+            let s = load(&d).0;
+            assert_eq!((s.search_prompt_chars, s.search_results, s.auto_archive_days), (2000, 50, 9), "{odd}");
+            assert!(s.search_archived, "{odd}: only a real true or false is a choice, and the default is true");
+        }
+        write(&d, r#"{"search_archived": "no"}"#);
+        assert!(load(&d).0.search_archived);
+        // Saved, clamped, and the file's other keys survive.
+        write(&d, r#"{"mine": [1, 2]}"#);
+        save(&d, &Settings { search_prompt_chars: 1, search_results: 10_000, search_archived: false, ..Settings::default() }).unwrap();
+        let v = saved(&d);
+        assert_eq!((v["search_prompt_chars"].as_u64(), v["search_results"].as_u64(), v["search_archived"].as_bool()), (Some(MIN_PROMPT_CHARS), Some(MAX_SEARCH_RESULTS), Some(false)));
+        assert_eq!(v["mine"], json!([1, 2]));
+    }
+
+    #[test]
+    fn every_search_entry_is_listed_with_plain_words_and_its_default_among_the_steps() {
+        let names: Vec<&str> = ITEMS.iter().map(|i| i.name).collect();
+        assert_eq!(names[4..], ["Search archived", "Search results shown", "Search preview length", "Longest message kept"]);
+        let d = Settings::default();
+        assert_eq!((ITEMS[4].label)((ITEMS[4].get)(&d)), "Include archived");
+        assert_eq!((ITEMS[5].label)((ITEMS[5].get)(&d)), "50 results");
+        assert_eq!((ITEMS[6].label)((ITEMS[6].get)(&d)), "120 characters");
+        assert_eq!((ITEMS[7].label)((ITEMS[7].get)(&d)), "2000 characters");
+        assert_eq!((results_label(1), chars_label(1)), ("1 result".to_string(), "1 character".to_string()));
+        for item in &ITEMS[4..] {
+            let lower = item.explain.to_lowercase();
+            for jargon in ["index", "json", "cache", "byte", "token", "thread"] {
+                assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
+            }
+            // Every step is inside the limits the file is clamped to.
+            for &c in item.choices {
+                let mut s = Settings::default();
+                (item.set)(&mut s, c);
+                assert_eq!(s.clone().clamped(), s, "{}: step {c}", item.name);
+            }
+        }
     }
 }

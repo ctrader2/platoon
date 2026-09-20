@@ -10,8 +10,10 @@ mod host;
 mod index;
 mod mcp;
 mod model;
+mod names;
 mod open;
 mod procs;
+mod prompts;
 mod select;
 mod setup;
 mod settings;
@@ -20,6 +22,8 @@ mod ui;
 mod usertheme;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod search_app_tests;
 #[cfg(test)]
 mod select_app_tests;
 #[cfg(test)]
@@ -851,8 +855,8 @@ mod tests {
 
         // / -> filter mode, typing filters, esc-button clears
         draw(&mut term, &app);
-        click_action(&mut app, Action::Filter);
-        assert!(matches!(app.mode, Mode::Filter));
+        click_action(&mut app, Action::Search);
+        assert!(matches!(app.mode, Mode::Search));
         for c in "zzzz-no-such".chars() {
             ch(&mut app, c);
         }
@@ -1281,7 +1285,7 @@ mod tests {
 
         ch(&mut app, '/');
         ch(&mut app, 's');
-        assert!(matches!(app.mode, Mode::Filter) && app.filter == "s", "an s typed into the filter is text");
+        assert!(matches!(app.mode, Mode::Search) && app.filter == "s", "an s typed into the filter is text");
         key(&mut app, KeyCode::Esc);
 
         ch(&mut app, 'n');
@@ -1345,15 +1349,14 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 4);
-        key(&mut app, KeyCode::Down);
-        key(&mut app, KeyCode::Down);
-        key(&mut app, KeyCode::Down);
-        assert_eq!(app.setting, 3, "no wrapping past the last");
-        key(&mut app, KeyCode::Up);
-        key(&mut app, KeyCode::Up);
-        key(&mut app, KeyCode::Up);
-        key(&mut app, KeyCode::Up);
+        assert_eq!(ITEMS.len(), 8);
+        for _ in 0..ITEMS.len() + 2 {
+            key(&mut app, KeyCode::Down);
+        }
+        assert_eq!(app.setting, ITEMS.len() - 1, "no wrapping past the last");
+        for _ in 0..ITEMS.len() + 2 {
+            key(&mut app, KeyCode::Up);
+        }
         assert_eq!(app.setting, 0, "nor before the first");
     }
 
@@ -1561,7 +1564,7 @@ mod tests {
     fn settings_float_over_a_faded_list_and_a_click_outside_closes_them() {
         let (_w, mut app) = mixed_app("popup");
         ch(&mut app, 's');
-        let mut term = Terminal::new(TestBackend::new(120, 36)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(120, 60)).unwrap();
         let shown = draw(&mut term, &app);
         // The list is still there behind it...
         assert!(shown.contains("platoon") && flat(&shown).contains("1 Active 3") && shown.contains("Settings"), "{shown}");
@@ -1589,19 +1592,19 @@ mod tests {
         let (_w, mut app) = mixed_app("popup-size");
         ch(&mut app, 's');
         // Tall terminal: floats with air above and below.
-        let mut tall = Terminal::new(TestBackend::new(110, 50)).unwrap();
+        let mut tall = Terminal::new(TestBackend::new(110, 70)).unwrap();
         let shown = draw(&mut tall, &app);
         let (first, last) = (
             shown.lines().position(|l| l.contains("Settings")).unwrap(),
             shown.lines().enumerate().filter(|(_, l)| l.contains("esc back")).map(|(i, _)| i).last().unwrap(),
         );
         assert!(first > 1 && shown.lines().count() - last > 3, "not stretched to the screen:\n{shown}");
-        // 100x30 and 140x30: every explanation fits.
+        // 100x60 and 140x60: every explanation fits.
         for cols in [100, 140] {
-            let mut term = Terminal::new(TestBackend::new(cols, 30)).unwrap();
+            let mut term = Terminal::new(TestBackend::new(cols, 60)).unwrap();
             let text = popup_flat(&draw(&mut term, &app));
             for item in ITEMS.iter() {
-                assert!(text.contains(item.explain), "{}: cut off at {cols}x30", item.name);
+                assert!(text.contains(item.explain), "{}: cut off at {cols}x60", item.name);
             }
         }
         // 80x24 has room for the entries and one explanation: the selected one, whole, and it moves with the selection.
@@ -1836,13 +1839,13 @@ mod tests {
             a
         };
         let file = "settings.json";
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (80, 20)] {
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (100, 60), (140, 60), (60, 20), (80, 20)] {
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
             let ctx = format!("{cols}x{rows}\n{shown}");
             // Where every explanation doesn't fit with room to breathe, the selected one does (and is whole).
-            let roomy = rows >= 30;
+            let roomy = rows >= 60;
             for (i, item) in ITEMS.iter().enumerate() {
                 assert!(text.contains(item.name), "{ctx}");
                 let must_explain = roomy || i == 0;
@@ -1870,13 +1873,15 @@ mod tests {
     }
 
     #[test]
-    fn the_mcp_entry_reads_plainly_and_is_whole_at_80_100_and_140_columns_and_at_60_by_20() {
+    fn the_mcp_entry_reads_plainly_and_is_whole_at_80_100_and_140_columns_and_at_60_by_24() {
         let w = World::new("set-mcp-render");
         let mut app = w.app();
         ch(&mut app, 's');
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (60, 18)] {
-            ch(&mut app, 'G'); // the last entry is the one under test, and (small terminals) the one explained
-            assert_eq!(app.setting, ITEMS.len() - 1);
+        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 26), (60, 24)] {
+            for _ in 0..3 {
+                key(&mut app, KeyCode::Down); // the MCP entry is the one under test, and (small terminals) the one explained
+            }
+            assert_eq!(app.setting, 3);
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
@@ -1901,7 +1906,9 @@ mod tests {
         let w = World::new("set-mcp-input");
         let on_disk_flag = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["idle_stop_ignores_mcp"].clone();
         let (mut app, mut term) = settings_screen(&w, 100, 30);
-        ch(&mut app, 'G');
+        for _ in 0..2 {
+            key(&mut app, KeyCode::Down);
+        }
         assert_eq!(app.setting, 3);
         assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "the default");
         assert!(!config_file(&w).exists() || on_disk(&w).idle_stop_ignores_mcp, "looking at it changes nothing");
@@ -1958,7 +1965,9 @@ mod tests {
         std::fs::write(config_file(&w), r#"{"idle_stop_ignores_mcp":"no","keep":{"a":[1]},"idle_stop_minutes":60}"#).unwrap();
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "a wrong-typed value shows the default");
-        ch(&mut app, 'G');
+        for _ in 0..2 {
+            key(&mut app, KeyCode::Down);
+        }
         key(&mut app, KeyCode::Left);
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
         assert_eq!((v["idle_stop_ignores_mcp"].clone(), v["keep"].clone(), v["idle_stop_minutes"].clone()), (serde_json::json!(false), serde_json::json!({"a": [1]}), serde_json::json!(60)));
@@ -1985,24 +1994,24 @@ mod tests {
             }
         }
         // With little room only the selected setting explains itself, and moving on moves the explanation.
-        let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 18)).unwrap();
         let first = flat(&draw(&mut term, &app));
         assert!(first.contains(ITEMS[0].explain) && !first.contains(ITEMS[1].explain), "{first}");
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 15)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 17.
+        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 21 (with the four search entries after it).
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 17)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 21)).unwrap();
         let third = draw(&mut term, &app);
         assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
         // Too cramped to explain it: the entries and the way back are still whole.
         let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
         assert!(cramped.contains(ITEMS[3].name) && cramped.contains("esc back"), "{cramped}");
-        let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         let cramped = draw(&mut term, &app);
         assert!(cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
     }
