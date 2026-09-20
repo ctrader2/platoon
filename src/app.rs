@@ -8,12 +8,13 @@ use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
 use crate::ledger::Ledger;
-use crate::model::{Proc, Session, Status};
+use crate::model::{NameSource, Proc, Session, Status};
 use crate::names::{self, Names};
 use crate::prompts::{self, PromptIndex};
 use crate::select::{click_count, extract, Click, Point, Selection, Unit};
-use crate::settings::{Kind, SettingsStore, Step, ITEMS};
+use crate::settings::{Item, Kind, Settings, SettingsStore, Step, ITEMS, SMART_ITEMS};
 use crate::setup;
+use crate::summaries::Summaries;
 use crate::theme::Theme;
 use crate::usertheme::Registry;
 use crate::usage::{self, Usage};
@@ -28,8 +29,12 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
+    thread,
     time::{Duration, Instant},
 };
+
+mod smart_glue;
+pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 /// Automatic archiving is something the user didn't do, so its notice stays long enough to be read.
@@ -74,6 +79,16 @@ pub fn detect_rounded_with(env: &dyn Fn(&str) -> Option<String>) -> bool {
         || term.contains("ghostty")
         || term.contains("kitty")
         || ["KITTY_WINDOW_ID", "WEZTERM_EXECUTABLE", "GHOSTTY_RESOURCES_DIR"].iter().any(|k| env(k).is_some())
+}
+
+/// The mark of a generated name is `✦`, which nearly every font has; on the Linux console and when
+/// `PLATOON_GLYPHS=plain` it is a plain `*` (`PLATOON_GLYPHS=fancy` forces the `✦`).
+pub fn detect_plain_marker_with(env: &dyn Fn(&str) -> Option<String>) -> bool {
+    match env("PLATOON_GLYPHS").as_deref() {
+        Some("plain" | "ascii") => true,
+        Some("fancy") => false,
+        _ => env("TERM").as_deref() == Some("linux"),
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -207,6 +222,9 @@ pub struct SearchKind {
     pub prompt: &'static str,
     /// It narrows the list behind the dialog as you type (and Enter keeps that), rather than listing results of its own.
     pub narrows_list: bool,
+    /// The token feature this kind needs (its id in `ai::FEATURES`): the kind is only offered while the master switch
+    /// and that feature's own switch are both on.
+    pub feature: Option<&'static str>,
 }
 
 pub const SEARCH_KINDS: &[SearchKind] = &[
@@ -215,12 +233,21 @@ pub const SEARCH_KINDS: &[SearchKind] = &[
         explain: "Narrows the list by name, folder, branch and description.",
         prompt: "Type to narrow the list.",
         narrows_list: true,
+        feature: None,
     },
     SearchKind {
         label: "Full-text",
         explain: "Finds conversations by the words you typed in them, archived ones too.",
         prompt: "Type words you asked Claude about, in any order.",
         narrows_list: false,
+        feature: None,
+    },
+    SearchKind {
+        label: "Describe it",
+        explain: "Describe it in your own words; Claude picks the likely ones.",
+        prompt: "Describe what you remember, then press enter.",
+        narrows_list: false,
+        feature: Some("find"),
     },
 ];
 
@@ -253,6 +280,15 @@ pub struct Search {
     pub top: Cell<usize>,
     /// What `results` was worked out from, so nothing is redone when nothing changed.
     computed_for: Option<(usize, String, u64, u64, bool, u64)>,
+    /// The state of the "Describe it" search.
+    pub find: FindData,
+}
+
+/// Which screen of the settings is showing: the main one, or the one behind its "Smart features" entry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Page {
+    Main,
+    Smart,
 }
 
 /// A conversation being renamed.
@@ -309,6 +345,8 @@ pub struct App {
     /// Where copied text goes. Lives as long as the app: on X11 the program that set the clipboard is the one
     /// that hands it to whoever pastes, so it has to stay around for the text to stay pasteable.
     clipboard: Clipboard,
+    /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
+    pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
     pub rounded: bool,
     pub home: String,
@@ -338,7 +376,13 @@ pub struct App {
     names: Names,
     /// Automatic clean-up settings, re-read when the file changes.
     settings: SettingsStore,
-    /// The selected line of the settings screen, an index into `ITEMS`.
+    /// The names and summaries platoon generated (`summaries.json`).
+    summaries: Summaries,
+    /// The naming worker and the description search's calls (see `smart_glue.rs`).
+    smart: Engine,
+    /// The settings screen showing: the main one or "Smart features".
+    pub page: Page,
+    /// The selected line of the settings screen, an index into the entries of `page` (`items()`).
     pub setting: usize,
     /// The first entry of the settings screen in view, when the entries don't all fit. Kept between frames so the list
     /// scrolls only as far as the selection needs, like the other lists.
@@ -374,6 +418,7 @@ impl App {
         let indexer = Indexer::spawn(reader.root(), &cache);
         let mut app = Self::build(reader, cache, archive::config_dir(), indexer, true);
         app.rounded = detect_rounded();
+        app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
         app
     }
@@ -404,7 +449,7 @@ impl App {
             selected: 0,
             filter: String::new(),
             mode: Mode::List,
-            search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None },
+            search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None, find: FindData::new() },
             rename: Rename { id: String::new(), input: String::new(), original: String::new() },
             picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0 },
             hosts: Vec::new(),
@@ -426,6 +471,7 @@ impl App {
             themes: Registry::open(&config),
             quit: false,
             rounded: false,
+            plain_marker: false,
             hits: RefCell::new(Vec::new()),
             size: (80, 24),
             reader,
@@ -434,6 +480,9 @@ impl App {
             prompt_cap,
             archive: Archive::open(&config),
             names: Names::open(&config),
+            summaries: Summaries::open(&config),
+            smart: Engine::new(),
+            page: Page::Main,
             settings,
             setting: 0,
             setting_top: Cell::new(0),
@@ -457,6 +506,11 @@ impl App {
 
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// The mark of a generated name.
+    pub fn marker(&self) -> &'static str {
+        if self.plain_marker { "*" } else { "✦" }
     }
 
     /// Everything about the token features that follows the settings and the ledger: calls whose switch was turned
@@ -696,6 +750,8 @@ impl App {
             // The name the user gave it in platoon wins over the one Claude was told.
             if let (Some(n), None) = (ls.iter().find_map(|l| l.name.as_ref()), self.names.get(&s.id)) {
                 s.name.clone_from(n);
+                s.name_source = NameSource::Claude;
+                s.rehaystack();
             }
             s.status = if ls.iter().any(|l| l.busy && !l.is_background()) {
                 Status::Busy
@@ -719,6 +775,7 @@ impl App {
         // After the settings were re-read (auto_archive does that first), so an edit of the file is seen at once.
         self.sync_ai();
         self.refresh_prompts();
+        self.drive_smart();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
             None if setup::statusline_installed(self.reader.root()) => Usage::Waiting,
@@ -841,15 +898,20 @@ impl App {
     fn session(&self, id: String, cwd: String, branch: Option<String>, model: Option<String>, est: u8, description: String, last_active: u64) -> Session {
         // Claude Code derives a placeholder name; only a name the user chose (set from the registry) replaces this, and
         // a name the user gave it in platoon replaces both.
-        let name = match self.names.get(&id) {
-            Some(n) => n.to_string(),
-            None => Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string(),
+        let generated = self.summaries.get(&id);
+        let (name, name_source) = match (self.names.get(&id), generated) {
+            (Some(n), _) => (n.to_string(), NameSource::Platoon),
+            (None, Some(g)) => (g.name.clone(), NameSource::Generated),
+            (None, None) => (Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string(), NameSource::Folder),
         };
+        let summary = generated.map(|g| g.summary.clone()).unwrap_or_default();
         let dir = dirs::tilde(&cwd, &self.home);
-        let haystack = [name.as_str(), dir.as_str(), branch.as_deref().unwrap_or(""), description.as_str()].join("\n").to_lowercase();
+        let haystack = Session::make_haystack(&name, &dir, branch.as_deref(), &description, &summary);
         Session {
             id,
             name,
+            name_source,
+            summary,
             dir,
             cwd,
             branch,
@@ -893,6 +955,7 @@ impl App {
             }
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
             (Action::Cancel, Mode::Themes) => self.close_theme_list(),
+            (Action::Cancel, Mode::Settings) if self.page == Page::Smart => self.close_smart_settings(),
             (Action::Confirm, Mode::Search) => self.confirm_search(),
             (Action::Cancel, Mode::Search) => self.cancel_search(),
             (Action::Confirm, Mode::Rename) => self.save_rename(),
@@ -912,6 +975,7 @@ impl App {
             selected: 0,
             top: Cell::new(0),
             computed_for: None,
+            find: FindData::new(),
         };
         self.mode = Mode::Search;
         self.update_search();
@@ -923,6 +987,14 @@ impl App {
         if kind >= SEARCH_KINDS.len() || kind == self.search.kind {
             return;
         }
+        // What the description search asked belongs to it: leaving it drops the question, and its answers with it.
+        if self.search.kind == FIND_KIND || kind == FIND_KIND {
+            self.cancel_find();
+            self.search.find = FindData::new();
+            self.search.results.clear();
+            self.search.total = 0;
+            self.search.computed_for = None;
+        }
         self.search.kind = kind;
         self.search.selected = 0;
         self.selected = 0;
@@ -931,8 +1003,9 @@ impl App {
     }
 
     fn step_search_kind(&mut self, delta: i32) {
-        let n = SEARCH_KINDS.len() as i32;
-        self.set_search_kind((self.search.kind as i32 + delta).rem_euclid(n) as usize);
+        let kinds = self.search_kinds();
+        let at = kinds.iter().position(|&k| k == self.search.kind).unwrap_or(0) as i32;
+        self.set_search_kind(kinds[(at + delta).rem_euclid(kinds.len() as i32) as usize]);
     }
 
     /// The words changed: narrow the list, or work out the results.
@@ -940,6 +1013,9 @@ impl App {
         self.selected = 0;
         self.search.selected = 0;
         self.search.top.set(0);
+        if self.search.kind == FIND_KIND {
+            self.find_text_changed();
+        }
         self.update_search();
     }
 
@@ -952,6 +1028,10 @@ impl App {
             return;
         }
         self.filter.clear();
+        // "Describe it" lists what Claude answered, never something worked out on every keystroke.
+        if self.search.kind == FIND_KIND {
+            return;
+        }
         let settings = self.settings.get();
         let key = (self.search.kind, self.search.text.clone(), self.prompts.generation, self.rev, settings.search_archived, settings.search_results);
         if self.search.computed_for.as_ref() == Some(&key) {
@@ -977,9 +1057,11 @@ impl App {
             if s.archived && !settings.search_archived {
                 continue;
             }
-            let name = self.names.get(&s.id).map(str::to_lowercase).unwrap_or_default();
+            // The name you gave and the one platoon made up both count as the name; the summary is searched too.
+            let name = format!("{} {}", self.names.get(&s.id).unwrap_or(""), self.summaries.get(&s.id).map_or("", |g| g.name.as_str())).to_lowercase();
+            let summary = s.summary.to_lowercase();
             let data = self.prompts.get(&s.id);
-            if let Some(f) = prompts::find(data.map(|d| &**d), &name, &words) {
+            if let Some(f) = prompts::find_with(data.map(|d| &**d), &name, &summary, &words) {
                 found.push((s, f, data));
             }
         }
@@ -994,6 +1076,7 @@ impl App {
             .map(|(s, f, data)| {
                 let detail = match (f.prompt, data) {
                     (Some(i), Some(d)) => d.prompts[i].clone(),
+                    _ if !s.summary.is_empty() => s.summary.clone(),
                     _ => s.description.clone(),
                 };
                 let marks = prompts::spans(&detail, &words);
@@ -1007,6 +1090,8 @@ impl App {
     fn confirm_search(&mut self) {
         if SEARCH_KINDS[self.search.kind].narrows_list {
             self.mode = Mode::List;
+        } else if self.search.kind == FIND_KIND {
+            self.confirm_find();
         } else if let Some(id) = self.search.results.get(self.search.selected).map(|r| r.id.clone()) {
             self.show_conversation(&id);
         }
@@ -1014,6 +1099,11 @@ impl App {
 
     /// Esc in the dialog: closes it, and nothing stays narrowed.
     fn cancel_search(&mut self) {
+        // In the description search the first esc calls off what it has out; only then does it close the dialog.
+        if self.search.kind == FIND_KIND && self.cancel_find_step() {
+            return;
+        }
+        self.cancel_find();
         self.filter.clear();
         self.selected = 0;
         self.mode = Mode::List;
@@ -1102,6 +1192,7 @@ impl App {
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
         self.refresh_settings();
+        self.page = Page::Main;
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
@@ -1177,16 +1268,45 @@ impl App {
         }
     }
 
+    /// The entries of the settings screen showing.
+    pub fn items(&self) -> &'static [Item] {
+        match self.page {
+            Page::Main => &ITEMS,
+            Page::Smart => &SMART_ITEMS,
+        }
+    }
+
+    /// Open the "Smart features" screen from the main one.
+    fn open_smart_settings(&mut self) {
+        self.page = Page::Smart;
+        self.setting = 0;
+        self.setting_top.set(0);
+    }
+
+    /// Back from the "Smart features" screen to the main one, on the entry that opened it.
+    fn close_smart_settings(&mut self) {
+        self.page = Page::Main;
+        self.setting = ITEMS.iter().position(|i| i.kind == Kind::Submenu).unwrap_or(0);
+        self.setting_top.set(0);
+    }
+
     /// Move to another line of the settings screen.
     fn move_setting(&mut self, delta: i32) {
-        self.setting = (self.setting as i32 + delta).clamp(0, ITEMS.len() as i32 - 1) as usize;
+        self.setting = (self.setting as i32 + delta).clamp(0, self.items().len() as i32 - 1) as usize;
     }
 
     /// Change one setting a step and save it at once. What the screen shows afterwards is read back from
     /// the file, so a save that failed leaves the old value on screen with a notice saying why.
     fn change_setting(&mut self, i: usize, step: Step) {
-        let Some(item) = ITEMS.get(i) else { return };
+        let Some(item) = self.items().get(i) else { return };
         self.notice = None;
+        if item.kind == Kind::Submenu {
+            // Enter, space and "next" open it; going "back" on it does nothing.
+            if step != Step::Prev {
+                self.open_smart_settings();
+            }
+            return;
+        }
         // Start from the file as it is now, in case it was edited since the screen last looked.
         self.refresh_settings();
         if item.kind == Kind::Theme {
@@ -1393,6 +1513,7 @@ impl App {
     /// write to it), and an archived one comes back to the Active tab.
     fn note_opened(&mut self, id: &str, archived: bool) {
         self.viewing = Some(id.to_string());
+        self.boost(id);
         let now = usage::now();
         let saved = if archived { self.archive.restore(id, now) } else { self.archive.touch(id, now) };
         if let Err(e) = saved {
@@ -1542,7 +1663,7 @@ impl App {
                 KeyCode::Up => self.move_setting(-1),
                 KeyCode::Down => self.move_setting(1),
                 KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
-                KeyCode::End | KeyCode::Char('G') => self.setting = ITEMS.len() - 1,
+                KeyCode::End | KeyCode::Char('G') => self.setting = self.items().len() - 1,
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
                 KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
                 KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
@@ -1576,6 +1697,9 @@ impl App {
                 KeyCode::PageUp => self.move_search(-5),
                 KeyCode::PageDown => self.move_search(5),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Char('w') if ctrl => self.ask_wider(),
+                // While a description search is out what was typed is what was asked: esc calls it off first.
+                _ if self.find_locked() => {}
                 KeyCode::Char('u') if ctrl => {
                     self.search.text.clear();
                     self.search_text_changed();
@@ -1641,6 +1765,7 @@ impl App {
                 self.picker.input.push_str(&text.replace('\n', ""));
                 self.picker.update(&self.home);
             }
+            Mode::Search if self.find_locked() => {}
             Mode::Search => {
                 self.search.text.push_str(&text.replace(['\n', '\r'], ""));
                 self.search_text_changed();

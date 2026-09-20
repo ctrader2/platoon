@@ -407,6 +407,37 @@ pub fn prompt_in_line(line: &str, cap: usize) -> Option<String> {
     real_prompt_capped(&serde_json::from_str::<Value>(line).ok()?, cap)
 }
 
+/// How much of Claude's last reply is kept per conversation (characters): one line of context for the smart names.
+pub const REPLY_CHARS: usize = 200;
+
+/// Could this line of a transcript be something Claude said in words? A substring test only, so a whole transcript
+/// can be run through it without parsing: an assistant entry that is not a subagent's, not one of Claude's own
+/// synthetic notices (an error message, "no response requested") and that has a text block. A tool call, a tool
+/// result and a thinking block are other kinds of entry or block and don't match.
+pub fn may_be_reply(line: &str) -> bool {
+    line.contains("\"type\":\"assistant\"")
+        && line.contains("\"type\":\"text\"")
+        && !line.contains("\"isSidechain\":true")
+        && !line.contains("<synthetic>")
+}
+
+/// The words Claude said in this line of a transcript: the text blocks of an assistant entry that is not a
+/// subagent's, as one line, cut to `cap` characters. Never tool calls, tool output or thinking. None when the line
+/// has no such text.
+pub fn reply_in_line(line: &str, cap: usize) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v["type"].as_str() != Some("assistant") || v["isSidechain"].as_bool() == Some(true) {
+        return None;
+    }
+    let content = &v["message"]["content"];
+    let text = match content {
+        Value::String(s) => one_line(s),
+        Value::Array(a) => one_line(&a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ")),
+        _ => return None,
+    };
+    (!text.is_empty()).then(|| truncate_to(text, cap))
+}
+
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -605,5 +636,32 @@ mod transcript_tests {
         assert_eq!(prompt_in_line(r#"{"type":"user","message":{"content":[{"type":"tool_result","content":"x"}]}}"#, 100), None);
         assert_eq!(prompt_in_line("not json but \"type\":\"user\"", 100), None);
         assert_eq!(prompt_in_line("", 100), None);
+    }
+
+    #[test]
+    fn a_reply_is_the_text_claude_said_and_nothing_else() {
+        use serde_json::json;
+        let asst = |c: Value| json!({"type":"assistant","message":{"model":"claude-sonnet-5","content":c}}).to_string();
+        let line = asst(json!([{"type":"text","text":"I fixed\nthe   redirect."}]));
+        assert!(may_be_reply(&line));
+        assert_eq!(reply_in_line(&line, 200).as_deref(), Some("I fixed the redirect."));
+        assert_eq!(reply_in_line(&line, 7).as_deref(), Some("I fixed"), "cut to the given number of characters");
+        let two = asst(json!([{"type":"text","text":"one"},{"type":"tool_use","name":"Bash","input":{"command":"rm -rf /"}},{"type":"text","text":"two"}]));
+        assert_eq!(reply_in_line(&two, 200).as_deref(), Some("one two"), "tool calls are not in it");
+        // Not replies: a tool call alone, thinking, tool output, the user's own words, a subagent, Claude's synthetic notices.
+        let tool = asst(json!([{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]));
+        assert!(!may_be_reply(&tool) && reply_in_line(&tool, 200).is_none());
+        let thinking = asst(json!([{"type":"thinking","thinking":"hmm"}]));
+        assert!(!may_be_reply(&thinking) && reply_in_line(&thinking, 200).is_none());
+        let result = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"{\"type\":\"assistant\"} {\"type\":\"text\"}"}]}}).to_string();
+        assert!(!may_be_reply(&result), "text inside a tool result is escaped and never matches");
+        assert!(reply_in_line(&result, 200).is_none());
+        let side = json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}).to_string();
+        assert!(!may_be_reply(&side) && reply_in_line(&side, 200).is_none());
+        let synthetic = json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]}}).to_string();
+        assert!(!may_be_reply(&synthetic));
+        assert_eq!(reply_in_line(&asst(json!([{"type":"text","text":"   "}])), 200), None);
+        assert_eq!(reply_in_line("not json", 200), None);
+        assert_eq!(reply_in_line(&asst(json!("plain string")), 200).as_deref(), Some("plain string"));
     }
 }

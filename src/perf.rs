@@ -252,6 +252,12 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     assert!(cold.bytes <= total && cold.bytes > total - 1000 * CONVERSATIONS as u64, "each byte once: {} of {total}", cold.bytes);
     assert!(cold_time < Duration::from_secs(120), "cold prompt index took {cold_time:?}");
     assert!(file < 30 * 1024 * 1024, "prompts.jsonl is {file} bytes");
+    // Claude's last words are found in the same pass, from the newest assistant text only: 200 characters of the
+    // fat lorem-ipsum entry that ends each real conversation.
+    let snapshot = store.snapshot();
+    let with_reply = snapshot.iter().filter(|f| f.reply.as_ref().is_some_and(|r| r.starts_with("lorem ipsum") && r.chars().count() == crate::claude::REPLY_CHARS)).count();
+    println!("prompt index: {with_reply} of {} conversations have a last reply", snapshot.len());
+    assert_eq!(with_reply, snapshot.len(), "every conversation with prompts ends with a reply");
 
     // Warm, in a new process's shoes: load the saved file and check every file's size: nothing is read.
     let t = Instant::now();
@@ -268,6 +274,7 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     assert!(before > 10 * 1024 * 1024);
     let mut f = fs::OpenOptions::new().append(true).open(big).unwrap();
     writeln!(f, "{}", line_user("/work/x", "one more thing about quebec", now_ms())).unwrap();
+    writeln!(f, "{}", json!({"type":"assistant","timestamp":iso(now_ms()),"message":{"model":"claude-sonnet-5","content":[{"type":"text","text":"Newest words from Claude"}]}})).unwrap();
     drop(f);
     let after = fs::metadata(big).unwrap().len();
     let mut fresh = entries.clone();
@@ -284,9 +291,10 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
         got.extend(u.upserts);
         true
     });
-    println!("prompt index, one appended line of a {} MB file: {:?}, {} bytes read", before / 1_000_000, t.elapsed(), append.bytes);
+    println!("prompt index, one appended prompt and reply of a {} MB file: {:?}, {} bytes read", before / 1_000_000, t.elapsed(), append.bytes);
     assert_eq!((append.read, append.rebuilt, append.bytes), (1, 0, after - before));
     assert!(got[0].prompts.last().unwrap().contains("quebec"));
+    assert_eq!(got[0].reply.as_deref(), Some("Newest words from Claude"), "the reply moved on by reading only the appended bytes");
 
     // Search over all of it, through the app, as typed: every key is a search.
     let mut ix = PromptIndex::inline(&w.cache, 2000);
@@ -353,4 +361,49 @@ fn a_background_prompt_index_never_blocks_the_caller_and_fills_in() {
         assert!(t.elapsed() < Duration::from_secs(60), "indexed {} of {}", ix.len(), 1500 - JUNK);
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+#[test]
+fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
+    use crate::summaries::{Entry as Named, Summaries};
+    let w = World::new("perf-smart");
+    generate(&w.root, CONVERSATIONS);
+    let entry = |i: usize| (format!("{i:08}-aaaa-bbbb-cccc-dddddddddddd"), Named { name: format!("Task {i}"), summary: format!("Working on task number {i}."), covers: 1, model: "haiku".into(), at: 1 });
+    let mut sums = Summaries::open(&w.config);
+    let t = Instant::now();
+    sums.set_many(&(JUNK..CONVERSATIONS).map(entry).collect::<Vec<_>>()).unwrap();
+    println!("summaries.json: {} entries written in {:?}, {} KB", CONVERSATIONS - JUNK, t.elapsed(), fs::metadata(w.config.join("summaries.json")).unwrap().len() / 1000);
+    // One batch of thirty arriving in a file that size: what the app does after every call.
+    let t = Instant::now();
+    sums.set_many(&(JUNK..JUNK + 30).map(entry).collect::<Vec<_>>()).unwrap();
+    let batch = t.elapsed();
+    println!("summaries.json: one batch of 30 saved in {batch:?}");
+    assert!(batch < Duration::from_secs(2), "saving a batch took {batch:?}");
+
+    let mut settings = crate::settings::load(&w.config).0;
+    settings.tokens_enabled = true;
+    settings.set_feature("names", true);
+    crate::settings::save(&w.config, &settings).unwrap();
+    let fake = crate::testkit::AiFake::new("perf-smart");
+    let mut app = w.app();
+    app.set_ai_program_for_test(&fake.script);
+    for _ in 0..3 {
+        app.refresh_for_test();
+    }
+    let t = Instant::now();
+    for _ in 0..10 {
+        app.refresh_for_test();
+    }
+    let on = t.elapsed() / 10;
+    settings.tokens_enabled = false;
+    crate::settings::save(&w.config, &settings).unwrap();
+    app.refresh_for_test();
+    let t = Instant::now();
+    for _ in 0..10 {
+        app.refresh_for_test();
+    }
+    let off = t.elapsed() / 10;
+    println!("smart features, {CONVERSATIONS} conversations all named: a refresh takes {on:?} with them on, {off:?} off; calls made: {}", fake.calls());
+    assert_eq!(fake.calls(), 0, "everything is named: nothing to send");
+    assert!(on < off + Duration::from_millis(500), "the scheduler added {:?} to a refresh", on.saturating_sub(off));
 }

@@ -1,9 +1,9 @@
-use crate::app::{Action, AdoptKind, App, Confirm, Hit, Mode, SEARCH_KINDS, TABS};
+use crate::app::{Action, AdoptKind, App, Confirm, FindState, Hit, Mode, Page, FIND_KIND, SEARCH_KINDS, TABS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::select::{Selection, Span as Cells};
-use crate::model::{Session, Status};
-use crate::settings::{Kind, Step, ITEMS};
+use crate::model::{NameSource, Session, Status};
+use crate::settings::{Kind, Step};
 use crate::usage::Usage;
 use crate::theme::{contrast, Theme};
 use ratatui::{
@@ -20,6 +20,27 @@ const BAR_WIDTH: usize = 10;
 const SELECTION_MIN_FG_CONTRAST: f64 = 3.0;
 
 type Hint<'a> = (&'a str, &'a str, Option<Action>);
+
+/// The summary strip needs this many rows inside the frame (header, rule, column titles, footer, the strip and three
+/// rows of the list); on a shorter terminal it is left out.
+const STRIP_MIN_HEIGHT: u16 = 15;
+
+/// The selected conversation's summary in up to two lines, dim, with the generated-name marker in front of the first.
+fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
+    let t = app.effective_theme();
+    let marker = app.marker();
+    let width = (area.width as usize).saturating_sub(3);
+    let mut lines = wrap(text, width);
+    if lines.len() > 2 {
+        lines.truncate(2);
+        let last = lines.pop().unwrap_or_default();
+        lines.push(fit_end(&format!("{last}…"), width));
+    }
+    for (i, line) in lines.iter().enumerate() {
+        let lead = if i == 0 { Span::styled(format!("{marker} "), Style::new().fg(t.dim)) } else { Span::raw("  ") };
+        f.render_widget(Paragraph::new(Line::from(vec![lead, Span::styled(line.clone(), Style::new().fg(t.subtext))])), Rect::new(area.x, area.y + i as u16, area.width, 1));
+    }
+}
 
 pub fn draw(f: &mut Frame, app: &App) {
     let t = app.effective_theme();
@@ -40,14 +61,22 @@ pub fn draw(f: &mut Frame, app: &App) {
         return;
     }
 
-    let [header, rule, cols, list, footer] = Layout::vertical([
+    // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
+    // tall enough to keep at least three rows of the list beside it.
+    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty());
+    let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
+    let [header, rule, cols, list, strip, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Min(1),
+        Constraint::Length(strip_h),
         Constraint::Length(1),
     ])
     .areas(inner.inner(Margin::new(2, 0)));
+    if let (Some(text), true) = (summary, strip_h > 0) {
+        draw_summary_strip(f, app, text, strip);
+    }
 
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
@@ -164,6 +193,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         let spin = SPINNER[(app.tick % 10) as usize];
         let text = if n > 0 { format!("   {spin} indexing {n}…") } else { format!("   {spin} indexing…") };
         left.push(Span::styled(text, Style::new().fg(t.dim)));
+    }
+    // The smart names being made: how far along, while there is work.
+    if let Some((done, total, _)) = app.smart_progress() {
+        let paused = if app.smart_idle().is_some() { " (paused)" } else { "" };
+        left.push(Span::styled(format!("   {} Indexing {done} of {total}{paused}", app.marker()), Style::new().fg(t.dim)));
     }
 
     let mut right = Vec::new();
@@ -346,15 +380,23 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
-    let mut l1 = vec![
-        lead.clone(),
-        Span::styled(format!("{marker} "), base.fg(marker_color)),
-        Span::styled(fit(&s.name, c.name), name_style),
-        Span::styled(fit(&s.dir, c.dir), base.fg(subtext)),
+    let mut l1 = vec![lead.clone(), Span::styled(format!("{marker} "), base.fg(marker_color))];
+    // A name platoon made up carries a quiet mark at the end of its column, so it can be told from one you chose.
+    if s.name_source == NameSource::Generated && c.name >= 8 {
+        l1.push(Span::styled(fit(&s.name, c.name - 3), name_style));
+        l1.push(Span::styled(format!(" {} ", app.marker()), base.fg(t.dim)));
+    } else {
+        l1.push(Span::styled(fit(&s.name, c.name), name_style));
+    }
+    // With a name that isn't the folder's, the folder is what tells the conversations apart: when the path has to be
+    // cut, the end of it (the folder itself) stays.
+    let dir = if s.name_source == NameSource::Folder { fit(&s.dir, c.dir) } else { fit_tail(&s.dir, c.dir) };
+    l1.extend([
+        Span::styled(dir, base.fg(subtext)),
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
         Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(subtext)),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
-    ];
+    ]);
     l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
     l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1), base.fg(t.dim)));
 
@@ -467,6 +509,7 @@ fn fit_start(s: &str, n: usize) -> String {
 /// The settings screen: one entry per `ITEMS`, each with its explanation and a value that steps with `‹` `›`.
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
+    let items = app.items();
     let w = area.width as usize;
     let store = app.settings();
     let current = store.get();
@@ -487,17 +530,18 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let top = area.y;
     // The reassurance line is the first thing to go when that lets the selected entry explain itself.
     // A warning or an error is never dropped.
-    // The first note is the day's token count: it stays, and only what follows it is dropped.
     if !store.is_corrupt() && app.active_notice().is_none() {
         let text_w = (area.width as usize).saturating_sub(4);
-        let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
-        let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top)) - top;
-        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(1) as usize) < 2 {
-            notes.truncate(1);
+        let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
+        let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top;
+        // (On the smart features screen the first note is the day's token count: that one stays.)
+        let keep = usize::from(app.page == Page::Smart);
+        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(keep) as usize) < 2 {
+            notes.truncate(keep);
         }
     }
     // The entries come before the notes: on a very short terminal the notes give way.
-    let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + ITEMS.len() as u16).min(path_y.max(top));
+    let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top));
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
 
     // The notes follow the entries directly.
@@ -521,9 +565,26 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
 fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
     let t = app.effective_theme();
     let mut notes: Vec<(String, Color)> = Vec::new();
-    let (used, cap) = (app.tokens_today, app.settings().get().ai_daily_tokens);
-    let line = format!("Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(cap));
-    notes.push((line, if used >= cap { t.warn } else { t.subtext }));
+    if app.page == Page::Smart {
+        let (used, cap) = (app.tokens_today, app.settings().get().ai_daily_tokens);
+        let line = format!("Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(cap));
+        notes.push((line, if used >= cap { t.warn } else { t.subtext }));
+        let e = app.archived_estimate();
+        let archived = if e.conversations == 0 {
+            "Archived: none waiting to be named".to_string()
+        } else {
+            format!(
+                "Archived: {} conversation{}, about {} tokens to index (an estimate)",
+                e.conversations,
+                if e.conversations == 1 { "" } else { "s" },
+                crate::settings::thousands(e.tokens)
+            )
+        };
+        notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
+        if let Some(why) = app.smart_idle() {
+            notes.extend(wrap(&format!("Naming is waiting: {why}"), w).into_iter().map(|l| (l, t.warn)));
+        }
+    }
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
@@ -539,7 +600,8 @@ fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
 /// path and the key hints.
 fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
-    let entries: usize = ITEMS.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + ITEMS.len().saturating_sub(1);
+    let items = app.items();
+    let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1);
     (entries + 1 + settings_notes(app, w).len() + 1 + 2) as u16
 }
 
@@ -561,13 +623,17 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     let vpad = u16::from(need + 2 <= area.height);
     let r = centered(area, w, (need + 2 * vpad).min(area.height).max(1));
     f.render_widget(Clear, r);
-    let block = modal_block(t, "Settings");
+    let block = modal_block(t, if app.page == Page::Smart { crate::settings::SMART_SCREEN_TITLE } else { "Settings" });
     let inner = block.inner(r).inner(Margin::new(hpad, vpad));
     f.render_widget(block, r);
     draw_settings(f, app, inner);
     // Last, so it only catches clicks the popup didn't: outside it, a click closes settings.
     app.hits.borrow_mut().push((area, Hit::Action(Action::Cancel)));
 }
+
+/// The entries get at least this many rows before the notes under them give way (a screen with more entries than
+/// that scrolls, so they needn't all be in view).
+const SETTINGS_MIN_ROWS: usize = 9;
 
 /// The fewest entries the settings list still shows, together with the selected entry's explanation, before the
 /// explanations are given up (a terminal a handful of lines tall).
@@ -595,7 +661,8 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         return area.y;
     }
     let text_w = (area.width as usize).saturating_sub(4);
-    let explained: Vec<Vec<String>> = ITEMS.iter().map(|it| wrap(it.explain, text_w)).collect();
+    let items = app.items();
+    let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
 
     let level = explain_level(&explained, app.setting, area.height as usize);
     let show = |i: usize| level == 0 || (level == 1 && i == app.setting);
@@ -611,7 +678,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     app.setting_top.set(start);
 
     let mut y = area.y;
-    for (i, item) in ITEMS.iter().enumerate().skip(start) {
+    for (i, item) in items.iter().enumerate().skip(start) {
         let h = height(i) as u16;
         if y + h > area.bottom() {
             break;
@@ -631,6 +698,12 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let label = (item.label)(value);
                 let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
+            }
+            // The value is shown and the right arrow opens the screen; there is nothing to step back to.
+            Kind::Submenu => {
+                let label = (item.label)(item.value(current));
+                let vw = label.chars().count().max(3);
+                (label, vw, true, false, item.off == Some(item.value(current)))
             }
             Kind::Theme => {
                 let all = app.themes().all();
@@ -918,7 +991,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     // One chip per kind: the showing one is lit, a hovered one half lit.
     let mut x = chips.x;
     let mut spans = Vec::new();
-    for (i, k) in SEARCH_KINDS.iter().enumerate() {
+    for i in app.search_kinds() {
+        let k = &SEARCH_KINDS[i];
         let label = format!(" {} ", k.label);
         let cw = label.chars().count() as u16;
         let rect = Rect::new(x, chips.y, cw, 1).intersection(chips);
@@ -952,13 +1026,35 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         draw_result_rows(f, app, list);
         match (s.results.len(), s.total) {
             (0, _) => String::new(),
+            _ if s.kind == FIND_KIND && !matches!(app.find_state(), FindState::Done) => String::new(),
             (n, total) if n < total => format!("first {n} of {total}"),
             (n, _) => format!("{n} found"),
         }
     };
-    let enter = if kind.narrows_list { "keep filter" } else { "open" };
-    let esc = if kind.narrows_list { "clear" } else { "close" };
-    let hints: [Hint; 3] = [("enter", enter, Some(Action::Confirm)), ("tab", "switch", None), ("esc", esc, Some(Action::Cancel))];
+    let (enter, esc) = if kind.narrows_list {
+        ("keep filter", "clear")
+    } else if s.kind == FIND_KIND {
+        match app.find_state() {
+            FindState::Idle | FindState::Failed(_) => ("ask Claude", "close"),
+            FindState::Done => ("open", "close"),
+            FindState::Confirm { .. } => ("go ahead", "back"),
+            FindState::Waiting | FindState::Asking => ("", "cancel"),
+        }
+    } else {
+        ("open", "close")
+    };
+    let mut hints: Vec<Hint> = Vec::new();
+    if !enter.is_empty() {
+        hints.push(("enter", enter, Some(Action::Confirm)));
+    }
+    if s.kind == FIND_KIND && matches!(app.find_state(), FindState::Idle | FindState::Done | FindState::Failed(_)) && !s.text.trim().is_empty() {
+        hints.push(("ctrl+w", "search wider", None));
+    }
+    if app.search_kinds().len() > 1 {
+        hints.push(("tab", "switch", None));
+    }
+    hints.push(("esc", esc, Some(Action::Cancel)));
+    let hints = fit_hints(hints, foot.width as usize, &["switch", "search wider"]);
     draw_footer(f, app, foot, &hints, Some((count, t.dim)));
     // Last, so it only catches clicks the dialog didn't: outside it, a click closes it like esc.
     app.hits.borrow_mut().push((area, Hit::Action(Action::Cancel)));
@@ -994,13 +1090,69 @@ fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// What "Describe it" says in place of a list: what to do, that it is waiting for Claude, the question about a
+/// wider search, or why it didn't work. False when there are results to draw instead.
+fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
+    let t = app.effective_theme();
+    let s = &app.search;
+    let mut lines: Vec<(String, Color)> = Vec::new();
+    if !app.search_kinds().contains(&FIND_KIND) {
+        let text = format!(
+            "Describe it is switched off. Press s in the list, open Smart features, and turn on \"{}\" and \"Find a session by description\".",
+            crate::ai::MASTER_LABEL
+        );
+        lines.push((text, t.warn));
+    } else {
+        match app.find_state() {
+            FindState::Idle if s.text.trim().is_empty() => lines.push((SEARCH_KINDS[FIND_KIND].prompt.to_string(), t.dim)),
+            FindState::Idle => lines.push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), t.dim)),
+            FindState::Waiting => {
+                lines.push(("Asking Claude...".to_string(), t.subtext));
+                lines.push(("Waiting for the names being made to finish first. Press esc to cancel.".to_string(), t.dim));
+            }
+            FindState::Asking => {
+                lines.push(("Asking Claude...".to_string(), t.subtext));
+                lines.push(("Press esc to cancel.".to_string(), t.dim));
+            }
+            FindState::Confirm { estimate, count } => {
+                lines.push((
+                    format!(
+                        "Search wider? This sends {count} conversations to Claude, about {} tokens (an estimate). Press enter to go ahead or esc to go back.",
+                        crate::settings::thousands(estimate.tokens)
+                    ),
+                    t.text,
+                ));
+            }
+            FindState::Done if s.results.is_empty() => {
+                lines.push(("Claude found no likely match. Try other words, or press ctrl+w to search wider.".to_string(), t.dim));
+            }
+            FindState::Done => return false,
+            FindState::Failed(msg) => lines.push((msg.clone(), t.warn)),
+        }
+    }
+    let mut y = area.y;
+    for (text, color) in lines {
+        for line in wrap(&text, area.width as usize) {
+            if y < area.bottom() {
+                f.render_widget(Paragraph::new(Span::styled(line, Style::new().fg(color))), Rect::new(area.x, y, area.width, 1));
+                y += 1;
+            }
+        }
+    }
+    true
+}
+
 /// The word search's results: the conversation's name and when it was used, and under it the matching message with the
 /// words in the accent color.
 fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
     const H: u16 = 2;
     let t = app.effective_theme();
     let s = &app.search;
-    if s.results.is_empty() {
+    if s.kind == FIND_KIND {
+        if draw_find_message(f, app, area) {
+            return;
+        }
+    } else if s.results.is_empty() {
         let msg = if s.text.trim().is_empty() {
             SEARCH_KINDS[s.kind].prompt
         } else if app.search_catching_up() {
@@ -1352,6 +1504,15 @@ fn fit(s: &str, n: usize) -> String {
         out
     } else {
         format!("{s:<n$}")
+    }
+}
+
+/// Pad to exactly `n` chars, or cut from the front (`…` first) so that the end stays: a path's last folder.
+fn fit_tail(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        format!("{s:<n$}")
+    } else {
+        fit_start(s, n)
     }
 }
 

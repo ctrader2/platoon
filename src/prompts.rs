@@ -15,7 +15,7 @@
 //! The in-memory side keeps, per conversation, its prompts and one lower-case copy of them for searching:
 //! a search is a substring scan over that text.
 
-use crate::claude::prompt_in_line;
+use crate::claude::{may_be_reply, prompt_in_line, reply_in_line, REPLY_CHARS};
 use crate::index::Entry;
 use serde_json::{json, Value};
 use std::{
@@ -33,7 +33,7 @@ use std::{
 };
 
 /// Bump when what the file holds changes meaning, so an old one is rebuilt instead of trusted.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 /// How much of a file is read at a time.
 const CHUNK: usize = 1 << 20;
 /// How many of a file's first bytes tell whether it is still the file that was read before.
@@ -59,26 +59,45 @@ pub struct FilePrompts {
     pub prompts: Vec<String>,
     /// The same, lower-cased, one per line (prompts never contain a line break), for searching.
     lower: String,
+    /// The first `REPLY_CHARS` characters of the last thing Claude said in words in this conversation (no tool
+    /// output, no subagents). One line of context for the smart names.
+    pub reply: Option<String>,
+    /// How many of `prompts` are substantive (see `smart::is_substantive`): not "yes" or "continue".
+    pub substantive: usize,
 }
 
 impl FilePrompts {
-    fn new(id: String, path: PathBuf, prompts: Vec<String>) -> Self {
+    fn new(id: String, path: PathBuf, prompts: Vec<String>, reply: Option<String>) -> Self {
         let lower = prompts.iter().map(|p| p.to_lowercase()).collect::<Vec<_>>().join("\n");
-        Self { id, path, prompts, lower }
+        let substantive = prompts.iter().filter(|p| crate::smart::is_substantive(p)).count();
+        Self { id, path, prompts, lower, reply, substantive }
     }
 
-    /// This conversation with `more` prompts added at the end.
-    fn extended(&self, more: Vec<String>) -> Self {
+    /// This conversation with `more` prompts added at the end, and Claude's newest reply if a newer one was found.
+    fn extended(&self, more: Vec<String>, reply: Option<String>) -> Self {
         let mut prompts = self.prompts.clone();
         let mut lower = self.lower.clone();
+        let mut substantive = self.substantive;
         for p in more {
             if !prompts.is_empty() {
                 lower.push('\n');
             }
             lower.push_str(&p.to_lowercase());
+            substantive += usize::from(crate::smart::is_substantive(&p));
             prompts.push(p);
         }
-        Self { id: self.id.clone(), path: self.path.clone(), prompts, lower }
+        Self { id: self.id.clone(), path: self.path.clone(), prompts, lower, reply: reply.or_else(|| self.reply.clone()), substantive }
+    }
+
+    /// All the prompts lower-cased, one per line, for searching.
+    pub fn lower_text(&self) -> &str {
+        &self.lower
+    }
+
+    /// A conversation for tests of other modules.
+    #[cfg(test)]
+    pub fn for_test(id: &str, prompts: &[&str], reply: Option<&str>) -> Self {
+        Self::new(id.into(), PathBuf::from(format!("/x/{id}.jsonl")), prompts.iter().map(|s| s.to_string()).collect(), reply.map(String::from))
     }
 
     /// The lower-cased prompts, one per line, aligned with `prompts`.
@@ -139,6 +158,9 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
     file.seek(SeekFrom::Start(start)).ok()?;
 
     let mut prompts: Vec<String> = Vec::new();
+    // The newest line that could be Claude's words, kept as text and parsed once, after the last chunk: the rest of
+    // the file's assistant lines (most of it) are never parsed.
+    let mut reply_line: Option<String> = None;
     let mut consumed = 0u64;
     let mut pending: Vec<u8> = Vec::new();
     let mut buf = vec![0u8; CHUNK];
@@ -152,10 +174,20 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
         // Only whole lines are taken: the last one may still be being written.
         let Some(last) = buf[..n].iter().rposition(|&b| b == b'\n') else { continue };
         let end = old + last + 1;
-        for line in String::from_utf8_lossy(&pending[..end]).split('\n') {
-            if let Some(p) = prompt_in_line(line, cap) {
-                prompts.push(p);
+        let chunk = String::from_utf8_lossy(&pending[..end]);
+        let mut newest: Option<&str> = None;
+        for line in chunk.split('\n') {
+            // A user entry is never an assistant one, so the second test only runs on the rest.
+            if line.contains("\"type\":\"user\"") {
+                if let Some(p) = prompt_in_line(line, cap) {
+                    prompts.push(p);
+                }
+            } else if may_be_reply(line) {
+                newest = Some(line);
             }
+        }
+        if let Some(l) = newest {
+            reply_line = Some(l.to_string());
         }
         consumed += end as u64;
         pending.drain(..end);
@@ -169,11 +201,12 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
             (n, if n == 0 { 0 } else { head_hash(&mut file, n)? })
         }
     };
+    let reply = reply_line.and_then(|l| reply_in_line(&l, REPLY_CHARS));
     let (data, changed) = match keep {
-        Some(p) if prompts.is_empty() => (p.data.clone(), false),
-        Some(p) => (Arc::new(p.data.extended(prompts)), true),
+        Some(p) if prompts.is_empty() && reply.as_ref().is_none_or(|r| p.data.reply.as_ref() == Some(r)) => (p.data.clone(), false),
+        Some(p) => (Arc::new(p.data.extended(prompts, reply)), true),
         None => {
-            let data = Arc::new(FilePrompts::new(id.to_string(), path.to_path_buf(), prompts));
+            let data = Arc::new(FilePrompts::new(id.to_string(), path.to_path_buf(), prompts, reply));
             // A file seen for the first time with nothing in it is not news; one read again from the start is (it may
             // have had prompts before).
             let changed = prev.is_some() || !data.prompts.is_empty();
@@ -316,7 +349,7 @@ impl Store {
             writeln!(out, "{}", json!({ "version": VERSION, "cap": self.cap }))?;
             for (path, s) in &self.files {
                 let Some(path) = path.to_str() else { continue };
-                let v = json!({ "p": path, "m": s.mtime, "s": s.size, "o": s.offset, "n": s.fp_len, "h": s.fingerprint, "t": s.data.prompts });
+                let v = json!({ "p": path, "m": s.mtime, "s": s.size, "o": s.offset, "n": s.fp_len, "h": s.fingerprint, "t": s.data.prompts, "r": s.data.reply });
                 writeln!(out, "{v}")?;
             }
             out.flush()?;
@@ -345,7 +378,7 @@ fn state_from_json(v: &Value) -> Option<(PathBuf, FileState)> {
         offset,
         fp_len,
         fingerprint: v["h"].as_u64()?,
-        data: Arc::new(FilePrompts::new(id, path.clone(), prompts)),
+        data: Arc::new(FilePrompts::new(id, path.clone(), prompts, v["r"].as_str().map(String::from))),
     };
     Some((path, state))
 }
@@ -555,13 +588,20 @@ pub struct Found {
 /// Does the conversation match all of `words` (already lower-cased, at least one)? A word matches inside a
 /// longer word, and a conversation matches when each word is somewhere in what the user typed or in the name the
 /// user gave it, not necessarily in the same place.
+#[cfg(test)]
 pub fn find(data: Option<&FilePrompts>, name_lower: &str, words: &[String]) -> Option<Found> {
+    find_with(data, name_lower, "", words)
+}
+
+/// `find`, also looking in the summary platoon generated for the conversation (`summary_lower`, already lower-cased):
+/// a word in it counts like a word in a prompt, and one in the name counts as the name having it.
+pub fn find_with(data: Option<&FilePrompts>, name_lower: &str, summary_lower: &str, words: &[String]) -> Option<Found> {
     if words.is_empty() {
         return None;
     }
     let in_name = words.iter().all(|w| name_lower.contains(w.as_str()));
     let text = data.map_or("", |d| d.lower.as_str());
-    if !words.iter().all(|w| name_lower.contains(w.as_str()) || text.contains(w.as_str())) {
+    if !words.iter().all(|w| name_lower.contains(w.as_str()) || summary_lower.contains(w.as_str()) || text.contains(w.as_str())) {
         return None;
     }
     let (mut hits, mut in_one_prompt, mut best) = (0, false, None::<(usize, usize)>);
@@ -913,7 +953,7 @@ mod tests {
     }
 
     fn data(prompts: &[&str]) -> FilePrompts {
-        FilePrompts::new("id".into(), PathBuf::from("/x/id.jsonl"), prompts.iter().map(|s| s.to_string()).collect())
+        FilePrompts::new("id".into(), PathBuf::from("/x/id.jsonl"), prompts.iter().map(|s| s.to_string()).collect(), None)
     }
 
     #[test]
@@ -1046,5 +1086,124 @@ mod tests {
         assert_eq!(ix.get("abc").unwrap().prompts[0].chars().count(), 999, "a trailing space is trimmed");
         ix.refresh(&entries, 1, 100, true);
         assert_eq!(ix.get("abc").unwrap().prompts[0].chars().count(), 100);
+    }
+
+    // ---- Claude's last reply ----
+
+    fn say(text: &str) -> String {
+        json!({"type":"assistant","cwd":"/w","timestamp":"2026-09-19T01:00:00.000Z","message":{"model":"claude-sonnet-5","content":[{"type":"text","text":text}]}}).to_string()
+    }
+
+    fn tool_call() -> String {
+        json!({"type":"assistant","message":{"model":"claude-sonnet-5","content":[{"type":"tool_use","name":"Bash","input":{"command":"echo SECRET-CALL"}}]}}).to_string()
+    }
+
+    fn tool_output() -> String {
+        json!({"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"SECRET-OUTPUT"}]}}).to_string()
+    }
+
+    #[test]
+    fn a_conversations_last_reply_is_the_newest_thing_claude_said_in_words_and_nothing_else() {
+        let d = tmp("reply");
+        let p = write(
+            &d,
+            "abc",
+            &[
+                user("fix the parser"),
+                say("First answer."),
+                tool_call(),
+                tool_output(),
+                say("The parser is fixed.\nAll tests pass."),
+                tool_call(),
+                tool_output(),
+                json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"SECRET-SUBAGENT"}]}}).to_string(),
+                json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"SECRET-SYNTHETIC"}]}}).to_string(),
+                json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"SECRET-THINKING"}]}}).to_string(),
+            ],
+        );
+        let (_, got) = scan(&mut Store::load(&d, 2000), &[&p]);
+        assert_eq!(got[0].reply.as_deref(), Some("The parser is fixed. All tests pass."));
+        assert_eq!(got[0].prompts, ["fix the parser"]);
+        // Cut to REPLY_CHARS.
+        let p2 = write(&d, "long", &[user("hello there"), say(&"w".repeat(1000))]);
+        let (_, got) = scan(&mut Store::load(&tmp("reply2"), 2000), &[&p2]);
+        assert_eq!(got[0].reply.as_ref().map(|r| r.chars().count()), Some(REPLY_CHARS));
+        // No reply at all: None, and the prompts are still kept.
+        let p3 = write(&d, "mute", &[user("anyone there")]);
+        let (_, got) = scan(&mut Store::load(&tmp("reply3"), 2000), &[&p3]);
+        assert_eq!((got[0].reply.clone(), got[0].prompts.len()), (None, 1));
+    }
+
+    #[test]
+    fn only_the_newest_candidate_line_is_parsed_so_an_older_reply_is_never_dug_out() {
+        let d = tmp("reply-newest");
+        // The newest line that looks like Claude's words is damaged: it is the only one looked at, and it says nothing.
+        let broken = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"cut off"#.to_string();
+        let p = write(&d, "abc", &[user("hello there"), say("An old answer."), broken]);
+        let (_, got) = scan(&mut Store::load(&d, 2000), &[&p]);
+        assert_eq!(got[0].reply, None, "older lines are not parsed at all");
+    }
+
+    #[test]
+    fn the_reply_follows_appended_lines_reading_only_the_new_bytes() {
+        let d = tmp("reply-append");
+        let p = write(&d, "abc", &[user("first prompt"), say("Old answer."), "x".repeat(300_000)]);
+        let mut s = Store::load(&d, 2000);
+        let (_, got) = scan(&mut s, &[&p]);
+        assert_eq!(got[0].reply.as_deref(), Some("Old answer."));
+        // A newer answer arrives: one line read, the reply moves on, the prompts are the same.
+        let new = vec![say("Newer answer.")];
+        append(&p, &new);
+        let (stats, got) = scan(&mut s, &[&p]);
+        assert_eq!(stats.bytes, (new[0].len() + 1) as u64, "only the appended bytes were read");
+        assert_eq!((got[0].reply.as_deref(), got[0].prompts.len()), (Some("Newer answer."), 1));
+        // A tool call and its output are not words: nothing changes, and nothing is announced.
+        append(&p, &[tool_call(), tool_output()]);
+        let (stats, got) = scan(&mut s, &[&p]);
+        assert!(stats.bytes > 0 && got.is_empty(), "read, but there is nothing new to say");
+        // A new prompt keeps the reply that was there.
+        append(&p, &[user("second prompt")]);
+        let (_, got) = scan(&mut s, &[&p]);
+        assert_eq!((got[0].reply.as_deref(), got[0].prompts.len()), (Some("Newer answer."), 2));
+        // The same reply again (a repeated line) changes nothing.
+        append(&p, &[say("Newer answer.")]);
+        let (_, got) = scan(&mut s, &[&p]);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn the_reply_is_saved_and_an_index_of_the_old_version_is_thrown_away() {
+        let d = tmp("reply-save");
+        let p = write(&d, "abc", &[user("please fix the parser"), say("Done.")]);
+        let mut s = Store::load(&d, 2000);
+        scan(&mut s, &[&p]);
+        s.save();
+        let text = fs::read_to_string(d.join("prompts.jsonl")).unwrap();
+        assert!(text.starts_with(&format!("{{\"cap\":2000,\"version\":{VERSION}")) || text.lines().next().unwrap().contains(&format!("\"version\":{VERSION}")), "{text}");
+        assert!(VERSION >= 2, "the reply made the saved format different");
+        let again = Store::load(&d, 2000);
+        assert_eq!(again.snapshot()[0].reply.as_deref(), Some("Done."));
+        assert_eq!(again.snapshot()[0].substantive, 1);
+        // A file from before the reply was kept (version 1) is not trusted: it is an empty index that fills again.
+        let old = text.replacen(&format!("\"version\":{VERSION}"), "\"version\":1", 1);
+        fs::write(d.join("prompts.jsonl"), old).unwrap();
+        assert!(Store::load(&d, 2000).snapshot().is_empty());
+        // And a pass over the same transcript brings the reply back at once.
+        let (_, got) = scan(&mut Store::load(&d, 2000), &[&p]);
+        assert_eq!(got[0].reply.as_deref(), Some("Done."));
+    }
+
+    #[test]
+    fn substantive_messages_are_counted_as_they_are_read() {
+        let d = tmp("substantive");
+        let p = write(&d, "abc", &[user("please fix the parser"), user("yes"), user("continue"), user("and add tests for the lexer too")]);
+        let mut s = Store::load(&d, 2000);
+        let (_, got) = scan(&mut s, &[&p]);
+        assert_eq!((got[0].prompts.len(), got[0].substantive), (4, 2));
+        append(&p, &[user("ok"), user("now refactor the parser module please")]);
+        let (_, got) = scan(&mut s, &[&p]);
+        assert_eq!((got[0].prompts.len(), got[0].substantive), (6, 3));
+        s.save();
+        assert_eq!(Store::load(&d, 2000).snapshot()[0].substantive, 3, "and again after a restart");
     }
 }

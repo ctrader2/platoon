@@ -18,6 +18,9 @@ use std::{
 /// How many calendar days of totals are kept.
 pub const KEEP_DAYS: usize = 30;
 
+/// The name under which a day's per-feature numbers hold what archived conversations used (see `Ledger::note_archived`).
+pub const ARCHIVED_KEY: &str = "names_archived";
+
 /// The four numbers Claude reports for a call. Every one of them counts against the daily limit.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Usage {
@@ -299,6 +302,22 @@ impl Ledger {
             f.tokens = f.tokens.saturating_add(usage.total());
             f.calls += 1;
         })
+    }
+
+    /// Tokens of today that went to archived conversations. Kept beside the per-feature numbers under a name of their
+    /// own and NOT added to the day's total (the call that used them already was), so the share rule can tell what
+    /// archived work has used.
+    pub fn note_archived(&self, now: u64, tokens: u64) -> io::Result<()> {
+        self.update(|d| {
+            let f = d.days.entry(local_day(now)).or_default().features.entry(ARCHIVED_KEY.to_string()).or_default();
+            f.tokens = f.tokens.saturating_add(tokens);
+            f.calls += 1;
+        })
+    }
+
+    /// The tokens archived conversations have used on the local day `now` falls on.
+    pub fn archived_today(&self, now: u64) -> u64 {
+        self.load().days.get(&local_day(now)).and_then(|d| d.features.get(ARCHIVED_KEY)).map_or(0, |f| f.tokens)
     }
 
     /// A call failed: refuse calls for a while, twice as long as after the previous failure in this run of them,

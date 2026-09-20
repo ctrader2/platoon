@@ -24,10 +24,23 @@ pub struct Proc {
     pub stale: bool,
 }
 
+/// Where a row's name came from, in the order that wins: the user's own platoon name, a name typed with `/rename`
+/// inside Claude, the name platoon generated, and the folder the conversation ran in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NameSource {
+    Folder,
+    Generated,
+    Claude,
+    Platoon,
+}
+
 /// One conversation (a session id), whether or not anything is running it.
 pub struct Session {
     pub id: String,
     pub name: String,
+    pub name_source: NameSource,
+    /// The summary platoon generated for it, empty if there is none.
+    pub summary: String,
     /// Home-abbreviated, for display.
     pub dir: String,
     /// Absolute working directory the conversation was run in.
@@ -50,8 +63,19 @@ pub struct Session {
     pub archived: bool,
     /// Live processes running this conversation right now, oldest first. Usually none or one.
     pub procs: Vec<Proc>,
-    /// Lowercased name, dir, branch and description, so filtering never allocates per row.
+    /// Lowercased name, dir, branch, description and summary, so filtering never allocates per row.
     pub haystack: String,
+}
+
+impl Session {
+    /// What the quick filter looks in: one lower-case text.
+    pub fn make_haystack(name: &str, dir: &str, branch: Option<&str>, description: &str, summary: &str) -> String {
+        [name, dir, branch.unwrap_or(""), description, summary].join("\n").to_lowercase()
+    }
+
+    pub fn rehaystack(&mut self) {
+        self.haystack = Self::make_haystack(&self.name, &self.dir, self.branch.as_deref(), &self.description, &self.summary);
+    }
 }
 
 /// One rate-limit window as reported by Claude Code.

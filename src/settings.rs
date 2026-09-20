@@ -51,6 +51,30 @@ pub const MAX_DAILY_TOKENS: u64 = 100_000_000;
 pub const DEFAULT_PAUSE_PERCENT: u64 = 80;
 pub const MIN_PAUSE_PERCENT: u64 = 10;
 pub const MAX_PAUSE_PERCENT: u64 = 100;
+/// Token features: what each conversation contributes to a naming call: its last few messages, each cut to this many characters.
+pub const DEFAULT_PROMPTS_PER_SESSION: u64 = 8;
+pub const MIN_PROMPTS_PER_SESSION: u64 = 1;
+pub const MAX_PROMPTS_PER_SESSION: u64 = 30;
+pub const DEFAULT_PROMPT_SEND_CHARS: u64 = 300;
+pub const MIN_PROMPT_SEND_CHARS: u64 = 50;
+pub const MAX_PROMPT_SEND_CHARS: u64 = 2000;
+/// Token features: a conversation is refreshed only after its transcript has been quiet this many seconds.
+pub const DEFAULT_QUIET_SECONDS: u64 = 60;
+pub const MAX_QUIET_SECONDS: u64 = 3600;
+/// Token features: archived conversations may use at most this percent of what is left of the day's limit.
+pub const DEFAULT_ARCHIVED_SHARE: u64 = 50;
+pub const MIN_ARCHIVED_SHARE: u64 = 5;
+pub const MAX_ARCHIVED_SHARE: u64 = 100;
+/// Token features: finding by description sends this many candidates (200 for a wider search) and shows this many results.
+pub const DEFAULT_FIND_CANDIDATES: u64 = 50;
+pub const MIN_FIND_CANDIDATES: u64 = 10;
+pub const MAX_FIND_CANDIDATES: u64 = 300;
+pub const DEFAULT_FIND_RESULTS: u64 = 10;
+pub const MIN_FIND_RESULTS: u64 = 3;
+pub const MAX_FIND_RESULTS: u64 = 20;
+pub const DEFAULT_FIND_WIDE: u64 = 200;
+pub const MIN_FIND_WIDE: u64 = 50;
+pub const MAX_FIND_WIDE: u64 = 1000;
 /// The models the token features can use, cheapest first: what the file says, and the first is the default.
 pub const MODELS: [&str; 2] = ["haiku", "sonnet"];
 
@@ -92,6 +116,19 @@ pub struct Settings {
     pub ai_pause_percent: u64,
     /// Which model does the work: one of `MODELS`.
     pub ai_model: String,
+    /// How many of a conversation's latest messages a naming call carries, and how long each may be (characters).
+    pub ai_prompts_per_session: u64,
+    pub ai_prompt_chars: u64,
+    /// A conversation is refreshed only once its transcript has been quiet this many seconds.
+    pub ai_quiet_seconds: u64,
+    /// Archived conversations are named slowly in the background (`"ai_archived": "background"` in the file) instead of not at all.
+    pub ai_archived: bool,
+    /// The most of the day's remaining limit archived conversations may use, in percent.
+    pub ai_archived_share: u64,
+    /// Finding by description: how many conversations one search sends, how many it shows, how many a wider search sends.
+    pub ai_find_candidates: u64,
+    pub ai_find_results: u64,
+    pub ai_find_wide_candidates: u64,
 }
 
 impl Default for Settings {
@@ -113,6 +150,14 @@ impl Default for Settings {
             ai_daily_tokens: DEFAULT_DAILY_TOKENS,
             ai_pause_percent: DEFAULT_PAUSE_PERCENT,
             ai_model: MODELS[0].into(),
+            ai_prompts_per_session: DEFAULT_PROMPTS_PER_SESSION,
+            ai_prompt_chars: DEFAULT_PROMPT_SEND_CHARS,
+            ai_quiet_seconds: DEFAULT_QUIET_SECONDS,
+            ai_archived: false,
+            ai_archived_share: DEFAULT_ARCHIVED_SHARE,
+            ai_find_candidates: DEFAULT_FIND_CANDIDATES,
+            ai_find_results: DEFAULT_FIND_RESULTS,
+            ai_find_wide_candidates: DEFAULT_FIND_WIDE,
         }
     }
 }
@@ -130,6 +175,13 @@ impl Settings {
             ai_daily_tokens: self.ai_daily_tokens.clamp(MIN_DAILY_TOKENS, MAX_DAILY_TOKENS),
             ai_pause_percent: if self.ai_pause_percent == 0 { 0 } else { self.ai_pause_percent.clamp(MIN_PAUSE_PERCENT, MAX_PAUSE_PERCENT) },
             ai_model: if MODELS.contains(&self.ai_model.as_str()) { self.ai_model } else { MODELS[0].into() },
+            ai_prompts_per_session: self.ai_prompts_per_session.clamp(MIN_PROMPTS_PER_SESSION, MAX_PROMPTS_PER_SESSION),
+            ai_prompt_chars: self.ai_prompt_chars.clamp(MIN_PROMPT_SEND_CHARS, MAX_PROMPT_SEND_CHARS),
+            ai_quiet_seconds: self.ai_quiet_seconds.min(MAX_QUIET_SECONDS),
+            ai_archived_share: self.ai_archived_share.clamp(MIN_ARCHIVED_SHARE, MAX_ARCHIVED_SHARE),
+            ai_find_candidates: self.ai_find_candidates.clamp(MIN_FIND_CANDIDATES, MAX_FIND_CANDIDATES),
+            ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
+            ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
             ..self
         }
     }
@@ -200,6 +252,19 @@ fn parse(text: &str) -> Option<Settings> {
             ai_daily_tokens: number("ai_daily_tokens", d.ai_daily_tokens),
             ai_pause_percent: number("ai_pause_percent", d.ai_pause_percent),
             ai_model: o.get("ai_model").and_then(Value::as_str).map_or(d.ai_model.clone(), str::to_string),
+            ai_prompts_per_session: number("ai_prompts_per_session", d.ai_prompts_per_session),
+            ai_prompt_chars: number("ai_prompt_chars", d.ai_prompt_chars),
+            ai_quiet_seconds: number("ai_quiet_seconds", d.ai_quiet_seconds),
+            // "background" (or a hand-written true) turns it on; "off", anything else, and a missing key mean off.
+            ai_archived: match o.get("ai_archived") {
+                Some(Value::String(s)) => s == "background",
+                Some(Value::Bool(b)) => *b,
+                _ => d.ai_archived,
+            },
+            ai_archived_share: number("ai_archived_share", d.ai_archived_share),
+            ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
+            ai_find_results: number("ai_find_results", d.ai_find_results),
+            ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
         }
         .clamped(),
     )
@@ -258,6 +323,14 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_daily_tokens".into(), json!(s.ai_daily_tokens));
     object.insert("ai_pause_percent".into(), json!(s.ai_pause_percent));
     object.insert("ai_model".into(), json!(s.ai_model));
+    object.insert("ai_prompts_per_session".into(), json!(s.ai_prompts_per_session));
+    object.insert("ai_prompt_chars".into(), json!(s.ai_prompt_chars));
+    object.insert("ai_quiet_seconds".into(), json!(s.ai_quiet_seconds));
+    object.insert("ai_archived".into(), json!(if s.ai_archived { "background" } else { "off" }));
+    object.insert("ai_archived_share".into(), json!(s.ai_archived_share));
+    object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
+    object.insert("ai_find_results".into(), json!(s.ai_find_results));
+    object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
     let mut features = match object.get("token_features") {
@@ -292,6 +365,9 @@ pub enum Kind {
     /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
     /// `enter` opens the theme picker.
     Theme,
+    /// An entry that opens a screen of its own instead of stepping: "Smart features" on the main settings screen. Its
+    /// value is read from `get` (the master switch) and shown, but `enter` and a click open the screen.
+    Submenu,
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
@@ -353,6 +429,14 @@ pub fn tokens_label(n: u64) -> String {
     }
 }
 
+pub fn seconds_label(n: u64) -> String {
+    match n {
+        0 => "No wait".into(),
+        n if n % 60 == 0 => plural(n / 60, "minute"),
+        n => plural(n, "second"),
+    }
+}
+
 pub fn percent_label(n: u64) -> String {
     if n == 0 { "Never".into() } else { format!("{n}%") }
 }
@@ -378,11 +462,18 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
-/// The entries of the settings screen, in order. Built once: the token features come from `ai::FEATURES`.
+/// The entries of the main settings screen, in order; the last opens the "Smart features" screen (`SMART_ITEMS`).
 pub static ITEMS: LazyLock<Vec<Item>> = LazyLock::new(items);
 
+/// The entries of the "Smart features" screen: everything that spends the user's Claude tokens, together, in order.
+/// Built once: the switches of the features come from `ai::FEATURES`.
+pub static SMART_ITEMS: LazyLock<Vec<Item>> = LazyLock::new(smart_items);
+
+/// The name of the entry on the main screen that opens the smart features.
+pub const SMART_SCREEN_TITLE: &str = "Smart features";
+
 fn items() -> Vec<Item> {
-    let mut v = vec![
+    let v = vec![
     Item {
         name: "Theme",
         explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
@@ -471,9 +562,24 @@ fn items() -> Vec<Item> {
         label: chars_label,
         off: None,
     },
+    Item {
+        name: SMART_SCREEN_TITLE,
+        explain: "Names and summaries for your conversations, and a search that finds one from a description. They use your own Claude plan, so \
+                  they stay off until you switch them on. Press enter to open them.",
+        kind: Kind::Submenu,
+        choices: &[],
+        get: |s| u64::from(s.tokens_enabled),
+        set: |_, _| {},
+        label: on_off,
+        off: Some(0),
+    },
     ];
-    // Everything that spends the user's Claude tokens comes last, together: the master switch, one switch per
-    // feature (from the feature table), then the numbers that limit them.
+    v
+}
+
+fn smart_items() -> Vec<Item> {
+    let mut v = Vec::new();
+    // The master switch, one switch per feature (from the feature table), then the numbers that limit them.
     v.push(Item {
         name: MASTER_LABEL,
         explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus one line \
@@ -548,6 +654,86 @@ fn items() -> Vec<Item> {
             get: |s| s.ai_refresh_messages,
             set: |s, v| s.ai_refresh_messages = v,
             label: messages_label,
+            off: None,
+        },
+        Item {
+            name: "Wait for quiet before refreshing",
+            explain: "A conversation is only refreshed once nothing has been written to it for this long, so a chat you are in the middle of isn't sent again and again.",
+            kind: Kind::Steps,
+            choices: &[15, 30, 60, 120, 300, 600],
+            get: |s| s.ai_quiet_seconds,
+            set: |s, v| s.ai_quiet_seconds = v,
+            label: seconds_label,
+            off: None,
+        },
+        Item {
+            name: "Recent messages sent",
+            explain: "How many of a conversation's latest messages from you go into its summary, besides the first one. More of them names it better and uses more of your plan.",
+            kind: Kind::Steps,
+            choices: &[3, 5, 8, 12, 20],
+            get: |s| s.ai_prompts_per_session,
+            set: |s, v| s.ai_prompts_per_session = v,
+            label: messages_label,
+            off: None,
+        },
+        Item {
+            name: "Longest message sent",
+            explain: "Each message is cut to this many characters before it is sent, so a huge paste doesn't use up your plan.",
+            kind: Kind::Steps,
+            choices: &[100, 200, 300, 500, 1000],
+            get: |s| s.ai_prompt_chars,
+            set: |s, v| s.ai_prompt_chars = v,
+            label: chars_label,
+            off: None,
+        },
+        Item {
+            name: "Archived conversations",
+            explain: "Whether conversations on the Archived tab get names and summaries too, slowly in the background. One that you restore or open is done at once either way.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.ai_archived),
+            set: |s, v| s.ai_archived = v != 0,
+            label: |v| if v == 0 { "Skip".into() } else { "In the background".into() },
+            off: Some(0),
+        },
+        Item {
+            name: "Share for archived",
+            explain: "Naming archived conversations may use at most this much of what is left of the day's limit, so the conversations you are using always have room.",
+            kind: Kind::Steps,
+            choices: &[10, 25, 50, 75, 100],
+            get: |s| s.ai_archived_share,
+            set: |s, v| s.ai_archived_share = v,
+            label: |v| format!("{v}%"),
+            off: None,
+        },
+        Item {
+            name: "Description search: conversations sent",
+            explain: "How many conversations a search by description sends to Claude to pick from. More finds the odd one but uses more of your plan.",
+            kind: Kind::Steps,
+            choices: &[20, 30, 50, 100, 150],
+            get: |s| s.ai_find_candidates,
+            set: |s, v| s.ai_find_candidates = v,
+            label: conversations_label,
+            off: None,
+        },
+        Item {
+            name: "Description search: results",
+            explain: "The most conversations a search by description lists.",
+            kind: Kind::Steps,
+            choices: &[5, 10, 15, 20],
+            get: |s| s.ai_find_results,
+            set: |s, v| s.ai_find_results = v,
+            label: results_label,
+            off: None,
+        },
+        Item {
+            name: "Description search: wider search",
+            explain: "How many conversations the wider search sends. It asks you first and says roughly how many tokens that is.",
+            kind: Kind::Steps,
+            choices: &[100, 200, 300, 500],
+            get: |s| s.ai_find_wide_candidates,
+            set: |s, v| s.ai_find_wide_candidates = v,
+            label: conversations_label,
             off: None,
         },
     ]);
@@ -766,7 +952,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -970,7 +1156,9 @@ mod tests {
     fn the_theme_entry_is_first_and_a_kind_of_its_own_next_to_the_stepped_ones() {
         assert_eq!(ITEMS[0].name, "Theme");
         assert_eq!(ITEMS[0].kind, Kind::Theme);
-        assert!(ITEMS[1..].iter().all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))));
+        assert!(ITEMS[1..ITEMS.len() - 1].iter().all(|i| i.kind == Kind::Steps), "only the last entry, which opens the smart features, is another kind");
+        assert_eq!((ITEMS.last().unwrap().name, ITEMS.last().unwrap().kind), (SMART_SCREEN_TITLE, Kind::Submenu));
+        assert!(SMART_ITEMS.iter().all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))));
         assert!(!ITEMS[0].explain.is_empty() && ITEMS[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
         assert_eq!((ITEMS[0].step(0, Step::Next), ITEMS[0].step(0, Step::Prev), ITEMS[0].step(0, Step::Cycle)), (0, 0, 0));
@@ -1139,13 +1327,11 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_gets_a_switch_on_the_settings_screen_from_the_table_alone() {
-        let names: Vec<&str> = ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(
-            names[8..],
-            ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call", "Refresh a summary after"]
-        );
-        for (f, item) in FEATURES.iter().zip(&ITEMS[9..]) {
+    fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
+        let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
+        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call", "Refresh a summary after"]);
+        assert_eq!(names.len(), 16, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
+        for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
             assert_eq!(item.value(&s), 0);
@@ -1155,11 +1341,17 @@ mod tests {
             assert_eq!((item.label)(1), "On");
             assert_eq!(item.step(0, Step::Cycle), 1);
         }
+        // The main screen keeps its eight entries and gains one that shows the master switch and opens the other screen.
+        let main = ITEMS.last().unwrap();
+        assert_eq!(ITEMS.len(), 9);
+        assert_eq!((main.value(&Settings::default()), (main.label)(main.value(&Settings::default()))), (0, "Off".to_string()));
+        assert_eq!((main.label)(main.value(&Settings { tokens_enabled: true, ..Settings::default() })), "On");
+        assert!(main.choices.is_empty(), "nothing to step through: enter opens the screen");
     }
 
     #[test]
     fn the_token_entries_read_plainly_and_every_step_is_within_the_limits() {
-        for item in &ITEMS[8..] {
+        for item in SMART_ITEMS.iter().chain(ITEMS.last()) {
             let lower = item.explain.to_lowercase();
             for jargon in ["index", "json", "cache", "byte", "thread", "api", "cli", "stdin", "process"] {
                 assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
@@ -1171,23 +1363,56 @@ mod tests {
                 assert_eq!(s.clone().clamped(), s, "{}: step {c}", item.name);
             }
             let d = Settings::default();
-            assert!(item.choices.contains(&item.value(&d)), "the default is one of the steps for {}", item.name);
+            assert!(item.choices.is_empty() || item.choices.contains(&item.value(&d)), "the default is one of the steps for {}", item.name);
+            assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}: steps ascend", item.name);
         }
         let d = Settings::default();
-        assert_eq!(ITEMS[8].name, MASTER_LABEL);
-        let label = |i: usize| (ITEMS[i].label)(ITEMS[i].value(&d));
-        assert_eq!([label(8), label(9), label(10), label(11), label(12), label(13), label(14), label(15)], ["Off", "Off", "Off", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages"]);
-        assert_eq!(ITEMS[12].step(0, Step::Cycle), 50, "Never is the first step");
+        assert_eq!(SMART_ITEMS[0].name, MASTER_LABEL);
+        let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
+        assert_eq!(
+            (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
+            ["Off", "Off", "Off", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+        );
+        assert_eq!(SMART_ITEMS[4].step(0, Step::Cycle), 50, "Never is the first step");
         assert_eq!(percent_label(0), "Never");
         assert_eq!([tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)], ["1M tokens", "250K tokens", "1234 tokens", "1 token"]);
         assert_eq!([thousands(0), thousands(999), thousands(1000), thousands(1_234_567)], ["0", "999", "1,000", "1,234,567"]);
+        assert_eq!([0, 15, 45, 60, 90, 120, 600].map(seconds_label), ["No wait", "15 seconds", "45 seconds", "1 minute", "90 seconds", "2 minutes", "10 minutes"]);
         // The model entry goes both ways.
         let mut s = Settings::default();
-        ITEMS[13].assign(&mut s, 1);
+        SMART_ITEMS[5].assign(&mut s, 1);
         assert_eq!(s.ai_model, "sonnet");
-        ITEMS[13].assign(&mut s, 0);
+        SMART_ITEMS[5].assign(&mut s, 0);
         assert_eq!(s.ai_model, "haiku");
         s.ai_model = "unknown".into();
-        assert_eq!(ITEMS[13].value(&s), 0);
+        assert_eq!(SMART_ITEMS[5].value(&s), 0);
+    }
+
+    #[test]
+    fn the_new_numbers_have_defaults_limits_and_survive_a_round_trip() {
+        let d = Settings::default();
+        assert_eq!(
+            (d.ai_prompts_per_session, d.ai_prompt_chars, d.ai_quiet_seconds, d.ai_archived, d.ai_archived_share, d.ai_find_candidates, d.ai_find_results, d.ai_find_wide_candidates),
+            (8, 300, 60, false, 50, 50, 10, 200)
+        );
+        let dir = dir("new-numbers");
+        write(&dir, r#"{"ai_prompts_per_session":0,"ai_prompt_chars":1,"ai_quiet_seconds":999999,"ai_archived_share":0,"ai_find_candidates":1,"ai_find_results":99,"ai_find_wide_candidates":1}"#);
+        let s = load(&dir).0;
+        assert_eq!(
+            (s.ai_prompts_per_session, s.ai_prompt_chars, s.ai_quiet_seconds, s.ai_archived_share, s.ai_find_candidates, s.ai_find_results, s.ai_find_wide_candidates),
+            (MIN_PROMPTS_PER_SESSION, MIN_PROMPT_SEND_CHARS, MAX_QUIET_SECONDS, MIN_ARCHIVED_SHARE, MIN_FIND_CANDIDATES, MAX_FIND_RESULTS, MIN_FIND_WIDE)
+        );
+        // "ai_archived" is "off" or "background" in the file; a hand-written true or false is understood, anything else is off.
+        for (text, want) in [(r#""background""#, true), (r#""off""#, false), ("true", true), ("false", false), (r#""sometimes""#, false), ("7", false)] {
+            write(&dir, &format!(r#"{{"ai_archived":{text}}}"#));
+            assert_eq!(load(&dir).0.ai_archived, want, "{text}");
+        }
+        let s = Settings { ai_archived: true, ai_quiet_seconds: 0, ai_find_results: 7, ..Settings::default() };
+        save(&dir, &s).unwrap();
+        let v = saved(&dir);
+        assert_eq!((v["ai_archived"].clone(), v["ai_quiet_seconds"].clone(), v["ai_find_results"].clone()), (json!("background"), json!(0), json!(7)));
+        assert_eq!(load(&dir).0, s);
+        save(&dir, &Settings::default()).unwrap();
+        assert_eq!(saved(&dir)["ai_archived"], "off");
     }
 }

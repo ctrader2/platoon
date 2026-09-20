@@ -339,6 +339,8 @@ mod tests {
             archived: false,
             procs: if running { vec![crate::model::Proc { pid: 1, started_at: 0, hosted: true, background: None, stale: false }] } else { vec![] },
             haystack: String::new(),
+            name_source: crate::model::NameSource::Folder,
+            summary: String::new(),
         }
     }
 

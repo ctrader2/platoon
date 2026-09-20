@@ -18,7 +18,10 @@ mod procs;
 mod prompts;
 mod select;
 mod setup;
+mod scan;
 mod settings;
+mod smart;
+mod summaries;
 mod theme;
 mod ui;
 mod usertheme;
@@ -28,6 +31,8 @@ mod perf;
 mod search_app_tests;
 #[cfg(test)]
 mod select_app_tests;
+#[cfg(test)]
+mod smart_app_tests;
 #[cfg(test)]
 mod testkit;
 #[cfg(test)]
@@ -139,7 +144,13 @@ fn setup() -> io::Result<()> {
     // The one extra question. It never changes what setup did or the exit code.
     use std::io::IsTerminal;
     let interactive = io::stdin().is_terminal() && io::stdout().is_terminal();
-    setup::ask_about_tokens(&archive::config_dir(), interactive, &mut io::stdin().lock(), &mut io::stdout());
+    let answer = setup::ask_about_tokens(&archive::config_dir(), interactive, &mut io::stdin().lock(), &mut io::stdout());
+    // Yes now, or yes before and nothing named yet: the first pass over the active conversations, right here.
+    if matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
+        let (config, cache) = (archive::config_dir(), usage::cache_dir());
+        let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), interactive };
+        scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
+    }
     Ok(())
 }
 
@@ -153,7 +164,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
@@ -1362,7 +1373,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 16, "eight entries, the master switch, one per token feature, and five limits");
+        assert_eq!(ITEMS.len(), 9, "eight entries and the one that opens the smart features");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -1630,7 +1641,7 @@ mod tests {
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
             assert!(text.contains(item.name) && text.contains(item.explain), "{} is shown with its explanation at 80x24:\n{shown}", item.name);
-            assert!(text.contains("esc back") && text.contains("Used today"), "{shown}");
+            assert!(text.contains("esc back") && !text.contains("Used today"), "{shown}");
             for (j, other) in ITEMS.iter().enumerate().filter(|(j, _)| *j != i) {
                 assert!(!text.contains(other.explain), "{} is explained only while selected ({}, {j})", other.name, item.name);
             }
@@ -1874,7 +1885,7 @@ mod tests {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
             assert!(rows < 30 || text.contains("Changes are saved and apply immediately."), "{ctx}");
-            assert!(rows < 24 || text.contains("Used today: 0 of 500,000 tokens"), "{ctx}");
+            assert!(!text.contains("Used today"), "the day's token count is on the smart features screen: {ctx}");
             let lower = text.to_lowercase();
             for jargon in ["sigterm", "host", "index", "pid", "json:"] {
                 assert!(!lower.contains(jargon), "{jargon:?} in {ctx}");
@@ -2022,10 +2033,10 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 21 (with the four search entries after it).
+        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 19.
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 21)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let third = draw(&mut term, &app);
         assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
         // Too cramped to explain it: the entries and the way back are still whole.

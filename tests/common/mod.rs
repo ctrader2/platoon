@@ -303,3 +303,70 @@ impl Viewer {
         panic!("`{command}` never printed {expect:?}; screen was:\n{}", self.text());
     }
 }
+
+/// A stand-in for `claude -p`: see `tests/fake-claude.sh`. Records every call under `calls/N.*` and answers from files
+/// the test writes (`reply.N`, `reply.default`, `usage`, `hang`, `fail`, `delay`).
+pub struct AiFake {
+    pub dir: PathBuf,
+    pub script: String,
+}
+
+impl AiFake {
+    pub fn new(name: &str) -> AiFake {
+        let dir = tmp(&format!("aifake-{name}"));
+        std::fs::create_dir_all(dir.join("calls")).unwrap();
+        let script = dir.join("fake-claude");
+        std::fs::write(&script, include_str!("../fake-claude.sh").replace("@DIR@", &dir.display().to_string())).unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        AiFake { script: script.display().to_string(), dir }
+    }
+
+    pub fn calls(&self) -> usize {
+        std::fs::read_dir(self.dir.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+    }
+
+    pub fn stdin(&self, k: usize) -> String {
+        std::fs::read_to_string(self.dir.join("calls").join(format!("{k}.stdin"))).unwrap_or_default()
+    }
+
+    pub fn reply_default(&self, text: &str) {
+        std::fs::write(self.dir.join("reply.default"), text).unwrap();
+    }
+
+    pub fn hang(&self, on: bool) {
+        let p = self.dir.join("hang");
+        if on {
+            std::fs::write(p, "").unwrap();
+        } else {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+
+    pub fn usage(&self, input: u64, output: u64) {
+        std::fs::write(self.dir.join("usage"), format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#)).unwrap();
+    }
+
+    /// The pids of the hanging fake and of the `sleep` it started.
+    pub fn pids(&self) -> Vec<u32> {
+        ["pid", "sleep-pid"].iter().filter_map(|f| std::fs::read_to_string(self.dir.join(f)).ok()?.trim().parse().ok()).collect()
+    }
+
+    /// True while any of them still runs. (A zombie is not running.)
+    pub fn any_alive(&self) -> bool {
+        self.pids().into_iter().any(|p| alive(p) && !zombie(p))
+    }
+}
+
+fn zombie(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(|st| st == "Z"))).unwrap_or(false)
+}
+
+impl Drop for AiFake {
+    fn drop(&mut self) {
+        for p in self.pids() {
+            if p > 1 && alive(p) {
+                unsafe { libc::kill(p as i32, libc::SIGKILL) };
+            }
+        }
+    }
+}

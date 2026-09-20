@@ -172,8 +172,15 @@ pub fn plan_percent(cache: &Path, now: u64) -> Option<(u8, &'static str)> {
         .max_by_key(|(p, _)| *p)
 }
 
-/// May a call for `feature` start now? Cheap checks first; reads only small files.
+/// May a background call for `feature` start now? Cheap checks first; reads only small files.
 pub fn gate(settings: &Settings, feature: &str, cache: &Path, now: u64) -> Result<(), Refusal> {
+    gate_for(settings, feature, cache, now, false)
+}
+
+/// The gate, saying who started the call. A call the user started by pressing a key (`user_initiated`: finding a
+/// conversation by description) ignores the plan-usage pause, which exists so background work doesn't take the plan
+/// from the person's own; it still needs the switches and the daily limit and still waits out a back-off.
+pub fn gate_for(settings: &Settings, feature: &str, cache: &Path, now: u64, user_initiated: bool) -> Result<(), Refusal> {
     if !settings.tokens_enabled {
         return Err(Refusal::MasterOff);
     }
@@ -192,7 +199,7 @@ pub fn gate(settings: &Settings, feature: &str, cache: &Path, now: u64) -> Resul
     if used >= settings.ai_daily_tokens {
         return Err(Refusal::OverBudget { used, cap: settings.ai_daily_tokens });
     }
-    if settings.ai_pause_percent > 0 {
+    if settings.ai_pause_percent > 0 && !user_initiated {
         if let Some((pct, window)) = plan_percent(cache, now).filter(|(p, _)| u64::from(*p) > settings.ai_pause_percent) {
             return Err(Refusal::PlanBusy { pct, limit: settings.ai_pause_percent, window });
         }
@@ -253,11 +260,13 @@ pub struct Request {
     pub prompt: String,
     pub timeout: Duration,
     pub cancel: Cancel,
+    /// The person asked for this by pressing a key (see `gate_for`): the plan-usage pause doesn't apply.
+    pub user_initiated: bool,
 }
 
 impl Request {
     pub fn new(feature: &'static str, system: impl Into<String>, prompt: impl Into<String>) -> Self {
-        Request { feature, system: system.into(), prompt: prompt.into(), timeout: DEFAULT_TIMEOUT, cancel: Cancel::new() }
+        Request { feature, system: system.into(), prompt: prompt.into(), timeout: DEFAULT_TIMEOUT, cancel: Cancel::new(), user_initiated: false }
     }
 }
 
@@ -503,16 +512,28 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
 pub struct Runner {
     program: String,
     cache: PathBuf,
+    /// Seconds added to the clock this runner reads (tests move it to cross midnight without waiting).
+    offset: u64,
 }
 
 impl Runner {
     /// The program is PLATOON_CLAUDE_BIN, else `claude`.
     pub fn from_env(cache: &Path) -> Runner {
-        Runner { program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), cache: cache.to_path_buf() }
+        Runner { program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), cache: cache.to_path_buf(), offset: 0 }
     }
 
     pub fn with_program(cache: &Path, program: &str) -> Runner {
-        Runner { program: program.to_string(), cache: cache.to_path_buf() }
+        Runner { program: program.to_string(), cache: cache.to_path_buf(), offset: 0 }
+    }
+
+    /// The same runner with its clock `secs` seconds ahead.
+    pub fn with_clock_offset(mut self, secs: u64) -> Runner {
+        self.offset = secs;
+        self
+    }
+
+    fn now(&self) -> u64 {
+        usage::now() + self.offset
     }
 
     /// The folder every call runs in.
@@ -536,8 +557,8 @@ impl Runner {
     }
 
     pub fn run(&self, settings: &Settings, req: &Request) -> Result<Reply, AiError> {
-        let start = usage::now();
-        gate(settings, req.feature, &self.cache, start).map_err(AiError::Refused)?;
+        let start = self.now();
+        gate_for(settings, req.feature, &self.cache, start, req.user_initiated).map_err(AiError::Refused)?;
         if req.cancel.is_cancelled() {
             return Err(AiError::Cancelled);
         }
@@ -562,7 +583,7 @@ impl Runner {
             Ok(c) => c,
             Err(e) => {
                 let why = if e.kind() == io::ErrorKind::NotFound { format!("couldn't find `{}` to run", self.program) } else { format!("couldn't start `{}`: {e}", self.program) };
-                let _ = ledger.note_failure(usage::now(), FailKind::Other);
+                let _ = ledger.note_failure(self.now(), FailKind::Other);
                 return Err(other(why));
             }
         };
@@ -599,7 +620,7 @@ impl Runner {
         };
         let collect = |rx: mpsc::Receiver<Vec<u8>>| rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default();
         let (stdout, stderr) = (collect(out_rx), collect(err_rx));
-        let now = usage::now();
+        let now = self.now();
 
         if cancelled {
             return Err(AiError::Cancelled);
@@ -688,6 +709,25 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 extern "C" fn on_interrupt(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::SeqCst);
+}
+
+/// Start listening for Ctrl+C: from now on it sets a flag (`interrupted`) instead of ending the program, so whoever is
+/// waiting for a call can stop it (the call runs in its own process group and never sees the key).
+pub fn watch_interrupt() {
+    INTERRUPTED.store(false, Ordering::SeqCst);
+    // SAFETY: the handler only stores into an atomic.
+    unsafe { libc::signal(libc::SIGINT, on_interrupt as *const () as libc::sighandler_t) };
+}
+
+/// Ctrl+C ends the program again, as it does by default.
+pub fn stop_watching_interrupt() {
+    // SAFETY: restoring the default action of a signal.
+    unsafe { libc::signal(libc::SIGINT, libc::SIG_DFL) };
+}
+
+/// Has Ctrl+C been pressed since `watch_interrupt`?
+pub fn interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
 }
 
 /// `platoon tokens [test]`. Returns the exit code: 0 fine, 1 the call failed, 2 usage, 3 refused by a gate.
@@ -802,7 +842,7 @@ fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cach
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::AtomicUsize};
 
@@ -983,6 +1023,58 @@ mod tests {
         assert_eq!(gate(&never, "names", &f.cache, now), Ok(()));
         assert!(matches!(gate(&s, "names", &f.cache, now), Err(Refusal::PlanBusy { pct: 100, .. })));
         assert!(Refusal::PlanBusy { pct: 90, limit: 80, window: "5-hour limit" }.plain().contains("90%"));
+    }
+
+    #[test]
+    fn a_call_the_user_asked_for_ignores_the_plan_pause_and_nothing_else() {
+        let f = Fake::ok("user-gate");
+        let s = on();
+        let now = 1_800_000_000;
+        plan_report(&f.cache, 95, Some(10), now + 3600, now - 10);
+        assert!(matches!(gate_for(&s, "find", &f.cache, now, false), Err(Refusal::PlanBusy { pct: 95, .. })), "background: paused");
+        assert_eq!(gate_for(&s, "find", &f.cache, now, true), Ok(()), "asked for by a key press: the plan's own pause is not for it");
+        assert_eq!(gate(&s, "find", &f.cache, now), gate_for(&s, "find", &f.cache, now, false), "`gate` is the background gate");
+        // The switches still count...
+        let mut off = s.clone();
+        off.set_feature("find", false);
+        assert_eq!(gate_for(&off, "find", &f.cache, now, true), Err(Refusal::FeatureOff("Find a session by description")));
+        off = s.clone();
+        off.tokens_enabled = false;
+        assert_eq!(gate_for(&off, "find", &f.cache, now, true), Err(Refusal::MasterOff));
+        // ...and so do the daily limit and a running back-off.
+        let mut small = s.clone();
+        small.ai_daily_tokens = 20_000;
+        Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 20_000, ..Usage::default() }, 0.0, true).unwrap();
+        assert!(matches!(gate_for(&small, "find", &f.cache, now, true), Err(Refusal::OverBudget { .. })));
+        let g = Fake::ok("user-gate-2");
+        Ledger::open(&g.cache).note_failure(now, FailKind::Network).unwrap();
+        assert!(matches!(gate_for(&s, "find", &g.cache, now + 1, true), Err(Refusal::BackedOff { .. })));
+    }
+
+    #[test]
+    fn the_runner_lets_a_user_initiated_request_through_the_plan_pause_and_a_background_one_not() {
+        let f = Fake::ok("user-run");
+        let s = on();
+        let now = usage::now();
+        plan_report(&f.cache, 99, None, now + 3600, now);
+        let mut bg = Request::new("find", "Be brief.", "x");
+        assert!(matches!(f.runner().run(&s, &bg), Err(AiError::Refused(Refusal::PlanBusy { .. }))));
+        assert!(!f.ran());
+        bg.user_initiated = true;
+        assert!(f.runner().run(&s, &bg).is_ok());
+        assert!(f.ran());
+    }
+
+    #[test]
+    fn a_runner_whose_clock_is_ahead_sees_the_next_day() {
+        let f = Fake::ok("clock");
+        let mut s = on();
+        s.ai_daily_tokens = 20_000;
+        Ledger::open(&f.cache).record_call(usage::now(), "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true).unwrap();
+        assert!(matches!(f.runner().run(&s, &req()), Err(AiError::Refused(Refusal::OverBudget { .. }))));
+        assert!(f.runner().with_clock_offset(2 * 86_400).run(&s, &req()).is_ok(), "two days on, today's use is a different day's");
+        let day2 = crate::ledger::local_day(usage::now() + 2 * 86_400);
+        assert!(Ledger::open(&f.cache).load().days.contains_key(&day2), "and the call is recorded under that day");
     }
 
     #[test]

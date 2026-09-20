@@ -32,6 +32,13 @@ one-line description. Newest activity first.
 Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, or `Background` (see
 [Background sessions](#background-sessions)). Conversations that only ever held slash commands are hidden.
 
+The name shown is, in this order: the one you gave it with `r` (platoon's own), then one you typed with `/rename` inside
+Claude, then, when the [smart features](#features-that-use-tokens) are on, a short name platoon made up (marked with a quiet `✦`
+at the end of the name, or `*` on the Linux console or when `PLATOON_GLYPHS=plain`, so you can tell it from one you chose), and
+otherwise the folder's name. The folder always stays visible in the DIR column: when the path is too long for it, the start is
+cut and the end (the folder itself) kept. With a summary made, the selected row's summary shows in two lines just above the
+key hints (left out on a terminal too short to spare them).
+
 | Key | Does |
 | --- | --- |
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
@@ -50,8 +57,8 @@ WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set 
 
 ### Search
 
-`/` opens a search dialog over the list. It has two kinds of search; `tab` (or a click on its name) switches between them
-and keeps what you typed.
+`/` opens a search dialog over the list. It has two kinds of search, and a third when the [smart features](#features-that-use-tokens)
+are on; `tab` (or a click on its name) switches between them and keeps what you typed.
 
 - **Quick filter** (the one it opens on): narrows the list as you type, by name, folder, branch and description. `enter` keeps the
   filter and closes the dialog; `esc` clears it and closes. (In the list, `esc` also clears a kept filter.)
@@ -61,6 +68,16 @@ and keeps what you typed.
   with your words in the accent color. `↑` `↓` (or `PgUp` `PgDn`, or the wheel) pick a result and `enter` (or a second click)
   closes the dialog and selects that conversation in the list, on the Archived tab if that is where it is. Only what you typed is
   searched: Claude's answers and the output of tools are not.
+
+- **Describe it** (only while "Enable features which require tokens" and "Find a session by description" are both on): for when you
+  remember what a conversation was about but not the words. Type a few words about it and press `enter`: platoon picks about 50
+  conversations that share words with your description (their names, summaries and what you typed; topped up with the most recently
+  used when fewer than 10 do), sends Claude one short list of them and asks for the best matches, and shows up to 10 with a
+  one-line reason each. Nothing is sent while you type, only when you press `enter`. `esc` calls the request off (and a second `esc`
+  closes the dialog); `enter` on a result opens it as in Full-text; `ctrl+w` searches wider (about 200 conversations) after
+  telling you roughly how many tokens that is and waiting for `enter`. It is your own request, so it goes ahead even when the plan is
+  used above the pause point that holds the background naming back; it still needs the switches, the daily limit and no back-off,
+  and says plainly if one of them stops it. Words in generated names and summaries are found by the Quick filter and by Full-text too.
 
 Results come best first: conversations whose name has all the words, then those where one single message has all of them, then
 those where more messages mention them, then the most recently used. `ctrl+u` empties the box.
@@ -141,13 +158,7 @@ Details worth knowing:
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
-| Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
-| Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
-| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
-| Pause above plan usage | They stop asking Claude while your plan is used more than this much. | Never, 50%, 60%, 70%, 80% (default), 90% |
-| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
-| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
-| Refresh a summary after | How many new messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
+| Smart features | Opens a screen of its own (below) with everything that uses your Claude plan. The row shows the master switch: Off or On. | `enter` (or `→`, or a click) opens it |
 
 `↑` `↓` pick a setting (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
 next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter` opens the theme list
@@ -170,34 +181,90 @@ by hand too:
 {"idle_stop_minutes": 120, "auto_archive_days": 2, "idle_stop_ignores_mcp": true, "theme": "catppuccin-mocha",
  "search_archived": true, "search_results": 50, "search_snippet_chars": 120, "search_prompt_chars": 2000,
  "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
- "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5}
+ "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
+ "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
+ "ai_find_wide_candidates": 200}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
-With the token entries the popup has 16 lines, so on a short terminal (80x24) it shows a window of them and scrolls as you move,
-explaining the selected one. Under the entries a line says `Used today: N of M tokens`.
+**Smart features** (`enter` on that row; `esc` goes back to the settings) holds every setting for the token features, so the main
+popup stays short. The screen keeps the same rules: it scrolls on a short terminal (80x24 shows a window of it), explains the selected
+entry, and has under the entries `Used today: N of M tokens` and `Archived: N conversations, about X tokens to index (an estimate)`.
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
+| Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
+| Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
+| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
+| Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
+| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
+| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
+| Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
+| Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
+| Recent messages sent | How many of a conversation's latest messages go into its summary, besides the first one. | 3, 5, 8 (default), 12, 20 messages |
+| Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
+| Archived conversations | Whether archived conversations are named too, slowly in the background. | Skip (default), In the background |
+| Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
+| Description search: conversations sent / results / wider search | How many conversations a search by description sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
 
 ### Features that use tokens
 
-Some features (smart names and summaries, finding a session by description; they arrive after this plumbing does) need to
-ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which require
-tokens** in the settings plus the switch of each feature. `platoon setup` asks once, in a terminal, with the default "no": it lists the
-features and says that platoon would send Claude the prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and
-that you can switch it off any time (`s`, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one line
-saying how to turn them on. Turning a switch off stops a call already in progress and throws its answer away; summaries already saved stay.
+Two features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
+require tokens** in the settings (under **Smart features**) plus the switch of each feature:
+
+- **Smart names and summaries**: gives each conversation a short name and a one- or two-sentence summary (shown under the list for
+  the selected row, found by the search), and keeps them up to date as the conversation goes on.
+- **Find a session by description**: the [Describe it](#search) search.
+
+`platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send Claude the
+prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and that you can switch it off any
+time (`s`, then Smart features, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one
+line saying how to turn them on. Turning a switch off stops a call already in progress and throws its answer away; names and
+summaries already saved stay.
+
+**The first pass, in `platoon setup`.** After a yes (and also when you said yes earlier and nothing has been named yet), setup shows
+a local estimate ("3 active conversations to name, about 2,100 tokens, roughly 1 call (an estimate, made on this computer)") and
+names your active conversations right there, newest first, with a one-line progress display. `Ctrl+C` skips it: platoon carries on
+in the background while it is open. Setup then asks about archived conversations, showing how many there are and what naming them
+would roughly cost, with "skip" as the default and "slowly in the background" as the other choice (the setting `Archived
+conversations`). Without a terminal there is no scan, just one line. None of this ever changes what setup does or its exit code, or
+stops platoon from starting.
+
+**What is sent.** For each conversation: its first message, its last few messages (8 by default, each cut to 300 characters), the
+name and summary platoon made last time (if any) and one line (200 characters) of Claude's last reply. The conversations are
+numbered 1, 2, 3 in the request (never their ids or folders), up to 30 to a call. Never tool output, file contents, or anything
+else. The description search sends, for about 50 conversations, the name, the folder's own name and the summary (or, for a
+conversation with none, a little of its first and last message) and asks for the best matches. Every request tells the model that
+the text is data to read, not instructions, and to answer with JSON only; what comes back is checked strictly (unknown numbers,
+wrong types and empty text are ignored, names are cut to 60 characters and summaries to 300) and every control character and escape
+sequence is removed before it is stored or drawn. A conversation the model skips is tried in a later batch at most twice, then left
+until it changes.
+
+**When.** The naming work runs only **while the platoon window is open**, on a background worker inside platoon: nothing keeps
+running when you quit (the hosts that keep your sessions alive do no naming), and it catches up the next time platoon starts. One
+call at a time, in this order: a description search you asked for, conversations that hit the refresh trigger (5 new substantive
+messages, i.e. not "yes", "continue", "ok", "go ahead", "thanks" or anything under 10 characters, and quiet for 60 seconds), a
+conversation you just took out of the archive or opened, first-time names for active conversations (newest first), then archived
+ones if you chose that. Archived conversations may use at most half (a setting) of what is left of the day's limit, so the
+conversations you are using always have room. The header shows `✦ Indexing 12 of 240` while there is work.
+
+**Where it is kept.** Names and summaries are in `~/.config/platoon/summaries.json` (`$PLATOON_CONFIG_DIR`): per conversation the
+name, the summary, how many messages it covers, the model and the time, never a message you typed or a reply from Claude. It is
+written atomically, kept as it was if platoon can't understand it (a `.bak` copy first), other things in it are left alone, and it is
+in the config folder (not the cache) because making it again costs tokens. platoon never writes to Claude's own files.
 
 What keeps it safe, all enforced in one place before any call starts:
 
 - **Daily limit** (default 500K tokens; every number Claude reports counts, input, cache writes, cache reads and output). The day is your local calendar day.
   Every call is added to `~/.cache/platoon/ai-usage.json` (numbers only, kept for 30 days; nothing you typed or Claude answered is ever saved there).
-- **Pause above plan usage** (default 80%), using the figure Claude Code's status line reports. With no figure yet, nothing pauses.
+- **Pause above plan usage** (default 80%), using the figure Claude Code's status line reports, for background work. With no figure yet, nothing pauses.
 - **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls for a while (30 seconds doubling up
   to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed out or over the plan limit). A success ends it. The footer says
-  `Smart features paused: <reason>` once, not once per failed call.
+  `Smart features paused: <reason>` once, not once per failed call, and the worker looks again every 30 seconds without repeating itself.
 - **Small calls**: `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and low effort, run in
   `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only one), with `PLATOON_AI=1` set.
 
@@ -277,8 +344,8 @@ come from.
 platoon keeps an index of your transcripts in `~/.cache/platoon/index.json` and only re-reads files that
 changed, in the background, so it opens at once even with thousands of conversations (a small
 `indexing N…` shows in the header while it catches up). Deleting the file is harmless: it is rebuilt. The words for the
-[full-text search](#search) are kept the same way in `prompts.jsonl` next to it, by remembering how far into each transcript
-it has read.
+[full-text search](#search) (and, for the smart names, one line of Claude's last reply) are kept the same way in `prompts.jsonl`
+next to it, by remembering how far into each transcript it has read.
 
 ## Sessions started in platoon keep running
 

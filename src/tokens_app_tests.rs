@@ -2,9 +2,9 @@
 //! reading and the screen out. Every directory is a temp dir (`World`); nothing here starts a `claude`.
 
 use crate::ai::{self, FEATURES, MASTER_LABEL, TEST_FEATURE};
-use crate::app::{App, Mode};
+use crate::app::{App, Mode, Page};
 use crate::ledger::{FailKind, Ledger, Usage};
-use crate::settings::{self, Settings, ITEMS};
+use crate::settings::{self, Settings, ITEMS, SMART_ITEMS};
 use crate::testkit::World;
 use crate::ui;
 use crate::usage;
@@ -24,12 +24,23 @@ fn screen(term: &mut Terminal<TestBackend>, app: &App) -> String {
     (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
-/// The settings screen with the entry called `name` selected.
+/// The settings screen (the main one, or "Smart features" for an entry that lives there) with the entry called `name`
+/// selected.
 fn select(app: &mut App, name: &str) {
     if !matches!(app.mode, Mode::Settings) {
         key(app, KeyCode::Char('s'));
     }
-    let at = ITEMS.iter().position(|i| i.name == name).unwrap();
+    let smart_at = SMART_ITEMS.iter().position(|i| i.name == name);
+    match (smart_at, app.page) {
+        (Some(_), Page::Main) => {
+            key(app, KeyCode::End);
+            key(app, KeyCode::Enter);
+            assert_eq!(app.page, Page::Smart, "enter on the last entry opens the smart features");
+        }
+        (None, Page::Smart) => key(app, KeyCode::Esc),
+        _ => {}
+    }
+    let at = smart_at.unwrap_or_else(|| ITEMS.iter().position(|i| i.name == name).unwrap());
     key(app, KeyCode::Home);
     for _ in 0..at {
         key(app, KeyCode::Down);
@@ -115,7 +126,7 @@ fn used_today_shows_the_ledger_against_the_limit_and_turns_to_a_warning_at_the_l
     let w = World::new("tok-used");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    key(&mut app, KeyCode::Char('s'));
+    select(&mut app, "Daily token limit");
     let shown = screen(&mut term, &app);
     assert!(shown.contains("Used today: 0 of 500,000 tokens"), "{shown}");
     Ledger::open(&w.cache).record_call(usage::now(), "names", &Usage { input: 1000, cache_creation: 200, cache_read: 30_000, output: 5 }, 0.01, true).unwrap();

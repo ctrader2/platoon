@@ -138,3 +138,107 @@ impl Drop for World {
 pub fn alive(pid: u32) -> bool {
     crate::claude::pid_alive(pid)
 }
+
+/// A stand-in for `claude -p` that records every call (`calls/N.argv`, `.cwd`, `.env`, `.stdin`, N from 1) and
+/// answers from files the test writes: `reply.N` (the text the model says, for call N) or else `reply.default`, or,
+/// when neither exists, a naming answer built from the numbers it finds in the request (`[1]`, `[2]`, ...) or a
+/// ranking answer for a "Description:" request. `usage` holds the four token numbers it reports; `hang` makes it
+/// sleep until killed (its pid is written to `pid`); `fail` makes it print an error result and exit 1.
+pub struct AiFake {
+    pub dir: PathBuf,
+    pub script: String,
+}
+
+impl AiFake {
+    pub fn new(name: &str) -> AiFake {
+        let dir = std::env::temp_dir().join(format!("platoon-aifake-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("calls")).unwrap();
+        let d = dir.display();
+        let body = include_str!("../tests/fake-claude.sh")
+        .replace("@DIR@", &d.to_string());
+        let script = dir.join("fake-claude");
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        AiFake { script: script.display().to_string(), dir }
+    }
+
+    pub fn calls(&self) -> usize {
+        fs::read_dir(self.dir.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+    }
+
+    fn call_file(&self, k: usize, what: &str) -> String {
+        fs::read_to_string(self.dir.join("calls").join(format!("{k}.{what}"))).unwrap_or_default()
+    }
+
+    /// What call number `k` (from 1) was sent on its standard input.
+    pub fn stdin(&self, k: usize) -> String {
+        self.call_file(k, "stdin")
+    }
+
+    pub fn argv(&self, k: usize) -> Vec<String> {
+        self.call_file(k, "argv").lines().map(String::from).collect()
+    }
+
+    pub fn cwd(&self, k: usize) -> String {
+        self.call_file(k, "cwd").trim().to_string()
+    }
+
+    pub fn env(&self, k: usize) -> String {
+        self.call_file(k, "env")
+    }
+
+    /// Say `text` (the model's words, not the envelope) to call `k`.
+    pub fn reply(&self, k: usize, text: &str) {
+        fs::write(self.dir.join(format!("reply.{k}")), text).unwrap();
+    }
+
+    pub fn reply_default(&self, text: &str) {
+        fs::write(self.dir.join("reply.default"), text).unwrap();
+    }
+
+    pub fn usage(&self, input: u64, output: u64) {
+        fs::write(self.dir.join("usage"), format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#)).unwrap();
+    }
+
+    pub fn hang(&self, on: bool) {
+        let p = self.dir.join("hang");
+        if on {
+            fs::write(p, "").unwrap();
+        } else {
+            let _ = fs::remove_file(p);
+        }
+    }
+
+    /// Every call takes this many seconds before it answers.
+    pub fn slow(&self, secs: f32) {
+        fs::write(self.dir.join("delay"), secs.to_string()).unwrap();
+    }
+
+    pub fn fail(&self, message: Option<&str>) {
+        let p = self.dir.join("fail");
+        match message {
+            Some(m) => fs::write(p, m).unwrap(),
+            None => {
+                let _ = fs::remove_file(p);
+            }
+        }
+    }
+
+    /// The pids of the hanging fake and its `sleep`, if it ran.
+    pub fn pids(&self) -> Vec<u32> {
+        ["pid", "sleep-pid"].iter().filter_map(|f| fs::read_to_string(self.dir.join(f)).ok()?.trim().parse().ok()).collect()
+    }
+}
+
+impl Drop for AiFake {
+    fn drop(&mut self) {
+        // Anything still hanging is ours: kill exactly the pids it wrote down.
+        for pid in self.pids() {
+            if pid > 1 && alive(pid) {
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            }
+        }
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
