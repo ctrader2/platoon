@@ -30,6 +30,8 @@ mod perf;
 #[cfg(test)]
 mod search_app_tests;
 #[cfg(test)]
+mod stop_app_tests;
+#[cfg(test)]
 mod select_app_tests;
 #[cfg(test)]
 mod smart_app_tests;
@@ -161,6 +163,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let start = Instant::now();
     let mut last_refresh = Instant::now();
     while !app.quit {
+        app.poll_stops();
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
@@ -184,6 +187,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
             }
         }
     }
+    // Stops still running for the archive key get a few seconds to finish, so their records are written.
+    app.finish_stops();
     Ok(app.hosts.len())
 }
 
@@ -590,6 +595,7 @@ mod tests {
         ch(&mut app, 'a');
         ch(&mut app, 'y');
         assert!(matches!(app.mode, Mode::List));
+        assert!(app.settle_stops_for_test(std::time::Duration::from_secs(5)), "the stop finishes");
         assert!(!alive(pid), "SIGTERM must have ended it");
         assert!(w.archive_file().unwrap()["archived"].get("mid-2").is_some());
     }
@@ -602,6 +608,7 @@ mod tests {
         app.selected = row_of(&app, "mid-2");
         ch(&mut app, 'a');
         assert!(matches!(app.mode, Mode::List), "platoon's own idle process: nothing to protect");
+        assert!(app.settle_stops_for_test(std::time::Duration::from_secs(5)), "the stop finishes");
         assert!(!alive(pid));
         assert!(w.archive_file().unwrap()["archived"].get("mid-2").is_some());
     }
@@ -627,6 +634,7 @@ mod tests {
         ch(&mut app, 'a');
         ch(&mut app, 'y');
         assert!(matches!(app.mode, Mode::List));
+        assert!(app.settle_stops_for_test(std::time::Duration::from_secs(5)), "the stop finishes");
         assert!(!alive(pid) && w.archive_file().unwrap()["archived"].get("busy-1").is_some());
         assert_eq!(app.counts, [0, 1]);
     }
@@ -1023,6 +1031,7 @@ mod tests {
         key(&mut app, KeyCode::Char('y'));
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(250));
+            app.poll_stops();
             app.refresh();
             if app.hosts.is_empty() {
                 break;

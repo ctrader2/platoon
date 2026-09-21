@@ -115,6 +115,15 @@ is running in a terminal platoon didn't start (that copy isn't platoon's to end 
 itself is untouched, and `enter` on an archived one restores it and opens it. The list of archived ids lives
 in `~/.config/platoon/archive.json` (`$PLATOON_CONFIG_DIR`, or `$XDG_CONFIG_HOME/platoon`).
 
+Stopping a running conversation takes Claude about a second, and platoon doesn't make you wait for it: the row
+leaves the list (and the Active count drops) the moment you press the key or answer the question, and the stop
+runs in the background. The conversation shows up under Archived once the process has really exited, so a
+conversation is never archived while it is still running. If it hasn't exited after about 5 seconds, the row comes
+back with a notice (`Couldn't stop "name": ... Try again in a moment.`) and nothing is archived. While a stop is
+under way you can carry on as usual (open, rename, filter, restore or archive other conversations). Quitting
+platoon then waits up to 3 seconds for it, so the archive gets written, and leaves anyway after that; a
+conversation whose process is still running at that point stays in the list.
+
 ### Automatic clean-up
 
 Two things happen on their own, so you don't have to think about them. Nothing is ever deleted.

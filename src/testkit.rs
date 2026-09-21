@@ -100,6 +100,34 @@ impl World {
         pid
     }
 
+    /// Start a shell script standing in for a claude that behaves in a particular way when told to stop, and
+    /// register it. Killed on drop. The pid is the shell's own, and the script only ever ends through its trap.
+    /// Returns once the trap is in place: a SIGTERM before that would simply end it.
+    fn live_script(&mut self, id: &str, cwd: &str, started: u64, status: &str, trap: &str) -> u32 {
+        let ready = self.base.join(format!("ready-{}", NEXT.fetch_add(1, Ordering::SeqCst)));
+        let script = format!("trap '{trap}' TERM; : > '{}'; while :; do sleep 0.05; done", ready.display());
+        let child = Command::new("sh").arg("-c").arg(script).spawn().unwrap();
+        let pid = child.id();
+        self.procs.push(child);
+        let start = std::time::Instant::now();
+        while !ready.exists() {
+            assert!(start.elapsed() < std::time::Duration::from_secs(10), "the stand-in process never got ready");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        self.register(pid, id, cwd, started, status);
+        pid
+    }
+
+    /// Like `live`, but the process takes `secs` seconds to end after SIGTERM (as Claude does, cleaning up).
+    pub fn live_slow_exit(&mut self, id: &str, cwd: &str, started: u64, status: &str, secs: f32) -> u32 {
+        self.live_script(id, cwd, started, status, &format!("sleep {secs}; exit 0"))
+    }
+
+    /// Like `live`, but the process ignores SIGTERM (only SIGKILL, on drop, ends it).
+    pub fn live_deaf(&mut self, id: &str, cwd: &str, started: u64, status: &str) -> u32 {
+        self.live_script(id, cwd, started, status, "")
+    }
+
     /// Write the registry file of a background session (`"kind":"bg"`), shaped like Claude's own: its `jobId` is
     /// what `claude attach` takes. `spare` makes it one of the service's idle pre-started spares.
     pub fn register_bg(&self, pid: u32, id: &str, cwd: &str, started: u64, job_id: &str, spare: bool) {

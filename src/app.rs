@@ -28,7 +28,10 @@ use std::{
     io,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        mpsc::{channel, Receiver, Sender},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -45,6 +48,31 @@ const AUTO_ARCHIVE_EVERY: Duration = Duration::from_secs(60);
 /// steps are one key press apart, so getting from 2 days to Off passes through 1 day, and archiving at that
 /// stop would put away conversations the user was on the way to keeping.
 const SETTLE: Duration = Duration::from_millis(1200);
+
+/// How long quitting waits for stops that are still running (so their archive records get written) before leaving.
+const QUIT_WAITS_FOR_STOPS: Duration = Duration::from_secs(3);
+
+/// A conversation whose process is being stopped in the background because the user archived it.
+struct Stopping {
+    name: String,
+    /// The processes signalled: exactly this conversation's own, never a background session's.
+    pids: Vec<u32>,
+}
+
+/// What a stop worker reports back: the conversation and whether every one of its processes exited.
+struct StopDone {
+    id: String,
+    result: Result<(), String>,
+}
+
+/// The two waiting times of stopping, held apart from the constants so tests can shorten them.
+#[derive(Clone, Copy)]
+struct StopTimes {
+    /// How long a process gets to exit after SIGTERM.
+    stop: Duration,
+    /// How long quitting waits for stops in flight.
+    quit: Duration,
+}
 
 /// A tab in the header. Adding one is adding an entry here: the header, the number keys (`1` is the
 /// first tab, `2` the second, ...) and the counts all follow.
@@ -408,6 +436,12 @@ pub struct App {
     rev: u64,
     /// The index generation and live session ids `sessions` was built from.
     built: (u64, Vec<String>),
+    /// Conversations the user archived whose process is still being stopped, by a worker thread each. They are left
+    /// out of the list and of the counts at once, and archived only when the process has really exited.
+    stopping: HashMap<String, Stopping>,
+    stops_tx: Sender<StopDone>,
+    stops_rx: Receiver<StopDone>,
+    stop_times: StopTimes,
 }
 
 impl App {
@@ -446,6 +480,7 @@ impl App {
         #[cfg(not(test))]
         let prompts = PromptIndex::spawn(&cache, prompt_cap);
         let _ = threaded;
+        let (stops_tx, stops_rx) = channel();
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
@@ -503,6 +538,10 @@ impl App {
             view_for: (String::new(), usize::MAX, 0),
             rev: 0,
             built: (0, Vec::new()),
+            stopping: HashMap::new(),
+            stops_tx,
+            stops_rx,
+            stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
         // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
@@ -598,14 +637,16 @@ impl App {
         self.view_for = (self.filter.clone(), self.tab, self.rev);
         let q = self.filter.to_lowercase();
         let shows = TABS[self.tab.min(TABS.len() - 1)].shows;
+        // A conversation being stopped is on neither tab: it is on its way to Archived and can't be acted on meanwhile.
+        let listed = |s: &Session| self.stopping.is_empty() || !self.stopping.contains_key(&s.id);
         self.view = self
             .sessions
             .iter()
             .enumerate()
-            .filter(|(_, s)| shows(s) && (q.is_empty() || s.haystack.contains(&q)))
+            .filter(|(_, s)| listed(s) && shows(s) && (q.is_empty() || s.haystack.contains(&q)))
             .map(|(i, _)| i)
             .collect();
-        self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| (t.shows)(s)).count()).collect();
+        self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| listed(s) && (t.shows)(s)).count()).collect();
         self.clamp_selected();
     }
 
@@ -838,7 +879,9 @@ impl App {
             return;
         }
         let viewing = self.attached_pid().and(self.viewing.as_deref());
-        let ids = archive::auto_archive_ids(&self.sessions, &self.archive, now_secs, age, viewing);
+        let mut ids = archive::auto_archive_ids(&self.sessions, &self.archive, now_secs, age, viewing);
+        // One being stopped for the archive key is archived by that (once its process is gone), not counted here.
+        ids.retain(|id| !self.stopping.contains_key(id));
         if ids.is_empty() {
             return;
         }
@@ -1060,7 +1103,7 @@ impl App {
         }
         let mut found: Vec<(&Session, prompts::Found, Option<&Arc<prompts::FilePrompts>>)> = Vec::new();
         for s in &self.sessions {
-            if s.archived && !settings.search_archived {
+            if (s.archived && !settings.search_archived) || self.stopping.contains_key(&s.id) {
                 continue;
             }
             // The name you gave and the one platoon made up both count as the name; the summary is searched too.
@@ -1119,7 +1162,7 @@ impl App {
     /// list (a filter would hide it).
     fn show_conversation(&mut self, id: &str) {
         self.mode = Mode::List;
-        let Some(s) = self.sessions.iter().find(|s| s.id == id) else { return };
+        let Some(s) = self.sessions.iter().find(|s| s.id == id && !self.stopping.contains_key(&s.id)) else { return };
         let Some(tab) = TABS.iter().position(|t| (t.shows)(s)) else { return };
         self.filter.clear();
         self.tab = tab;
@@ -1506,23 +1549,122 @@ impl App {
         }
     }
 
-    /// Stop whatever runs the conversation (SIGTERM, so Claude shuts down cleanly) and move it to Archived.
+    /// Move the conversation to Archived, stopping whatever runs it first (SIGTERM, so Claude shuts down cleanly).
     /// The transcript stays, so restoring it resumes from the saved history.
+    ///
+    /// Nothing running it: archived at once. Something running it: the row leaves the list and the counts at once, a
+    /// worker thread stops the process(es) and waits for them to exit, and only then (`stop_done`) is the archive
+    /// written. So a conversation is never archived while its process still runs, and the screen never waits for one.
     fn archive_conversation(&mut self, id: &str, name: &str) {
+        if self.stopping.contains_key(id) {
+            return; // already on its way
+        }
         // Never a background session's process: Claude's own service owns it (the archive key refuses those rows).
         let pids: Vec<u32> =
             self.sessions.iter().filter(|s| s.id == id).flat_map(|s| s.procs.iter().filter(|p| p.background.is_none()).map(|p| p.pid)).collect();
-        if !pids.is_empty() {
-            if let Err(e) = host::end_processes(&pids) {
-                self.notify(format!("Couldn't stop \"{name}\": {e}. Try again in a moment."));
-                return;
-            }
+        if pids.is_empty() {
+            self.record_archived(id, name);
+            self.reload();
+            return;
         }
+        let (tx, wait, worker_pids) = (self.stops_tx.clone(), self.stop_times.stop, pids.clone());
+        let worker_id = id.to_string();
+        let started = thread::Builder::new().name("platoon-stop".into()).spawn(move || {
+            let result = host::end_processes_within(&worker_pids, wait);
+            let _ = tx.send(StopDone { id: worker_id, result });
+        });
+        if let Err(e) = started {
+            self.notify(format!("Couldn't stop \"{name}\": {e}. Try again in a moment."));
+            return;
+        }
+        self.stopping.insert(id.to_string(), Stopping { name: name.to_string(), pids });
+        self.rev += 1;
+        self.update_view();
+    }
+
+    /// Write the archive record and say so (or say why it couldn't be saved).
+    fn record_archived(&mut self, id: &str, name: &str) {
         match self.archive.archive(id, usage::now()) {
             Ok(()) => self.notify(format!("Archived \"{name}\"")),
             Err(e) => self.notify(format!("Couldn't save the archive: {e}")),
         }
-        self.reload();
+    }
+
+    /// Take in what the stop workers have finished. Cheap when none are running; the event loop calls it every turn.
+    pub fn poll_stops(&mut self) {
+        if self.stopping.is_empty() {
+            return;
+        }
+        let mut any = false;
+        while let Ok(done) = self.stops_rx.try_recv() {
+            any |= self.stop_done(done);
+        }
+        if any {
+            self.reload();
+        }
+    }
+
+    /// One worker finished. Its process(es) exited: write the archive record (unless the conversation was opened
+    /// again in the meantime, from another terminal, which makes it in use: it stays in the list). They didn't:
+    /// the row comes back with the plain notice. True when something changed that the list must be rebuilt for.
+    fn stop_done(&mut self, done: StopDone) -> bool {
+        let Some(Stopping { name, pids }) = self.stopping.remove(&done.id) else { return false };
+        match done.result {
+            Ok(()) => {
+                let again = self.reader.live().iter().any(|l| l.id == done.id && l.background.is_none() && !pids.contains(&l.pid));
+                if again {
+                    self.notify(format!("\"{name}\" was opened again, so it stays in the list."));
+                } else {
+                    self.record_archived(&done.id, &name);
+                }
+            }
+            Err(e) => self.notify(format!("Couldn't stop \"{name}\": {e}. Try again in a moment.")),
+        }
+        true
+    }
+
+    /// Called once when platoon is leaving: give the stops still running a few seconds to finish, so their archive
+    /// records are written, and then leave regardless. A stop that hasn't finished by then leaves its conversation
+    /// unarchived (its process may still be shutting down): never archived while running.
+    pub fn finish_stops(&mut self) {
+        let deadline = Instant::now() + self.stop_times.quit;
+        while !self.stopping.is_empty() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.stops_rx.recv_timeout(left) {
+                Ok(done) => {
+                    self.stop_done(done);
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    /// How many conversations are being stopped for the archive key right now.
+    #[cfg(test)]
+    pub fn stops_pending(&self) -> usize {
+        self.stopping.len()
+    }
+
+    /// Take in finished stops until none is pending (or `max` has passed). True when none is left.
+    #[cfg(test)]
+    pub fn settle_stops_for_test(&mut self, max: Duration) -> bool {
+        let deadline = Instant::now() + max;
+        while !self.stopping.is_empty() && Instant::now() < deadline {
+            self.poll_stops();
+            thread::sleep(Duration::from_millis(5));
+        }
+        self.stopping.is_empty()
+    }
+
+    /// Archive `id` as the archive key does after any confirmation (for tests that go round the selection).
+    #[cfg(test)]
+    pub fn archive_for_test(&mut self, id: &str, name: &str) {
+        self.archive_conversation(id, name);
+    }
+
+    #[cfg(test)]
+    pub fn set_stop_times_for_test(&mut self, stop: Duration, quit: Duration) {
+        self.stop_times = StopTimes { stop, quit };
     }
 
     /// The user opened a conversation. That counts as activity for auto-archive (opening one doesn't always

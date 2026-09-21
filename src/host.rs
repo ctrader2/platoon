@@ -536,20 +536,37 @@ fn serve_client(mut stream: UnixStream, sh: &Shared) {
     fit_smallest_viewer(sh);
 }
 
+/// How long a stop waits for a process to exit after SIGTERM. Claude shuts down cleanly in about a second.
+pub const STOP_WAIT: Duration = Duration::from_secs(5);
+
 /// SIGTERM each process and wait for all of them to exit. Used when ending copies before reopening.
+/// Blocks for as long as the processes take (up to `STOP_WAIT`): never call it from the UI's own thread when the
+/// screen would freeze for that long (the archive key runs it on a worker: see `App::start_stop`).
 pub fn end_processes(pids: &[u32]) -> Result<(), String> {
+    end_processes_within(pids, STOP_WAIT)
+}
+
+/// `end_processes` with the waiting time given, so a test does not have to wait for the real one.
+pub fn end_processes_within(pids: &[u32], wait: Duration) -> Result<(), String> {
     for &pid in pids {
-        if pid <= 1 || unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 {
+        if pid <= 1 {
+            return Err(format!("couldn't stop pid {pid}"));
+        }
+        // Already gone (it ended by itself since the list was last read) is what we wanted: nothing to signal.
+        if unsafe { libc::kill(pid as i32, libc::SIGTERM) } != 0 && std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH) {
             return Err(format!("couldn't stop pid {pid}"));
         }
     }
-    for _ in 0..100 {
+    let deadline = Instant::now() + wait;
+    loop {
         if !pids.iter().any(|&p| pid_alive(p)) {
             return Ok(());
         }
-        thread::sleep(Duration::from_millis(50));
+        if Instant::now() >= deadline {
+            return Err("it didn't exit in time".into());
+        }
+        thread::sleep(Duration::from_millis(20));
     }
-    Err("it didn't exit in time".into())
 }
 
 #[cfg(test)]
@@ -925,5 +942,52 @@ mod tests {
         assert_eq!(blocker_reason(Blocker::Unsure(7), true), Reason::UnsureProcess(7));
         assert_eq!(blocker_reason(Blocker::Other(7), false), Reason::OtherProcess(7));
         assert_eq!(blocker_reason(Blocker::Other(7), true), Reason::ConfigUnreadable(7));
+    }
+
+    // --- ending processes ----------------------------------------------------------------------------
+
+    /// A shell of the test's own that ends `secs` seconds after SIGTERM, or ignores it (`None`). Returned once it has
+    /// set that up (a SIGTERM before then would just end it).
+    fn shell(after_term: Option<f32>) -> Child {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let ready = std::env::temp_dir().join(format!("platoon-host-ready-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        let trap = after_term.map_or(String::new(), |secs| format!("sleep {secs}; exit 0"));
+        let script = format!("trap '{trap}' TERM; : > '{}'; while :; do sleep 0.05; done", ready.display());
+        let child = Command::new("sh").arg("-c").arg(script).spawn().unwrap();
+        let start = Instant::now();
+        while !ready.exists() {
+            assert!(start.elapsed() < Duration::from_secs(10));
+            thread::sleep(Duration::from_millis(5));
+        }
+        let _ = fs::remove_file(&ready);
+        child
+    }
+
+    #[test]
+    fn end_processes_waits_for_the_exit_and_gives_up_after_the_time_it_was_given() {
+        let mut slow = shell(Some(0.4));
+        let t = Instant::now();
+        assert_eq!(end_processes_within(&[slow.id()], Duration::from_secs(10)), Ok(()));
+        assert!(t.elapsed() >= Duration::from_millis(350), "it waited for the exit: {:?}", t.elapsed());
+        slow.wait().unwrap();
+
+        let mut deaf = shell(None);
+        let t = Instant::now();
+        assert_eq!(end_processes_within(&[deaf.id()], Duration::from_millis(250)), Err("it didn't exit in time".into()));
+        let took = t.elapsed();
+        assert!(took >= Duration::from_millis(250) && took < Duration::from_secs(3), "{took:?}");
+        deaf.kill().unwrap(); // our own child, by handle
+        deaf.wait().unwrap();
+    }
+
+    #[test]
+    fn a_process_that_is_already_gone_counts_as_stopped_and_pid_zero_and_one_are_never_signalled() {
+        let mut gone = Command::new("true").spawn().unwrap();
+        let dead = gone.id();
+        gone.wait().unwrap();
+        assert_eq!(end_processes_within(&[dead], Duration::from_millis(200)), Ok(()));
+        for bad in [0u32, 1] {
+            assert_eq!(end_processes_within(&[bad], Duration::from_millis(200)), Err(format!("couldn't stop pid {bad}")));
+        }
     }
 }

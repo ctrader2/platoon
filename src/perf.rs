@@ -407,3 +407,70 @@ fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
     assert_eq!(fake.calls(), 0, "everything is named: nothing to send");
     assert!(on < off + Duration::from_millis(500), "the scheduler added {:?} to a refresh", on.saturating_sub(off));
 }
+
+/// The archive key with something running the conversation: the key press returns without waiting for the process to
+/// shut down (it takes 1.5 s here), with a handful of conversations and with thousands, and with nothing running it.
+#[test]
+fn archiving_never_waits_for_a_process_and_stays_quick_with_five_thousand_rows() {
+    let key = |app: &mut crate::app::App, c: char| app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    let hosted = |pid| crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() };
+    let limit = Duration::from_millis(500);
+
+    // A few conversations, the process takes 1.5 s to exit.
+    let mut w = World::new("perf-arch-small");
+    w.transcript("aaa", "/srv/a", "one", 5);
+    w.transcript("bbb", "/srv/b", "two", 50);
+    let pid = w.live_slow_exit("aaa", "/srv/a", 1, "idle", 1.5);
+    let mut app = w.app();
+    app.refresh_with(vec![hosted(pid)], true);
+    app.selected = app.visible().iter().position(|&i| app.sessions[i].id == "aaa").unwrap();
+    let t = Instant::now();
+    key(&mut app, 'a');
+    let small_running = t.elapsed();
+    assert_eq!(app.visible().len(), 1);
+    assert!(app.settle_stops_for_test(Duration::from_secs(10)));
+
+    // A few, nothing running.
+    let w = World::new("perf-arch-none");
+    w.transcript("aaa", "/srv/a", "one", 5);
+    w.transcript("bbb", "/srv/b", "two", 50);
+    let mut app = w.app();
+    let t = Instant::now();
+    key(&mut app, 'a');
+    let small_idle = t.elapsed();
+
+    // Thousands of rows: the same two cases, and the parts of the second one told apart.
+    let mut w = World::new("perf-arch-big");
+    generate(&w.root, CONVERSATIONS);
+    let mut s = Scanner::load(&w.root, &w.cache);
+    s.scan(&mut |_| true);
+    s.save();
+    let busy_id = "00000100-aaaa-bbbb-cccc-dddddddddddd";
+    let pid = w.live_slow_exit(busy_id, "/work/proj-0", 1, "idle", 1.5);
+    let mut app = w.app();
+    app.refresh_with(vec![hosted(pid)], true);
+    app.selected = app.visible().iter().position(|&i| app.sessions[i].id == busy_id).unwrap();
+    let t = Instant::now();
+    key(&mut app, 'a');
+    let big_running = t.elapsed();
+    assert_eq!(app.visible().len(), CONVERSATIONS - JUNK - 1);
+    assert!(crate::testkit::alive(pid), "still shutting down when the key press has returned");
+    assert!(app.settle_stops_for_test(Duration::from_secs(10)));
+    let t = Instant::now();
+    app.reload_for_test();
+    let reload = t.elapsed();
+    app.selected = 200;
+    let t = Instant::now();
+    key(&mut app, 'a');
+    let big_idle = t.elapsed();
+    assert_eq!(app.visible().len(), CONVERSATIONS - JUNK - 2);
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let t = Instant::now();
+    term.draw(|f| crate::ui::draw(f, &app)).unwrap();
+    let frame = t.elapsed();
+    println!("archive key: {small_running:?} (a few rows, process 1.5 s to exit), {small_idle:?} (a few rows, nothing running)");
+    println!("archive key: {big_running:?} ({CONVERSATIONS} rows, process 1.5 s to exit), {big_idle:?} ({CONVERSATIONS} rows, nothing running; a reload alone {reload:?}, a frame {frame:?})");
+    for (what, took) in [("small running", small_running), ("small idle", small_idle), ("big running", big_running), ("big idle", big_idle)] {
+        assert!(took < limit, "{what}: the archive key took {took:?}");
+    }
+}
