@@ -1021,7 +1021,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 
     let count = if kind.narrows_list {
         draw_quick_rows(f, app, list);
-        format!("{} shown", app.visible().len())
+        if app.search_rows_hidden() { String::new() } else { format!("{} shown", app.visible().len()) }
     } else {
         draw_result_rows(f, app, list);
         match (s.results.len(), s.total) {
@@ -1031,6 +1031,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
             (n, _) => format!("{n} found"),
         }
     };
+    // Whatever the results area holds, a click on its empty part is not a click outside the dialog.
+    app.hits.borrow_mut().push((list, Hit::Inert));
     let (enter, esc) = if kind.narrows_list {
         ("keep filter", "clear")
     } else if s.kind == FIND_KIND {
@@ -1064,7 +1066,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let visible = app.visible();
-    if visible.is_empty() {
+    // Nothing is listed until something is typed: the box's own hint stands in the empty area.
+    if app.search_rows_hidden() || visible.is_empty() {
         let msg = if app.search.text.trim().is_empty() { SEARCH_KINDS[0].prompt } else { "No sessions match the filter" };
         f.render_widget(Paragraph::new(msg).style(Style::new().fg(t.dim)), area);
         return;

@@ -1139,6 +1139,12 @@ impl App {
         if SEARCH_KINDS[self.search.kind].narrows_list { self.selected } else { self.search.selected }
     }
 
+    /// The quick filter lists nothing until something is typed (an empty filter narrows nothing, so the rows would
+    /// only be the whole list again). The results of the other kinds are empty by themselves then.
+    pub fn search_rows_hidden(&self) -> bool {
+        SEARCH_KINDS[self.search.kind.min(SEARCH_KINDS.len() - 1)].narrows_list && self.search.text.is_empty()
+    }
+
     fn select_search_row(&mut self, i: usize) {
         if SEARCH_KINDS[self.search.kind].narrows_list {
             self.selected = i;
@@ -1148,6 +1154,10 @@ impl App {
     }
 
     fn move_search(&mut self, delta: i32) {
+        // Nothing is listed, so there is nothing to move over (and the list behind must not move unseen).
+        if self.search_rows_hidden() {
+            return;
+        }
         if SEARCH_KINDS[self.search.kind].narrows_list {
             self.move_selection(delta);
         } else {
@@ -1844,6 +1854,8 @@ impl App {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
+                    // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
+                    Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}
                     // As in the list: clicking the highlighted result again takes it.
                     Some(Hit::SearchRow(i)) if i == self.search_selected() => self.act(Action::Confirm),
                     Some(Hit::SearchRow(i)) => self.select_search_row(i),

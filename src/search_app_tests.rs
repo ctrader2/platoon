@@ -155,11 +155,15 @@ fn enter_keeps_the_filter_esc_clears_it_and_the_dialog_opens_on_what_is_kept() {
 fn up_and_down_move_the_highlight_in_the_list_and_a_paste_lands_in_the_box() {
     let (_w, mut app) = four("s-move");
     key(&mut app, KeyCode::Char('/'));
+    // Something has to be typed before there is anything listed to move over.
+    type_str(&mut app, "s");
+    assert_eq!(app.visible().len(), 4, "the letter is in every folder name, so all four are listed");
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Down);
     assert_eq!(app.selected, 2);
     key(&mut app, KeyCode::Up);
     assert_eq!(app.selected, 1);
+    ctrl(&mut app, 'u');
     app.on_paste("alp\nha");
     assert_eq!((app.search.text.as_str(), app.filter.as_str(), app.selected), ("alpha", "alpha", 0), "line breaks dropped, list narrowed");
     assert_eq!(app.visible().len(), 1);
@@ -406,6 +410,157 @@ fn the_footer_button_and_the_click_open_the_dialog_and_quick_rows_can_be_clicked
     assert_eq!(app.selected, 2);
     click(&mut app, row.x + 3, row.y);
     assert!(matches!(app.mode, Mode::List) && app.filter == "s", "a second click keeps the filter and closes");
+}
+
+// ---- the quick filter lists nothing until something is typed ----
+
+/// The text of the dialog's results area (between its separator line and its footer line), one string per row, and
+/// the rectangle of the area, for the screen the app draws now.
+fn results_area(term: &mut Terminal<TestBackend>, app: &App) -> (Vec<String>, Rect) {
+    let shown = screen(term, app);
+    let (left, top) = find(&shown, "╭ Search");
+    let lines: Vec<&str> = shown.lines().collect();
+    let sep = (top as usize + 1..lines.len()).find(|&r| lines[r].chars().skip(left as usize + 3).take(10).all(|c| c == '─')).expect("separator");
+    let foot = (sep + 1..lines.len()).find(|&r| lines[r].contains("esc ")).expect("footer");
+    let width = lines[top as usize].chars().skip(left as usize).position(|c| c == '╮').expect("top right corner") as u16 + 1;
+    let rows = (sep + 1..foot).map(|r| lines[r].chars().skip(left as usize + 1).take(width as usize - 2).collect::<String>()).collect();
+    (rows, Rect::new(left + 1, sep as u16 + 1, width - 2, (foot - sep - 1) as u16))
+}
+
+/// Every cell of the results area has the plain dialog background and nothing but the hint is written in it.
+fn assert_no_rows(term: &mut Terminal<TestBackend>, app: &App, hint: &str) {
+    let (rows, area) = results_area(term, app);
+    let text: Vec<String> = rows.iter().map(|r| r.trim().to_string()).filter(|r| !r.is_empty()).collect();
+    assert_eq!(text, [hint], "only the hint is in the results area: {rows:?}");
+    let buf = term.backend().buffer();
+    let t = &app.theme;
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            let c = &buf[(x, y)];
+            assert!(c.bg != t.surface && c.symbol() != "▎", "a highlighted row at ({x},{y})");
+        }
+    }
+}
+
+#[test]
+fn the_quick_filter_lists_nothing_until_a_character_is_typed_and_nothing_again_when_the_box_is_emptied() {
+    let (_w, mut app) = four("s-noprelist");
+    let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+    key(&mut app, KeyCode::Char('/'));
+    assert!(app.search_rows_hidden());
+    assert_no_rows(&mut term, &app, "Type to narrow the list.");
+    let shown = screen(&mut term, &app);
+    assert!(!shown.contains(" shown"), "no count of rows that are not listed\n{shown}");
+    assert!(!app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::SearchRow(_))), "no row to click");
+    assert_eq!(app.visible().len(), 4, "the list behind still shows every conversation: an empty filter narrows nothing");
+    // The list behind is drawn as it always was (its rows are on the screen at the sides of the dialog).
+    assert!(shown.contains("alpha") || shown.contains("/srv/alpha") || shown.contains("aaaaaaaa"), "{shown}");
+
+    // One character: the narrowed rows, as before.
+    type_str(&mut app, "d");
+    let shown = screen(&mut term, &app);
+    assert!(!app.search_rows_hidden() && shown.contains("4 shown"), "{shown}");
+    let (rows, _) = results_area(&mut term, &app);
+    assert_eq!(rows.iter().filter(|r| r.contains("/srv/")).count(), 4, "{rows:?}");
+    assert!(app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::SearchRow(3))));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.selected, 2);
+
+    // Deleting back to empty hides them again and the highlight starts over.
+    key(&mut app, KeyCode::Backspace);
+    assert_eq!((app.selected, app.search.selected, app.filter.as_str()), (0, 0, ""));
+    assert_no_rows(&mut term, &app, "Type to narrow the list.");
+    assert_eq!(app.visible().len(), 4);
+
+    // Ctrl+U does the same.
+    type_str(&mut app, "delta");
+    let (rows, _) = results_area(&mut term, &app);
+    assert_eq!(rows.iter().filter(|r| r.contains("/srv/")).count(), 1, "{rows:?}");
+    ctrl(&mut app, 'u');
+    assert_no_rows(&mut term, &app, "Type to narrow the list.");
+    // A paste is a typing too.
+    app.on_paste("beta");
+    let (rows, _) = results_area(&mut term, &app);
+    assert_eq!(rows.iter().filter(|r| r.contains("/srv/beta")).count(), 1, "{rows:?}");
+}
+
+#[test]
+fn with_nothing_listed_the_movement_keys_the_wheel_and_clicks_do_nothing_and_enter_closes_without_a_filter() {
+    let (_w, mut app) = four("s-noprelist-keys");
+    let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+    // The list's own highlight (second row) is where the user left it and stays there.
+    key(&mut app, KeyCode::Down);
+    let before = app.selected_session().unwrap().id.clone();
+    key(&mut app, KeyCode::Char('/'));
+    screen(&mut term, &app);
+    for code in [KeyCode::Down, KeyCode::Down, KeyCode::PageDown, KeyCode::PageDown, KeyCode::Up, KeyCode::PageUp] {
+        key(&mut app, code);
+        assert!(matches!(app.mode, Mode::Search));
+        assert_eq!(app.selected_session().unwrap().id, before, "no hidden row was selected");
+    }
+    for kind in [MouseEventKind::ScrollDown, MouseEventKind::ScrollDown, MouseEventKind::ScrollUp] {
+        app.on_mouse(MouseEvent { kind, column: 30, row: 14, modifiers: KeyModifiers::NONE });
+    }
+    assert_eq!(app.selected_session().unwrap().id, before);
+    // Clicks all over the results area (and a stale row from an earlier frame) neither select, nor keep, nor close.
+    let (_, area) = results_area(&mut term, &app);
+    let list = hit_rect(&app, |h| matches!(h, Hit::Inert));
+    assert!(area.contains(list.as_position()) && list.height == area.height, "the empty area is a panel that swallows clicks");
+    for (dx, dy) in [(0, 0), (3, 0), (10, 1), (list.width - 1, list.height - 1)] {
+        click(&mut app, list.x + dx, list.y + dy);
+        assert!(matches!(app.mode, Mode::Search), "a click in the empty area keeps the dialog open");
+        assert_eq!(app.selected_session().unwrap().id, before);
+    }
+    app.hits.borrow_mut().insert(0, (list, Hit::SearchRow(2)));
+    click(&mut app, list.x + 3, list.y);
+    assert!(matches!(app.mode, Mode::Search) && app.selected_session().unwrap().id == before);
+    // Enter closes; nothing is kept, nothing is jumped to.
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List) && app.filter.is_empty() && app.tab == 0);
+    assert_eq!((app.visible().len(), app.selected_session().unwrap().id.clone()), (4, before.clone()));
+    // Esc closes just the same.
+    key(&mut app, KeyCode::Char('/'));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List) && app.filter.is_empty());
+    // A click outside the dialog still closes it.
+    key(&mut app, KeyCode::Char('/'));
+    screen(&mut term, &app);
+    click(&mut app, 1, 1);
+    assert!(matches!(app.mode, Mode::List));
+}
+
+#[test]
+fn tab_to_full_text_and_back_keeps_the_rule_and_full_text_also_lists_nothing_until_typed() {
+    let (_w, mut app) = four("s-noprelist-tab");
+    let mut term = Terminal::new(TestBackend::new(110, 32)).unwrap();
+    key(&mut app, KeyCode::Char('/'));
+    key(&mut app, KeyCode::Tab);
+    assert!(!app.search_rows_hidden(), "the rule is the quick filter's; Full-text has no results of its own to hide");
+    assert!(app.search.results.is_empty());
+    assert_no_rows(&mut term, &app, "Type words you asked Claude about, in any order.");
+    key(&mut app, KeyCode::Tab);
+    assert_no_rows(&mut term, &app, "Type to narrow the list.");
+    // With words typed: Full-text lists what it found, the quick filter its rows; empty again on both.
+    type_str(&mut app, "docker");
+    let (rows, _) = results_area(&mut term, &app);
+    assert_eq!(rows.iter().filter(|r| r.contains("/srv/")).count(), 2);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(found(&app).len(), 3);
+    ctrl(&mut app, 'u');
+    assert_no_rows(&mut term, &app, "Type words you asked Claude about, in any order.");
+    key(&mut app, KeyCode::Tab);
+    assert_no_rows(&mut term, &app, "Type to narrow the list.");
+    // Full-text with the box empty: the keys and Enter do nothing harmful either.
+    key(&mut app, KeyCode::Tab);
+    for code in [KeyCode::Down, KeyCode::PageDown, KeyCode::Enter] {
+        key(&mut app, code);
+    }
+    assert!(matches!(app.mode, Mode::Search) && app.search.selected == 0);
+    // Typing straight into the quick filter after a Tab round trip narrows again.
+    key(&mut app, KeyCode::Tab);
+    type_str(&mut app, "kub");
+    assert_eq!(names(&app), ["dddddddd-0000"]);
 }
 
 // ---- what is drawn ----

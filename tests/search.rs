@@ -78,9 +78,29 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     t.send(b"/");
     t.wait_for("╭ Search");
     t.wait_for("Narrows the list by name, folder, branch and description.");
+    // With an empty box nothing is listed in the dialog: only the hint, in the empty results area (the list
+    // behind still has both rows, at the dialog's sides).
+    t.wait_for("Type to narrow the list.");
+    t.wait_for_flat("esc clear"); // (the footer of a frame can arrive after its rows)
+    let text = t.text();
+    let lines: Vec<&str> = text.lines().collect();
+    let top = lines.iter().position(|l| l.contains("╭ Search")).unwrap();
+    let left = lines[top].chars().position(|c| c == '╭').unwrap();
+    let inside = |l: &str| l.chars().skip(left + 2).take(70).collect::<String>();
+    let sep = (top..lines.len()).find(|&r| inside(lines[r]).starts_with("──────")).expect("separator");
+    let foot = (sep..lines.len()).find(|&r| lines[r].contains("esc clear")).expect("footer");
+    for r in sep + 1..foot {
+        let row = inside(lines[r]);
+        assert!(!row.contains("alpha") && !row.contains("beta") && !row.contains("/work/") && !row.contains("ago"), "row text in the empty results area: {row:?}\n{text}");
+    }
+    assert!(!text.contains(" shown"), "{text}");
     // Typing right away narrows the list at once (the words are ones that are keys elsewhere, too).
     t.send(b"alp");
-    t.wait_for_flat("2 shown"); // both are in the dialog's list until the words narrow it: alpha alone soon
+    t.wait_for_flat("1 shown");
+    // Deleting the box empty takes the rows away again.
+    t.send(b"\x7f\x7f\x7f");
+    t.wait_for("Type to narrow the list.");
+    t.send(b"alp");
     t.wait_for_flat("1 shown");
     t.wait_for("❯ alp");
     t.send(b"\r");

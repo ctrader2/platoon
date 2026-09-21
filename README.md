@@ -61,7 +61,9 @@ WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set 
 are on; `tab` (or a click on its name) switches between them and keeps what you typed.
 
 - **Quick filter** (the one it opens on): narrows the list as you type, by name, folder, branch and description. `enter` keeps the
-  filter and closes the dialog; `esc` clears it and closes. (In the list, `esc` also clears a kept filter.)
+  filter and closes the dialog; `esc` clears it and closes. (In the list, `esc` also clears a kept filter.) The dialog lists nothing
+  until you type: with an empty box the results area is empty (the list behind still shows everything, and `enter` just closes the
+  dialog), and the narrowed rows appear with the first character and go away again if you delete it.
 - **Full-text**: finds conversations by the words you typed in them, in every conversation, archived ones too. Every word must be
   there, in any order and in any case, and a word matches inside a longer one (`migrat` finds `migration`). Words spread over
   different messages of the same conversation count. Each result shows the conversation's name and, under it, the matching message
