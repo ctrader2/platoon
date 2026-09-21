@@ -270,16 +270,61 @@ pub fn saved_session_ids(root: &Path) -> Vec<String> {
 pub fn pid_alive(pid: u32) -> bool {
     // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
     let exists = unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) };
-    exists && !is_zombie(pid)
+    alive_verdict(exists, read_proc_stat(pid))
 }
 
-/// A process that has exited but not yet been reaped by its parent still answers signal 0, though it
-/// is gone as far as anyone using it is concerned. (Linux only; elsewhere it counts as alive.)
-fn is_zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|s| s.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next().map(|st| st == "Z")))
-        .unwrap_or(false)
+/// What reading `/proc/<pid>/stat` came to.
+#[derive(Debug, PartialEq)]
+enum StatRead {
+    /// No `/proc` on this platform (macOS), or it is not mounted: the file says nothing either way.
+    NoProc,
+    /// The process vanished under us: the file is gone (NotFound), or the kernel refused the read because
+    /// the process was ending (ESRCH, "No such process": it shows up as an unclassified error, not NotFound).
+    Vanished,
+    /// Some other trouble reading (permission, ...).
+    Unreadable,
+    Text(String),
+}
+
+fn read_proc_stat(pid: u32) -> StatRead {
+    if !cfg!(target_os = "linux") {
+        return StatRead::NoProc;
+    }
+    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+        Ok(s) => StatRead::Text(s),
+        Err(e) => classify_read_error(&e, std::path::Path::new("/proc/self/stat").exists()),
+    }
+}
+
+fn classify_read_error(e: &std::io::Error, proc_is_there: bool) -> StatRead {
+    if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH) {
+        // Every pid looks "not found" when /proc is not mounted at all: then we cannot tell.
+        if proc_is_there { StatRead::Vanished } else { StatRead::NoProc }
+    } else {
+        StatRead::Unreadable
+    }
+}
+
+/// The decision behind `pid_alive`, kept pure so the race can be tested without timing.
+///
+/// A process that has exited stays a zombie (state `Z`) until its parent reaps it, and a zombie still
+/// answers signal 0, though it is gone as far as anyone using it is concerned. And if the parent reaps it
+/// between our signal 0 and our read of `/proc/<pid>/stat`, the read fails (NotFound or ESRCH): that also
+/// means gone (reading it as "not a zombie, so alive" made a dead process look alive for one call). Any
+/// other read error (say, permission), an unparseable line, or no `/proc` at all (macOS) leaves what the
+/// signal said: it exists.
+fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
+    if !exists_per_kill {
+        return false;
+    }
+    match stat {
+        StatRead::NoProc | StatRead::Unreadable => true,
+        StatRead::Vanished => false,
+        StatRead::Text(s) => {
+            let state = s.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_owned));
+            !matches!(state.as_deref(), Some("Z" | "X" | "x"))
+        }
+    }
 }
 
 pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
@@ -532,6 +577,58 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stat(state: &str) -> StatRead {
+        StatRead::Text(format!("123 (a b) c) {state} 1 123 123 0 -1"))
+    }
+
+    #[test]
+    fn liveness_is_decided_by_the_signal_and_then_the_state_line() {
+        use StatRead::{NoProc, Unreadable, Vanished};
+        // Not there per the signal: never alive, whatever the state file says.
+        assert!(!alive_verdict(false, stat("S")));
+        for r in [NoProc, Vanished, Unreadable, StatRead::Text(String::new())] {
+            assert!(!alive_verdict(false, r));
+        }
+        // There, and running, sleeping, waiting: alive (comm with spaces and a ')' is parsed past).
+        for st in ["R", "S", "D", "T", "t", "I"] {
+            assert!(alive_verdict(true, stat(st)), "{st}");
+        }
+        // There but a zombie or dead: gone.
+        for st in ["Z", "X", "x"] {
+            assert!(!alive_verdict(true, stat(st)), "{st}");
+        }
+        // The race: the signal worked, then the parent reaped it before we read the state (file gone, or
+        // the kernel said ESRCH): gone.
+        assert!(!alive_verdict(true, Vanished));
+        // Other read trouble, or a line we cannot read, or no /proc (macOS): the signal stands.
+        assert!(alive_verdict(true, Unreadable));
+        assert!(alive_verdict(true, StatRead::Text("garbage".into())));
+        assert!(alive_verdict(true, StatRead::Text(String::new())));
+        assert!(alive_verdict(true, NoProc));
+    }
+
+    #[test]
+    fn a_failed_read_of_the_state_file_is_sorted_into_gone_or_unknown() {
+        use std::io::{Error, ErrorKind};
+        let esrch = Error::from_raw_os_error(libc::ESRCH);
+        assert_eq!(classify_read_error(&Error::from(ErrorKind::NotFound), true), StatRead::Vanished);
+        assert_eq!(classify_read_error(&esrch, true), StatRead::Vanished, "the kernel says ESRCH for a process that is ending");
+        assert_eq!(classify_read_error(&Error::from(ErrorKind::NotFound), false), StatRead::NoProc, "no /proc: cannot tell");
+        assert_eq!(classify_read_error(&Error::from(ErrorKind::PermissionDenied), true), StatRead::Unreadable);
+        assert_eq!(classify_read_error(&Error::from_raw_os_error(libc::EIO), true), StatRead::Unreadable);
+    }
+
+    #[test]
+    fn pid_alive_tells_a_running_process_from_a_reaped_one() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        assert!(pid_alive(pid));
+        child.kill().unwrap();
+        child.wait().unwrap(); // reaped: gone for good
+        assert!(!pid_alive(pid));
+        assert!(pid_alive(std::process::id()));
+    }
 
     #[test]
     fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
