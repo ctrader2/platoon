@@ -8,7 +8,7 @@
 //! Scanning runs on a background thread (`Indexer::spawn`) and streams results back in batches, newest
 //! files first, so the list fills in while the UI is already usable.
 
-use crate::claude::{read_transcript, Transcript};
+use crate::claude::{read_transcript, Hidden, Transcript};
 use serde_json::{json, Map, Value};
 use std::{
     collections::{HashMap, HashSet},
@@ -251,6 +251,11 @@ pub struct Indexer {
     /// The first scan of this run has finished and been taken in: `entries` now matches the disk, rather
     /// than what an older run saved. Anything that acts on how old a conversation is waits for this.
     pub first_scan_done: bool,
+    /// Transcripts recorded in this folder are not conversations (platoon's own helper), so they never enter
+    /// `entries`. The scanner still keeps them, so an unchanged file isn't read again on every pass.
+    hidden: Option<Hidden>,
+    /// Working folder -> is it hidden, so each distinct folder is looked at once.
+    hidden_memo: HashMap<String, bool>,
 }
 
 impl Indexer {
@@ -276,7 +281,7 @@ impl Indexer {
                 while woken.try_recv().is_ok() {}
             }
         });
-        Self { backend: Backend::Thread { rx, wake, busy }, entries, generation: 1, remaining: 0, first_scan_done: false }
+        Self { backend: Backend::Thread { rx, wake, busy }, entries, generation: 1, remaining: 0, first_scan_done: false, hidden: None, hidden_memo: HashMap::new() }
     }
 
     /// Scan on the calling thread on every poll.
@@ -284,7 +289,25 @@ impl Indexer {
     pub fn inline(claude_root: &Path, cache: &Path) -> Self {
         let scanner = Scanner::load(claude_root, cache);
         let entries = scanner.entries().into_iter().map(|e| (e.path.clone(), e)).collect();
-        Self { backend: Backend::Inline(scanner), entries, generation: 1, remaining: 0, first_scan_done: false }
+        Self { backend: Backend::Inline(scanner), entries, generation: 1, remaining: 0, first_scan_done: false, hidden: None, hidden_memo: HashMap::new() }
+    }
+
+    /// Leave out every transcript whose working folder is (inside) `dir`, now and from here on.
+    pub fn hide(&mut self, dir: Hidden) {
+        self.hidden = Some(dir);
+        self.hidden_memo.clear();
+        let doomed: Vec<PathBuf> = self.entries.values().filter(|e| self.is_hidden(e)).map(|e| e.path.clone()).collect();
+        if !doomed.is_empty() {
+            for p in doomed {
+                self.entries.remove(&p);
+            }
+            self.generation += 1;
+        }
+    }
+
+    fn is_hidden(&self, e: &Entry) -> bool {
+        let (Some(h), Some(cwd)) = (&self.hidden, &e.t.cwd) else { return false };
+        self.hidden_memo.get(cwd).copied().unwrap_or_else(|| h.covers(cwd))
     }
 
     /// True while a scan is reading files (or the first one is still listing them).
@@ -331,6 +354,15 @@ impl Indexer {
                 }
             }
             for e in u.upserts {
+                if let (Some(h), Some(cwd)) = (&self.hidden, &e.t.cwd) {
+                    let hidden = *self.hidden_memo.entry(cwd.clone()).or_insert_with(|| h.covers(cwd));
+                    if hidden {
+                        if self.entries.remove(&e.path).is_some() {
+                            self.generation += 1;
+                        }
+                        continue;
+                    }
+                }
                 self.entries.insert(e.path.clone(), e);
                 self.generation += 1;
             }
@@ -521,5 +553,41 @@ mod tests {
         assert!(cache.join("index.json").exists());
         let again = Indexer::spawn(&root, &cache);
         assert_eq!(again.entries.len(), 200);
+    }
+
+    #[test]
+    fn transcripts_recorded_in_a_hidden_folder_never_enter_the_entries_and_a_similar_folder_does() {
+        let d = tmp("hidden");
+        let (root, cache) = (d.join("claude"), d.join("cache"));
+        let line = |cwd: &str| format!(r#"{{"type":"user","cwd":"{cwd}","timestamp":"2026-09-19T03:53:40.091Z","message":{{"role":"user","content":"a real prompt"}}}}"#);
+        let work = cache.join("ai-work");
+        fs::create_dir_all(&work).unwrap();
+        write(&root, "-a", "helper", &[line(&work.display().to_string())]);
+        write(&root, "-b", "near", &[line(&format!("{}-2", work.display()))]);
+        write(&root, "-c", "real", &[line("/work/real")]);
+        let ids = |ix: &Indexer| {
+            let mut v: Vec<String> = ix.entries.values().map(|e| e.id.clone()).collect();
+            v.sort();
+            v
+        };
+        // Hidden after the saved index was loaded: purged at once.
+        let mut ix = Indexer::inline(&root, &cache);
+        ix.poll();
+        assert_eq!(ids(&ix), ["helper", "near", "real"]);
+        let before = ix.generation;
+        ix.hide(Hidden::new(&work));
+        assert_eq!(ids(&ix), ["near", "real"]);
+        assert!(ix.generation > before, "the list is rebuilt");
+        // Later scans, changed file included, keep it out.
+        write(&root, "-a", "helper", &[line(&work.display().to_string()), line(&work.display().to_string())]);
+        write(&root, "-d", "helper2", &[line(&work.join("x/..").display().to_string())]);
+        ix.poll();
+        assert_eq!(ids(&ix), ["near", "real"]);
+        // A fresh indexer that reads the saved index (which knows all four files) hides them from the start.
+        let mut again = Indexer::inline(&root, &cache);
+        again.hide(Hidden::new(&work));
+        again.poll();
+        assert_eq!(ids(&again), ["near", "real"]);
+        let _ = fs::remove_dir_all(&d);
     }
 }

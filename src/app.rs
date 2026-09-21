@@ -432,7 +432,13 @@ impl App {
     }
 
     /// `threaded`: the prompt index reads in the background (the real thing) rather than on the calling thread (tests).
-    fn build(reader: Reader, cache: PathBuf, config: PathBuf, indexer: Indexer, threaded: bool) -> Self {
+    fn build(mut reader: Reader, cache: PathBuf, config: PathBuf, mut indexer: Indexer, threaded: bool) -> Self {
+        // platoon's own `claude -p` helper runs in one folder of ours. It registers itself like any session, but it is
+        // not a conversation: dropped here, at the two doors (running processes and saved transcripts), so nothing
+        // downstream (rows, counts, search, naming, archive) ever sees it.
+        let helper = claude::Hidden::new(&ai::work_dir(&cache));
+        reader.hide(helper.clone());
+        indexer.hide(helper);
         let settings = SettingsStore::open(&config);
         let prompt_cap = settings.get().search_prompt_chars as usize;
         #[cfg(test)]

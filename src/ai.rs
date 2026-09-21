@@ -8,8 +8,12 @@
 //! - The call is `claude -p` with the user's normal login: no tools, no settings, no saved session, no slash
 //!   commands, no MCP servers, a SHORT system prompt supplied by the caller and low effort (Claude's own system
 //!   prompt alone costs ~6,600 tokens a call). Never `--bare`: it needs an API key, which subscribers don't have.
-//! - It always runs in one fixed neutral folder (`<cache dir>/ai-work`) with `PLATOON_AI=1` in its environment,
-//!   because Claude makes an empty folder under `~/.claude/projects` for every working directory it is run in.
+//! - It always runs in one fixed neutral folder (`work_dir`: `<cache dir>/ai-work`) with `PLATOON_AI=1` in its
+//!   environment, because Claude makes an empty folder under `~/.claude/projects` for every working directory it is
+//!   run in. The child registers itself with Claude like any session, so platoon hides everything whose working
+//!   folder is that one (`claude::Hidden`): it is never a row, a count or a candidate.
+//! - `MAX_THINKING_TOKENS=0` is set in the child's environment: `--effort low` alone still let the model spend hidden
+//!   thinking tokens (a batch of 4 conversations cost 2,137 output tokens where the JSON needs about 250).
 //! - The prompt goes in on stdin, so a big batch can't hit the limit on argument length.
 //! - The runner only ever kills the process it started (and what that process started, which shares its process
 //!   group). Turning a switch off cancels the calls of that feature that are running (`Switchboard`).
@@ -508,6 +512,12 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
     Outcome { result, usage, cost_usd }
 }
 
+/// The one folder every call runs in, under platoon's cache folder. Defined here only: whatever must recognise or
+/// hide the runner's own sessions asks for it.
+pub fn work_dir(cache: &Path) -> PathBuf {
+    cache.join("ai-work")
+}
+
 /// Runs `claude -p` for a request, honoring every gate. Cheap to make; blocking; use it from a thread.
 pub struct Runner {
     program: String,
@@ -538,7 +548,7 @@ impl Runner {
 
     /// The folder every call runs in.
     pub fn work_dir(&self) -> PathBuf {
-        self.cache.join("ai-work")
+        work_dir(&self.cache)
     }
 
     /// The real `claude` must never be reached by a test: in unit tests it panics, and in a test run of the binary
@@ -574,6 +584,8 @@ impl Runner {
             .args(["--system-prompt", req.system.as_str(), "--effort", "low", "--output-format", "json"])
             .current_dir(&work)
             .env("PLATOON_AI", "1")
+            // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
+            .env("MAX_THINKING_TOKENS", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -1232,6 +1244,7 @@ pub(crate) mod tests {
         let cwd = f.rec("cwd");
         assert_eq!(fs::canonicalize(cwd.trim()).unwrap(), fs::canonicalize(f.cache.join("ai-work")).unwrap(), "always the neutral folder");
         assert!(f.rec("env").lines().any(|l| l == "PLATOON_AI=1"), "{}", f.rec("env"));
+        assert!(f.rec("env").lines().any(|l| l == "MAX_THINKING_TOKENS=0"), "{}", f.rec("env"));
     }
 
     #[test]

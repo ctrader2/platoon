@@ -71,8 +71,53 @@ pub fn short_id(session_id: &str) -> String {
     session_id.chars().take(8).collect()
 }
 
+/// A working folder whose sessions are not conversations to show: the folder platoon's own `claude -p` calls run in.
+/// A process registered there, or a transcript recorded there, is platoon's own helper, never something the user
+/// opened. Compared after resolving `.`, `..` and symlinks, so a different spelling of the same folder still counts,
+/// while a folder that only has a similar name (`ai-work-2`, or `ai-work` somewhere else) does not.
+#[derive(Clone, Debug)]
+pub struct Hidden {
+    resolved: PathBuf,
+}
+
+impl Hidden {
+    pub fn new(dir: &Path) -> Hidden {
+        Hidden { resolved: resolve_path(dir) }
+    }
+
+    /// Is `cwd` this folder, or somewhere inside it?
+    pub fn covers(&self, cwd: &str) -> bool {
+        !cwd.is_empty() && resolve_path(Path::new(cwd)).starts_with(&self.resolved)
+    }
+}
+
+/// `p` with symlinks and `..` resolved as far as it exists; the part that doesn't exist (yet, or any more) is
+/// tidied up in writing only.
+fn resolve_path(p: &Path) -> PathBuf {
+    use std::path::Component;
+    if let Ok(c) = fs::canonicalize(p) {
+        return c;
+    }
+    let comps: Vec<Component> = p.components().collect();
+    let (mut out, from) = (0..comps.len())
+        .rev()
+        .find_map(|k| fs::canonicalize(comps[..k].iter().collect::<PathBuf>()).ok().filter(|_| k > 0).map(|c| (c, k)))
+        .unwrap_or_default();
+    for c in &comps[from..] {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 pub struct Reader {
     root: PathBuf,
+    hidden: Option<Hidden>,
 }
 
 impl Reader {
@@ -81,7 +126,12 @@ impl Reader {
     }
 
     pub fn with_root(root: PathBuf) -> Self {
-        Self { root }
+        Self { root, hidden: None }
+    }
+
+    /// Never report a process whose working folder is (inside) `dir`.
+    pub fn hide(&mut self, dir: Hidden) {
+        self.hidden = Some(dir);
     }
 
     pub fn root(&self) -> &Path {
@@ -89,7 +139,7 @@ impl Reader {
     }
 
     /// All live processes that run a conversation, oldest first: interactive ones and background sessions (see
-    /// `Live::background`). Several can share one session id.
+    /// `Live::background`). Several can share one session id. Not the ones in a hidden folder (`hide`).
     pub fn live(&self) -> Vec<Live> {
         let mut out = Vec::new();
         let Ok(entries) = fs::read_dir(self.root.join("sessions")) else { return out };
@@ -100,7 +150,7 @@ impl Reader {
             let Some(v) = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else {
                 continue;
             };
-            if let Some(l) = live_from(&v) {
+            if let Some(l) = live_from(&v).filter(|l| !self.hidden.as_ref().is_some_and(|h| h.covers(&l.cwd))) {
                 out.push(l);
             }
         }
@@ -663,5 +713,74 @@ mod transcript_tests {
         assert_eq!(reply_in_line(&asst(json!([{"type":"text","text":"   "}])), 200), None);
         assert_eq!(reply_in_line("not json", 200), None);
         assert_eq!(reply_in_line(&asst(json!("plain string")), 200).as_deref(), Some("plain string"));
+    }
+}
+
+#[cfg(test)]
+mod hidden_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+
+    fn tmp(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("platoon-hidden-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_folder_is_hidden_however_it_is_spelled_and_a_similar_name_is_not() {
+        let base = tmp("spell");
+        let work = base.join("cache/ai-work");
+        fs::create_dir_all(&work).unwrap();
+        fs::create_dir_all(base.join("cache/ai-work-2")).unwrap();
+        fs::create_dir_all(base.join("other/ai-work")).unwrap();
+        fs::create_dir_all(base.join("cache/x")).unwrap();
+        symlink(&work, base.join("link")).unwrap();
+        let h = Hidden::new(&work);
+        let s = |p: PathBuf| p.display().to_string();
+        for yes in [
+            s(work.clone()),
+            format!("{}/", work.display()),
+            s(base.join("cache/x/../ai-work")),
+            s(base.join("./cache/./ai-work")),
+            s(base.join("link")),
+            s(work.join("inside")),
+            s(base.join("link/deeper/still")),
+        ] {
+            assert!(h.covers(&yes), "{yes}");
+        }
+        for no in ["", "/", "relative/ai-work", &s(base.join("cache")), &s(base.join("cache/ai-work-2")), &s(base.join("other/ai-work")), &s(base.join("cache/ai-wor"))] {
+            assert!(!h.covers(no), "{no}");
+        }
+        // Hidden before the folder exists (nothing has been called yet).
+        let ahead = Hidden::new(&base.join("cache/not-yet/ai-work"));
+        assert!(ahead.covers(&s(base.join("cache/not-yet/ai-work"))) && ahead.covers(&s(base.join("cache/x/../not-yet/ai-work"))));
+        assert!(!ahead.covers(&s(base.join("cache/not-yet/ai-work-2"))));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn the_reader_leaves_out_live_processes_in_a_hidden_folder_and_keeps_the_rest() {
+        let base = tmp("reader");
+        let work = base.join("cache/ai-work");
+        fs::create_dir_all(work.join("sub")).unwrap();
+        fs::create_dir_all(base.join("cache/ai-work-2")).unwrap();
+        fs::create_dir_all(base.join("claude/sessions")).unwrap();
+        let me = std::process::id();
+        let write = |n: u32, id: &str, cwd: &Path, kind: &str| {
+            let v = serde_json::json!({"pid":me,"sessionId":id,"cwd":cwd,"kind":kind,"startedAt":n,"status":"busy","jobId":"abcd1234"});
+            fs::write(base.join("claude/sessions").join(format!("{n}.json")), v.to_string()).unwrap();
+        };
+        write(1, "helper", &work, "interactive");
+        write(2, "helper-bg", &work.join("sub"), "bg");
+        write(3, "near", &base.join("cache/ai-work-2"), "interactive");
+        write(4, "real", Path::new("/work/real"), "interactive");
+        let mut r = Reader::with_root(base.join("claude"));
+        let ids = |r: &Reader| r.live().into_iter().map(|l| l.id).collect::<Vec<_>>();
+        assert_eq!(ids(&r), ["helper", "helper-bg", "near", "real"], "shown while nothing is hidden");
+        r.hide(Hidden::new(&work));
+        assert_eq!(ids(&r), ["near", "real"]);
+        let _ = fs::remove_dir_all(&base);
     }
 }

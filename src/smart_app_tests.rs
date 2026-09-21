@@ -1391,3 +1391,152 @@ fn the_old_row_layout_is_unchanged_without_smart_features() {
     let footer = lines.iter().position(|l| l.contains("enter open")).unwrap();
     assert!(lines[footer - 1].trim_matches(|c| c == '│' || c == ' ').is_empty(), "no strip");
 }
+
+// ---- platoon's own helper is never a conversation --------------------------------------------------------------
+
+/// The ways the helper's folder can be written down (it exists, so `..` and the link resolve).
+fn helper_spellings(w: &World) -> Vec<String> {
+    let work = w.cache.join("ai-work");
+    fs::create_dir_all(&work).unwrap();
+    fs::create_dir_all(w.cache.join("x")).unwrap();
+    std::os::unix::fs::symlink(&work, w.base.join("link-to-work")).unwrap();
+    vec![
+        work.display().to_string(),
+        format!("{}/", work.display()),
+        w.cache.join("x/../ai-work").display().to_string(),
+        w.base.join("link-to-work").display().to_string(),
+    ]
+}
+
+#[test]
+fn the_helpers_own_process_is_no_row_no_count_and_no_badge_and_the_screen_does_not_change() {
+    let mut w = World::new("hid-live");
+    let now = usage::now();
+    w.live("real1", "/work/real1", now - 100, "busy");
+    w.live("real2", "/work/real2", now - 90, "idle");
+    simple(&w, "real3", "please look into the saved one", 300);
+    // Similar names are real folders and stay in the list.
+    fs::create_dir_all(w.cache.join("ai-work-2")).unwrap();
+    w.live("near1", &w.cache.join("ai-work-2").display().to_string(), now - 80, "idle");
+    w.live("near2", "/somewhere/else/ai-work", now - 70, "idle");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    app.refresh_for_test();
+    let ids = |app: &App| {
+        let mut v: Vec<String> = app.sessions.iter().map(|s| s.id.clone()).collect();
+        v.sort();
+        v
+    };
+    let before = (ids(&app), app.counts.clone(), screen(&mut term, &app));
+    assert_eq!(before.0, ["near1", "near2", "real1", "real2", "real3"]);
+    // The helper, once per spelling of its folder, busy (would be a working badge) and idle.
+    for (i, cwd) in helper_spellings(&w).iter().enumerate() {
+        w.live(&format!("helper-{i}"), cwd, now - 50 + i as u64, if i % 2 == 0 { "busy" } else { "idle" });
+    }
+    w.register_bg(std::process::id(), "helper-bg-0001", &w.cache.join("ai-work").display().to_string(), now - 40, "helper-b", false);
+    app.refresh_for_test();
+    app.refresh_for_test();
+    assert_eq!((ids(&app), app.counts.clone()), (before.0.clone(), before.1.clone()));
+    assert_eq!(screen(&mut term, &app), before.2, "the list looks exactly the same");
+    assert!(!app.sessions.iter().any(|s| s.id.starts_with("helper") || s.cwd.ends_with("/cache/ai-work")));
+}
+
+#[test]
+fn a_transcript_recorded_in_the_helpers_folder_is_no_row_no_search_hit_and_no_naming_candidate() {
+    let w = World::new("hid-transcript");
+    let mut spellings = helper_spellings(&w).into_iter();
+    // A real conversation and a decoy in a similarly named folder, both about "zebra".
+    simple(&w, "real", "please look into the zebra crossing bug", 300);
+    conv(&w, "decoy", &w.cache.join("ai-work-2").display().to_string(), &["please look into the zebra decoy"], "Done.", 400);
+    // The helper's own transcripts, one per spelling, all about "zebra" too, one of them archived by an old run.
+    for (i, cwd) in spellings.by_ref().enumerate() {
+        conv(&w, &format!("helper{i}"), &cwd, &["please look into the zebra helper prompt"], "Done.", 100 + i as u64);
+    }
+    archive(&w, &["helper3"]);
+    smart(&w, |s| s.ai_archived = true);
+    let fake = AiFake::new("hid-transcript");
+    let mut app = app_with(&w, &fake);
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let ids = |app: &App| {
+        let mut v: Vec<String> = app.sessions.iter().map(|s| s.id.clone()).collect();
+        v.sort();
+        v
+    };
+    assert_eq!(ids(&app), ["decoy", "real"]);
+    assert_eq!(app.counts, [2, 0], "the helper's archived one is not counted either");
+    assert!(!screen(&mut term, &app).contains("helper"));
+    // Estimate: only what could really be named.
+    let solo = {
+        let w2 = World::new("hid-transcript-solo");
+        simple(&w2, "real", "please look into the zebra crossing bug", 300);
+        conv(&w2, "decoy", &w2.cache.join("ai-work-2").display().to_string(), &["please look into the zebra decoy"], "Done.", 400);
+        w2.app().archived_estimate()
+    };
+    assert_eq!(app.archived_estimate(), solo);
+    // Full-text: the words are found in the two real ones only.
+    key(&mut app, KeyCode::Char('/'));
+    key(&mut app, KeyCode::Tab);
+    type_str(&mut app, "zebra");
+    let mut hits: Vec<String> = app.search.results.iter().map(|r| r.id.clone()).collect();
+    hits.sort();
+    assert_eq!(hits, ["decoy", "real"]);
+    // Describe it: nothing of the helper's is sent. (Call 1 named the conversations, call 2 is the search.)
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    app.settle_ai_for_test(10);
+    assert_eq!(fake.calls(), 2);
+    let all: String = (1..=fake.calls()).map(|k| fake.stdin(k)).collect::<Vec<_>>().join("\n");
+    assert!(!all.contains("helper prompt"), "{all}");
+    // Naming: two conversations, and after it the helper still is not a row.
+    let heads = fake.stdin(1).lines().filter(|l| l.starts_with('[')).count();
+    assert_eq!(heads, 2, "{}", fake.stdin(1));
+    assert_eq!(ids(&app), ["decoy", "real"]);
+}
+
+#[test]
+fn a_describe_search_does_not_offer_the_helpers_transcripts() {
+    let w = World::new("hid-find");
+    conv(&w, "real", "/work/real", &["please look into the zebra crossing bug"], "Done.", 300);
+    conv(&w, "helper", &w.cache.join("ai-work").display().to_string(), &["please look into the zebra helper prompt"], "Done.", 100);
+    smart(&w, |s| s.set_feature("names", false));
+    let fake = AiFake::new("hid-find");
+    let mut app = app_with(&w, &fake);
+    open_find(&mut app);
+    type_str(&mut app, "zebra");
+    key(&mut app, KeyCode::Enter);
+    app.settle_ai_for_test(10);
+    assert_eq!(fake.calls(), 1);
+    let sent = fake.stdin(1);
+    assert!(sent.contains("crossing bug") && !sent.contains("helper prompt"), "{sent}");
+    assert!(app.search.results.iter().all(|r| r.id == "real"));
+}
+
+#[test]
+fn auto_archive_never_reaches_the_helpers_old_transcript() {
+    let w = World::new("hid-auto");
+    w.settings(120, 1);
+    conv(&w, "old-real", "/work/real", &["please look into the old thing"], "Done.", 3 * 24 * 60 * 60 / 60 * 60);
+    conv(&w, "old-helper", &w.cache.join("ai-work").display().to_string(), &["please look into the helper thing"], "Done.", 3 * 24 * 60 * 60 / 60 * 60);
+    let mut app = w.app();
+    app.refresh_for_test();
+    let archived: Vec<String> = w.archive_file().map(|v| v.to_string()).into_iter().collect();
+    let text = archived.join("");
+    assert!(text.contains("old-real") && !text.contains("old-helper"), "{text}");
+    assert_eq!(app.counts, [0, 1]);
+}
+
+#[test]
+fn every_call_carries_the_no_thinking_and_helper_marks_in_its_environment() {
+    let w = World::new("hid-env");
+    simple(&w, "aaa", "please fix the login redirect", 300);
+    smart(&w, |_| {});
+    let fake = AiFake::new("hid-env");
+    let mut app = app_with(&w, &fake);
+    app.settle_ai_for_test(10);
+    let env = fake.env(1);
+    assert!(env.lines().any(|l| l == "MAX_THINKING_TOKENS=0") && env.lines().any(|l| l == "PLATOON_AI=1"), "{env}");
+    // Nothing else about the call changed: the same flags as before.
+    let argv = fake.argv(1);
+    assert_eq!(argv[..2], ["-p", "--model"]);
+    assert!(!argv.iter().any(|a| a.contains("thinking")), "{argv:?}");
+}

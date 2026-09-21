@@ -267,6 +267,9 @@ What keeps it safe, all enforced in one place before any call starts:
   `Smart features paused: <reason>` once, not once per failed call, and the worker looks again every 30 seconds without repeating itself.
 - **Small calls**: `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and low effort, run in
   `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only one), with `PLATOON_AI=1` set.
+  `MAX_THINKING_TOKENS=0` is set too, so the model doesn't spend hidden "thinking" tokens on a job that only needs a short answer (about
+  half the cost of a naming call). The helper Claude process that runs there is platoon's own: it is never shown as a conversation (not in
+  the list, the counts, search or naming, whatever it is doing).
 
 `platoon tokens` shows whether the features are on and today's total. `platoon tokens test` makes one tiny call the same way a feature would
 (master switch on, the daily limit, the plan pause and back-off all apply) and prints the reply, the tokens, the cost Claude reports and today's total; if a
