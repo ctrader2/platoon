@@ -1,4 +1,4 @@
-use crate::app::{Action, AdoptKind, App, Confirm, FindState, Hit, Mode, Page, FIND_KIND, SEARCH_KINDS, TABS};
+use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, Hit, Mode, NamePurpose, PStat, Page, Pane, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::select::{Selection, Span as Cells};
@@ -62,10 +62,11 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
-    // tall enough to keep at least three rows of the list beside it.
-    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty());
+    // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
+    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none());
     let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
-    let [header, rule, cols, list, strip, footer] = Layout::vertical([
+    let [header, rule, shelf, cols, list, strip, footer] = Layout::vertical([
+        Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -80,43 +81,51 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
-    draw_columns(f, t, cols);
-    let visible = app.visible();
-    if visible.is_empty() {
-        let tab = &TABS[app.tab.min(TABS.len() - 1)];
-        let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
-            "No sessions match the filter"
-        } else if app.indexing().is_some() {
-            "Reading your conversations…"
+    let hints: Vec<Hint> = if app.open_project.is_some() {
+        draw_project_screen(f, app, shelf, Rect::new(cols.x, cols.y, cols.width, list.bottom() - cols.y));
+        project_screen_hints(app)
+    } else if app.projects_list_showing() {
+        let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
+        draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
+        draw_project_columns(f, t, cols);
+        if app.project_rows().is_empty() {
+            let msg = if app.pcounts[app.ptab.min(1)] > 0 { "No projects match the filter" } else { PTABS[app.ptab.min(1)].1 };
+            let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
+            f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
         } else {
-            tab.empty
-        };
-        let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
-        f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
+            draw_project_list(f, app, list);
+        }
+        projects_hints(app)
     } else {
-        draw_list(f, app, visible, list);
-    }
-    let tab_keys = format!("1-{}", TABS.len());
-    let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
-    let hints: Vec<Hint> = match app.mode {
+        let labels: Vec<&str> = TABS.iter().map(|t| t.label).collect();
+        draw_shelf(f, app, shelf, &labels, &app.counts, app.tab);
+        draw_columns(f, t, cols);
+        let visible = app.visible();
+        if visible.is_empty() {
+            let tab = &TABS[app.tab.min(TABS.len() - 1)];
+            let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
+                "No sessions match the filter"
+            } else if app.indexing().is_some() {
+                "Reading your conversations…"
+            } else {
+                tab.empty
+            };
+            let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
+            f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
+        } else {
+            draw_list(f, app, visible, list);
+        }
+        sessions_hints(app)
+    };
+    let hints = match app.mode {
         Mode::Search => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
-        _ => vec![
-            ("enter", "open", Some(Action::Jump)),
-            ("n", "new", Some(Action::New)),
-            ("a", archive_verb, Some(Action::Archive)),
-            ("/", "search", Some(Action::Search)),
-            ("r", "rename", Some(Action::Rename)),
-            (&tab_keys, "tabs", None),
-            ("↑↓", "move", None),
-            ("s", "settings", Some(Action::Settings)),
-            ("q", "quit", Some(Action::Quit)),
-        ],
+        _ => hints,
     };
     // The mouse and the obvious keys need no reminder: when the line is short of room (a narrow terminal, or a
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["move", "tabs"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "project", "panes", "rename", "settings"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -134,9 +143,307 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Settings => draw_settings_modal(f, app, inner),
         Mode::Search => draw_search(f, app, inner),
         Mode::Rename => draw_rename(f, app, inner),
+        Mode::ProjectName => draw_name_box(f, app, inner),
+        Mode::Assign => draw_assign(f, app, inner),
+        Mode::Look => draw_look(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
+    }
+}
+
+fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
+    let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
+    vec![
+        ("enter", "open", Some(Action::Jump)),
+        ("n", "new", Some(Action::New)),
+        ("a", archive_verb, Some(Action::Archive)),
+        ("m", "project", Some(Action::Assign)),
+        ("/", "search", Some(Action::Search)),
+        ("r", "rename", Some(Action::Rename)),
+        ("←→", "active/archived", None),
+        ("1-2", "tabs", None),
+        ("↑↓", "move", None),
+        ("s", "settings", Some(Action::Settings)),
+        ("q", "quit", Some(Action::Quit)),
+    ]
+}
+
+fn projects_hints(app: &App) -> Vec<Hint<'static>> {
+    let archive_verb = if app.selected_project().is_some_and(|p| p.archived) { "restore" } else { "archive" };
+    vec![
+        ("enter", "open", Some(Action::Jump)),
+        ("n", "new", Some(Action::New)),
+        ("a", archive_verb, Some(Action::Archive)),
+        ("r", "rename", Some(Action::Rename)),
+        ("c", "color", Some(Action::Look)),
+        ("d", "delete", Some(Action::Delete)),
+        ("/", "search", Some(Action::Search)),
+        ("←→", "active/archived", None),
+        ("1-2", "tabs", None),
+        ("↑↓", "move", None),
+        ("s", "settings", Some(Action::Settings)),
+        ("q", "quit", Some(Action::Quit)),
+    ]
+}
+
+fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
+    let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
+    let mut out = vec![("enter", "open", Some(Action::Jump)), ("n", "new session", Some(Action::New))];
+    if app.pane == Pane::Sessions {
+        out.push(("a", archive_verb, Some(Action::Archive)));
+        out.push(("m", "project", Some(Action::Assign)));
+    } else {
+        out = vec![("↑↓", "scroll", None), ("n", "new session", Some(Action::New))];
+    }
+    out.extend([
+        ("/", "search", Some(Action::Search)),
+        ("←→", "panes", None),
+        ("esc", "back", Some(Action::Leave)),
+        ("q", "quit", Some(Action::Quit)),
+    ]);
+    out
+}
+
+/// The line under the rule: Active and Archived of the tab showing, with their counts; the arrows switch them.
+fn draw_shelf(f: &mut Frame, app: &App, area: Rect, labels: &[&str], counts: &[usize], current: usize) {
+    let t = app.effective_theme();
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    for (i, label) in labels.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+            x += 1;
+        }
+        let label = format!("{label} ");
+        let count = counts.get(i).copied().unwrap_or(0);
+        let w = chip_width("", &label, count);
+        let rect = Rect::new(x, area.y, w, 1).intersection(area);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::Tab(i)));
+        }
+        let hover = i != current && rect.contains(app.mouse.into());
+        spans.extend(tab_chip(t, app.rounded, "", &label, count, i == current, hover));
+        x += w;
+    }
+    spans.push(Span::styled("  ←→", Style::new().fg(t.dim)));
+    f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// A project's badge: its letters on its color.
+fn badge_span(t: &Theme, p: &crate::projects::Project) -> Span<'static> {
+    Span::styled(format!(" {} ", p.badge), Style::new().fg(crate::projects::badge_text(t)).bg(crate::projects::slot_color(t, &p.color)).add_modifier(Modifier::BOLD))
+}
+
+fn badge_width(p: &crate::projects::Project) -> usize {
+    p.badge.chars().count() + 2
+}
+
+/// `3 active · 1 archived`
+fn session_counts(st: &PStat) -> String {
+    match (st.active, st.archived) {
+        (0, 0) => "no sessions".into(),
+        (a, 0) => format!("{a} active"),
+        (0, b) => format!("{b} archived"),
+        (a, b) => format!("{a} active · {b} archived"),
+    }
+}
+
+struct PCols {
+    name: usize,
+    sessions: usize,
+    notes: usize,
+}
+
+fn project_cols(width: u16) -> PCols {
+    let w = width as usize;
+    let fixed = 3 + LAST_W;
+    let notes = if w >= 70 { 14 } else { 0 };
+    let sessions = if w >= 50 { 24 } else { 0 };
+    PCols { name: w.saturating_sub(fixed + notes + sessions), sessions, notes }
+}
+
+fn draw_project_columns(f: &mut Frame, t: &Theme, area: Rect) {
+    let c = project_cols(area.width);
+    let s = Style::new().fg(t.dim);
+    let line = Line::from(vec![
+        Span::raw("   "),
+        Span::styled(fit("PROJECT", c.name), s),
+        Span::styled(fit(if c.sessions > 0 { "SESSIONS" } else { "" }, c.sessions), s),
+        Span::styled(fit(if c.notes > 0 { "NOTES" } else { "" }, c.notes), s),
+        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1), s),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
+}
+
+fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
+    const ROW_H: u16 = 3; // the name line, the description line (left empty until descriptions exist), a spacer
+    let t = app.effective_theme();
+    let rows = (area.height / ROW_H).max(1) as usize;
+    let now = crate::usage::now() * 1000;
+    let start = app.pselected.saturating_sub(rows.saturating_sub(1));
+    let c = project_cols(area.width);
+    let all = app.projects.all();
+    for (i, &idx) in app.project_rows().iter().enumerate().skip(start).take(rows) {
+        let p = &all[idx];
+        let y = area.y + (i - start) as u16 * ROW_H;
+        if y >= area.bottom() {
+            break;
+        }
+        let row = Rect::new(area.x, y, area.width, ROW_H.min(area.bottom() - y));
+        app.hits.borrow_mut().push((row, Hit::ProjectRow(i)));
+        let selected = i == app.pselected;
+        let bg = if selected || row.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let text = if p.archived { t.dim } else { t.text };
+        let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
+        let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
+        let bw = badge_width(p) + 1;
+        let notes = match st.notes_at {
+            Some(at) => format!("notes {}", ago(now, at)),
+            None => "no notes".into(),
+        };
+        let l1 = Line::from(vec![
+            lead.clone(),
+            Span::styled(" ", base),
+            badge_span(t, p),
+            Span::styled(" ", base),
+            Span::styled(fit(&p.name, c.name.saturating_sub(bw)), base.fg(text).add_modifier(Modifier::BOLD)),
+            Span::styled(fit(&session_counts(&st), c.sessions), base.fg(t.subtext)),
+            Span::styled(fit(if c.notes > 0 { &notes } else { "" }, c.notes), base.fg(t.dim)),
+            Span::styled(format!("{:>w$}", ago(now, st.last_active), w = LAST_W - 1), base.fg(t.dim)),
+        ]);
+        f.render_widget(Paragraph::new(l1).style(base), Rect::new(row.x, row.y, row.width, 1));
+        if row.height > 1 {
+            // The description goes here once platoon writes one.
+            f.render_widget(Paragraph::new(Line::from(vec![lead])).style(base), Rect::new(row.x, row.y + 1, row.width, 1));
+        }
+        if row.height > 2 {
+            f.render_widget(Block::default().style(Style::new().bg(t.bg)), Rect::new(row.x, row.y + 2, row.width, 1));
+        }
+    }
+}
+
+/// A project's screen: its name (and, one day, its description) at the top, its sessions on the left and its notes
+/// on the right.
+fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
+    let t = app.effective_theme();
+    let Some(p) = app.open_project() else { return };
+    let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
+    let mut spans = vec![badge_span(t, p), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
+    if p.archived {
+        spans.push(Span::styled("  archived", Style::new().fg(t.warn)));
+    }
+    spans.push(Span::styled(format!("   {}", session_counts(&st)), Style::new().fg(t.dim)));
+    if !app.filter.is_empty() {
+        spans.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
+        spans.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), title);
+    // The description line: empty until platoon writes descriptions.
+    let [_desc, panes] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
+    let left_w = if panes.width >= 60 { panes.width * 45 / 100 } else { panes.width / 2 };
+    let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(panes);
+    let pane_block = |title: &'static str, focused: bool| {
+        Block::default()
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(if focused { t.accent } else { t.border }))
+            .title(Span::styled(format!(" {title} "), Style::new().fg(if focused { t.accent } else { t.dim }).add_modifier(Modifier::BOLD)))
+            .style(Style::new().bg(t.bg))
+    };
+    let lb = pane_block("Sessions", app.pane == Pane::Sessions);
+    let li = lb.inner(left).inner(Margin::new(1, 0));
+    f.render_widget(lb, left);
+    draw_project_sessions(f, app, li);
+    let rb = pane_block("Notes", app.pane == Pane::Notes);
+    let ri = rb.inner(right).inner(Margin::new(1, 0));
+    f.render_widget(rb, right);
+    draw_notes(f, app, ri);
+    let mut hits = app.hits.borrow_mut();
+    hits.push((left, Hit::Pane(Pane::Sessions)));
+    hits.push((right, Hit::Pane(Pane::Notes)));
+}
+
+fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let visible = app.visible();
+    if visible.is_empty() {
+        let msg = if app.filter.is_empty() {
+            "No sessions in this project yet. Press n to start one, or m on a session in the Sessions tab."
+        } else {
+            "No sessions match the filter"
+        };
+        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), area);
+        return;
+    }
+    let active = visible.len() - app.archived_rows;
+    // Screen lines: the active rows, then (if any are archived) a heading and the archived rows.
+    let line_of = |i: usize| if i < active { i } else { i + 1 };
+    let total = line_of(visible.len() - 1) + 1;
+    let rows = area.height as usize;
+    let want = line_of(app.selected);
+    let top = if rows == 0 { 0 } else { want.saturating_sub(rows.saturating_sub(1)).min(total.saturating_sub(rows)) };
+    let now = crate::usage::now() * 1000;
+    let w = area.width as usize;
+    let name_w = (w.saturating_sub(4 + LAST_W) * 3 / 5).max(6);
+    let dir_w = w.saturating_sub(4 + LAST_W + name_w);
+    for (i, &idx) in visible.iter().enumerate() {
+        let line = line_of(i);
+        if i == active && active <= visible.len() && line > 0 && line - 1 >= top && line - 1 < top + rows {
+            let y = area.y + (line - 1 - top) as u16;
+            f.render_widget(Paragraph::new(Span::styled(format!("Archived ({})", app.archived_rows), Style::new().fg(t.dim).add_modifier(Modifier::BOLD))), Rect::new(area.x, y, area.width, 1));
+        }
+        if line < top || line >= top + rows {
+            continue;
+        }
+        let s = &app.sessions[idx];
+        let rect = Rect::new(area.x, area.y + (line - top) as u16, area.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::Row(i)));
+        let sel = i == app.selected;
+        let bg = if (sel && app.pane == Pane::Sessions) || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, app.tick);
+        let text = if s.archived { t.dim } else { t.text };
+        let spans = vec![
+            Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
+            Span::styled(format!("{marker} "), base.fg(if s.archived { t.dim } else { marker_color })),
+            Span::styled(fit(&s.name, name_w), base.fg(text)),
+            Span::styled(fit_tail(&s.dir, dir_w), base.fg(t.dim)),
+            Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+}
+
+fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let Some(text) = app.open_notes().filter(|n| !n.trim().is_empty()) else {
+        let mut lines = vec![Line::styled("No notes yet", Style::new().fg(t.subtext))];
+        lines.push(Line::raw(""));
+        lines.push(Line::styled(format!("They live in {}", app.open_notes_path()), Style::new().fg(t.dim)));
+        f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
+        return;
+    };
+    let w = area.width as usize;
+    let mut lines: Vec<String> = Vec::new();
+    for raw in text.lines() {
+        if raw.trim().is_empty() {
+            lines.push(String::new());
+        } else {
+            // Keep a line's indent; wrap the rest at word boundaries.
+            let indent: String = raw.chars().take_while(|c| *c == ' ').collect();
+            for (k, l) in wrap(raw, w.saturating_sub(indent.len()).max(1)).into_iter().enumerate() {
+                lines.push(if k == 0 { format!("{indent}{l}") } else { format!("{indent}{l}") });
+            }
+        }
+    }
+    let rows = area.height as usize;
+    let top = app.notes_top.get().min(lines.len().saturating_sub(rows));
+    app.notes_top.set(top);
+    for (n, l) in lines.iter().skip(top).take(rows).enumerate() {
+        let style = if l.starts_with('#') { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.text) };
+        f.render_widget(Paragraph::new(Span::styled(l.clone(), style)), Rect::new(area.x, area.y + n as u16, area.width, 1));
     }
 }
 
@@ -163,29 +470,32 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
     let mut spans = Vec::new();
-    for (i, tab) in TABS.iter().enumerate() {
+    // The top-level tabs count what is active: sessions, and projects.
+    let top_counts = [app.counts.first().copied().unwrap_or(0), app.pcounts[0]];
+    for (i, tab) in TOPS.iter().enumerate() {
         if i > 0 {
             left.push(Span::raw(" "));
             x += 1;
         }
-        // A chip: ` 1 Active ` with the count in a badge after a little air. Round caps where the terminal has the
-        // glyphs, otherwise a padded square. Either way the text reads "1 Active 3".
-        let current = i == app.tab;
-        let (key, label) = (format!("{}", i + 1), format!(" {} ", tab.label));
-        let w = chip_width(&key, &label, app.counts[i]);
+        // A chip: ` 1 Sessions ` with the count in a badge after a little air. Round caps where the terminal has the
+        // glyphs, otherwise a padded square. Either way the text reads "1 Sessions 3".
+        let current = i == app.top;
+        let (key, label) = (format!("{}", i + 1), format!(" {tab} "));
+        let count = top_counts.get(i).copied().unwrap_or(0);
+        let w = chip_width(&key, &label, count);
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() {
-            app.hits.borrow_mut().push((rect, Hit::Tab(i)));
+            app.hits.borrow_mut().push((rect, Hit::Top(i)));
         }
         spans.push((x, w, current));
         x += w;
         let hover = !current && rect.contains(app.mouse.into());
-        left.extend(tab_chip(t, app.rounded, &key, &label, app.counts[i], current, hover));
+        left.extend(tab_chip(t, app.rounded, &key, &label, count, current, hover));
     }
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
     }
-    if !app.filter.is_empty() {
+    if !app.filter.is_empty() && app.open_project.is_none() {
         left.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
         left.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
     }
@@ -381,12 +691,19 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
     let mut l1 = vec![lead.clone(), Span::styled(format!("{marker} "), base.fg(marker_color))];
+    // A session in a project carries the project's badge in front of its name.
+    let mut name_w = c.name;
+    if let Some(p) = app.projects.of(&s.id).filter(|p| badge_width(p) + 6 <= c.name) {
+        l1.push(badge_span(t, p));
+        l1.push(Span::styled(" ", base));
+        name_w -= badge_width(p) + 1;
+    }
     // A name platoon made up carries a quiet mark at the end of its column, so it can be told from one you chose.
-    if s.name_source == NameSource::Generated && c.name >= 8 {
-        l1.push(Span::styled(fit(&s.name, c.name - 3), name_style));
+    if s.name_source == NameSource::Generated && name_w >= 8 {
+        l1.push(Span::styled(fit(&s.name, name_w - 3), name_style));
         l1.push(Span::styled(format!(" {} ", app.marker()), base.fg(t.dim)));
     } else {
-        l1.push(Span::styled(fit(&s.name, c.name), name_style));
+        l1.push(Span::styled(fit(&s.name, name_w), name_style));
     }
     // With a name that isn't the folder's, the folder is what tells the conversations apart: when the path has to be
     // cut, the end of it (the folder itself) stays.
@@ -1021,7 +1338,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 
     let count = if kind.narrows_list {
         draw_quick_rows(f, app, list);
-        if app.search_rows_hidden() { String::new() } else { format!("{} shown", app.visible().len()) }
+        let n = if app.projects_list_showing() { app.project_rows().len() } else { app.visible().len() };
+        if app.search_rows_hidden() { String::new() } else { format!("{n} shown") }
     } else {
         draw_result_rows(f, app, list);
         match (s.results.len(), s.total) {
@@ -1065,6 +1383,9 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
 /// The quick filter's rows: the conversations the list behind is narrowed to, one line each.
 fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
+    if app.projects_list_showing() {
+        return draw_quick_project_rows(f, app, area);
+    }
     let visible = app.visible();
     // Nothing is listed until something is typed: the box's own hint stands in the empty area.
     if app.search_rows_hidden() || visible.is_empty() {
@@ -1088,6 +1409,36 @@ fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(fit(&s.name, name_w.saturating_sub(2)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
             Span::styled(fit(&s.dir, dir_w), Style::new().fg(t.dim).bg(bg)),
             Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), Style::new().fg(t.dim).bg(bg)),
+        ]);
+        f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
+    }
+}
+
+/// The quick filter on the Projects tab: the projects it narrows the list to, one line each.
+fn draw_quick_project_rows(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let rows_ = app.project_rows();
+    if app.search_rows_hidden() || rows_.is_empty() {
+        let msg = if app.search.text.trim().is_empty() { "Type to narrow the list of projects." } else { "No projects match the filter" };
+        f.render_widget(Paragraph::new(msg).style(Style::new().fg(t.dim)), area);
+        return;
+    }
+    let rows = area.height as usize;
+    let start = app.pselected.saturating_sub(rows.saturating_sub(1));
+    let all = app.projects.all();
+    for (i, &idx) in rows_.iter().enumerate().skip(start).take(rows) {
+        let p = &all[idx];
+        let rect = Rect::new(area.x, area.y + (i - start) as u16, area.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::SearchRow(i)));
+        let sel = i == app.pselected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
+        let line = Line::from(vec![
+            Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
+            badge_span(t, p),
+            Span::styled(" ", Style::new().bg(bg)),
+            Span::styled(fit(&p.name, (area.width as usize / 2).max(8)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
+            Span::styled(session_counts(&st), Style::new().fg(t.dim).bg(bg)),
         ]);
         f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
     }
@@ -1238,6 +1589,128 @@ fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, foot, &hints, None);
 }
 
+/// The box for a project's name: a new one, or a new name.
+fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let nb = &app.name_box;
+    app.hits.borrow_mut().clear();
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 7);
+    f.render_widget(Clear, r);
+    let (title, note) = match nb.purpose {
+        NamePurpose::Rename(_) => ("rename project", "The project's notes and sessions stay as they are."),
+        NamePurpose::NewFor(_) => ("new project", "The session goes into it. Its color and badge can be changed later (c)."),
+        NamePurpose::New => ("new project", "Give it a name. Its color and badge can be changed later (c)."),
+    };
+    let block = modal_block(t, title);
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [input, sep, note_area, _, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(nb.input.clone(), Style::new().fg(t.text))])),
+        input,
+    );
+    f.set_cursor_position((input.x + 2 + (nb.input.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    f.render_widget(Paragraph::new(fit_end(note, note_area.width as usize)).style(Style::new().fg(t.dim)), note_area);
+    let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// The project picker of `m`: the active projects, "New project…" and "No project".
+fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let a = &app.assign;
+    app.hits.borrow_mut().clear();
+    let h = (a.options.len() as u16 + 5).min(area.height.saturating_sub(2)).max(6);
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 60), h);
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "project");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, list, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new(fit_end(&format!("Put \"{}\" in:", a.session_name), head.width as usize)).style(Style::new().fg(t.text)), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let current = app.projects.project_id_of(&a.session);
+    let rows = list.height as usize;
+    let start = a.selected.saturating_sub(rows.saturating_sub(1));
+    for (i, o) in a.options.iter().enumerate().skip(start).take(rows) {
+        let rect = Rect::new(list.x, list.y + (i - start) as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::AssignRow(i)));
+        let sel = i == a.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let mut spans = vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent))];
+        match o {
+            AssignOpt::Project(id) => {
+                if let Some(p) = app.projects.get(id) {
+                    spans.push(badge_span(t, p));
+                    spans.push(Span::styled(" ", base));
+                    spans.push(Span::styled(fit(&p.name, (rect.width as usize).saturating_sub(badge_width(p) + 6)), base.fg(t.text)));
+                    if current == Some(id.as_str()) {
+                        spans.push(Span::styled(" ✓", base.fg(t.accent)));
+                    }
+                }
+            }
+            AssignOpt::New => spans.push(Span::styled("New project…", base.fg(t.accent))),
+            AssignOpt::None => spans.push(Span::styled("No project", base.fg(t.subtext))),
+        }
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+    let hints: [Hint; 3] = [("enter", "choose", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// A project's color (from the theme) and badge.
+fn draw_look(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let lk = &app.look;
+    app.hits.borrow_mut().clear();
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 10);
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "color and badge");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [swatches, names, _, badge, preview, _, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let mut spans = Vec::new();
+    let mut x = swatches.x;
+    for (i, (slot, _)) in crate::projects::SLOTS.iter().enumerate() {
+        let rect = Rect::new(x, swatches.y, 4, 1).intersection(swatches);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::Slot(i)));
+        }
+        let c = crate::projects::slot_color(t, slot);
+        let mark = if i == lk.slot { "▐██▌" } else { " ██ " };
+        spans.push(Span::styled(mark, Style::new().fg(c).bg(t.bg)));
+        x += 4;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), swatches);
+    let label = crate::projects::SLOTS.get(lk.slot).map_or("", |s| s.1);
+    f.render_widget(Paragraph::new(Span::styled(format!("Color: {label}   (←→ to change)"), Style::new().fg(t.dim))), names);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![Span::styled("Badge ❯ ", Style::new().fg(t.accent)), Span::styled(lk.badge.clone(), Style::new().fg(t.text))])),
+        badge,
+    );
+    f.set_cursor_position((badge.x + 8 + lk.badge.chars().count() as u16, badge.y));
+    if let Some(p) = app.projects.get(&lk.project) {
+        let mut shown = p.clone();
+        shown.color = crate::projects::SLOTS.get(lk.slot).map_or("accent", |s| s.0).to_string();
+        shown.badge = if lk.badge.is_empty() { crate::projects::default_badge(&p.name) } else { lk.badge.clone() };
+        f.render_widget(Paragraph::new(Line::from(vec![badge_span(t, &shown), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text))])), preview);
+    }
+    let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, None);
+}
+
 fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let p = &app.picker;
@@ -1245,7 +1718,11 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     // The modal owns all clicks while it's open.
     app.hits.borrow_mut().clear();
     f.render_widget(Clear, r);
-    let block = modal_block(t, "new session: pick a directory");
+    let title = match p.project.as_deref().and_then(|id| app.projects.get(id)) {
+        Some(pr) => format!("new session in {}: pick a directory", pr.name),
+        None => "new session: pick a directory".to_string(),
+    };
+    let block = modal_block(t, &title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
 
@@ -1302,6 +1779,31 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 "archive",
             )
         }
+        Confirm::ArchiveProject { name, running, busy, outside, .. } => {
+            let what = match (outside, busy) {
+                (true, true) => "Some of them run in a terminal outside platoon, and some are working right now: archiving ends them, which interrupts what they are doing.",
+                (true, false) => "Some of them run in a terminal outside platoon: archiving ends those copies.",
+                _ => "Some of them are working right now: archiving stops them, which interrupts what they are doing.",
+            };
+            (
+                "archive project",
+                format!("Archive the project \"{name}\" and its active sessions?"),
+                format!(
+                    "{running} of its sessions {} running. {what} Nothing is lost: restoring the project brings its sessions back.",
+                    if *running == 1 { "is" } else { "are" }
+                ),
+                "archive",
+            )
+        }
+        Confirm::DeleteProject { name, sessions, .. } => (
+            "delete project",
+            format!("Delete the project \"{name}\"?"),
+            format!(
+                "Its notes are deleted too (a backup copy is kept). Its {sessions} session{} stay in the Sessions tab, in no project; no conversation is deleted.",
+                if *sessions == 1 { "" } else { "s" }
+            ),
+            "delete",
+        ),
         Confirm::Adopt { pids, name, busy, kind, .. } => {
             let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
             match kind {

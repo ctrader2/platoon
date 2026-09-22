@@ -15,8 +15,10 @@ mod model;
 mod names;
 mod open;
 mod procs;
+mod projects;
 mod prompts;
 mod select;
+mod sessionhook;
 mod setup;
 mod scan;
 mod settings;
@@ -27,6 +29,8 @@ mod ui;
 mod usertheme;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod projects_app_tests;
 #[cfg(test)]
 mod search_app_tests;
 #[cfg(test)]
@@ -69,12 +73,13 @@ fn main() -> io::Result<()> {
             std::process::exit(open::run(&args));
         }
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run()),
         Some("host") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id] | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  setup           add platoon to Claude Code: plan usage in the status line, and a guard that\n                  stops two copies of one session from overwriting each other\n  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id] | open --project <name> | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  open --project <name>   start a new session here, in that project\n  setup           add platoon to Claude Code: plan usage in the status line, a guard that\n                  stops two copies of one session from overwriting each other, and a hook\n                  that hands a project's notes to its sessions\n  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start   internal: run by Claude Code");
             std::process::exit(2);
         }
     }
@@ -322,13 +327,13 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let text = draw(&mut term, &app);
         println!("{text}");
-        for want in ["NAME", "DIR", "LAST", "1 Active 3", "2 Archived 0", "working", "idle", "3m", "30m", "3d", "gamma", "write the docs", "Sonnet 5", "main", "~ 25%"] {
+        for want in ["NAME", "DIR", "LAST", "Active 3", "Archived 0", "working", "idle", "3m", "30m", "3d", "gamma", "write the docs", "Sonnet 5", "main", "~ 25%"] {
             assert!(flat(&text).contains(want), "missing {want:?}:\n{text}");
         }
         for banned in ["ext", "paused", "2 places", "kill", "x kill", "not open", "open elsewhere", "in platoon"] {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
         }
-        assert!(text.contains("enter open") && text.contains("a archive") && text.contains("1-2 tabs"), "{text}");
+        assert!(text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 3"), "{text}");
         // Working then finished while unseen -> "done".
         w.register(busy, "new-3", "/srv/gamma", 2, "idle");
         app.reload_for_test();
@@ -494,28 +499,48 @@ mod tests {
         std::fs::write(w.config.join("archive.json"), r#"{"version":1,"archived":{"old-1":5}}"#).unwrap();
         let mut app = w.app();
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
-        assert_eq!(app.tab, 0);
+        assert_eq!((app.top, app.tab), (0, 0));
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
-        assert!(flat(&draw(&mut term, &app)).contains("1 Active 2 2 Archived 1"));
+        let shown = flat(&draw(&mut term, &app));
+        assert!(shown.contains("1 Sessions 2 2 Projects 0") && shown.contains("Active 2 Archived 1"), "{shown}");
 
-        ch(&mut app, '2');
+        // Left and right: Active and Archived.
+        key(&mut app, KeyCode::Right);
         assert_eq!((app.tab, ids(&app)), (1, vec!["old-1"]));
-        ch(&mut app, '3'); // no third tab yet
+        key(&mut app, KeyCode::Right); // nothing further right
         assert_eq!(app.tab, 1);
-        ch(&mut app, '1');
+        key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
+        // 1 and 2: the top-level tabs. A number with no tab does nothing.
+        ch(&mut app, '2');
+        assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
+        ch(&mut app, '3');
+        assert_eq!(app.top, 1);
+        assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
+        ch(&mut app, '1');
+        assert_eq!(app.top, 0);
+
+        // Clicks: the top-level tabs and the Active/Archived chips.
         draw(&mut term, &app);
         click_tab(&mut app, 1);
         assert_eq!(app.tab, 1);
         draw(&mut term, &app);
         click_tab(&mut app, 0);
         assert_eq!(app.tab, 0);
+        draw(&mut term, &app);
+        let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Top(1))).map(|(r, _)| *r).unwrap();
+        click(&mut app, r.x + 1, r.y);
+        assert_eq!(app.top, 1);
+        draw(&mut term, &app);
+        let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Top(0))).map(|(r, _)| *r).unwrap();
+        click(&mut app, r.x + 1, r.y);
+        assert_eq!(app.top, 0);
 
         // Digits are plain text while typing a filter.
         ch(&mut app, '/');
         ch(&mut app, '2');
-        assert_eq!((app.tab, app.filter.as_str()), (0, "2"));
+        assert_eq!((app.top, app.tab, app.filter.as_str()), (0, 0, "2"));
     }
 
     #[test]
@@ -536,7 +561,7 @@ mod tests {
         }
         assert!(app.visible().is_empty(), "alpha is archived, so not on Active");
         key(&mut app, KeyCode::Esc);
-        ch(&mut app, '2');
+        key(&mut app, KeyCode::Right);
         ch(&mut app, '/');
         for c in "ALPHA".chars() {
             ch(&mut app, c);
@@ -564,7 +589,7 @@ mod tests {
         let app2 = w.app();
         assert_eq!(app2.counts, [2, 1]);
 
-        ch(&mut app, '2');
+        key(&mut app, KeyCode::Right);
         assert_eq!(ids(&app), ["old-1"]);
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let text = draw(&mut term, &app);
@@ -684,7 +709,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let text = draw(&mut term, &app);
             assert!(text.contains(&notice_of(143)), "{cols}x{rows}: notice cut off:\n{text}");
-            assert!(flat(&text).contains("1 Active 1") && flat(&text).contains("2 Archived 143"), "{text}");
+            assert!(flat(&text).contains("Active 1") && flat(&text).contains("Archived 143"), "{text}");
         }
         // It covers the key hints, so it goes as soon as the user does anything.
         let mut app = app;
@@ -760,7 +785,7 @@ mod tests {
         let mut app = w.app();
         assert_eq!(app.counts, [1, 1]);
 
-        ch(&mut app, '2');
+        key(&mut app, KeyCode::Right);
         assert_eq!(ids(&app), ["old"]);
         ch(&mut app, 'a'); // restore without opening it
         assert_eq!(app.counts, [2, 0]);
@@ -931,7 +956,7 @@ mod tests {
         std::fs::write(w.config.join("archive.json"), r#"{"archived":{"aaa":1}}"#).unwrap();
         let mut app = w.app();
         let mut term = Terminal::new(TestBackend::new(110, 20)).unwrap();
-        ch(&mut app, '2');
+        key(&mut app, KeyCode::Right);
         draw(&mut term, &app);
         let buf = term.backend().buffer();
         let row = (0..buf.area.height).find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().contains("hello")).unwrap();
@@ -1453,7 +1478,7 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("1 Active 3") && flat(&shown).contains("2 Archived 0"), "{shown}");
+        assert!(flat(&shown).contains("1 Sessions 3") && flat(&shown).contains("2 Projects 0"), "{shown}");
         let rule = shown.lines().nth(2).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
@@ -1463,13 +1488,13 @@ mod tests {
             let text: String = header.iter().collect();
             text[..text.find(needle).unwrap()].chars().count()
         };
-        assert!(a_first <= col_of("1 Active") && a_last > col_of("1 Active") + "1 Active".len(), "{shown}");
-        assert!(a_last < col_of("2 Archived"), "the other tab is not underlined: {shown}");
+        assert!(a_first <= col_of("1 Sessions") && a_last > col_of("1 Sessions") + "1 Sessions".len(), "{shown}");
+        assert!(a_last < col_of("2 Projects"), "the other tab is not underlined: {shown}");
 
         ch(&mut app, '2');
         let shown2 = draw(&mut term, &app);
         let (b_first, _) = underline(&shown2).unwrap();
-        assert!(b_first >= col_of("2 Archived") - 1, "the underline moved to the Archived tab: {shown2}");
+        assert!(b_first >= col_of("2 Projects") - 1, "the underline moved to the Projects tab: {shown2}");
         assert!(b_first > a_last, "{shown2}");
     }
 
@@ -1491,7 +1516,7 @@ mod tests {
         draw(&mut term, &app);
         let t = app.theme.clone();
         let cells = header_cells(&term);
-        let name_end = cell_index(&cells, "1 Active") + "1 Active".len();
+        let name_end = cell_index(&cells, "1 Sessions") + "1 Sessions".len();
         // Between the name and the badge there is air: cells on the tab's own background, not the badge's.
         let badge_at = (name_end..cells.len()).find(|&i| cells[i].bg == t.accent).expect("the badge");
         assert!(badge_at - name_end >= 1, "a gap between the name and the badge");
@@ -1501,12 +1526,12 @@ mod tests {
         assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg));
         assert_eq!((cells[three - 1].symbol(), cells[three + 1].symbol()), (" ", " "), "padded");
         // The badge on the tab you're not on is quieter.
-        let arch_end = cell_index(&cells, "2 Archived") + "2 Archived".len();
+        let arch_end = cell_index(&cells, "2 Projects") + "2 Projects".len();
         let zero = (arch_end..cells.len()).find(|&i| cells[i].symbol() == "0").unwrap();
         assert_eq!(cells[zero].bg, t.surface);
         // Clicking anywhere on a tab, badge included, switches to it.
         click(&mut app, zero as u16, 1);
-        assert_eq!(app.tab, 1);
+        assert_eq!(app.top, 1);
     }
 
     #[test]
@@ -1524,17 +1549,17 @@ mod tests {
         assert_eq!((cells[three - 1].fg, cells[three + 1].fg, cells[three + 1].bg), (t.accent, t.accent, t.bg));
         assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg), "the count sits on the badge color");
         // Same air before the badge, and the text still reads as before.
-        let name_end = cell_index(&cells, "1 Active") + "1 Active".len();
+        let name_end = cell_index(&cells, "1 Sessions") + "1 Sessions".len();
         assert!(three - 1 - name_end >= 1 && cells[name_end].symbol() == " ");
         let plain: String = cells.iter().map(|c| c.symbol()).collect::<String>().replace(['\u{e0b6}', '\u{e0b4}'], "");
-        assert!(flat(&plain).contains("1 Active 3") && flat(&plain).contains("2 Archived 0"), "{plain}");
+        assert!(flat(&plain).contains("1 Sessions 3") && flat(&plain).contains("2 Projects 0"), "{plain}");
         // The underline still spans the whole tab, caps included, and a click on the cap switches tabs.
         let shown = draw(&mut term, &app);
         let (first, last) = underline(&shown).unwrap();
-        assert!(first <= cell_index(&cells, "1 Active") && last > three, "{shown}");
+        assert!(first <= cell_index(&cells, "1 Sessions") && last > three, "{shown}");
         let arch_cap = cells.iter().rposition(|c| c.symbol() == left).unwrap();
         click(&mut app, arch_cap as u16, 1);
-        assert_eq!(app.tab, 1);
+        assert_eq!(app.top, 1);
     }
 
     #[test]
@@ -1573,7 +1598,8 @@ mod tests {
     fn big_counts_and_the_usage_readout_share_a_narrow_header_without_clipping_either_tab() {
         use crate::model::{PlanUsage, Window};
         let (_w, mut app) = mixed_app("tabs-narrow");
-        app.counts = vec![1234, 5678];
+        app.counts = vec![1234, 3];
+        app.pcounts = [5678, 0];
         for (cols, bars) in [(80u16, false), (100, true), (140, true)] {
             app.usage = crate::usage::Usage::Ready(PlanUsage {
                 five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
@@ -1582,7 +1608,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
             let header = shown.lines().nth(1).unwrap();
-            assert!(flat(header).contains("1 Active 1234") && flat(header).contains("2 Archived 5678"), "{cols}: {header}");
+            assert!(flat(header).contains("Sessions 1234") && flat(header).contains("Projects 5678"), "{cols}: {header}");
             assert!(header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"), "{cols}: usage still readable: {header}");
             assert_eq!(header.contains('━'), bars, "{cols}: full bars only when there is room: {header}");
         }
@@ -1590,7 +1616,7 @@ mod tests {
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
         let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
-        assert!(flat(&header).contains("1 Active 1234") && flat(&header).contains("2 Archived 5678"), "{header}");
+        assert!(flat(&header).contains("Sessions 1234") && flat(&header).contains("Projects 5678"), "{header}");
     }
 
     #[test]
@@ -1600,7 +1626,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 100)).unwrap();
         let shown = draw(&mut term, &app);
         // The list is still there behind it...
-        assert!(shown.contains("platoon") && flat(&shown).contains("1 Active 3") && shown.contains("Settings"), "{shown}");
+        assert!(shown.contains("platoon") && flat(&shown).contains("Active 3") && shown.contains("Settings"), "{shown}");
         // ...the popup is a window with room around it, not the whole screen...
         let top = shown.lines().position(|l| l.contains("Settings")).unwrap();
         assert!(top >= 1, "{shown}");
@@ -1838,7 +1864,7 @@ mod tests {
         let shown = draw(&mut term, &app);
         assert!(flat(&shown).contains("Auto-archived 1 conversation idle for 1+ day. Find it under Archived."), "{shown}");
         key(&mut app, KeyCode::Esc);
-        ch(&mut app, '2');
+        key(&mut app, KeyCode::Right);
         assert_eq!(ids(&app), ["old"]);
     }
 

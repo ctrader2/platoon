@@ -11,12 +11,15 @@ use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}};
 pub struct Step {
     pub name: &'static str,
     pub what: &'static str,
+    /// platoon refuses to start without it. A step that isn't (the notes hook) only makes a feature work.
+    pub blocking: bool,
 }
 
 /// Same order as `check` and `Report::outcomes`.
-pub const STEPS: [Step; 2] = [
-    Step { name: "Status line", what: "plan usage, and Claude's own context % in the list" },
-    Step { name: "Session guard", what: "stops two copies of a session overwriting each other" },
+pub const STEPS: [Step; 3] = [
+    Step { name: "Status line", what: "plan usage, and Claude's own context % in the list", blocking: true },
+    Step { name: "Session guard", what: "stops two copies of a session overwriting each other", blocking: true },
+    Step { name: "Project notes", what: "hands a project's notes to its sessions when they start", blocking: false },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -81,6 +84,21 @@ fn is_guard(c: &str) -> bool {
     c.contains("platoon") && c.contains("hook guard")
 }
 
+fn is_notes_hook(c: &str) -> bool {
+    c.contains("platoon") && c.contains("hook session-start")
+}
+
+fn hook_commands<'a>(v: &'a Value, event: &str, is_ours: fn(&str) -> bool) -> Vec<&'a str> {
+    v["hooks"][event]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|g| g["hooks"].as_array().into_iter().flatten())
+        .filter_map(|h| h["command"].as_str())
+        .filter(|c| is_ours(c))
+        .collect()
+}
+
 fn guard_commands(v: &Value) -> Vec<&str> {
     v["hooks"]["UserPromptSubmit"]
         .as_array()
@@ -100,6 +118,18 @@ fn check_statusline(v: &Value) -> State {
     }
 }
 
+fn check_notes_hook(v: &Value) -> State {
+    commands_state(&hook_commands(v, "SessionStart", is_notes_hook))
+}
+
+fn commands_state(cmds: &[&str]) -> State {
+    match cmds.iter().map(|c| command_state(c)).find(|s| *s != State::Done) {
+        _ if cmds.is_empty() => State::Missing,
+        Some(broken) => broken,
+        None => State::Done,
+    }
+}
+
 fn check_guard(v: &Value) -> State {
     let cmds = guard_commands(v);
     match cmds.iter().map(|c| command_state(c)).find(|s| *s != State::Done) {
@@ -112,11 +142,17 @@ fn check_guard(v: &Value) -> State {
 /// Where each step stands, in `STEPS` order.
 pub fn check(root: &Path) -> Vec<State> {
     let v = read_settings(root).unwrap_or(Value::Null);
-    vec![check_statusline(&v), check_guard(&v)]
+    vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v)]
 }
 
+/// Every step platoon can't do without is done (the notes hook is not one of them).
 pub fn ready(states: &[State]) -> bool {
-    states.iter().all(State::satisfied)
+    states.iter().zip(STEPS.iter()).all(|(s, step)| !step.blocking || s.satisfied())
+}
+
+/// True when the SessionStart hook that hands project notes to sessions is present and working.
+pub fn notes_hook_installed(root: &Path) -> bool {
+    read_settings(root).is_some_and(|v| check_notes_hook(&v) == State::Done)
 }
 
 pub fn statusline_installed(root: &Path) -> bool {
@@ -129,16 +165,51 @@ pub fn guard_installed(root: &Path) -> bool {
 }
 
 fn remove_guard(v: &mut Value) {
+    remove_hook(v, "UserPromptSubmit", is_guard);
+}
+
+/// Take our own hook commands out of `event`, and any group that holds nothing else. Other hooks stay.
+fn remove_hook(v: &mut Value, event: &str, is_ours: fn(&str) -> bool) {
     // `get_mut`, not indexing: mutable indexing on a serde_json Value creates the missing keys as null.
-    let groups = v.get_mut("hooks").and_then(|h| h.get_mut("UserPromptSubmit")).and_then(Value::as_array_mut);
+    let groups = v.get_mut("hooks").and_then(|h| h.get_mut(event)).and_then(Value::as_array_mut);
     if let Some(groups) = groups {
         for g in groups.iter_mut() {
-            if let Some(hs) = g["hooks"].as_array_mut() {
-                hs.retain(|h| !h["command"].as_str().is_some_and(is_guard));
+            if let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) {
+                hs.retain(|h| !h.get("command").and_then(Value::as_str).is_some_and(is_ours));
             }
         }
-        groups.retain(|g| g["hooks"].as_array().is_none_or(|hs| !hs.is_empty()));
+        groups.retain(|g| g.get("hooks").and_then(Value::as_array).is_none_or(|hs| !hs.is_empty()));
     }
+}
+
+/// Add one hook command to `event`, in a group of its own.
+fn add_hook(v: &mut Value, event: &str, command: String) -> Result<(), String> {
+    let list = v
+        .as_object_mut()
+        .ok_or("settings.json isn't a JSON object")?
+        .entry("hooks")
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("\"hooks\" in settings.json isn't an object")?
+        .entry(event)
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .ok_or_else(|| format!("\"hooks.{event}\" in settings.json isn't a list"))?;
+    list.push(json!({ "hooks": [{ "type": "command", "command": command }] }));
+    Ok(())
+}
+
+/// Take the notes hook out of Claude Code's settings in `root` again, leaving everything else. True when it was there.
+#[cfg(test)]
+pub fn remove_notes_hook(root: &Path) -> Result<bool, String> {
+    let path = root.join("settings.json");
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if check_notes_hook(&v) == State::Missing {
+        return Ok(false);
+    }
+    remove_hook(&mut v, "SessionStart", is_notes_hook);
+    fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Do whatever is still missing or broken. Everything else in settings.json, including other hooks and
@@ -187,6 +258,17 @@ pub fn run(root: &Path) -> Result<Report, String> {
             list.push(json!({ "hooks": [{ "type": "command", "command": format!("{quoted} hook guard") }] }));
             changed = true;
             if guard == State::Missing { Outcome::Added } else { Outcome::Repaired }
+        }
+    });
+
+    let notes = check_notes_hook(&v);
+    outcomes.push(match notes {
+        State::Done | State::Skipped(_) => Outcome::AlreadyDone,
+        State::Missing | State::Broken(_) => {
+            remove_hook(&mut v, "SessionStart", is_notes_hook);
+            add_hook(&mut v, "SessionStart", format!("{quoted} hook session-start"))?;
+            changed = true;
+            if notes == State::Missing { Outcome::Added } else { Outcome::Repaired }
         }
     });
 
@@ -319,6 +401,9 @@ pub fn render_blocked(states: &[State], color: bool) -> String {
         out.push(match s {
             State::Done => row(Some(true), step, "", color),
             State::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
+            // Not needed to start: said plainly, without the red cross.
+            State::Missing if !step.blocking => row(None, step, "not set up yet: projects work, but their notes don't reach sessions", color),
+            State::Broken(why) if !step.blocking => row(None, step, &format!("broken: {why}"), color),
             State::Missing => row(Some(false), step, "not set up", color),
             State::Broken(why) => row(Some(false), step, &format!("broken: {why}"), color),
         });
@@ -347,11 +432,12 @@ mod tests {
     fn nothing_is_done_at_first_and_everything_is_after_setup() {
         let root = tmp("fresh");
         let before = check(&root);
-        assert_eq!(before, vec![State::Missing, State::Missing]);
+        assert_eq!(before, vec![State::Missing, State::Missing, State::Missing]);
         assert!(!ready(&before));
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::Added, Outcome::Added]);
-        assert_eq!(check(&root), vec![State::Done, State::Done]);
+        assert_eq!(r.outcomes, vec![Outcome::Added, Outcome::Added, Outcome::Added]);
+        assert_eq!(check(&root), vec![State::Done, State::Done, State::Done]);
+        assert!(notes_hook_installed(&root));
         assert!(ready(&check(&root)) && statusline_installed(&root) && guard_installed(&root));
     }
 
@@ -361,11 +447,11 @@ mod tests {
         run(&root).unwrap();
         let text = fs::read_to_string(root.join("settings.json")).unwrap();
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::AlreadyDone, Outcome::AlreadyDone]);
+        assert_eq!(r.outcomes, vec![Outcome::AlreadyDone, Outcome::AlreadyDone, Outcome::AlreadyDone]);
         assert!(r.saved.is_none());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), text);
         let shown = render_report(&r, &root, false);
-        assert_eq!(shown.matches("[✓]").count(), 2, "{shown}");
+        assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
         assert!(shown.contains("already done") && shown.contains("Nothing to change"), "{shown}");
     }
 
@@ -409,7 +495,7 @@ mod tests {
         assert!(!ready(&before));
         assert!(render_blocked(&before, false).contains("no longer exists"));
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::Repaired, Outcome::Repaired]);
+        assert_eq!(r.outcomes, vec![Outcome::Repaired, Outcome::Repaired, Outcome::Added]);
         assert!(ready(&check(&root)));
         // Repaired in place, not duplicated.
         assert_eq!(settings(&root)["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
@@ -421,6 +507,41 @@ mod tests {
         let shown = render_blocked(&check(&root), false);
         assert_eq!(shown.matches("[✗]").count(), 2, "{shown}");
         assert!(shown.contains("Status line") && shown.contains("Session guard") && shown.contains("platoon setup"), "{shown}");
+        assert!(shown.contains("[–] Project notes") && shown.contains("notes don't reach sessions"), "optional, not a cross: {shown}");
+    }
+
+    #[test]
+    fn the_notes_hook_is_installed_and_removed_without_disturbing_other_hooks_and_never_blocks() {
+        let root = tmp("notes-hook");
+        let original = r#"{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"my-start"}]}],"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
+        fs::write(root.join("settings.json"), original).unwrap();
+        run(&root).unwrap();
+        let v = settings(&root);
+        let starts = v["hooks"]["SessionStart"].as_array().unwrap();
+        assert_eq!(starts.len(), 2);
+        assert_eq!(starts[0]["hooks"][0]["command"], "my-start");
+        assert_eq!(starts[0]["matcher"], "startup");
+        assert!(starts[1]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook session-start"));
+        assert!(starts[1].get("matcher").is_none(), "every source: startup, resume, clear and compact");
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
+        assert!(notes_hook_installed(&root));
+        // Taken out again: only ours goes, and platoon still starts without it.
+        assert!(remove_notes_hook(&root).unwrap());
+        let v = settings(&root);
+        assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
+        assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"], "my-start");
+        assert!(v["hooks"]["UserPromptSubmit"].as_array().is_some() && v.get("statusLine").is_some());
+        let states = check(&root);
+        assert_eq!(states[2], State::Missing);
+        assert!(ready(&states), "the notes hook never blocks starting");
+        assert!(!remove_notes_hook(&root).unwrap());
+        // A broken one (pointing at a platoon that is gone) is repaired in place, not duplicated.
+        let mut v = settings(&root);
+        v["hooks"]["SessionStart"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","command":"/gone/platoon hook session-start"}]}));
+        fs::write(root.join("settings.json"), v.to_string()).unwrap();
+        assert!(matches!(check(&root)[2], State::Broken(_)) && ready(&check(&root)));
+        assert_eq!(run(&root).unwrap().outcomes[2], Outcome::Repaired);
+        assert_eq!(settings(&root)["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
     }
 
     #[test]

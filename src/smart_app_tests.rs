@@ -587,7 +587,7 @@ fn a_restored_conversation_is_named_at_once_ahead_of_the_rest() {
     let mut app = app_with(&w, &fake);
     app.refresh_for_test(); // sees the archive
     // Restore it on the Archived tab.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Char('a'));
     assert!(!row(&app, "old").archived);
     smart(&w, |s| s.ai_batch_size = 1);

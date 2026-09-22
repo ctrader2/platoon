@@ -129,9 +129,13 @@ pub fn discover() -> Vec<HostInfo> {
 
 /// Start a detached host running `program args` in `dir` and wait until it is ready to connect to.
 /// The returned `Child` should be polled with `try_wait` so it is reaped when the host exits.
-pub fn launch(program: &str, dir: &str, args: &[&str], rows: u16, cols: u16) -> Result<(HostInfo, Child), String> {
+/// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT` is only ever
+/// what `env` says: one platoon itself inherited (say, started from inside a project's session) is not passed on.
+pub fn launch(program: &str, dir: &str, args: &[&str], env: &[(&str, &str)], rows: u16, cols: u16) -> Result<(HostInfo, Child), String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
+    cmd.env_remove("PLATOON_PROJECT");
+    cmd.envs(env.iter().copied());
     cmd.args(["host", "--program", program, "--dir", dir, "--rows", &rows.to_string(), "--cols", &cols.to_string(), "--"])
         .args(args)
         .stdin(Stdio::null())

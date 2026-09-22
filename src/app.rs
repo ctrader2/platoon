@@ -10,6 +10,7 @@ use crate::index::{Entry, Indexer};
 use crate::ledger::Ledger;
 use crate::model::{NameSource, Proc, Session, Status};
 use crate::names::{self, Names};
+use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
 use crate::select::{click_count, extract, Click, Point, Selection, Unit};
 use crate::settings::{Item, Kind, Settings, SettingsStore, Step, ITEMS, SMART_ITEMS};
@@ -36,7 +37,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod projects_glue;
 mod smart_glue;
+pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -132,6 +135,14 @@ pub enum Action {
     Back,
     Confirm,
     Cancel,
+    /// `m`: put the selected session in a project, another one, or none.
+    Assign,
+    /// `d` on the Projects tab: delete the selected project (asks first).
+    Delete,
+    /// `c` on the Projects tab: the project's color and badge.
+    Look,
+    /// Esc on a project's screen: back to the Projects tab.
+    Leave,
 }
 
 /// Clickable regions, recorded by the UI each frame.
@@ -140,7 +151,18 @@ pub enum Hit {
     Row(usize),
     PickerRow(usize),
     Action(Action),
+    /// Active or Archived (of the Sessions tab, or of the Projects tab when that is showing).
     Tab(usize),
+    /// A top-level tab: Sessions or Projects.
+    Top(usize),
+    /// A row of the Projects tab.
+    ProjectRow(usize),
+    /// An entry of the project picker (`m`).
+    AssignRow(usize),
+    /// A color of the color and badge box.
+    Slot(usize),
+    /// One of the two panes of a project's screen: gives it the focus.
+    Pane(Pane),
     /// One kind of search in the search dialog: switches to it.
     SearchKind(usize),
     /// A row of the search dialog's list: selects it, and a click on the selected one takes it.
@@ -184,6 +206,10 @@ pub enum Confirm {
     /// Archiving stops the process. Only asked when that is destructive: it is in the middle of working,
     /// or it runs in a terminal platoon doesn't own (so its owner didn't choose this).
     Archive { id: String, name: String, busy: bool, outside: bool },
+    /// Archiving a project stops sessions of it that are running, and one of those is working or runs outside platoon.
+    ArchiveProject { id: String, name: String, running: usize, busy: bool, outside: bool },
+    /// Deleting a project always asks: its notes go too.
+    DeleteProject { id: String, name: String, sessions: usize },
 }
 
 #[derive(Clone)]
@@ -202,6 +228,12 @@ pub enum Mode {
     Themes,
     /// Full-screen view of a platoon-hosted session, by claude's pid.
     Attached(u32),
+    /// Typing the name of a new project, or a new name for one (`name_box`).
+    ProjectName,
+    /// The project picker of `m` (`assign`).
+    Assign,
+    /// The color and badge of a project (`look`).
+    Look,
 }
 
 pub struct Picker {
@@ -210,6 +242,8 @@ pub struct Picker {
     /// Absolute paths, best match first.
     pub results: Vec<String>,
     pub selected: usize,
+    /// The project a new session started from here goes into.
+    pub project: Option<String>,
 }
 
 impl Picker {
@@ -373,6 +407,31 @@ pub struct App {
     /// Where copied text goes. Lives as long as the app: on X11 the program that set the clipboard is the one
     /// that hands it to whoever pastes, so it has to stay around for the text to stay pasteable.
     clipboard: Clipboard,
+    /// Projects and which sessions are in them (`projects.json`).
+    pub projects: Projects,
+    /// Which of `TOPS` is showing: Sessions or Projects.
+    pub top: usize,
+    /// Active (0) or Archived (1) on the Projects tab.
+    pub ptab: usize,
+    /// Indices into `projects.all()` shown on the Projects tab now.
+    pview: Vec<usize>,
+    /// Active and archived projects.
+    pub pcounts: [usize; 2],
+    /// Index into `project_rows()`.
+    pub pselected: usize,
+    /// Per project: its sessions, when it was last used, when its notes changed.
+    pub pstats: HashMap<String, PStat>,
+    /// The project whose screen is showing, if any. Its sessions are then what `visible()` lists.
+    pub open_project: Option<String>,
+    /// Which pane of the project's screen has the focus.
+    pub pane: Pane,
+    /// The first line of the notes in view.
+    pub notes_top: Cell<usize>,
+    /// How many of the rows of a project's screen are archived ones (they come last).
+    pub archived_rows: usize,
+    pub name_box: NameBox,
+    pub assign: AssignPick,
+    pub look: LookEdit,
     /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
     pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
@@ -430,8 +489,9 @@ pub struct App {
     /// The program that runs a conversation: `claude`, or PLATOON_CLAUDE_BIN (a wrapper, or a stand-in in tests).
     program: String,
     guard_on: bool,
-    /// What `view` and `counts` were computed from: (filter, tab, generation). Recomputed when it changes.
-    view_for: (String, usize, u64),
+    /// What `view` and `counts` were computed from: (filter, tab, generation, top tab, projects tab, open
+    /// project). Recomputed when it changes.
+    view_for: (String, usize, u64, usize, usize, Option<String>),
     /// Bumped on every refresh.
     rev: u64,
     /// The index generation and live session ids `sessions` was built from.
@@ -492,7 +552,7 @@ impl App {
             mode: Mode::List,
             search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None, find: FindData::new() },
             rename: Rename { id: String::new(), input: String::new(), original: String::new() },
-            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0 },
+            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None },
             hosts: Vec::new(),
             client: None,
             spawned: Vec::new(),
@@ -503,6 +563,20 @@ impl App {
             last_click: None,
             // Nothing is ever copied by an App that was not asked to: `new` and tests choose.
             clipboard: Clipboard::off(),
+            projects: Projects::open(&config),
+            top: TOP_SESSIONS,
+            ptab: 0,
+            pview: Vec::new(),
+            pcounts: [0, 0],
+            pselected: 0,
+            pstats: HashMap::new(),
+            open_project: None,
+            pane: Pane::Sessions,
+            notes_top: Cell::new(0),
+            archived_rows: 0,
+            name_box: NameBox { purpose: NamePurpose::New, input: String::new() },
+            assign: AssignPick { session: String::new(), session_name: String::new(), options: Vec::new(), selected: 0 },
+            look: LookEdit { project: String::new(), slot: 0, badge: String::new() },
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             tick: 0,
@@ -535,7 +609,7 @@ impl App {
             apply_after: None,
             program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
             guard_on: false,
-            view_for: (String::new(), usize::MAX, 0),
+            view_for: (String::new(), usize::MAX, 0, 0, 0, None),
             rev: 0,
             built: (0, Vec::new()),
             stopping: HashMap::new(),
@@ -631,22 +705,37 @@ impl App {
     /// Recompute the rows on screen if the filter, tab or data changed. Called after every event and
     /// refresh, and does nothing (one comparison) when nothing moved.
     fn update_view(&mut self) {
-        if self.view_for.0 == self.filter && self.view_for.1 == self.tab && self.view_for.2 == self.rev {
+        let key = (self.filter.clone(), self.tab, self.rev, self.top, self.ptab, self.open_project.clone());
+        if self.view_for == key {
             return;
         }
-        self.view_for = (self.filter.clone(), self.tab, self.rev);
+        self.view_for = key;
         let q = self.filter.to_lowercase();
         let shows = TABS[self.tab.min(TABS.len() - 1)].shows;
         // A conversation being stopped is on neither tab: it is on its way to Archived and can't be acted on meanwhile.
         let listed = |s: &Session| self.stopping.is_empty() || !self.stopping.contains_key(&s.id);
-        self.view = self
-            .sessions
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| listed(s) && shows(s) && (q.is_empty() || s.haystack.contains(&q)))
-            .map(|(i, _)| i)
-            .collect();
+        self.pstats = self.project_stats();
+        self.archived_rows = 0;
+        if let Some(open) = self.open_project.clone() {
+            // A project's screen: its sessions, the active ones first and then the archived ones.
+            let mine = |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s) && (q.is_empty() || s.haystack.contains(&q));
+            let (active, archived): (Vec<usize>, Vec<usize>) =
+                self.sessions.iter().enumerate().filter(|(_, s)| mine(s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
+            self.archived_rows = archived.len();
+            self.view = active.into_iter().chain(archived).collect();
+        } else if self.top == TOP_PROJECTS {
+            self.view.clear();
+        } else {
+            self.view = self
+                .sessions
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| listed(s) && shows(s) && (q.is_empty() || s.haystack.contains(&q)))
+                .map(|(i, _)| i)
+                .collect();
+        }
         self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| listed(s) && (t.shows)(s)).count()).collect();
+        self.update_project_rows(&q);
         self.clamp_selected();
     }
 
@@ -656,6 +745,7 @@ impl App {
 
     fn clamp_selected(&mut self) {
         self.selected = self.selected.min(self.view.len().saturating_sub(1));
+        self.pselected = self.pselected.min(self.pview.len().saturating_sub(1));
     }
 
     pub fn unread_count(&self) -> usize {
@@ -747,6 +837,13 @@ impl App {
             self.built.0 = u64::MAX;
         }
         let live = self.reader.live();
+        self.projects.reload_if_changed();
+        // Sessions started under a project are placed in it once their id shows up.
+        let ids: Vec<(u32, String, u64)> = live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
+        projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &claude::pid_alive);
+        if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
+            self.open_project = None; // deleted in another window
+        }
 
         // One row per conversation, however many processes run it.
         let mut by_id: HashMap<&str, Vec<&Live>> = HashMap::new();
@@ -982,12 +1079,34 @@ impl App {
         match (action, self.mode.clone()) {
             // Sessions started here keep running in their hosts, so quitting never ends them.
             (Action::Quit, Mode::List) => self.quit = true,
-            (Action::New, Mode::List) => self.open_picker(),
+            (Action::New, Mode::List) if self.projects_list_showing() => self.open_name_box(NamePurpose::New),
+            (Action::New, Mode::List) => {
+                let project = self.open_project.clone();
+                self.open_picker_in(project);
+            }
+            (Action::Archive, Mode::List) if self.projects_list_showing() => self.toggle_project_archive(),
             (Action::Archive, Mode::List) => self.toggle_archive(),
             (Action::Search, Mode::List) => self.open_search(),
+            (Action::Rename, Mode::List) if self.projects_list_showing() => self.open_project_rename(),
             (Action::Rename, Mode::List) => self.open_rename(),
             (Action::Settings, Mode::List) => self.open_settings(),
+            (Action::Jump, Mode::List) if self.projects_list_showing() => self.open_project_screen(),
             (Action::Jump, Mode::List) => self.jump(),
+            (Action::Assign, Mode::List) if !self.projects_list_showing() => self.open_assign(),
+            (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
+            (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
+            (Action::Leave, Mode::List) => self.close_project_screen(),
+            (Action::Confirm, Mode::ProjectName) => self.save_name_box(),
+            (Action::Confirm, Mode::Assign) => self.take_assign(),
+            (Action::Confirm, Mode::Look) => self.save_look(),
+            (Action::Confirm, Mode::Confirm(Confirm::ArchiveProject { id, .. })) => {
+                self.mode = Mode::List;
+                self.archive_project(&id);
+            }
+            (Action::Confirm, Mode::Confirm(Confirm::DeleteProject { id, .. })) => {
+                self.mode = Mode::List;
+                self.delete_project(&id);
+            }
             (Action::Back, Mode::Attached(_)) => self.detach(),
             (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name, .. })) => {
                 self.mode = Mode::List;
@@ -999,7 +1118,8 @@ impl App {
             }
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
-                    self.launch(dir, &[]);
+                    let project = self.picker.project.clone();
+                    self.launch_in(dir, &[], project.as_deref(), true);
                 }
             }
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
@@ -1103,7 +1223,7 @@ impl App {
         }
         let mut found: Vec<(&Session, prompts::Found, Option<&Arc<prompts::FilePrompts>>)> = Vec::new();
         for s in &self.sessions {
-            if (s.archived && !settings.search_archived) || self.stopping.contains_key(&s.id) {
+            if (s.archived && !settings.search_archived) || self.stopping.contains_key(&s.id) || !self.in_scope(s) {
                 continue;
             }
             // The name you gave and the one platoon made up both count as the name; the summary is searched too.
@@ -1155,6 +1275,7 @@ impl App {
         self.cancel_find();
         self.filter.clear();
         self.selected = 0;
+        self.pselected = 0;
         self.mode = Mode::List;
     }
 
@@ -1165,7 +1286,12 @@ impl App {
         let Some(s) = self.sessions.iter().find(|s| s.id == id && !self.stopping.contains_key(&s.id)) else { return };
         let Some(tab) = TABS.iter().position(|t| (t.shows)(s)) else { return };
         self.filter.clear();
-        self.tab = tab;
+        // On a project's screen the search only looked at its sessions, and both groups are on that screen.
+        if self.open_project.is_none() {
+            self.tab = tab;
+            self.top = TOP_SESSIONS;
+        }
+        self.pane = Pane::Sessions;
         self.update_view();
         if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
             self.selected = pos;
@@ -1179,7 +1305,13 @@ impl App {
 
     /// The highlighted row of the dialog: in the list behind for a kind that narrows it, else among its results.
     pub fn search_selected(&self) -> usize {
-        if SEARCH_KINDS[self.search.kind].narrows_list { self.selected } else { self.search.selected }
+        if self.projects_list_showing() {
+            self.pselected
+        } else if SEARCH_KINDS[self.search.kind].narrows_list {
+            self.selected
+        } else {
+            self.search.selected
+        }
     }
 
     /// The quick filter lists nothing until something is typed (an empty filter narrows nothing, so the rows would
@@ -1189,7 +1321,9 @@ impl App {
     }
 
     fn select_search_row(&mut self, i: usize) {
-        if SEARCH_KINDS[self.search.kind].narrows_list {
+        if self.projects_list_showing() {
+            self.pselected = i;
+        } else if SEARCH_KINDS[self.search.kind].narrows_list {
             self.selected = i;
         } else {
             self.search.selected = i;
@@ -1201,7 +1335,9 @@ impl App {
         if self.search_rows_hidden() {
             return;
         }
-        if SEARCH_KINDS[self.search.kind].narrows_list {
+        if self.projects_list_showing() {
+            self.move_project(delta);
+        } else if SEARCH_KINDS[self.search.kind].narrows_list {
             self.move_selection(delta);
         } else {
             let last = self.search.results.len().saturating_sub(1) as i32;
@@ -1241,9 +1377,13 @@ impl App {
         self.reload();
     }
 
-    fn open_picker(&mut self) {
-        let all = dirs::candidates(self.reader.root(), &self.home);
-        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0 };
+    /// The folder picker for a new session; under a project, the folders its other sessions use come first.
+    fn open_picker_in(&mut self, project: Option<String>) {
+        let mut all = project.as_deref().map(|p| self.project_folders(p)).unwrap_or_default();
+        all.extend(dirs::candidates(self.reader.root(), &self.home));
+        let mut seen = std::collections::HashSet::new();
+        all.retain(|p| seen.insert(p.clone()));
+        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
     }
@@ -1474,7 +1614,8 @@ impl App {
                 if !self.cwd_exists(&name, &cwd) {
                     return;
                 }
-                if self.launch(cwd, &["--resume", &id]) {
+                let project = self.projects.project_id_of(&id).map(String::from);
+                if self.launch_in(cwd, &["--resume", &id], project.as_deref(), false) {
                     self.note_opened(&id, restore);
                 }
             }
@@ -1518,7 +1659,8 @@ impl App {
             self.notify(format!("Couldn't end {name}: {e}. Try again in a moment."));
             return;
         }
-        if self.launch(cwd, &["--resume", id]) {
+        let project = self.projects.project_id_of(id).map(String::from);
+        if self.launch_in(cwd, &["--resume", id], project.as_deref(), false) {
             self.note_opened(id, restore);
         }
     }
@@ -1539,6 +1681,8 @@ impl App {
                 Ok(()) => self.notify(format!("Restored \"{name}\"")),
                 Err(e) => self.notify(format!("Couldn't save the archive: {e}")),
             }
+            // It stays in its project; the project, archived or not, stays as it is.
+            let _ = self.projects.session_restored(&id);
             self.reload();
         } else if (s.status == Status::Busy && !s.procs.is_empty()) || s.procs.iter().any(|p| !p.hosted) {
             // Stopping it is destructive if it is mid-turn, or if it lives in a terminal platoon didn't start.
@@ -1674,6 +1818,9 @@ impl App {
         self.boost(id);
         let now = usage::now();
         let saved = if archived { self.archive.restore(id, now) } else { self.archive.touch(id, now) };
+        if archived {
+            let _ = self.projects.session_restored(id);
+        }
         if let Err(e) = saved {
             self.notify(format!("Couldn't save the archive: {e}"));
         }
@@ -1693,10 +1840,23 @@ impl App {
 
     /// Start `args` under a new host in `dir` and attach to it. False if it couldn't be started.
     fn launch(&mut self, dir: String, args: &[&str]) -> bool {
+        self.launch_in(dir, args, None, false)
+    }
+
+    /// `launch`, for a session of `project`: claude gets `PLATOON_PROJECT` (so the notes hook knows), and with
+    /// `place` (a new session) the process is remembered until its session id shows up and is put in the project.
+    fn launch_in(&mut self, dir: String, args: &[&str], project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
-        match host::launch(&self.program, &dir, args, rows, cols) {
+        let env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+        let at_ms = usage::now().saturating_sub(2) * 1000;
+        match host::launch(&self.program, &dir, args, &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
+                if let (Some(p), true) = (project, place) {
+                    if let Err(e) = projects_mod::note_launch(&self.cache, pid, p, at_ms) {
+                        self.notify(format!("Couldn't note the new session's project: {e}"));
+                    }
+                }
                 self.spawned.push(child);
                 self.hosts.push(info);
                 self.filter.clear();
@@ -1766,6 +1926,11 @@ impl App {
     #[cfg(test)]
     pub fn picker_launch_for_test(&mut self, dir: String) {
         self.launch(dir, &[]);
+    }
+
+    #[cfg(test)]
+    pub fn cache_for_test(&self) -> &Path {
+        &self.cache
     }
 
     fn move_selection(&mut self, delta: i32) {
@@ -1883,25 +2048,36 @@ impl App {
                 KeyCode::Char(c) if !ctrl && !alt => self.type_name(&c.to_string()),
                 _ => {}
             },
-            Mode::List => match key.code {
-                KeyCode::Char('c') if ctrl => self.act(Action::Quit),
-                KeyCode::Char('q') => self.act(Action::Quit),
-                KeyCode::Char('n') => self.act(Action::New),
-                KeyCode::Char('a') => self.act(Action::Archive),
-                KeyCode::Char('/') => self.act(Action::Search),
-                KeyCode::Char('r') => self.act(Action::Rename),
-                KeyCode::Char('s') => self.act(Action::Settings),
-                // 1 is the first tab, 2 the second; a number with no tab does nothing.
-                KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => self.switch_tab(c as usize - '1' as usize),
-                KeyCode::Enter => self.act(Action::Jump),
-                KeyCode::Esc => {
-                    self.filter.clear();
-                    self.selected = 0;
+            Mode::List => self.list_key(key),
+            Mode::ProjectName => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Char('u') if ctrl => self.name_box.input.clear(),
+                KeyCode::Backspace => {
+                    self.name_box.input.pop();
                 }
-                KeyCode::Down => self.move_selection(1),
-                KeyCode::Up => self.move_selection(-1),
-                KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
-                KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
+                KeyCode::Char(c) if !ctrl && !alt => self.type_project_name(&c.to_string()),
+                _ => {}
+            },
+            Mode::Assign => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Up => self.move_assign(-1),
+                KeyCode::Down => self.move_assign(1),
+                _ => {}
+            },
+            Mode::Look => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Left | KeyCode::Up => self.step_slot(-1),
+                KeyCode::Right | KeyCode::Down | KeyCode::Tab => self.step_slot(1),
+                KeyCode::Backspace => {
+                    self.look.badge.pop();
+                }
+                KeyCode::Char(c) if !ctrl && !alt => self.type_badge(&c.to_string()),
                 _ => {}
             },
         }
@@ -1929,6 +2105,8 @@ impl App {
                 self.search_text_changed();
             }
             Mode::Rename => self.type_name(&text.replace(['\n', '\r'], "")),
+            Mode::ProjectName => self.type_project_name(&text.replace(['\n', '\r'], "")),
+            Mode::Look => self.type_badge(&text.replace(['\n', '\r'], "")),
             _ => {}
         }
         self.update_view();
@@ -1977,7 +2155,9 @@ impl App {
                         }
                     }
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
-                    Mode::List => self.move_selection(if up { -1 } else { 1 }),
+                    Mode::List => self.wheel_list(up),
+                    Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
+                    Mode::ProjectName | Mode::Look => {}
                     Mode::Search => self.move_search(if up { -1 } else { 1 }),
                     Mode::Rename => {}
                     Mode::Settings => self.move_setting(if up { -1 } else { 1 }),
@@ -1994,7 +2174,15 @@ impl App {
                     .map(|(_, h)| *h);
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
+                    Some(Hit::Tab(i)) if self.projects_list_showing() => self.switch_ptab(i),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
+                    Some(Hit::Top(i)) => self.switch_top(i),
+                    Some(Hit::ProjectRow(i)) if i == self.pselected => self.act(Action::Jump),
+                    Some(Hit::ProjectRow(i)) => self.pselected = i,
+                    Some(Hit::AssignRow(i)) if i == self.assign.selected => self.act(Action::Confirm),
+                    Some(Hit::AssignRow(i)) => self.assign.selected = i,
+                    Some(Hit::Slot(i)) => self.look.slot = i,
+                    Some(Hit::Pane(p)) => self.pane = p,
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}
@@ -2007,8 +2195,11 @@ impl App {
                         self.change_setting(i, step);
                     }
                     // Clicking the selected row again acts like Enter.
-                    Some(Hit::Row(i)) if i == self.selected => self.act(Action::Jump),
-                    Some(Hit::Row(i)) => self.selected = i,
+                    Some(Hit::Row(i)) if i == self.selected && (self.open_project.is_none() || self.pane == Pane::Sessions) => self.act(Action::Jump),
+                    Some(Hit::Row(i)) => {
+                        self.selected = i;
+                        self.pane = Pane::Sessions;
+                    }
                     Some(Hit::PickerRow(i)) if i == self.picker.selected => self.act(Action::Confirm),
                     Some(Hit::PickerRow(i)) => self.picker.selected = i,
                     // The previewed entry is the one that gets kept: clicking it again is "use this".

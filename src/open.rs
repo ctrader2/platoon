@@ -6,6 +6,7 @@
 
 use crate::claude::{self, claude_root, find_transcript, saved_session_ids, transcript_cwd, Reader};
 use crate::guard;
+use crate::projects::{self, Projects};
 use crate::host::{self, read_frame, size_payload, write_frame, HostInfo, F_INPUT, F_OUTPUT, F_RESIZE};
 use ratatui::crossterm::terminal;
 use std::{
@@ -59,7 +60,7 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     let hosts = host::discover();
     let Some(arg) = arg else {
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        return host::launch(&program(), &cwd.to_string_lossy(), &[], rows, cols).map(|(h, _)| h);
+        return host::launch(&program(), &cwd.to_string_lossy(), &[], &[], rows, cols).map(|(h, _)| h);
     };
 
     let live = guard::live_entries(&root);
@@ -77,7 +78,7 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         let cwd = background.iter().find(|l| l.id == id).map(|l| l.cwd.clone()).filter(|c| Path::new(c).is_dir());
         let cwd = cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
         let args = claude::attach_args(&attach_id);
-        return host::launch(&program(), &cwd, &[args[0].as_str(), args[1].as_str()], rows, cols).map(|(h, _)| h);
+        return host::launch(&program(), &cwd, &[args[0].as_str(), args[1].as_str()], &[], rows, cols).map(|(h, _)| h);
     }
 
     let copies: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id).collect();
@@ -99,7 +100,43 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         }
         host::end_processes(&pids)?;
     }
-    host::launch(&program(), &cwd, &["--resume", &id], rows, cols).map(|(h, _)| h)
+    // A session of a project keeps carrying the project, so the notes hook can tell.
+    let projects = Projects::open(&crate::archive::config_dir());
+    let env: Vec<(&str, &str)> = projects.project_id_of(&id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    host::launch(&program(), &cwd, &["--resume", &id], &env, rows, cols).map(|(h, _)| h)
+}
+
+/// `platoon open --project <name>`: a new session in this folder, in that project.
+fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String> {
+    let projects = Projects::open(&crate::archive::config_dir());
+    let p = projects.find_by_name(name)?;
+    if p.archived {
+        return Err(format!("the project \"{}\" is archived; restore it in platoon first", p.name));
+    }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let at_ms = crate::usage::now().saturating_sub(2) * 1000;
+    let (info, _) = host::launch(&program(), &cwd.to_string_lossy(), &[], &[("PLATOON_PROJECT", p.id.as_str())], rows, cols)?;
+    // Placed in the project once its session id shows up (by any platoon window, or by the notes hook).
+    projects::note_launch(&crate::usage::cache_dir(), info.claude_pid, &p.id, at_ms).map_err(|e| format!("couldn't note the project: {e}"))?;
+    Ok(info)
+}
+
+/// The id argument and the project name of `platoon open [id] [--project <name>]`.
+fn parse_args(args: &[String]) -> Result<(Option<&str>, Option<&str>), String> {
+    let (mut id, mut project) = (None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--project" | "-p" => project = Some(it.next().map(String::as_str).ok_or("--project needs a project's name")?),
+            other if other.starts_with("--project=") => project = Some(&other["--project=".len()..]),
+            other if id.is_none() && !other.starts_with('-') => id = Some(other),
+            other => return Err(format!("don't know what \"{other}\" means here")),
+        }
+    }
+    if id.is_some() && project.is_some() {
+        return Err("give a session id or --project, not both (`m` in platoon moves a session to a project)".into());
+    }
+    Ok((id, project))
 }
 
 struct RawMode;
@@ -197,11 +234,22 @@ fn attach(sock: &Path, rows: u16, cols: u16) -> io::Result<Ended> {
 }
 
 pub fn run(args: &[String]) -> i32 {
+    let (id, project) = match parse_args(args) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("platoon open: {e}");
+            return 2;
+        }
+    };
     let Ok((cols, rows)) = terminal::size() else {
         eprintln!("platoon open needs an interactive terminal.");
         return 1;
     };
-    let info = match host_for(args.first().map(String::as_str), rows, cols) {
+    let found = match project {
+        Some(name) => host_in_project(name, rows, cols),
+        None => host_for(id, rows, cols),
+    };
+    let info = match found {
         Ok(h) => h,
         Err(e) => {
             eprintln!("platoon open: {e}");
@@ -237,6 +285,18 @@ mod tests {
         assert_eq!(resolve_id("ffff", ids()).unwrap(), "ffff0000-cccc");
         assert_eq!(resolve_id("abcd1", ids()).unwrap(), "abcd1111-aaaa");
         assert_eq!(resolve_id("abcd2222-bbbb", ids()).unwrap(), "abcd2222-bbbb");
+    }
+
+    #[test]
+    fn the_arguments_are_an_id_or_a_project_never_both() {
+        let a = |v: &[&str]| parse_args(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()).map(|(i, p)| (i.map(String::from), p.map(String::from)));
+        assert_eq!(a(&[]).unwrap(), (None, None));
+        assert_eq!(a(&["abcd"]).unwrap(), (Some("abcd".into()), None));
+        assert_eq!(a(&["--project", "Web shop"]).unwrap(), (None, Some("Web shop".into())));
+        assert_eq!(a(&["--project=shop"]).unwrap(), (None, Some("shop".into())));
+        assert!(a(&["--project"]).is_err());
+        assert!(a(&["abcd", "--project", "x"]).is_err());
+        assert!(a(&["--nope"]).is_err());
     }
 
     #[test]

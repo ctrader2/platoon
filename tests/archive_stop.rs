@@ -97,7 +97,7 @@ fn the_row_leaves_at_once_while_claude_shuts_down_and_the_archive_follows_its_ex
     let pid = lab.run("aaaa-0001", Some(1.5));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("refactor the widget");
-    t.wait_for_flat("1 Active 2");
+    t.wait_for_flat("Active 2");
 
     // `a` on the row whose process is not one platoon started asks first; the answer is what starts the stop.
     t.send(b"a");
@@ -110,15 +110,15 @@ fn the_row_leaves_at_once_while_claude_shuts_down_and_the_archive_follows_its_ex
     assert!(gone_after < Duration::from_millis(1000), "the row took {gone_after:?} to leave (the process needs 1.5 s)");
     assert!(!lab.exited(pid), "the process is still shutting down when the row is already gone");
     assert!(lab.archived().is_empty(), "not archived while it still runs");
-    t.wait_for_flat("1 Active 1");
+    t.wait_for_flat("Active 1");
 
     until("the archive record after the process exited", || !lab.archived().is_empty());
     assert!(lab.exited(pid), "the record was written only once the process had exited");
     assert_eq!(lab.archived(), ["aaaa-0001"]);
-    t.wait_for_flat("2 Archived 1");
+    t.wait_for_flat("Archived 1");
     t.wait_for("Archived \"");
 
-    t.send(b"2");
+    t.send(b"\x1b[C"); // right arrow: Archived
     t.wait_for("refactor the widget");
     t.send(b"q");
     t.wait_exit();

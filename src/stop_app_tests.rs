@@ -81,7 +81,7 @@ fn the_row_leaves_at_once_and_the_archive_is_written_only_after_the_process_has_
     assert!(!shown.contains("refactor the parser") && shown.contains("add a login page"), "gone from the screen, the others stay:\n{shown}");
     assert_eq!(ids(&app), ["beta-2", "gamma-3"]);
     assert_eq!(app.counts, [2, 0], "the Active count dropped at once");
-    assert!(shown.split_whitespace().collect::<Vec<_>>().join(" ").contains("1 Active 2 2 Archived 0"), "{shown}");
+    assert!(shown.split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 2 Archived 0"), "{shown}");
     assert!(archived_ids(&w).is_empty(), "not archived while its process runs");
     assert_eq!(app.stops_pending(), 1);
 
@@ -99,7 +99,7 @@ fn the_row_leaves_at_once_and_the_archive_is_written_only_after_the_process_has_
     assert_eq!(archived_ids(&w), ["alpha-1"]);
     assert_eq!(app.counts, [2, 1]);
     assert_eq!(app.active_notice(), Some("Archived \"alpha\""));
-    ch(&mut app, '2');
+    key(&mut app, KeyCode::Right);
     assert_eq!(ids(&app), ["alpha-1"], "the Archived tab shows it now");
     assert!(screen(&mut term, &app).contains("refactor the parser"));
     assert!(w.root.join("projects/-some-project/alpha-1.jsonl").exists(), "the transcript is kept");

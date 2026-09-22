@@ -56,15 +56,15 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 2, "{shown}");
-    assert!(shown.contains("added") && shown.contains("Saved"), "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
+    assert!(shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes"), "{shown}");
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
 
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 2, "{shown}");
-    assert_eq!(shown.matches("already done").count(), 2, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
 }
@@ -125,6 +125,27 @@ fn once_setup_is_done_platoon_starts_and_undoing_a_step_blocks_it_again() {
     assert_eq!(out.status.code(), Some(1));
     let err = text(&out.stderr);
     assert!(err.contains("[✓]") && err.contains("[✗]") && err.contains("Session guard"), "{err}");
+}
+
+#[test]
+fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that() {
+    let (claude, cache) = dirs("notes-hook");
+    assert!(platoon(&claude, &cache, &["setup"]).status.success());
+    // An existing user's settings: the two hooks from before, not the new one.
+    let path = claude.join("settings.json");
+    let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["hooks"].as_object_mut().unwrap().remove("SessionStart");
+    fs::write(&path, v.to_string()).unwrap();
+    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
+    assert!(screen.contains("No conversations yet"), "the missing notes hook must not block starting:\n{screen}");
+    let out = platoon(&claude, &cache, &["setup"]);
+    let shown = text(&out.stdout);
+    assert_eq!(shown.matches("already done").count(), 2, "{shown}");
+    assert!(shown.contains("Project notes") && shown.contains("added"), "{shown}");
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
+    assert!(cmd.ends_with(" hook session-start"), "{cmd}");
+    assert_eq!(v["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1, "the guard is not added twice");
 }
 
 #[test]

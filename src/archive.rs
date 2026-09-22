@@ -158,6 +158,16 @@ impl Archive {
         self.save(at)
     }
 
+    /// Restore several at once with a single write (restoring a project brings back all of its sessions).
+    pub fn restore_many(&mut self, ids: &[String], at: u64) -> io::Result<()> {
+        self.load();
+        for id in ids {
+            self.ids.remove(id);
+            self.touched.insert(id.clone(), at);
+        }
+        self.save(at)
+    }
+
     /// The user opened it: count `at` as activity even if nothing gets written to the conversation.
     pub fn touch(&mut self, id: &str, at: u64) -> io::Result<()> {
         self.load();

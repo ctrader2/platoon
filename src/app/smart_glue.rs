@@ -407,6 +407,10 @@ impl App {
 
     /// The kinds of search on offer: "Describe it" only while the master switch and its own switch are on.
     pub fn search_kinds(&self) -> Vec<usize> {
+        // The Projects tab's search narrows its list of projects: the other kinds are about sessions.
+        if self.projects_list_showing() {
+            return vec![0];
+        }
         let s = self.settings.get();
         (0..SEARCH_KINDS.len()).filter(|&i| SEARCH_KINDS[i].feature.is_none_or(|f| s.feature_on(f))).collect()
     }
@@ -476,7 +480,7 @@ impl App {
 
     /// The conversations a description search may pick from, the local way: by index into `sessions`.
     fn find_pool(&self, settings: &Settings) -> Vec<usize> {
-        (0..self.sessions.len()).filter(|&i| !(self.sessions[i].archived && !settings.search_archived)).collect()
+        (0..self.sessions.len()).filter(|&i| !(self.sessions[i].archived && !settings.search_archived) && self.in_scope(&self.sessions[i])).collect()
     }
 
     /// Ctrl+W: search wider. Says what that costs first and waits for enter.

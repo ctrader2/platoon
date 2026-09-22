@@ -2,7 +2,8 @@
 
 A terminal app for managing Claude Code sessions (Linux and macOS): every conversation across every
 directory in one list, with status, model, context use and plan usage. Open one (resuming it if nothing is
-running it), start one, and archive the ones you're done with.
+running it), start one, and archive the ones you're done with. Group conversations into [projects](#projects) that
+span as many folders as you like, each with its own notes.
 
 ## Install
 
@@ -21,8 +22,12 @@ already done, and a step whose command points at a platoon that no longer exists
 | --- | --- |
 | Status line | Plan usage (5-hour and weekly) and Claude's own context percentage |
 | Session guard | Stops two copies of one conversation from overwriting each other |
+| Project notes | Hands a [project's](#projects) notes to its sessions when they start. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 
 ## The list
+
+The header has two tabs, **Sessions** and **Projects** (`1` and `2`, or click them), each with how many active ones
+it holds. Under it, each tab has **Active** and **Archived**: the left and right arrow keys switch them (or click them).
 
 One row per conversation, built from Claude Code's saved history, so everything you've ever run is there
 whether or not it's running. Each row shows the name, directory, branch, model, a status, how full the
@@ -44,7 +49,9 @@ key hints (left out on a terminal too short to spare them).
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
-| `1` `2` | switch between the Active and Archived tabs (or click them); the current tab is underlined and each shows a count badge |
+| `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
+| `1` `2` | switch between the Sessions and Projects tabs (or click them); the current tab is underlined and each shows a count badge |
+| `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
@@ -361,6 +368,52 @@ changed, in the background, so it opens at once even with thousands of conversat
 [full-text search](#search) (and, for the smart names, one line of Claude's last reply) are kept the same way in `prompts.jsonl`
 next to it, by remembering how far into each transcript it has read.
 
+## Projects
+
+A project is a name, a color and a badge, and the conversations you put in it. It isn't tied to a folder: a project can
+hold conversations from any number of folders, and each keeps its own. A conversation is in at most one project, and any
+conversation can be put in one, including ones you started outside platoon. Conversations in a project still show on the
+Sessions tab, with the project's badge (its first letters, on its color) in front of the name.
+
+On the **Projects** tab each row shows the badge and name, how many active and archived sessions the project has, when its
+notes last changed and when it was last used.
+
+| Key (Projects tab) | Does |
+| --- | --- |
+| `n` | new project (it asks for a name only) |
+| `enter` | open the project's screen |
+| `r` | rename it |
+| `a` | archive it (on the Archived side: restore it) |
+| `c` | its color (one of the theme's, so it follows the theme) and badge (up to 3 letters) |
+| `d` | delete it (asks first) |
+| `/` | narrow the list of projects as you type |
+| `←` `→` | Active or Archived projects |
+
+A **project's screen** shows its sessions on the left (active ones first, then an `Archived (N)` group, dimmed) and its
+notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
+`enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` work there too). `n` starts a new session in the
+project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
+sessions, with all three kinds of search. `esc` goes back.
+
+The notes are a file, `project.md`, in `~/.config/platoon/projects/<id>/` (the folder is named by the project's id, so a
+rename changes nothing there). For now platoon shows it but doesn't edit it: create or edit it with any editor. When the
+Project notes step of `platoon setup` is done, a session in the project gets the notes as context when it starts, when it
+is resumed after the notes changed, and again after Claude compacts the conversation; unchanged notes are not sent again.
+This works for every session in the project, including ones you run with plain `claude`.
+
+- **Archiving** a project archives its active sessions too (stopping the ones that are running, as archiving a single
+  conversation does; it asks first if one is working or runs in a terminal outside platoon). **Restoring** it brings back
+  exactly those; sessions that were archived before stay archived. You can restore one session of an archived project on
+  its own: it stays in the project and the project stays archived.
+- **Deleting** a project takes its sessions out of it (they stay on the Sessions tab), deletes its notes and keeps one
+  backup copy in `~/.cache/platoon/deleted-projects/<id>/`. No conversation is ever deleted.
+- Automatic archiving after days of no use applies to conversations in projects too.
+- Projects live in `~/.config/platoon/projects.json`.
+
+```
+platoon open --project "Web shop"   # start a new session in this folder, in that project
+```
+
 ## Sessions started in platoon keep running
 
 Each one runs under a small background host, so quitting platoon (or closing its terminal) never ends it.
@@ -415,6 +468,7 @@ through, so the terminal's own selection and copy work as usual.
 ```
 platoon open            # start a new session in this directory
 platoon open a1b2       # join a session by (a prefix of) its id, resuming it if nothing is running
+platoon open --project shop   # start a new session in this directory, in a project (by its name)
 ```
 
 The session is shared, tmux-style: every window shows it live and any of them can type. The session is

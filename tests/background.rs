@@ -128,7 +128,7 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
     t.wait_for("Background");
     let text = t.text();
     assert!(text.contains("idle"), "the ordinary conversation is still idle:\n{text}");
-    assert!(t.flat().contains("1 Active 2"), "a background session is on the Active tab:\n{text}");
+    assert!(t.flat().contains("Active 2"), "a background session is on the Active tab:\n{text}");
 
     // The status is drawn in the theme's accent (Catppuccin Mocha lavender), not the idle grey or working purple.
     let (row, col) = find(&mut t, "Background");
@@ -174,7 +174,7 @@ fn the_archive_key_on_a_background_row_says_no_and_changes_nothing() {
     t.wait_for("Background");
     t.send(b"a");
     t.wait_for("can't archive it");
-    assert!(t.flat().contains("1 Active 2"), "{}", t.text());
+    assert!(t.flat().contains("Active 2"), "{}", t.text());
     assert!(w.service_alive());
     assert!(!w.config.join("archive.json").exists());
     assert!(w.launches().is_empty());

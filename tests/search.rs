@@ -131,7 +131,7 @@ fn tab_finds_conversations_by_the_words_typed_in_them_and_enter_opens_the_archiv
     fs::write(w.base.join("config/archive.json"), r#"{"version":1,"archived":{"cccccccc-3333":1}}"#).unwrap();
     let mut t = Term::spawn(&[], &w.env(), &w.base, 30, 100);
     t.wait_for("alpha");
-    t.wait_for_flat("2 Archived 1".replace("2 Archived 1", "Archived 1").as_str());
+    t.wait_for_flat("Archived 1".replace("Archived 1", "Archived 1").as_str());
 
     t.send(b"/\t");
     t.wait_for("Type words you asked Claude about, in any order.");

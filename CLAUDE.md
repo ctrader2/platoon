@@ -78,6 +78,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `select.rs`, `clipboard.rs` | text selection and copy in the attached view (in progress, see "Where we are") |
 | `ai.rs`, `ledger.rs` | the token plumbing: feature table, gate (switches, daily limit, plan pause, back-off; `gate_for` says "user initiated"), the `claude -p` runner, numbers-only usage ledger |
 | `smart.rs`, `summaries.rs`, `scan.rs`, `app/smart_glue.rs` | smart names and "Describe it": what counts as a substantive message, digests, reply validation, who is due and in what order (`smart.rs`, pure); `summaries.json` in the config dir; the first pass inside `platoon setup`; the app's background worker and the find flow |
+| `projects.rs`, `sessionhook.rs`, `app/projects_glue.rs` | projects: `projects.json` (projects, membership, archived-by-project), notes paths, color slots, sessions started under a project (`<cache>/project-launches`); `platoon hook session-start` (notes as SessionStart context, sent hashes in `<cache>/notes-sent`); the app's tabs, Projects tab, project screen, picker and lifecycle |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
 

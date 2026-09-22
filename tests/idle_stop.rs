@@ -325,7 +325,7 @@ fn a_stopped_session_is_still_listed_and_enter_resumes_it_from_its_saved_history
     until("the list to show the row after the stop", || {
         listed = t.text();
         let flat = t.flat();
-        listed.contains("refactor the widget") && flat.contains("1 Active 1") && flat.contains("2 Archived 0")
+        listed.contains("refactor the widget") && flat.contains("Active 1") && flat.contains("Archived 0")
     });
     for banned in ["stopped", "Session ended", "not open", "asleep", "paused"] {
         assert!(!listed.contains(banned), "{banned:?} must not appear:\n{listed}");
@@ -357,13 +357,13 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
     let mut t = Term::spawn(&[], &env, &r.work, 30, 110);
 
     t.wait_for("Auto-archived 1 conversation idle for 2+ days. Find it under Archived.");
-    assert!(t.flat().contains("1 Active 1") && t.flat().contains("2 Archived 1"), "{}", t.text());
+    assert!(t.flat().contains("Active 1") && t.flat().contains("Archived 1"), "{}", t.text());
     let file: serde_json::Value = serde_json::from_str(&fs::read_to_string(r.config.join("archive.json")).unwrap()).unwrap();
     assert!(file["archived"].get("dead-0001-aaaa").is_some() && file["archived"].get("live-0002-bbbb").is_none(), "{file}");
     assert!(r.claude.join("projects/-work/dead-0001-aaaa.jsonl").exists(), "the conversation itself is untouched");
 
     // Open it from the Archived tab: it is restored and resumed, and stays restored.
-    t.send(b"2");
+    t.send(b"\x1b[C"); // right arrow: Archived
     t.wait_for("a restore");
     t.send(b"\r");
     t.wait_for("fake-claude args:--resume dead-0001-aaaa");
@@ -371,10 +371,10 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
         r.pids.push(pid);
     }
     t.send(&[0]);
-    t.wait_for_flat("2 Archived 0");
+    t.wait_for_flat("Archived 0");
     thread::sleep(Duration::from_millis(2500)); // several refreshes
     let text = t.flat();
-    assert!(text.contains("2 Archived 0") && text.contains("1 Active 2"), "{text}");
+    assert!(text.contains("Archived 0") && text.contains("Active 2"), "{text}");
     t.send(b"q");
     t.wait_exit();
 }
