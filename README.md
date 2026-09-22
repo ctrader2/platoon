@@ -373,7 +373,9 @@ next to it, by remembering how far into each transcript it has read.
 A project is a name, a color and a badge, and the conversations you put in it. It isn't tied to a folder: a project can
 hold conversations from any number of folders, and each keeps its own. A conversation is in at most one project, and any
 conversation can be put in one, including ones you started outside platoon. Conversations in a project still show on the
-Sessions tab, with the project's badge (its first letters, on its color) in front of the name.
+Sessions tab, with a **PROJECT** column after the name: the project's name in a pill of its color (round ends where the
+terminal has the glyphs, like the count badges). Long names are cut to fit; on a narrow terminal (where the BRANCH column
+goes) the pill shows the project's badge letters instead. A tab where no conversation is in a project has no such column.
 
 On the **Projects** tab each row shows the badge and name, how many active and archived sessions the project has, when its
 notes last changed and when it was last used.

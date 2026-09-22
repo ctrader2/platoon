@@ -99,8 +99,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         let labels: Vec<&str> = TABS.iter().map(|t| t.label).collect();
         draw_shelf(f, app, shelf, &labels, &app.counts, app.tab);
-        draw_columns(f, t, cols);
         let visible = app.visible();
+        let project_w = project_width(app, visible, cols.width);
+        draw_columns(f, t, cols, project_w);
         if visible.is_empty() {
             let tab = &TABS[app.tab.min(TABS.len() - 1)];
             let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
@@ -113,7 +114,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
             f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
         } else {
-            draw_list(f, app, visible, list);
+            draw_list(f, app, visible, project_w, list);
         }
         sessions_hints(app)
     };
@@ -561,7 +562,6 @@ fn chip_width(key: &str, label: &str, count: usize) -> u16 {
 
 /// One tab of the header, ` 1 Active 3 `: the current tab is lit, a hovered one half lit, the rest quiet.
 fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, current: bool, hover: bool) -> Vec<Span<'static>> {
-    let count = if rounded { format!("{count}") } else { format!(" {count} ") };
     let chip = if current || hover { t.surface } else { t.bg };
     let (k, l, badge) = if current {
         (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
@@ -571,20 +571,30 @@ fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, curr
         (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
     };
     let mut out = vec![Span::styled(" ", Style::new().bg(chip)), Span::styled(key.to_string(), k.bg(chip)), Span::styled(label.to_string(), l.bg(chip))];
-    if rounded {
-        // The caps are drawn in the badge color on the color beside them, so the block reads as a pill.
-        let pill = badge.bg.unwrap_or(t.surface);
-        out.push(Span::styled("\u{e0b6}", Style::new().fg(pill).bg(chip)));
-        out.push(Span::styled(count, badge));
-        out.push(Span::styled("\u{e0b4}", Style::new().fg(pill).bg(t.bg)));
-    } else {
-        out.push(Span::styled(count, badge));
-    }
+    out.extend(pill(t, rounded, &count.to_string(), badge, chip, t.bg));
     out
+}
+
+/// Text in a pill: round caps where the terminal has the glyphs, otherwise a padded square. Two cells more than the
+/// text either way. `style` carries the pill's color as its background; the caps sit on `left_bg` and `right_bg`.
+fn pill(t: &Theme, rounded: bool, text: &str, style: Style, left_bg: Color, right_bg: Color) -> Vec<Span<'static>> {
+    if rounded {
+        // The caps are drawn in the pill's color on the color beside them, so the block reads as a pill.
+        let color = style.bg.unwrap_or(t.surface);
+        vec![
+            Span::styled("\u{e0b6}", Style::new().fg(color).bg(left_bg)),
+            Span::styled(text.to_string(), style),
+            Span::styled("\u{e0b4}", Style::new().fg(color).bg(right_bg)),
+        ]
+    } else {
+        vec![Span::styled(format!(" {text} "), style)]
+    }
 }
 
 struct Cols {
     name: usize,
+    /// The PROJECT column (pill and the gap after it); 0 when no row on the tab is in a project, or no room.
+    project: usize,
     dir: usize,
     branch: usize,
     model: usize,
@@ -594,23 +604,55 @@ struct Cols {
 /// Width of the "last active" column, right-aligned, at the end of the row.
 const LAST_W: usize = 6;
 
-fn cols(width: u16) -> Cols {
-    // marker(3) + name + dir + branch + model + status + context bar(BAR_WIDTH + 5) + last active
+/// The widest the PROJECT column gets (pill caps and the gap after it included); longer names are cut with `…`.
+const PROJECT_MAX: usize = 18;
+/// The PROJECT column is never narrower than its title and a space.
+const PROJECT_MIN: usize = 8;
+/// Below this many columns a row's project pill shows the project's short badge letters instead of its name.
+const PROJECT_NAME_MIN_WIDTH: u16 = 90;
+/// NAME and DIR together keep at least this much room; the PROJECT column shrinks, then goes, before they do.
+const NAME_DIR_MIN: usize = 20;
+
+/// What a row's project pill says at this width: the name, or on a narrow terminal the badge letters.
+fn project_label(p: &crate::projects::Project, width: u16) -> &str {
+    if width >= PROJECT_NAME_MIN_WIDTH {
+        &p.name
+    } else {
+        &p.badge
+    }
+}
+
+/// How wide the PROJECT column wants to be for these rows: enough for the longest pill plus a gap, at most
+/// `PROJECT_MAX`; 0 (no column) when none of them is in a project.
+fn project_width(app: &App, rows: &[usize], width: u16) -> usize {
+    let longest = rows.iter().filter_map(|&i| app.projects.of(&app.sessions[i].id)).map(|p| project_label(p, width).chars().count()).max();
+    longest.map_or(0, |n| (n + 3).clamp(PROJECT_MIN, PROJECT_MAX))
+}
+
+/// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for none).
+fn cols(width: u16, project: usize) -> Cols {
+    // marker(3) + name + project + dir + branch + model + status + context bar(BAR_WIDTH + 5) + last active
     let fixed = 3 + BAR_WIDTH + 5 + LAST_W;
     let w = width as usize;
     let branch = if w >= 90 { 16 } else { 0 };
     let model = if w >= 100 { 12 } else { 0 };
     let status = 11; // room for "Background" and a space
     let flex = w.saturating_sub(fixed + branch + model + status);
-    Cols { name: flex * 2 / 5, dir: flex - flex * 2 / 5, branch, model, status }
+    // The project column comes out of the room NAME and DIR share, and gives way to them on a narrow terminal:
+    // it shrinks (the name cut with `…`), and goes when not even its title fits.
+    let room = flex.saturating_sub(NAME_DIR_MIN);
+    let project = if project > 0 && room >= PROJECT_MIN { project.min(room) } else { 0 };
+    let flex = flex - project;
+    Cols { name: flex * 2 / 5, project, dir: flex - flex * 2 / 5, branch, model, status }
 }
 
-fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
-    let c = cols(area.width);
+fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, project: usize) {
+    let c = cols(area.width, project);
     let s = Style::new().fg(t.dim);
     let line = Line::from(vec![
         Span::raw("   "),
         Span::styled(fit("NAME", c.name), s),
+        Span::styled(fit(if c.project > 0 { "PROJECT" } else { "" }, c.project), s),
         Span::styled(fit("DIR", c.dir), s),
         Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch), s),
         Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model), s),
@@ -621,7 +663,7 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_list(f: &mut Frame, app: &App, visible: &[usize], area: Rect) {
+fn draw_list(f: &mut Frame, app: &App, visible: &[usize], project: usize, area: Rect) {
     const ROW_H: u16 = 3; // two text lines + one spacer
     let rows = (area.height / ROW_H) as usize;
     let now = crate::usage::now() * 1000;
@@ -632,7 +674,7 @@ fn draw_list(f: &mut Frame, app: &App, visible: &[usize], area: Rect) {
         let row = Rect::new(area.x, y, area.width, ROW_H.min(area.bottom() - y));
         app.hits.borrow_mut().push((row, Hit::Row(i)));
         let hover = row.contains(app.mouse.into());
-        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, now, row);
+        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, now, project, row);
     }
 }
 
@@ -673,9 +715,10 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
     }
 }
 
-fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, area: Rect) {
+#[allow(clippy::too_many_arguments)]
+fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, project: usize, area: Rect) {
     let t = app.effective_theme();
-    let c = cols(area.width);
+    let c = cols(area.width, project);
     let bg = if selected || hover { t.surface } else { t.bg };
     let base = Style::new().bg(bg);
     // Archived rows are dimmed so the tab reads as "put away" at a glance.
@@ -691,13 +734,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
     let mut l1 = vec![lead.clone(), Span::styled(format!("{marker} "), base.fg(marker_color))];
-    // A session in a project carries the project's badge in front of its name.
-    let mut name_w = c.name;
-    if let Some(p) = app.projects.of(&s.id).filter(|p| badge_width(p) + 6 <= c.name) {
-        l1.push(badge_span(t, p));
-        l1.push(Span::styled(" ", base));
-        name_w -= badge_width(p) + 1;
-    }
+    let name_w = c.name;
     // A name platoon made up carries a quiet mark at the end of its column, so it can be told from one you chose.
     if s.name_source == NameSource::Generated && name_w >= 8 {
         l1.push(Span::styled(fit(&s.name, name_w - 3), name_style));
@@ -708,6 +745,20 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     // With a name that isn't the folder's, the folder is what tells the conversations apart: when the path has to be
     // cut, the end of it (the folder itself) stays.
     let dir = if s.name_source == NameSource::Folder { fit(&s.dir, c.dir) } else { fit_tail(&s.dir, c.dir) };
+    // The project, as a pill in its color (the same pill as the counts beside Active and Archived), then a gap.
+    if c.project > 0 {
+        match app.projects.of(&s.id) {
+            Some(p) => {
+                let text = fit_end(project_label(p, area.width), c.project - 3);
+                let style = Style::new().fg(crate::projects::badge_text(t)).bg(crate::projects::slot_color(t, &p.color)).add_modifier(Modifier::BOLD);
+                let spans = pill(t, app.rounded, &text, style, bg, bg);
+                let used = text.chars().count() + 2;
+                l1.extend(spans);
+                l1.push(Span::styled(" ".repeat(c.project - used), base));
+            }
+            None => l1.push(Span::styled(" ".repeat(c.project), base)),
+        }
+    }
     l1.extend([
         Span::styled(dir, base.fg(subtext)),
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
@@ -2125,6 +2176,25 @@ mod tests {
                 assert!(matches!(cell.fg, Color::Rgb(..)) && matches!(cell.bg, Color::Rgb(..)), "{}: {:?} {:?}", t.id, cell.fg, cell.bg);
             }
         }
+    }
+
+    #[test]
+    fn the_project_column_takes_its_room_from_name_and_dir_and_never_widens_the_table() {
+        let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status;
+        for width in 0..=240u16 {
+            let plain = cols(width, 0);
+            assert_eq!(plain.project, 0);
+            for want in [PROJECT_MIN, 12, PROJECT_MAX] {
+                let c = cols(width, want);
+                assert_eq!(sum(&c), sum(&plain), "{width}/{want}: the table adds up to the same width");
+                assert_eq!((c.branch, c.model, c.status), (plain.branch, plain.model, plain.status), "{width}: other drop rules unchanged");
+                assert!(c.project == 0 || (PROJECT_MIN..=want).contains(&c.project), "{width}/{want}: {}", c.project);
+                assert!(c.project == 0 || c.name + c.dir >= NAME_DIR_MIN, "{width}/{want}");
+            }
+        }
+        // At 120 there is room for the widest column; at the narrowest there is none.
+        assert_eq!(cols(114, PROJECT_MAX).project, PROJECT_MAX);
+        assert_eq!(cols(40, PROJECT_MAX).project, 0);
     }
 
     #[test]

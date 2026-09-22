@@ -1,5 +1,5 @@
 //! Projects end to end, in a real terminal with the real binary: the top-level tabs, the Projects tab and its keys,
-//! the project picker and the badge on a session row, a project's screen, a new session started under a project,
+//! the project picker and the project column on the Sessions tab, a project's screen, a new session started under a project,
 //! archiving and restoring a project with a live stand-in session, `platoon open --project`, and the SessionStart hook.
 //!
 //! The "claude" is a small script: it registers itself the way Claude does, prints how it was started and what
@@ -202,11 +202,17 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     t.wait_for("No project");
     t.send(b"\r");
     t.wait_gone("New project…");
-    t.wait_for(" WS ");
+    t.wait_for("PROJECT");
+    t.wait_for(" Shop ");
     let session = lab.projects()["sessions"].as_object().unwrap().keys().next().cloned().expect("a member");
     assert!(session == "aaaa-0001" || session == "bbbb-0002");
-    // The badge is drawn in the project's color (the first project gets the theme's accent), the letters on it dark.
-    let (row, col) = locate(&t.text(), " WS ");
+    // The project's own column, right after NAME: its name in a pill of its color (the first project gets the theme's
+    // accent), the letters on it dark. The badge letters are no longer in front of the name.
+    let text = t.text();
+    let (head, head_col) = locate(&text, "PROJECT");
+    let (row, col) = locate(&text, " Shop ");
+    assert!(row > head && col == head_col && locate(&text, "NAME").1 < head_col, "{text}");
+    assert!(!text.contains(" WS "), "{text}");
     t.wait_bg(row, col + 1, vt100::Color::Rgb(0xb4, 0xbe, 0xfe));
     t.wait_fg(row, col + 1, vt100::Color::Rgb(0x1e, 0x1e, 0x2e));
 
@@ -227,7 +233,8 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     assert!(lab.cache.join("deleted-projects").join(&id).join("project.json").exists());
     t.send(b"1");
     t.wait_for_flat("Active 2");
-    t.wait_gone(" WS ");
+    t.wait_gone(" Shop ");
+    t.wait_gone("PROJECT");
     t.send(b"q");
     t.wait_exit();
 }

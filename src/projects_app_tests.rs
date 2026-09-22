@@ -182,26 +182,76 @@ fn m_offers_the_active_projects_new_project_and_no_project() {
     assert!(matches!(app.mode, Mode::List));
 }
 
+/// The screen's cells, line by line.
+fn cells(term: &Terminal<TestBackend>) -> Vec<Vec<ratatui::buffer::Cell>> {
+    let buf = term.backend().buffer();
+    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].clone()).collect()).collect()
+}
+
+fn text_of(line: &[ratatui::buffer::Cell]) -> String {
+    line.iter().map(|c| c.symbol()).collect()
+}
+
+/// The column (in cells) where `word` starts on a line of cells.
+fn col_of(line: &[ratatui::buffer::Cell], word: &str) -> Option<usize> {
+    let syms: Vec<String> = line.iter().map(|c| c.symbol().to_string()).collect();
+    let w: Vec<String> = word.chars().map(|c| c.to_string()).collect();
+    (0..syms.len().saturating_sub(w.len() - 1)).find(|&i| syms[i..i + w.len()] == w[..])
+}
+
+/// The Sessions table's title line.
+fn header_row(lines: &[Vec<ratatui::buffer::Cell>]) -> usize {
+    lines.iter().position(|l| col_of(l, "STATUS").is_some() && col_of(l, "CONTEXT").is_some()).expect("the column titles")
+}
+
+/// The table's lines (below the column titles) with cells on `color`: the rows carrying that project's pill.
+fn pill_rows(lines: &[Vec<ratatui::buffer::Cell>], color: ratatui::style::Color) -> Vec<usize> {
+    let h = header_row(lines);
+    lines.iter().enumerate().skip(h + 1).filter(|(_, l)| l.iter().any(|c| c.bg == color)).map(|(i, _)| i).collect()
+}
+
+/// The first line of a session's row: the one above its description (the prompt, in these tests).
+fn row_of(lines: &[Vec<ratatui::buffer::Cell>], prompt: &str) -> usize {
+    lines.iter().position(|l| text_of(l).contains(prompt)).expect("the row") - 1
+}
+
 #[test]
-fn a_session_in_a_project_carries_its_badge_in_the_projects_color() {
-    let w = four("p-badge");
+fn a_session_in_a_project_shows_the_project_as_a_pill_in_its_own_column() {
+    let w = four("p-column");
     let mut app = w.app();
     let a = make_project(&mut app, "Web shop");
     put_in(&mut app, "alpha-1", &a);
+    app.notice = None;
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = draw(&mut term, &app);
     let t = app.theme.clone();
-    let buf = term.backend().buffer().clone();
-    let row = shown.lines().position(|l| l.contains(" WS ")).expect("the badge on a row");
-    let line: Vec<char> = shown.lines().nth(row).unwrap().chars().collect();
-    let col = (0..line.len()).find(|&i| line[i] == 'W' && line[i + 1] == 'S').unwrap() as u16;
+    let lines = cells(&term);
+    let h = header_row(&lines);
+    // PROJECT comes right after NAME, before DIR.
+    let (name_x, proj_x, dir_x) = (col_of(&lines[h], "NAME").unwrap(), col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    assert!(name_x < proj_x && proj_x < dir_x, "{}", text_of(&lines[h]));
+    // As wide as the name needs, pill and gap included, never narrower than its title and a space.
+    assert_eq!(dir_x - proj_x, "Web shop".len() + 3);
+    // The pill: the name on the project's color, the letters in the badge's text color, padded square (no round glyphs here).
     let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
-    assert_eq!((buf[(col, row as u16)].bg, buf[(col, row as u16)].fg), (color, projects::badge_text(&t)));
     assert_ne!(color, t.bg);
-    // Only that row: the others have no badge.
-    assert_eq!(shown.matches(" WS ").count(), 1, "{shown}");
+    let rows = pill_rows(&lines, color);
+    assert_eq!(rows.len(), 1, "only the one session in the project: {shown}");
+    let row = &lines[rows[0]];
+    assert_eq!(col_of(row, " Web shop ").unwrap(), proj_x, "{}", text_of(row));
+    for c in &row[proj_x..proj_x + 10] {
+        assert_eq!((c.bg, c.fg), (color, projects::badge_text(&t)));
+    }
+    assert_ne!(row[proj_x + 10].bg, color, "then a gap on the row's own color");
+    // The badge letters are not in front of the name any more.
+    assert!(col_of(row, " WS ").is_none(), "{}", text_of(row));
+    assert!(row[..proj_x].iter().all(|c| c.bg != color));
+    assert_eq!(rows[0], row_of(&lines, "alpha talks"));
+    // Rows not in a project leave the column blank.
+    let other = row_of(&lines, "delta talks");
+    assert!(lines[other][proj_x..dir_x].iter().all(|c| c.symbol() == " "));
 
-    // Color and badge can be changed: the row follows.
+    // Color and badge can be changed: the pill follows the color; the name stays the name.
     key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::Look));
@@ -217,11 +267,156 @@ fn a_session_in_a_project_carries_its_badge_in_the_projects_color() {
     let p = app.projects.get(&a).unwrap().clone();
     assert_eq!((p.badge.as_str(), p.color.as_str()), ("sho", projects::SLOTS[slot].0));
     key(&mut app, KeyCode::Char('1'));
-    let shown = draw(&mut term, &app);
-    let row = shown.lines().position(|l| l.contains(" sho ")).expect("the new badge");
-    let line: Vec<char> = shown.lines().nth(row).unwrap().chars().collect();
-    let col = (0..line.len()).find(|&i| line[i] == 's' && line[i + 1] == 'h').unwrap() as u16;
-    assert_eq!(term.backend().buffer()[(col, row as u16)].bg, projects::slot_color(&t, &p.color));
+    draw(&mut term, &app);
+    let lines = cells(&term);
+    let rows = pill_rows(&lines, projects::slot_color(&t, &p.color));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(col_of(&lines[rows[0]], " Web shop "), Some(proj_x));
+}
+
+#[test]
+fn where_the_terminal_has_the_glyphs_the_project_pill_is_round() {
+    let w = four("p-round");
+    let mut app = w.app();
+    let a = make_project(&mut app, "Web shop");
+    put_in(&mut app, "alpha-1", &a);
+    app.rounded = true;
+    let t = app.theme.clone();
+    let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
+    for selected in [false, true] {
+        if selected {
+            select(&mut app, "alpha-1");
+        } else {
+            select(&mut app, "delta-4");
+        }
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        draw(&mut term, &app);
+        let lines = cells(&term);
+        let proj_x = col_of(&lines[header_row(&lines)], "PROJECT").unwrap();
+        let row = &lines[pill_rows(&lines, color)[0]];
+        let row_bg = if selected { t.surface } else { t.bg };
+        // The same pill as the counts: caps in the pill's color on the row's own background, the name between.
+        assert_eq!(row[proj_x].symbol(), "\u{e0b6}", "{}", text_of(row));
+        assert_eq!((row[proj_x].fg, row[proj_x].bg), (color, row_bg));
+        assert_eq!(col_of(row, "Web shop"), Some(proj_x + 1));
+        assert_eq!((row[proj_x + 1].bg, row[proj_x + 1].fg), (color, projects::badge_text(&t)));
+        assert_eq!(row[proj_x + 9].symbol(), "\u{e0b4}");
+        assert_eq!((row[proj_x + 9].fg, row[proj_x + 9].bg), (color, row_bg));
+        assert_eq!(row[proj_x + 10].bg, row_bg);
+    }
+}
+
+#[test]
+fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
+    let w = four("p-long");
+    let mut app = w.app();
+    let a = make_project(&mut app, "A project with a rather long name");
+    put_in(&mut app, "alpha-1", &a);
+    let b = make_project(&mut app, "Tiny");
+    put_in(&mut app, "beta-2", &b);
+    key(&mut app, KeyCode::Char('1'));
+    app.notice = None;
+    let t = app.theme.clone();
+    let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    draw(&mut term, &app);
+    let lines = cells(&term);
+    let h = header_row(&lines);
+    let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    // At most 18 columns: the pill holds 15 characters, the last one `…`.
+    assert_eq!(dir_x - proj_x, 18);
+    let row = &lines[pill_rows(&lines, color)[0]];
+    assert_eq!(col_of(row, " A project with… "), Some(proj_x), "{}", text_of(row));
+    // The short name sits in the same column.
+    let tiny = projects::slot_color(&t, &app.projects.get(&b).unwrap().color);
+    assert_ne!(tiny, color, "each project its own color");
+    assert_eq!(col_of(&lines[pill_rows(&lines, tiny)[0]], " Tiny "), Some(proj_x));
+
+    // Below 90 columns (where BRANCH goes): the badge letters, the column as wide as its title needs.
+    let mut term = Terminal::new(TestBackend::new(89, 30)).unwrap();
+    draw(&mut term, &app);
+    let lines = cells(&term);
+    let h = header_row(&lines);
+    let head = text_of(&lines[h]);
+    assert!(!head.contains("BRANCH") && !head.contains("MODEL"), "{head}");
+    let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    assert_eq!(dir_x - proj_x, 8);
+    let row = &lines[pill_rows(&lines, color)[0]];
+    assert_eq!(col_of(row, " AP "), Some(proj_x), "{}", text_of(row));
+    assert!(!text_of(row).contains("A project"));
+    assert_eq!(col_of(&lines[pill_rows(&lines, tiny)[0]], " TI "), Some(proj_x));
+}
+
+#[test]
+fn without_a_project_on_the_tab_the_table_is_unchanged() {
+    let table = |term: &Terminal<TestBackend>| -> Vec<String> {
+        let lines = cells(term);
+        lines[header_row(&lines)..].iter().map(|l| text_of(l)).collect()
+    };
+    for width in [120u16, 80] {
+        let w = four(&format!("p-nocol-{width}"));
+        fs::create_dir_all(&w.config).unwrap();
+        fs::write(w.config.join("archive.json"), r#"{"version":1,"archived":{"delta-4":5}}"#).unwrap();
+        let mut app = w.app();
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        draw(&mut term, &app);
+        let before = table(&term);
+        assert!(!before[0].contains("PROJECT"));
+        // A project with nobody in it, then one holding only an archived session: the Active tab has no column.
+        let a = make_project(&mut app, "Web shop");
+        key(&mut app, KeyCode::Char('1'));
+        app.notice = None;
+        draw(&mut term, &app);
+        assert_eq!(table(&term), before, "{width}");
+        app.projects.assign("delta-4", Some(&a)).unwrap();
+        app.refresh_for_test();
+        draw(&mut term, &app);
+        assert_eq!(table(&term), before, "{width}: the archived session's project is not on this tab");
+        // On the Archived tab it is.
+        key(&mut app, KeyCode::Right);
+        draw(&mut term, &app);
+        assert!(table(&term)[0].contains("PROJECT"), "{}", table(&term)[0]);
+    }
+}
+
+#[test]
+fn with_a_project_column_every_row_still_fits_the_width() {
+    let w = four("p-fit");
+    let mut app = w.app();
+    let a = make_project(&mut app, "A project with a rather long name");
+    put_in(&mut app, "alpha-1", &a);
+    key(&mut app, KeyCode::Char('1'));
+    app.notice = None;
+    let t = app.theme.clone();
+    let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
+    for width in [120u16, 100, 96, 95, 90, 89, 80, 69, 68, 60, 50, 40, 30] {
+        let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
+        draw(&mut term, &app);
+        let lines = cells(&term);
+        let h = header_row(&lines);
+        // The table's right edge: LAST ends where the rows' times end, with a column to spare before the frame.
+        let head = text_of(&lines[h]);
+        let last_end = col_of(&lines[h], "LAST").map(|x| x + 4);
+        let rows: Vec<usize> = (h + 1..lines.len()).filter(|&y| text_of(&lines[y]).contains("talks")).map(|y| y - 1).collect();
+        assert_eq!(rows.len(), 4, "{width}: every row drawn");
+        for &y in &rows {
+            let line = text_of(&lines[y]);
+            let end = line.trim_end_matches(['│', ' ']).chars().count();
+            if let Some(e) = last_end {
+                assert_eq!(end, e, "{width}: the row ends under LAST:\n{head}\n{line}");
+            }
+            assert!(line.ends_with('│'), "{width}: the frame is not overwritten: {line}");
+        }
+        let has_col = head.contains("PROJECT");
+        assert_eq!(has_col, width >= 69, "{width}: {head}");
+        assert_eq!(pill_rows(&lines, color).is_empty(), !has_col, "{width}");
+        // The pill switches to the badge letters exactly where BRANCH goes (the table is 90 columns wide).
+        if has_col {
+            let row = text_of(&lines[pill_rows(&lines, color)[0]]);
+            assert_eq!(row.contains(" AP "), !head.contains("BRANCH"), "{width}: {row}");
+            assert_eq!(row.contains(" A project"), head.contains("BRANCH"), "{width}: {row}");
+        }
+    }
 }
 
 #[test]
