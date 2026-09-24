@@ -1358,8 +1358,8 @@ mod tests {
     #[test]
     fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
         let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call"]);
-        assert_eq!(names.len(), 17, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
+        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit", "Pause above plan usage", "Model for smart features"]);
+        assert_eq!(names.len(), 18, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
         for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
@@ -1402,7 +1402,7 @@ mod tests {
         let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
         assert_eq!(
             (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
         );
         let by_name = |name: &str| SMART_ITEMS.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");

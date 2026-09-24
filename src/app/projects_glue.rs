@@ -254,6 +254,7 @@ impl App {
             KeyCode::Char('a') => self.act(Action::Archive),
             KeyCode::Char('r') => self.act(Action::Rename),
             KeyCode::Char('m') => self.act(Action::Assign),
+            KeyCode::Char('H') => self.act(Action::HandOff),
             KeyCode::Enter => self.act(Action::Jump),
             KeyCode::Esc => {
                 self.filter.clear();
@@ -321,6 +322,7 @@ impl App {
                 KeyCode::Char('a') => self.act(Action::Archive),
                 KeyCode::Char('r') => self.act(Action::Rename),
                 KeyCode::Char('m') => self.act(Action::Assign),
+                KeyCode::Char('H') => self.act(Action::HandOff),
                 KeyCode::Enter => self.act(Action::Jump),
                 KeyCode::Down => self.move_selection(1),
                 KeyCode::Up => self.move_selection(-1),
@@ -385,7 +387,11 @@ impl App {
                     let mut msg = format!("Made the project \"{name}\"");
                     if let NamePurpose::NewFor(session) = &purpose {
                         match self.projects.assign(session, Some(&id)) {
-                            Ok(()) => msg = format!("Made the project \"{name}\" and put the session in it"),
+                            Ok(()) => {
+                                let s = session.clone();
+                                self.joined_project(&id, &s);
+                                msg = format!("Made the project \"{name}\" and put the session in it");
+                            }
                             Err(e) => return self.report_projects_error(e),
                         }
                     } else {
@@ -412,6 +418,13 @@ impl App {
             },
         }
         self.reload();
+    }
+
+    /// A session has just joined a project: tell the notes helper, so an update runs a few minutes later without
+    /// the user having to resume anything. It never blocks (the helper is a detached process of its own) and it
+    /// does nothing at all when the feature is off, the project is archived or there are no notes yet.
+    pub(super) fn joined_project(&self, project: &str, session: &str) {
+        crate::notesrun::mark_joined(&self.config, &self.cache, project, session, crate::notesrun::now_ms());
     }
 
     fn report_projects_error(&mut self, e: io::Error) {
@@ -454,7 +467,11 @@ impl App {
             AssignOpt::Project(p) => {
                 let pname = self.projects.get(&p).map(|x| x.name.clone()).unwrap_or_default();
                 match self.projects.assign(&session, Some(&p)) {
-                    Ok(()) => self.notify(format!("Put \"{name}\" in the project \"{pname}\"")),
+                    Ok(()) => {
+                        // Nothing ends a turn when a session is added by hand, so the notes are told here instead.
+                        self.joined_project(&p, &session);
+                        self.notify(format!("Put \"{name}\" in the project \"{pname}\""));
+                    }
                     Err(e) => self.report_projects_error(e),
                 }
             }

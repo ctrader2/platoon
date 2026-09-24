@@ -142,7 +142,7 @@ impl App {
     }
 
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.
-    fn spawn_call(&self, settings: Settings, req: Request) -> Receiver<Answer> {
+    pub(super) fn spawn_call(&self, settings: Settings, req: Request) -> Receiver<Answer> {
         let (tx, rx) = channel();
         let program = self.ai_program();
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.

@@ -38,9 +38,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod handoff_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
+pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
@@ -154,6 +156,8 @@ pub enum Action {
     ShowChanges,
     /// `u` in the notes pane: undo the last change.
     Undo,
+    /// `H` on a session that is in a project: write a brief and start a new session from it.
+    HandOff,
 }
 
 /// Clickable regions, recorded by the UI each frame.
@@ -253,6 +257,8 @@ pub enum Mode {
     PickEditor,
     /// The before/after view of the last change to the notes (`changes`).
     Changes,
+    /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
+    Handoff,
 }
 
 pub struct Picker {
@@ -465,6 +471,9 @@ pub struct App {
     notes_window: Option<NotesWindow>,
     pub epick: EditorPick,
     pub changes: Changes,
+    /// The hand-off box (`H`), and the call it is waiting for.
+    pub handoff: HandoffBox,
+    handoff_flight: Option<Receiver<Result<crate::ai::Reply, crate::ai::AiError>>>,
     /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
     pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
@@ -619,6 +628,8 @@ impl App {
             notes_window: None,
             epick: EditorPick { project: String::new(), options: Vec::new(), selected: 0 },
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
+            handoff: HandoffBox::empty(),
+            handoff_flight: None,
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             config: config.clone(),
@@ -890,7 +901,11 @@ impl App {
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
         let ids: Vec<(u32, String, u64)> = live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
-        projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &claude::pid_alive);
+        // A session platoon started under a project is placed here; that is a membership change like any other,
+        // so its project is told there is something new (the same as pressing `m`).
+        for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &claude::pid_alive) {
+            self.joined_project(&project, &session);
+        }
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
         }
@@ -969,6 +984,7 @@ impl App {
         // After the settings were re-read (auto_archive does that first), so an edit of the file is seen at once.
         self.sync_ai();
         self.refresh_prompts();
+        self.poll_handoff();
         self.drive_smart();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
@@ -1150,6 +1166,9 @@ impl App {
             (Action::EditWith, Mode::List) => self.edit_notes(true),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
+            (Action::HandOff, Mode::List) if !self.projects_list_showing() => self.start_handoff(),
+            (Action::Confirm, Mode::Handoff) => self.take_handoff(),
+            (Action::Cancel, Mode::Handoff) => self.cancel_handoff(),
             (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),
             (Action::Confirm, Mode::ProjectName) => self.save_name_box(),
             (Action::Confirm, Mode::Assign) => self.take_assign(),
@@ -2108,6 +2127,7 @@ impl App {
                 _ => {}
             },
             Mode::List => self.list_key(key),
+            Mode::Handoff => self.handoff_key(key),
             Mode::ProjectName => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2187,6 +2207,7 @@ impl App {
             Mode::ProjectName => self.type_project_name(&text.replace(['\n', '\r'], "")),
             Mode::Look => self.type_badge(&text.replace(['\n', '\r'], "")),
             Mode::EditNotes => self.editor_paste(text),
+            Mode::Handoff => self.handoff_paste(text),
             _ => {}
         }
         self.update_view();
@@ -2240,6 +2261,8 @@ impl App {
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
+                    // The brief is scrolled by the cursor, not the wheel: nothing to do here.
+                    Mode::Handoff => {}
                     Mode::ProjectName | Mode::Look => {}
                     Mode::Search => self.move_search(if up { -1 } else { 1 }),
                     Mode::Rename => {}

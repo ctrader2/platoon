@@ -77,7 +77,33 @@ pub const FEATURES: &[Feature] = &[
         description: "Keeps a project's notes up to date from what its sessions did, a few minutes after they stop. It never changes what you wrote yourself.",
         on_unless_switched_off: true,
     },
+    Feature {
+        id: crate::describe::FEATURE,
+        label: "Project descriptions",
+        description: "Gives each project the one line that says what it is, from its conversations' summaries and its notes, at most once an hour.",
+        on_unless_switched_off: true,
+    },
 ];
+
+/// Work that has no switch of its own, with what `platoon tokens` calls it. It only ever runs because the person
+/// asked for it then and there, so there is nothing to switch off; it obeys every other gate (the master switch,
+/// the daily limit, a back-off) and its spend is in the ledger like everything else.
+pub const SWITCHLESS: &[(&str, &str)] = &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off")];
+
+/// Is this a feature id with no switch of its own?
+pub fn switchless(id: &str) -> bool {
+    SWITCHLESS.iter().any(|(f, _)| *f == id)
+}
+
+/// What a feature id is called where the user sees it (`platoon tokens`), switch or no switch.
+pub fn feature_label(id: &str) -> &str {
+    FEATURES
+        .iter()
+        .find(|f| f.id == id)
+        .map(|f| f.label)
+        .or_else(|| SWITCHLESS.iter().find(|(f, _)| *f == id).map(|(_, label)| *label))
+        .unwrap_or(id)
+}
 
 /// Is this feature on when the settings file says nothing about it?
 pub fn on_by_default(id: &str) -> bool {
@@ -204,7 +230,7 @@ pub fn gate_for(settings: &Settings, feature: &str, cache: &Path, now: u64, user
     if !settings.tokens_enabled {
         return Err(Refusal::MasterOff);
     }
-    if feature != TEST_FEATURE {
+    if !switchless(feature) {
         match FEATURES.iter().find(|f| f.id == feature) {
             None => return Err(Refusal::UnknownFeature(feature.into())),
             Some(f) if !settings.feature_toggle(f.id) => return Err(Refusal::FeatureOff(f.label)),
@@ -340,7 +366,7 @@ impl Switchboard {
     /// Cancel every call whose feature is no longer allowed to run under these settings.
     pub fn apply(&self, settings: &Settings) {
         let mut flags = self.flags.lock().unwrap();
-        let off: Vec<String> = flags.keys().filter(|id| !(settings.feature_on(id) || (id.as_str() == TEST_FEATURE && settings.tokens_enabled))).cloned().collect();
+        let off: Vec<String> = flags.keys().filter(|id| !(settings.feature_on(id) || (switchless(id) && settings.tokens_enabled))).cloned().collect();
         for id in off {
             if let Some(c) = flags.remove(&id) {
                 c.cancel();
@@ -775,7 +801,7 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
             // What each feature spent today, so it is clear where the tokens went.
             let day = Ledger::open(cache).today(now);
             for (id, used) in &day.features {
-                let label = FEATURES.iter().find(|f| f.id == id).map_or(id.as_str(), |f| f.label);
+                let label = feature_label(id);
                 let _ = writeln!(out, "  {label}: {} tokens in {} call{}", crate::settings::thousands(used.tokens), used.calls, if used.calls == 1 { "" } else { "s" });
             }
             match s.plan {
@@ -968,14 +994,19 @@ pub(crate) mod tests {
     #[test]
     fn the_feature_table_has_plain_unique_rows() {
         let ids: Vec<&str> = FEATURES.iter().map(|f| f.id).collect();
-        assert_eq!(ids, ["names", "find", "project_notes"]);
+        assert_eq!(ids, ["names", "find", "project_notes", "project_description"]);
         for f in FEATURES {
             assert!(!f.label.is_empty() && f.description.ends_with('.') && f.description.len() < 200, "{}", f.id);
             assert_ne!(f.id, TEST_FEATURE);
         }
-        // Only the newest row is on as soon as the master switch is: the others were there before anyone was asked.
-        assert_eq!(FEATURES.iter().filter(|f| f.on_unless_switched_off).map(|f| f.id).collect::<Vec<_>>(), ["project_notes"]);
-        assert!(on_by_default("project_notes") && !on_by_default("names") && !on_by_default("nonsense"));
+        // The newer rows are on as soon as the master switch is: the first two were there before anyone was asked.
+        assert_eq!(FEATURES.iter().filter(|f| f.on_unless_switched_off).map(|f| f.id).collect::<Vec<_>>(), ["project_notes", "project_description"]);
+        assert!(on_by_default("project_notes") && on_by_default("project_description") && !on_by_default("names") && !on_by_default("nonsense"));
+        // Work with no switch of its own is not in the table, has a name of its own, and is not a feature id twice over.
+        assert!(SWITCHLESS.iter().all(|(id, _)| !ids.contains(id)));
+        assert_eq!((feature_label("project_notes"), feature_label(crate::handoff::FEATURE)), ("Project notes", "Hand-off"));
+        assert_eq!(feature_label("something else"), "something else");
+        assert!(switchless(TEST_FEATURE) && switchless(crate::handoff::FEATURE) && !switchless("names"));
     }
 
     #[test]
@@ -1133,7 +1164,7 @@ pub(crate) mod tests {
         let now = 1_800_000_000;
         let st = status(&s, &f.cache, now);
         assert!(st.master && st.paused.is_none() && st.used_today == 0 && st.cap == 500_000 && st.plan.is_none() && st.backoff.is_none());
-        assert_eq!(st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(), [("names", true), ("find", true), ("project_notes", true)]);
+        assert_eq!(st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(), [("names", true), ("find", true), ("project_notes", true), ("project_description", true)]);
         Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 1234, ..Usage::default() }, 0.0, true).unwrap();
         Ledger::open(&f.cache).note_failure(now, FailKind::Network).unwrap();
         let st = status(&s, &f.cache, now + 1);

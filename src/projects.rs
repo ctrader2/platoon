@@ -97,6 +97,10 @@ pub struct Project {
     pub created: u64,
     /// The sessions archiving this project archived, which restoring it brings back.
     pub archived_sessions: Vec<String>,
+    /// The one line platoon generated saying what the project is (empty until it has written one).
+    pub description: String,
+    /// When that line was written, seconds since the epoch (0: never).
+    pub description_at: u64,
 }
 
 pub struct Projects {
@@ -268,6 +272,8 @@ impl Projects {
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
                     .unwrap_or_default(),
+                description: o.get("description").and_then(Value::as_str).map(|d| clean(d, crate::describe::MAX_CHARS)).unwrap_or_default(),
+                description_at: o.get("description_at").and_then(Value::as_u64).unwrap_or(0),
                 name,
             });
         }
@@ -386,6 +392,16 @@ impl Projects {
         self.edit(id, |p| {
             p.insert("color".into(), json!(color));
             p.insert("badge".into(), json!(badge));
+        })
+    }
+
+    /// The one line that says what the project is, and when it was written. Written by the notes helper, read by
+    /// every screen that lists projects; the text is cleaned before it ever gets here.
+    pub fn set_description(&mut self, id: &str, text: &str, at: u64) -> io::Result<()> {
+        let text = clean(text, crate::describe::MAX_CHARS);
+        self.edit(id, |p| {
+            p.insert("description".into(), json!(text));
+            p.insert("description_at".into(), json!(at));
         })
     }
 
@@ -573,9 +589,10 @@ pub fn launches(cache: &Path) -> Vec<Launch> {
 
 /// Match launches with the live processes (pid, session id, started ms): a session id not placed from that launch
 /// yet goes into the project (unless it is in one already), and a launch whose process has gone is forgotten.
-/// `alive` says whether a pid still runs. True when the projects changed.
-pub fn resolve_launches(cache: &Path, projects: &mut Projects, live: &[(u32, String, u64)], alive: &dyn Fn(u32) -> bool) -> bool {
-    let mut changed = false;
+/// `alive` says whether a pid still runs. Gives back (session, project) for every session actually placed, so the
+/// caller can tell the notes helper that the project has something new.
+pub fn resolve_launches(cache: &Path, projects: &mut Projects, live: &[(u32, String, u64)], alive: &dyn Fn(u32) -> bool) -> Vec<(String, String)> {
+    let mut placed: Vec<(String, String)> = Vec::new();
     for mut l in launches(cache) {
         let path = launches_dir(cache).join(format!("{}.json", l.pid));
         if !alive(l.pid) {
@@ -589,7 +606,7 @@ pub fn resolve_launches(cache: &Path, projects: &mut Projects, live: &[(u32, Str
                 continue;
             }
             if projects.place(id, &l.project).unwrap_or(false) {
-                changed = true;
+                placed.push((id.clone(), l.project.clone()));
             }
             l.placed.push(id.clone());
             dirty = true;
@@ -598,7 +615,7 @@ pub fn resolve_launches(cache: &Path, projects: &mut Projects, live: &[(u32, Str
             let _ = write_launch(cache, &l);
         }
     }
-    changed
+    placed
 }
 
 #[cfg(test)]
@@ -799,18 +816,18 @@ mod tests {
         let a = p.create("a").unwrap();
         note_launch(&cache, 4242, &a, 10_000).unwrap();
         let alive = |pid: u32| pid == 4242;
-        assert!(!resolve_launches(&cache, &mut p, &[], &alive), "nothing registered yet");
-        assert!(resolve_launches(&cache, &mut p, &[(4242, "new".into(), 10_500)], &alive));
+        assert!(resolve_launches(&cache, &mut p, &[], &alive).is_empty(), "nothing registered yet");
+        assert_eq!(resolve_launches(&cache, &mut p, &[(4242, "new".into(), 10_500)], &alive), [("new".to_string(), a.clone())]);
         assert_eq!(p.project_id_of("new"), Some(a.as_str()));
         // The user moves it out: it is not put back while the process runs.
         p.assign("new", None).unwrap();
-        assert!(!resolve_launches(&cache, &mut p, &[(4242, "new".into(), 10_500)], &alive));
+        assert!(resolve_launches(&cache, &mut p, &[(4242, "new".into(), 10_500)], &alive).is_empty());
         assert!(p.of("new").is_none());
         // A /clear gives the same process a new id: that one goes in too.
-        assert!(resolve_launches(&cache, &mut p, &[(4242, "cleared".into(), 10_500)], &alive));
+        assert_eq!(resolve_launches(&cache, &mut p, &[(4242, "cleared".into(), 10_500)], &alive), [("cleared".to_string(), a.clone())]);
         // An unrelated process that started long before, reusing the pid, is not ours.
         note_launch(&cache, 77, &a, 1_000_000).unwrap();
-        assert!(!resolve_launches(&cache, &mut p, &[(77, "other".into(), 10)], &|_| true));
+        assert!(resolve_launches(&cache, &mut p, &[(77, "other".into(), 10)], &|_| true).is_empty());
         // A launch whose process has gone is forgotten.
         resolve_launches(&cache, &mut p, &[], &|_| false);
         assert!(launches(&cache).is_empty());

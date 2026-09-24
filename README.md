@@ -61,6 +61,7 @@ before.
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
+| `H` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `1` `2` | switch between the Sessions and Projects tabs (or click them); the current tab is underlined and each shows a count badge |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
@@ -243,7 +244,7 @@ entry, and has under the entries `Used today: N of M tokens` and `Archived: N co
 
 ### Features that use tokens
 
-Three features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
+Four features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
 require tokens** in the settings (under **Smart features**) plus the switch of each feature:
 
 - **Smart names and summaries**: gives each conversation a short name and a one- or two-sentence summary (shown under the list for
@@ -251,8 +252,14 @@ require tokens** in the settings (under **Smart features**) plus the switch of e
 - **Find a session by description**: the [Describe it](#search) search.
 - **Project notes**: keeps a project's notes up to date by itself, a few minutes after its sessions stop; see
   [Notes that keep themselves up to date](#notes-that-keep-themselves-up-to-date). This one is on as soon as the master switch is.
+- **Project descriptions**: the one line under a project's name saying what it is; see
+  [The line that says what a project is](#the-line-that-says-what-a-project-is). On as soon as the master switch is, too.
 
-`platoon tokens` lists each feature's switch and, under today's total, how many tokens each one used and in how many calls.
+The [hand-off](#handing-work-on-to-a-new-session) (`H`) has no switch: it only ever runs because you pressed the key. It still needs
+the master switch on and still counts against the daily limit, like everything else.
+
+`platoon tokens` lists each feature's switch and, under today's total, how many tokens each one used and in how many calls (the
+hand-off and `platoon tokens test` appear there too, by name).
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send Claude the
 prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and that you can switch it off any
@@ -396,8 +403,8 @@ quick filter; on a wide terminal the column also takes its share of the spare wi
 terminal columns the pill shows the project's badge letters instead. A tab where no conversation is in a project has no such
 column.
 
-On the **Projects** tab each row shows the badge and name, how many active and archived sessions the project has, when its
-notes last changed and when it was last used. Its name column, too, holds only as much as the projects on show need, and its
+On the **Projects** tab each row shows the badge and name, [what the project is](#the-line-that-says-what-a-project-is) in one
+line under it, how many active and archived sessions the project has, when its notes last changed and when it was last used. Its name column, too, holds only as much as the projects on show need, and its
 columns share a wide terminal's spare width the same way.
 
 | Key (Projects tab) | Does |
@@ -411,9 +418,9 @@ columns share a wide terminal's spare width the same way.
 | `/` | narrow the list of projects as you type |
 | `←` `→` | Active or Archived projects |
 
-A **project's screen** shows its sessions on the left (active ones first, then an `Archived (N)` group, dimmed) and its
-notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
-`enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` work there too). `n` starts a new session in the
+A **project's screen** shows its name and that same one-line description across the top, its sessions on the left (active ones
+first, then an `Archived (N)` group, dimmed) and its notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
+`enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `H` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
 sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
 `E` picks an editor for this once, `c` shows what changed last and `u` undoes it.
@@ -476,7 +483,9 @@ what your sessions actually did. It needs the **Notes updates** line of `platoon
 Code; without it nothing happens automatically.
 
 **How it runs.** Every time a session in a project finishes answering, the hook makes a note of it - instantly, silently, no
-tokens - and starts a small helper in the background. The helper waits until the project has been quiet for **about three
+tokens - and starts a small helper in the background. Putting a conversation **into** a project does the same: `m`, a session
+started under a project, or one the SessionStart hook places there all mark the project, so its notes catch up a few minutes
+later without you having to resume anything (a conversation you never open again would otherwise never be read at all). The helper waits until the project has been quiet for **about three
 minutes** (another turn starts that timer over) and then makes **one** request to Claude. Only one helper runs per project,
 and it works whether the platoon window is open or closed. Archived projects, archived sessions, and projects whose notes
 file doesn't exist yet are skipped entirely: platoon never starts the notes for you, you do that with `e`.
@@ -491,7 +500,7 @@ full once: its first message and its last 20.
 | Heading | What an update may do |
 | --- | --- |
 | Overview, Requirements, Status | add to them, and reword **what platoon itself wrote** before |
-| Decisions | append dated entries; nothing already there is ever changed |
+| Decisions | append dated entries; nothing already there is ever changed. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
 | Notes | nothing at all: it is yours |
 
 platoon remembers exactly which sentences it wrote last time, so the rest of a section is yours. If an answer comes back
@@ -505,6 +514,60 @@ undoes it, and platoon tells you once when the notes change under you.
 
 **Where it is kept.** The times and the copy of platoon's own sentences live in `~/.config/platoon/projects/<id>/notes-state.json`
 (numbers and platoon's own text only - never a message you typed, never a reply from Claude).
+
+### The line that says what a project is
+
+With **Project descriptions** on (see [features that use tokens](#features-that-use-tokens)), each project gets one short line
+saying what it is, under its name on the Projects tab and across the top of its own screen:
+
+```
+  WB  Web shop              1 active                        notes now                         2h
+      A sock shop, now with a basket that adds up.
+```
+
+It is written from the summaries platoon already made for the project's conversations plus the project's own notes - no
+transcript is read for it, and no conversation's id or folder is ever in the request. It is refreshed **straight after a notes
+update**, and at most **once an hour** per project, so it costs one small call at a time and only when something has actually
+happened. Archived projects and archived sessions are left out entirely, an answer that isn't understood changes nothing (the
+line that is there stays, and the next update tries again), and the line is cut to 100 characters with every control character
+and escape sequence removed before it is drawn. It is kept beside the project in `~/.config/platoon/projects.json`.
+
+### Handing work on to a new session
+
+`H` on a conversation that is in a project - on the Sessions tab or in the project's own screen - hands that work on to a fresh
+conversation. platoon asks Claude for a short brief (what was done, what was decided, what is next), shows it in a box:
+
+```
+╭ hand this work on ───────────────────────────────────────────────────────────────────────────╮
+│ A new session in ~/work/shop · project Web shop                                              │
+│ ──────────────────────────────────────────────────────────────────────────────────────────── │
+│ Carrying on from an earlier session. Here is where it stands.                                │
+│                                                                                              │
+│ What was done:                                                                               │
+│ The basket page is in and the totals add up.                                                 │
+│                                                                                              │
+│ Decisions made:                                                                              │
+│ - Baskets are session based                                                                  │
+│ - Totals include VAT                                                                         │
+│                                                                                              │
+│ What is next:                                                                                │
+│ Take card payments, starting with the checkout form.                                         │
+│                                                                                              │
+│ Read this, then carry on from there.                                                         │
+│ ──────────────────────────────────────────────────────────────────────────────────────────── │
+│ Edit it if you like. The old session is left exactly as it is.                               │
+│ ctrl+s start the new session   enter new line   esc cancel                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+```
+
+and waits. **You can type into it** - the arrows, Home, End, Backspace and Delete all work, `enter` starts a new line - and
+`ctrl+s` starts a **new** session in the same folder and the same project, with that text as its **first message**, visible in
+the conversation like anything else you typed. `esc` calls the whole thing off and changes nothing.
+
+The old conversation is left exactly as it is: not archived, not stopped. The project's notes are not repeated in the brief -
+the new session is given those by the SessionStart hook, as every session in a project is. If Claude can't be asked (the master
+switch is off, the day's limit is spent, a failure has paused things) or the answer isn't understood, platoon says so plainly and
+nothing is started.
 
 
 ## Sessions started in platoon keep running

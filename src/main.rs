@@ -5,9 +5,11 @@ mod claude;
 mod client;
 mod clipboard;
 mod colordepth;
+mod describe;
 mod dirs;
 mod editors;
 mod guard;
+mod handoff;
 mod host;
 mod index;
 mod ledger;
@@ -31,6 +33,8 @@ mod summaries;
 mod theme;
 mod ui;
 mod usertheme;
+#[cfg(test)]
+mod handoff_app_tests;
 #[cfg(test)]
 mod layout_app_tests;
 #[cfg(test)]
@@ -186,7 +190,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();

@@ -110,6 +110,17 @@ impl Lab {
         fs::write(self.fake.join("reply.default"), text).unwrap();
     }
 
+    /// What the stand-in says to the `k`th call (1 is the notes update, 2 the description that follows it).
+    fn reply_to(&self, k: usize, text: &str) {
+        fs::write(self.fake.join(format!("reply.{k}")), text).unwrap();
+    }
+
+    /// The description platoon has written for the project, straight from `projects.json`.
+    fn description(&self) -> String {
+        let v: Value = serde_json::from_str(&fs::read_to_string(self.config.join("projects.json")).unwrap_or_default()).unwrap_or(Value::Null);
+        v["projects"]["pweb"]["description"].as_str().unwrap_or("").to_string()
+    }
+
     fn calls(&self) -> usize {
         fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
     }
@@ -161,7 +172,9 @@ impl Drop for Lab {
 fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_undoes_the_change() {
     let lab = Lab::new("notes-update-e2e");
     lab.project(NOTES, "sess-1", &["Add a basket page to the shop", "And make the totals add up"]);
-    lab.reply(r#"{"overview":"Sell socks.\nThere is a basket page.","status":"The basket totals add up.","decisions":["Baskets are session based"]}"#);
+    lab.reply_to(1, r#"{"overview":"Sell socks.\nThere is a basket page.","status":"The basket totals add up.","decisions":["Baskets are session based"]}"#);
+    // The description follows the update, as its own call.
+    lab.reply_to(2, r#"{"description":"A sock shop, now with a basket that adds up."}"#);
 
     // The hook itself: instant, silent, exit 0 - and it starts the helper.
     let out = lab.stop_hook("sess-1", "/home/x/work");
@@ -171,12 +184,18 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     until("the notes to be updated", || lab.notes().contains("There is a basket page."));
     until("the helper to finish", || lab.helper_pid().is_some_and(|p| !alive(p)));
 
-    // One call, in the runner's own work folder, about this project and without any session id in it.
-    assert_eq!(lab.calls(), 1);
+    until("the description to be written", || !lab.description().is_empty());
+
+    // Two calls, in the runner's own work folder, about this project and without any session id in either.
+    assert_eq!(lab.calls(), 2, "the update, then the description");
     let sent = lab.sent(1);
     assert!(sent.contains("Project: Web") && sent.contains("Add a basket page to the shop"), "{sent}");
     assert!(sent.contains("Claude's last reply: I added the basket page."), "{sent}");
     assert!(!sent.contains("sess-1"), "{sent}");
+    let described = lab.sent(2);
+    assert!(described.contains("Write one short line") && described.contains("Project: Web"), "{described}");
+    assert!(!described.contains("sess-1"), "{described}");
+    assert_eq!(lab.description(), "A sock shop, now with a basket that adds up.");
 
     // What it wrote: the user's line kept, platoon's added, a dated decision, Notes untouched.
     let after = lab.notes();
@@ -192,13 +211,23 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     let day = ledger["days"].as_object().unwrap().values().next().unwrap().clone();
     assert_eq!(day["features"]["project_notes"]["calls"], 1, "{day}");
     assert!(day["features"]["project_notes"]["tokens"].as_u64().unwrap() > 0, "{day}");
+    assert_eq!(day["features"]["project_description"]["calls"], 1, "{day}");
+    assert!(day["features"]["project_description"]["tokens"].as_u64().unwrap() > 0, "{day}");
     // Nothing is waiting any more, and the helper did not set itself off again.
     assert!(!lab.cache.join("notes-due/pweb").exists());
     assert!(!lab.cache.join("notes-updating/pweb").exists());
 
-    // Now the screen: when it last ran, what changed, and undoing it.
+    // Now the screen: the description on the Projects list and across the top of the project's own screen, when
+    // the notes last changed, what changed, and undoing it.
     let mut t = Term::spawn(&[], &lab.env(), &lab.base, 40, 120);
-    lab.open_notes(&mut t);
+    t.send(b"2");
+    t.wait_for_flat("WB Web");
+    t.wait_for("A sock shop, now with a basket that adds up.");
+    t.send(b"\r");
+    t.wait_for("╭ Notes");
+    t.wait_for("A sock shop, now with a basket that adds up.");
+    t.send(b"\x1b[C");
+    t.wait_for_flat("e edit notes");
     t.wait_for_flat("platoon last updated these just now.");
     t.wait_for("There is a basket page.");
     t.send(b"c");
@@ -211,7 +240,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     t.send(b"u");
     t.wait_for_flat("The notes are back as they were");
     until("the notes to go back", || lab.notes() == NOTES);
-    assert_eq!(lab.calls(), 1, "nothing asked Claude anything else");
+    assert_eq!(lab.calls(), 2, "nothing asked Claude anything else");
 }
 
 #[test]

@@ -46,7 +46,11 @@ pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cach
         let fresh = matches!(source, "startup" | "clear");
         match env_project.filter(|p| fresh && !p.is_empty()) {
             Some(p) if projects.get(p).is_some() => {
-                projects.place(session, p).ok()?;
+                if projects.place(session, p).ok()? {
+                    // A session placed here has joined a project without any turn ending, so the notes are told:
+                    // an update runs a few minutes later instead of waiting for someone to resume it.
+                    crate::notesrun::mark_joined(config, cache, p, session, crate::notesrun::now_ms());
+                }
             }
             _ => return None,
         }

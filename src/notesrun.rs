@@ -23,6 +23,7 @@
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::claude;
+use crate::describe;
 use crate::notes;
 use crate::notesupdate::{self, Doc, Material, SessionMaterial, State};
 use crate::projects::Projects;
@@ -55,6 +56,9 @@ pub const FULL_READ_MESSAGES: usize = 20;
 
 /// The longest one update may take before it is given up on.
 const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// The longest the (much smaller) description call may take.
+const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// How much of a transcript is kept in memory while it is read.
 const KEEP_RECENT: usize = 64;
@@ -202,6 +206,10 @@ pub fn spawn_helper(id: &str) -> io::Result<()> {
     if std::env::var("PLATOON_NOTES_HELPER").is_ok_and(|v| v == "off") {
         return Ok(());
     }
+    // A unit test's own program is the test binary: running it as a helper would run the test suite again.
+    if cfg!(test) {
+        return Ok(());
+    }
     let exe = std::env::current_exe()?;
     let mut cmd = Command::new(exe);
     cmd.args(["notes-update", id]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
@@ -229,6 +237,36 @@ pub fn run_hook() -> i32 {
         }
     });
     0
+}
+
+/// A session has just joined a project - the user pressed `m`, a session platoon started under a project showed
+/// up, or the SessionStart hook placed one. Nothing ends a turn in that case, so without this the project would
+/// wait until somebody resumed one of its sessions, and a session nobody resumes would never be read at all.
+///
+/// Everything the `Stop` hook turns away is turned away here too (the switch off, an archived project, an
+/// archived session, no notes to keep up to date), and marking is all it does: the helper it starts takes the
+/// same one-per-project lock and waits out the same quiet period. True when the project was marked.
+pub fn mark_joined(config: &Path, cache: &Path, project: &str, session: &str, at_ms: u64) -> bool {
+    let (settings, corrupt) = crate::settings::load(config);
+    if corrupt || !settings.feature_on(FEATURE) {
+        return false;
+    }
+    let projects = Projects::open(config);
+    if !projects.get(project).is_some_and(|p| !p.archived) {
+        return false;
+    }
+    if Archive::open(config).contains(session) {
+        return false;
+    }
+    // No notes yet means nothing to keep up to date: the user starts them with `e`.
+    if fs::read_to_string(projects.notes_path(project)).map(|t| t.trim().is_empty()).unwrap_or(true) {
+        return false;
+    }
+    if mark_due(cache, project, at_ms).is_err() {
+        return false;
+    }
+    let _ = spawn_helper(project);
+    true
 }
 
 // ---- reading what is new in a session ---------------------------------------------------------------------------
@@ -392,6 +430,31 @@ pub enum Round {
     Written { sections: usize, decisions: usize },
 }
 
+impl Round {
+    /// A call really went out and came back understood. Only then is the project's description looked at: that is
+    /// what "refreshed right after a notes update" means.
+    pub fn ran_a_call(&self) -> bool {
+        matches!(self, Round::Unchanged | Round::Written { .. })
+    }
+}
+
+/// What came of looking at the project's description.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Described {
+    /// The gate said no (the switch, the daily limit, the plan, a back-off): in plain words.
+    Refused(String),
+    /// There is a description and it is less than an hour old.
+    NotDue,
+    /// No project, or nothing to go on.
+    Nothing,
+    /// The call itself failed.
+    Failed(String),
+    /// The answer could not be understood, so nothing was written.
+    BadReply,
+    /// The description now on file.
+    Written(String),
+}
+
 /// One update, start to finish, in the caller's own thread. The helper loop calls it; so does every test.
 pub fn update_once(env: &Env, id: &str) -> Round {
     let (settings, corrupt) = crate::settings::load(&env.config);
@@ -465,6 +528,63 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     }
     let _ = state.save(&env.config, id);
     outcome
+}
+
+// ---- the project's description ------------------------------------------------------------------------------------
+
+/// What the description is worked out from: the project's notes as they are now, and the name and summary
+/// platoon already made for each of its active conversations (newest summary first). No transcript is read and no
+/// session id is ever in it.
+pub fn describe_material(config: &Path, id: &str, name: &str) -> describe::Material {
+    let projects = Projects::open(config);
+    let archive = Archive::open(config);
+    let summaries = crate::summaries::Summaries::open(config);
+    let mut sessions: Vec<(u64, describe::SessionLine)> = Vec::new();
+    for sid in projects.members_of(id) {
+        if archive.contains(&sid) {
+            continue; // archived sessions are skipped entirely
+        }
+        let Some(e) = summaries.get(&sid) else { continue };
+        sessions.push((e.at, describe::SessionLine { name: e.name.clone(), summary: e.summary.clone() }));
+    }
+    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    let notes = fs::read_to_string(projects.notes_path(id)).unwrap_or_default();
+    describe::Material { project: name.to_string(), notes, sessions: sessions.into_iter().map(|(_, s)| s).collect() }
+}
+
+/// One look at the project's description: at most one an hour, and nothing at all for an archived project or
+/// while the switch is off. Run straight after a notes update, in the helper's own thread.
+pub fn describe_once(env: &Env, id: &str) -> Described {
+    let (settings, corrupt) = crate::settings::load(&env.config);
+    if corrupt {
+        return Described::Nothing;
+    }
+    let now = usage::now();
+    if let Err(r) = ai::gate(&settings, describe::FEATURE, &env.cache, now) {
+        return Described::Refused(r.plain());
+    }
+    let mut projects = Projects::open(&env.config);
+    let Some(project) = projects.get(id).filter(|p| !p.archived).cloned() else { return Described::Nothing };
+    if !describe::due(project.description_at, now) {
+        return Described::NotDue;
+    }
+    let material = describe_material(&env.config, id, &project.name);
+    if material.is_empty() {
+        return Described::Nothing;
+    }
+    let mut req = Request::new(describe::FEATURE, describe::system(), describe::prompt(&material));
+    req.timeout = DESCRIBE_TIMEOUT;
+    let reply = match env.runner().run(&settings, &req) {
+        Ok(r) => r.text,
+        Err(AiError::Refused(r)) => return Described::Refused(r.plain()),
+        Err(e) => return Described::Failed(e.plain()),
+    };
+    // A reply that isn't understood writes nothing at all, not even the time: the line that is there stays.
+    let Some(text) = describe::parse(&reply) else { return Described::BadReply };
+    match projects.set_description(id, &text, now) {
+        Ok(()) => Described::Written(text),
+        Err(e) => Described::Failed(e.to_string()),
+    }
 }
 
 // ---- the helper -------------------------------------------------------------------------------------------------
@@ -551,6 +671,10 @@ fn helper_loop(env: &Env, id: &str, quiet_ms: u64) {
             continue;
         }
         let round = update_once(env, id);
+        // The description follows a notes update, and never more than once an hour (`describe_once` says no).
+        if round.ran_a_call() {
+            describe_once(env, id);
+        }
         // A turn that happened while the call was out keeps the mark, and the timer starts over.
         clear_due_if(&env.cache, id, at);
         match round {
@@ -614,6 +738,16 @@ mod tests {
 
         fn notes(&self, id: &str) -> String {
             fs::read_to_string(Projects::open(&self.env.config).notes_path(id)).unwrap_or_default()
+        }
+
+        /// A generated name and summary for a session, as the naming feature would have written them.
+        fn summary(&self, sid: &str, name: &str, summary: &str, at: u64) {
+            let mut sums = crate::summaries::Summaries::open(&self.env.config);
+            sums.set_many(&[(sid.to_string(), crate::summaries::Entry { name: name.into(), summary: summary.into(), covers: 1, model: "haiku".into(), at })]).unwrap();
+        }
+
+        fn description(&self, id: &str) -> String {
+            Projects::open(&self.env.config).get(id).map(|p| p.description.clone()).unwrap_or_default()
         }
 
         fn hook(&self, sid: &str) -> Option<String> {
@@ -949,10 +1083,173 @@ mod tests {
         // A mark that is already old enough (the quiet period is a parameter here).
         mark_due(&r.env.cache, &id, now_ms()).unwrap();
         helper_loop(&r.env, &id, 0);
-        assert_eq!(r.fake.calls(), 1, "one update, and then it stopped");
+        // One update, then the description that follows it, and then it stopped.
+        assert_eq!(r.fake.calls(), 2, "the update and the description that follows it");
+        assert!(r.fake.stdin(2).contains("Write one short line"), "the second call is the description: {}", r.fake.stdin(2));
         assert!(r.notes(&id).contains("The basket page is in."));
+        // The stand-in answered the description call with the update's own JSON, which is not a description: so
+        // nothing was written for it.
+        assert_eq!(Projects::open(&r.env.config).get(&id).unwrap().description, "");
         assert_eq!(due_at(&r.env.cache, &id), None, "the mark is cleared");
         assert!(!updating(&r.env.cache, &id), "and nothing says an update is running");
     }
-}
 
+    // ---- the project's one-line description -------------------------------------------------------------------
+
+    #[test]
+    fn the_description_is_written_from_the_summaries_and_the_notes_and_then_not_again_for_an_hour() {
+        let r = Rig::new("describe");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.session(&id, "s2", &["Take card payments"], "Done.");
+        r.summary("s1", "Basket page", "Building the basket and its totals.", 10);
+        r.summary("s2", "Payments", "Taking card payments.", 20);
+        r.fake.reply_default(r#"{"description":"A sock shop with a basket and card payments."}"#);
+
+        assert_eq!(describe_once(&r.env, &id), Described::Written("A sock shop with a basket and card payments.".into()));
+        assert_eq!(r.description(&id), "A sock shop with a basket and card payments.");
+        // What was sent: the notes, both conversations (newest summary first), no session id anywhere.
+        let sent = r.fake.stdin(1);
+        assert!(sent.contains("Project: Web shop") && sent.contains("Sell socks."), "{sent}");
+        assert!(sent.contains("[1] Payments") && sent.contains("[2] Basket page"), "the newest summary first: {sent}");
+        assert!(!sent.contains("s1") || !sent.contains("s2"), "no session ids: {sent}");
+        assert_eq!(r.fake.calls(), 1);
+        // The spend is in the ledger under its own feature.
+        let day = Ledger::open(&r.env.cache).today(usage::now());
+        assert_eq!(day.features.get(crate::describe::FEATURE).map(|f| f.calls), Some(1));
+
+        // One an hour: straight away there is nothing to do, and no call is made.
+        assert_eq!(describe_once(&r.env, &id), Described::NotDue);
+        assert_eq!(r.fake.calls(), 1, "nothing was asked a second time");
+        // An hour later it is asked again.
+        let mut p = Projects::open(&r.env.config);
+        p.set_description(&id, &r.description(&id), usage::now() - crate::describe::REFRESH_SECS).unwrap();
+        r.fake.reply_default(r#"{"description":"A sock shop that now takes cards."}"#);
+        assert_eq!(describe_once(&r.env, &id), Described::Written("A sock shop that now takes cards.".into()));
+        assert_eq!(r.description(&id), "A sock shop that now takes cards.");
+        assert_eq!(r.fake.calls(), 2);
+    }
+
+    #[test]
+    fn a_description_that_is_not_understood_writes_nothing_at_all() {
+        let r = Rig::new("describe-bad");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.summary("s1", "Basket page", "Building the basket.", 10);
+        let mut p = Projects::open(&r.env.config);
+        p.set_description(&id, "What it was before", 1).unwrap();
+        for nonsense in ["I can't do that.", "{}", r#"{"description":""}"#, r#"{"description":"ok"}"#] {
+            r.fake.reply_default(nonsense);
+            assert_eq!(describe_once(&r.env, &id), Described::BadReply, "{nonsense:?}");
+            assert_eq!(r.description(&id), "What it was before", "the line that is there stays: {nonsense:?}");
+            // The time is not touched either, so the next update tries again rather than waiting an hour.
+            assert_eq!(Projects::open(&r.env.config).get(&id).unwrap().description_at, 1);
+        }
+        // A control character or an escape sequence never reaches the file.
+        r.fake.reply_default("{\"description\":\"\\u001b[31mSocks\\u0007 and hats for sale\"}");
+        assert_eq!(describe_once(&r.env, &id), Described::Written("Socks and hats for sale".into()));
+        assert_eq!(r.description(&id), "Socks and hats for sale");
+    }
+
+    #[test]
+    fn the_description_obeys_the_switch_the_daily_limit_and_an_archived_project() {
+        let r = Rig::new("describe-gate");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.summary("s1", "Basket page", "Building the basket.", 10);
+        r.fake.reply_default(r#"{"description":"A sock shop with a basket."}"#);
+        let mut s = crate::settings::load(&r.env.config).0;
+
+        // Its own switch off.
+        s.set_feature(crate::describe::FEATURE, false);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        let refused = describe_once(&r.env, &id);
+        assert!(matches!(&refused, Described::Refused(why) if why.contains("Project descriptions")), "{refused:?}");
+
+        // The master switch off.
+        s.set_feature(crate::describe::FEATURE, true);
+        s.tokens_enabled = false;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert!(matches!(describe_once(&r.env, &id), Described::Refused(_)));
+
+        // Today's tokens spent.
+        s.tokens_enabled = true;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        let spent = Usage { input: s.clone().clamped().ai_daily_tokens + 1, ..Usage::default() };
+        Ledger::open(&r.env.cache).record_call(usage::now(), FEATURE, &spent, 0.0, true).unwrap();
+        let refused = describe_once(&r.env, &id);
+        assert!(matches!(&refused, Described::Refused(why) if why.contains("limit")), "{refused:?}");
+
+        // An archived project is skipped entirely, even with everything switched on and nothing spent.
+        let _ = fs::remove_file(Ledger::open(&r.env.cache).path());
+        let mut p = Projects::open(&r.env.config);
+        p.archive(&id, &[]).unwrap();
+        assert_eq!(describe_once(&r.env, &id), Described::Nothing);
+        assert_eq!(r.fake.calls(), 0, "nothing was ever asked");
+        assert_eq!(r.description(&id), "");
+    }
+
+    #[test]
+    fn nothing_to_go_on_costs_no_call_and_an_archived_session_is_left_out() {
+        let r = Rig::new("describe-material");
+        let id = r.project("   \n");
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        // Empty notes and no summary yet: nothing to describe.
+        assert_eq!(describe_once(&r.env, &id), Described::Nothing);
+        assert_eq!(r.fake.calls(), 0);
+        // An archived session's summary is not used.
+        r.summary("s1", "Basket page", "Building the basket.", 10);
+        crate::archive::Archive::open(&r.env.config).archive_many(&["s1".to_string()], usage::now()).unwrap();
+        let m = describe_material(&r.env.config, &id, "Web shop");
+        assert!(m.sessions.is_empty() && m.is_empty(), "{m:?}");
+        assert_eq!(describe_once(&r.env, &id), Described::Nothing);
+        assert_eq!(r.fake.calls(), 0);
+    }
+
+    // ---- a session joining a project -----------------------------------------------------------------------------
+
+    #[test]
+    fn a_session_joining_a_project_marks_it_so_an_update_runs_without_anyone_resuming_anything() {
+        let r = Rig::new("joined");
+        let id = r.project(NOTES);
+        let mut p = Projects::open(&r.env.config);
+        p.assign("s1", Some(&id)).unwrap();
+        assert!(mark_joined(&r.env.config, &r.env.cache, &id, "s1", 12_345));
+        assert_eq!(due_at(&r.env.cache, &id), Some(12_345), "the quiet timer starts from here");
+        // A later one simply starts the timer over, exactly as a later turn does.
+        assert!(mark_joined(&r.env.config, &r.env.cache, &id, "s1", 99_000));
+        assert_eq!(due_at(&r.env.cache, &id), Some(99_000));
+    }
+
+    #[test]
+    fn joining_marks_nothing_when_there_is_nothing_to_keep_up_to_date() {
+        let r = Rig::new("joined-no");
+        let id = r.project(NOTES);
+        let empty = {
+            let mut p = Projects::open(&r.env.config);
+            let e = p.create("Empty").unwrap();
+            fs::create_dir_all(r.env.config.join("projects").join(&e)).unwrap();
+            e
+        };
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &empty, "s1", 1), "a project with no notes");
+        assert!(!mark_joined(&r.env.config, &r.env.cache, "pnope", "s1", 1), "a project that isn't there");
+        // An archived session is skipped.
+        crate::archive::Archive::open(&r.env.config).archive_many(&["gone".to_string()], usage::now()).unwrap();
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &id, "gone", 1));
+        // An archived project is skipped.
+        let mut p = Projects::open(&r.env.config);
+        p.archive(&id, &[]).unwrap();
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &id, "s1", 1));
+        p.restore(&id).unwrap();
+        // The switch off means no marks at all.
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.set_feature(FEATURE, false);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &id, "s1", 1));
+        assert!(!r.env.cache.join("notes-due").join(&id).exists(), "nothing was ever marked");
+        // With it back on, it marks.
+        s.set_feature(FEATURE, true);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert!(mark_joined(&r.env.config, &r.env.cache, &id, "s1", 7));
+    }
+}

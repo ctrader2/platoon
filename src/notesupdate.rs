@@ -279,7 +279,7 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
         "Rules:\n\
          - Overview, Requirements and Status: send back the whole section as it should read now. Every line listed under \"the user's own lines\" \
          must come back word for word; you may reword, shorten or add to the rest, which you wrote yourself.\n\
-         - Decisions: send only new entries, one short sentence each, at most 5. They are dated and added to the end; nothing there is ever rewritten.\n\
+         - Decisions: send only new entries, one short sentence each, at most 5. Don't put a date in them: platoon dates them itself. They are added to the end; nothing there is ever rewritten.\n\
          - Never write a heading (a line starting with #).\n\
          - Leave a section out of your answer when nothing about it has changed.\n\
          - Write plainly, in whole sentences. No jargon the person didn't use themselves.\n\n",
@@ -386,6 +386,125 @@ fn one_string(v: &Value) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+// ---- a date the model wrote itself ----------------------------------------------------------------------------
+
+const MONTHS: [&str; 12] =
+    ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+fn skip_ws(c: &[char], mut at: usize) -> usize {
+    while c.get(at).is_some_and(|x| x.is_whitespace()) {
+        at += 1;
+    }
+    at
+}
+
+/// `min`..`max` digits from `at`; where they end.
+fn digits(c: &[char], at: usize, min: usize, max: usize) -> Option<usize> {
+    let mut n = 0;
+    while n < max && c.get(at + n).is_some_and(char::is_ascii_digit) {
+        n += 1;
+    }
+    (n >= min).then_some(at + n)
+}
+
+/// One of the separators a date is written with (`2026-09-24`, `24/09/2026`, `24.09.2026`).
+fn date_sep(c: &[char], at: usize) -> Option<usize> {
+    matches!(c.get(at), Some('-' | '/' | '.')).then_some(at + 1)
+}
+
+/// A month's name, in full or shortened to at least three letters (`Sep`, `Sept.`, `September`).
+fn month_name(c: &[char], at: usize) -> Option<usize> {
+    let word: String = c[at.min(c.len())..].iter().take_while(|x| x.is_ascii_alphabetic()).collect();
+    if word.len() < 3 {
+        return None;
+    }
+    let lower = word.to_lowercase();
+    if !MONTHS.iter().any(|m| m.starts_with(&lower)) {
+        return None;
+    }
+    let mut end = at + word.chars().count();
+    if c.get(end) == Some(&'.') {
+        end += 1;
+    }
+    Some(end)
+}
+
+/// `1st`, `2nd`, `23rd`, `24th`.
+fn day_number(c: &[char], at: usize) -> Option<usize> {
+    let mut end = digits(c, at, 1, 2)?;
+    let two: String = c[end.min(c.len())..].iter().take(2).collect::<String>().to_lowercase();
+    if ["st", "nd", "rd", "th"].contains(&two.as_str()) {
+        end += 2;
+    }
+    Some(end)
+}
+
+/// A date written in any of the usual ways, at `at`: where it ends, or None when there isn't one.
+fn date_at(c: &[char], at: usize) -> Option<usize> {
+    // 2026-09-24, 2026/09/24
+    let iso = || {
+        let end = digits(c, at, 4, 4)?;
+        let end = date_sep(c, end)?;
+        let end = digits(c, end, 1, 2)?;
+        let end = date_sep(c, end)?;
+        digits(c, end, 1, 2)
+    };
+    // 24/09/2026, 24-09-26
+    let numeric = || {
+        let end = digits(c, at, 1, 2)?;
+        let end = date_sep(c, end)?;
+        let end = digits(c, end, 1, 2)?;
+        let end = date_sep(c, end)?;
+        digits(c, end, 2, 4)
+    };
+    // September 24, 2026
+    let named = || {
+        let end = month_name(c, at)?;
+        let end = skip_ws(c, end);
+        let end = day_number(c, end)?;
+        let end = if c.get(end) == Some(&',') { end + 1 } else { end };
+        let end = skip_ws(c, end);
+        digits(c, end, 4, 4)
+    };
+    // 24 September 2026
+    let day_first = || {
+        let end = day_number(c, at)?;
+        let end = skip_ws(c, end);
+        let end = month_name(c, end)?;
+        let end = skip_ws(c, end);
+        digits(c, end, 4, 4)
+    };
+    let end = iso().or_else(numeric).or_else(named).or_else(day_first)?;
+    // A time stamp stuck to it (`2026-09-24T10:00:00Z`) belongs to the date.
+    if c.get(end) == Some(&'T') && c.get(end + 1).is_some_and(char::is_ascii_digit) {
+        let mut j = end + 1;
+        while c.get(j).is_some_and(|x| x.is_ascii_alphanumeric() || *x == ':' || *x == '.' || *x == '+') {
+            j += 1;
+        }
+        return Some(j);
+    }
+    Some(end)
+}
+
+/// A date the model put at the front of a decision, taken off. platoon dates every entry it appends, so a date in
+/// the answer as well would read twice over ("- 2026-09-24: 2026-09-24: Badges go in a row"). Only a date at the
+/// very front goes, with the bullet and the separator written around it; a date anywhere else in the sentence is
+/// left exactly as it is, and text that isn't a date is never touched.
+pub fn strip_leading_date(text: &str) -> String {
+    let c: Vec<char> = text.chars().collect();
+    let mut at = skip_ws(&c, 0);
+    // A bullet in front of the date ("- 2026-09-24: ...") goes with it; one in front of anything else stays.
+    if matches!(c.get(at), Some('-' | '*' | '•' | '·')) && c.get(at + 1).is_some_and(|x| x.is_whitespace()) {
+        at = skip_ws(&c, at + 1);
+    }
+    let Some(end) = date_at(&c, at) else { return text.to_string() };
+    let mut j = skip_ws(&c, end);
+    if matches!(c.get(j), Some(':' | '-' | '–' | '—' | '|' | ',')) {
+        j = skip_ws(&c, j + 1);
+    }
+    c[j.min(c.len())..].iter().collect::<String>().trim().to_string()
+}
+
 /// What the model answered, checked strictly. A field that isn't text, is empty once cleaned, or says nothing is
 /// simply missing, and a reply that is not JSON at all gives None: nothing changes.
 pub fn parse_update(reply: &str) -> Option<Update> {
@@ -405,13 +524,14 @@ pub fn parse_update(reply: &str) -> Option<Update> {
                     Value::Object(m) => m.get("text").or_else(|| m.get("decision")).and_then(Value::as_str).map(|s| clean_text(s, DECISION_MAX)).unwrap_or_default(),
                     _ => String::new(),
                 };
+                let text = strip_leading_date(&text);
                 if !text.is_empty() && !decisions.contains(&text) {
                     decisions.push(text);
                 }
             }
         }
         Some(Value::String(s)) => {
-            let text = clean_text(s, DECISION_MAX);
+            let text = strip_leading_date(&clean_text(s, DECISION_MAX));
             if !text.is_empty() {
                 decisions.push(text);
             }
@@ -707,5 +827,65 @@ mod tests {
         let p = prompt(&Doc::parse(&big), &State::default(), &m);
         assert!(p.len() < 12_000, "the prompt is bounded: {}", p.len());
         assert!(p.contains('…'));
+    }
+
+    #[test]
+    fn a_date_the_model_wrote_itself_is_taken_off_so_a_decision_is_never_dated_twice() {
+        // The shape the user actually saw in their own notes.
+        let up = parse_update(r#"{"decisions":["2026-09-24: Badges will be positioned in a row above the name"]}"#).unwrap();
+        assert_eq!(up.decisions, ["Badges will be positioned in a row above the name"]);
+        let now = 1_790_000_000;
+        let today = day(now);
+        let merged = merge("# Decisions\n\n# Notes\n", &State::default(), &up, now);
+        assert_eq!(merged.added, [format!("- {today}: Badges will be positioned in a row above the name")]);
+        assert!(merged.text.contains(&format!("- {today}: Badges will be positioned in a row above the name")), "{}", merged.text);
+        assert!(!merged.text.contains(&format!("{today}: {today}")), "never twice: {}", merged.text);
+        assert_eq!(merged.text.matches("2026-09-24").count(), 0, "the model's own date is gone: {}", merged.text);
+
+        // Every reasonable way of writing it, with or without a separator, with a bullet, with a time stamp.
+        for dated in [
+            "2026-09-24: Use Postgres",
+            "2026-09-24 Use Postgres",
+            "2026-09-24 - Use Postgres",
+            "2026-09-24 — Use Postgres",
+            "2026/09/24: Use Postgres",
+            "24/09/2026: Use Postgres",
+            "24.09.2026 | Use Postgres",
+            "24-09-26, Use Postgres",
+            "2026-09-24T10:11:12Z: Use Postgres",
+            "- 2026-09-24: Use Postgres",
+            "• 2026-09-24: Use Postgres",
+            "September 24, 2026: Use Postgres",
+            "Sep 24 2026 - Use Postgres",
+            "Sept. 24, 2026: Use Postgres",
+            "24 September 2026: Use Postgres",
+            "24th September 2026 — Use Postgres",
+            "   2026-09-24:   Use Postgres",
+        ] {
+            assert_eq!(strip_leading_date(dated), "Use Postgres", "{dated:?}");
+        }
+
+        // What must never be touched: no date at all, a date later in the sentence, a number that only looks like one.
+        for kept in [
+            "Use Postgres",
+            "Ship it by 2026-09-24",
+            "3 of the 5 checks now run on every push",
+            "Version 1.2.3 is the one to build on",
+            "- Use Postgres",
+            "Maybe 2026 is the year",
+            "24 hours is long enough for the cache",
+            "Marching orders: ship on Friday",
+        ] {
+            assert_eq!(strip_leading_date(kept), kept, "{kept:?}");
+        }
+
+        // An entry that is nothing but a date says nothing, so it is dropped rather than written.
+        assert_eq!(strip_leading_date("2026-09-24"), "");
+        assert_eq!(strip_leading_date("2026-09-24:"), "");
+        assert!(parse_update(r#"{"decisions":["2026-09-24:"]}"#).is_none(), "nothing left to say");
+        // A dated repeat of something already in Decisions is still recognised as a repeat.
+        let up = parse_update(r#"{"decisions":["2026-09-24: Use Postgres","Ship on Friday"]}"#).unwrap();
+        let merged = merge("# Decisions\n\n- 2026-09-20: Use Postgres\n\n# Notes\n", &State::default(), &up, now);
+        assert_eq!(merged.added, [format!("- {today}: Ship on Friday")]);
     }
 }

@@ -1,4 +1,4 @@
-use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, Hit, Mode, NamePurpose, PStat, Page, Pane, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
+use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Page, Pane, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::select::{Selection, Span as Cells};
@@ -134,7 +134,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "project", "panes", "rename", "settings", "scroll", "new session", "editor"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "editor"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -157,6 +157,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Look => draw_look(f, app, inner),
         Mode::PickEditor => draw_editor_pick(f, app, inner),
         Mode::Changes => draw_changes(f, app, inner),
+        Mode::Handoff => draw_handoff(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -170,6 +171,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("n", "new", Some(Action::New)),
         ("a", archive_verb, Some(Action::Archive)),
         ("m", "project", Some(Action::Assign)),
+        ("H", "hand-off", Some(Action::HandOff)),
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
@@ -204,6 +206,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     if app.pane == Pane::Sessions {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
+        out.push(("H", "hand-off", Some(Action::HandOff)));
     } else {
         out = vec![
             ("e", "edit notes", Some(Action::Edit)),
@@ -370,8 +373,11 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
         ]);
         f.render_widget(Paragraph::new(l1).style(base), Rect::new(row.x, row.y, row.width, 1));
         if row.height > 1 {
-            // The description goes here once platoon writes one.
-            f.render_widget(Paragraph::new(Line::from(vec![lead])).style(base), Rect::new(row.x, row.y + 1, row.width, 1));
+            // Under the name: the one line platoon generated saying what the project is (blank until it has).
+            let indent = 2 + bw;
+            let room = (row.width as usize).saturating_sub(indent + 1);
+            let line = Line::from(vec![lead, gap(indent - 1, base), Span::styled(fit_end(&p.description, room), base.fg(t.dim))]);
+            f.render_widget(Paragraph::new(line).style(base), Rect::new(row.x, row.y + 1, row.width, 1));
         }
         if row.height > 2 {
             f.render_widget(Block::default().style(Style::new().bg(t.bg)), Rect::new(row.x, row.y + 2, row.width, 1));
@@ -395,8 +401,11 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
         spans.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), title);
-    // The description line: empty until platoon writes descriptions.
-    let [_desc, panes] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
+    // The description across the top: empty until platoon has written one for this project.
+    let [desc, panes] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
+    if !p.description.is_empty() {
+        f.render_widget(Paragraph::new(Span::styled(fit_end(&p.description, desc.width as usize), Style::new().fg(t.subtext))), desc);
+    }
     let left_w = if panes.width >= 60 { panes.width * 45 / 100 } else { panes.width / 2 };
     let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(panes);
     let pane_block = |title: &'static str, focused: bool| {
@@ -1993,6 +2002,73 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
         );
     }
     let hints: [Hint; 3] = [("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// The hand-off box: the brief Claude wrote, which the user may edit before it becomes the first message of a
+/// new session in the same folder and project.
+fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let h = &app.handoff;
+    app.hits.borrow_mut().clear();
+    let r = centered(area, area.width.saturating_sub(6).clamp(40, 100), area.height.saturating_sub(2).clamp(10, 26));
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "hand this work on");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, body, sep2, note, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let title = format!("A new session in {} · project {}", fit_start(&h.cwd, 40), h.project_name);
+    f.render_widget(Paragraph::new(Span::styled(fit_end(&title, head.width as usize), Style::new().fg(t.subtext))), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let w = body.width as usize;
+    match &h.state {
+        HandoffState::Asking => {
+            let text = format!("Asking Claude what to hand on from \"{}\"…", h.session_name);
+            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), body);
+        }
+        HandoffState::Failed(why) => {
+            f.render_widget(Paragraph::new(why.clone()).wrap(Wrap { trim: true }).style(Style::new().fg(t.warn)), body);
+        }
+        HandoffState::Ready => {
+            let lines = h.lines();
+            let rows = body.height as usize;
+            let (cy, cx) = h.cursor_at();
+            // Keep the cursor's line in view, scrolling as little as it takes.
+            let mut top = h.top.get().min(lines.len().saturating_sub(1));
+            top = top.min(cy);
+            if rows > 0 && cy >= top + rows {
+                top = cy + 1 - rows;
+            }
+            h.top.set(top);
+            for (n, line) in lines.iter().skip(top).take(rows).enumerate() {
+                f.render_widget(
+                    Paragraph::new(Span::styled(fit_end(line, w), Style::new().fg(t.text))),
+                    Rect::new(body.x, body.y + n as u16, body.width, 1),
+                );
+            }
+            if cy >= top && cy < top + rows {
+                f.set_cursor_position((body.x + (cx as u16).min(body.width.saturating_sub(1)), body.y + (cy - top) as u16));
+            }
+        }
+    }
+    f.render_widget(Paragraph::new("─".repeat(sep2.width as usize)).style(Style::new().fg(t.border)), sep2);
+    let note_text = match &h.state {
+        HandoffState::Ready => "Edit it if you like. The old session is left exactly as it is. The project's notes go to the new session by themselves.",
+        _ => "The old session is left exactly as it is.",
+    };
+    f.render_widget(Paragraph::new(fit_end(note_text, note.width as usize)).style(Style::new().fg(t.dim)), note);
+    let hints: Vec<Hint> = match h.state {
+        HandoffState::Ready => vec![("ctrl+s", "start the new session", Some(Action::Confirm)), ("enter", "new line", None), ("esc", "cancel", Some(Action::Cancel))],
+        _ => vec![("esc", "cancel", Some(Action::Cancel))],
+    };
     draw_footer(f, app, foot, &hints, None);
 }
 
