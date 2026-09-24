@@ -469,20 +469,54 @@ pub fn update_once(env: &Env, id: &str) -> Round {
 
 // ---- the helper -------------------------------------------------------------------------------------------------
 
-/// Take the project's lock, or None when another helper already has it.
-fn try_lock(path: &Path) -> Option<fs::File> {
+/// How many times the lock file is opened again when the open itself failed, and how long between tries.
+const LOCK_OPEN_TRIES: u32 = 5;
+const LOCK_OPEN_WAIT: Duration = Duration::from_millis(100);
+
+/// What came of trying to take a project's lock. "Another helper has it" and "the lock file couldn't even be
+/// opened" are very different answers: the first means there is nothing to do here, the second means platoon
+/// couldn't tell. Treating the second as the first would skip an update without a word.
+#[derive(Debug)]
+enum Taken {
+    /// It is ours until this file is dropped, or this process exits.
+    Mine(fs::File),
+    /// Another helper has this project.
+    Held,
+    /// The lock file couldn't be opened at all: no room, no permission, no descriptors left.
+    Cant(io::Error),
+}
+
+fn try_lock(path: &Path) -> Taken {
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).ok()?;
+        if let Err(e) = fs::create_dir_all(dir) {
+            return Taken::Cant(e);
+        }
     }
-    let mut file = fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+    let mut file = match fs::OpenOptions::new().create(true).truncate(false).write(true).open(path) {
+        Ok(f) => f,
+        Err(e) => return Taken::Cant(e),
+    };
     // SAFETY: an advisory lock on a file this process holds open; it goes when the file is dropped or we exit.
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return None;
+        return Taken::Held;
     }
     let _ = file.set_len(0);
     let _ = write!(file, "{}", std::process::id());
     let _ = file.flush();
-    Some(file)
+    Taken::Mine(file)
+}
+
+/// Take the lock, giving a failed open a few more goes: running out of descriptors is a passing thing, and it
+/// must never be mistaken for another helper having the project. "Held" is never tried again - that is what the
+/// lock is for.
+fn take_lock(path: &Path) -> Taken {
+    for _ in 1..LOCK_OPEN_TRIES {
+        match try_lock(path) {
+            Taken::Cant(_) => thread::sleep(LOCK_OPEN_WAIT),
+            answer => return answer,
+        }
+    }
+    try_lock(path)
 }
 
 /// `platoon notes-update <project id>`: wait for the project to go quiet, then run one update; again if something
@@ -490,7 +524,17 @@ fn try_lock(path: &Path) -> Option<fs::File> {
 pub fn run_helper(args: &[String]) -> i32 {
     let Some(id) = args.first().filter(|a| crate::sessionhook::safe_name(a)) else { return 2 };
     let env = Env::from_env();
-    let Some(_lock) = try_lock(&lock_path(&env.cache, id)) else { return 0 };
+    let _lock = match take_lock(&lock_path(&env.cache, id)) {
+        Taken::Mine(file) => file,
+        // Another helper has this project. It will see the newer mark, so there is nothing to do here.
+        Taken::Held => return 0,
+        // platoon couldn't tell. Nothing is lost: the mark stays, so the next turn of a session in this project
+        // starts a helper again. Said out loud for anyone running this by hand; started by the hook it goes nowhere.
+        Taken::Cant(why) => {
+            eprintln!("platoon: couldn't open the lock for project {id}: {why}");
+            return 1;
+        }
+    };
     helper_loop(&env, id, quiet_secs() * 1000);
     0
 }
@@ -650,19 +694,91 @@ mod tests {
         assert_eq!(due_at(&r.env.cache, &id), None);
     }
 
+    /// Take a lock that nothing should be holding, waiting briefly for it to come free and insisting all the
+    /// while that it reads as "held" and never as "couldn't tell". The file is handed back, so the caller decides
+    /// when it is let go.
+    ///
+    /// Why a wait at all: an `flock` belongs to the open file *description*, not to the process or to one
+    /// descriptor, and it is only released once EVERY descriptor for that description is closed - and `fork`
+    /// duplicates all of them. So while any other thread of this test binary sits between `fork` and `exec` (the
+    /// editor, host and terminal tests start processes all the time), a child holds a copy of the descriptor this
+    /// test has just closed, and the lock stays held for that instant, until close-on-exec tidies the copy away.
+    /// Measured here at 5 in 400 with six threads spawning hard, which is why it only ever showed up under a full
+    /// suite. It is this test process that is unusual, not the code: a helper is a fresh, single-threaded process
+    /// that forks nothing before it takes its lock, so nothing of its own can be holding a copy.
+    fn take_when_free(path: &Path) -> Option<fs::File> {
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(10) {
+            match try_lock(path) {
+                Taken::Mine(file) => return Some(file),
+                Taken::Held => thread::sleep(Duration::from_millis(5)),
+                // Never quietly treated as "somebody has it": that is the whole point of telling them apart.
+                Taken::Cant(e) => panic!("the lock file couldn't be opened at all: {e}"),
+            }
+        }
+        None
+    }
+
     #[test]
     fn only_one_helper_per_project_may_run() {
         let r = Rig::new("lock");
         let id = r.project(NOTES);
-        let first = try_lock(&lock_path(&r.env.cache, &id)).expect("the first takes it");
-        // A second attempt in another process is what matters; in this one flock would be re-entrant, so the
-        // second process is a real one: a tiny helper run that must return at once.
-        let held = fs::read_to_string(lock_path(&r.env.cache, &id)).unwrap();
-        assert_eq!(held, std::process::id().to_string(), "the holder writes its pid");
+        let path = lock_path(&r.env.cache, &id);
+        let Taken::Mine(first) = try_lock(&path) else { panic!("the first helper takes it") };
+        assert_eq!(fs::read_to_string(&path).unwrap(), std::process::id().to_string(), "the holder writes its pid");
+        // A second helper for the same project is turned away, and is told the project is taken - not that
+        // something went wrong. (Two descriptors for one file conflict even inside one process.)
+        assert!(matches!(try_lock(&path), Taken::Held));
         // Another project is free.
-        assert!(try_lock(&lock_path(&r.env.cache, "other")).is_some());
+        assert!(matches!(try_lock(&lock_path(&r.env.cache, "other")), Taken::Mine(_)));
         drop(first);
-        assert!(try_lock(&lock_path(&r.env.cache, &id)).is_some(), "released when it is dropped");
+        assert!(take_when_free(&path).is_some(), "released when the holder is dropped");
+    }
+
+    #[test]
+    fn taking_and_releasing_the_lock_survives_other_threads_starting_processes() {
+        // The regression test for a real flake: `fork` duplicates every open descriptor, and an `flock` is only
+        // released once all of them are closed, so a lock this process has just dropped can look held for as long
+        // as some other thread's child takes to reach `exec`. Taking the lock straight after letting it go, with
+        // no wait, failed at the first round nearly every time here (and 320 times in 400 in the measurement this
+        // test came from). With the wait it must not fail at all.
+        let r = Rig::new("lock-forks");
+        let path = lock_path(&r.env.cache, "p1");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let spawners: Vec<_> = (0..2)
+            .map(|_| {
+                let stop = stop.clone();
+                thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::SeqCst) {
+                        // Ours, started here and waited for here; nothing else is ever signalled.
+                        let _ = Command::new("/bin/true").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+                    }
+                })
+            })
+            .collect();
+        for n in 0..60 {
+            let held = take_when_free(&path);
+            assert!(held.is_some(), "round {n}: the lock never came free");
+            drop(held);
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        for t in spawners {
+            t.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn a_lock_file_that_cannot_be_opened_is_not_another_helper_holding_it() {
+        // Saying "held" here would skip the update without a word, so the two answers are kept apart. The folder
+        // the lock would live in is a file, so it can never be made.
+        let r = Rig::new("lock-cant");
+        let blocked = r.env.cache.join("in-the-way");
+        fs::write(&blocked, "not a folder").unwrap();
+        let path = blocked.join("p1");
+        assert!(matches!(try_lock(&path), Taken::Cant(_)));
+        // The retrying wrapper gives the same answer, and takes a free lock straight away.
+        assert!(matches!(take_lock(&path), Taken::Cant(_)));
+        assert!(matches!(take_lock(&lock_path(&r.env.cache, "fresh")), Taken::Mine(_)));
     }
 
     #[test]
@@ -839,3 +955,4 @@ mod tests {
         assert!(!updating(&r.env.cache, &id), "and nothing says an update is running");
     }
 }
+
