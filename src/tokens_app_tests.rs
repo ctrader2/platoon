@@ -66,8 +66,18 @@ fn the_master_switch_and_each_feature_switch_are_saved_at_once_and_start_off() {
     select(&mut app, MASTER_LABEL);
     key(&mut app, KeyCode::Right);
     assert!(on_disk(&w).tokens_enabled, "turning it on is saved straight away");
-    assert!(FEATURES.iter().all(|f| !on_disk(&w).feature_on(f.id)), "the features are still off: they have switches of their own");
+    assert!(
+        FEATURES.iter().filter(|f| !f.on_unless_switched_off).all(|f| !on_disk(&w).feature_on(f.id)),
+        "the features that were here before anyone was asked are still off: they have switches of their own"
+    );
 
+    for f in FEATURES {
+        select(&mut app, f.label);
+        if on_disk(&w).feature_toggle(f.id) {
+            key(&mut app, KeyCode::Left); // one that starts on: off first, so the step below is the same for all
+        }
+        assert!(!on_disk(&w).feature_on(f.id), "{}", f.id);
+    }
     for f in FEATURES {
         select(&mut app, f.label);
         key(&mut app, KeyCode::Right);

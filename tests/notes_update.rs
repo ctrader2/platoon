@@ -1,0 +1,261 @@
+//! Keeping a project's notes up to date, end to end, with the real binary: the `Stop` hook marks the project and
+//! starts the detached helper, the helper runs one call through a stand-in `claude`, the notes are written with a
+//! copy of the old ones kept, the spend lands in the ledger, and the project's screen says an update is running
+//! and, afterwards, when it last ran - with `c` showing the change and `u` undoing it.
+//!
+//! No real `claude` is ever run (`PLATOON_CLAUDE_BIN` points at `tests/fake-claude.sh`), every directory is a temp
+//! dir of the test's own, and the quiet period is a fraction of a second (`PLATOON_NOTES_QUIET_SECS`).
+
+mod common;
+use common::*;
+use serde_json::{json, Value};
+use std::{fs, io::Write, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio};
+
+const NOTES: &str = "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
+
+# Overview
+
+Sell socks.
+
+# Requirements
+
+# Status
+
+# Decisions
+
+# Notes
+
+Mine, and platoon never touches it.
+";
+
+struct Lab {
+    base: PathBuf,
+    claude: PathBuf,
+    cache: PathBuf,
+    config: PathBuf,
+    fake: PathBuf,
+}
+
+impl Lab {
+    fn new(name: &str) -> Lab {
+        let base = tmp(name);
+        let lab = Lab { claude: base.join("claude"), cache: base.join("cache"), config: base.join("config"), fake: base.join("fake"), base };
+        for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.fake.join("calls")] {
+            fs::create_dir_all(d).unwrap();
+        }
+        // The stand-in for `claude -p`: the same script the other token tests use.
+        let script = lab.fake.join("claude");
+        fs::write(&script, include_str!("fake-claude.sh").replace("@DIR@", &lab.fake.display().to_string())).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        // The smart features on, and this one with them.
+        fs::write(
+            lab.config.join("settings.json"),
+            json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": true}}).to_string(),
+        )
+        .unwrap();
+        lab
+    }
+
+    fn env(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("CLAUDE_CONFIG_DIR", self.claude.to_string_lossy().into()),
+            ("PLATOON_CACHE_DIR", self.cache.to_string_lossy().into()),
+            ("PLATOON_CONFIG_DIR", self.config.to_string_lossy().into()),
+            ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
+            ("PLATOON_CLAUDE_BIN", self.fake.join("claude").to_string_lossy().into()),
+            // A fraction of a second instead of three minutes, and a helper that can never outlive the test.
+            ("PLATOON_NOTES_QUIET_SECS", "0".into()),
+            ("PLATOON_NOTES_MAX_LIFE_SECS", "25".into()),
+        ]
+    }
+
+    /// One project, "Web", with these notes, and one session in it whose transcript holds `messages`.
+    fn project(&self, notes: &str, session: &str, messages: &[&str]) {
+        let v = json!({
+            "version": 1,
+            "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}},
+            "sessions": {session: "pweb"},
+        });
+        fs::write(self.config.join("projects.json"), v.to_string()).unwrap();
+        fs::create_dir_all(self.config.join("projects/pweb")).unwrap();
+        fs::write(self.notes_path(), notes).unwrap();
+        let mut lines: Vec<String> = Vec::new();
+        for (n, m) in messages.iter().enumerate() {
+            let at = format!("2026-09-24T10:00:{:02}.000Z", n);
+            lines.push(json!({"type":"user","cwd":"/home/x/work","timestamp":at,"message":{"role":"user","content":m}}).to_string());
+        }
+        lines.push(
+            json!({"type":"assistant","cwd":"/home/x/work","timestamp":"2026-09-24T10:01:00.000Z","message":{"role":"assistant","content":[{"type":"text","text":"I added the basket page."}]}})
+                .to_string(),
+        );
+        fs::write(self.claude.join("projects/-work").join(format!("{session}.jsonl")), lines.join("\n") + "\n").unwrap();
+    }
+
+    fn notes_path(&self) -> PathBuf {
+        self.config.join("projects/pweb/project.md")
+    }
+
+    fn notes(&self) -> String {
+        fs::read_to_string(self.notes_path()).unwrap_or_default()
+    }
+
+    fn versions(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = fs::read_dir(self.config.join("projects/pweb/history")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        v.sort();
+        v
+    }
+
+    /// What the stand-in was told to say.
+    fn reply(&self, text: &str) {
+        fs::write(self.fake.join("reply.default"), text).unwrap();
+    }
+
+    fn calls(&self) -> usize {
+        fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+    }
+
+    fn sent(&self, k: usize) -> String {
+        fs::read_to_string(self.fake.join("calls").join(format!("{k}.stdin"))).unwrap_or_default()
+    }
+
+    fn ledger(&self) -> Value {
+        serde_json::from_str(&fs::read_to_string(self.cache.join("ai-usage.json")).unwrap_or_default()).unwrap_or(Value::Null)
+    }
+
+    /// Run `platoon hook stop` for this session, exactly as Claude Code would.
+    fn stop_hook(&self, session: &str, cwd: &str) -> std::process::Output {
+        let mut cmd = std::process::Command::new(BIN);
+        cmd.args(["hook", "stop"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        for (k, v) in self.env() {
+            cmd.env(k, v);
+        }
+        let mut child = cmd.spawn().unwrap();
+        let input = json!({"session_id": session, "cwd": cwd, "hook_event_name": "Stop", "stop_hook_active": false}).to_string();
+        child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+        child.wait_with_output().unwrap()
+    }
+
+    /// The pid of the helper that took this project, if one ever did.
+    fn helper_pid(&self) -> Option<u32> {
+        fs::read_to_string(self.cache.join("notes-helper/pweb")).ok()?.trim().parse().ok()
+    }
+
+    /// Open the project's screen with the notes pane in focus.
+    fn open_notes(&self, t: &mut Term) {
+        t.send(b"2");
+        t.wait_for_flat("WB Web");
+        t.send(b"\r");
+        t.wait_for("╭ Notes");
+        t.send(b"\x1b[C");
+        t.wait_for_flat("e edit notes");
+    }
+}
+
+impl Drop for Lab {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.base);
+    }
+}
+
+#[test]
+fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_undoes_the_change() {
+    let lab = Lab::new("notes-update-e2e");
+    lab.project(NOTES, "sess-1", &["Add a basket page to the shop", "And make the totals add up"]);
+    lab.reply(r#"{"overview":"Sell socks.\nThere is a basket page.","status":"The basket totals add up.","decisions":["Baskets are session based"]}"#);
+
+    // The hook itself: instant, silent, exit 0 - and it starts the helper.
+    let out = lab.stop_hook("sess-1", "/home/x/work");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "the hook says nothing: {out:?}");
+
+    until("the notes to be updated", || lab.notes().contains("There is a basket page."));
+    until("the helper to finish", || lab.helper_pid().is_some_and(|p| !alive(p)));
+
+    // One call, in the runner's own work folder, about this project and without any session id in it.
+    assert_eq!(lab.calls(), 1);
+    let sent = lab.sent(1);
+    assert!(sent.contains("Project: Web") && sent.contains("Add a basket page to the shop"), "{sent}");
+    assert!(sent.contains("Claude's last reply: I added the basket page."), "{sent}");
+    assert!(!sent.contains("sess-1"), "{sent}");
+
+    // What it wrote: the user's line kept, platoon's added, a dated decision, Notes untouched.
+    let after = lab.notes();
+    assert!(after.contains("Sell socks.\nThere is a basket page."), "{after}");
+    assert!(after.contains("The basket totals add up."), "{after}");
+    assert!(after.contains(": Baskets are session based"), "{after}");
+    assert!(after.contains("Mine, and platoon never touches it."), "Notes is the user's: {after}");
+    // The version before it is kept, so the change can be seen and undone.
+    assert_eq!(lab.versions().len(), 1);
+    assert_eq!(fs::read_to_string(&lab.versions()[0]).unwrap(), NOTES);
+    // The spend is in the ledger under this feature.
+    let ledger = lab.ledger();
+    let day = ledger["days"].as_object().unwrap().values().next().unwrap().clone();
+    assert_eq!(day["features"]["project_notes"]["calls"], 1, "{day}");
+    assert!(day["features"]["project_notes"]["tokens"].as_u64().unwrap() > 0, "{day}");
+    // Nothing is waiting any more, and the helper did not set itself off again.
+    assert!(!lab.cache.join("notes-due/pweb").exists());
+    assert!(!lab.cache.join("notes-updating/pweb").exists());
+
+    // Now the screen: when it last ran, what changed, and undoing it.
+    let mut t = Term::spawn(&[], &lab.env(), &lab.base, 40, 120);
+    lab.open_notes(&mut t);
+    t.wait_for_flat("platoon last updated these just now.");
+    t.wait_for("There is a basket page.");
+    t.send(b"c");
+    t.wait_for("was there before");
+    let screen = t.text();
+    assert!(screen.contains("+ There is a basket page."), "{screen}");
+    assert!(screen.contains("+ The basket totals add up."), "{screen}");
+    t.send(b"\x1b");
+    t.wait_gone("was there before");
+    t.send(b"u");
+    t.wait_for_flat("The notes are back as they were");
+    until("the notes to go back", || lab.notes() == NOTES);
+    assert_eq!(lab.calls(), 1, "nothing asked Claude anything else");
+}
+
+#[test]
+fn the_notes_pane_says_while_an_update_is_running() {
+    let lab = Lab::new("notes-update-running");
+    lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);
+    lab.reply(r#"{"status":"The basket page is in."}"#);
+    // The stand-in takes its time, so the screen can be caught mid-update.
+    fs::write(lab.fake.join("delay"), "3").unwrap();
+
+    // The helper is started here as a child of the test, so the test owns it and waits for it.
+    let mut cmd = std::process::Command::new(BIN);
+    cmd.args(["notes-update", "pweb"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    for (k, v) in lab.env() {
+        cmd.env(k, v);
+    }
+    fs::create_dir_all(lab.cache.join("notes-due")).unwrap();
+    fs::write(lab.cache.join("notes-due/pweb"), "1").unwrap();
+    let mut helper = cmd.spawn().unwrap();
+
+    let mut t = Term::spawn(&[], &lab.env(), &lab.base, 40, 120);
+    lab.open_notes(&mut t);
+    t.wait_for_flat("platoon is updating these notes now");
+    assert_eq!(helper.wait().unwrap().code(), Some(0));
+    until("the notes to be updated", || lab.notes().contains("The basket page is in."));
+    // Once it is done the line changes to when it last ran, and the change is announced.
+    t.wait_for_flat("platoon last updated these just now.");
+    t.wait_for_flat("The notes changed. Press c to see what changed");
+}
+
+#[test]
+fn a_session_that_is_not_in_a_project_and_the_helpers_own_work_cost_nothing() {
+    let lab = Lab::new("notes-update-loop");
+    lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);
+    // Not in the project: no mark, no helper, no call.
+    let out = lab.stop_hook("stranger", "/home/x/elsewhere");
+    assert_eq!(out.status.code(), Some(0));
+    // The helper's own `claude -p` works in <cache>/ai-work: a Stop from there is ignored, whatever session it says.
+    let work = lab.cache.join("ai-work").to_string_lossy().into_owned();
+    let out = lab.stop_hook("sess-1", &work);
+    assert_eq!(out.status.code(), Some(0));
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(!lab.cache.join("notes-due").join("pweb").exists(), "nothing was marked");
+    assert!(lab.helper_pid().is_none(), "no helper was ever started");
+    assert_eq!(lab.calls(), 0, "and nothing was asked of Claude");
+    assert_eq!(lab.notes(), NOTES);
+}

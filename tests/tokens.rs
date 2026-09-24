@@ -157,6 +157,9 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     // And `platoon tokens` reports it.
     let s = text(&lab.run(&["tokens"], &bin).stdout);
     assert!(s.contains("Features that use tokens: on") && s.contains("Used today: 844 of 500,000 tokens") && s.contains("Model: haiku"), "{s}");
+    // Where the tokens went, feature by feature, so the spend of each one is visible.
+    assert!(s.contains("  test: 844 tokens in 2 calls"), "{s}");
+    assert!(s.contains("Project notes: on"), "the new feature has its own line: {s}");
 }
 
 #[test]
@@ -290,7 +293,7 @@ fn setup_asks_in_a_terminal_and_yes_saves_the_master_switch_the_features_and_the
     assert!(t.flat().contains("Smart features are on"), "{}", t.flat());
     let s = saved(&lab);
     assert_eq!((s["tokens_enabled"].clone(), s["tokens_asked"].clone()), (json!(true), json!(true)));
-    assert_eq!(s["token_features"], json!({"names": true, "find": true}));
+    assert_eq!(s["token_features"], json!({"names": true, "find": true, "project_notes": true}));
     // Asked once: the second run prints no question and changes nothing.
     let before = fs::read(lab.config().join("settings.json")).unwrap();
     let mut t = Term::spawn(&["setup"], &setup_env(&lab), &lab.base, 50, 110);

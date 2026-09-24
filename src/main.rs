@@ -15,6 +15,8 @@ mod mcp;
 mod model;
 mod names;
 mod notes;
+mod notesrun;
+mod notesupdate;
 mod open;
 mod procs;
 mod projects;
@@ -80,12 +82,17 @@ fn main() -> io::Result<()> {
         }
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook()),
+        Some("notes-update") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(notesrun::run_helper(&args));
+        }
         Some("host") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(host::run(&args));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id] | open --project <name> | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  open --project <name>   start a new session here, in that project\n  setup           add platoon to Claude Code: plan usage in the status line, a guard that\n                  stops two copies of one session from overwriting each other, and a hook\n                  that hands a project's notes to its sessions\n  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start   internal: run by Claude Code");
+            eprintln!("usage: platoon [setup | open [id] | open --project <name> | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  open --project <name>   start a new session here, in that project\n  setup           add platoon to Claude Code: plan usage in the status line, a guard that\n                  stops two copies of one session from overwriting each other, and two hooks\n                  that hand a project's notes to its sessions and keep them up to date\n  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, notes-update   internal: run by\n                  Claude Code, or by platoon itself");
             std::process::exit(2);
         }
     }

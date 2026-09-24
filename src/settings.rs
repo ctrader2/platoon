@@ -101,7 +101,8 @@ pub struct Settings {
     pub search_archived: bool,
     /// The master switch for everything that spends the user's Claude tokens. Off unless the user turned it on.
     pub tokens_enabled: bool,
-    /// One switch per token feature, by the feature's id (see `ai::FEATURES`). A feature that is missing is off.
+    /// One switch per token feature, by the feature's id (see `ai::FEATURES`). A feature that is missing is off,
+    /// unless its row says it is on as soon as the master switch is (`ai::on_by_default`).
     /// Ids this version doesn't know are kept as they are.
     pub token_features: BTreeMap<String, bool>,
     /// `platoon setup` has already asked about the token features, so it doesn't ask again.
@@ -192,7 +193,7 @@ impl Settings {
 
     /// The feature's own switch, whatever the master says.
     pub fn feature_toggle(&self, id: &str) -> bool {
-        self.token_features.get(id).copied().unwrap_or(false)
+        self.token_features.get(id).copied().unwrap_or_else(|| crate::ai::on_by_default(id))
     }
 
     pub fn set_feature(&mut self, id: &str, on: bool) {
@@ -1275,7 +1276,9 @@ mod tests {
         assert!(!d.tokens_enabled && d.token_features.is_empty() && !d.tokens_asked);
         assert_eq!((d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent, d.ai_model.as_str()), (5, 30, 500_000, 80, "haiku"));
         for f in FEATURES {
-            assert!(!d.feature_on(f.id) && !d.feature_toggle(f.id), "{}", f.id);
+            // The master switch is off, so nothing may spend anything; a feature added later is on once it is on.
+            assert!(!d.feature_on(f.id), "{}", f.id);
+            assert_eq!(d.feature_toggle(f.id), f.on_unless_switched_off, "{}", f.id);
         }
         let dir = dir("tokens-default");
         assert_eq!(load(&dir).0, d, "no file");
@@ -1355,12 +1358,14 @@ mod tests {
     #[test]
     fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
         let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call", "Refresh a summary after"]);
-        assert_eq!(names.len(), 16, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
+        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Daily token limit", "Pause above plan usage", "Model for smart features", "Conversations per call"]);
+        assert_eq!(names.len(), 17, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
         for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
-            assert_eq!(item.value(&s), 0);
+            assert_eq!(item.value(&s), u64::from(f.on_unless_switched_off));
+            item.assign(&mut s, 0);
+            assert!(!s.feature_toggle(f.id) && item.value(&s) == 0, "{}", f.id);
             item.assign(&mut s, 1);
             assert!(s.feature_toggle(f.id) && item.value(&s) == 1);
             assert!(!s.feature_on(f.id), "its own switch is not enough");
@@ -1397,21 +1402,23 @@ mod tests {
         let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
         assert_eq!(
             (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+            ["Off", "Off", "Off", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
         );
-        assert_eq!(SMART_ITEMS[4].step(0, Step::Cycle), 50, "Never is the first step");
+        let by_name = |name: &str| SMART_ITEMS.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
+        assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");
         assert_eq!(percent_label(0), "Never");
         assert_eq!([tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)], ["1M tokens", "250K tokens", "1234 tokens", "1 token"]);
         assert_eq!([thousands(0), thousands(999), thousands(1000), thousands(1_234_567)], ["0", "999", "1,000", "1,234,567"]);
         assert_eq!([0, 15, 45, 60, 90, 120, 600].map(seconds_label), ["No wait", "15 seconds", "45 seconds", "1 minute", "90 seconds", "2 minutes", "10 minutes"]);
         // The model entry goes both ways.
         let mut s = Settings::default();
-        SMART_ITEMS[5].assign(&mut s, 1);
+        let model = by_name("Model for smart features");
+        model.assign(&mut s, 1);
         assert_eq!(s.ai_model, "sonnet");
-        SMART_ITEMS[5].assign(&mut s, 0);
+        model.assign(&mut s, 0);
         assert_eq!(s.ai_model, "haiku");
         s.ai_model = "unknown".into();
-        assert_eq!(SMART_ITEMS[5].value(&s), 0);
+        assert_eq!(model.value(&s), 0);
     }
 
     #[test]

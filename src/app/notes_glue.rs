@@ -6,6 +6,8 @@
 use super::*;
 use crate::editors::{self, Editor};
 use crate::notes;
+use crate::notesrun;
+use crate::notesupdate;
 
 /// A terminal editor running inside platoon's window on a project's notes.
 pub struct NotesEdit {
@@ -96,6 +98,39 @@ impl App {
         self.report_save(saved);
     }
 
+    /// An automatic update is running on the open project's notes right now.
+    pub fn notes_updating(&self) -> bool {
+        self.open_project.as_deref().is_some_and(|p| notesrun::updating(&self.cache, p))
+    }
+
+    /// When platoon itself last changed the open project's notes, in seconds since the epoch.
+    pub fn notes_updated_at(&self) -> Option<u64> {
+        let p = self.open_project.as_deref()?;
+        let at = notesupdate::State::load(&self.config, p).last_update_at;
+        (at > 0).then_some(at)
+    }
+
+    /// Forget what the notes looked like, so a change platoon has just made itself isn't announced twice.
+    fn forget_notes_stamp(&mut self) {
+        self.notes_seen = None;
+    }
+
+    /// Notice the notes changing under the open project's screen - an automatic update finishing, another window,
+    /// or an editor of the user's own - and say so once. Cheap: one `stat` a frame.
+    fn poll_notes_changes(&mut self) {
+        let Some(project) = self.open_project.clone() else {
+            self.notes_seen = None;
+            return;
+        };
+        let stamp = notes::stamp(&self.config, &project);
+        if let Some((seen, was)) = self.notes_seen.take() {
+            if seen == project && was != stamp && !self.notes_busy() {
+                self.notify("The notes changed. Press c to see what changed, u to undo it.");
+            }
+        }
+        self.notes_seen = Some((project, stamp));
+    }
+
     /// The warning shown above big notes, or None.
     pub fn notes_size_warning(&self) -> Option<String> {
         let project = self.open_project.as_deref()?;
@@ -160,6 +195,10 @@ impl App {
             return;
         }
         let stamp = notes::stamp(&self.config, project);
+        // While platoon has an editor open on them, an automatic update must not write: the helper is another
+        // process, so it is told through a small file (its own pid inside, so a platoon that was killed says nothing).
+        notesrun::set_marker(&notesrun::editing_path(&self.cache, project));
+        self.forget_notes_stamp();
         if e.terminal {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
@@ -168,7 +207,10 @@ impl App {
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
-                Err(err) => self.notify(format!("Couldn't open the notes in {}: {}", e.name, plain(&err))),
+                Err(err) => {
+                    notesrun::clear_marker(&notesrun::editing_path(&self.cache, project));
+                    self.notify(format!("Couldn't open the notes in {}: {}", e.name, plain(&err)));
+                }
             }
             return;
         }
@@ -177,7 +219,10 @@ impl App {
                 self.notes_window = Some(NotesWindow { project: project.to_string(), name: e.name.clone(), stamp, child });
                 self.notify(format!("The notes opened in {}, in a window of its own.", e.name));
             }
-            Err(err) => self.notify(format!("Couldn't open the notes in {}: {}", e.name, plain(&err))),
+            Err(err) => {
+                notesrun::clear_marker(&notesrun::editing_path(&self.cache, project));
+                self.notify(format!("Couldn't open the notes in {}: {}", e.name, plain(&err)));
+            }
         }
     }
 
@@ -223,6 +268,7 @@ impl App {
                 self.after_edit(&w.project, w.stamp, &w.name);
             }
         }
+        self.poll_notes_changes();
     }
 
     fn finish_edit(&mut self) {
@@ -237,6 +283,8 @@ impl App {
     /// What to say once an editor has been and gone. The words follow the text, not the file's timestamp: an
     /// editor that saves the same words over again has changed nothing.
     fn after_edit(&mut self, project: &str, stamp: notes::Stamp, name: &str) {
+        notesrun::clear_marker(&notesrun::editing_path(&self.cache, project));
+        self.forget_notes_stamp();
         let changed = match notes::last_change(&self.config, project) {
             Some((before, after)) => before != after,
             // No earlier version: the notes are brand new (platoon wrote the template), so the file itself says.
@@ -284,6 +332,7 @@ impl App {
         match notes::undo(&self.config, &project) {
             Ok(()) => {
                 self.notes_top.set(0);
+                self.forget_notes_stamp();
                 self.notify("The notes are back as they were. Press u again to undo that too.");
             }
             Err(why) => self.notify(why),

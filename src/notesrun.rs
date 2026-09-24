@@ -1,0 +1,841 @@
+//! Keeping a project's notes up to date by itself: the `Stop` hook that notices there is something new, the
+//! detached helper that runs one `claude -p` update once the project has been quiet for a few minutes, and the
+//! small files the two use to tell each other (and platoon's window) what is going on.
+//!
+//! How it hangs together:
+//! - Claude Code runs `platoon hook stop` whenever a session finishes answering. The hook is instant, silent,
+//!   spends no tokens and exits 0 whatever happens. If the session belongs to an active project whose notes exist,
+//!   it writes the time into `<cache>/notes-due/<project id>` and starts the helper. Any later turn rewrites that
+//!   time, which is what makes the timer start over.
+//! - The helper (`platoon notes-update <project id>`, run detached, so the platoon window need not be open) takes
+//!   an exclusive lock on `<cache>/notes-helper/<project id>.lock`: a second helper for the same project exits at
+//!   once, because the one holding the lock will see the newer time anyway. It waits until the mark is about three
+//!   minutes old, runs one update, clears the mark and, if a new one arrived meanwhile, waits again.
+//! - While a call is out, `<cache>/notes-updating/<project id>` holds the helper's pid, so the notes pane can say
+//!   an update is running. While platoon has an editor of its own open on the notes, `<cache>/notes-editing/<...>`
+//!   holds platoon's pid and the helper does not write.
+//!
+//! **It must not be able to feed itself.** The runner's own `claude -p` calls work in `<cache>/ai-work` with
+//! `PLATOON_AI=1` in their environment and `--setting-sources ""`, so they load no settings and no hooks at all;
+//! on top of that the hook refuses outright when `PLATOON_AI` is set or the session's folder is that work folder,
+//! and a session that is in no project is turned away after one small read.
+
+use crate::ai::{self, AiError, Request, Runner};
+use crate::archive::Archive;
+use crate::claude;
+use crate::notes;
+use crate::notesupdate::{self, Doc, Material, SessionMaterial, State};
+use crate::projects::Projects;
+use crate::settings::Settings;
+use crate::usage;
+use serde_json::Value;
+use std::{
+    collections::{BTreeMap, VecDeque},
+    fs,
+    io::{self, BufRead, BufReader, Read, Write},
+    os::unix::{io::AsRawFd, process::CommandExt},
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+/// The feature id in `ai::FEATURES`: the switch, the gate and the ledger all go by it.
+pub const FEATURE: &str = "project_notes";
+
+/// How long a project must be quiet before one update runs.
+pub const DEFAULT_QUIET_SECS: u64 = 180;
+
+/// A helper never lives longer than this, whatever happens.
+pub const DEFAULT_MAX_LIFE_SECS: u64 = 1800;
+
+/// A session platoon has never read before is read in full, once: its first message and up to this many of its
+/// latest messages. (Beyond that the whole point of the caps is lost and one project could cost a fortune.)
+pub const FULL_READ_MESSAGES: usize = 20;
+
+/// The longest one update may take before it is given up on.
+const CALL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How much of a transcript is kept in memory while it is read.
+const KEEP_RECENT: usize = 64;
+
+/// A line of a transcript longer than this is not a message anyone typed.
+const MAX_LINE: u64 = 4 << 20;
+
+// ---- the small files ------------------------------------------------------------------------------------------
+
+fn dir_file(cache: &Path, dir: &str, id: &str) -> PathBuf {
+    cache.join(dir).join(id)
+}
+
+/// Where the time of the last finished turn of a project's sessions is kept.
+pub fn due_path(cache: &Path, id: &str) -> PathBuf {
+    dir_file(cache, "notes-due", id)
+}
+
+/// Where the helper says it has a call out.
+pub fn running_path(cache: &Path, id: &str) -> PathBuf {
+    dir_file(cache, "notes-updating", id)
+}
+
+/// Where platoon says it has an editor of its own open on these notes.
+pub fn editing_path(cache: &Path, id: &str) -> PathBuf {
+    dir_file(cache, "notes-editing", id)
+}
+
+fn lock_path(cache: &Path, id: &str) -> PathBuf {
+    dir_file(cache, "notes-helper", id)
+}
+
+pub fn now_ms() -> u64 {
+    usage::now() * 1000 + u64::from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_millis()).unwrap_or(0))
+}
+
+/// Note that this project has something new, at `at_ms`. A later turn simply writes a later time: that is the
+/// quiet timer starting over.
+pub fn mark_due(cache: &Path, id: &str, at_ms: u64) -> io::Result<()> {
+    crate::projects::write_atomic(&due_path(cache, id), &at_ms.to_string())
+}
+
+/// When this project was last marked, or None when it has nothing waiting.
+pub fn due_at(cache: &Path, id: &str) -> Option<u64> {
+    fs::read_to_string(due_path(cache, id)).ok()?.trim().parse().ok()
+}
+
+/// Forget the mark, but only while it is still the one that was acted on: a turn that happened while the call was
+/// out must not be lost.
+pub fn clear_due_if(cache: &Path, id: &str, was: u64) -> bool {
+    if due_at(cache, id) != Some(was) {
+        return false;
+    }
+    let _ = fs::remove_file(due_path(cache, id));
+    true
+}
+
+/// Write this process's pid into `path`, to say it is doing something.
+pub fn set_marker(path: &Path) {
+    let _ = crate::projects::write_atomic(path, &std::process::id().to_string());
+}
+
+pub fn clear_marker(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+/// Is the process that wrote this marker still there? A marker left behind by a platoon that was killed says
+/// nothing, so it is ignored (and tidied away).
+pub fn marker_alive(path: &Path) -> bool {
+    let Ok(text) = fs::read_to_string(path) else { return false };
+    let Ok(pid) = text.trim().parse::<u32>() else { return false };
+    if claude::pid_alive(pid) {
+        return true;
+    }
+    let _ = fs::remove_file(path);
+    false
+}
+
+/// An update is running for this project right now.
+pub fn updating(cache: &Path, id: &str) -> bool {
+    marker_alive(&running_path(cache, id))
+}
+
+/// platoon has an editor of its own open on these notes, so nothing may write them.
+pub fn being_edited(cache: &Path, id: &str) -> bool {
+    marker_alive(&editing_path(cache, id))
+}
+
+fn env_secs(key: &str, fallback: u64) -> u64 {
+    std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(fallback)
+}
+
+/// How long a project must be quiet before an update (`PLATOON_NOTES_QUIET_SECS` in tests).
+pub fn quiet_secs() -> u64 {
+    env_secs("PLATOON_NOTES_QUIET_SECS", DEFAULT_QUIET_SECS)
+}
+
+fn max_life_secs() -> u64 {
+    env_secs("PLATOON_NOTES_MAX_LIFE_SECS", DEFAULT_MAX_LIFE_SECS)
+}
+
+// ---- the Stop hook --------------------------------------------------------------------------------------------
+
+/// What the hook does with one hook input: the project it marked, or None for "nothing to do", which costs one
+/// small read of `projects.json` and nothing else. It never writes anything but the mark and never prints.
+pub fn stop_mark(input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms: u64) -> Option<String> {
+    // The helper's own calls must never come back here. (They load no settings, so Claude Code runs no hook for
+    // them at all; these two checks are the belt to that brace.)
+    if ai_child {
+        return None;
+    }
+    let v: Value = serde_json::from_str(input).ok()?;
+    let session = v.get("session_id")?.as_str()?;
+    if !crate::sessionhook::safe_name(session) {
+        return None;
+    }
+    let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
+    if !cwd.is_empty() && Path::new(cwd) == ai::work_dir(cache) {
+        return None;
+    }
+    let (settings, corrupt) = crate::settings::load(config);
+    if corrupt || !settings.feature_on(FEATURE) {
+        return None;
+    }
+    let projects = Projects::open(config);
+    let project = projects.of(session)?;
+    if project.archived {
+        return None;
+    }
+    let id = project.id.clone();
+    if Archive::open(config).contains(session) {
+        return None;
+    }
+    // No notes yet means nothing to keep up to date: the user starts them with `e`.
+    if fs::read_to_string(projects.notes_path(&id)).ok()?.trim().is_empty() {
+        return None;
+    }
+    mark_due(cache, &id, at_ms).ok()?;
+    Some(id)
+}
+
+/// Start the helper for `id`, detached: its own session, no terminal, nothing waiting for it. It exits at once if
+/// another helper already has the project.
+pub fn spawn_helper(id: &str) -> io::Result<()> {
+    if std::env::var("PLATOON_NOTES_HELPER").is_ok_and(|v| v == "off") {
+        return Ok(());
+    }
+    let exe = std::env::current_exe()?;
+    let mut cmd = Command::new(exe);
+    cmd.args(["notes-update", id]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    // SAFETY: setsid in the child before exec, so closing the terminal can't hang it up.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    cmd.spawn().map(|_| ())
+}
+
+/// `platoon hook stop`. Always 0, always silent: a hook that gets in a session's way is worse than no hook.
+pub fn run_hook() -> i32 {
+    let _ = std::panic::catch_unwind(|| {
+        let mut input = String::new();
+        if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() {
+            return;
+        }
+        let ai_child = std::env::var_os("PLATOON_AI").is_some();
+        let (config, cache) = (crate::archive::config_dir(), usage::cache_dir());
+        if let Some(id) = stop_mark(&input, &config, &cache, ai_child, now_ms()) {
+            let _ = spawn_helper(&id);
+        }
+    });
+    0
+}
+
+// ---- reading what is new in a session ---------------------------------------------------------------------------
+
+/// What one transcript holds, read once: its first message, its latest messages, how many substantive ones there
+/// are in all, and one line of Claude's last reply. Nothing else of it is ever kept.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Read1 {
+    pub first: Option<String>,
+    pub recent: Vec<String>,
+    pub total: usize,
+    pub reply: Option<String>,
+}
+
+/// Read a transcript for what an update may send: the user's substantive messages (each cut to `cap` characters)
+/// and Claude's last reply. Only the last `KEEP_RECENT` messages are held, so a huge conversation costs no more
+/// memory than a small one.
+pub fn read_session(path: &Path, cap: usize) -> Read1 {
+    let Ok(file) = fs::File::open(path) else { return Read1::default() };
+    let mut reader = BufReader::new(file);
+    let mut out = Read1::default();
+    let mut recent: VecDeque<String> = VecDeque::new();
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        // A line longer than any message anyone types is skipped rather than held (tool output can be enormous).
+        match (&mut reader).take(MAX_LINE).read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {}
+            Err(_) => break,
+        }
+        if line.last() != Some(&b'\n') && line.len() as u64 == MAX_LINE {
+            // The rest of this over-long line is read and thrown away.
+            let mut rest = Vec::new();
+            if reader.read_until(b'\n', &mut rest).unwrap_or(0) == 0 {
+                break;
+            }
+            continue;
+        }
+        let Ok(text) = std::str::from_utf8(&line) else { continue };
+        if let Some(p) = claude::prompt_in_line(text, cap) {
+            if crate::smart::is_substantive(&p) {
+                out.total += 1;
+                if out.first.is_none() {
+                    out.first = Some(p.clone());
+                }
+                recent.push_back(p);
+                if recent.len() > KEEP_RECENT {
+                    recent.pop_front();
+                }
+            }
+        } else if claude::may_be_reply(text) {
+            if let Some(r) = claude::reply_in_line(text, claude::REPLY_CHARS) {
+                out.reply = Some(r);
+            }
+        }
+    }
+    out.recent = recent.into();
+    out
+}
+
+/// The last part of a session's folder, which is all the prompt says about where it is.
+fn folder_of(path: &Path, cwd: Option<String>) -> String {
+    let from_cwd = cwd.and_then(|c| Path::new(&c).file_name().map(|n| n.to_string_lossy().into_owned()));
+    from_cwd.filter(|f| !f.is_empty()).unwrap_or_else(|| path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+}
+
+/// What is new in this project since the last update, and how much of each session has now been read.
+pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, settings: &Settings) -> (Material, BTreeMap<String, usize>) {
+    let projects = Projects::open(config);
+    let archive = Archive::open(config);
+    let per = settings.ai_prompts_per_session as usize;
+    let cap = settings.ai_prompt_chars as usize;
+    let mut sessions: Vec<(u64, SessionMaterial)> = Vec::new();
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for sid in projects.members_of(id) {
+        if archive.contains(&sid) {
+            continue; // archived sessions are skipped entirely
+        }
+        let Some(path) = claude::find_transcript(root, &sid) else { continue };
+        let read = read_session(&path, cap);
+        if read.total == 0 {
+            continue;
+        }
+        let before = state.seen.get(&sid).copied();
+        seen.insert(sid.clone(), read.total);
+        let first_read = state.first_read(&sid);
+        let messages = match before {
+            // Never read before: the whole conversation, once, within a cap of its own.
+            None => {
+                let mut m: Vec<String> = read.recent.iter().rev().take(FULL_READ_MESSAGES).rev().cloned().collect();
+                if let Some(f) = &read.first {
+                    if !m.first().is_some_and(|x| x == f) {
+                        m.insert(0, f.clone());
+                    }
+                }
+                m
+            }
+            Some(n) if read.total > n => {
+                let fresh = read.total - n;
+                read.recent.iter().rev().take(fresh.min(per)).rev().cloned().collect()
+            }
+            Some(_) => Vec::new(),
+        };
+        if messages.is_empty() {
+            continue; // nothing new in this one
+        }
+        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
+        sessions.push((modified, SessionMaterial { folder: folder_of(&path, claude::transcript_cwd(&path)), messages, reply: read.reply, first_read }));
+    }
+    // The most recently used session first: if anything has to be cut, it is the stalest.
+    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    (Material { project: name.to_string(), sessions: sessions.into_iter().map(|(_, s)| s).collect() }, seen)
+}
+
+// ---- one update -------------------------------------------------------------------------------------------------
+
+/// Everything the helper needs to know about where things are. A test points it at its own folders and its own
+/// stand-in for `claude`.
+pub struct Env {
+    pub config: PathBuf,
+    pub cache: PathBuf,
+    /// Claude's own folder, where the transcripts are.
+    pub root: PathBuf,
+    /// The program that runs a call; None means `PLATOON_CLAUDE_BIN`, else `claude`.
+    pub program: Option<String>,
+}
+
+impl Env {
+    pub fn from_env() -> Env {
+        Env { config: crate::archive::config_dir(), cache: usage::cache_dir(), root: claude::claude_root(), program: None }
+    }
+
+    fn runner(&self) -> Runner {
+        match &self.program {
+            Some(p) => Runner::with_program(&self.cache, p),
+            None => Runner::from_env(&self.cache),
+        }
+    }
+}
+
+/// What one round came to. Nothing here is shown to the user as it is; it is what the helper acts on and what the
+/// tests read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Round {
+    /// The gate said no (switch off, daily limit, plan busy, back-off): in plain words.
+    Refused(String),
+    /// platoon has an editor open on these notes: not now.
+    Busy,
+    /// No project, no notes, or nothing readable.
+    NoNotes,
+    /// Nothing has been said in this project since the last update: no call, no tokens.
+    NothingNew,
+    /// The call itself failed.
+    Failed(String),
+    /// Claude's answer could not be understood, so nothing was changed.
+    BadReply,
+    /// It ran and the answer came to nothing (the same words back again, or every section refused).
+    Unchanged,
+    /// The notes were written. (sections rewritten, decisions added)
+    Written { sections: usize, decisions: usize },
+}
+
+/// One update, start to finish, in the caller's own thread. The helper loop calls it; so does every test.
+pub fn update_once(env: &Env, id: &str) -> Round {
+    let (settings, corrupt) = crate::settings::load(&env.config);
+    if corrupt {
+        return Round::NoNotes;
+    }
+    let now = usage::now();
+    if let Err(r) = ai::gate(&settings, FEATURE, &env.cache, now) {
+        return Round::Refused(r.plain());
+    }
+    if being_edited(&env.cache, id) {
+        return Round::Busy;
+    }
+    let projects = Projects::open(&env.config);
+    let Some(project) = projects.get(id).filter(|p| !p.archived).cloned() else { return Round::NoNotes };
+    let notes_path = projects.notes_path(id);
+    let Ok(before) = fs::read_to_string(&notes_path) else { return Round::NoNotes };
+    if before.trim().is_empty() {
+        return Round::NoNotes;
+    }
+    let mut state = State::load(&env.config, id);
+    let (material, seen) = gather(&env.config, &env.root, id, &project.name, &state, &settings);
+    if material.is_empty() {
+        return Round::NothingNew;
+    }
+    let text = notesupdate::prompt(&Doc::parse(&before), &state, &material);
+    let mut req = Request::new(FEATURE, notesupdate::system(), text);
+    req.timeout = CALL_TIMEOUT;
+
+    let running = running_path(&env.cache, id);
+    set_marker(&running);
+    let answer = env.runner().run(&settings, &req);
+    clear_marker(&running);
+
+    let reply = match answer {
+        Ok(r) => r.text,
+        Err(AiError::Refused(r)) => return Round::Refused(r.plain()),
+        Err(e) => return Round::Failed(e.plain()),
+    };
+    let Some(update) = notesupdate::parse_update(&reply) else { return Round::BadReply };
+
+    // What is on disk now is what counts: the user may have written the notes while the call was out, and then
+    // the merge is worked out again against what they wrote (and refused if it no longer fits).
+    let _lock = crate::projects::lock(&notes_path);
+    let current = fs::read_to_string(&notes_path).unwrap_or_default();
+    if current.trim().is_empty() {
+        return Round::NoNotes;
+    }
+    if being_edited(&env.cache, id) {
+        return Round::Busy;
+    }
+    let merged = notesupdate::merge(&current, &state, &update, now);
+    let outcome = if merged.changed {
+        if notes::write(&env.config, id, &merged.text).is_err() {
+            return Round::Failed("the notes couldn't be written".into());
+        }
+        Round::Written { sections: merged.written.len(), decisions: merged.added.len() }
+    } else {
+        Round::Unchanged
+    };
+    drop(_lock);
+
+    // The material was read and paid for, so it is not read again; what platoon wrote is remembered, so the next
+    // update can tell its own sentences from the user's.
+    state.seen.extend(seen);
+    for (key, written) in &merged.written {
+        state.set_mine(*key, written);
+    }
+    if merged.changed {
+        state.last_update_at = now;
+    }
+    let _ = state.save(&env.config, id);
+    outcome
+}
+
+// ---- the helper -------------------------------------------------------------------------------------------------
+
+/// Take the project's lock, or None when another helper already has it.
+fn try_lock(path: &Path) -> Option<fs::File> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).ok()?;
+    }
+    let mut file = fs::OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
+    // SAFETY: an advisory lock on a file this process holds open; it goes when the file is dropped or we exit.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return None;
+    }
+    let _ = file.set_len(0);
+    let _ = write!(file, "{}", std::process::id());
+    let _ = file.flush();
+    Some(file)
+}
+
+/// `platoon notes-update <project id>`: wait for the project to go quiet, then run one update; again if something
+/// new arrived while it ran. One per project, and never alive longer than `max_life_secs`.
+pub fn run_helper(args: &[String]) -> i32 {
+    let Some(id) = args.first().filter(|a| crate::sessionhook::safe_name(a)) else { return 2 };
+    let env = Env::from_env();
+    let Some(_lock) = try_lock(&lock_path(&env.cache, id)) else { return 0 };
+    helper_loop(&env, id, quiet_secs() * 1000);
+    0
+}
+
+/// The wait-and-update loop. `quiet_ms` is how long the project must have been quiet (a parameter, so a test runs
+/// it in its own thread without touching the environment).
+fn helper_loop(env: &Env, id: &str, quiet_ms: u64) {
+    let poll = Duration::from_millis((quiet_ms / 4).clamp(20, 1000));
+    let deadline = Instant::now() + Duration::from_secs(max_life_secs());
+    while Instant::now() < deadline {
+        let Some(at) = due_at(&env.cache, id) else { break };
+        if now_ms().saturating_sub(at) < quiet_ms {
+            thread::sleep(poll);
+            continue;
+        }
+        let round = update_once(env, id);
+        // A turn that happened while the call was out keeps the mark, and the timer starts over.
+        clear_due_if(&env.cache, id, at);
+        match round {
+            // Nothing will change within this helper's life: stop rather than ask again and again.
+            Round::Refused(_) | Round::NoNotes => break,
+            Round::Busy => thread::sleep(poll),
+            _ => {}
+        }
+    }
+    clear_marker(&running_path(&env.cache, id));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ledger::{Ledger, Usage};
+    use crate::testkit::{iso, AiFake};
+    use serde_json::json;
+
+    struct Rig {
+        base: PathBuf,
+        env: Env,
+        fake: AiFake,
+    }
+
+    impl Rig {
+        fn new(name: &str) -> Rig {
+            let base = std::env::temp_dir().join(format!("platoon-nrun-{name}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&base);
+            let (config, cache, root) = (base.join("config"), base.join("cache"), base.join("claude"));
+            for d in [&config, &cache, &root.join("projects/-work")] {
+                fs::create_dir_all(d).unwrap();
+            }
+            let fake = AiFake::new(name);
+            let env = Env { config, cache, root, program: Some(fake.script.clone()) };
+            let mut s = Settings { tokens_enabled: true, ..Settings::default() };
+            s.set_feature(FEATURE, true);
+            crate::settings::save(&env.config, &s).unwrap();
+            Rig { base, env, fake }
+        }
+
+        fn project(&self, notes: &str) -> String {
+            let mut p = Projects::open(&self.env.config);
+            let id = p.create("Web shop").unwrap();
+            fs::create_dir_all(self.env.config.join("projects").join(&id)).unwrap();
+            fs::write(p.notes_path(&id), notes).unwrap();
+            id
+        }
+
+        /// A transcript with these messages from the user and this last reply from Claude.
+        fn session(&self, project: &str, sid: &str, messages: &[&str], reply: &str) {
+            let mut p = Projects::open(&self.env.config);
+            p.assign(sid, Some(project)).unwrap();
+            let mut lines: Vec<String> = Vec::new();
+            for (n, m) in messages.iter().enumerate() {
+                lines.push(json!({"type":"user","cwd":"/home/x/work","timestamp":iso(1_789_000_000_000 + n as u64 * 1000),"message":{"role":"user","content":m}}).to_string());
+            }
+            lines.push(json!({"type":"assistant","cwd":"/home/x/work","timestamp":iso(1_789_000_100_000u64),"message":{"role":"assistant","content":[{"type":"text","text":reply}]}}).to_string());
+            fs::write(self.env.root.join("projects/-work").join(format!("{sid}.jsonl")), lines.join("\n") + "\n").unwrap();
+        }
+
+        fn notes(&self, id: &str) -> String {
+            fs::read_to_string(Projects::open(&self.env.config).notes_path(id)).unwrap_or_default()
+        }
+
+        fn hook(&self, sid: &str) -> Option<String> {
+            let input = json!({"session_id": sid, "cwd": "/home/x/work", "hook_event_name": "Stop"}).to_string();
+            stop_mark(&input, &self.env.config, &self.env.cache, false, now_ms())
+        }
+    }
+
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.base);
+        }
+    }
+
+    const NOTES: &str = "platoon keeps these.\n\n# Overview\n\nSell socks.\n\n# Requirements\n\n# Status\n\n# Decisions\n\n# Notes\n\nmine\n";
+
+    #[test]
+    fn the_hook_marks_a_project_with_notes_and_costs_nothing_for_anything_else() {
+        let r = Rig::new("hook");
+        let id = r.project(NOTES);
+        r.session(&id, "in-project", &["Add a basket page to the shop"], "Done.");
+        assert_eq!(r.hook("in-project"), Some(id.clone()));
+        assert!(due_at(&r.env.cache, &id).is_some());
+        let _ = fs::remove_file(due_path(&r.env.cache, &id));
+
+        // A session in no project at all.
+        assert_eq!(r.hook("loose"), None);
+        // Bad input of every shape.
+        for bad in ["", "{", "[]", "null", r#"{"cwd":"/x"}"#, r#"{"session_id":5}"#, r#"{"session_id":"../../etc"}"#] {
+            assert_eq!(stop_mark(bad, &r.env.config, &r.env.cache, false, 1), None, "{bad}");
+        }
+        // The helper's own session: by its environment, and by the folder it works in.
+        assert_eq!(stop_mark(&json!({"session_id":"in-project"}).to_string(), &r.env.config, &r.env.cache, true, 1), None, "PLATOON_AI is set");
+        let work = ai::work_dir(&r.env.cache).display().to_string();
+        assert_eq!(stop_mark(&json!({"session_id":"in-project","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1), None, "the work folder");
+        // An archived session of the project, and an archived project.
+        let mut archive = Archive::open(&r.env.config);
+        archive.archive("in-project", usage::now()).unwrap();
+        assert_eq!(r.hook("in-project"), None, "an archived session");
+        archive.restore("in-project", usage::now()).unwrap();
+        let mut p = Projects::open(&r.env.config);
+        p.archive(&id, &[]).unwrap();
+        assert_eq!(r.hook("in-project"), None, "an archived project");
+        p.restore(&id).unwrap();
+        // No notes file, and an empty one.
+        let notes = Projects::open(&r.env.config).notes_path(&id);
+        fs::remove_file(&notes).unwrap();
+        assert_eq!(r.hook("in-project"), None, "no notes yet");
+        fs::write(&notes, "  \n\n").unwrap();
+        assert_eq!(r.hook("in-project"), None, "empty notes");
+        fs::write(&notes, NOTES).unwrap();
+        // The switch off costs nothing either.
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.set_feature(FEATURE, false);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert_eq!(r.hook("in-project"), None, "the feature is switched off");
+        s.set_feature(FEATURE, true);
+        s.tokens_enabled = false;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert_eq!(r.hook("in-project"), None, "the master switch is off");
+        // Nothing of all that wrote a mark.
+        assert_eq!(due_at(&r.env.cache, &id), None);
+        assert_eq!(r.fake.calls(), 0, "the hook never asks Claude anything");
+    }
+
+    #[test]
+    fn a_later_turn_starts_the_quiet_timer_over() {
+        let r = Rig::new("timer");
+        let id = r.project(NOTES);
+        mark_due(&r.env.cache, &id, 1000).unwrap();
+        assert_eq!(due_at(&r.env.cache, &id), Some(1000));
+        mark_due(&r.env.cache, &id, 5000).unwrap();
+        assert_eq!(due_at(&r.env.cache, &id), Some(5000), "the newer turn wins");
+        // Acting on the older mark must not throw the newer one away.
+        assert!(!clear_due_if(&r.env.cache, &id, 1000));
+        assert_eq!(due_at(&r.env.cache, &id), Some(5000));
+        assert!(clear_due_if(&r.env.cache, &id, 5000));
+        assert_eq!(due_at(&r.env.cache, &id), None);
+    }
+
+    #[test]
+    fn only_one_helper_per_project_may_run() {
+        let r = Rig::new("lock");
+        let id = r.project(NOTES);
+        let first = try_lock(&lock_path(&r.env.cache, &id)).expect("the first takes it");
+        // A second attempt in another process is what matters; in this one flock would be re-entrant, so the
+        // second process is a real one: a tiny helper run that must return at once.
+        let held = fs::read_to_string(lock_path(&r.env.cache, &id)).unwrap();
+        assert_eq!(held, std::process::id().to_string(), "the holder writes its pid");
+        // Another project is free.
+        assert!(try_lock(&lock_path(&r.env.cache, "other")).is_some());
+        drop(first);
+        assert!(try_lock(&lock_path(&r.env.cache, &id)).is_some(), "released when it is dropped");
+    }
+
+    #[test]
+    fn only_what_is_new_is_sent_and_a_session_added_late_is_read_in_full_once() {
+        let r = Rig::new("new");
+        let id = r.project(NOTES);
+        let many: Vec<String> = (1..=30).map(|n| format!("This is message number {n} of the shop work")).collect();
+        let refs: Vec<&str> = many.iter().map(String::as_str).collect();
+        r.session(&id, "s1", &refs, "I did all of that.");
+        let settings = crate::settings::load(&r.env.config).0;
+        // Never read before: the first message and the latest ones, capped.
+        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        assert_eq!(seen.get("s1"), Some(&30));
+        let sent = &m.sessions[0];
+        assert!(sent.first_read);
+        assert_eq!(sent.messages.len(), FULL_READ_MESSAGES + 1, "the first message and the last twenty");
+        assert_eq!(sent.messages[0], many[0]);
+        assert_eq!(sent.messages.last().unwrap(), &many[29]);
+        assert_eq!(sent.reply.as_deref(), Some("I did all of that."));
+        assert_eq!(sent.folder, "work");
+        // Read before: only what came after, under the per-session cap.
+        let mut state = State::default();
+        state.seen.insert("s1".into(), 28);
+        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        assert!(!m.sessions[0].first_read);
+        assert_eq!(m.sessions[0].messages, [many[28].clone(), many[29].clone()]);
+        // Nothing new at all.
+        state.seen.insert("s1".into(), 30);
+        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        assert!(m.is_empty() && m.sessions.is_empty());
+        // Filler ("yes", "ok") is not new material.
+        r.session(&id, "s2", &["ok", "yes please", "thanks"], "Right.");
+        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        assert!(m.sessions.is_empty() && !seen.contains_key("s2"), "{m:?}");
+        // An archived session is skipped entirely.
+        Archive::open(&r.env.config).archive("s1", usage::now()).unwrap();
+        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        assert!(m.sessions.is_empty() && seen.is_empty());
+    }
+
+    #[test]
+    fn an_update_writes_the_notes_keeps_a_version_and_records_what_it_spent() {
+        let r = Rig::new("write");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "I added the basket page.");
+        // platoon has written nothing here yet, so every line of Overview is the user's: it may add, not reword.
+        r.fake.reply_default(r#"{"overview":"Sell socks.\nThere is a basket page.","decisions":["Baskets are session based"]}"#);
+        r.fake.usage(900, 120);
+        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 1, decisions: 1 });
+        let text = r.notes(&id);
+        assert!(text.contains("Sell socks.\nThere is a basket page."), "{text}");
+        assert!(text.contains(&format!("- {}: Baskets are session based", notesupdate::day(usage::now()))), "{text}");
+        assert!(text.contains("# Notes\n\nmine"), "Notes is untouched: {text}");
+        // The version before it is kept, so `c` and `u` work on it.
+        assert_eq!(crate::notes::last_change(&r.env.config, &id).map(|(b, _)| b), Some(NOTES.to_string()));
+        // The spend is in the ledger under this feature.
+        let day = Ledger::open(&r.env.cache).today(usage::now());
+        assert_eq!(day.features.get(FEATURE).map(|f| (f.tokens, f.calls)), Some((1020, 1)));
+        assert_eq!(day.usage, Usage { input: 900, output: 120, ..Usage::default() });
+        // What was sent: one call, in the work folder, with the project's name and no session id.
+        assert_eq!(r.fake.calls(), 1);
+        let sent = r.fake.stdin(1);
+        assert!(sent.contains("Project: Web shop") && sent.contains("Add a basket page"), "{sent}");
+        assert!(!sent.contains("s1"), "{sent}");
+        assert_eq!(r.fake.cwd(1), ai::work_dir(&r.env.cache).display().to_string());
+        // And it is not read again: a second round has nothing new.
+        assert_eq!(update_once(&r.env, &id), Round::NothingNew);
+        assert_eq!(r.fake.calls(), 1);
+    }
+
+    #[test]
+    fn the_second_update_may_reword_what_platoon_wrote_but_not_what_the_user_wrote() {
+        let r = Rig::new("reword");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.fake.reply(1, r#"{"overview":"Sell socks.\nThere is a basket page."}"#);
+        assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
+        assert_eq!(State::load(&r.env.config, &id).mine(notesupdate::Key::Overview), "Sell socks.\nThere is a basket page.");
+        // The user adds a line of their own.
+        let path = Projects::open(&r.env.config).notes_path(&id);
+        let text = fs::read_to_string(&path).unwrap().replace("There is a basket page.", "There is a basket page.\nWe never sell hats.");
+        fs::write(&path, &text).unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop", "Now add the checkout page as well"], "Done.");
+        // An answer that drops the user's line changes nothing.
+        r.fake.reply(2, r#"{"overview":"Sell socks.\nThere is a basket and a checkout page."}"#);
+        assert_eq!(update_once(&r.env, &id), Round::Unchanged);
+        assert_eq!(fs::read_to_string(&path).unwrap(), text, "nothing written");
+        // An answer that keeps it goes in, with platoon's own line reworded around it.
+        r.session(&id, "s1", &["Add a basket page to the shop", "Now add the checkout page as well", "And a receipt page too"], "Done.");
+        r.fake.reply(3, r#"{"overview":"Sell socks.\nThere is a basket and a checkout page.\nWe never sell hats."}"#);
+        assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
+        let after = fs::read_to_string(&path).unwrap();
+        assert!(after.contains("There is a basket and a checkout page.") && after.contains("We never sell hats."), "{after}");
+    }
+
+    #[test]
+    fn a_reply_that_makes_no_sense_changes_nothing() {
+        let r = Rig::new("bad");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"overview":""}"#].iter().enumerate() {
+            r.fake.reply(n + 1, bad);
+            assert_eq!(update_once(&r.env, &id), Round::BadReply, "{bad}");
+            assert_eq!(r.notes(&id), NOTES, "{bad}");
+            assert!(crate::notes::versions(&r.env.config, &id).is_empty(), "no copy kept either");
+            // The material is not counted as read, so the next try sends it again.
+            assert_eq!(State::load(&r.env.config, &id), State::default());
+        }
+        // A call that fails outright leaves the notes alone too.
+        r.fake.fail(Some("something went wrong"));
+        assert!(matches!(update_once(&r.env, &id), Round::Failed(_)));
+        assert_eq!(r.notes(&id), NOTES);
+    }
+
+    #[test]
+    fn the_notes_as_they_are_on_disk_win_over_what_the_call_started_from() {
+        let r = Rig::new("disk");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let path = Projects::open(&r.env.config).notes_path(&id);
+        // The fake rewrites the notes while its call is out: exactly what a user typing in an editor does.
+        let rewritten = NOTES.replace("Sell socks.", "Sell socks.\nWritten by hand while the call was out.");
+        fs::write(r.fake.dir.join("reply.1"), r#"{"overview":"Sell socks.\nThere is a basket page."}"#).unwrap();
+        fs::write(&path, &rewritten).unwrap();
+        assert_eq!(update_once(&r.env, &id), Round::Unchanged, "the answer no longer fits what is on disk");
+        assert_eq!(fs::read_to_string(&path).unwrap(), rewritten, "what the person wrote is still there");
+        // An editor platoon started stops an update before it begins.
+        fs::write(&path, NOTES).unwrap();
+        set_marker(&editing_path(&r.env.cache, &id));
+        assert_eq!(update_once(&r.env, &id), Round::Busy);
+        clear_marker(&editing_path(&r.env.cache, &id));
+        // A marker left behind by a platoon that is gone says nothing.
+        crate::projects::write_atomic(&editing_path(&r.env.cache, &id), "999999999").unwrap();
+        assert!(!being_edited(&r.env.cache, &id));
+    }
+
+    #[test]
+    fn the_gate_is_obeyed_before_anything_is_read_or_sent() {
+        let r = Rig::new("gate");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.set_feature(FEATURE, false);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        let refused = update_once(&r.env, &id);
+        assert!(matches!(&refused, Round::Refused(why) if why.contains("Project notes")), "{refused:?}");
+        s.set_feature(FEATURE, true);
+        s.tokens_enabled = false;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert!(matches!(update_once(&r.env, &id), Round::Refused(_)));
+        // The day's limit spent.
+        s.tokens_enabled = true;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        let spent = Usage { input: s.clone().clamped().ai_daily_tokens + 1, ..Usage::default() };
+        Ledger::open(&r.env.cache).record_call(usage::now(), FEATURE, &spent, 0.0, true).unwrap();
+        let refused = update_once(&r.env, &id);
+        assert!(matches!(&refused, Round::Refused(why) if why.contains("limit")), "{refused:?}");
+        assert_eq!(r.fake.calls(), 0, "nothing was ever asked");
+        assert_eq!(r.notes(&id), NOTES);
+    }
+
+    #[test]
+    fn the_helper_waits_for_quiet_then_runs_once_and_stops() {
+        let r = Rig::new("loop");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.fake.reply_default(r#"{"status":"The basket page is in."}"#);
+        // A mark that is already old enough (the quiet period is a parameter here).
+        mark_due(&r.env.cache, &id, now_ms()).unwrap();
+        helper_loop(&r.env, &id, 0);
+        assert_eq!(r.fake.calls(), 1, "one update, and then it stopped");
+        assert!(r.notes(&id).contains("The basket page is in."));
+        assert_eq!(due_at(&r.env.cache, &id), None, "the mark is cleared");
+        assert!(!updating(&r.env.cache, &id), "and nothing says an update is running");
+    }
+}

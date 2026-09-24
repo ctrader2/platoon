@@ -53,6 +53,9 @@ pub struct Feature {
     pub label: &'static str,
     /// One plain sentence: what it does for the person.
     pub description: &'static str,
+    /// On as soon as the master switch is on, without being listed in the settings file. A feature added after
+    /// someone has already answered the setup question would otherwise be off for them for ever.
+    pub on_unless_switched_off: bool,
 }
 
 pub const FEATURES: &[Feature] = &[
@@ -60,13 +63,26 @@ pub const FEATURES: &[Feature] = &[
         id: "names",
         label: "Smart names and summaries",
         description: "Gives each conversation a short name and a one-line summary, and keeps them up to date.",
+        on_unless_switched_off: false,
     },
     Feature {
         id: "find",
         label: "Find a session by description",
         description: "Finds the conversation you mean from a few words about it, when searching for exact words isn't enough.",
+        on_unless_switched_off: false,
+    },
+    Feature {
+        id: crate::notesrun::FEATURE,
+        label: "Project notes",
+        description: "Keeps a project's notes up to date from what its sessions did, a few minutes after they stop. It never changes what you wrote yourself.",
+        on_unless_switched_off: true,
     },
 ];
+
+/// Is this feature on when the settings file says nothing about it?
+pub fn on_by_default(id: &str) -> bool {
+    FEATURES.iter().any(|f| f.id == id && f.on_unless_switched_off)
+}
 
 /// The id `platoon tokens test` uses: it obeys every gate except a feature's own switch, because it isn't a feature.
 pub const TEST_FEATURE: &str = "test";
@@ -756,6 +772,12 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
             }
             let _ = writeln!(out, "Model: {}", settings.ai_model);
             let _ = writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(s.used_today), crate::settings::thousands(s.cap));
+            // What each feature spent today, so it is clear where the tokens went.
+            let day = Ledger::open(cache).today(now);
+            for (id, used) in &day.features {
+                let label = FEATURES.iter().find(|f| f.id == id).map_or(id.as_str(), |f| f.label);
+                let _ = writeln!(out, "  {label}: {} tokens in {} call{}", crate::settings::thousands(used.tokens), used.calls, if used.calls == 1 { "" } else { "s" });
+            }
             match s.plan {
                 Some((pct, w)) => {
                     let _ = writeln!(out, "Plan usage: {pct}% ({w}); pause above {}", crate::settings::percent_label(settings.ai_pause_percent));
@@ -946,11 +968,14 @@ pub(crate) mod tests {
     #[test]
     fn the_feature_table_has_plain_unique_rows() {
         let ids: Vec<&str> = FEATURES.iter().map(|f| f.id).collect();
-        assert_eq!(ids, ["names", "find"]);
+        assert_eq!(ids, ["names", "find", "project_notes"]);
         for f in FEATURES {
             assert!(!f.label.is_empty() && f.description.ends_with('.') && f.description.len() < 200, "{}", f.id);
             assert_ne!(f.id, TEST_FEATURE);
         }
+        // Only the newest row is on as soon as the master switch is: the others were there before anyone was asked.
+        assert_eq!(FEATURES.iter().filter(|f| f.on_unless_switched_off).map(|f| f.id).collect::<Vec<_>>(), ["project_notes"]);
+        assert!(on_by_default("project_notes") && !on_by_default("names") && !on_by_default("nonsense"));
     }
 
     #[test]
@@ -1108,7 +1133,7 @@ pub(crate) mod tests {
         let now = 1_800_000_000;
         let st = status(&s, &f.cache, now);
         assert!(st.master && st.paused.is_none() && st.used_today == 0 && st.cap == 500_000 && st.plan.is_none() && st.backoff.is_none());
-        assert_eq!(st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(), [("names", true), ("find", true)]);
+        assert_eq!(st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(), [("names", true), ("find", true), ("project_notes", true)]);
         Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 1234, ..Usage::default() }, 0.0, true).unwrap();
         Ledger::open(&f.cache).note_failure(now, FailKind::Network).unwrap();
         let st = status(&s, &f.cache, now + 1);

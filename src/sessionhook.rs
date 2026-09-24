@@ -24,7 +24,8 @@ fn fnv(bytes: &[u8]) -> u64 {
     h
 }
 
-fn safe_name(id: &str) -> bool {
+/// A session id or project id that is safe to use as a file name.
+pub fn safe_name(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 

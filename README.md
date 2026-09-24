@@ -23,6 +23,7 @@ already done, and a step whose command points at a platoon that no longer exists
 | Status line | Plan usage (5-hour and weekly) and Claude's own context percentage |
 | Session guard | Stops two copies of one conversation from overwriting each other |
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
+| Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 
 ## The list
 
@@ -242,12 +243,16 @@ entry, and has under the entries `Used today: N of M tokens` and `Archived: N co
 
 ### Features that use tokens
 
-Two features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
+Three features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
 require tokens** in the settings (under **Smart features**) plus the switch of each feature:
 
 - **Smart names and summaries**: gives each conversation a short name and a one- or two-sentence summary (shown under the list for
   the selected row, found by the search), and keeps them up to date as the conversation goes on.
 - **Find a session by description**: the [Describe it](#search) search.
+- **Project notes**: keeps a project's notes up to date by itself, a few minutes after its sessions stop; see
+  [Notes that keep themselves up to date](#notes-that-keep-themselves-up-to-date). This one is on as soon as the master switch is.
+
+`platoon tokens` lists each feature's switch and, under today's total, how many tokens each one used and in how many calls.
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send Claude the
 prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and that you can switch it off any
@@ -463,6 +468,43 @@ if something else changed it, what is on disk wins.
 
 **When the notes get big** (past about 20 KB) the pane says so: the whole file goes to every session in the project, and
 that costs tokens each time. Nothing is ever cut; it is yours to shorten.
+
+### Notes that keep themselves up to date
+
+With **Project notes** on (see [features that use tokens](#features-that-use-tokens)), platoon writes the notes for you from
+what your sessions actually did. It needs the **Notes updates** line of `platoon setup`, which adds a `Stop` hook to Claude
+Code; without it nothing happens automatically.
+
+**How it runs.** Every time a session in a project finishes answering, the hook makes a note of it - instantly, silently, no
+tokens - and starts a small helper in the background. The helper waits until the project has been quiet for **about three
+minutes** (another turn starts that timer over) and then makes **one** request to Claude. Only one helper runs per project,
+and it works whether the platoon window is open or closed. Archived projects, archived sessions, and projects whose notes
+file doesn't exist yet are skipped entirely: platoon never starts the notes for you, you do that with `e`.
+
+**What it reads.** Only what is new since the last update: for each active session in the project, the messages you typed
+since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus one line of Claude's last
+reply. A session that platoon has never read before - a new project, or one you have just added a session to - is read in
+full once: its first message and its last 20.
+
+**What it may write.**
+
+| Heading | What an update may do |
+| --- | --- |
+| Overview, Requirements, Status | add to them, and reword **what platoon itself wrote** before |
+| Decisions | append dated entries; nothing already there is ever changed |
+| Notes | nothing at all: it is yours |
+
+platoon remembers exactly which sentences it wrote last time, so the rest of a section is yours. If an answer comes back
+without one of your lines in it, word for word, that section is **left exactly as it was**. The same goes for an answer that
+isn't understood, a heading you have deleted, and notes that changed on disk while the request was out: what is on disk wins,
+and platoon works the merge out again or leaves it alone.
+
+**Seeing it.** The notes pane says `platoon is updating these notes now.` while a request is out, and `platoon last updated
+these 5m ago.` afterwards. Every update goes through the same history as your own edits, so `c` shows what changed and `u`
+undoes it, and platoon tells you once when the notes change under you.
+
+**Where it is kept.** The times and the copy of platoon's own sentences live in `~/.config/platoon/projects/<id>/notes-state.json`
+(numbers and platoon's own text only - never a message you typed, never a reply from Claude).
 
 
 ## Sessions started in platoon keep running

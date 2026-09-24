@@ -473,8 +473,18 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
-    // Above the notes: the editor platoon has open on them, and the warning when the file has grown big.
+    // Above the notes: whether platoon is updating them or when it last did, the editor it has open on them, and
+    // the warning when the file has grown big.
     let mut top_lines: Vec<Line> = Vec::new();
+    if app.notes_updating() {
+        top_lines.push(Line::styled("platoon is updating these notes now.", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
+        top_lines.push(Line::raw(""));
+    } else if let Some(at) = app.notes_updated_at() {
+        let when = ago(crate::usage::now() * 1000, at * 1000);
+        let when = if when == "now" { "just now".to_string() } else { format!("{when} ago") };
+        top_lines.push(Line::styled(format!("platoon last updated these {when}."), Style::new().fg(t.dim)));
+        top_lines.push(Line::raw(""));
+    }
     if let Some(name) = app.notes_editor_open() {
         top_lines.push(Line::styled(format!("Open in {name}, in a window of its own."), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
         top_lines.push(Line::styled("platoon reads them again when you are done.", Style::new().fg(t.subtext)));

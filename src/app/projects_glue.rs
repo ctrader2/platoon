@@ -399,9 +399,10 @@ impl App {
                         }
                     }
                     // Said once: without the hook, the notes never reach a session.
-                    if !setup::notes_hook_installed(self.reader.root()) && !self.projects.hook_told() {
+                    let hooks_missing = !setup::notes_hook_installed(self.reader.root()) || !setup::stop_hook_installed(self.reader.root());
+                    if hooks_missing && !self.projects.hook_told() {
                         let _ = self.projects.set_hook_told();
-                        msg.push_str(". To hand a project's notes to its sessions, run `platoon setup` once more.");
+                        msg.push_str(". To hand a project's notes to its sessions, and keep them up to date, run `platoon setup` once more.");
                         self.notice = Some((msg, Instant::now(), AUTO_ARCHIVE_NOTICE_FOR));
                     } else {
                         self.notify(msg);

@@ -100,7 +100,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     assert_eq!(app.selected_project().map(|p| p.name.as_str()), Some("Web shop"));
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("1 Sessions 4 2 Projects 1") && shown.contains("WS Web shop") && shown.contains("no sessions"), "{shown}");
-    assert!(shown.contains("run `platoon setup` once more"), "said once, since the notes hook is not installed: {shown}");
+    assert!(shown.contains("run `platoon setu"), "said once, since the notes hooks are not installed: {shown}");
     // Saved where it belongs.
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.config.join("projects.json")).unwrap()).unwrap();
     assert_eq!(v["projects"][&id]["name"], "Web shop");

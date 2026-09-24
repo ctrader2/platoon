@@ -57,7 +57,8 @@ cargo build --release                    # must be warning-free
 `tests/fake-claude.sh` is the stand-in `claude -p` (records every call, answers from files) shared by `testkit::AiFake` and `tests/common`.
 
 Test environment knobs: `PLATOON_CLAUDE_BIN` (a stand-in for `claude`), `PLATOON_SKIP_SETUP_CHECK=1`, `PLATOON_BADGES`,
-`PLATOON_COLORS`, `PLATOON_IDLE_SECS_PER_MINUTE`, `PLATOON_CLIPBOARD`. `tests/common` `Term::spawn` fixes them for
+`PLATOON_COLORS`, `PLATOON_IDLE_SECS_PER_MINUTE`, `PLATOON_CLIPBOARD`, `PLATOON_NOTES_QUIET_SECS`, `PLATOON_NOTES_MAX_LIFE_SECS`,
+`PLATOON_NOTES_HELPER=off`. `tests/common` `Term::spawn` fixes them for
 terminal tests. Run the whole suite twice before trusting it and fix races instead of retrying. A real `claude` cannot be
 used in tests (trust-folder prompt): use `sh` or a fake script.
 
@@ -79,6 +80,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `ai.rs`, `ledger.rs` | the token plumbing: feature table, gate (switches, daily limit, plan pause, back-off; `gate_for` says "user initiated"), the `claude -p` runner, numbers-only usage ledger |
 | `smart.rs`, `summaries.rs`, `scan.rs`, `app/smart_glue.rs` | smart names and "Describe it": what counts as a substantive message, digests, reply validation, who is due and in what order (`smart.rs`, pure); `summaries.json` in the config dir; the first pass inside `platoon setup`; the app's background worker and the find flow |
 | `projects.rs`, `sessionhook.rs`, `app/projects_glue.rs` | projects: `projects.json` (projects, membership, archived-by-project), notes paths, color slots, sessions started under a project (`<cache>/project-launches`); `platoon hook session-start` (notes as SessionStart context, sent hashes in `<cache>/notes-sent`); the app's tabs, Projects tab, project screen, picker and lifecycle |
+| `notesupdate.rs`, `notesrun.rs` | keeping a project's notes up to date: the five sections, the prompt, the reply and the merge rules (`notesupdate.rs`, pure, plus `notes-state.json`); the `Stop` hook, the detached helper (`platoon notes-update <id>`), the quiet timer, the per-project lock and the marks in `<cache>/notes-due`, `notes-updating`, `notes-editing`, `notes-helper` |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
 

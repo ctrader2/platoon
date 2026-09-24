@@ -56,15 +56,15 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
-    assert!(shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes"), "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
+    assert!(shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"), "{shown}");
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
 
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
-    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
 }
@@ -140,12 +140,49 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
     assert!(screen.contains("No conversations yet"), "the missing notes hook must not block starting:\n{screen}");
     let out = platoon(&claude, &cache, &["setup"]);
     let shown = text(&out.stdout);
-    assert_eq!(shown.matches("already done").count(), 2, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
     assert!(shown.contains("Project notes") && shown.contains("added"), "{shown}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
     assert!(cmd.ends_with(" hook session-start"), "{cmd}");
     assert_eq!(v["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1, "the guard is not added twice");
+    assert_eq!(v["hooks"]["Stop"].as_array().unwrap().len(), 1, "and neither is the Stop hook");
+}
+
+#[test]
+fn the_stop_hook_that_keeps_notes_up_to_date_is_added_beside_any_other_stop_hook() {
+    let (claude, cache) = dirs("stop-hook");
+    // Somebody else's Stop hook is already there: it must survive, and platoon's goes beside it.
+    fs::write(
+        claude.join("settings.json"),
+        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say-something"}]}]}}"#,
+    )
+    .unwrap();
+    assert!(platoon(&claude, &cache, &["setup"]).status.success());
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
+    let groups = v["hooks"]["Stop"].as_array().unwrap();
+    assert_eq!(groups.len(), 2, "{v}");
+    assert_eq!(groups[0]["hooks"][0]["command"], "say-something");
+    assert!(groups[1]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook stop"), "{v}");
+    // Running the hook by hand with nothing to do is instant, silent and fine.
+    let out = std::process::Command::new(BIN)
+        .args(["hook", "stop"])
+        .env("CLAUDE_CONFIG_DIR", &claude)
+        .env("PLATOON_CACHE_DIR", &cache)
+        .env("PLATOON_CONFIG_DIR", cache.join("config"))
+        .env("PLATOON_NOTES_HELPER", "off")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(br#"{"session_id":"nobody","cwd":"/tmp","hook_event_name":"Stop"}"#)?;
+            c.wait_with_output()
+        })
+        .unwrap();
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "{out:?}");
 }
 
 #[test]

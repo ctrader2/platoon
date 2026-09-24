@@ -449,6 +449,9 @@ pub struct App {
     pub pane: Pane,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
+    /// The open project and the state of its notes file when it was last looked at, so a change made by the
+    /// automatic update (or by anything else) while the screen is open is noticed and said once.
+    pub notes_seen: Option<(String, crate::notes::Stamp)>,
     /// How many of the rows of a project's screen are archived ones (they come last).
     pub archived_rows: usize,
     pub name_box: NameBox,
@@ -606,6 +609,7 @@ impl App {
             open_project: None,
             pane: Pane::Sessions,
             notes_top: Cell::new(0),
+            notes_seen: None,
             archived_rows: 0,
             name_box: NameBox { purpose: NamePurpose::New, input: String::new() },
             assign: AssignPick { session: String::new(), session_name: String::new(), options: Vec::new(), selected: 0 },

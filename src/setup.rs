@@ -11,15 +11,28 @@ use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}};
 pub struct Step {
     pub name: &'static str,
     pub what: &'static str,
-    /// platoon refuses to start without it. A step that isn't (the notes hook) only makes a feature work.
+    /// platoon refuses to start without it. A step that isn't (the two notes hooks) only makes a feature work.
     pub blocking: bool,
+    /// What is said, plainly, when a step that isn't blocking hasn't been done.
+    pub missing_note: &'static str,
 }
 
 /// Same order as `check` and `Report::outcomes`.
-pub const STEPS: [Step; 3] = [
-    Step { name: "Status line", what: "plan usage, and Claude's own context % in the list", blocking: true },
-    Step { name: "Session guard", what: "stops two copies of a session overwriting each other", blocking: true },
-    Step { name: "Project notes", what: "hands a project's notes to its sessions when they start", blocking: false },
+pub const STEPS: [Step; 4] = [
+    Step { name: "Status line", what: "plan usage, and Claude's own context % in the list", blocking: true, missing_note: "" },
+    Step { name: "Session guard", what: "stops two copies of a session overwriting each other", blocking: true, missing_note: "" },
+    Step {
+        name: "Project notes",
+        what: "hands a project's notes to its sessions when they start",
+        blocking: false,
+        missing_note: "not set up yet: projects work, but their notes don't reach sessions",
+    },
+    Step {
+        name: "Notes updates",
+        what: "lets platoon keep a project's notes up to date after its sessions stop",
+        blocking: false,
+        missing_note: "not set up yet: projects work, but platoon can't keep their notes up to date by itself",
+    },
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,6 +101,10 @@ fn is_notes_hook(c: &str) -> bool {
     c.contains("platoon") && c.contains("hook session-start")
 }
 
+fn is_stop_hook(c: &str) -> bool {
+    c.contains("platoon") && c.contains("hook stop")
+}
+
 fn hook_commands<'a>(v: &'a Value, event: &str, is_ours: fn(&str) -> bool) -> Vec<&'a str> {
     v["hooks"][event]
         .as_array()
@@ -122,6 +139,10 @@ fn check_notes_hook(v: &Value) -> State {
     commands_state(&hook_commands(v, "SessionStart", is_notes_hook))
 }
 
+fn check_stop_hook(v: &Value) -> State {
+    commands_state(&hook_commands(v, "Stop", is_stop_hook))
+}
+
 fn commands_state(cmds: &[&str]) -> State {
     match cmds.iter().map(|c| command_state(c)).find(|s| *s != State::Done) {
         _ if cmds.is_empty() => State::Missing,
@@ -142,7 +163,7 @@ fn check_guard(v: &Value) -> State {
 /// Where each step stands, in `STEPS` order.
 pub fn check(root: &Path) -> Vec<State> {
     let v = read_settings(root).unwrap_or(Value::Null);
-    vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v)]
+    vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v), check_stop_hook(&v)]
 }
 
 /// Every step platoon can't do without is done (the notes hook is not one of them).
@@ -153,6 +174,11 @@ pub fn ready(states: &[State]) -> bool {
 /// True when the SessionStart hook that hands project notes to sessions is present and working.
 pub fn notes_hook_installed(root: &Path) -> bool {
     read_settings(root).is_some_and(|v| check_notes_hook(&v) == State::Done)
+}
+
+/// True when the Stop hook that keeps a project's notes up to date is present and working.
+pub fn stop_hook_installed(root: &Path) -> bool {
+    read_settings(root).is_some_and(|v| check_stop_hook(&v) == State::Done)
 }
 
 pub fn statusline_installed(root: &Path) -> bool {
@@ -202,12 +228,23 @@ fn add_hook(v: &mut Value, event: &str, command: String) -> Result<(), String> {
 /// Take the notes hook out of Claude Code's settings in `root` again, leaving everything else. True when it was there.
 #[cfg(test)]
 pub fn remove_notes_hook(root: &Path) -> Result<bool, String> {
+    remove_one_hook(root, "SessionStart", is_notes_hook, check_notes_hook)
+}
+
+/// The same for the Stop hook that keeps the notes up to date.
+#[cfg(test)]
+pub fn remove_stop_hook(root: &Path) -> Result<bool, String> {
+    remove_one_hook(root, "Stop", is_stop_hook, check_stop_hook)
+}
+
+#[cfg(test)]
+fn remove_one_hook(root: &Path, event: &str, is_ours: fn(&str) -> bool, check: fn(&Value) -> State) -> Result<bool, String> {
     let path = root.join("settings.json");
     let mut v: Value = serde_json::from_str(&fs::read_to_string(&path).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
-    if check_notes_hook(&v) == State::Missing {
+    if check(&v) == State::Missing {
         return Ok(false);
     }
-    remove_hook(&mut v, "SessionStart", is_notes_hook);
+    remove_hook(&mut v, event, is_ours);
     fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n").map_err(|e| e.to_string())?;
     Ok(true)
 }
@@ -261,16 +298,21 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     });
 
-    let notes = check_notes_hook(&v);
-    outcomes.push(match notes {
-        State::Done | State::Skipped(_) => Outcome::AlreadyDone,
-        State::Missing | State::Broken(_) => {
-            remove_hook(&mut v, "SessionStart", is_notes_hook);
-            add_hook(&mut v, "SessionStart", format!("{quoted} hook session-start"))?;
-            changed = true;
-            if notes == State::Missing { Outcome::Added } else { Outcome::Repaired }
-        }
-    });
+    for (event, command, is_ours, check) in [
+        ("SessionStart", "hook session-start", is_notes_hook as fn(&str) -> bool, check_notes_hook as fn(&Value) -> State),
+        ("Stop", "hook stop", is_stop_hook, check_stop_hook),
+    ] {
+        let state = check(&v);
+        outcomes.push(match state {
+            State::Done | State::Skipped(_) => Outcome::AlreadyDone,
+            State::Missing | State::Broken(_) => {
+                remove_hook(&mut v, event, is_ours);
+                add_hook(&mut v, event, format!("{quoted} {command}"))?;
+                changed = true;
+                if state == State::Missing { Outcome::Added } else { Outcome::Repaired }
+            }
+        });
+    }
 
     let mut saved = None;
     let mut notes = Vec::new();
@@ -402,7 +444,7 @@ pub fn render_blocked(states: &[State], color: bool) -> String {
             State::Done => row(Some(true), step, "", color),
             State::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
             // Not needed to start: said plainly, without the red cross.
-            State::Missing if !step.blocking => row(None, step, "not set up yet: projects work, but their notes don't reach sessions", color),
+            State::Missing if !step.blocking => row(None, step, step.missing_note, color),
             State::Broken(why) if !step.blocking => row(None, step, &format!("broken: {why}"), color),
             State::Missing => row(Some(false), step, "not set up", color),
             State::Broken(why) => row(Some(false), step, &format!("broken: {why}"), color),
@@ -432,12 +474,12 @@ mod tests {
     fn nothing_is_done_at_first_and_everything_is_after_setup() {
         let root = tmp("fresh");
         let before = check(&root);
-        assert_eq!(before, vec![State::Missing, State::Missing, State::Missing]);
+        assert_eq!(before, (0..STEPS.len()).map(|_| State::Missing).collect::<Vec<_>>());
         assert!(!ready(&before));
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::Added, Outcome::Added, Outcome::Added]);
-        assert_eq!(check(&root), vec![State::Done, State::Done, State::Done]);
-        assert!(notes_hook_installed(&root));
+        assert_eq!(r.outcomes, (0..STEPS.len()).map(|_| Outcome::Added).collect::<Vec<_>>());
+        assert_eq!(check(&root), (0..STEPS.len()).map(|_| State::Done).collect::<Vec<_>>());
+        assert!(notes_hook_installed(&root) && stop_hook_installed(&root));
         assert!(ready(&check(&root)) && statusline_installed(&root) && guard_installed(&root));
     }
 
@@ -447,11 +489,11 @@ mod tests {
         run(&root).unwrap();
         let text = fs::read_to_string(root.join("settings.json")).unwrap();
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::AlreadyDone, Outcome::AlreadyDone, Outcome::AlreadyDone]);
+        assert_eq!(r.outcomes, (0..STEPS.len()).map(|_| Outcome::AlreadyDone).collect::<Vec<_>>());
         assert!(r.saved.is_none());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), text);
         let shown = render_report(&r, &root, false);
-        assert_eq!(shown.matches("[✓]").count(), 3, "{shown}");
+        assert_eq!(shown.matches("[✓]").count(), STEPS.len(), "{shown}");
         assert!(shown.contains("already done") && shown.contains("Nothing to change"), "{shown}");
     }
 
@@ -495,7 +537,7 @@ mod tests {
         assert!(!ready(&before));
         assert!(render_blocked(&before, false).contains("no longer exists"));
         let r = run(&root).unwrap();
-        assert_eq!(r.outcomes, vec![Outcome::Repaired, Outcome::Repaired, Outcome::Added]);
+        assert_eq!(r.outcomes, vec![Outcome::Repaired, Outcome::Repaired, Outcome::Added, Outcome::Added]);
         assert!(ready(&check(&root)));
         // Repaired in place, not duplicated.
         assert_eq!(settings(&root)["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
@@ -508,6 +550,7 @@ mod tests {
         assert_eq!(shown.matches("[✗]").count(), 2, "{shown}");
         assert!(shown.contains("Status line") && shown.contains("Session guard") && shown.contains("platoon setup"), "{shown}");
         assert!(shown.contains("[–] Project notes") && shown.contains("notes don't reach sessions"), "optional, not a cross: {shown}");
+        assert!(shown.contains("[–] Notes updates") && shown.contains("can't keep their notes up to date"), "the same for the Stop hook: {shown}");
     }
 
     #[test]
@@ -523,8 +566,9 @@ mod tests {
         assert_eq!(starts[0]["matcher"], "startup");
         assert!(starts[1]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook session-start"));
         assert!(starts[1].get("matcher").is_none(), "every source: startup, resume, clear and compact");
-        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
-        assert!(notes_hook_installed(&root));
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "x", "somebody else's Stop hook is left alone");
+        assert!(v["hooks"]["Stop"][1]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook stop"), "ours goes beside it: {v}");
+        assert!(notes_hook_installed(&root) && stop_hook_installed(&root));
         // Taken out again: only ours goes, and platoon still starts without it.
         assert!(remove_notes_hook(&root).unwrap());
         let v = settings(&root);
@@ -542,6 +586,15 @@ mod tests {
         assert!(matches!(check(&root)[2], State::Broken(_)) && ready(&check(&root)));
         assert_eq!(run(&root).unwrap().outcomes[2], Outcome::Repaired);
         assert_eq!(settings(&root)["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
+        // The Stop hook behaves exactly the same way, and is just as optional.
+        assert!(remove_stop_hook(&root).unwrap());
+        let states = check(&root);
+        assert_eq!(states[3], State::Missing);
+        assert!(ready(&states), "the Stop hook never blocks starting either");
+        assert!(!remove_stop_hook(&root).unwrap());
+        assert_eq!(settings(&root)["hooks"]["Stop"].as_array().unwrap().len(), 1, "only ours went");
+        assert_eq!(run(&root).unwrap().outcomes[3], Outcome::Added);
+        assert!(stop_hook_installed(&root));
     }
 
     #[test]
