@@ -410,11 +410,11 @@ fn with_a_project_column_every_row_still_fits_the_width() {
         let has_col = head.contains("PROJECT");
         assert_eq!(has_col, width >= 69, "{width}: {head}");
         assert_eq!(pill_rows(&lines, color).is_empty(), !has_col, "{width}");
-        // The pill switches to the badge letters exactly where BRANCH goes (the table is 90 columns wide).
+        // The pill switches to the badge letters below 90 real terminal columns.
         if has_col {
             let row = text_of(&lines[pill_rows(&lines, color)[0]]);
-            assert_eq!(row.contains(" AP "), !head.contains("BRANCH"), "{width}: {row}");
-            assert_eq!(row.contains(" A project"), head.contains("BRANCH"), "{width}: {row}");
+            assert_eq!(row.contains(" AP "), width < 90, "{width}: {row}");
+            assert_eq!(row.contains(" A project"), width >= 90, "{width}: {row}");
         }
     }
 }

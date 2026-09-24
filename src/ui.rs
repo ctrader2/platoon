@@ -65,7 +65,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
     let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none());
     let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
-    let [header, rule, shelf, cols, list, strip, footer] = Layout::vertical([
+    let term_w = f.area().width;
+    let [header, rule, shelf, titles, list, strip, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -82,12 +83,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
     let hints: Vec<Hint> = if app.open_project.is_some() {
-        draw_project_screen(f, app, shelf, Rect::new(cols.x, cols.y, cols.width, list.bottom() - cols.y));
+        draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
         project_screen_hints(app)
     } else if app.projects_list_showing() {
         let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
         draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
-        draw_project_columns(f, t, cols);
+        draw_project_columns(f, t, app, titles);
         if app.project_rows().is_empty() {
             let msg = if app.pcounts[app.ptab.min(1)] > 0 { "No projects match the filter" } else { PTABS[app.ptab.min(1)].1 };
             let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
@@ -100,8 +101,11 @@ pub fn draw(f: &mut Frame, app: &App) {
         let labels: Vec<&str> = TABS.iter().map(|t| t.label).collect();
         draw_shelf(f, app, shelf, &labels, &app.counts, app.tab);
         let visible = app.visible();
-        let project_w = project_width(app, visible, cols.width);
-        draw_columns(f, t, cols, project_w);
+        // The PROJECT column is sized from every row on the tab (so it doesn't jump while the filter is
+        // typed); NAME and DIR from the rows actually listed.
+        let project_w = project_width(app, app.tab_rows(), term_w);
+        let c = cols(titles.width, project_w, content_widths(app, visible));
+        draw_columns(f, t, titles, &c);
         if visible.is_empty() {
             let tab = &TABS[app.tab.min(TABS.len() - 1)];
             let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
@@ -114,7 +118,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             let p = Paragraph::new(msg).style(Style::new().fg(t.dim)).alignment(Alignment::Center);
             f.render_widget(p, Rect::new(list.x, list.y + list.height / 3, list.width, 1));
         } else {
-            draw_list(f, app, visible, project_w, list);
+            draw_list(f, app, visible, &c, term_w, list);
         }
         sessions_hints(app)
     };
@@ -256,16 +260,34 @@ struct PCols {
     notes: usize,
 }
 
-fn project_cols(width: u16) -> PCols {
+/// How much room the PROJECT column of the Projects list would like: the longest badge-and-name on show
+/// plus a gap, never less than its own title, never more than the cap.
+fn project_name_width(app: &App) -> usize {
+    let all = app.projects.all();
+    let longest = app
+        .project_rows()
+        .iter()
+        .map(|&i| {
+            let p = &all[i];
+            badge_width(p) + 1 + p.name.chars().count()
+        })
+        .max()
+        .unwrap_or(0);
+    (longest.max("PROJECT".chars().count()) + COL_GAP).min(NAME_MAX)
+}
+
+/// The Projects list's columns. `want` is what the names on show need; the column is that wide unless the
+/// terminal is too narrow, in which case it takes whatever room is left, exactly as it always did.
+fn project_cols(width: u16, want: usize) -> PCols {
     let w = width as usize;
     let fixed = 3 + LAST_W;
     let notes = if w >= 70 { 14 } else { 0 };
     let sessions = if w >= 50 { 24 } else { 0 };
-    PCols { name: w.saturating_sub(fixed + notes + sessions), sessions, notes }
+    PCols { name: want.min(w.saturating_sub(fixed + notes + sessions)), sessions, notes }
 }
 
-fn draw_project_columns(f: &mut Frame, t: &Theme, area: Rect) {
-    let c = project_cols(area.width);
+fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
+    let c = project_cols(area.width, project_name_width(app));
     let s = Style::new().fg(t.dim);
     let line = Line::from(vec![
         Span::raw("   "),
@@ -283,7 +305,7 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
     let rows = (area.height / ROW_H).max(1) as usize;
     let now = crate::usage::now() * 1000;
     let start = app.pselected.saturating_sub(rows.saturating_sub(1));
-    let c = project_cols(area.width);
+    let c = project_cols(area.width, project_name_width(app));
     let all = app.projects.all();
     for (i, &idx) in app.project_rows().iter().enumerate().skip(start).take(rows) {
         let p = &all[idx];
@@ -613,9 +635,15 @@ const PROJECT_NAME_MIN_WIDTH: u16 = 90;
 /// NAME and DIR together keep at least this much room; the PROJECT column shrinks, then goes, before they do.
 const NAME_DIR_MIN: usize = 20;
 
-/// What a row's project pill says at this width: the name, or on a narrow terminal the badge letters.
-fn project_label(p: &crate::projects::Project, width: u16) -> &str {
-    if width >= PROJECT_NAME_MIN_WIDTH {
+/// The widest NAME and DIR get when they are sized to what the rows hold; a longer value is cut.
+const NAME_MAX: usize = 60;
+const DIR_MAX: usize = 60;
+/// Clear air a content-sized column keeps after its longest value, so the columns don't touch.
+const COL_GAP: usize = 2;
+
+/// What a row's project pill says at this terminal width: the name, or on a narrow terminal the badge letters.
+fn project_label(p: &crate::projects::Project, term_w: u16) -> &str {
+    if term_w >= PROJECT_NAME_MIN_WIDTH {
         &p.name
     } else {
         &p.badge
@@ -623,14 +651,34 @@ fn project_label(p: &crate::projects::Project, width: u16) -> &str {
 }
 
 /// How wide the PROJECT column wants to be for these rows: enough for the longest pill plus a gap, at most
-/// `PROJECT_MAX`; 0 (no column) when none of them is in a project.
-fn project_width(app: &App, rows: &[usize], width: u16) -> usize {
-    let longest = rows.iter().filter_map(|&i| app.projects.of(&app.sessions[i].id)).map(|p| project_label(p, width).chars().count()).max();
+/// `PROJECT_MAX`; 0 (no column) when none of them is in a project. `term_w` is the real terminal width,
+/// which decides whether the pills hold names or badge letters.
+fn project_width(app: &App, rows: &[usize], term_w: u16) -> usize {
+    let longest = rows.iter().filter_map(|&i| app.projects.of(&app.sessions[i].id)).map(|p| project_label(p, term_w).chars().count()).max();
     longest.map_or(0, |n| (n + 3).clamp(PROJECT_MIN, PROJECT_MAX))
 }
 
-/// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for none).
-fn cols(width: u16, project: usize) -> Cols {
+/// How much room NAME and DIR would like for these rows: the longest value plus a gap, never less than the
+/// column's own title, never more than the cap. This is what keeps the table beside its content on a wide
+/// screen instead of stretched across it.
+fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
+    let (mut name, mut dir) = ("NAME".chars().count(), "DIR".chars().count());
+    for &i in rows {
+        let s = &app.sessions[i];
+        // A name platoon made up carries ` ✦ ` after it, inside the same column.
+        let n = s.name.chars().count() + if s.name_source == NameSource::Generated { 3 } else { 0 };
+        name = name.max(n);
+        dir = dir.max(s.dir.chars().count());
+        if name + COL_GAP >= NAME_MAX && dir + COL_GAP >= DIR_MAX {
+            break; // both are already past their cap; nothing further can widen them
+        }
+    }
+    ((name + COL_GAP).min(NAME_MAX), (dir + COL_GAP).min(DIR_MAX))
+}
+
+/// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for
+/// none) and NAME/DIR that want `want` (see `content_widths`).
+fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
     // marker(3) + name + project + dir + branch + model + status + context bar(BAR_WIDTH + 5) + last active
     let fixed = 3 + BAR_WIDTH + 5 + LAST_W;
     let w = width as usize;
@@ -643,11 +691,25 @@ fn cols(width: u16, project: usize) -> Cols {
     let room = flex.saturating_sub(NAME_DIR_MIN);
     let project = if project > 0 && room >= PROJECT_MIN { project.min(room) } else { 0 };
     let flex = flex - project;
-    Cols { name: flex * 2 / 5, project, dir: flex - flex * 2 / 5, branch, model, status }
+    // NAME and DIR are as wide as their content needs, and the table simply ends there: on a wide screen the
+    // spare cells stay empty on the right instead of being pushed between the columns. When the content wants
+    // more than there is, the two fall back to sharing what there is, as they always have, so nothing
+    // overflows and the row still lines up with the titles.
+    let (wn, wd) = (want.0.min(NAME_MAX), want.1.min(DIR_MAX));
+    let share = flex * 2 / 5;
+    let (name, dir) = if wn + wd <= flex {
+        (wn, wd)
+    } else if wn <= share {
+        (wn, flex - wn)
+    } else if wd <= flex - share {
+        (flex - wd, wd)
+    } else {
+        (share, flex - share)
+    };
+    Cols { name, project, dir, branch, model, status }
 }
 
-fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, project: usize) {
-    let c = cols(area.width, project);
+fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, c: &Cols) {
     let s = Style::new().fg(t.dim);
     let line = Line::from(vec![
         Span::raw("   "),
@@ -663,7 +725,7 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, project: usize) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-fn draw_list(f: &mut Frame, app: &App, visible: &[usize], project: usize, area: Rect) {
+fn draw_list(f: &mut Frame, app: &App, visible: &[usize], c: &Cols, term_w: u16, area: Rect) {
     const ROW_H: u16 = 3; // two text lines + one spacer
     let rows = (area.height / ROW_H) as usize;
     let now = crate::usage::now() * 1000;
@@ -674,7 +736,7 @@ fn draw_list(f: &mut Frame, app: &App, visible: &[usize], project: usize, area: 
         let row = Rect::new(area.x, y, area.width, ROW_H.min(area.bottom() - y));
         app.hits.borrow_mut().push((row, Hit::Row(i)));
         let hover = row.contains(app.mouse.into());
-        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, now, project, row);
+        draw_row(f, app, &app.sessions[idx], i == app.selected, hover, now, c, term_w, row);
     }
 }
 
@@ -716,9 +778,8 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, project: usize, area: Rect) {
+fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, now: u64, c: &Cols, term_w: u16, area: Rect) {
     let t = app.effective_theme();
-    let c = cols(area.width, project);
     let bg = if selected || hover { t.surface } else { t.bg };
     let base = Style::new().bg(bg);
     // Archived rows are dimmed so the tab reads as "put away" at a glance.
@@ -742,14 +803,14 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     } else {
         l1.push(Span::styled(fit(&s.name, name_w), name_style));
     }
-    // With a name that isn't the folder's, the folder is what tells the conversations apart: when the path has to be
-    // cut, the end of it (the folder itself) stays.
-    let dir = if s.name_source == NameSource::Folder { fit(&s.dir, c.dir) } else { fit_tail(&s.dir, c.dir) };
+    // The last parts of a path are what tell folders apart, so a path too long for the column is cut at the
+    // front (`…/repos/platoon`) and its end kept. (`s.dir` is already written with `~` for the home folder.)
+    let dir = fit_tail(&s.dir, c.dir);
     // The project, as a pill in its color (the same pill as the counts beside Active and Archived), then a gap.
     if c.project > 0 {
         match app.projects.of(&s.id) {
             Some(p) => {
-                let text = fit_end(project_label(p, area.width), c.project - 3);
+                let text = fit_end(project_label(p, term_w), c.project - 3);
                 let style = Style::new().fg(crate::projects::badge_text(t)).bg(crate::projects::slot_color(t, &p.color)).add_modifier(Modifier::BOLD);
                 let spans = pill(t, app.rounded, &text, style, bg, bg);
                 let used = text.chars().count() + 2;
@@ -869,6 +930,9 @@ fn fit_start(s: &str, n: usize) -> String {
     let len = s.chars().count();
     if len <= n {
         return s.to_string();
+    }
+    if n == 0 {
+        return String::new(); // a column with no room at all shows nothing, not even the ellipsis
     }
     let tail: String = s.chars().skip(len - n.saturating_sub(1)).collect();
     format!("…{tail}")
@@ -2178,23 +2242,66 @@ mod tests {
         }
     }
 
+    /// What NAME and DIR ask for when the rows are longer than any cap: everything, so the columns share
+    /// the room the way they always have.
+    const GREEDY: (usize, usize) = (NAME_MAX, DIR_MAX);
+
     #[test]
     fn the_project_column_takes_its_room_from_name_and_dir_and_never_widens_the_table() {
+        let rest = 3 + BAR_WIDTH + 5 + LAST_W;
         let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status;
         for width in 0..=240u16 {
-            let plain = cols(width, 0);
+            let plain = cols(width, 0, GREEDY);
             assert_eq!(plain.project, 0);
+            let flex = (width as usize).saturating_sub(rest + plain.status + plain.branch + plain.model);
             for want in [PROJECT_MIN, 12, PROJECT_MAX] {
-                let c = cols(width, want);
-                assert_eq!(sum(&c), sum(&plain), "{width}/{want}: the table adds up to the same width");
-                assert_eq!((c.branch, c.model, c.status), (plain.branch, plain.model, plain.status), "{width}: other drop rules unchanged");
-                assert!(c.project == 0 || (PROJECT_MIN..=want).contains(&c.project), "{width}/{want}: {}", c.project);
-                assert!(c.project == 0 || c.name + c.dir >= NAME_DIR_MIN, "{width}/{want}");
+                for content in [(6usize, 5usize), (20, 34), GREEDY] {
+                    let c = cols(width, want, content);
+                    assert_eq!((c.branch, c.model, c.status), (plain.branch, plain.model, plain.status), "{width}: other drop rules unchanged");
+                    assert!(c.project == 0 || (PROJECT_MIN..=want).contains(&c.project), "{width}/{want}: {}", c.project);
+                    assert!(c.project == 0 || c.name + c.dir >= NAME_DIR_MIN.min(content.0 + content.1), "{width}/{want}/{content:?}");
+                    assert!(rest + sum(&c) <= (width as usize).max(rest + plain.status), "{width}/{want}/{content:?}: past the terminal's right edge");
+                }
+                // Where the content fills the row anyway, the project column comes out of NAME and DIR, and
+                // the table still adds up to exactly the width it did before there was such a column.
+                if plain.name + plain.dir == flex {
+                    assert_eq!(sum(&cols(width, want, GREEDY)), sum(&plain), "{width}/{want}: the table adds up to the same width");
+                }
             }
         }
         // At 120 there is room for the widest column; at the narrowest there is none.
-        assert_eq!(cols(114, PROJECT_MAX).project, PROJECT_MAX);
-        assert_eq!(cols(40, PROJECT_MAX).project, 0);
+        assert_eq!(cols(114, PROJECT_MAX, GREEDY).project, PROJECT_MAX);
+        assert_eq!(cols(40, PROJECT_MAX, GREEDY).project, 0);
+    }
+
+    #[test]
+    fn name_and_dir_are_sized_to_their_content_and_never_overflow_the_width() {
+        let rest = 3 + BAR_WIDTH + 5 + LAST_W; // marker, context bar, last active
+        let fixed = rest + 11; // and the status column
+        for width in 0..=340u16 {
+            for want in [(6, 5), (20, 34), (NAME_MAX, 12), (12, DIR_MAX), GREEDY] {
+                for project in [0, PROJECT_MIN, PROJECT_MAX] {
+                    let c = cols(width, project, want);
+                    let total = rest + c.name + c.project + c.dir + c.branch + c.model + c.status;
+                    assert!(total <= (width as usize).max(fixed), "{width}/{want:?}/{project}: {total} cells for {width} columns");
+                    assert!(c.name <= NAME_MAX && c.dir <= DIR_MAX, "{width}/{want:?}: capped");
+                    // Nothing is cut that fits: when there is room for both wants they get exactly that.
+                    let flex = (width as usize).saturating_sub(fixed + c.branch + c.model) - c.project;
+                    if want.0 + want.1 <= flex {
+                        assert_eq!((c.name, c.dir), want, "{width}/{want:?}/{project}: sized to the content");
+                    } else {
+                        assert_eq!(c.name + c.dir, flex, "{width}/{want:?}/{project}: the two share what there is");
+                    }
+                }
+            }
+        }
+        // Wide screen, short content: the table ends just past the content, not at the right edge.
+        let c = cols(341, 0, (10, 18));
+        assert_eq!((c.name, c.dir), (10, 18));
+        // Narrow screen, long content: exactly the sharing of before (two fifths to NAME).
+        let narrow = cols(80, 0, GREEDY);
+        let flex = 80 - (fixed + 0 + 0);
+        assert_eq!((narrow.name, narrow.dir), (flex * 2 / 5, flex - flex * 2 / 5));
     }
 
     #[test]

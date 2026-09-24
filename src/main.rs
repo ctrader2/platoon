@@ -28,6 +28,8 @@ mod theme;
 mod ui;
 mod usertheme;
 #[cfg(test)]
+mod layout_app_tests;
+#[cfg(test)]
 mod perf;
 #[cfg(test)]
 mod projects_app_tests;

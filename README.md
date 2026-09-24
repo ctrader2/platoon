@@ -44,6 +44,12 @@ otherwise the folder's name. The folder always stays visible in the DIR column: 
 cut and the end (the folder itself) kept. With a summary made, the selected row's summary shows in two lines just above the
 key hints (left out on a terminal too short to spare them).
 
+**How wide the columns are.** NAME and DIR are as wide as the rows on show need and no wider, up to 60 columns each, so on a
+wide terminal the table stays together on the left instead of being stretched across the screen, and the rest of the line
+stays empty. A value longer than that is cut: a name loses its end (`a very long name…`), a path its start
+(`…/repos/platoon`). BRANCH, MODEL, STATUS, CONTEXT and LAST keep their sizes; on a narrow terminal BRANCH goes first, then
+MODEL, and NAME and DIR share whatever room is left, as before.
+
 | Key | Does |
 | --- | --- |
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
@@ -374,11 +380,13 @@ A project is a name, a color and a badge, and the conversations you put in it. I
 hold conversations from any number of folders, and each keeps its own. A conversation is in at most one project, and any
 conversation can be put in one, including ones you started outside platoon. Conversations in a project still show on the
 Sessions tab, with a **PROJECT** column after the name: the project's name in a pill of its color (round ends where the
-terminal has the glyphs, like the count badges). Long names are cut to fit; on a narrow terminal (where the BRANCH column
-goes) the pill shows the project's badge letters instead. A tab where no conversation is in a project has no such column.
+terminal has the glyphs, like the count badges). The column is as wide as the longest project name on the tab needs (at most
+18 columns; longer names are cut), and it is sized from every conversation on the tab, so it doesn't jump about while you
+type in the quick filter. Below 90 terminal columns the pill shows the project's badge letters instead. A tab where no
+conversation is in a project has no such column.
 
 On the **Projects** tab each row shows the badge and name, how many active and archived sessions the project has, when its
-notes last changed and when it was last used.
+notes last changed and when it was last used. Its name column, too, is only as wide as the projects on show need.
 
 | Key (Projects tab) | Does |
 | --- | --- |

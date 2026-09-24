@@ -376,6 +376,9 @@ pub struct App {
     pub sessions: Vec<Session>,
     /// Indices into `sessions` shown now: the current tab, narrowed by the filter.
     view: Vec<usize>,
+    /// The same rows before the filter: every conversation on this tab. The PROJECT column is sized from
+    /// these, so its width doesn't jump about while the filter is being typed.
+    tab_view: Vec<usize>,
     /// How many conversations each tab holds (unfiltered), parallel to `TABS`.
     pub counts: Vec<usize>,
     /// Which of `TABS` is showing.
@@ -544,6 +547,7 @@ impl App {
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
+            tab_view: Vec::new(),
             counts: vec![0; TABS.len()],
             tab: 0,
             usage: Usage::NotSetUp,
@@ -702,6 +706,11 @@ impl App {
         &self.view
     }
 
+    /// Indices into `sessions` for every row on this tab (or project screen) before the quick filter.
+    pub fn tab_rows(&self) -> &[usize] {
+        &self.tab_view
+    }
+
     /// Recompute the rows on screen if the filter, tab or data changed. Called after every event and
     /// refresh, and does nothing (one comparison) when nothing moved.
     fn update_view(&mut self) {
@@ -718,21 +727,20 @@ impl App {
         self.archived_rows = 0;
         if let Some(open) = self.open_project.clone() {
             // A project's screen: its sessions, the active ones first and then the archived ones.
-            let mine = |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s) && (q.is_empty() || s.haystack.contains(&q));
+            let mine = |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s);
             let (active, archived): (Vec<usize>, Vec<usize>) =
                 self.sessions.iter().enumerate().filter(|(_, s)| mine(s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
-            self.archived_rows = archived.len();
-            self.view = active.into_iter().chain(archived).collect();
+            self.tab_view = active.into_iter().chain(archived).collect();
+            let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
+            self.archived_rows = view.iter().filter(|&&i| self.sessions[i].archived).count();
+            self.view = view;
         } else if self.top == TOP_PROJECTS {
+            self.tab_view.clear();
             self.view.clear();
         } else {
-            self.view = self
-                .sessions
-                .iter()
-                .enumerate()
-                .filter(|(_, s)| listed(s) && shows(s) && (q.is_empty() || s.haystack.contains(&q)))
-                .map(|(i, _)| i)
-                .collect();
+            self.tab_view = self.sessions.iter().enumerate().filter(|(_, s)| listed(s) && shows(s)).map(|(i, _)| i).collect();
+            let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
+            self.view = view;
         }
         self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| listed(s) && (t.shows)(s)).count()).collect();
         self.update_project_rows(&q);
