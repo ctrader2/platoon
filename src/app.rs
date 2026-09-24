@@ -4,6 +4,7 @@ use crate::claude::{self, Live, Reader};
 use crate::client::{key_bytes, Client};
 use crate::clipboard::Clipboard;
 use crate::dirs;
+use crate::editors::Editor;
 use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
@@ -37,8 +38,10 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod notes_glue;
 mod projects_glue;
 mod smart_glue;
+pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 
@@ -143,6 +146,14 @@ pub enum Action {
     Look,
     /// Esc on a project's screen: back to the Projects tab.
     Leave,
+    /// `e` in the notes pane: edit the project's notes.
+    Edit,
+    /// `E` in the notes pane: choose an editor for this once.
+    EditWith,
+    /// `c` in the notes pane: what changed last.
+    ShowChanges,
+    /// `u` in the notes pane: undo the last change.
+    Undo,
 }
 
 /// Clickable regions, recorded by the UI each frame.
@@ -159,6 +170,8 @@ pub enum Hit {
     ProjectRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
+    /// An entry of the editor list.
+    EditorRow(usize),
     /// A color of the color and badge box.
     Slot(usize),
     /// One of the two panes of a project's screen: gives it the focus.
@@ -234,6 +247,12 @@ pub enum Mode {
     Assign,
     /// The color and badge of a project (`look`).
     Look,
+    /// A terminal editor running inside platoon's window on a project's notes (`editing`).
+    EditNotes,
+    /// The list of editors to open the notes with (`epick`).
+    PickEditor,
+    /// The before/after view of the last change to the notes (`changes`).
+    Changes,
 }
 
 pub struct Picker {
@@ -435,6 +454,14 @@ pub struct App {
     pub name_box: NameBox,
     pub assign: AssignPick,
     pub look: LookEdit,
+    /// The editors this computer has (`editors.rs`), as they were when platoon started.
+    editors: Vec<Editor>,
+    /// A terminal editor platoon is running on a project's notes, inside its own window.
+    pub editing: Option<NotesEdit>,
+    /// An editor with a window of its own that platoon opened on a project's notes.
+    notes_window: Option<NotesWindow>,
+    pub epick: EditorPick,
+    pub changes: Changes,
     /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
     pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
@@ -442,6 +469,8 @@ pub struct App {
     pub home: String,
     /// Where platoon keeps its own state (`~/.cache/platoon`).
     pub cache: PathBuf,
+    /// Where platoon's own settings, archive, projects and notes live (`~/.config/platoon`).
+    pub config: PathBuf,
     /// Animation frame counter, ~10 per second.
     pub tick: u64,
     /// The theme the settings name: what the app looks like unless a preview is showing.
@@ -581,8 +610,14 @@ impl App {
             name_box: NameBox { purpose: NamePurpose::New, input: String::new() },
             assign: AssignPick { session: String::new(), session_name: String::new(), options: Vec::new(), selected: 0 },
             look: LookEdit { project: String::new(), slot: 0, badge: String::new() },
+            editors: crate::editors::detect(),
+            editing: None,
+            notes_window: None,
+            epick: EditorPick { project: String::new(), options: Vec::new(), selected: 0 },
+            changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
+            config: config.clone(),
             tick: 0,
             theme: Theme::default(),
             preview: None,
@@ -791,6 +826,9 @@ impl App {
         let (rows, cols) = self.pty_size();
         if let Some(c) = &mut self.client {
             c.resize(rows, cols);
+        }
+        if let Some(e) = &mut self.editing {
+            e.run.resize(rows, cols);
         }
         self.clear_selection();
     }
@@ -1104,6 +1142,11 @@ impl App {
             (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
             (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
+            (Action::Edit, Mode::List) => self.edit_notes(false),
+            (Action::EditWith, Mode::List) => self.edit_notes(true),
+            (Action::ShowChanges, Mode::List) => self.show_changes(),
+            (Action::Undo, Mode::List) => self.undo_notes(),
+            (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),
             (Action::Confirm, Mode::ProjectName) => self.save_name_box(),
             (Action::Confirm, Mode::Assign) => self.take_assign(),
             (Action::Confirm, Mode::Look) => self.save_look(),
@@ -1521,6 +1564,10 @@ impl App {
                 Step::Cycle => self.open_theme_list(),
                 _ => self.step_theme(step),
             }
+            return;
+        }
+        if item.kind == Kind::Editor {
+            self.step_notes_editor(step);
             return;
         }
         let mut next = self.settings.get();
@@ -2076,6 +2123,26 @@ impl App {
                 KeyCode::Down => self.move_assign(1),
                 _ => {}
             },
+            Mode::EditNotes => self.editor_key(key),
+            Mode::PickEditor => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Up => self.move_editor_pick(-1),
+                KeyCode::Down => self.move_editor_pick(1),
+                KeyCode::Char('g') | KeyCode::Home => self.epick.selected = 0,
+                KeyCode::Char('G') | KeyCode::End => self.epick.selected = self.epick.options.len().saturating_sub(1),
+                _ => {}
+            },
+            Mode::Changes => match key.code {
+                KeyCode::Esc | KeyCode::Char('q' | 'c') => self.act(Action::Cancel),
+                KeyCode::Down => self.scroll_changes(1),
+                KeyCode::Up => self.scroll_changes(-1),
+                KeyCode::PageDown => self.scroll_changes(10),
+                KeyCode::PageUp => self.scroll_changes(-10),
+                KeyCode::Home | KeyCode::Char('g') => self.changes.top.set(0),
+                _ => {}
+            },
             Mode::Look => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2115,6 +2182,7 @@ impl App {
             Mode::Rename => self.type_name(&text.replace(['\n', '\r'], "")),
             Mode::ProjectName => self.type_project_name(&text.replace(['\n', '\r'], "")),
             Mode::Look => self.type_badge(&text.replace(['\n', '\r'], "")),
+            Mode::EditNotes => self.editor_paste(text),
             _ => {}
         }
         self.update_view();
@@ -2165,6 +2233,9 @@ impl App {
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
                     Mode::List => self.wheel_list(up),
                     Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
+                    Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
+                    Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
+                    Mode::EditNotes => {}
                     Mode::ProjectName | Mode::Look => {}
                     Mode::Search => self.move_search(if up { -1 } else { 1 }),
                     Mode::Rename => {}
@@ -2189,6 +2260,8 @@ impl App {
                     Some(Hit::ProjectRow(i)) => self.pselected = i,
                     Some(Hit::AssignRow(i)) if i == self.assign.selected => self.act(Action::Confirm),
                     Some(Hit::AssignRow(i)) => self.assign.selected = i,
+                    Some(Hit::EditorRow(i)) if i == self.epick.selected => self.act(Action::Confirm),
+                    Some(Hit::EditorRow(i)) => self.epick.selected = i,
                     Some(Hit::Slot(i)) => self.look.slot = i,
                     Some(Hit::Pane(p)) => self.pane = p,
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),

@@ -6,6 +6,7 @@ mod client;
 mod clipboard;
 mod colordepth;
 mod dirs;
+mod editors;
 mod guard;
 mod host;
 mod index;
@@ -13,6 +14,7 @@ mod ledger;
 mod mcp;
 mod model;
 mod names;
+mod notes;
 mod open;
 mod procs;
 mod projects;
@@ -29,6 +31,8 @@ mod ui;
 mod usertheme;
 #[cfg(test)]
 mod layout_app_tests;
+#[cfg(test)]
+mod notes_app_tests;
 #[cfg(test)]
 mod perf;
 #[cfg(test)]
@@ -171,6 +175,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut last_refresh = Instant::now();
     while !app.quit {
         app.poll_stops();
+        app.poll_editors();
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
@@ -1059,6 +1064,7 @@ mod tests {
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(250));
             app.poll_stops();
+        app.poll_editors();
             app.refresh();
             if app.hosts.is_empty() {
                 break;
@@ -1409,7 +1415,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 9, "eight entries and the one that opens the smart features");
+        assert_eq!(ITEMS.len(), 10, "nine entries and the one that opens the smart features");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }

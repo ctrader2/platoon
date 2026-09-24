@@ -60,6 +60,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         draw_attached(f, app, client, dir, inner);
         return;
     }
+    if let (Mode::EditNotes, Some(edit)) = (&app.mode, &app.editing) {
+        draw_editing(f, app, edit, inner);
+        return;
+    }
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
@@ -130,7 +134,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "project", "panes", "rename", "settings"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "project", "panes", "rename", "settings", "scroll", "new session", "editor"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -151,6 +155,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::ProjectName => draw_name_box(f, app, inner),
         Mode::Assign => draw_assign(f, app, inner),
         Mode::Look => draw_look(f, app, inner),
+        Mode::PickEditor => draw_editor_pick(f, app, inner),
+        Mode::Changes => draw_changes(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -199,7 +205,14 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
     } else {
-        out = vec![("↑↓", "scroll", None), ("n", "new session", Some(Action::New))];
+        out = vec![
+            ("e", "edit notes", Some(Action::Edit)),
+            ("E", "editor", Some(Action::EditWith)),
+            ("c", "changes", Some(Action::ShowChanges)),
+            ("u", "undo", Some(Action::Undo)),
+            ("↑↓", "scroll", None),
+            ("n", "new session", Some(Action::New)),
+        ];
     }
     out.extend([
         ("/", "search", Some(Action::Search)),
@@ -460,8 +473,31 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
+    // Above the notes: the editor platoon has open on them, and the warning when the file has grown big.
+    let mut top_lines: Vec<Line> = Vec::new();
+    if let Some(name) = app.notes_editor_open() {
+        top_lines.push(Line::styled(format!("Open in {name}, in a window of its own."), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
+        top_lines.push(Line::styled("platoon reads them again when you are done.", Style::new().fg(t.subtext)));
+        top_lines.push(Line::raw(""));
+    }
+    if let Some(warning) = app.notes_size_warning() {
+        for line in wrap(&warning, area.width as usize) {
+            top_lines.push(Line::styled(line, Style::new().fg(t.warn)));
+        }
+        top_lines.push(Line::raw(""));
+    }
+    let used = (top_lines.len() as u16).min(area.height);
+    if used > 0 {
+        f.render_widget(Paragraph::new(top_lines), Rect::new(area.x, area.y, area.width, used));
+    }
+    let area = Rect::new(area.x, area.y + used, area.width, area.height.saturating_sub(used));
+    if area.height == 0 {
+        return;
+    }
     let Some(text) = app.open_notes().filter(|n| !n.trim().is_empty()) else {
         let mut lines = vec![Line::styled("No notes yet", Style::new().fg(t.subtext))];
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Press e to start them from a short template.", Style::new().fg(t.text)));
         lines.push(Line::raw(""));
         lines.push(Line::styled(format!("They live in {}", app.open_notes_path()), Style::new().fg(t.dim)));
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
@@ -1220,6 +1256,10 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let vw = label.chars().count().max(3);
                 (label, vw, true, false, item.off == Some(item.value(current)))
             }
+            Kind::Editor => {
+                let vw = app.notes_editor_width();
+                (fit_end(&app.notes_editor_label(), vw), vw, app.notes_editor_at_end(false), app.notes_editor_at_end(true), false)
+            }
             Kind::Theme => {
                 let all = app.themes().all();
                 let at = all.iter().position(|t| t.id == app.theme.id).unwrap_or(0);
@@ -1857,6 +1897,111 @@ fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
     }
     let hints: [Hint; 3] = [("enter", "choose", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
+}
+
+/// The editors this computer has, to open a project's notes with. `E` always shows it; `e` shows it while the
+/// setting says "Ask each time".
+fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let pick = &app.epick;
+    app.hits.borrow_mut().clear();
+    let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 62), h);
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "edit the notes with");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, list, note, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(fit_end("Editors found on this computer:", head.width as usize)).style(Style::new().fg(t.text)), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let rows = list.height as usize;
+    let start = pick.selected.saturating_sub(rows.saturating_sub(1));
+    for (i, e) in pick.options.iter().enumerate().skip(start).take(rows) {
+        let rect = Rect::new(list.x, list.y + (i - start) as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::EditorRow(i)));
+        let sel = i == pick.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let where_it_runs = if e.terminal { "here in platoon" } else { "in its own window" };
+        let spans = vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(24)), base.fg(t.text)),
+            Span::styled(where_it_runs, base.fg(t.dim)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+    f.render_widget(
+        Paragraph::new(fit_end("Set a favorite in the settings (s), \"Edit notes with\".", note.width as usize)).style(Style::new().fg(t.dim)),
+        note,
+    );
+    let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// The last change to the notes, line by line: `-` for what went, `+` for what came. The marks carry the meaning,
+/// so it reads on a screen with no colors at all.
+fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let ch = &app.changes;
+    app.hits.borrow_mut().clear();
+    let r = centered(area, area.width.saturating_sub(6).max(30), area.height.saturating_sub(2).max(8));
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "what changed last");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, body, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let legend = Line::from(vec![
+        Span::styled("- ", Style::new().fg(t.err).add_modifier(Modifier::BOLD)),
+        Span::styled("was there before    ", Style::new().fg(t.subtext)),
+        Span::styled("+ ", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
+        Span::styled("is there now", Style::new().fg(t.subtext)),
+    ]);
+    f.render_widget(Paragraph::new(legend), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let rows = body.height as usize;
+    let top = ch.top.get().min(ch.lines.len().saturating_sub(rows));
+    ch.top.set(top);
+    let w = body.width as usize;
+    for (n, (mark, line)) in ch.lines.iter().skip(top).take(rows).enumerate() {
+        let color = match mark {
+            crate::notes::Mark::Removed => t.err,
+            crate::notes::Mark::Added => t.ok,
+            crate::notes::Mark::Gap => t.dim,
+            crate::notes::Mark::Same => t.subtext,
+        };
+        let text = format!("{}{line}", mark.sign());
+        f.render_widget(
+            Paragraph::new(Span::styled(fit_end(&text, w), Style::new().fg(color))),
+            Rect::new(body.x, body.y + n as u16, body.width, 1),
+        );
+    }
+    let hints: [Hint; 3] = [("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// A terminal editor running inside platoon's window on a project's notes: its screen, and one line saying how to
+/// get out if it ever wedges.
+fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Rect) {
+    let t = app.effective_theme();
+    let [screen, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
+    {
+        let parser = edit.run.parser().lock().unwrap_or_else(|x| x.into_inner());
+        draw_screen(f, t, parser.screen(), screen, None);
+    }
+    let right = match app.active_notice() {
+        Some(n) => n.to_string(),
+        None => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
+    };
+    let hints: [Hint; 1] = [("ctrl+space", "stop the editor", Some(Action::Back))];
+    let color = if app.active_notice().is_some() { t.warn } else { t.dim };
+    draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }
 
 /// A project's color (from the theme) and badge.

@@ -184,6 +184,7 @@ Details worth knowing:
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
 | Search archived | Whether the [Full-text search](#search) also looks in archived conversations. | Include archived (default), Skip archived |
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
+| Edit notes with | Which editor `e` opens a [project's notes](#editing-the-notes) in. Only editors this computer already has are listed. | Ask each time (default), then each editor found |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
 | Smart features | Opens a screen of its own (below) with everything that uses your Claude plan. The row shows the master switch: Off or On. | `enter` (or `→`, or a click) opens it |
@@ -211,13 +212,13 @@ by hand too:
  "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
- "ai_find_wide_candidates": 200}
+ "ai_find_wide_candidates": 200, "notes_editor": "ask"}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is `ask` or an editor's command (`code`, `nano`), and one this computer doesn't have reads as `ask` and is kept until you choose another; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 **Smart features** (`enter` on that row; `esc` goes back to the settings) holds every setting for the token features, so the main
 popup stays short. The screen keeps the same rules: it scrolls on a short terminal (80x24 shows a window of it), explains the selected
@@ -409,13 +410,14 @@ A **project's screen** shows its sessions on the left (active ones first, then a
 notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
 `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
-sessions, with all three kinds of search. `esc` goes back.
+sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
+`E` picks an editor for this once, `c` shows what changed last and `u` undoes it.
 
 The notes are a file, `project.md`, in `~/.config/platoon/projects/<id>/` (the folder is named by the project's id, so a
-rename changes nothing there). For now platoon shows it but doesn't edit it: create or edit it with any editor. When the
-Project notes step of `platoon setup` is done, a session in the project gets the notes as context when it starts, when it
-is resumed after the notes changed, and again after Claude compacts the conversation; unchanged notes are not sent again.
-This works for every session in the project, including ones you run with plain `claude`.
+rename changes nothing there). When the Project notes step of `platoon setup` is done, a session in the project gets the
+notes as context when it starts, when it is resumed after the notes changed, and again after Claude compacts the
+conversation; unchanged notes are not sent again. This works for every session in the project, including ones you run with
+plain `claude`.
 
 - **Archiving** a project archives its active sessions too (stopping the ones that are running, as archiving a single
   conversation does; it asks first if one is working or runs in a terminal outside platoon). **Restoring** it brings back
@@ -429,6 +431,39 @@ This works for every session in the project, including ones you run with plain `
 ```
 platoon open --project "Web shop"   # start a new session in this folder, in that project
 ```
+
+### Editing the notes
+
+With the notes pane in focus (the right arrow on a project's screen):
+
+| Key | Does |
+| --- | --- |
+| `e` | edit them with your chosen editor (or ask which one, which is what it does until you choose) |
+| `E` | always ask, and use that editor this once |
+| `c` | what changed last: the lines that went and the lines that came |
+| `u` | undo the last change (and `u` again undoes the undo) |
+
+**Which editors.** platoon uses editors you already have; nothing is installed. It looks at `$VISUAL` and `$EDITOR` first,
+then for editors it knows by name: nano, Neovim, Vim, Helix, Micro, Emacs and `vi` in the terminal, and VS Code, Cursor,
+Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of their own (TextEdit on macOS). Only the ones
+it finds are offered, by their plain names. An editor that lives in the terminal **runs inside platoon's window**, like a
+session (`ctrl+space` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
+notes and reads them again as soon as you are done or the file changes. Set your favorite under **Edit notes with** in the
+[settings](#settings). If platoon finds nothing at all it offers `nano` and `vi`.
+
+**A new file starts from a template**: one line saying that platoon keeps Overview, Requirements and Status up to date,
+adds to Decisions and never changes Notes, then those five headings.
+
+**Nothing is lost.** Before every change platoon didn't make itself, the version that was there is copied into
+`~/.config/platoon/projects/<id>/history/`, newest first, at most 20 per project (the oldest goes). `c` shows the last
+change with `-` in front of the lines that went and `+` in front of the ones that came, so it reads on a screen with no
+colors. `u` puts the previous version back, and that counts as a change of its own, so `u` again brings your edit back.
+platoon never writes the file while an editor it started is open, and always reads the file from disk before showing it:
+if something else changed it, what is on disk wins.
+
+**When the notes get big** (past about 20 KB) the pane says so: the whole file goes to every session in the project, and
+that costs tokens each time. Nothing is ever cut; it is yours to shorten.
+
 
 ## Sessions started in platoon keep running
 

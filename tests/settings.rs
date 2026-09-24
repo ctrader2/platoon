@@ -114,7 +114,7 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     t.send(b"s");
     t.wait_for("Idle stop and MCP servers");
     t.wait_for("Changes are saved and apply immediately.");
-    // With eight entries only the selected one is explained at this height: move to the MCP entry, the fourth
+    // With this many entries only the selected one is explained at this height: move to the MCP entry, the fourth
     // (the theme is the first).
     t.send(b"\x1b[B\x1b[B\x1b[B");
     t.wait_for("helper programs");

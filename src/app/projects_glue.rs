@@ -311,6 +311,11 @@ impl App {
                 self.notes_top.set((self.notes_top.get() as i64 + d).max(0) as usize);
             }
             KeyCode::Home if self.pane == Pane::Notes => self.notes_top.set(0),
+            // The notes' own keys: edit them, see what changed, undo it.
+            KeyCode::Char('e') if self.pane == Pane::Notes => self.act(Action::Edit),
+            KeyCode::Char('E') if self.pane == Pane::Notes => self.act(Action::EditWith),
+            KeyCode::Char('c') if self.pane == Pane::Notes => self.act(Action::ShowChanges),
+            KeyCode::Char('u') if self.pane == Pane::Notes => self.act(Action::Undo),
             // Everything else is about the selected session, as on the Sessions tab.
             _ if self.pane == Pane::Sessions => match key.code {
                 KeyCode::Char('a') => self.act(Action::Archive),

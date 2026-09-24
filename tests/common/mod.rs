@@ -69,6 +69,7 @@ impl Term {
         cmd.env("PLATOON_COLORS", "truecolor"); // and the same colors
         cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         cmd.env("PLATOON_FORBID_REAL_CLAUDE", "1"); // ...nor the real `claude`, if a test forgets to name a stand-in
+        cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
         for (k, v) in env {
             cmd.env(k, v);
         }
