@@ -204,6 +204,13 @@ fn header_row(lines: &[Vec<ratatui::buffer::Cell>]) -> usize {
     lines.iter().position(|l| col_of(l, "STATUS").is_some() && col_of(l, "CONTEXT").is_some()).expect("the column titles")
 }
 
+/// One column's share of a wide screen's spare width, read off the title line: STATUS is 11 cells, so
+/// whatever stands between it and CONTEXT is a share. The odd cell that does not divide evenly goes to the
+/// leftmost columns, so a column further left (PROJECT) has that share or one cell more.
+fn share(line: &[ratatui::buffer::Cell]) -> usize {
+    col_of(line, "CONTEXT").unwrap() - col_of(line, "STATUS").unwrap() - 11
+}
+
 /// The table's lines (below the column titles) with cells on `color`: the rows carrying that project's pill.
 fn pill_rows(lines: &[Vec<ratatui::buffer::Cell>], color: ratatui::style::Color) -> Vec<usize> {
     let h = header_row(lines);
@@ -230,8 +237,10 @@ fn a_session_in_a_project_shows_the_project_as_a_pill_in_its_own_column() {
     // PROJECT comes right after NAME, before DIR.
     let (name_x, proj_x, dir_x) = (col_of(&lines[h], "NAME").unwrap(), col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
     assert!(name_x < proj_x && proj_x < dir_x, "{}", text_of(&lines[h]));
-    // As wide as the name needs, pill and gap included, never narrower than its title and a space.
-    assert_eq!(dir_x - proj_x, "Web shop".len() + 3);
+    // As wide as the name needs, pill and gap included (and its share of the screen's spare width), never
+    // narrower than its title and a space.
+    let want = "Web shop".len() + 3 + share(&lines[h]);
+    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
     // The pill: the name on the project's color, the letters in the badge's text color, padded square (no round glyphs here).
     let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
     assert_ne!(color, t.bg);
@@ -323,8 +332,10 @@ fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     let lines = cells(&term);
     let h = header_row(&lines);
     let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
-    // At most 18 columns: the pill holds 15 characters, the last one `…`.
-    assert_eq!(dir_x - proj_x, 18);
+    // At most 18 columns of text: the pill holds 15 characters, the last one `…` (plus the column's share
+    // of the screen's spare width, which is clear air after the pill).
+    let want = 18 + share(&lines[h]);
+    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
     let row = &lines[pill_rows(&lines, color)[0]];
     assert_eq!(col_of(row, " A project with… "), Some(proj_x), "{}", text_of(row));
     // The short name sits in the same column.
@@ -340,7 +351,8 @@ fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     let head = text_of(&lines[h]);
     assert!(!head.contains("BRANCH") && !head.contains("MODEL"), "{head}");
     let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
-    assert_eq!(dir_x - proj_x, 8);
+    let want = 8 + share(&lines[h]);
+    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
     let row = &lines[pill_rows(&lines, color)[0]];
     assert_eq!(col_of(row, " AP "), Some(proj_x), "{}", text_of(row));
     assert!(!text_of(row).contains("A project"));

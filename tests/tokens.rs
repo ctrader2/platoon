@@ -340,7 +340,9 @@ fn setup_without_a_terminal_asks_nothing_leaves_everything_off_and_prints_one_li
         c.env(k, v);
     }
     let mut child = c.spawn().unwrap();
-    std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"y\n").unwrap();
+    // The answer may never be read: setup, seeing no terminal, asks nothing and can be gone before this
+    // write lands (a broken pipe, and that is the point of the test), so a failed write is fine here.
+    let _ = std::io::Write::write_all(child.stdin.as_mut().unwrap(), b"y\n");
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(0));
     assert!(!lab.config().join("settings.json").exists());

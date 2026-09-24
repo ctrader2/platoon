@@ -258,6 +258,16 @@ struct PCols {
     name: usize,
     sessions: usize,
     notes: usize,
+    /// The spare width of a wide terminal, shared between these columns (same rule as the Sessions table).
+    pad: PPad,
+}
+
+#[derive(Default, Clone, Copy)]
+struct PPad {
+    name: usize,
+    sessions: usize,
+    notes: usize,
+    last: usize,
 }
 
 /// How much room the PROJECT column of the Projects list would like: the longest badge-and-name on show
@@ -277,13 +287,17 @@ fn project_name_width(app: &App) -> usize {
 }
 
 /// The Projects list's columns. `want` is what the names on show need; the column is that wide unless the
-/// terminal is too narrow, in which case it takes whatever room is left, exactly as it always did.
+/// terminal is too narrow, in which case it takes whatever room is left, exactly as it always did. What a
+/// wide terminal has over is shared equally between the columns, as on the Sessions table.
 fn project_cols(width: u16, want: usize) -> PCols {
     let w = width as usize;
     let fixed = 3 + LAST_W;
     let notes = if w >= 70 { 14 } else { 0 };
     let sessions = if w >= 50 { 24 } else { 0 };
-    PCols { name: want.min(w.saturating_sub(fixed + notes + sessions)), sessions, notes }
+    let name = want.min(w.saturating_sub(fixed + notes + sessions));
+    let spare = w.saturating_sub(fixed + notes + sessions + name);
+    let s = spread(spare, [true, sessions > 0, notes > 0, true]);
+    PCols { name, sessions, notes, pad: PPad { name: s[0], sessions: s[1], notes: s[2], last: s[3] } }
 }
 
 fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
@@ -291,10 +305,10 @@ fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
     let s = Style::new().fg(t.dim);
     let line = Line::from(vec![
         Span::raw("   "),
-        Span::styled(fit("PROJECT", c.name), s),
-        Span::styled(fit(if c.sessions > 0 { "SESSIONS" } else { "" }, c.sessions), s),
-        Span::styled(fit(if c.notes > 0 { "NOTES" } else { "" }, c.notes), s),
-        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1), s),
+        Span::styled(fit("PROJECT", c.name + c.pad.name), s),
+        Span::styled(fit(if c.sessions > 0 { "SESSIONS" } else { "" }, c.sessions + c.pad.sessions), s),
+        Span::styled(fit(if c.notes > 0 { "NOTES" } else { "" }, c.notes + c.pad.notes), s),
+        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1 + c.pad.last), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -332,9 +346,14 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
             badge_span(t, p),
             Span::styled(" ", base),
             Span::styled(fit(&p.name, c.name.saturating_sub(bw)), base.fg(text).add_modifier(Modifier::BOLD)),
+            gap(c.pad.name, base),
             Span::styled(fit(&session_counts(&st), c.sessions), base.fg(t.subtext)),
+            gap(c.pad.sessions, base),
             Span::styled(fit(if c.notes > 0 { &notes } else { "" }, c.notes), base.fg(t.dim)),
-            Span::styled(format!("{:>w$}", ago(now, st.last_active), w = LAST_W - 1), base.fg(t.dim)),
+            gap(c.pad.notes, base),
+            // A row starts one cell to the left of the titles (the badge carries its own leading space), so
+            // LAST gets that cell back here and the times line up under the title, at the row's right edge.
+            Span::styled(format!("{:>w$}", ago(now, st.last_active), w = LAST_W + c.pad.last), base.fg(t.dim)),
         ]);
         f.render_widget(Paragraph::new(l1).style(base), Rect::new(row.x, row.y, row.width, 1));
         if row.height > 1 {
@@ -621,6 +640,56 @@ struct Cols {
     branch: usize,
     model: usize,
     status: usize,
+    /// The spare width of a wide terminal, shared out between the columns (see `Pad`).
+    pad: Pad,
+}
+
+/// What a wide terminal has left over once every column is as wide as its content needs, shared equally
+/// between the columns. A column keeps its own width for text; its share is clear air after it, so the row
+/// reaches the right edge and a short value simply leaves a wider gap than a long one. LAST's share goes
+/// before it, because LAST is read at the right edge.
+#[derive(Default, Clone, Copy)]
+struct Pad {
+    name: usize,
+    project: usize,
+    dir: usize,
+    branch: usize,
+    model: usize,
+    status: usize,
+    context: usize,
+    last: usize,
+}
+
+impl Pad {
+    #[cfg(test)]
+    fn sum(&self) -> usize {
+        self.name + self.project + self.dir + self.branch + self.model + self.status + self.context + self.last
+    }
+}
+
+/// Share `spare` cells equally between the columns marked `true`, left to right. What does not divide evenly
+/// goes one cell each to the leftmost of them, so the shares are always within one cell of each other and
+/// add up to exactly `spare`: the row fills the width and never comes out a cell too wide.
+fn spread<const N: usize>(spare: usize, present: [bool; N]) -> [usize; N] {
+    let mut out = [0usize; N];
+    let n = present.iter().filter(|p| **p).count();
+    if n == 0 || spare == 0 {
+        return out;
+    }
+    let (each, mut rem) = (spare / n, spare % n);
+    for (i, p) in present.iter().enumerate() {
+        if *p {
+            let bonus = usize::from(rem > 0);
+            rem -= bonus;
+            out[i] = each + bonus;
+        }
+    }
+    out
+}
+
+/// `n` cells of clear air in a row's own background.
+fn gap(n: usize, style: Style) -> Span<'static> {
+    Span::styled(" ".repeat(n), style)
 }
 
 /// Width of the "last active" column, right-aligned, at the end of the row.
@@ -691,10 +760,9 @@ fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
     let room = flex.saturating_sub(NAME_DIR_MIN);
     let project = if project > 0 && room >= PROJECT_MIN { project.min(room) } else { 0 };
     let flex = flex - project;
-    // NAME and DIR are as wide as their content needs, and the table simply ends there: on a wide screen the
-    // spare cells stay empty on the right instead of being pushed between the columns. When the content wants
-    // more than there is, the two fall back to sharing what there is, as they always have, so nothing
-    // overflows and the row still lines up with the titles.
+    // NAME and DIR are as wide as their content needs. When the content wants more than there is, the two
+    // fall back to sharing what there is, as they always have, so nothing overflows and the row still lines
+    // up with the titles.
     let (wn, wd) = (want.0.min(NAME_MAX), want.1.min(DIR_MAX));
     let share = flex * 2 / 5;
     let (name, dir) = if wn + wd <= flex {
@@ -706,21 +774,27 @@ fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
     } else {
         (share, flex - share)
     };
-    Cols { name, project, dir, branch, model, status }
+    // Whatever a wide screen has over is then shared equally between the columns, so the row fills the
+    // terminal and LAST sits at the right edge. On a narrow terminal there is nothing over and nothing moves.
+    let spare = flex.saturating_sub(name + dir);
+    let s = spread(spare, [true, project > 0, true, branch > 0, model > 0, true, true, true]);
+    let pad = Pad { name: s[0], project: s[1], dir: s[2], branch: s[3], model: s[4], status: s[5], context: s[6], last: s[7] };
+    Cols { name, project, dir, branch, model, status, pad }
 }
 
 fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, c: &Cols) {
     let s = Style::new().fg(t.dim);
+    let p = &c.pad;
     let line = Line::from(vec![
         Span::raw("   "),
-        Span::styled(fit("NAME", c.name), s),
-        Span::styled(fit(if c.project > 0 { "PROJECT" } else { "" }, c.project), s),
-        Span::styled(fit("DIR", c.dir), s),
-        Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch), s),
-        Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model), s),
-        Span::styled(fit("STATUS", c.status), s),
-        Span::styled(fit("CONTEXT", BAR_WIDTH + 5), s),
-        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1), s),
+        Span::styled(fit("NAME", c.name + p.name), s),
+        Span::styled(fit(if c.project > 0 { "PROJECT" } else { "" }, c.project + p.project), s),
+        Span::styled(fit("DIR", c.dir + p.dir), s),
+        Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch + p.branch), s),
+        Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model + p.model), s),
+        Span::styled(fit("STATUS", c.status + p.status), s),
+        Span::styled(fit("CONTEXT", BAR_WIDTH + 5 + p.context), s),
+        Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1 + p.last), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
@@ -803,6 +877,8 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     } else {
         l1.push(Span::styled(fit(&s.name, name_w), name_style));
     }
+    // The column's share of a wide screen's spare width sits after the text (see `Pad`).
+    l1.push(gap(c.pad.name, base));
     // The last parts of a path are what tell folders apart, so a path too long for the column is cut at the
     // front (`…/repos/platoon`) and its end kept. (`s.dir` is already written with `~` for the home folder.)
     let dir = fit_tail(&s.dir, c.dir);
@@ -815,19 +891,26 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
                 let spans = pill(t, app.rounded, &text, style, bg, bg);
                 let used = text.chars().count() + 2;
                 l1.extend(spans);
-                l1.push(Span::styled(" ".repeat(c.project - used), base));
+                l1.push(gap(c.project - used + c.pad.project, base));
             }
-            None => l1.push(Span::styled(" ".repeat(c.project), base)),
+            None => l1.push(gap(c.project + c.pad.project, base)),
         }
     }
     l1.extend([
         Span::styled(dir, base.fg(subtext)),
+        gap(c.pad.dir, base),
         Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
+        gap(c.pad.branch, base),
         Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(subtext)),
+        gap(c.pad.model, base),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
+        gap(c.pad.status, base),
     ]);
+    // The bar keeps its own size, whatever the screen: how full it looks is what it means. Its column's
+    // share of the spare width sits after the percentage.
     l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
-    l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1), base.fg(t.dim)));
+    l1.push(gap(c.pad.context, base));
+    l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1 + c.pad.last), base.fg(t.dim)));
 
     let desc_w = (area.width as usize).saturating_sub(3);
     let l2 = vec![
@@ -2249,7 +2332,7 @@ mod tests {
     #[test]
     fn the_project_column_takes_its_room_from_name_and_dir_and_never_widens_the_table() {
         let rest = 3 + BAR_WIDTH + 5 + LAST_W;
-        let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status;
+        let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status + c.pad.sum();
         for width in 0..=240u16 {
             let plain = cols(width, 0, GREEDY);
             assert_eq!(plain.project, 0);
@@ -2282,26 +2365,58 @@ mod tests {
             for want in [(6, 5), (20, 34), (NAME_MAX, 12), (12, DIR_MAX), GREEDY] {
                 for project in [0, PROJECT_MIN, PROJECT_MAX] {
                     let c = cols(width, project, want);
-                    let total = rest + c.name + c.project + c.dir + c.branch + c.model + c.status;
+                    let total = rest + c.name + c.project + c.dir + c.branch + c.model + c.status + c.pad.sum();
                     assert!(total <= (width as usize).max(fixed), "{width}/{want:?}/{project}: {total} cells for {width} columns");
                     assert!(c.name <= NAME_MAX && c.dir <= DIR_MAX, "{width}/{want:?}: capped");
                     // Nothing is cut that fits: when there is room for both wants they get exactly that.
                     let flex = (width as usize).saturating_sub(fixed + c.branch + c.model) - c.project;
                     if want.0 + want.1 <= flex {
                         assert_eq!((c.name, c.dir), want, "{width}/{want:?}/{project}: sized to the content");
+                        // And the room that is over fills the rest of the row, shared between the columns.
+                        assert_eq!(total, (width as usize).max(fixed), "{width}/{want:?}/{project}: the row reaches the right edge");
                     } else {
                         assert_eq!(c.name + c.dir, flex, "{width}/{want:?}/{project}: the two share what there is");
+                        assert_eq!(c.pad.sum(), 0, "{width}/{want:?}/{project}: nothing over to share");
                     }
                 }
             }
         }
-        // Wide screen, short content: the table ends just past the content, not at the right edge.
+        // Wide screen, short content: the columns keep their own width and the spare cells are shared
+        // equally between them (the shares within one cell of each other).
+        let c = cols(341, PROJECT_MAX, (10, 18));
+        assert_eq!((c.name, c.project, c.dir), (10, PROJECT_MAX, 18));
+        let shares = [c.pad.name, c.pad.project, c.pad.dir, c.pad.branch, c.pad.model, c.pad.status, c.pad.context, c.pad.last];
+        let (lo, hi) = (shares.iter().min().unwrap(), shares.iter().max().unwrap());
+        assert!(hi - lo <= 1, "the eight columns share alike: {shares:?}");
+        assert_eq!(3 + c.name + c.project + c.dir + c.branch + c.model + c.status + BAR_WIDTH + 5 + LAST_W + c.pad.sum(), 341);
+        // A column that is not there takes no share: with no PROJECT column the other seven share it all.
         let c = cols(341, 0, (10, 18));
-        assert_eq!((c.name, c.dir), (10, 18));
-        // Narrow screen, long content: exactly the sharing of before (two fifths to NAME).
+        assert_eq!(c.pad.project, 0);
+        assert!(c.pad.name - c.pad.last <= 1, "and the rest still share alike: {} vs {}", c.pad.name, c.pad.last);
+        // Narrow screen, long content: exactly the sharing of before (two fifths to NAME), nothing over.
         let narrow = cols(80, 0, GREEDY);
         let flex = 80 - (fixed + 0 + 0);
         assert_eq!((narrow.name, narrow.dir), (flex * 2 / 5, flex - flex * 2 / 5));
+        assert_eq!(narrow.pad.sum(), 0);
+    }
+
+    #[test]
+    fn spare_width_is_shared_equally_and_to_the_cell() {
+        // Nothing over, nothing shared.
+        assert_eq!(spread(0, [true, true, true]), [0, 0, 0]);
+        // An even share, and a remainder that goes to the leftmost columns so the total is exact.
+        assert_eq!(spread(9, [true, true, true]), [3, 3, 3]);
+        assert_eq!(spread(11, [true, true, true]), [4, 4, 3]);
+        assert_eq!(spread(2, [true, false, true, true]), [1, 0, 1, 0]);
+        for spare in 0..=400usize {
+            for present in [[true; 4], [true, false, true, false], [false, false, false, true]] {
+                let out = spread(spare, present);
+                assert_eq!(out.iter().sum::<usize>(), spare, "{spare}/{present:?}: every spare cell is used");
+                let used: Vec<usize> = out.iter().zip(present).filter(|(_, p)| *p).map(|(n, _)| *n).collect();
+                assert!(used.iter().max().unwrap() - used.iter().min().unwrap() <= 1, "{spare}/{present:?}: {used:?}");
+                assert!(out.iter().zip(present).all(|(n, p)| p || *n == 0), "{spare}/{present:?}: a column that is not there gets nothing");
+            }
+        }
     }
 
     #[test]

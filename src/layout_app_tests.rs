@@ -52,8 +52,13 @@ fn short(name: &str) -> World {
     w
 }
 
+/// Where the table's columns begin on a header line, in row order, skipping the ones not drawn.
+fn column_starts(head: &str) -> Vec<usize> {
+    ["NAME", "PROJECT", "DIR", "BRANCH", "MODEL", "STATUS", "CONTEXT", "LAST"].iter().filter_map(|t| col_of(head, t)).collect()
+}
+
 #[test]
-fn on_a_wide_screen_name_and_dir_are_only_as_wide_as_the_rows_need() {
+fn on_a_wide_screen_the_columns_share_the_spare_width_and_the_row_fills_it() {
     let w = short("l-wide");
     let mut app = w.app();
     app.notice = None;
@@ -61,16 +66,51 @@ fn on_a_wide_screen_name_and_dir_are_only_as_wide_as_the_rows_need() {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        let (name_x, dir_x, branch_x) = (col_of(head, "NAME").unwrap(), col_of(head, "DIR").unwrap(), col_of(head, "BRANCH").unwrap());
-        // "alpha-one" is the longest name (9) and "/srv/alpha-one" the longest path (14), each plus a gap.
-        assert_eq!(dir_x - name_x, 9 + 2, "{width}: NAME is as wide as its longest value\n{head}");
-        assert_eq!(branch_x - dir_x, 14 + 2, "{width}: DIR is as wide as its longest value\n{head}");
-        // Nothing is cut, and the table stops well short of the right edge: the spare cells stay empty.
         let row = &lines[FIRST_ROW];
-        assert!(row.contains("alpha-one") && row.contains("/srv/alpha-one"), "{row}");
+        // The row reaches the right edge: the frame, its two-cell margin and the table's own trailing cell
+        // are all that is left of the line.
         let end = table_end(head);
         assert_eq!(end, table_end(row), "{width}: the header and the row end together\n{head}\n{row}");
-        assert!(end + 20 < width as usize, "{width}: the table ends at {end}, leaving the right of the screen empty");
+        assert_eq!(end, width as usize - 4, "{width}: the table reaches the right edge\n{head}");
+        // Every column keeps the width its content needs, plus an equal share of what is over. "alpha-one"
+        // is the longest name (9) and "/srv/alpha-one" the longest path (14), each plus a two-cell gap.
+        let starts = column_starts(head);
+        assert_eq!(starts.len(), 7, "{width}: NAME, DIR, BRANCH, MODEL, STATUS, CONTEXT and LAST are drawn\n{head}");
+        // NAME, DIR, BRANCH, MODEL, STATUS: the distance to the next column is its own width plus its share.
+        let wanted = [9 + 2, 14 + 2, 16, 12, 11];
+        let shares: Vec<usize> = starts.windows(2).zip(wanted).map(|(x, want)| x[1] - x[0] - want).collect();
+        let (lo, hi) = (shares.iter().min().unwrap(), shares.iter().max().unwrap());
+        assert!(hi - lo <= 1 && *lo > 0, "{width}: the columns share what is over: {shares:?}\n{head}");
+        // The context bar itself keeps its size; its column's share is the air after the percentage.
+        let pct = col_of(row, "%").expect("the bar's percentage");
+        assert_eq!(pct + 1, starts[5] + BAR + 5, "{width}: the bar is not stretched\n{head}\n{row}");
+        // Nothing is cut: the text sits at the left of its column, the share is clear air after it.
+        assert!(row.contains("alpha-one") && row.contains("/srv/alpha-one"), "{row}");
+    }
+}
+
+/// The context bar keeps its own width: how full it looks is what it means.
+const BAR: usize = 10;
+
+#[test]
+fn a_narrow_screen_still_shares_the_room_between_name_and_dir_as_it_did() {
+    let w = World::new("l-narrow");
+    w.transcript("alpha-1", &format!("/srv/{}", "a".repeat(60)), "alpha talks about apples", 10);
+    w.transcript("beta-2", &format!("/srv/{}", "b".repeat(60)), "beta talks about pears", 20);
+    let mut app = w.app();
+    app.notice = None;
+    for width in [80u16, 100, 120] {
+        let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        let lines = draw(&mut term, &app);
+        let head = &lines[TITLES];
+        let table = width as usize - 6;
+        let (branch, model) = (if table >= 90 { 16 } else { 0 }, if table >= 100 { 12 } else { 0 });
+        let flex = table - (3 + BAR + 5 + 6 + 11 + branch + model);
+        let starts = column_starts(head);
+        // Two fifths of what there is to NAME, the rest to DIR, exactly as before: nothing is over to share.
+        assert_eq!(starts[1] - starts[0], flex * 2 / 5, "{width}: NAME's old share\n{head}");
+        assert_eq!(starts[2] - starts[1], flex - flex * 2 / 5, "{width}: DIR's old share\n{head}");
+        assert_eq!(table_end(head), table_end(&lines[FIRST_ROW]), "{width}: header and row end together\n{head}");
     }
 }
 
@@ -86,7 +126,12 @@ fn a_name_or_a_path_longer_than_the_cap_is_cut_and_a_path_keeps_its_end() {
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];
     let (name_x, dir_x, branch_x) = (col_of(head, "NAME").unwrap(), col_of(head, "DIR").unwrap(), col_of(head, "BRANCH").unwrap());
-    assert_eq!((dir_x - name_x, branch_x - dir_x), (60, 60), "both columns stop at the cap\n{head}");
+    // The cap still holds: the columns are 60 cells of text each; what is past that is the equal share of
+    // the spare width, which is the same for both.
+    let share = (dir_x - name_x) - 60;
+    assert!(share > 0, "and take a share of the spare width\n{head}");
+    // (The odd cell that does not divide evenly goes to the leftmost columns, hence "or one less".)
+    assert!((branch_x - dir_x) + 1 >= 60 + share && branch_x - dir_x <= 60 + share, "both columns stop at the cap\n{head}");
     // The long name: cut with `…` at the end, inside its column.
     let name_row = lines.iter().find(|l| l.contains("nnnn")).expect("the long-named row");
     let shown_name: String = name_row.chars().skip(name_x).take(60).collect();
@@ -169,8 +214,17 @@ fn the_project_column_keeps_its_width_while_the_quick_filter_is_typed() {
     app.notice = None;
     let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
     let head = draw(&mut term, &app)[TITLES].clone();
-    let (proj_x, dir_x) = (col_of(&head, "PROJECT").unwrap(), col_of(&head, "DIR").unwrap());
-    assert_eq!(dir_x - proj_x, "Web shop".len() + 3);
+    // Every column takes the same share of the wide screen's spare width (the odd cell to the leftmost),
+    // so the pill's own width is the distance to DIR less that share: STATUS (11 cells) shows what a share
+    // is, and PROJECT, being further left, has it or one cell more.
+    let pill = |head: &str| {
+        let share = (col_of(head, "CONTEXT").unwrap() - col_of(head, "STATUS").unwrap()) - 11;
+        let col = col_of(head, "DIR").unwrap() - col_of(head, "PROJECT").unwrap();
+        assert!(col >= share, "{head}");
+        col - share
+    };
+    let want = "Web shop".len() + 3;
+    assert!([want, want + 1].contains(&pill(&head)), "{head}");
 
     // Narrow the list down to the row that is in no project: the column is sized from every row on the tab,
     // so it neither shrinks nor goes while the filter is typed.
@@ -179,8 +233,8 @@ fn the_project_column_keeps_its_width_while_the_quick_filter_is_typed() {
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List) && app.visible().len() == 1 && app.filter == "beta");
     let head = draw(&mut term, &app)[TITLES].clone();
-    let narrowed = col_of(&head, "PROJECT").expect("the column is still there");
-    assert_eq!(col_of(&head, "DIR").unwrap() - narrowed, "Web shop".len() + 3, "and still the same width\n{head}");
+    assert!(col_of(&head, "PROJECT").is_some(), "the column is still there\n{head}");
+    assert!([want, want + 1].contains(&pill(&head)), "and still the same width\n{head}");
 }
 
 #[test]
@@ -209,13 +263,23 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     app.notice = None;
     key(&mut app, KeyCode::Char('2'));
     let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
-    let lines = draw(&mut term, &app);
-    let head = &lines[TITLES];
-    let (proj_x, sess_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap());
-    // The badge (` WS `, four cells), a space and the longest name, plus the gap.
-    assert_eq!(sess_x - proj_x, 4 + 1 + "Web shop".len() + 2, "{head}");
-    let row = lines.iter().find(|l| l.contains("Web shop")).expect("the row");
-    assert!(table_end(row) + 20 < 200, "the list ends well short of the right edge: {row}");
+    // The name column is the badge (` WS `, four cells), a space and the longest name, plus the gap - and
+    // then its share of the wide screen's spare width, the share SESSIONS (24 cells) gets or one cell more
+    // (the odd cell goes to the leftmost columns).
+    for width in [200u16, 341] {
+        let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        let lines = draw(&mut term, &app);
+        let head = &lines[TITLES];
+        let (proj_x, sess_x, notes_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "NOTES").unwrap());
+        let share = (notes_x - sess_x) - 24;
+        assert!(share > 0, "{width}: {head}");
+        let want = 4 + 1 + "Web shop".len() + 2 + share;
+        assert!([want, want + 1].contains(&(sess_x - proj_x)), "{width}: {head}");
+        // The rows fill the width: they end where the header does, at the right edge.
+        let row = lines.iter().find(|l| l.contains("Web shop")).expect("the row");
+        assert_eq!(table_end(row), table_end(head), "{width}: the row and the header end together: {row}");
+        assert_eq!(table_end(head), width as usize - 4, "{width}: the list reaches the right edge: {head}");
+    }
 
     // A name past the cap stops there and is cut.
     let long = "L".repeat(crate::projects::NAME_MAX);
@@ -224,10 +288,12 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     app.notice = None;
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];
-    let (proj_x, sess_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap());
-    assert_eq!(sess_x - proj_x, 60, "{head}");
+    let (proj_x, sess_x, notes_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "NOTES").unwrap());
+    let share = (notes_x - sess_x) - 24;
+    assert!([60 + share, 61 + share].contains(&(sess_x - proj_x)), "{head}");
     let row = lines.iter().find(|l| l.contains("LLLL")).expect("the long row");
     assert!(row.contains('…'), "the long name is cut: {row}");
     assert!(!row.contains(&long), "{row}");
 }
+
 
