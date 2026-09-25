@@ -248,10 +248,9 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     t.wait_for_flat("platoon last updated these just now.");
     t.wait_for("There is a basket page.");
     t.send(b"c");
-    t.wait_for("was there before");
-    let screen = t.text();
-    assert!(screen.contains("+ There is a basket page."), "{screen}");
-    assert!(screen.contains("+ The basket totals add up."), "{screen}");
+    // The legend and the lines under it come in one frame, and half a frame can be read: wait for all of them,
+    // which is the check - the two added lines carry a `+`.
+    t.wait_for_all(&["was there before", "+ There is a basket page.", "+ The basket totals add up."]);
     t.send(b"\x1b");
     t.wait_gone("was there before");
     t.send(b"u");

@@ -101,7 +101,7 @@ fn a_session_that_did_not_ask_keeps_the_wheel_for_scrolling_platoons_own_screen(
 
     t.send(&wheel(true, 20, 8));
     until("the screen to show older lines", || numbers(&t.text()).iter().min().is_some_and(|m| *m < top));
-    assert!(!t.text().contains("^["), "and nothing was typed into the shell");
+    assert!(!t.stable().contains("^["), "and nothing was typed into the shell");
 
     t.send(&[0]); // ctrl+space
     t.wait_for("enter open");

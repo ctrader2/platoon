@@ -203,7 +203,13 @@ fn wait_pane(t: &mut Term, text: &str) {
 }
 
 fn wait_pane_gone(t: &mut Term, text: &str) {
-    until(&format!("the notes pane to stop saying {text:?}"), || !pane(t).contains(text));
+    // Twice over, a moment apart: a half-read frame can be missing words that are still there really.
+    until(&format!("the notes pane to stop saying {text:?}"), || {
+        !pane(t).contains(text) && {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            !pane(t).contains(text)
+        }
+    });
 }
 
 #[test]
@@ -215,12 +221,10 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     lab.open_notes(&mut t);
     t.wait_for("No notes yet");
 
-    // The setting is "Ask each time" to begin with, so e offers the editors that were found.
+    // No editor used yet, so e offers the ones that were found, with where each of them runs. (All of it lands
+    // in one frame, and half a frame can be read, so it is waited for together rather than snapshotted.)
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
-    let screen = t.text();
-    assert!(screen.contains("nano") && screen.contains("VS Code"), "both were found:\n{screen}");
-    assert!(screen.contains("here in platoon") && screen.contains("in its own window"), "{screen}");
+    t.wait_for_all(&["╭ edit the notes with", "nano", "VS Code", "here in platoon", "in its own window"]);
     t.send(b"\r"); // nano, the first
 
     // The file was started from the template, and the editor is running inside platoon's own window.
@@ -265,12 +269,9 @@ fn c_shows_what_changed_with_plain_marks_and_u_puts_the_notes_back() {
 
     // c: the before/after view. The marks are what carry the meaning.
     t.send(b"c");
-    t.wait_for("╭ what changed last");
-    t.wait_for("was there before");
-    t.wait_for("is there now");
-    let screen = t.text();
-    assert!(screen.contains("- Sell socks."), "the line that went, marked -:\n{screen}");
-    assert!(screen.contains("+ Sell socks and hats."), "the line that came, marked +:\n{screen}");
+    // The whole popup arrives as one frame: the legend, the line that went and the line that came.
+    t.wait_for_all(&["╭ what changed last", "was there before", "is there now", "- Sell socks.", "+ Sell socks and hats."]);
+    let screen = t.stable();
     assert!(screen.contains("  # Status"), "unchanged lines carry no mark:\n{screen}");
     t.send(b"\x1b");
     t.wait_gone("what changed last");
@@ -324,7 +325,8 @@ fn long_notes_are_not_warned_about_however_long_they_get_and_nothing_is_cut() {
     t.wait_for("enter open");
     lab.open_notes(&mut t);
     t.wait_for("Sell socks to the whole world.");
-    let shown = t.flat();
+    // Nothing is being claimed to be *missing* from half a frame: the screen has to have settled first.
+    let shown = t.stable().split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(!shown.contains("costs tokens") && !shown.contains("KB"), "no warning about the length:\n{shown}");
     assert_eq!(lab.notes().len(), "# Overview\n".len() + body.len(), "the file is left whole");
     t.send(b"q");
@@ -341,11 +343,10 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
 
     // Nothing used yet: the editors in the order they were found, nothing starred, the first one picked.
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
-    let shown = t.text();
-    assert!(shown.contains("nano") && shown.contains("VS Code"), "{shown}");
+    t.wait_for_all(&["╭ edit the notes with", "nano", "VS Code", "starred here next time"]);
+    // "nothing is starred" is a claim about the whole frame, so it waits for one that has settled.
+    let shown = t.stable();
     assert!(!shown.contains("★"), "nothing to star yet:\n{shown}");
-    t.wait_for("starred here next time");
     // The second one, VS Code, in a window of its own.
     t.send(b"\x1b[B\r");
     t.wait_gone("edit the notes with");
@@ -354,16 +355,16 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     t.wait_gone("Open in VS Code");
     until("the choice to reach the settings file", || lab.settings()["notes_editor"] == "code");
 
-    // Now it is starred, first and picked, so enter alone opens it again.
+    // Now it is starred, first and picked, so enter alone opens it again. Which row the star is on, and which
+    // row comes first, are claims about the whole popup: wait for all of it, then for it to settle.
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
-    let shown = t.text();
+    t.wait_for_all(&["╭ edit the notes with", "★ VS Code", "nano", "the one you used last: enter opens it again"]);
+    let shown = t.stable();
     let starred = shown.lines().find(|l| l.contains("VS Code")).unwrap_or("");
     assert!(starred.contains("★"), "the one used last carries the star: {starred}");
     assert!(!shown.lines().find(|l| l.contains("nano")).unwrap_or("").contains("★"), "only that one:\n{shown}");
     let rows: Vec<&str> = shown.lines().filter(|l| l.contains("here in platoon") || l.contains("in its own window")).collect();
     assert!(rows[0].contains("VS Code"), "and it is first: {rows:?}");
-    t.wait_for("the one you used last: enter opens it again");
     t.send(b"\r");
     t.wait_gone("edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
@@ -376,8 +377,8 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     t.wait_for("enter open");
     lab.open_notes(&mut t);
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
-    let shown = t.text();
+    t.wait_for_all(&["╭ edit the notes with", "★ VS Code"]);
+    let shown = t.stable();
     assert!(shown.lines().find(|l| l.contains("VS Code")).unwrap_or("").contains("★"), "{shown}");
     t.send(b"\x1b");
     t.wait_gone("edit the notes with");

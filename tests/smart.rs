@@ -80,11 +80,7 @@ fn the_list_fills_in_generated_names_with_a_mark_and_the_summary_under_it() {
     let fake = AiFake::new("smart-names");
     names_reply(&fake);
     let mut t = Term::spawn(&[], &lab.env(&fake), &lab.base, 24, 100);
-    t.wait_for("Newest topic");
-    t.wait_for("Oldest topic");
-    let screen = t.text();
-    assert!(screen.contains('✦'), "the mark: {screen}");
-    t.wait_for("About the newest thing.");
+    t.wait_for_all(&["Newest topic", "Oldest topic", "✦", "About the newest thing."]);
     assert_eq!(fake.calls(), 1, "three conversations, one call");
     assert!(!fake.stdin(1).contains(lab.base.to_str().unwrap()), "no path is sent");
     // The files: names and summaries in the config folder, nothing in Claude's.
@@ -176,9 +172,8 @@ fn describe_it_says_plainly_when_the_daily_limit_is_used_up_and_how_to_raise_it(
     t.send(b"\t\t");
     t.wait_for("Describe what you remember");
     t.send(b"the login thing\r");
-    t.wait_for_flat("Today's token limit is used up");
-    let flat = t.flat();
-    assert!(flat.contains("raise it in settings"), "{flat}");
+    // Both halves of the message, which may have wrapped onto two rows that arrive one after the other.
+    t.wait_for_all(&["Today's token limit is used up", "raise it in settings"]);
     assert_eq!(fake.calls(), 0);
 }
 

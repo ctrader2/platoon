@@ -192,6 +192,51 @@ impl Term {
         panic!("never saw {text:?}; screen was:\n{}", self.text());
     }
 
+    /// Waits until **every** one of `needles` is on the screen at the same time.
+    ///
+    /// A frame reaches this harness as a stream of bytes, cell by cell from the top down, and `text()` reads
+    /// whatever has arrived: `wait_for` returns the moment its own needle lands, which can be halfway through a
+    /// frame, with everything below it still showing the frame before. So when one change puts several things on
+    /// the screen at once - a popup's legend and the lines under it, a message that wrapped onto two rows - wait
+    /// for all of them here instead of waiting for one and reading the rest out of a snapshot.
+    pub fn wait_for_all(&mut self, needles: &[&str]) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            let text = self.text();
+            if needles.iter().all(|n| text.contains(n)) {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        let text = self.text();
+        let missing: Vec<&str> = needles.iter().copied().filter(|n| !text.contains(n)).collect();
+        panic!("never saw {missing:?} (waiting for all of {needles:?}); screen was:\n{text}");
+    }
+
+    /// The screen once it has stopped changing. For assertions about a whole frame - what is **not** on it, what
+    /// order the rows are in, how many times something appears - which a half-drawn frame would answer wrongly.
+    /// (The program writes a few bytes on every frame whether or not anything changed, so this watches the screen
+    /// itself, not the stream.)
+    pub fn stable(&mut self) -> String {
+        let start = Instant::now();
+        let mut last = self.text();
+        let mut unchanged = 0;
+        while start.elapsed() < WAIT {
+            self.drain(Duration::from_millis(60));
+            let now = self.text();
+            if now == last {
+                unchanged += 1;
+                if unchanged >= 2 {
+                    return now;
+                }
+            } else {
+                unchanged = 0;
+                last = now;
+            }
+        }
+        panic!("the screen never stopped changing; it was:\n{last}");
+    }
+
     /// Exit code once the program has exited.
     pub fn wait_exit(&mut self) -> u32 {
         let start = Instant::now();

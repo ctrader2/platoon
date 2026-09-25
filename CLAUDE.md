@@ -59,7 +59,9 @@ cargo build --release                    # must be warning-free
 Test environment knobs: `PLATOON_CLAUDE_BIN` (a stand-in for `claude`), `PLATOON_SKIP_SETUP_CHECK=1`, `PLATOON_BADGES`,
 `PLATOON_COLORS`, `PLATOON_IDLE_SECS_PER_MINUTE`, `PLATOON_CLIPBOARD`, `PLATOON_NOTES_QUIET_SECS`, `PLATOON_NOTES_MAX_LIFE_SECS`,
 `PLATOON_NOTES_HELPER=off`. `tests/common` `Term::spawn` fixes them for
-terminal tests. Run the whole suite twice before trusting it and fix races instead of retrying. A real `claude` cannot be
+terminal tests. Run the whole suite twice before trusting it and fix races instead of retrying. In a terminal test, a frame arrives
+as a stream and `wait_for` can return halfway through one: wait for every line you rely on (`Term::wait_for_all`) and
+snapshot only from `Term::stable()` when the claim is about the whole frame (what is missing, what order, how many). A real `claude` cannot be
 used in tests (trust-folder prompt): use `sh` or a fake script.
 
 ## Where things live (`src/`)

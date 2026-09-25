@@ -372,7 +372,8 @@ fn the_question_never_holds_up_starting_platoon_or_changes_the_gate() {
     assert!(c.output().unwrap().status.success());
     let mut t = Term::spawn(&[], &setup_env(&lab), &lab.base, 24, 100);
     t.wait_for("enter open");
-    assert!(!t.text().contains("[y/N]") && !t.text().contains("Turn these features on"), "{}", t.text());
+    let shown = t.stable();
+    assert!(!shown.contains("[y/N]") && !shown.contains("Turn these features on"), "{shown}");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }

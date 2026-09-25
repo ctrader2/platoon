@@ -125,10 +125,9 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
     let mut w = World::new("bg-list");
     let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
     t.wait_for("an ordinary idle conversation"); // the saved conversations are read in the background
-    t.wait_for("Background");
-    let text = t.text();
-    assert!(text.contains("idle"), "the ordinary conversation is still idle:\n{text}");
-    assert!(t.flat().contains("Active 2"), "a background session is on the Active tab:\n{text}");
+    // The two rows and the counts fill in together, and half a frame can be read: wait for all of it.
+    t.wait_for_all(&["an ordinary idle conversation", "Background", "idle"]);
+    assert!(t.stable().split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 2"), "a background session is on the Active tab:\n{}", t.text());
 
     // The status is drawn in the theme's accent (Catppuccin Mocha lavender), not the idle grey or working purple.
     let (row, col) = find(&mut t, "Background");
@@ -141,9 +140,9 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
 
     // Enter on the background row (the newest, so selected first): `claude attach dffac639` in its directory.
     t.send(b"\r");
-    t.wait_for("fake-claude args:attach dffac639");
-    let text = t.text();
-    assert!(text.contains(&format!("cwd:{}", w.work.display())), "{text}");
+    t.wait_for_all(&["fake-claude args:attach dffac639", &format!("cwd:{}", w.work.display())]);
+    // What must *not* be there is a claim about the whole screen, so it waits for a settled one.
+    let text = t.stable();
     assert!(!text.contains("--resume") && !text.contains("Take over") && !text.contains("Reload"), "{text}");
     assert_eq!(w.launches(), ["attach dffac639"]);
 
@@ -190,7 +189,7 @@ fn a_background_entry_whose_process_has_gone_is_an_ordinary_idle_conversation_ag
     let _ = w.service.wait();
     let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
     t.wait_for("continue the release work");
-    assert!(!t.text().contains("Background"), "{}", t.text());
+    assert!(!t.stable().contains("Background"), "{}", t.text());
     t.send(b"\r");
     t.wait_for(&format!("fake-claude args:--resume {BG_ID}"));
     assert_eq!(w.launches(), [format!("--resume {BG_ID}")]);
@@ -205,9 +204,8 @@ fn a_background_entry_whose_process_has_gone_is_an_ordinary_idle_conversation_ag
 fn platoon_open_on_a_background_session_runs_attach_by_prefix_and_joins_it_the_second_time() {
     let mut w = World::new("bg-open");
     let mut t = Term::spawn(&["open", "dffa"], &w.env(), &w.work, 24, 100);
-    t.wait_for("fake-claude args:attach dffac639");
-    assert!(t.text().contains(&format!("cwd:{}", w.work.display())), "{}", t.text());
-    assert!(!t.text().contains("--resume"));
+    t.wait_for_all(&["fake-claude args:attach dffac639", &format!("cwd:{}", w.work.display())]);
+    assert!(!t.stable().contains("--resume"));
     t.send(&[0]);
     assert_eq!(t.wait_exit(), 0);
     assert!(w.service_alive(), "detaching must not stop the background session");

@@ -106,7 +106,7 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     t.send(b"\r");
     t.wait_gone("╭ Search");
     t.wait_for("filter: alp");
-    assert!(!t.text().contains("write the docs"), "kept: only alpha is listed\n{}", t.text());
+    assert!(!t.stable().contains("write the docs"), "kept: only alpha is listed\n{}", t.text());
     // Esc in the list clears the kept filter.
     t.send(b"\x1b");
     t.wait_for("write the docs");
@@ -139,7 +139,7 @@ fn tab_finds_conversations_by_the_words_typed_in_them_and_enter_opens_the_archiv
     t.send(b"MIGRATION docker");
     t.wait_for("1 found");
     t.wait_for("then add a migration for users");
-    assert!(!t.text().contains("Nothing found"));
+    assert!(!t.stable().contains("Nothing found"));
     // Words that are only in tool output are not found.
     t.send(b"\x15zebra"); // ctrl+u clears the box
     t.wait_for("Nothing found");
@@ -150,7 +150,8 @@ fn tab_finds_conversations_by_the_words_typed_in_them_and_enter_opens_the_archiv
     t.send(b"\r");
     t.wait_gone("╭ Search");
     t.wait_for("gamma");
-    let screen = t.text();
+    // "only gamma" is a claim about the whole list, which a half-drawn frame would answer wrongly.
+    let screen = t.stable();
     assert!(!screen.contains("alpha") && !screen.contains("beta"), "the Archived tab holds only gamma:\n{screen}");
     // The index is kept in its own file in the cache directory, next to the small conversation index.
     let cache = listing(&w.base.join("cache"));

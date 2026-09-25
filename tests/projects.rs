@@ -202,13 +202,14 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     t.wait_for("No project");
     t.send(b"\r");
     t.wait_gone("New project…");
-    t.wait_for("PROJECT");
-    t.wait_for(" Shop ");
+    t.wait_for_all(&["PROJECT", "NAME", " Shop "]);
     let session = lab.projects()["sessions"].as_object().unwrap().keys().next().cloned().expect("a member");
     assert!(session == "aaaa-0001" || session == "bbbb-0002");
     // The project's own column, right after NAME: its name in a pill of its color (the first project gets the theme's
     // accent), the letters on it dark. The badge letters are no longer in front of the name.
-    let text = t.text();
+    // Where the columns sit, and what is no longer in front of the name: claims about the whole row, so the
+    // screen has to have settled.
+    let text = t.stable();
     let (head, head_col) = locate(&text, "PROJECT");
     let (row, col) = locate(&text, " Shop ");
     assert!(row > head && col == head_col && locate(&text, "NAME").1 < head_col, "{text}");
@@ -255,7 +256,8 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
     t.wait_for_flat("WB Web 1 active");
     t.wait_for("╭ Sessions");
     t.wait_for("╭ Notes");
-    assert!(!t.text().contains("write the docs") && !t.text().contains("bbbb"), "only its own sessions:\n{}", t.text());
+    let shown = t.stable();
+    assert!(!shown.contains("write the docs") && !shown.contains("bbbb"), "only its own sessions:\n{shown}");
 
     // The quick filter only looks at the project's sessions.
     t.send(b"/");

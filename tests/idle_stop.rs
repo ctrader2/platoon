@@ -321,12 +321,13 @@ fn a_stopped_session_is_still_listed_and_enter_resumes_it_from_its_saved_history
 
     thread::sleep(Duration::from_millis(1500)); // platoon looks again once a second
     // Nothing was lost and nothing changed in the list: same row, same tab, no extra state or column.
-    let mut listed = String::new();
     until("the list to show the row after the stop", || {
-        listed = t.text();
+        let listed = t.text();
         let flat = t.flat();
         listed.contains("refactor the widget") && flat.contains("Active 1") && flat.contains("Archived 0")
     });
+    // What must *not* be on the screen is read from one that has settled: half a frame would agree too easily.
+    let listed = t.stable();
     for banned in ["stopped", "Session ended", "not open", "asleep", "paused"] {
         assert!(!listed.contains(banned), "{banned:?} must not appear:\n{listed}");
     }
@@ -373,7 +374,7 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
     t.send(&[0]);
     t.wait_for_flat("Archived 0");
     thread::sleep(Duration::from_millis(2500)); // several refreshes
-    let text = t.flat();
+    let text = t.stable().split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(text.contains("Archived 0") && text.contains("Active 2"), "{text}");
     t.send(b"q");
     t.wait_exit();
