@@ -231,10 +231,10 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     t.wait_for("FAKE NANO EDITING");
     t.wait_for("ctrl+space stop the editor");
     let notes = lab.notes();
-    for heading in ["# Overview", "# Requirements", "# Status", "# Decisions", "# Notes"] {
+    for heading in ["# Summary", "# Decisions"] {
         assert!(notes.contains(heading), "{heading} missing from the template:\n{notes}");
     }
-    assert!(notes.lines().next().unwrap().contains("Overview, Requirements and Status"), "{notes}");
+    assert!(notes.lines().next().unwrap().contains("the summary at the top, the sections in between"), "{notes}");
 
     // What is typed reaches the editor; when it exits, platoon is back and shows the file as it is now.
     t.send(b"Sell socks online.\r");

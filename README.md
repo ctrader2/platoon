@@ -475,8 +475,9 @@ notes and reads them again as soon as you are done or the file changes. There is
 remembered (as `notes_editor` in `settings.json`) and offered first, with a star, the next time. If platoon finds nothing at
 all it offers `nano` and `vi`.
 
-**A new file starts from a template**: one line saying that platoon keeps Overview, Requirements and Status up to date,
-adds to Decisions and never changes Notes, then those five headings.
+**A new file starts from a template**: one line saying what platoon keeps up to date, then the two headings that are
+always there, **Summary** and **Decisions**. The sections in between are added as the work needs them (see
+[The shape of the notes](#the-shape-of-the-notes)).
 
 **Nothing is lost.** Before every change platoon didn't make itself, the version that was there is copied into
 `~/.config/platoon/projects/<id>/history/`, newest first, at most 20 per project (the oldest goes). `c` shows the last
@@ -487,6 +488,27 @@ if something else changed it, what is on disk wins.
 
 **Length is whatever the project needs.** Nothing is ever cut and platoon doesn't nag about it; the pane does say how many
 of the project's sessions already have the notes as they are now (see below).
+
+### The shape of the notes
+
+Two parts of `project.md` are fixed, and everything else fits the work:
+
+- **Summary**, at the top: a few lines saying what this project is and where it stands, so a new session (and you) can
+  read it in ten seconds.
+- **Decisions**, at the end: dated entries, added one at a time and never rewritten.
+- **In between, whatever the project needs.** Requirements and Status while something is being built; Symptoms, Ruled out
+  and Leads while a problem is being chased; Questions and Findings while something is being looked into; **Open
+  questions** as a plain list, one question a line, with nothing tagged onto them. When the work changes, the headings
+  change with it: platoon may add one, rename one, fold two into one or put them in another order.
+
+**Nothing is ever deleted by a change of heading.** A section platoon doesn't mention stays exactly where it is, word for
+word. A heading can only go away by being carried into the one that replaces it, and everything of yours that was under
+it has to come across with it or the change is thrown away (below).
+
+Notes written before this - the five fixed headings Overview, Requirements, Status, Decisions and Notes - carry on
+working and lose nothing: a summary is added at the top the next time platoon writes, and your old headings become
+ordinary sections that platoon may reshape from then on. Your old **Notes** section is one of them: platoon has never
+written a word in it, so every line of it is yours and stays word for word.
 
 ### Notes that keep themselves up to date
 
@@ -510,16 +532,18 @@ full once: its first message and its last 20.
 
 **What it may write.**
 
-| Heading | What an update may do |
+| Part | What an update may do |
 | --- | --- |
-| Overview, Requirements, Status | add to them, and reword **what platoon itself wrote** before |
+| Summary | rewrite it, keeping it short; it is added at the top if it isn't there |
+| The sections in between | add one, reword **what platoon itself wrote** in one, rename one, fold two into one, put them in another order |
 | Decisions | append dated entries; nothing already there is ever changed. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
-| Notes | nothing at all: it is yours |
 
-platoon remembers exactly which sentences it wrote last time, so the rest of a section is yours. If an answer comes back
-without one of your lines in it, word for word, that section is **left exactly as it was**. The same goes for an answer that
-isn't understood, a heading you have deleted, and notes that changed on disk while the request was out: what is on disk wins,
-and platoon works the merge out again or leaves it alone.
+platoon remembers exactly which sentences it wrote itself, under which heading, so every other line of a section is
+yours. If an answer comes back without one of your lines in it, word for word, that section is **left exactly as it
+was** - and that holds when a heading is renamed too: your lines have to turn up under the new one. The same goes for an
+answer that isn't understood and for notes that changed on disk while the request was out: what is on disk wins, and
+platoon works the merge out again or leaves it alone. A line of yours that an answer had to repeat stays yours: platoon
+only ever counts its own words as its own.
 
 **Seeing it.** The notes pane says `platoon is updating these notes now.` while a request is out, and `platoon last updated
 these 5m ago.` afterwards. Every update goes through the same history as your own edits, so `c` shows what changed and `u`
@@ -544,8 +568,10 @@ platoon   1 Sessions 3   2 Projects 1   ✦ smart features paused · your Claude
 A switch you turned off yourself is not in the header (it would sit there for as long as you left it off); it is said where
 that feature lives, as above.
 
-**Where it is kept.** The times and the copy of platoon's own sentences live in `~/.config/platoon/projects/<id>/notes-state.json`
-(numbers and platoon's own text only - never a message you typed, never a reply from Claude).
+**Where it is kept.** The times and the copy of platoon's own sentences, heading by heading, live in
+`~/.config/platoon/projects/<id>/notes-state.json` (numbers and platoon's own text only - never a message you typed,
+never a reply from Claude). When a heading is renamed, its record moves with it; when a section is folded into
+another, its record goes.
 
 ### The line that says what a project is
 

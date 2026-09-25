@@ -122,7 +122,7 @@ fn e_on_a_project_with_no_notes_starts_them_from_the_template_and_runs_the_edito
     // The file was started from the template before the editor could see it.
     let started = notes_of(&w, &id);
     assert!(started.starts_with(notes::TEMPLATE.lines().next().unwrap()), "{started}");
-    for heading in ["# Overview", "# Requirements", "# Status", "# Decisions", "# Notes"] {
+    for heading in ["# Summary", "# Decisions"] {
         assert!(started.contains(heading), "{heading} missing:\n{started}");
     }
     // The editor's own screen is what platoon draws while it runs.

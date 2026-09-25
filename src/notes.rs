@@ -18,19 +18,21 @@ use std::{
 /// How many earlier versions of one project's notes are kept.
 pub const MAX_VERSIONS: usize = 20;
 
-/// What a new `project.md` starts from: one line saying who writes what, then the headings.
+/// The line at the top of the notes, saying who writes what. platoon replaces this one line (and only this one)
+/// in a file that still carries the one it wrote before the shape of the notes became fluid.
+pub const PREAMBLE: &str = "\
+platoon keeps these up to date: the summary at the top, the sections in between, and dated entries in Decisions. Your own words are always kept.
+
+";
+
+/// What a new `project.md` starts from: that line, then the two headings that are always there. The sections in
+/// between are added as the work needs them (`notesupdate.rs`), and anyone may add their own with `e`.
 pub const TEMPLATE: &str = "\
-platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
+platoon keeps these up to date: the summary at the top, the sections in between, and dated entries in Decisions. Your own words are always kept.
 
-# Overview
-
-# Requirements
-
-# Status
+# Summary
 
 # Decisions
-
-# Notes
 
 ";
 
@@ -272,14 +274,15 @@ mod tests {
     }
 
     #[test]
-    fn a_new_file_starts_from_the_template_with_every_heading_and_who_writes_what() {
+    fn a_new_file_starts_from_the_template_with_the_two_fixed_headings_and_who_writes_what() {
         let mut at = 0;
-        for heading in ["# Overview", "# Requirements", "# Status", "# Decisions", "# Notes"] {
+        for heading in ["# Summary", "# Decisions"] {
             let found = TEMPLATE[at..].find(heading).unwrap_or_else(|| panic!("{heading} missing from the template:\n{TEMPLATE}"));
             at += found + heading.len();
         }
+        assert!(TEMPLATE.starts_with(PREAMBLE), "the template starts with the line that says who writes what");
         let first = TEMPLATE.lines().next().unwrap();
-        assert!(first.contains("Overview, Requirements and Status") && first.contains("Decisions") && first.contains("never changes it"), "{first}");
+        assert!(first.contains("summary at the top") && first.contains("Decisions") && first.contains("Your own words"), "{first}");
         let lower = TEMPLATE.to_lowercase();
         for jargon in ["markdown", "prompt", "token", "llm", "context window"] {
             assert!(!lower.contains(jargon), "{jargon:?} in the template");

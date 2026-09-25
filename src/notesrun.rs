@@ -521,7 +521,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         if notes::write(&env.config, id, &merged.text).is_err() {
             return Round::Failed("the notes couldn't be written".into());
         }
-        Round::Written { sections: merged.written.len(), decisions: merged.added.len() }
+        Round::Written { sections: merged.wrote.len(), decisions: merged.added.len() }
     } else {
         Round::Unchanged
     };
@@ -530,9 +530,9 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     // The material was read and paid for, so it is not read again; what platoon wrote is remembered, so the next
     // update can tell its own sentences from the user's.
     state.seen.extend(seen);
-    for (key, written) in &merged.written {
-        state.set_mine(*key, written);
-    }
+    // What platoon now calls its own, heading by heading: a heading that was renamed has moved, one that was
+    // folded into another is gone, and a line of the user's that the answer had to repeat is not platoon's.
+    state.written = merged.mine.clone();
     if merged.changed {
         state.last_update_at = now;
     }
@@ -774,6 +774,7 @@ mod tests {
         }
     }
 
+    /// Notes in the shape platoon wrote before the sections became fluid: an update has to cope with them.
     const NOTES: &str = "platoon keeps these.\n\n# Overview\n\nSell socks.\n\n# Requirements\n\n# Status\n\n# Decisions\n\n# Notes\n\nmine\n";
 
     #[test]
@@ -995,11 +996,14 @@ mod tests {
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "I added the basket page.");
         // platoon has written nothing here yet, so every line of Overview is the user's: it may add, not reword.
-        r.fake.reply_default(r#"{"overview":"Sell socks.\nThere is a basket page.","decisions":["Baskets are session based"]}"#);
+        r.fake.reply_default(
+            r#"{"summary":"A shop that sells socks.","sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket page."}],"decisions":["Baskets are session based"]}"#,
+        );
         r.fake.usage(900, 120);
-        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 1, decisions: 1 });
+        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 2, decisions: 1 });
         let text = r.notes(&id);
         assert!(text.contains("Sell socks.\nThere is a basket page."), "{text}");
+        assert!(text.starts_with("platoon keeps these.\n\n# Summary\n\nA shop that sells socks."), "the summary goes in at the top: {text}");
         assert!(text.contains(&format!("- {}: Baskets are session based", notesupdate::day(usage::now()))), "{text}");
         assert!(text.contains("# Notes\n\nmine"), "Notes is untouched: {text}");
         // The version before it is kept, so `c` and `u` work on it.
@@ -1024,21 +1028,22 @@ mod tests {
         let r = Rig::new("reword");
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
-        r.fake.reply(1, r#"{"overview":"Sell socks.\nThere is a basket page."}"#);
+        r.fake.reply(1, r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket page."}]}"#);
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
-        assert_eq!(State::load(&r.env.config, &id).mine(notesupdate::Key::Overview), "Sell socks.\nThere is a basket page.");
+        // Only platoon's own line is recorded as platoon's: "Sell socks." was the user's and stays theirs.
+        assert_eq!(State::load(&r.env.config, &id).mine("Overview"), "There is a basket page.");
         // The user adds a line of their own.
         let path = Projects::open(&r.env.config).notes_path(&id);
         let text = fs::read_to_string(&path).unwrap().replace("There is a basket page.", "There is a basket page.\nWe never sell hats.");
         fs::write(&path, &text).unwrap();
         r.session(&id, "s1", &["Add a basket page to the shop", "Now add the checkout page as well"], "Done.");
         // An answer that drops the user's line changes nothing.
-        r.fake.reply(2, r#"{"overview":"Sell socks.\nThere is a basket and a checkout page."}"#);
+        r.fake.reply(2, r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket and a checkout page."}]}"#);
         assert_eq!(update_once(&r.env, &id), Round::Unchanged);
         assert_eq!(fs::read_to_string(&path).unwrap(), text, "nothing written");
         // An answer that keeps it goes in, with platoon's own line reworded around it.
         r.session(&id, "s1", &["Add a basket page to the shop", "Now add the checkout page as well", "And a receipt page too"], "Done.");
-        r.fake.reply(3, r#"{"overview":"Sell socks.\nThere is a basket and a checkout page.\nWe never sell hats."}"#);
+        r.fake.reply(3, r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket and a checkout page.\nWe never sell hats."}]}"#);
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.contains("There is a basket and a checkout page.") && after.contains("We never sell hats."), "{after}");
@@ -1049,7 +1054,7 @@ mod tests {
         let r = Rig::new("bad");
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
-        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"overview":""}"#].iter().enumerate() {
+        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"summary":""}"#, r#"{"sections":[{"heading":"Status"}]}"#].iter().enumerate() {
             r.fake.reply(n + 1, bad);
             assert_eq!(update_once(&r.env, &id), Round::BadReply, "{bad}");
             assert_eq!(r.notes(&id), NOTES, "{bad}");
@@ -1071,7 +1076,7 @@ mod tests {
         let path = Projects::open(&r.env.config).notes_path(&id);
         // The fake rewrites the notes while its call is out: exactly what a user typing in an editor does.
         let rewritten = NOTES.replace("Sell socks.", "Sell socks.\nWritten by hand while the call was out.");
-        fs::write(r.fake.dir.join("reply.1"), r#"{"overview":"Sell socks.\nThere is a basket page."}"#).unwrap();
+        fs::write(r.fake.dir.join("reply.1"), r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket page."}]}"#).unwrap();
         fs::write(&path, &rewritten).unwrap();
         assert_eq!(update_once(&r.env, &id), Round::Unchanged, "the answer no longer fits what is on disk");
         assert_eq!(fs::read_to_string(&path).unwrap(), rewritten, "what the person wrote is still there");
@@ -1115,7 +1120,7 @@ mod tests {
         let r = Rig::new("loop");
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
-        r.fake.reply_default(r#"{"status":"The basket page is in."}"#);
+        r.fake.reply_default(r#"{"sections":[{"heading":"Status","body":"The basket page is in."}]}"#);
         // A mark that is already old enough (the quiet period is a parameter here).
         mark_due(&r.env.cache, &id, now_ms()).unwrap();
         helper_loop(&r.env, &id, 0);

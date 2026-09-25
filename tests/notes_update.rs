@@ -189,7 +189,12 @@ impl Drop for Lab {
 fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_undoes_the_change() {
     let lab = Lab::new("notes-update-e2e");
     lab.project(NOTES, "sess-1", &["Add a basket page to the shop", "And make the totals add up"]);
-    lab.reply_to(1, r#"{"overview":"Sell socks.\nThere is a basket page.","status":"The basket totals add up.","decisions":["Baskets are session based"]}"#);
+    // The answer reshapes the notes: a summary at the top, "Status" renamed, a section that was not there
+    // before, and a decision. The five fixed headings the file was written with are not what it sends back.
+    lab.reply_to(
+        1,
+        r#"{"summary":"A sock shop. The basket works and the totals add up.","sections":[{"heading":"Where it stands","body":"The basket totals add up.","was":"Status"},{"heading":"Open questions","body":"- Does VAT go in the basket total?"}],"decisions":["Baskets are session based"]}"#,
+    );
     // The description follows the update, as its own call.
     lab.reply_to(2, r#"{"description":"A sock shop, now with a basket that adds up."}"#);
 
@@ -198,7 +203,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty() && out.stderr.is_empty(), "the hook says nothing: {out:?}");
 
-    until("the notes to be updated", || lab.notes().contains("There is a basket page."));
+    until("the notes to be updated", || lab.notes().contains("A sock shop."));
     until("the helper to finish", || lab.helper_pid().is_some_and(|p| !alive(p)));
 
     until("the description to be written", || !lab.description().is_empty());
@@ -214,12 +219,18 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     assert!(!described.contains("sess-1"), "{described}");
     assert_eq!(lab.description(), "A sock shop, now with a basket that adds up.");
 
-    // What it wrote: the user's line kept, platoon's added, a dated decision, Notes untouched.
+    // What it wrote: a summary at the top, the renamed heading with its text, a new section, a dated decision -
+    // and not a word of the file it started from is gone.
     let after = lab.notes();
-    assert!(after.contains("Sell socks.\nThere is a basket page."), "{after}");
-    assert!(after.contains("The basket totals add up."), "{after}");
+    let headings: Vec<&str> = after.lines().filter(|l| l.starts_with("# ")).collect();
+    assert_eq!(headings, ["# Summary", "# Overview", "# Requirements", "# Where it stands", "# Open questions", "# Decisions", "# Notes"], "{after}");
+    assert!(after.contains("# Summary\n\nA sock shop. The basket works and the totals add up."), "{after}");
+    assert!(after.contains("# Where it stands\n\nThe basket totals add up."), "{after}");
+    assert!(after.contains("# Open questions\n\n- Does VAT go in the basket total?"), "{after}");
+    assert!(after.contains("Sell socks."), "the user's own line is still there: {after}");
     assert!(after.contains(": Baskets are session based"), "{after}");
-    assert!(after.contains("Mine, and platoon never touches it."), "Notes is the user's: {after}");
+    assert!(after.contains("Mine, and platoon never touches it."), "what the user wrote is kept: {after}");
+    assert!(!after.contains("# Status"), "the old heading went, and its words came with it: {after}");
     // The version before it is kept, so the change can be seen and undone.
     assert_eq!(lab.versions().len(), 1);
     assert_eq!(fs::read_to_string(&lab.versions()[0]).unwrap(), NOTES);
@@ -246,11 +257,11 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     t.send(b"\x1b[C");
     t.wait_for_flat("e edit notes");
     t.wait_for_flat("platoon last updated these just now.");
-    t.wait_for("There is a basket page.");
+    t.wait_for("A sock shop.");
     t.send(b"c");
     // The legend and the lines under it come in one frame, and half a frame can be read: wait for all of them,
-    // which is the check - the two added lines carry a `+`.
-    t.wait_for_all(&["was there before", "+ There is a basket page.", "+ The basket totals add up."]);
+    // which is the check - the headings that came carry a `+`, the one that went carries a `-`.
+    t.wait_for_all(&["was there before", "+ # Summary", "+ # Open questions", "- # Status"]);
     t.send(b"\x1b");
     t.wait_gone("was there before");
     t.send(b"u");
@@ -263,7 +274,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
 fn the_notes_pane_says_while_an_update_is_running() {
     let lab = Lab::new("notes-update-running");
     lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);
-    lab.reply(r#"{"status":"The basket page is in."}"#);
+    lab.reply(r#"{"sections":[{"heading":"Status","body":"The basket page is in."}]}"#);
     // The stand-in takes its time, so the screen can be caught mid-update.
     fs::write(lab.fake.join("delay"), "3").unwrap();
 
@@ -309,7 +320,7 @@ fn a_session_that_is_not_in_a_project_and_the_helpers_own_work_cost_nothing() {
 fn how_long_the_helper_waits_for_quiet_is_the_setting_and_the_test_knob_beats_it() {
     let lab = Lab::new("notes-update-quiet");
     lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);
-    lab.reply(r#"{"status":"The basket page is in."}"#);
+    lab.reply(r#"{"sections":[{"heading":"Status","body":"The basket page is in."}]}"#);
     // A mark from just now, and the setting at its longest: the helper must find the project too fresh to touch.
     fs::write(
         lab.config.join("settings.json"),
