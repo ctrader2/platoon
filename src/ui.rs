@@ -134,7 +134,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "editor"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -171,7 +171,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("n", "new", Some(Action::New)),
         ("a", archive_verb, Some(Action::Archive)),
         ("m", "project", Some(Action::Assign)),
-        ("H", "hand-off", Some(Action::HandOff)),
+        ("h", "hand-off", Some(Action::HandOff)),
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
@@ -206,11 +206,10 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     if app.pane == Pane::Sessions {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
-        out.push(("H", "hand-off", Some(Action::HandOff)));
+        out.push(("h", "hand-off", Some(Action::HandOff)));
     } else {
         out = vec![
             ("e", "edit notes", Some(Action::Edit)),
-            ("E", "editor", Some(Action::EditWith)),
             ("c", "changes", Some(Action::ShowChanges)),
             ("u", "undo", Some(Action::Undo)),
             ("↑↓", "scroll", None),
@@ -499,9 +498,17 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         top_lines.push(Line::styled("platoon reads them again when you are done.", Style::new().fg(t.subtext)));
         top_lines.push(Line::raw(""));
     }
-    if let Some(warning) = app.notes_size_warning() {
-        for line in wrap(&warning, area.width as usize) {
+    // Why they are not being kept up to date, when that is so: plain words, and where to put it right.
+    if let Some(why) = app.notes_stopped() {
+        for line in wrap(&format!("These notes are not updating right now: {why}"), area.width as usize) {
             top_lines.push(Line::styled(line, Style::new().fg(t.warn)));
+        }
+        top_lines.push(Line::raw(""));
+    }
+    // Where the notes go, and how many of the project's sessions already have this version.
+    if let Some(reach) = app.notes_reach() {
+        for line in wrap(&reach, area.width as usize) {
+            top_lines.push(Line::styled(line, Style::new().fg(t.dim)));
         }
         top_lines.push(Line::raw(""));
     }
@@ -605,6 +612,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     if let Some((done, total, _)) = app.smart_progress() {
         let paused = if app.smart_idle().is_some() { " (paused)" } else { "" };
         left.push(Span::styled(format!("   {} Indexing {done} of {total}{paused}", app.marker()), Style::new().fg(t.dim)));
+    }
+    // Nothing that spends tokens can run right now: say so quietly, and why. It goes as soon as the reason does.
+    // The header is where it belongs: it shows on every tab, so notes that stopped updating can't go unnoticed.
+    let so_far = left.iter().map(|s| s.content.chars().count()).sum::<usize>();
+    if let Some(note) = app.ai_header_note((area.width as usize).saturating_sub(so_far + 6)) {
+        left.push(Span::styled(format!("   {} {note}", app.marker()), Style::new().fg(t.dim)));
     }
 
     let mut right = Vec::new();
@@ -1275,10 +1288,6 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let vw = label.chars().count().max(3);
                 (label, vw, true, false, item.off == Some(item.value(current)))
             }
-            Kind::Editor => {
-                let vw = app.notes_editor_width();
-                (fit_end(&app.notes_editor_label(), vw), vw, app.notes_editor_at_end(false), app.notes_editor_at_end(true), false)
-            }
             Kind::Theme => {
                 let all = app.themes().all();
                 let at = all.iter().position(|t| t.id == app.theme.id).unwrap_or(0);
@@ -1918,8 +1927,8 @@ fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, foot, &hints, None);
 }
 
-/// The editors this computer has, to open a project's notes with. `E` always shows it; `e` shows it while the
-/// setting says "Ask each time".
+/// The editors this computer has, to open a project's notes with. `e` always shows it; the one used last is
+/// starred, first and already picked, so enter opens it again.
 fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let pick = &app.epick;
@@ -1949,17 +1958,22 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
         let where_it_runs = if e.terminal { "here in platoon" } else { "in its own window" };
+        // A star on the one used last, which is also the first and the one already picked.
+        let star = if e.id == pick.starred { app.star() } else { " " };
         let spans = vec![
             Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
-            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(24)), base.fg(t.text)),
+            Span::styled(format!("{star} "), base.fg(t.accent)),
+            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(26)), base.fg(t.text)),
             Span::styled(where_it_runs, base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
     }
-    f.render_widget(
-        Paragraph::new(fit_end("Set a favorite in the settings (s), \"Edit notes with\".", note.width as usize)).style(Style::new().fg(t.dim)),
-        note,
-    );
+    let foot_note = if pick.starred.is_empty() {
+        "The one you use is starred here next time.".to_string()
+    } else {
+        format!("{} the one you used last: enter opens it again.", app.star())
+    };
+    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(t.dim)), note);
     let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }

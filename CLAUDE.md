@@ -71,7 +71,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `ui.rs` | all drawing (header and tabs, rows, footer, popups, attached view); `model.rs` the row types |
 | `claude.rs`, `index.rs` | read Claude Code's undocumented on-disk state; the persistent incremental index of conversations |
 | `host.rs`, `client.rs`, `open.rs` | the detached per-session host (owns claude's pty, serves many windows), the client, `platoon open` |
-| `guard.rs`, `setup.rs`, `usage.rs` | one-writer-per-conversation hook, the `platoon setup` checklist and gate, statusline plan usage |
+| `guard.rs`, `setup.rs`, `usage.rs` | one-writer-per-conversation hook (which also carries a project's notes into a running session), the `platoon setup` checklist and gate, statusline plan usage |
 | `archive.rs`, `settings.rs`, `dirs.rs` | archive list, settings file and the settings screen catalog, directory picker sources |
 | `mcp.rs`, `procs.rs` | telling MCP servers from other child processes (idle stop), process table |
 | `theme.rs`, `usertheme.rs`, `colordepth.rs` | built-in themes and contrast rules, user theme files, 256-color fallback |

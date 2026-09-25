@@ -151,7 +151,6 @@ pub enum Action {
     /// `e` in the notes pane: edit the project's notes.
     Edit,
     /// `E` in the notes pane: choose an editor for this once.
-    EditWith,
     /// `c` in the notes pane: what changed last.
     ShowChanges,
     /// `u` in the notes pane: undo the last change.
@@ -458,6 +457,14 @@ pub struct App {
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
     /// automatic update (or by anything else) while the screen is open is noticed and said once.
     pub notes_seen: Option<(String, crate::notes::Stamp)>,
+    /// For the open project: how many of its sessions have the version of the notes that is on disk now, of how
+    /// many sessions in all. Worked out with the rest of the state, not while drawing.
+    notes_reach_count: Option<(usize, usize)>,
+    /// Why the open project's notes are not being kept up to date, in the words the pane shows. None while they are.
+    notes_stopped: Option<String>,
+    /// What the header says while nothing that spends tokens can run: the short form and the one with where to
+    /// change it (`ai::header_note`).
+    ai_note: Option<(String, String)>,
     /// How many of the rows of a project's screen are archived ones (they come last).
     pub archived_rows: usize,
     pub name_box: NameBox,
@@ -619,6 +626,9 @@ impl App {
             pane: Pane::Sessions,
             notes_top: Cell::new(0),
             notes_seen: None,
+            notes_reach_count: None,
+            notes_stopped: None,
+            ai_note: None,
             archived_rows: 0,
             name_box: NameBox { purpose: NamePurpose::New, input: String::new() },
             assign: AssignPick { session: String::new(), session_name: String::new(), options: Vec::new(), selected: 0 },
@@ -626,7 +636,7 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
-            epick: EditorPick { project: String::new(), options: Vec::new(), selected: 0 },
+            epick: EditorPick { project: String::new(), options: Vec::new(), selected: 0, starred: String::new() },
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
@@ -684,6 +694,11 @@ impl App {
     /// The mark of a generated name.
     pub fn marker(&self) -> &'static str {
         if self.plain_marker { "*" } else { "✦" }
+    }
+
+    /// The mark on the editor used last. A plain `*` where `✦` may be missing from the font, for the same reason.
+    pub fn star(&self) -> &'static str {
+        if self.plain_marker { "*" } else { "★" }
     }
 
     /// Everything about the token features that follows the settings and the ledger: calls whose switch was turned
@@ -983,6 +998,7 @@ impl App {
         self.auto_archive(index_changed, usage::now());
         // After the settings were re-read (auto_archive does that first), so an edit of the file is seen at once.
         self.sync_ai();
+        self.poll_notes_status();
         self.refresh_prompts();
         self.poll_handoff();
         self.drive_smart();
@@ -1162,8 +1178,7 @@ impl App {
             (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
             (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
-            (Action::Edit, Mode::List) => self.edit_notes(false),
-            (Action::EditWith, Mode::List) => self.edit_notes(true),
+            (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
             (Action::HandOff, Mode::List) if !self.projects_list_showing() => self.start_handoff(),
@@ -1587,10 +1602,6 @@ impl App {
                 Step::Cycle => self.open_theme_list(),
                 _ => self.step_theme(step),
             }
-            return;
-        }
-        if item.kind == Kind::Editor {
-            self.step_notes_editor(step);
             return;
         }
         let mut next = self.settings.get();

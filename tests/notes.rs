@@ -1,6 +1,7 @@
-//! Editing a project's notes end to end, in a real terminal with the real binary: the template, an editor that
-//! runs inside platoon's window, one with a window of its own, the before/after view, undo, the size warning and
-//! the "Edit notes with" setting.
+//! Editing a project's notes end to end, in a real terminal with the real binary: the template, the editor list
+//! `e` opens (with the one used last starred and picked), an editor that runs inside platoon's window, one with a
+//! window of its own, the before/after view, undo, what the pane says about the notes reaching the project's
+//! sessions, and what it says when the updates are paused.
 //!
 //! The "editors" are two small scripts in a folder of the test's own, which `PLATOON_EDITOR_PATH` makes the only
 //! place platoon looks: no real editor is ever started, and every directory is a temp dir.
@@ -69,6 +70,7 @@ impl Lab {
             ("PLATOON_CACHE_DIR", self.cache.to_string_lossy().into()),
             ("PLATOON_CONFIG_DIR", self.config.to_string_lossy().into()),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
+            ("PLATOON_NOTES_HELPER", "off".into()),
             // The only place platoon looks for editors: the two scripts above.
             ("PLATOON_EDITOR_PATH", self.bin.to_string_lossy().into()),
             ("EDITOR", String::new()),
@@ -109,6 +111,61 @@ impl Lab {
         fs::read_to_string(self.config.join("settings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
     }
 
+    fn write_settings(&self, v: Value) {
+        fs::write(self.config.join("settings.json"), v.to_string()).unwrap();
+    }
+
+    /// A conversation of the project: a transcript Claude Code would have written, and its membership.
+    fn session(&self, id: &str, prompt: &str) {
+        let line = json!({"type":"user","cwd":self.work,"gitBranch":"main","timestamp":"2026-09-24T10:00:00.000Z","message":{"role":"user","content":prompt}}).to_string();
+        fs::write(self.claude.join("projects/-work").join(format!("{id}.jsonl")), line + "\n").unwrap();
+        let mut v: Value = serde_json::from_str(&fs::read_to_string(self.config.join("projects.json")).unwrap()).unwrap();
+        v.get_mut("sessions").unwrap().as_object_mut().unwrap().insert(id.to_string(), json!("pweb"));
+        fs::write(self.config.join("projects.json"), v.to_string()).unwrap();
+    }
+
+    /// Record that this session has been handed this version of the notes, as the two hooks do.
+    fn mark_sent(&self, session: &str, notes: &str) {
+        // FNV-1a of "<project id>\n<notes>", as `sessionhook::notes_hash` writes it.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in format!("pweb\n{notes}").as_bytes() {
+            h ^= u64::from(*b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        let dir = self.cache.join("notes-sent");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(session), format!("{h:016x}")).unwrap();
+    }
+
+    /// Today, in the local calendar, as the ledger keys its days.
+    fn today(&self) -> String {
+        let out = std::process::Command::new("date").arg("+%F").output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// Put this many tokens on today's count, the way a day of real calls would.
+    fn spend_the_day(&self, tokens: u64) {
+        let day = json!({"usage": {"input": tokens, "cache_creation": 0, "cache_read": 0, "output": 0}, "cost_usd": 0.0, "calls": 1, "failed": 0, "features": {}});
+        let v = json!({"version": 1, "days": {self.today(): day}});
+        fs::write(self.cache.join("ai-usage.json"), v.to_string()).unwrap();
+    }
+
+    fn clear_the_day(&self) {
+        let _ = fs::remove_file(self.cache.join("ai-usage.json"));
+    }
+
+    /// A status-line report saying the plan is this much used, with the window still running.
+    fn plan_used(&self, pct: u64) {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        fs::create_dir_all(self.cache.join("status")).unwrap();
+        let v = json!({"ts": now, "context_pct": null, "five_hour": {"pct": pct, "resets_at": now + 3600}, "seven_day": null});
+        fs::write(self.cache.join("status/s1.json"), v.to_string()).unwrap();
+    }
+
+    fn clear_the_plan(&self) {
+        let _ = fs::remove_file(self.cache.join("status/s1.json"));
+    }
+
     /// Open the project's screen with the notes pane in focus.
     fn open_notes(&self, t: &mut Term) {
         t.send(b"2");
@@ -124,6 +181,29 @@ impl Drop for Lab {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.base);
     }
+}
+
+/// The words of the notes pane as one line, whatever they wrapped onto: the right-hand pane of the project screen
+/// with its borders taken off, so a sentence that runs over two lines still reads as one.
+fn pane(t: &mut Term) -> String {
+    let screen = t.text();
+    let mut words: Vec<String> = Vec::new();
+    for row in screen.lines() {
+        let parts: Vec<&str> = row.split('\u{2502}').collect();
+        if parts.len() < 5 {
+            continue;
+        }
+        words.extend(parts[parts.len() - 3].split_whitespace().map(str::to_string));
+    }
+    words.join(" ")
+}
+
+fn wait_pane(t: &mut Term, text: &str) {
+    until(&format!("the notes pane to say {text:?}"), || pane(t).contains(text));
+}
+
+fn wait_pane_gone(t: &mut Term, text: &str) {
+    until(&format!("the notes pane to stop saying {text:?}"), || !pane(t).contains(text));
 }
 
 #[test]
@@ -216,8 +296,8 @@ fn an_editor_with_its_own_window_says_so_platoon_carries_on_and_the_notes_come_b
     t.wait_for("enter open");
     lab.open_notes(&mut t);
 
-    // E always asks; pick VS Code, the second.
-    t.send(b"E");
+    // e lists them; pick VS Code, the second.
+    t.send(b"e");
     t.wait_for("╭ edit the notes with");
     t.send(b"\x1b[B\r");
     t.wait_gone("edit the notes with");
@@ -236,57 +316,132 @@ fn an_editor_with_its_own_window_says_so_platoon_carries_on_and_the_notes_come_b
 }
 
 #[test]
-fn notes_past_about_twenty_kilobytes_say_plainly_what_that_costs_and_nothing_is_cut() {
+fn long_notes_are_not_warned_about_however_long_they_get_and_nothing_is_cut() {
     let lab = Lab::new("notes-big");
-    let body = "Sell socks to the whole world.\n".repeat(1000); // about 30 KB
+    let body = "Sell socks to the whole world.\n".repeat(1400); // about 42 KB, twice the old warning
     lab.project(Some(&format!("# Overview\n{body}")));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("enter open");
     lab.open_notes(&mut t);
-    t.wait_for_flat("These notes are 30 KB");
-    t.wait_for("The whole file is sent to every");
-    t.wait_for("so it costs tokens each time.");
+    t.wait_for("Sell socks to the whole world.");
+    let shown = t.flat();
+    assert!(!shown.contains("costs tokens") && !shown.contains("KB"), "no warning about the length:\n{shown}");
     assert_eq!(lab.notes().len(), "# Overview\n".len() + body.len(), "the file is left whole");
     t.send(b"q");
     t.wait_exit();
 }
 
 #[test]
-fn the_edit_notes_with_setting_lists_what_was_found_saves_at_once_and_is_used_next_time() {
-    let lab = Lab::new("notes-setting");
+fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_enter_alone() {
+    let lab = Lab::new("notes-star");
     lab.project(Some("# Overview\nA project.\n"));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("enter open");
-    t.send(b"s");
-    t.wait_for("Settings file:");
-    t.send(b"G"); // the last entry, Smart features...
-    t.send(b"\x1b[A"); // ...and up one: Edit notes with
-    t.wait_for("Edit notes with");
-    t.wait_for("Ask each time");
-    t.wait_for("Only editors this computer already has");
-    t.send(b"\x1b[C");
-    t.wait_for_flat("‹ nano ›");
-    until("the choice to reach the file", || lab.settings()["notes_editor"] == "nano");
-    t.send(b"\x1b[C");
-    t.wait_for_flat("‹ VS Code ›");
-    t.send(b"\x1b[D");
-    t.wait_for_flat("‹ nano ›");
-    t.send(b"\x1b");
-    t.wait_gone("Settings file:");
+    lab.open_notes(&mut t);
+
+    // Nothing used yet: the editors in the order they were found, nothing starred, the first one picked.
+    t.send(b"e");
+    t.wait_for("╭ edit the notes with");
+    let shown = t.text();
+    assert!(shown.contains("nano") && shown.contains("VS Code"), "{shown}");
+    assert!(!shown.contains("★"), "nothing to star yet:\n{shown}");
+    t.wait_for("starred here next time");
+    // The second one, VS Code, in a window of its own.
+    t.send(b"\x1b[B\r");
+    t.wait_gone("edit the notes with");
+    t.wait_for("Open in VS Code, in a window of its own.");
+    until("the other window to write", || lab.notes().contains("written in the other window"));
+    t.wait_gone("Open in VS Code");
+    until("the choice to reach the settings file", || lab.settings()["notes_editor"] == "code");
+
+    // Now it is starred, first and picked, so enter alone opens it again.
+    t.send(b"e");
+    t.wait_for("╭ edit the notes with");
+    let shown = t.text();
+    let starred = shown.lines().find(|l| l.contains("VS Code")).unwrap_or("");
+    assert!(starred.contains("★"), "the one used last carries the star: {starred}");
+    assert!(!shown.lines().find(|l| l.contains("nano")).unwrap_or("").contains("★"), "only that one:\n{shown}");
+    let rows: Vec<&str> = shown.lines().filter(|l| l.contains("here in platoon") || l.contains("in its own window")).collect();
+    assert!(rows[0].contains("VS Code"), "and it is first: {rows:?}");
+    t.wait_for("the one you used last: enter opens it again");
+    t.send(b"\r");
+    t.wait_gone("edit the notes with");
+    t.wait_for("Open in VS Code, in a window of its own.");
+    until("the second write", || lab.notes().matches("written in the other window").count() == 2);
     t.send(b"q");
     t.wait_exit();
-    assert_eq!(lab.settings()["notes_editor"], "nano");
 
-    // A new run reads it back, and e now opens that editor without asking.
+    // A fresh platoon reads the choice back: still starred, still first.
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("enter open");
     lab.open_notes(&mut t);
     t.send(b"e");
-    t.wait_for("FAKE NANO EDITING");
-    assert!(!t.text().contains("edit the notes with"), "no question: the setting answered it");
-    t.send(b"One more line.\r");
-    until("the editor to write the notes", || lab.notes().contains("One more line."));
-    t.wait_for("The notes changed");
+    t.wait_for("╭ edit the notes with");
+    let shown = t.text();
+    assert!(shown.lines().find(|l| l.contains("VS Code")).unwrap_or("").contains("★"), "{shown}");
+    t.send(b"\x1b");
+    t.wait_gone("edit the notes with");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn the_pane_says_the_notes_go_to_every_session_and_how_many_have_the_latest() {
+    let lab = Lab::new("notes-reach");
+    lab.project(Some("# Overview\nSell socks.\n"));
+    // Two sessions in the project, one of which has already been handed these notes by a hook.
+    lab.session("sess-1", "A basket page");
+    lab.session("sess-2", "Card payments");
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
+    t.wait_for("enter open");
+    lab.open_notes(&mut t);
+    wait_pane(&mut t, "These notes go to every session in this project; 0 of 2 have the latest version.");
+    lab.mark_sent("sess-1", "# Overview\nSell socks.\n");
+    wait_pane(&mut t, "1 of 2 have the latest version.");
+    lab.mark_sent("sess-2", "# Overview\nSell socks.\n");
+    wait_pane(&mut t, "all 2 have the latest version.");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_when_the_reason_goes() {
+    let lab = Lab::new("notes-paused");
+    lab.project(Some("# Overview\nSell socks.\n"));
+    lab.session("sess-1", "A basket page");
+
+    // The switch off, with the features on: the pane says which switch, and where.
+    lab.write_settings(json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": false}}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 150);
+    t.wait_for("enter open");
+    lab.open_notes(&mut t);
+    wait_pane(&mut t, "These notes are not updating right now: \"Project notes\" is switched off. Press s for the settings to switch it back on.");
+    assert!(!t.flat().contains("smart features paused"), "one switch is not the whole header's business:\n{}", t.flat());
+
+    // The daily limit spent: said in the pane in full, and in the header for every tab to see.
+    lab.write_settings(json!({"auto_archive_days": 0, "tokens_enabled": true, "ai_daily_tokens": 20000}));
+    lab.spend_the_day(25_000);
+    wait_pane(&mut t, "These notes are not updating right now: Today's token limit is used up (25,000 of 20,000 tokens). It starts over tomorrow, or you can raise it in settings.");
+    t.wait_for_flat("smart features paused · today's 20,000 limit is used up · press s for the settings");
+    // The header says it on the Sessions tab as well: that is the point of it being there.
+    t.send(b"1");
+    t.wait_for_flat("smart features paused · today's 20,000 limit is used up");
+
+    // The plan pause, the one that caught the user out.
+    lab.clear_the_day();
+    lab.plan_used(82);
+    t.wait_for_flat("smart features paused · your Claude plan is 82% used (5-hour limit) · press s for the settings");
+    t.send(b"2");
+    t.wait_for_flat("WB Web");
+    t.send(b"\r");
+    t.wait_for("╭ Notes");
+    wait_pane(&mut t, "These notes are not updating right now: Your Claude plan is 82% used (5-hour limit), above the pause point of 80%. Smart features wait until it drops. Press s for the settings to change the pause point.");
+
+    // The reason goes: so does the line, in the pane and in the header.
+    lab.clear_the_plan();
+    wait_pane_gone(&mut t, "not updating right now");
+    t.wait_gone("smart features paused");
+    wait_pane(&mut t, "These notes go to every session in this project");
     t.send(b"q");
     t.wait_exit();
 }

@@ -21,8 +21,8 @@ already done, and a step whose command points at a platoon that no longer exists
 | Step | Why |
 | --- | --- |
 | Status line | Plan usage (5-hour and weekly) and Claude's own context percentage |
-| Session guard | Stops two copies of one conversation from overwriting each other |
-| Project notes | Hands a [project's](#projects) notes to its sessions when they start. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
+| Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](#projects) notes in each of its conversations while they run |
+| Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 
 ## The list
@@ -61,7 +61,7 @@ before.
 | `n` | new session (pick a directory) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
-| `H` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
+| `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `1` `2` | switch between the Sessions and Projects tabs (or click them); the current tab is underlined and each shows a count badge |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
@@ -186,7 +186,6 @@ Details worth knowing:
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
 | Search archived | Whether the [Full-text search](#search) also looks in archived conversations. | Include archived (default), Skip archived |
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
-| Edit notes with | Which editor `e` opens a [project's notes](#editing-the-notes) in. Only editors this computer already has are listed. | Ask each time (default), then each editor found |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
 | Smart features | Opens a screen of its own (below) with everything that uses your Claude plan. The row shows the master switch: Off or On. | `enter` (or `→`, or a click) opens it |
@@ -214,13 +213,13 @@ by hand too:
  "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
- "ai_find_wide_candidates": 200, "notes_editor": "ask"}
+ "ai_find_wide_candidates": 200, "notes_editor": "ask", "notes_quiet_minutes": 3}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is `ask` or an editor's command (`code`, `nano`), and one this computer doesn't have reads as `ask` and is kept until you choose another; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 **Smart features** (`enter` on that row; `esc` goes back to the settings) holds every setting for the token features, so the main
 popup stays short. The screen keeps the same rules: it scrolls on a short terminal (80x24 shows a window of it), explains the selected
@@ -230,6 +229,7 @@ entry, and has under the entries `Used today: N of M tokens` and `Archived: N co
 | --- | --- | --- |
 | Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
 | Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
+| Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
 | Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
 | Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
@@ -255,7 +255,7 @@ require tokens** in the settings (under **Smart features**) plus the switch of e
 - **Project descriptions**: the one line under a project's name saying what it is; see
   [The line that says what a project is](#the-line-that-says-what-a-project-is). On as soon as the master switch is, too.
 
-The [hand-off](#handing-work-on-to-a-new-session) (`H`) has no switch: it only ever runs because you pressed the key. It still needs
+The [hand-off](#handing-work-on-to-a-new-session) (`h`) has no switch: it only ever runs because you pressed the key. It still needs
 the master switch on and still counts against the daily limit, like everything else.
 
 `platoon tokens` lists each feature's switch and, under today's total, how many tokens each one used and in how many calls (the
@@ -420,16 +420,28 @@ columns share a wide terminal's spare width the same way.
 
 A **project's screen** shows its name and that same one-line description across the top, its sessions on the left (active ones
 first, then an `Archived (N)` group, dimmed) and its notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
-`enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `H` work there too). `n` starts a new session in the
+`enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
 sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
-`E` picks an editor for this once, `c` shows what changed last and `u` undoes it.
+`c` shows what changed last and `u` undoes it.
 
 The notes are a file, `project.md`, in `~/.config/platoon/projects/<id>/` (the folder is named by the project's id, so a
-rename changes nothing there). When the Project notes step of `platoon setup` is done, a session in the project gets the
-notes as context when it starts, when it is resumed after the notes changed, and again after Claude compacts the
-conversation; unchanged notes are not sent again. This works for every session in the project, including ones you run with
-plain `claude`.
+rename changes nothing there). **Every session in the project has them in its context**, and keeps them as they change:
+
+- When the **Project notes** step of `platoon setup` is done, a session gets the notes when it starts, when it is resumed
+  after they changed, and again after Claude compacts the conversation.
+- While a session is running, the **Session guard** step hands them over again with your next message whenever they have
+  changed since that conversation last got them - so notes written an hour into a session still reach it.
+
+Either way they are only ever sent when they are **new or changed for that conversation** (platoon keeps the version each
+session has, as a short hash in `~/.cache/platoon/notes-sent/<session id>`), so the same words are never sent twice and the
+two hooks never both send the same version. About 2 KB of notes is roughly 500 tokens, on the changes only. It works for
+every session in the project, including ones you run with plain `claude`, and the notes pane says how many of the project's
+sessions have the version that is on disk now:
+
+```
+These notes go to every session in this project; 2 of 3 have the latest version.
+```
 
 - **Archiving** a project archives its active sessions too (stopping the ones that are running, as archiving a single
   conversation does; it asks first if one is working or runs in a terminal outside platoon). **Restoring** it brings back
@@ -450,8 +462,7 @@ With the notes pane in focus (the right arrow on a project's screen):
 
 | Key | Does |
 | --- | --- |
-| `e` | edit them with your chosen editor (or ask which one, which is what it does until you choose) |
-| `E` | always ask, and use that editor this once |
+| `e` | the list of editors this computer has. The one you used last is **starred and first**, and already picked, so `enter` opens it again |
 | `c` | what changed last: the lines that went and the lines that came |
 | `u` | undo the last change (and `u` again undoes the undo) |
 
@@ -460,8 +471,9 @@ then for editors it knows by name: nano, Neovim, Vim, Helix, Micro, Emacs and `v
 Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of their own (TextEdit on macOS). Only the ones
 it finds are offered, by their plain names. An editor that lives in the terminal **runs inside platoon's window**, like a
 session (`ctrl+space` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
-notes and reads them again as soon as you are done or the file changes. Set your favorite under **Edit notes with** in the
-[settings](#settings). If platoon finds nothing at all it offers `nano` and `vi`.
+notes and reads them again as soon as you are done or the file changes. There is nothing to set up: whichever one you use is
+remembered (as `notes_editor` in `settings.json`) and offered first, with a star, the next time. If platoon finds nothing at
+all it offers `nano` and `vi`.
 
 **A new file starts from a template**: one line saying that platoon keeps Overview, Requirements and Status up to date,
 adds to Decisions and never changes Notes, then those five headings.
@@ -473,8 +485,8 @@ colors. `u` puts the previous version back, and that counts as a change of its o
 platoon never writes the file while an editor it started is open, and always reads the file from disk before showing it:
 if something else changed it, what is on disk wins.
 
-**When the notes get big** (past about 20 KB) the pane says so: the whole file goes to every session in the project, and
-that costs tokens each time. Nothing is ever cut; it is yours to shorten.
+**Length is whatever the project needs.** Nothing is ever cut and platoon doesn't nag about it; the pane does say how many
+of the project's sessions already have the notes as they are now (see below).
 
 ### Notes that keep themselves up to date
 
@@ -485,8 +497,9 @@ Code; without it nothing happens automatically.
 **How it runs.** Every time a session in a project finishes answering, the hook makes a note of it - instantly, silently, no
 tokens - and starts a small helper in the background. Putting a conversation **into** a project does the same: `m`, a session
 started under a project, or one the SessionStart hook places there all mark the project, so its notes catch up a few minutes
-later without you having to resume anything (a conversation you never open again would otherwise never be read at all). The helper waits until the project has been quiet for **about three
-minutes** (another turn starts that timer over) and then makes **one** request to Claude. Only one helper runs per project,
+later without you having to resume anything (a conversation you never open again would otherwise never be read at all). The helper waits until the project has been quiet for as long as
+**Update notes after** says (3 minutes unless you change it, in the [settings](#settings) under Smart features: 1, 3, 5, 15 or
+30 minutes; another turn starts that timer over) and then makes **one** request to Claude. Only one helper runs per project,
 and it works whether the platoon window is open or closed. Archived projects, archived sessions, and projects whose notes
 file doesn't exist yet are skipped entirely: platoon never starts the notes for you, you do that with `e`.
 
@@ -512,6 +525,25 @@ and platoon works the merge out again or leaves it alone.
 these 5m ago.` afterwards. Every update goes through the same history as your own edits, so `c` shows what changed and `u`
 undoes it, and platoon tells you once when the notes change under you.
 
+**When they are not updating, it says so.** Whenever something is stopping the updates, the pane says which and what to do
+about it, in one line that goes as soon as the reason does:
+
+```
+These notes are not updating right now: "Project notes" is switched off. Press s for the settings to switch it back on.
+These notes are not updating right now: Today's token limit is used up (25,000 of 20,000 tokens). It starts over tomorrow, or you can raise it in settings.
+These notes are not updating right now: Your Claude plan is 82% used (weekly limit), above the pause point of 80%. Smart features wait until it drops. Press s for the settings to change the pause point.
+```
+
+The three that stop **everything** that uses tokens - the day's limit, the plan pause, a pause after failures - are also said
+quietly in the header, on every tab, because those arrive out of nowhere:
+
+```
+platoon   1 Sessions 3   2 Projects 1   ✦ smart features paused · your Claude plan is 82% used (weekly limit) · press s for the settings
+```
+
+A switch you turned off yourself is not in the header (it would sit there for as long as you left it off); it is said where
+that feature lives, as above.
+
 **Where it is kept.** The times and the copy of platoon's own sentences live in `~/.config/platoon/projects/<id>/notes-state.json`
 (numbers and platoon's own text only - never a message you typed, never a reply from Claude).
 
@@ -534,7 +566,7 @@ and escape sequence removed before it is drawn. It is kept beside the project in
 
 ### Handing work on to a new session
 
-`H` on a conversation that is in a project - on the Sessions tab or in the project's own screen - hands that work on to a fresh
+`h` on a conversation that is in a project - on the Sessions tab or in the project's own screen - hands that work on to a fresh
 conversation. platoon asks Claude for a short brief (what was done, what was decided, what is next), shows it in a box:
 
 ```
@@ -565,7 +597,7 @@ and waits. **You can type into it** - the arrows, Home, End, Backspace and Delet
 the conversation like anything else you typed. `esc` calls the whole thing off and changes nothing.
 
 The old conversation is left exactly as it is: not archived, not stopped. The project's notes are not repeated in the brief -
-the new session is given those by the SessionStart hook, as every session in a project is. If Claude can't be asked (the master
+the new session is given those by the hooks, as every session in a project is. If Claude can't be asked (the master
 switch is off, the day's limit is spent, a failure has paused things) or the answer isn't understood, platoon says so plainly and
 nothing is started.
 

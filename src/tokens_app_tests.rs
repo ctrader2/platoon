@@ -132,6 +132,75 @@ fn the_limits_step_through_their_choices_and_are_saved() {
 }
 
 #[test]
+fn the_header_says_quietly_when_the_features_are_paused_shrinks_to_fit_and_goes_when_it_is_over() {
+    let w = World::new("tok-header");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
+    // Nothing wrong: nothing in the header.
+    assert_eq!(app.ai_header_note(200), None);
+    assert!(!screen(&mut term, &app).contains("smart features"), "nothing to say while the features are simply off");
+    // The features on and the plan above the pause point: the reason the user's notes stopped without a word.
+    let mut s = on_disk(&w);
+    s.tokens_enabled = true;
+    settings::save(&w.config, &s).unwrap();
+    let now = usage::now();
+    std::fs::create_dir_all(w.cache.join("status")).unwrap();
+    std::fs::write(
+        w.cache.join("status/s1.json"),
+        serde_json::json!({"ts": now, "context_pct": null, "five_hour": {"pct": 82, "resets_at": now + 3600}, "seven_day": null}).to_string(),
+    )
+    .unwrap();
+    app.refresh_for_test();
+    let full = "smart features paused · your Claude plan is 82% used (5-hour limit) · press s for the settings";
+    let short = "smart features paused · your Claude plan is 82% used (5-hour limit)";
+    assert_eq!(app.ai_header_note(200).unwrap(), full);
+    assert_eq!(app.ai_header_note(full.chars().count()).unwrap(), full, "exactly enough room is enough");
+    assert_eq!(app.ai_header_note(full.chars().count() - 1).unwrap(), short, "a little less: the reason without the way out");
+    assert_eq!(app.ai_header_note(short.chars().count() - 1), None, "and with no room at all the tabs win");
+    // On the real screen, in the header, beside the tabs.
+    let shown = screen(&mut term, &app);
+    let header = shown.lines().find(|l| l.contains("platoon")).unwrap_or("");
+    assert!(header.contains("smart features paused"), "{shown}");
+    assert!(header.contains(&format!("{} smart features", app.marker())), "with the same quiet mark as the rest: {header}");
+    // The window resets: the line goes by itself.
+    let _ = std::fs::remove_file(w.cache.join("status/s1.json"));
+    app.refresh_for_test();
+    assert_eq!(app.ai_header_note(200), None);
+    assert!(!screen(&mut term, &app).contains("smart features paused"));
+}
+
+#[test]
+fn how_long_to_wait_before_updating_a_projects_notes_is_on_the_smart_screen_and_saved_at_once() {
+    let w = World::new("tok-quiet");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(110, 40)).unwrap();
+    select(&mut app, "Update notes after");
+    assert_eq!(on_disk(&w).notes_quiet_minutes, 3, "three minutes to begin with");
+    let shown = screen(&mut term, &app).split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(shown.contains("Update notes after") && shown.contains("3 minutes"), "{shown}");
+    assert!(shown.contains("How long a project has to be quiet"), "in plain words: {shown}");
+    key(&mut app, KeyCode::Right);
+    assert_eq!(on_disk(&w).notes_quiet_minutes, 5, "saved as soon as it is stepped");
+    for want in [15, 30] {
+        key(&mut app, KeyCode::Right);
+        assert_eq!(on_disk(&w).notes_quiet_minutes, want);
+    }
+    key(&mut app, KeyCode::Right);
+    assert_eq!(on_disk(&w).notes_quiet_minutes, 30, "the longest wait it offers");
+    for want in [15, 5, 3, 1] {
+        key(&mut app, KeyCode::Left);
+        assert_eq!(on_disk(&w).notes_quiet_minutes, want);
+    }
+    key(&mut app, KeyCode::Left);
+    assert_eq!(on_disk(&w).notes_quiet_minutes, 1, "never no wait at all");
+    // It sits with the notes feature it belongs to, after the switches.
+    let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
+    let at = names.iter().position(|n| *n == "Update notes after").unwrap();
+    assert_eq!(names[at - 1], "Project descriptions", "right after the last of the feature switches");
+    assert_eq!(names[at + 1], "Daily token limit");
+}
+
+#[test]
 fn used_today_shows_the_ledger_against_the_limit_and_turns_to_a_warning_at_the_limit() {
     let w = World::new("tok-used");
     let mut app = w.app();

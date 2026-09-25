@@ -61,6 +61,10 @@ pub const MAX_PROMPT_SEND_CHARS: u64 = 2000;
 /// Token features: a conversation is refreshed only after its transcript has been quiet this many seconds.
 pub const DEFAULT_QUIET_SECONDS: u64 = 60;
 pub const MAX_QUIET_SECONDS: u64 = 3600;
+/// Project notes: how long a project must be quiet before its notes are brought up to date, in minutes.
+pub const DEFAULT_NOTES_QUIET_MINUTES: u64 = 3;
+pub const MIN_NOTES_QUIET_MINUTES: u64 = 1;
+pub const MAX_NOTES_QUIET_MINUTES: u64 = 60;
 /// Token features: archived conversations may use at most this percent of what is left of the day's limit.
 pub const DEFAULT_ARCHIVED_SHARE: u64 = 50;
 pub const MIN_ARCHIVED_SHARE: u64 = 5;
@@ -126,9 +130,12 @@ pub struct Settings {
     pub ai_archived: bool,
     /// The most of the day's remaining limit archived conversations may use, in percent.
     pub ai_archived_share: u64,
-    /// Which editor opens a project's notes: `"ask"` (ask every time) or an editor's id (see `editors.rs`). An id
-    /// this computer no longer has reads as "ask" and stays in the file until the user picks another.
+    /// The editor the notes were last opened with: an editor's id (see `editors.rs`), or `"ask"` while none has
+    /// been used yet. platoon remembers the last choice here; an id this computer no longer has is simply not
+    /// starred and stays in the file until another editor is used.
     pub notes_editor: String,
+    /// How long a project must be quiet before platoon brings its notes up to date, in minutes.
+    pub notes_quiet_minutes: u64,
     /// Finding by description: how many conversations one search sends, how many it shows, how many a wider search sends.
     pub ai_find_candidates: u64,
     pub ai_find_results: u64,
@@ -160,6 +167,7 @@ impl Default for Settings {
             ai_archived: false,
             ai_archived_share: DEFAULT_ARCHIVED_SHARE,
             notes_editor: crate::editors::ASK.into(),
+            notes_quiet_minutes: DEFAULT_NOTES_QUIET_MINUTES,
             ai_find_candidates: DEFAULT_FIND_CANDIDATES,
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
@@ -184,6 +192,7 @@ impl Settings {
             ai_prompt_chars: self.ai_prompt_chars.clamp(MIN_PROMPT_SEND_CHARS, MAX_PROMPT_SEND_CHARS),
             ai_quiet_seconds: self.ai_quiet_seconds.min(MAX_QUIET_SECONDS),
             ai_archived_share: self.ai_archived_share.clamp(MIN_ARCHIVED_SHARE, MAX_ARCHIVED_SHARE),
+            notes_quiet_minutes: self.notes_quiet_minutes.clamp(MIN_NOTES_QUIET_MINUTES, MAX_NOTES_QUIET_MINUTES),
             ai_find_candidates: self.ai_find_candidates.clamp(MIN_FIND_CANDIDATES, MAX_FIND_CANDIDATES),
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
@@ -268,6 +277,7 @@ fn parse(text: &str) -> Option<Settings> {
             },
             ai_archived_share: number("ai_archived_share", d.ai_archived_share),
             notes_editor: o.get("notes_editor").and_then(Value::as_str).map_or(d.notes_editor.clone(), str::to_string),
+            notes_quiet_minutes: number("notes_quiet_minutes", d.notes_quiet_minutes),
             ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
@@ -335,6 +345,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_archived".into(), json!(if s.ai_archived { "background" } else { "off" }));
     object.insert("ai_archived_share".into(), json!(s.ai_archived_share));
     object.insert("notes_editor".into(), json!(s.notes_editor));
+    object.insert("notes_quiet_minutes".into(), json!(s.notes_quiet_minutes));
     object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
@@ -375,9 +386,6 @@ pub enum Kind {
     /// An entry that opens a screen of its own instead of stepping: "Smart features" on the main settings screen. Its
     /// value is read from `get` (the master switch) and shown, but `enter` and a click open the screen.
     Submenu,
-    /// Which editor opens a project's notes. Its choices are the editors this computer has, which are only known at
-    /// run time, so `choices`, `get`, `set` and `label` are unused and the app steps through its own list instead.
-    Editor,
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
@@ -573,17 +581,6 @@ fn items() -> Vec<Item> {
         off: None,
     },
     Item {
-        name: "Edit notes with",
-        explain: "Which editor opens a project's notes when you press e on them. Only editors this computer already has are offered; \
-                  \"Ask each time\" asks which one to use. E on the notes always asks, whatever this says.",
-        kind: Kind::Editor,
-        choices: &[],
-        get: |_| 0,
-        set: |_, _| {},
-        label: |_| String::new(),
-        off: None,
-    },
-    Item {
         name: SMART_SCREEN_TITLE,
         explain: "Names and summaries for your conversations, and a search that finds one from a description. They use your own Claude plan, so \
                   they stay off until you switch them on. Press enter to open them.",
@@ -625,6 +622,17 @@ fn smart_items() -> Vec<Item> {
         });
     }
     v.extend([
+        Item {
+            name: "Update notes after",
+            explain: "How long a project has to be quiet before platoon brings its notes up to date. A new answer in any of its \
+                      sessions starts the wait again, so it only writes once the work has stopped.",
+            kind: Kind::Steps,
+            choices: &[1, 3, 5, 15, 30],
+            get: |s| s.notes_quiet_minutes,
+            set: |s, v| s.notes_quiet_minutes = v,
+            label: minutes_label,
+            off: None,
+        },
         Item {
             name: "Daily token limit",
             explain: "The most tokens the smart features may use in one day, counting everything Claude reports. \
@@ -973,7 +981,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1177,13 +1185,8 @@ mod tests {
     fn the_theme_entry_is_first_and_a_kind_of_its_own_next_to_the_stepped_ones() {
         assert_eq!(ITEMS[0].name, "Theme");
         assert_eq!(ITEMS[0].kind, Kind::Theme);
-        assert!(
-            ITEMS[1..ITEMS.len() - 1].iter().all(|i| i.kind == Kind::Steps || i.kind == Kind::Editor),
-            "between them only stepped entries and the editor, whose choices are the editors this computer has"
-        );
-        let editor = ITEMS.iter().find(|i| i.kind == Kind::Editor).expect("the editor entry");
-        assert_eq!(editor.name, "Edit notes with");
-        assert!(editor.choices.is_empty(), "its choices are found at run time, not written here");
+        assert!(ITEMS[1..ITEMS.len() - 1].iter().all(|i| i.kind == Kind::Steps), "between them only stepped entries");
+        assert!(!ITEMS.iter().any(|i| i.name == "Edit notes with"), "the editor is remembered from the last one used, not chosen here");
         assert_eq!((ITEMS.last().unwrap().name, ITEMS.last().unwrap().kind), (SMART_SCREEN_TITLE, Kind::Submenu));
         assert!(SMART_ITEMS.iter().all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))));
         assert!(!ITEMS[0].explain.is_empty() && ITEMS[0].explain.len() < 300);
@@ -1358,8 +1361,8 @@ mod tests {
     #[test]
     fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
         let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit", "Pause above plan usage", "Model for smart features"]);
-        assert_eq!(names.len(), 18, "the master switch, one per feature, and thirteen limits, all on the screen of their own");
+        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Update notes after", "Daily token limit", "Pause above plan usage"]);
+        assert_eq!(names.len(), 19, "the master switch, one per feature, and fourteen limits, all on the screen of their own");
         for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
@@ -1374,7 +1377,7 @@ mod tests {
         }
         // The main screen's own entries, and the last one, which shows the master switch and opens the other screen.
         let main = ITEMS.last().unwrap();
-        assert_eq!(ITEMS.len(), 10);
+        assert_eq!(ITEMS.len(), 9, "one fewer since the editor is remembered rather than chosen");
         assert_eq!((main.value(&Settings::default()), (main.label)(main.value(&Settings::default()))), (0, "Off".to_string()));
         assert_eq!((main.label)(main.value(&Settings { tokens_enabled: true, ..Settings::default() })), "On");
         assert!(main.choices.is_empty(), "nothing to step through: enter opens the screen");
@@ -1402,7 +1405,7 @@ mod tests {
         let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
         assert_eq!(
             (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+            ["Off", "Off", "Off", "On", "On", "3 minutes", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
         );
         let by_name = |name: &str| SMART_ITEMS.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");

@@ -1,7 +1,10 @@
-//! Editing a project's notes from the project screen: the editor picker, running the editor (in platoon's own
+//! Editing a project's notes from the project screen: the editor list (`e`), running the editor (in platoon's own
 //! window for a terminal one, beside it for one with a window of its own), the before/after view of the last
 //! change and undoing it. The file itself, its history and the diff are in `notes.rs`; finding editors and running
 //! them is in `editors.rs`.
+//!
+//! It also works out what the notes pane and the header say about the state of things: whether the notes are
+//! reaching the project's sessions, and why they are not being kept up to date (`poll_notes_status`).
 
 use super::*;
 use crate::editors::{self, Editor};
@@ -28,11 +31,13 @@ pub struct NotesWindow {
     child: std::process::Child,
 }
 
-/// The list of editors, shown by `E` (and by `e` while the setting says "Ask each time").
+/// The list of editors, which `e` opens. The one used last is first and picked, so enter is one keystroke.
 pub struct EditorPick {
     pub project: String,
     pub options: Vec<Editor>,
     pub selected: usize,
+    /// The id of the editor used last: the one with the star in front of it (empty when none has been used).
+    pub starred: String,
 }
 
 /// The before/after view of the last change to the notes.
@@ -64,38 +69,6 @@ impl App {
             return Some(&e.name);
         }
         self.notes_window.as_ref().filter(|w| w.project == project).map(|w| w.name.as_str())
-    }
-
-    /// What the "Edit notes with" row of the settings shows, and how wide its choices need it to be.
-    pub fn notes_editor_label(&self) -> String {
-        editors::label(&self.editors, &self.settings.get().notes_editor)
-    }
-
-    pub fn notes_editor_width(&self) -> usize {
-        editors::setting_ids(&self.editors).iter().map(|id| editors::label(&self.editors, id).chars().count()).max().unwrap_or(3)
-    }
-
-    /// True when the setting is already at the first (last) of its choices, so the arrow is drawn as spent.
-    pub fn notes_editor_at_end(&self, last: bool) -> bool {
-        let ids = editors::setting_ids(&self.editors);
-        let at = ids.iter().position(|i| *i == self.settings.get().notes_editor).unwrap_or(0);
-        if last { at + 1 >= ids.len() } else { at == 0 }
-    }
-
-    /// `←`/`→`/enter on the "Edit notes with" row: the next editor found, saved at once.
-    pub(super) fn step_notes_editor(&mut self, step: Step) {
-        let ids = editors::setting_ids(&self.editors);
-        let at = ids.iter().position(|i| *i == self.settings.get().notes_editor).unwrap_or(0);
-        let to = match step {
-            Step::Prev => at.checked_sub(1),
-            Step::Next => Some(at + 1).filter(|&n| n < ids.len()),
-            Step::Cycle => Some(if at + 1 < ids.len() { at + 1 } else { 0 }),
-        };
-        let Some(to) = to else { return };
-        let mut next = self.settings.get();
-        next.notes_editor.clone_from(&ids[to]);
-        let saved = self.settings.update(&next);
-        self.report_save(saved);
     }
 
     /// An automatic update is running on the open project's notes right now.
@@ -131,17 +104,65 @@ impl App {
         self.notes_seen = Some((project, stamp));
     }
 
-    /// The warning shown above big notes, or None.
-    pub fn notes_size_warning(&self) -> Option<String> {
-        let project = self.open_project.as_deref()?;
-        notes::size_warning(notes::size(&self.config, project))
+    /// The line above the notes saying they go to every session in the project, and how many of them already have
+    /// this version. platoon knows from the hash it keeps per session (`sessionhook.rs`); archived sessions are
+    /// left out, as they are everywhere else in a project.
+    pub fn notes_reach(&self) -> Option<String> {
+        let (have, total) = self.notes_reach_count?;
+        let lead = "These notes go to every session in this project";
+        Some(match (have, total) {
+            (_, 0) => format!("{lead}."),
+            (have, total) if have == total => format!("{lead}; all {total} have the latest version."),
+            (have, total) => format!("{lead}; {have} of {total} have the latest version."),
+        })
+    }
+
+    /// Why these notes are not being kept up to date right now (the master switch, this feature's switch, the daily
+    /// limit, the plan pause, a back-off), with where to change it. None while the updater can run.
+    pub fn notes_stopped(&self) -> Option<&str> {
+        self.notes_stopped.as_deref()
+    }
+
+    /// The dim line in the header while nothing that spends tokens can run at all: the long form when the header
+    /// has `room` for it, else the short one, else nothing (the tabs matter more).
+    pub fn ai_header_note(&self, room: usize) -> Option<&str> {
+        let (short, full) = self.ai_note.as_ref()?;
+        if full.chars().count() <= room {
+            Some(full)
+        } else if short.chars().count() <= room {
+            Some(short)
+        } else {
+            None
+        }
+    }
+
+    /// Work out, with the rest of the state, what the notes pane says about the open project: why its notes are
+    /// not updating, and how many of its sessions already have them. A handful of small reads, and nothing at all
+    /// while no project's screen is open.
+    pub(super) fn poll_notes_status(&mut self) {
+        let settings = self.settings.get();
+        let now = self.clock();
+        self.ai_note = ai::header_note(&settings, &self.cache, now);
+        let Some(project) = self.open_project.clone() else {
+            self.notes_reach_count = None;
+            self.notes_stopped = None;
+            return;
+        };
+        self.notes_stopped = ai::stopped_reason(&settings, notesrun::FEATURE, &self.cache, now);
+        let notes = std::fs::read_to_string(self.projects.notes_path(&project)).unwrap_or_default();
+        self.notes_reach_count = (!notes.trim().is_empty()).then(|| {
+            let hash = crate::sessionhook::notes_hash(&project, &notes);
+            let sessions: Vec<String> = self.projects.members_of(&project).into_iter().filter(|s| !self.archive.contains(s)).collect();
+            let have = sessions.iter().filter(|s| crate::sessionhook::sent_hash(&self.cache, s).as_deref() == Some(hash.as_str())).count();
+            (have, sessions.len())
+        });
     }
 
     // ---- starting an editor -----------------------------------------------------------------------------------
 
-    /// `e`: edit the open project's notes with the chosen editor (asking which one when that is the setting).
-    /// `E` (`always_ask`): always ask, for this once.
-    pub(super) fn edit_notes(&mut self, always_ask: bool) {
+    /// `e`: the list of editors. The one used last is starred, first and already picked, so enter opens it again;
+    /// anything else is one arrow away.
+    pub(super) fn edit_notes(&mut self) {
         let Some(project) = self.open_project.clone() else { return };
         if let Some(name) = self.notes_editor_open().map(str::to_string) {
             self.notify(format!("The notes are already open in {name}."));
@@ -151,16 +172,11 @@ impl App {
             self.notify("platoon is already editing another project's notes.");
             return;
         }
-        let chosen = self.settings.get().notes_editor;
-        match editors::by_id(&self.editors, &chosen).cloned() {
-            Some(e) if !always_ask => self.run_editor(&project, &e),
-            // "Ask each time", an editor this computer no longer has, or E: show the list.
-            _ => {
-                let selected = self.editors.iter().position(|e| e.id == chosen).unwrap_or(0);
-                self.epick = EditorPick { project, options: self.editors.clone(), selected };
-                self.mode = Mode::PickEditor;
-            }
-        }
+        let last = self.settings.get().notes_editor;
+        let options = editors::in_order(&self.editors, &last);
+        let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
+        self.epick = EditorPick { project, options, selected: 0, starred };
+        self.mode = Mode::PickEditor;
     }
 
     pub(super) fn move_editor_pick(&mut self, delta: i32) {
@@ -168,7 +184,7 @@ impl App {
         self.epick.selected = (self.epick.selected as i32 + delta).clamp(0, last) as usize;
     }
 
-    /// Enter in the editor list: use that editor this time.
+    /// Enter in the editor list: use that editor, and remember it as the one to offer first next time.
     pub(super) fn take_editor_pick(&mut self) {
         let Some(e) = self.epick.options.get(self.epick.selected).cloned() else {
             self.mode = Mode::List;
@@ -176,7 +192,22 @@ impl App {
         };
         let project = self.epick.project.clone();
         self.mode = Mode::List;
+        self.remember_editor(&e.id);
         self.run_editor(&project, &e);
+    }
+
+    /// Keep this editor as the last one used (`notes_editor` in the settings file). A save that fails is said
+    /// plainly and changes nothing else: the editor still opens.
+    fn remember_editor(&mut self, id: &str) {
+        if self.settings.get().notes_editor == id {
+            return;
+        }
+        let mut next = self.settings.get();
+        next.notes_editor = id.to_string();
+        let saved = self.settings.update(&next);
+        if saved.is_err() {
+            self.report_save(saved);
+        }
     }
 
     /// Open `project`'s notes in `e`. A project with no notes yet gets the template first, and whatever is there

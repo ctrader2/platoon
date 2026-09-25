@@ -1426,7 +1426,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 10, "nine entries and the one that opens the smart features");
+        assert_eq!(ITEMS.len(), 9, "eight entries and the one that opens the smart features");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }

@@ -33,6 +33,31 @@ pub fn sent_path(cache: &Path, session: &str) -> std::path::PathBuf {
     cache.join("notes-sent").join(session)
 }
 
+/// Which version of a project's notes this is: the project's id and the text together, so notes moved between
+/// projects still count as new. Both hooks use this one hash, which is why neither sends what the other just sent.
+pub fn notes_hash(project: &str, notes: &str) -> String {
+    format!("{:016x}", fnv(format!("{project}\n{notes}").as_bytes()))
+}
+
+/// The version of these notes this session has already been given, if any.
+pub fn sent_hash(cache: &Path, session: &str) -> Option<String> {
+    Some(fs::read_to_string(sent_path(cache, session)).ok()?.trim().to_string())
+}
+
+/// Remember that `session` has been given this version.
+pub fn mark_sent(cache: &Path, session: &str, hash: &str) {
+    let _ = projects::write_atomic(&sent_path(cache, session), hash);
+}
+
+/// The line that goes in front of a project's notes wherever they are handed to a session. The same words in both
+/// hooks, so a conversation that gets them twice reads the same thing.
+pub fn context_text(project_name: &str, notes: &str) -> String {
+    format!(
+        "These are the notes of the project \"{project_name}\" that this session belongs to (kept in platoon by the user):\n\n{}",
+        notes.trim_end()
+    )
+}
+
 /// What the hook prints for `input` (the hook's JSON), or None for nothing. Records what it sends.
 pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cache: &Path) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
@@ -60,18 +85,13 @@ pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cach
     if notes.trim().is_empty() {
         return None;
     }
-    let hash = format!("{:016x}", fnv(format!("{}\n{notes}", project.id).as_bytes()));
-    let path = sent_path(cache, session);
-    let before = fs::read_to_string(&path).ok();
-    if source != "compact" && before.as_deref().map(str::trim) == Some(hash.as_str()) {
+    let hash = notes_hash(&project.id, &notes);
+    // A compaction drops what Claude was told earlier, so the notes go again even unchanged.
+    if source != "compact" && sent_hash(cache, session).as_deref() == Some(hash.as_str()) {
         return None;
     }
-    let _ = projects::write_atomic(&path, &hash);
-    let context = format!(
-        "These are the notes of the project \"{}\" that this session belongs to (kept in platoon by the user):\n\n{}",
-        project.name,
-        notes.trim_end()
-    );
+    mark_sent(cache, session, &hash);
+    let context = context_text(&project.name, &notes);
     Some(json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}).to_string())
 }
 

@@ -204,6 +204,40 @@ impl Refusal {
     pub fn is_switch(&self) -> bool {
         matches!(self, Refusal::MasterOff | Refusal::FeatureOff(_))
     }
+
+    /// Where to put it right, for the reasons `plain()` doesn't already say that itself. Empty when there is
+    /// nothing for the user to do (a back-off tries again on its own; the daily limit's own sentence says where
+    /// to raise it).
+    pub fn where_to_change(&self) -> &'static str {
+        match self {
+            Refusal::MasterOff | Refusal::FeatureOff(_) => "Press s for the settings to switch it back on.",
+            Refusal::PlanBusy { .. } => "Press s for the settings to change the pause point.",
+            Refusal::BackedOff { .. } | Refusal::OverBudget { .. } | Refusal::UnknownFeature(_) => "",
+        }
+    }
+
+    /// The whole thing a screen says about it: the reason, and where to change it when that helps.
+    pub fn on_screen(&self) -> String {
+        match self.where_to_change() {
+            "" => self.plain(),
+            where_to => format!("{} {where_to}", self.plain()),
+        }
+    }
+
+    /// The few words the header has room for: no full stop, no quotes, and short enough to sit beside the tabs.
+    pub fn short(&self) -> String {
+        use crate::settings::thousands;
+        match self {
+            Refusal::MasterOff => "smart features off".into(),
+            Refusal::FeatureOff(label) => format!("{} off", label.to_lowercase()),
+            Refusal::UnknownFeature(_) => "smart features off".into(),
+            Refusal::BackedOff { until, now, .. } => {
+                format!("smart features paused after a failure · trying again in {}", wait_text(until.saturating_sub(*now)))
+            }
+            Refusal::OverBudget { cap, .. } => format!("smart features paused · today's {} limit is used up", thousands(*cap)),
+            Refusal::PlanBusy { pct, window, .. } => format!("smart features paused · your Claude plan is {pct}% used ({window})"),
+        }
+    }
 }
 
 /// The plan's highest used percentage among the windows that are still running, with the window's name. None when no
@@ -285,6 +319,30 @@ pub fn status(settings: &Settings, cache: &Path, now: u64) -> Status {
         plan,
         paused,
     }
+}
+
+/// Why `feature` cannot run right now, in the words a screen shows: the gate's own reason plus where to change it.
+/// None while it can run. Nothing here is a new wording: `Refusal` says it (see `on_screen`).
+pub fn stopped_reason(settings: &Settings, feature: &str, cache: &Path, now: u64) -> Option<String> {
+    Some(gate(settings, feature, cache, now).err()?.on_screen())
+}
+
+/// What the header says while the features are on but something has stopped them: the short form, and the same
+/// with where to change it for when there is room. None while they are running as they should.
+///
+/// Only the three reasons that come out of nowhere and stop every feature at once are here - the daily limit, the
+/// plan pause, a back-off after failures - because those are the ones that go unnoticed. A switch the user turned
+/// off themselves is said where that feature lives (the notes pane says it for the notes) rather than following
+/// them around every tab for as long as they leave it off.
+pub fn header_note(settings: &Settings, cache: &Path, now: u64) -> Option<(String, String)> {
+    if !settings.tokens_enabled {
+        return None;
+    }
+    let r = status(settings, cache, now).paused?;
+    let short = r.short();
+    // A back-off starts again by itself, so there is nothing to press; the other two are the user's to change.
+    let full = if matches!(r, Refusal::BackedOff { .. }) { short.clone() } else { format!("{short} · press s for the settings") };
+    Some((short, full))
 }
 
 /// The one line for the footer when calls are being refused after a failure: `("<run id>", text)`. The id is the
@@ -1058,6 +1116,99 @@ pub(crate) mod tests {
         assert_eq!(gate(&s, "names", &f.cache, now + 3 * 86_400), Ok(()), "another day is a fresh count");
         let msg = Refusal::OverBudget { used: 20_000, cap: 20_000 }.plain();
         assert!(msg.contains("20,000 of 20,000") && msg.contains("tomorrow"), "{msg}");
+    }
+
+    #[test]
+    fn every_reason_the_gate_can_give_turns_into_words_a_screen_can_show() {
+        let now = 1_800_000_000;
+        let cases = [
+            Refusal::MasterOff,
+            Refusal::FeatureOff("Project notes"),
+            Refusal::OverBudget { used: 25_000, cap: 20_000 },
+            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" },
+            Refusal::BackedOff { kind: crate::ledger::FailKind::NotSignedIn, until: now + 1800, now },
+        ];
+        for r in &cases {
+            let full = r.on_screen();
+            assert!(full.starts_with(&r.plain()), "the gate's own reason comes first: {full}");
+            assert!(full.ends_with('.') && !full.contains("  "), "{full}");
+            assert!(full.chars().next().unwrap().is_uppercase() || full.starts_with('"'), "{full}");
+            let short = r.short();
+            assert!(short.len() < 70 && !short.ends_with('.') && short == short.trim(), "the header has little room: {short:?}");
+            for jargon in ["gate", "refus", "token bucket", "backoff", "API"] {
+                assert!(!full.contains(jargon) && !short.contains(jargon), "{jargon:?} in {full:?} / {short:?}");
+            }
+        }
+        // Where to put it right, for the reasons that don't already say it themselves.
+        assert_eq!(
+            Refusal::MasterOff.on_screen(),
+            "\"Enable features which require tokens\" is switched off. Press s for the settings to switch it back on."
+        );
+        assert_eq!(
+            Refusal::FeatureOff("Project notes").on_screen(),
+            "\"Project notes\" is switched off. Press s for the settings to switch it back on."
+        );
+        assert_eq!(
+            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" }.on_screen(),
+            "Your Claude plan is 82% used (weekly limit), above the pause point of 80%. Smart features wait until it drops. \
+             Press s for the settings to change the pause point."
+        );
+        // These two say it in their own words already, so nothing is added.
+        assert_eq!(Refusal::OverBudget { used: 25_000, cap: 20_000 }.on_screen(), Refusal::OverBudget { used: 25_000, cap: 20_000 }.plain());
+        let backed = Refusal::BackedOff { kind: crate::ledger::FailKind::Network, until: now + 300, now };
+        assert_eq!(backed.on_screen(), backed.plain());
+        assert!(backed.on_screen().contains("trying again in 5 minutes"), "{}", backed.on_screen());
+        // The short forms, for the header.
+        assert_eq!(Refusal::MasterOff.short(), "smart features off");
+        assert_eq!(Refusal::FeatureOff("Project notes").short(), "project notes off");
+        assert_eq!(Refusal::OverBudget { used: 25_000, cap: 20_000 }.short(), "smart features paused · today's 20,000 limit is used up");
+        assert_eq!(
+            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" }.short(),
+            "smart features paused · your Claude plan is 82% used (weekly limit)"
+        );
+        assert_eq!(backed.short(), "smart features paused after a failure · trying again in 5 minutes");
+    }
+
+    #[test]
+    fn the_reason_a_feature_is_stopped_is_the_one_the_gate_gives_it() {
+        let f = Fake::ok("stopped");
+        let now = 1_800_000_000;
+        let mut s = Settings::default();
+        // The master switch off, then this feature's own switch off, then both on.
+        assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).as_deref(), Some(Refusal::MasterOff.on_screen().as_str()));
+        s.tokens_enabled = true;
+        s.set_feature(crate::notesrun::FEATURE, false);
+        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).unwrap();
+        assert!(said.starts_with("\"Project notes\" is switched off."), "{said}");
+        s.set_feature(crate::notesrun::FEATURE, true);
+        assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now), None, "nothing in the way: nothing to say");
+        // The daily limit, spent.
+        Ledger::open(&f.cache).record_call(now, crate::notesrun::FEATURE, &Usage { input: 600_000, ..Usage::default() }, 0.0, true).unwrap();
+        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).unwrap();
+        assert!(said.contains("Today's token limit is used up (600,000 of 500,000 tokens)"), "{said}");
+    }
+
+    #[test]
+    fn the_header_speaks_only_for_what_stops_everything_and_shrinks_to_fit() {
+        let f = Fake::ok("header");
+        let now = 1_800_000_000;
+        // Off by the user's own choice, or one feature's switch: not the header's business.
+        assert_eq!(header_note(&Settings::default(), &f.cache, now), None, "a master switch the user left off doesn't follow them around");
+        let mut s = on();
+        s.set_feature("names", false);
+        assert_eq!(header_note(&s, &f.cache, now), None, "nor does one feature's own switch");
+        // The daily limit: said, with where to change it when there is room.
+        s.ai_daily_tokens = 20_000;
+        Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 25_000, ..Usage::default() }, 0.0, true).unwrap();
+        let (short, full) = header_note(&s, &f.cache, now).expect("the header says so");
+        assert_eq!(short, "smart features paused · today's 20,000 limit is used up");
+        assert_eq!(full, "smart features paused · today's 20,000 limit is used up · press s for the settings");
+        // A back-off tries again by itself, so there is nothing to press.
+        let f2 = Fake::ok("header-backoff");
+        Ledger::open(&f2.cache).note_failure(now, crate::ledger::FailKind::Network).unwrap();
+        let (short, full) = header_note(&on(), &f2.cache, now).expect("a back-off is said too");
+        assert_eq!(short, full);
+        assert!(short.contains("after a failure"), "{short}");
     }
 
     fn plan_report(cache: &Path, five: u8, seven: Option<u8>, resets: u64, ts: u64) {

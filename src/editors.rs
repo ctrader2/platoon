@@ -24,7 +24,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The value of the setting that means "ask which editor every time".
+/// What `notes_editor` holds while no editor has been used yet, so nothing is starred and the list is in the
+/// order editors were found. (It is the old "ask each time" value of the setting this replaced, so a settings
+/// file written by an earlier platoon still reads.)
 pub const ASK: &str = "ask";
 
 /// An editor platoon knows how to name and how to run.
@@ -163,17 +165,12 @@ pub fn by_id<'a>(list: &'a [Editor], id: &str) -> Option<&'a Editor> {
     list.iter().find(|e| e.id == id)
 }
 
-/// What the settings screen shows for the value `id`.
-pub fn label(list: &[Editor], id: &str) -> String {
-    match by_id(list, id) {
-        Some(e) => e.name.clone(),
-        None => "Ask each time".into(),
-    }
-}
-
-/// The values the setting steps through: "Ask each time" first, then every editor found.
-pub fn setting_ids(list: &[Editor]) -> Vec<String> {
-    std::iter::once(ASK.to_string()).chain(list.iter().map(|e| e.id.clone())).collect()
+/// The editors as the list offers them: the one used last (`last`) first, then the rest in the order they were
+/// found. With no editor used yet - or one this computer no longer has - the order is simply the order found.
+pub fn in_order(list: &[Editor], last: &str) -> Vec<Editor> {
+    let mut out: Vec<Editor> = by_id(list, last).cloned().into_iter().collect();
+    out.extend(list.iter().filter(|e| e.id != last).cloned());
+    out
 }
 
 /// The program and arguments to really run, with the test knobs applied.
@@ -410,13 +407,15 @@ mod tests {
     }
 
     #[test]
-    fn the_setting_offers_ask_each_time_and_then_what_was_found() {
-        let f = Fake::new("setting", &["nano", "code"]);
+    fn the_list_puts_the_editor_used_last_first_and_otherwise_keeps_the_order_found() {
+        let f = Fake::new("order", &["nano", "code"]);
         let list = f.list();
-        assert_eq!(setting_ids(&list), ["ask", "nano", "code"]);
-        assert_eq!(label(&list, "ask"), "Ask each time");
-        assert_eq!(label(&list, "code"), "VS Code");
-        assert_eq!(label(&list, "one-i-uninstalled"), "Ask each time", "an editor that is no longer here");
+        let names = |last: &str| in_order(&list, last).into_iter().map(|e| e.name).collect::<Vec<_>>();
+        assert_eq!(names(ASK), ["nano", "VS Code"], "nothing used yet: the order they were found in");
+        assert_eq!(names("code"), ["VS Code", "nano"], "the one used last comes first");
+        assert_eq!(names("nano"), ["nano", "VS Code"]);
+        assert_eq!(names("one-i-uninstalled"), ["nano", "VS Code"], "an editor that is no longer here changes nothing");
+        assert_eq!(in_order(&list, "code").len(), list.len(), "every editor is offered exactly once");
         assert_eq!(by_id(&list, "nano").map(|e| e.name.as_str()), Some("nano"));
     }
 

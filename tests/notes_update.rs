@@ -147,6 +147,23 @@ impl Lab {
     }
 
     /// The pid of the helper that took this project, if one ever did.
+    /// The helper, run here and waited for, with the environment this test wants (the knob included or left out).
+    fn run_helper(&self, extra: &[(&str, &str)]) -> std::process::Output {
+        let mut cmd = std::process::Command::new(BIN);
+        cmd.args(["notes-update", "pweb"]);
+        for (k, v) in self.env() {
+            cmd.env(k, v);
+        }
+        for (k, v) in extra {
+            if v.is_empty() {
+                cmd.env_remove(k);
+            } else {
+                cmd.env(k, v);
+            }
+        }
+        cmd.output().unwrap()
+    }
+
     fn helper_pid(&self) -> Option<u32> {
         fs::read_to_string(self.cache.join("notes-helper/pweb")).ok()?.trim().parse().ok()
     }
@@ -287,4 +304,32 @@ fn a_session_that_is_not_in_a_project_and_the_helpers_own_work_cost_nothing() {
     assert!(lab.helper_pid().is_none(), "no helper was ever started");
     assert_eq!(lab.calls(), 0, "and nothing was asked of Claude");
     assert_eq!(lab.notes(), NOTES);
+}
+
+#[test]
+fn how_long_the_helper_waits_for_quiet_is_the_setting_and_the_test_knob_beats_it() {
+    let lab = Lab::new("notes-update-quiet");
+    lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);
+    lab.reply(r#"{"status":"The basket page is in."}"#);
+    // A mark from just now, and the setting at its longest: the helper must find the project too fresh to touch.
+    fs::write(
+        lab.config.join("settings.json"),
+        json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": true, "project_description": false}, "notes_quiet_minutes": 30}).to_string(),
+    )
+    .unwrap();
+    let now_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+    fs::create_dir_all(lab.cache.join("notes-due")).unwrap();
+    fs::write(lab.cache.join("notes-due/pweb"), now_ms.to_string()).unwrap();
+    // Without the knob it waits (its own life is capped at a second here, so the test doesn't).
+    let out = lab.run_helper(&[("PLATOON_NOTES_QUIET_SECS", ""), ("PLATOON_NOTES_MAX_LIFE_SECS", "1")]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(lab.calls(), 0, "thirty minutes of quiet were asked for, and it had been seconds");
+    assert_eq!(lab.notes(), NOTES, "so nothing was written");
+    assert!(lab.cache.join("notes-due/pweb").exists(), "and the project is still waiting its turn");
+
+    // The knob wins over the setting, so the same helper goes ahead at once.
+    let out = lab.run_helper(&[]);
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(lab.calls(), 1, "one update ran");
+    assert!(lab.notes().contains("The basket page is in."), "{}", lab.notes());
 }

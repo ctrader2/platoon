@@ -1,5 +1,5 @@
 //! A project's notes file: the template a new one starts from, the copies kept before each change, undoing the
-//! last change, the before/after view of it, and the warning when the file gets big.
+//! last change and the before/after view of it.
 //!
 //! The notes are `<config>/projects/<id>/project.md` (see `projects.rs`). Before every change platoon did not make
 //! itself - an editor it started, and later the automatic updates - the version that was there is copied into
@@ -17,9 +17,6 @@ use std::{
 
 /// How many earlier versions of one project's notes are kept.
 pub const MAX_VERSIONS: usize = 20;
-
-/// Past this many bytes the notes pane warns: the whole file goes to every session in the project.
-pub const BIG_BYTES: u64 = 20 * 1024;
 
 /// What a new `project.md` starts from: one line saying who writes what, then the headings.
 pub const TEMPLATE: &str = "\
@@ -141,26 +138,6 @@ pub fn stamp(config: &Path, id: &str) -> Stamp {
 /// writing over it.
 pub fn changed_on_disk(config: &Path, id: &str, since: Stamp) -> bool {
     stamp(config, id) != since
-}
-
-/// How big the notes are, in bytes.
-pub fn size(config: &Path, id: &str) -> u64 {
-    fs::metadata(crate::projects::notes_path(config, id)).map(|m| m.len()).unwrap_or(0)
-}
-
-/// The warning shown once the notes get big, or None while they are a sensible size.
-pub fn size_warning(bytes: u64) -> Option<String> {
-    (bytes > BIG_BYTES).then(|| {
-        format!("These notes are {}. The whole file is sent to every session in this project, so it costs tokens each time.", kb(bytes))
-    })
-}
-
-/// "24 KB", "1.4 MB".
-fn kb(bytes: u64) -> String {
-    match bytes {
-        b if b >= 1024 * 1024 => format!("{:.1} MB", b as f64 / (1024.0 * 1024.0)),
-        b => format!("{} KB", (b + 512) / 1024),
-    }
 }
 
 /// One line of the before/after view.
@@ -368,20 +345,6 @@ mod tests {
         fs::write(&latest, [0xff, 0xfe, 0x00]).unwrap();
         assert!(undo(&d, "p1").is_err());
         assert_eq!(now(&d), "edited notes\n");
-    }
-
-    #[test]
-    fn the_warning_starts_once_the_file_passes_about_twenty_kilobytes() {
-        assert_eq!(size_warning(0), None);
-        assert_eq!(size_warning(BIG_BYTES), None, "exactly at the mark is still fine");
-        let warning = size_warning(BIG_BYTES + 1).expect("past the mark");
-        assert!(warning.contains("20 KB") && warning.contains("every session in this project") && warning.contains("costs tokens"), "{warning}");
-        assert!(size_warning(60_000).unwrap().contains("59 KB"));
-        assert!(size_warning(3_000_000).unwrap().contains("2.9 MB"));
-        let d = dir("size");
-        set(&d, &"x".repeat(30_000));
-        assert_eq!(size(&d, "p1"), 30_000);
-        assert!(size_warning(size(&d, "p1")).is_some());
     }
 
     #[test]

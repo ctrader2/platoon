@@ -1,4 +1,4 @@
-//! The hand-off (`H`) at the level of the app: a real transcript on disk, a real project, a fake `claude` that
+//! The hand-off (`h`) at the level of the app: a real transcript on disk, a real project, a fake `claude` that
 //! records every call, and what the box shows, what may be edited and what is refused. Nothing here ever starts a
 //! session (that is `tests/handoff.rs`, with the real binary); every directory is a temp dir and the real
 //! `claude` is never reached.
@@ -74,7 +74,11 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
     select(&mut app, "sess-1");
+    // The key it used to be does nothing at all now, on either screen it works on.
     key(&mut app, KeyCode::Char('H'));
+    assert!(matches!(app.mode, Mode::List) && app.handoff.text.is_empty(), "H is no longer the hand-off");
+    assert_eq!(fake.calls(), 0, "and it asked Claude nothing");
+    key(&mut app, KeyCode::Char('h'));
     assert!(matches!(app.mode, Mode::Handoff) && app.handoff.state == HandoffState::Asking, "the box opens while the call is out");
     assert_eq!((app.handoff.session.as_str(), app.handoff.project_name.as_str(), app.handoff.cwd.clone()), ("sess-1", "Web shop", shop(&w)));
     wait_ready(&mut app);
@@ -106,12 +110,32 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
 }
 
 #[test]
+fn h_works_on_the_project_screen_too_and_the_old_key_does_not() {
+    let (w, fake) = world("handoff-project-screen");
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    // On to the Projects tab and into the project: its sessions pane has the focus.
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    assert!(app.open_project().is_some(), "the project's screen is open");
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('H'));
+    assert!(matches!(app.mode, Mode::List), "H does nothing here either");
+    assert_eq!(fake.calls(), 0);
+    key(&mut app, KeyCode::Char('h'));
+    assert!(matches!(app.mode, Mode::Handoff), "h asks for the brief straight away, with nothing to confirm");
+    wait_ready(&mut app);
+    assert_eq!(app.handoff.state, HandoffState::Ready);
+    assert_eq!(fake.calls(), 1);
+}
+
+#[test]
 fn the_brief_can_be_typed_into_before_it_is_accepted() {
     let (w, fake) = world("handoff-edit");
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     let before = app.handoff.text.clone();
 
@@ -168,7 +192,7 @@ fn esc_calls_the_whole_thing_off_and_changes_nothing() {
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
@@ -181,7 +205,7 @@ fn esc_calls_the_whole_thing_off_and_changes_nothing() {
 
     // Esc while the call is still out calls it off too.
     fake.hang(true);
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     assert_eq!(app.handoff.state, HandoffState::Asking);
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
@@ -195,7 +219,7 @@ fn an_answer_that_is_not_understood_or_a_call_that_fails_says_so_and_starts_noth
     fake.reply_default("I'm afraid I can't help with that.");
     let mut app = app_of(&w, &fake);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     match &app.handoff.state {
         HandoffState::Failed(why) => assert!(why.contains("couldn't be understood") && why.contains("Nothing has changed"), "{why}"),
@@ -208,7 +232,7 @@ fn an_answer_that_is_not_understood_or_a_call_that_fails_says_so_and_starts_noth
 
     // A call that fails outright says why in the same place.
     fake.fail(Some("Claude is over capacity"));
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     match &app.handoff.state {
         HandoffState::Failed(why) => assert!(why.contains("Nothing has changed"), "{why}"),
@@ -226,7 +250,7 @@ fn hand_off_needs_a_project_a_live_project_and_the_gate_and_says_plainly_which_i
     let mut app = app_of(&w, &fake);
 
     select(&mut app, "loose-2");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     assert!(matches!(app.mode, Mode::List));
     let said = app.active_notice().unwrap_or_default().to_string();
     assert!(said.contains("is in no project") && said.contains("Press m"), "{said}");
@@ -237,7 +261,7 @@ fn hand_off_needs_a_project_a_live_project_and_the_gate_and_says_plainly_which_i
     settings::save(&w.config, &s).unwrap();
     app.refresh_with(Vec::new(), false);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     assert!(matches!(app.mode, Mode::List), "the box never opens");
     let said = app.active_notice().unwrap_or_default().to_string();
     assert!(said.starts_with("No hand-off:") && said.contains("Smart features"), "{said}");
@@ -250,7 +274,7 @@ fn hand_off_needs_a_project_a_live_project_and_the_gate_and_says_plainly_which_i
     Ledger::open(&w.cache).record_call(usage::now(), "names", &spent, 0.0, true).unwrap();
     app.refresh_with(Vec::new(), false);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     let said = app.active_notice().unwrap_or_default().to_string();
     assert!(said.contains("limit is used up"), "{said}");
     assert_eq!(fake.calls(), 0);
@@ -261,7 +285,7 @@ fn hand_off_needs_a_project_a_live_project_and_the_gate_and_says_plainly_which_i
     Projects::open(&w.config).archive(&id, &[]).unwrap();
     app.refresh_with(Vec::new(), false);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     let said = app.active_notice().unwrap_or_default().to_string();
     assert!(said.contains("is archived"), "{said}");
     assert_eq!(fake.calls(), 0);
@@ -273,7 +297,7 @@ fn a_brief_that_could_not_be_handed_on_is_refused_with_the_box_left_as_it_was() 
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
     select(&mut app, "sess-1");
-    key(&mut app, KeyCode::Char('H'));
+    key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     // Emptied: there is nothing to start a session with.
     let was = app.handoff.text.chars().count();

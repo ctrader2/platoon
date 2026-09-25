@@ -183,6 +183,7 @@ impl App {
         self.pane = Pane::Sessions;
         self.notes_top.set(0);
         self.update_view();
+        self.poll_notes_status();
     }
 
     pub(super) fn close_project_screen(&mut self) {
@@ -254,7 +255,7 @@ impl App {
             KeyCode::Char('a') => self.act(Action::Archive),
             KeyCode::Char('r') => self.act(Action::Rename),
             KeyCode::Char('m') => self.act(Action::Assign),
-            KeyCode::Char('H') => self.act(Action::HandOff),
+            KeyCode::Char('h') => self.act(Action::HandOff),
             KeyCode::Enter => self.act(Action::Jump),
             KeyCode::Esc => {
                 self.filter.clear();
@@ -314,7 +315,6 @@ impl App {
             KeyCode::Home if self.pane == Pane::Notes => self.notes_top.set(0),
             // The notes' own keys: edit them, see what changed, undo it.
             KeyCode::Char('e') if self.pane == Pane::Notes => self.act(Action::Edit),
-            KeyCode::Char('E') if self.pane == Pane::Notes => self.act(Action::EditWith),
             KeyCode::Char('c') if self.pane == Pane::Notes => self.act(Action::ShowChanges),
             KeyCode::Char('u') if self.pane == Pane::Notes => self.act(Action::Undo),
             // Everything else is about the selected session, as on the Sessions tab.
@@ -322,7 +322,7 @@ impl App {
                 KeyCode::Char('a') => self.act(Action::Archive),
                 KeyCode::Char('r') => self.act(Action::Rename),
                 KeyCode::Char('m') => self.act(Action::Assign),
-                KeyCode::Char('H') => self.act(Action::HandOff),
+                KeyCode::Char('h') => self.act(Action::HandOff),
                 KeyCode::Enter => self.act(Action::Jump),
                 KeyCode::Down => self.move_selection(1),
                 KeyCode::Up => self.move_selection(-1),

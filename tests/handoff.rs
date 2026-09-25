@@ -1,4 +1,4 @@
-//! The hand-off end to end, in a real terminal with the real binary: `H` on a session that is in a project asks a
+//! The hand-off end to end, in a real terminal with the real binary: `h` on a session that is in a project asks a
 //! stand-in `claude -p` for a brief, shows it in a box, lets the user type into it, and on ctrl+s starts a **new**
 //! session in the same folder and the same project with that text as its first message. Esc changes nothing.
 //!
@@ -167,10 +167,15 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Add a basket page to the shop");
-    t.wait_for_flat("H hand-off");
+    t.wait_for_flat("h hand-off");
 
-    // H: the box opens and Claude is asked.
+    // The retired key does nothing at all now. (A real key press, then a frame's worth of time to prove it.)
     t.send(b"H");
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert!(!t.text().contains("hand this work on"), "H is no longer the hand-off:\n{}", t.text());
+
+    // h: the box opens and Claude is asked.
+    t.send(b"h");
     t.wait_for("hand this work on");
     t.wait_for("What was done:");
     let screen = t.text();
@@ -223,7 +228,7 @@ fn esc_leaves_the_hand_off_and_everything_else_exactly_as_it_was() {
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Add a basket page to the shop");
-    t.send(b"H");
+    t.send(b"h");
     t.wait_for("hand this work on");
     t.wait_for("What was done:");
     t.send(b"\x1b");
@@ -245,7 +250,7 @@ fn a_session_in_no_project_is_told_what_to_do_instead_and_nothing_is_asked() {
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Something else entirely");
-    t.send(b"H");
+    t.send(b"h");
     t.wait_for_flat("is in no project. Press m to put it in one first.");
     assert_eq!(lab.calls(), 0, "nothing was asked of Claude");
     assert!(!lab.fake.join("started").exists());

@@ -44,7 +44,8 @@ use std::{
 /// The feature id in `ai::FEATURES`: the switch, the gate and the ledger all go by it.
 pub const FEATURE: &str = "project_notes";
 
-/// How long a project must be quiet before one update runs.
+/// How long a project must be quiet before one update runs, when the settings can't be read at all. The setting
+/// itself ("Update notes after", `notes_quiet_minutes`) is what normally decides, and its own default is 3 minutes.
 pub const DEFAULT_QUIET_SECS: u64 = 180;
 
 /// A helper never lives longer than this, whatever happens.
@@ -151,9 +152,18 @@ fn env_secs(key: &str, fallback: u64) -> u64 {
     std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(fallback)
 }
 
-/// How long a project must be quiet before an update (`PLATOON_NOTES_QUIET_SECS` in tests).
-pub fn quiet_secs() -> u64 {
-    env_secs("PLATOON_NOTES_QUIET_SECS", DEFAULT_QUIET_SECS)
+/// How long a project must be quiet before an update: the user's "Update notes after" setting, in seconds.
+/// `PLATOON_NOTES_QUIET_SECS` always wins, so a test never waits minutes for one.
+pub fn quiet_secs(settings: &Settings) -> u64 {
+    quiet_secs_with(settings, &|k| std::env::var(k).ok())
+}
+
+/// The same with the environment handed in, so a test can try the knob without changing this process's own.
+pub fn quiet_secs_with(settings: &Settings, env: &dyn Fn(&str) -> Option<String>) -> u64 {
+    match env("PLATOON_NOTES_QUIET_SECS").and_then(|v| v.trim().parse().ok()) {
+        Some(secs) => secs,
+        None => settings.notes_quiet_minutes.max(1) * 60,
+    }
 }
 
 fn max_life_secs() -> u64 {
@@ -655,7 +665,9 @@ pub fn run_helper(args: &[String]) -> i32 {
             return 1;
         }
     };
-    helper_loop(&env, id, quiet_secs() * 1000);
+    let (settings, corrupt) = crate::settings::load(&env.config);
+    let quiet = if corrupt { DEFAULT_QUIET_SECS } else { quiet_secs(&settings) };
+    helper_loop(&env, id, quiet * 1000);
     0
 }
 
@@ -811,6 +823,30 @@ mod tests {
         // Nothing of all that wrote a mark.
         assert_eq!(due_at(&r.env.cache, &id), None);
         assert_eq!(r.fake.calls(), 0, "the hook never asks Claude anything");
+    }
+
+    #[test]
+    fn how_long_a_project_must_be_quiet_is_the_users_setting_and_the_test_knob_still_wins() {
+        let r = Rig::new("quiet-setting");
+        let mut s = crate::settings::load(&r.env.config).0;
+        assert_eq!(s.notes_quiet_minutes, 3, "three minutes unless the user says otherwise");
+        assert_eq!(quiet_secs(&s), 180);
+        for (minutes, secs) in [(1, 60), (5, 300), (15, 900), (30, 1800)] {
+            s.notes_quiet_minutes = minutes;
+            crate::settings::save(&r.env.config, &s).unwrap();
+            let on_disk = crate::settings::load(&r.env.config).0;
+            assert_eq!((on_disk.notes_quiet_minutes, quiet_secs(&on_disk)), (minutes, secs));
+        }
+        // Nonsense in the file can never mean "no wait at all".
+        s.notes_quiet_minutes = 0;
+        assert_eq!(quiet_secs(&s), 60);
+        // The knob tests use wins over any setting, so no test ever waits minutes. (Handed in rather than set on
+        // this process: other threads here are busy forking stand-in claudes.)
+        let knob = |v: &'static str| move |k: &str| (k == "PLATOON_NOTES_QUIET_SECS").then(|| v.to_string());
+        let half_hour = Settings { notes_quiet_minutes: 30, ..Settings::default() };
+        assert_eq!(quiet_secs_with(&half_hour, &knob("0")), 0, "the test knob wins");
+        assert_eq!(quiet_secs_with(&half_hour, &knob("2")), 2);
+        assert_eq!(quiet_secs_with(&half_hour, &|_| None), 1800, "without it, the setting decides");
     }
 
     #[test]
