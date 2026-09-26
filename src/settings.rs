@@ -1,7 +1,7 @@
 //! platoon's own settings, in `<config dir>/settings.json` next to `archive.json`: the two automatic
 //! clean-ups, how idle stop treats MCP servers, the color theme, the four limits of the word search, and everything
 //! about the features that use the user's Claude tokens (see `ai.rs`). The
-//! settings screen edits them through `save`, and `ITEMS` describes what it shows.
+//! settings screen edits them through `save`, and `TABS` describes what it shows.
 //!
 //! Like the archive file, this one must never take platoon down or be lost: a missing or unreadable file
 //! just means the defaults, values that make no sense are clamped, writes are atomic, and a file that
@@ -393,16 +393,13 @@ pub enum Kind {
     /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
     /// `enter` opens the theme picker.
     Theme,
-    /// An entry that opens a screen of its own instead of stepping: "Smart features" on the main settings screen. Its
-    /// value is read from `get` (the master switch) and shown, but `enter` and a click open the screen.
-    Submenu,
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
 }
 
-/// One line of the settings screen. The screen is built from `ITEMS` alone, so a new setting is a new entry
-/// here (plus its field in `Settings`, `parse` and `save`).
+/// One line of the settings screen. The screen is built from `TABS` alone, so a new setting is a new entry
+/// on one of its tabs (plus its field in `Settings`, `parse` and `save`).
 pub struct Item {
     pub name: &'static str,
     /// One plain-language sentence or two: what it does and why nothing is lost.
@@ -490,124 +487,175 @@ pub fn thousands(n: u64) -> String {
     out
 }
 
-/// The entries of the main settings screen, in order; the last opens the "Smart features" screen (`SMART_ITEMS`).
-pub static ITEMS: LazyLock<Vec<Item>> = LazyLock::new(items);
+/// The tabs of the settings screen, in order, each with its entries in order. The screen is built from this alone.
+pub static TABS: LazyLock<Vec<Tab>> = LazyLock::new(tabs);
 
-/// The entries of the "Smart features" screen: everything that spends the user's Claude tokens, together, in order.
-/// Built once: the switches of the features come from `ai::FEATURES`.
-pub static SMART_ITEMS: LazyLock<Vec<Item>> = LazyLock::new(smart_items);
-
-/// The name of the entry on the main screen that opens the smart features.
-pub const SMART_SCREEN_TITLE: &str = "Smart features";
-
-fn items() -> Vec<Item> {
-    let v = vec![
-    Item {
-        name: "Theme",
-        explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
-                  enter keeps it, esc undoes it.",
-        kind: Kind::Theme,
-        choices: &[],
-        get: |_| 0,
-        set: |_, _| {},
-        label: |_| String::new(),
-        off: None,
-    },
-    Item {
-        name: "Stop idle sessions after",
-        explain: "A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. \
-                  Nothing is lost: opening it again resumes it from its saved history.",
-        kind: Kind::Steps,
-        choices: &[0, 30, 60, 120, 240, 480, 1440],
-        get: |s| s.idle_stop_minutes,
-        set: |s, v| s.idle_stop_minutes = v,
-        label: minutes_label,
-        off: Some(0),
-    },
-    Item {
-        name: "Archive conversations after",
-        explain: "A conversation nobody has used for this long, with nothing running, moves to the Archived tab. \
-                  You can restore it from there.",
-        kind: Kind::Steps,
-        choices: &[0, 1, 2, 7, 14, 30],
-        get: |s| s.auto_archive_days,
-        set: |s, v| s.auto_archive_days = v,
-        label: days_label,
-        off: Some(0),
-    },
-    Item {
-        name: "Idle stop and MCP servers",
-        explain: "MCP servers are helper programs Claude starts with a session. By default they are ignored, so a session with only \
-                  those running is still stopped: they close with it and start again when you open it. Choose \"Count MCP servers\" \
-                  and they keep it alive like any other program.",
-        kind: Kind::Steps,
-        choices: &[0, 1],
-        get: |s| u64::from(s.idle_stop_ignores_mcp),
-        set: |s, v| s.idle_stop_ignores_mcp = v != 0,
-        label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
-        off: None,
-    },
-    Item {
-        name: "Search archived",
-        explain: "Whether searching by the words you typed (press / then tab) also looks in conversations on the Archived tab. \
-                  Choosing one from the results opens the Archived tab for you.",
-        kind: Kind::Steps,
-        choices: &[0, 1],
-        get: |s| u64::from(s.search_archived),
-        set: |s, v| s.search_archived = v != 0,
-        label: |v| if v == 0 { "Skip archived".into() } else { "Include archived".into() },
-        off: None,
-    },
-    Item {
-        name: "Search results shown",
-        explain: "The most conversations a word search lists. A narrower search finds what you want among fewer.",
-        kind: Kind::Steps,
-        choices: &[10, 20, 50, 100, 200],
-        get: |s| s.search_results,
-        set: |s, v| s.search_results = v,
-        label: results_label,
-        off: None,
-    },
-    Item {
-        name: "Search preview length",
-        explain: "The most of a matching message a search result shows around the words you typed. \
-                  It is also cut to fit the window.",
-        kind: Kind::Steps,
-        choices: &[40, 80, 120, 200, 400],
-        get: |s| s.search_snippet_chars,
-        set: |s, v| s.search_snippet_chars = v,
-        label: chars_label,
-        off: None,
-    },
-    Item {
-        name: "Longest message kept",
-        explain: "How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. \
-                  Changing it makes platoon read your conversations again in the background.",
-        kind: Kind::Steps,
-        choices: &[300, 1000, 2000, 5000, 20_000],
-        get: |s| s.search_prompt_chars,
-        set: |s, v| s.search_prompt_chars = v,
-        label: chars_label,
-        off: None,
-    },
-    Item {
-        name: SMART_SCREEN_TITLE,
-        explain: "Names and summaries for your conversations, and a search that finds one from a description. They use your own Claude plan, so \
-                  they stay off until you switch them on. Press enter to open them.",
-        kind: Kind::Submenu,
-        choices: &[],
-        get: |s| u64::from(s.tokens_enabled),
-        set: |_, _| {},
-        label: on_off,
-        off: Some(0),
-    },
-    ];
-    v
+/// One tab of the settings screen: its title and its entries.
+pub struct Tab {
+    pub title: &'static str,
+    pub items: Vec<Item>,
 }
 
+/// The tabs by position, for the code that treats one of them specially (see `tabs`).
+pub const TAB_SMART: usize = 2;
+pub const TAB_SESSIONS: usize = 3;
+
+/// Every entry on every tab, in screen order.
+#[cfg(test)]
+pub fn all_items() -> impl Iterator<Item = &'static Item> {
+    TABS.iter().flat_map(|t| t.items.iter())
+}
+
+/// The tab and the position on it of the entry called `name`.
+#[cfg(test)]
+pub fn find_item(name: &str) -> Option<(usize, usize)> {
+    TABS.iter().enumerate().find_map(|(t, tab)| tab.items.iter().position(|i| i.name == name).map(|i| (t, i)))
+}
+
+fn tabs() -> Vec<Tab> {
+    vec![
+        Tab { title: "General", items: general_items() },
+        Tab { title: "Search", items: search_items() },
+        Tab { title: "Smart features", items: smart_items() },
+        Tab { title: "Sessions", items: sessions_items() },
+        Tab { title: "Projects", items: projects_items() },
+    ]
+}
+
+/// Everyday behaviour: the colors and the two automatic clean-ups.
+fn general_items() -> Vec<Item> {
+    vec![
+        Item {
+            name: "Theme",
+            explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
+                      enter keeps it, esc undoes it.",
+            kind: Kind::Theme,
+            choices: &[],
+            get: |_| 0,
+            set: |_, _| {},
+            label: |_| String::new(),
+            off: None,
+        },
+        Item {
+            name: "Stop idle sessions after",
+            explain: "A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. \
+                      Nothing is lost: opening it again resumes it from its saved history.",
+            kind: Kind::Steps,
+            choices: &[0, 30, 60, 120, 240, 480, 1440],
+            get: |s| s.idle_stop_minutes,
+            set: |s, v| s.idle_stop_minutes = v,
+            label: minutes_label,
+            off: Some(0),
+        },
+        Item {
+            name: "Archive conversations after",
+            explain: "A conversation nobody has used for this long, with nothing running, moves to the Archived tab. \
+                      You can restore it from there.",
+            kind: Kind::Steps,
+            choices: &[0, 1, 2, 7, 14, 30],
+            get: |s| s.auto_archive_days,
+            set: |s, v| s.auto_archive_days = v,
+            label: days_label,
+            off: Some(0),
+        },
+        Item {
+            name: "Idle stop and MCP servers",
+            explain: "MCP servers are helper programs Claude starts with a session. By default they are ignored, so a session with only \
+                      those running is still stopped: they close with it and start again when you open it. Choose \"Count MCP servers\" \
+                      and they keep it alive like any other program.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.idle_stop_ignores_mcp),
+            set: |s, v| s.idle_stop_ignores_mcp = v != 0,
+            label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
+            off: None,
+        },
+    ]
+}
+
+/// The word search and the search by description.
+fn search_items() -> Vec<Item> {
+    vec![
+        Item {
+            name: "Search archived",
+            explain: "Whether searching by the words you typed (press / then tab) also looks in conversations on the Archived tab. \
+                      Choosing one from the results opens the Archived tab for you.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.search_archived),
+            set: |s, v| s.search_archived = v != 0,
+            label: |v| if v == 0 { "Skip archived".into() } else { "Include archived".into() },
+            off: None,
+        },
+        Item {
+            name: "Search results shown",
+            explain: "The most conversations a word search lists. A narrower search finds what you want among fewer.",
+            kind: Kind::Steps,
+            choices: &[10, 20, 50, 100, 200],
+            get: |s| s.search_results,
+            set: |s, v| s.search_results = v,
+            label: results_label,
+            off: None,
+        },
+        Item {
+            name: "Search preview length",
+            explain: "The most of a matching message a search result shows around the words you typed. \
+                      It is also cut to fit the window.",
+            kind: Kind::Steps,
+            choices: &[40, 80, 120, 200, 400],
+            get: |s| s.search_snippet_chars,
+            set: |s, v| s.search_snippet_chars = v,
+            label: chars_label,
+            off: None,
+        },
+        Item {
+            name: "Longest message kept",
+            explain: "How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. \
+                      Changing it makes platoon read your conversations again in the background.",
+            kind: Kind::Steps,
+            choices: &[300, 1000, 2000, 5000, 20_000],
+            get: |s| s.search_prompt_chars,
+            set: |s, v| s.search_prompt_chars = v,
+            label: chars_label,
+            off: None,
+        },
+        Item {
+            name: "Description search: conversations sent",
+            explain: "How many conversations a search by description sends to Claude to pick from. More finds the odd one but uses more of your plan.",
+            kind: Kind::Steps,
+            choices: &[20, 30, 50, 100, 150],
+            get: |s| s.ai_find_candidates,
+            set: |s, v| s.ai_find_candidates = v,
+            label: conversations_label,
+            off: None,
+        },
+        Item {
+            name: "Description search: results",
+            explain: "The most conversations a search by description lists.",
+            kind: Kind::Steps,
+            choices: &[5, 10, 15, 20],
+            get: |s| s.ai_find_results,
+            set: |s, v| s.ai_find_results = v,
+            label: results_label,
+            off: None,
+        },
+        Item {
+            name: "Description search: wider search",
+            explain: "How many conversations the wider search sends. It asks you first and says roughly how many tokens that is.",
+            kind: Kind::Steps,
+            choices: &[100, 200, 300, 500],
+            get: |s| s.ai_find_wide_candidates,
+            set: |s, v| s.ai_find_wide_candidates = v,
+            label: conversations_label,
+            off: None,
+        },
+    ]
+}
+
+/// Everything that decides whether the user's Claude plan is used at all: the master switch, one switch per feature
+/// (from `ai::FEATURES`), and the limits on the day's use.
 fn smart_items() -> Vec<Item> {
     let mut v = Vec::new();
-    // The master switch, one switch per feature (from the feature table), then the numbers that limit them.
     v.push(Item {
         name: MASTER_LABEL,
         explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus part \
@@ -632,28 +680,6 @@ fn smart_items() -> Vec<Item> {
         });
     }
     v.extend([
-        Item {
-            name: "Update notes after",
-            explain: "How long a project has to be quiet before platoon brings its notes up to date. A new answer in any of its \
-                      sessions starts the wait again, so it only writes once the work has stopped.",
-            kind: Kind::Steps,
-            choices: &[1, 3, 5, 15, 30],
-            get: |s| s.notes_quiet_minutes,
-            set: |s, v| s.notes_quiet_minutes = v,
-            label: minutes_label,
-            off: None,
-        },
-        Item {
-            name: "Read Claude's last reply up to",
-            explain: "How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. \
-                      What is still open is usually in Claude's answers; more of them uses a little more of your plan.",
-            kind: Kind::Steps,
-            choices: &[500, 1500, 3000],
-            get: |s| s.notes_reply_chars,
-            set: |s, v| s.notes_reply_chars = v,
-            label: chars_label,
-            off: None,
-        },
         Item {
             name: "Daily token limit",
             explain: "The most tokens the smart features may use in one day, counting everything Claude reports. \
@@ -686,6 +712,13 @@ fn smart_items() -> Vec<Item> {
             label: |v| if v == 0 { "Haiku".into() } else { "Sonnet".into() },
             off: None,
         },
+    ]);
+    v
+}
+
+/// What naming and summarizing the conversations reads, and how often.
+fn sessions_items() -> Vec<Item> {
+    vec![
         Item {
             name: "Conversations per call",
             explain: "How many conversations one request to Claude covers. Larger batches use less of your plan overall.",
@@ -756,38 +789,35 @@ fn smart_items() -> Vec<Item> {
             label: |v| format!("{v}%"),
             off: None,
         },
+    ]
+}
+
+/// Keeping a project's notes up to date.
+fn projects_items() -> Vec<Item> {
+    vec![
         Item {
-            name: "Description search: conversations sent",
-            explain: "How many conversations a search by description sends to Claude to pick from. More finds the odd one but uses more of your plan.",
+            name: "Update notes after",
+            explain: "How long a project has to be quiet before platoon brings its notes up to date. A new answer in any of its \
+                      sessions starts the wait again, so it only writes once the work has stopped.",
             kind: Kind::Steps,
-            choices: &[20, 30, 50, 100, 150],
-            get: |s| s.ai_find_candidates,
-            set: |s, v| s.ai_find_candidates = v,
-            label: conversations_label,
+            choices: &[1, 3, 5, 15, 30],
+            get: |s| s.notes_quiet_minutes,
+            set: |s, v| s.notes_quiet_minutes = v,
+            label: minutes_label,
             off: None,
         },
         Item {
-            name: "Description search: results",
-            explain: "The most conversations a search by description lists.",
+            name: "Read Claude's last reply up to",
+            explain: "How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. \
+                      What is still open is usually in Claude's answers; more of them uses a little more of your plan.",
             kind: Kind::Steps,
-            choices: &[5, 10, 15, 20],
-            get: |s| s.ai_find_results,
-            set: |s, v| s.ai_find_results = v,
-            label: results_label,
+            choices: &[500, 1500, 3000],
+            get: |s| s.notes_reply_chars,
+            set: |s, v| s.notes_reply_chars = v,
+            label: chars_label,
             off: None,
         },
-        Item {
-            name: "Description search: wider search",
-            explain: "How many conversations the wider search sends. It asks you first and says roughly how many tokens that is.",
-            kind: Kind::Steps,
-            choices: &[100, 200, 300, 500],
-            get: |s| s.ai_find_wide_candidates,
-            set: |s, v| s.ai_find_wide_candidates = v,
-            label: conversations_label,
-            off: None,
-        },
-    ]);
-    v
+    ]
 }
 
 /// Which way to move through an item's choices.
@@ -895,6 +925,15 @@ mod tests {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         d
+    }
+
+    /// The entries of the tab called `title`.
+    fn tab(title: &str) -> &'static [Item] {
+        &TABS.iter().find(|t| t.title == title).unwrap_or_else(|| panic!("no tab called {title}")).items
+    }
+
+    fn general() -> &'static [Item] {
+        tab("General")
     }
 
     fn write(d: &Path, text: &str) {
@@ -1026,7 +1065,7 @@ mod tests {
 
     #[test]
     fn every_setting_offers_ascending_steps_starting_at_off_within_the_limits() {
-        for item in ITEMS.iter().filter(|i| i.kind == Kind::Steps) {
+        for item in all_items().filter(|i| i.kind == Kind::Steps) {
             assert!(item.choices[0] == 0 || item.off.is_none(), "only an item that can be off starts at 0: {}", item.name);
             assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}", item.name);
             assert!(!item.explain.is_empty() && item.explain.len() < 300, "{}", item.name);
@@ -1040,7 +1079,7 @@ mod tests {
 
     #[test]
     fn stepping_goes_to_the_neighbouring_choice_from_a_step_or_from_between_steps() {
-        let idle = &ITEMS[1];
+        let idle = &general()[1];
         assert_eq!(idle.step(120, Step::Next), 240);
         assert_eq!(idle.step(120, Step::Prev), 60);
         assert_eq!(idle.step(90, Step::Next), 120, "from a hand-edited value, the nearest step above");
@@ -1093,7 +1132,7 @@ mod tests {
 
     #[test]
     fn the_two_way_choice_steps_between_its_two_values_and_only_the_numbers_can_be_off() {
-        let mcp = &ITEMS[3];
+        let mcp = &general()[3];
         assert_eq!(mcp.choices, [0, 1]);
         let mut s = Settings::default();
         assert_eq!((mcp.get)(&s), 1);
@@ -1110,7 +1149,7 @@ mod tests {
         (mcp.set)(&mut s, 1);
         assert!(s.idle_stop_ignores_mcp);
         assert_eq!(mcp.off, None, "neither choice is 'off'");
-        assert!(ITEMS[1..3].iter().all(|i| i.off == Some(0)));
+        assert!(general()[1..3].iter().all(|i| i.off == Some(0)));
     }
 
     #[test]
@@ -1204,15 +1243,51 @@ mod tests {
 
     #[test]
     fn the_theme_entry_is_first_and_a_kind_of_its_own_next_to_the_stepped_ones() {
-        assert_eq!(ITEMS[0].name, "Theme");
-        assert_eq!(ITEMS[0].kind, Kind::Theme);
-        assert!(ITEMS[1..ITEMS.len() - 1].iter().all(|i| i.kind == Kind::Steps), "between them only stepped entries");
-        assert!(!ITEMS.iter().any(|i| i.name == "Edit notes with"), "the editor is remembered from the last one used, not chosen here");
-        assert_eq!((ITEMS.last().unwrap().name, ITEMS.last().unwrap().kind), (SMART_SCREEN_TITLE, Kind::Submenu));
-        assert!(SMART_ITEMS.iter().all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))));
-        assert!(!ITEMS[0].explain.is_empty() && ITEMS[0].explain.len() < 300);
+        let items = general();
+        assert_eq!(items[0].name, "Theme");
+        assert_eq!(items[0].kind, Kind::Theme);
+        assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
+        assert!(!all_items().any(|i| i.name == "Edit notes with"), "the editor is remembered from the last one used, not chosen here");
+        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))), "the theme is the only one of its kind");
+        assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
-        assert_eq!((ITEMS[0].step(0, Step::Next), ITEMS[0].step(0, Step::Prev), ITEMS[0].step(0, Step::Cycle)), (0, 0, 0));
+        assert_eq!((items[0].step(0, Step::Next), items[0].step(0, Step::Prev), items[0].step(0, Step::Cycle)), (0, 0, 0));
+    }
+
+    #[test]
+    fn five_tabs_hold_every_setting_once_each_where_it_belongs() {
+        let titles: Vec<&str> = TABS.iter().map(|t| t.title).collect();
+        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects"]);
+        assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
+        let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
+        assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive conversations after", "Idle stop and MCP servers"]);
+        assert_eq!(
+            names("Search"),
+            [
+                "Search archived",
+                "Search results shown",
+                "Search preview length",
+                "Longest message kept",
+                "Description search: conversations sent",
+                "Description search: results",
+                "Description search: wider search"
+            ]
+        );
+        assert_eq!(
+            names("Smart features"),
+            [MASTER_LABEL, "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit", "Pause above plan usage", "Model for smart features"]
+        );
+        assert_eq!(
+            names("Sessions"),
+            ["Conversations per call", "Refresh a summary after", "Wait for quiet before refreshing", "Recent messages sent", "Longest message sent", "Archived conversations", "Share for archived"]
+        );
+        assert_eq!(names("Projects"), ["Update notes after", "Read Claude's last reply up to"]);
+        // No entry is on two tabs, and every one can be found by name.
+        let all: Vec<&str> = all_items().map(|i| i.name).collect();
+        let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
+        assert_eq!(all.len(), unique.len());
+        assert_eq!(find_item("Share for archived"), Some((TAB_SESSIONS, 6)));
+        assert_eq!(find_item("no such thing"), None);
     }
 
     #[test]
@@ -1272,15 +1347,17 @@ mod tests {
 
     #[test]
     fn every_search_entry_is_listed_with_plain_words_and_its_default_among_the_steps() {
-        let names: Vec<&str> = ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[4..8], ["Search archived", "Search results shown", "Search preview length", "Longest message kept"]);
+        let items = tab("Search");
+        let names: Vec<&str> = items.iter().map(|i| i.name).collect();
+        assert_eq!(names[0..4], ["Search archived", "Search results shown", "Search preview length", "Longest message kept"]);
         let d = Settings::default();
-        assert_eq!((ITEMS[4].label)((ITEMS[4].get)(&d)), "Include archived");
-        assert_eq!((ITEMS[5].label)((ITEMS[5].get)(&d)), "50 results");
-        assert_eq!((ITEMS[6].label)((ITEMS[6].get)(&d)), "120 characters");
-        assert_eq!((ITEMS[7].label)((ITEMS[7].get)(&d)), "2000 characters");
+        assert_eq!((items[0].label)((items[0].get)(&d)), "Include archived");
+        assert_eq!((items[1].label)((items[1].get)(&d)), "50 results");
+        assert_eq!((items[2].label)((items[2].get)(&d)), "120 characters");
+        assert_eq!((items[3].label)((items[3].get)(&d)), "2000 characters");
         assert_eq!((results_label(1), chars_label(1)), ("1 result".to_string(), "1 character".to_string()));
-        for item in &ITEMS[4..8] {
+        // (The word search's own entries: the description search's may speak of tokens, it spends them.)
+        for item in &items[0..4] {
             let lower = item.explain.to_lowercase();
             for jargon in ["index", "json", "cache", "byte", "token", "thread"] {
                 assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
@@ -1380,11 +1457,12 @@ mod tests {
     }
 
     #[test]
-    fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
-        let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Update notes after", "Read Claude's last reply up to", "Daily token limit"]);
-        assert_eq!(names.len(), 20, "the master switch, one per feature, and fifteen limits, all on the screen of their own");
-        for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
+    fn a_feature_gets_a_switch_on_the_smart_features_tab_from_the_table_alone() {
+        let smart = tab("Smart features");
+        let names: Vec<&str> = smart.iter().map(|i| i.name).collect();
+        assert_eq!(names[..6], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit"]);
+        assert_eq!(names.len(), 1 + FEATURES.len() + 3, "the master switch, one per feature, and the three limits on the day's use");
+        for (f, item) in FEATURES.iter().zip(&smart[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
             assert_eq!(item.value(&s), u64::from(f.on_unless_switched_off));
@@ -1396,17 +1474,17 @@ mod tests {
             assert_eq!((item.label)(1), "On");
             assert_eq!(item.step(0, Step::Cycle), 1);
         }
-        // The main screen's own entries, and the last one, which shows the master switch and opens the other screen.
-        let main = ITEMS.last().unwrap();
-        assert_eq!(ITEMS.len(), 9, "one fewer since the editor is remembered rather than chosen");
-        assert_eq!((main.value(&Settings::default()), (main.label)(main.value(&Settings::default()))), (0, "Off".to_string()));
-        assert_eq!((main.label)(main.value(&Settings { tokens_enabled: true, ..Settings::default() })), "On");
-        assert!(main.choices.is_empty(), "nothing to step through: enter opens the screen");
+        // The master switch reads Off until it is turned on.
+        let master = &smart[0];
+        assert_eq!((master.value(&Settings::default()), (master.label)(master.value(&Settings::default()))), (0, "Off".to_string()));
+        assert_eq!((master.label)(master.value(&Settings { tokens_enabled: true, ..Settings::default() })), "On");
     }
 
     #[test]
     fn the_token_entries_read_plainly_and_every_step_is_within_the_limits() {
-        for item in SMART_ITEMS.iter().chain(ITEMS.last()) {
+        // Everything that spends tokens or decides what is sent: the last three tabs, and the description search.
+        let token_items = || TABS[TAB_SMART..].iter().flat_map(|t| t.items.iter()).chain(tab("Search")[4..].iter());
+        for item in token_items() {
             let lower = item.explain.to_lowercase();
             for jargon in ["index", "json", "cache", "byte", "thread", "api", "cli", "stdin", "process"] {
                 assert!(!lower.contains(jargon), "{}: {jargon}", item.name);
@@ -1422,13 +1500,12 @@ mod tests {
             assert!(item.choices.windows(2).all(|w| w[0] < w[1]), "{}: steps ascend", item.name);
         }
         let d = Settings::default();
-        assert_eq!(SMART_ITEMS[0].name, MASTER_LABEL);
-        let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
+        assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
-            (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "3 minutes", "1500 characters", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+            token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "3 minutes", "1500 characters", "50 conversations", "10 results", "200 conversations"]
         );
-        let by_name = |name: &str| SMART_ITEMS.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
+        let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");
         assert_eq!(percent_label(0), "Never");
         assert_eq!([tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)], ["1M tokens", "250K tokens", "1234 tokens", "1 token"]);

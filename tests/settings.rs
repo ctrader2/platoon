@@ -262,3 +262,83 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
 fn saved_theme_key(file: &std::path::Path) -> bool {
     serde_json::from_str::<serde_json::Value>(&fs::read_to_string(file).unwrap()).unwrap().get("theme").is_some()
 }
+
+/// Column of `needle` on screen row `row`, counted in cells.
+fn col_on(screen: &str, row: u16, needle: &str) -> u16 {
+    let line = screen.lines().nth(row as usize).unwrap_or_default();
+    let at = line.find(needle).unwrap_or_else(|| panic!("no {needle:?} on row {row}:\n{screen}"));
+    line[..at].chars().count() as u16
+}
+
+fn click(t: &mut Term, row: u16, col: u16) {
+    t.send(format!("\x1b[<0;{};{}M\x1b[<0;{};{}m", col + 1, row + 1, col + 1, row + 1).as_bytes());
+}
+
+#[test]
+fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_saved_at_80_by_24() {
+    use vt100::Color::Rgb;
+    let base = tmp("settings-e2e-tabs");
+    let mut env = env(&base);
+    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
+    let file = base.join("config/settings.json");
+    fs::write(&file, r#"{"keep":"me","auto_archive_days":0}"#).unwrap();
+    // Catppuccin Mocha: the raised surface and the text on it for the tab showing; the plain background and the
+    // muted text for the others.
+    let (surface, bg, text, dim) = (Rgb(0x31, 0x32, 0x44), Rgb(0x1e, 0x1e, 0x2e), Rgb(0xcd, 0xd6, 0xf4), Rgb(0x6c, 0x70, 0x86));
+    let mut t = Term::spawn(&[], &env, &base, 24, 80);
+    t.wait_for("enter open");
+    t.send(b"s");
+    t.wait_for_all(&["General", "Smart features", "Sessions   Projects", "Stop idle sessions after", "Settings file:", "esc back"]);
+    let (row, _) = t.find("General").unwrap();
+    let screen = t.text();
+    let col = |name: &str| col_on(&screen, row, name);
+    let (general, search, smart, projects) = (col("General"), col("Search"), col("Smart features"), col("Projects"));
+    t.wait_bg(row, general, surface);
+    t.wait_fg(row, general, text);
+    assert_eq!((t.bg_at(row, search), t.fg_at(row, search)), (bg, dim), "a tab not showing is quiet");
+
+    // Tab goes to the next tab, lit in its turn; shift+tab comes back.
+    t.send(b"\t");
+    t.wait_for_all(&["Search archived", "Description search: wider search"]);
+    t.wait_gone("Stop idle sessions after");
+    assert_eq!(t.find("General").unwrap().0, row, "the tabs stay where they are");
+    t.wait_bg(row, search, surface);
+    t.wait_bg(row, general, bg);
+    assert_eq!(t.fg_at(row, general), dim);
+    t.send(b"\x1b[Z");
+    t.wait_for("Stop idle sessions after");
+    t.wait_gone("Search archived");
+    t.wait_bg(row, general, surface);
+
+    // A click on a title shows that tab: Projects, where right steps the first entry 3 -> 5 minutes, saved at once.
+    click(&mut t, row, projects + 2);
+    t.wait_for_all(&["Update notes after", "Read Claude's last reply up to", "3 minutes"]);
+    t.wait_bg(row, projects, surface);
+    t.send(b"\x1b[C");
+    t.wait_for("5 minutes");
+    until("the change to reach the file", || saved_ok(&base) && saved(&base)["notes_quiet_minutes"] == 5);
+    assert_eq!(saved(&base)["keep"], "me", "keys platoon doesn't know are kept");
+
+    // The smart features tab carries the day's token count.
+    click(&mut t, row, smart + 2);
+    t.wait_for_all(&["Enable features which require tokens", "Model for smart features", "Used today: 0 of 500,000 tokens", "esc back"]);
+    t.wait_bg(row, smart, surface);
+    // At 80x24 the whole popup fits: its frame, the tabs, the file and the hints, and no text touches the border.
+    let whole = t.stable();
+    for want in ["╭", "╰", "General", "Projects", "Settings file:", "esc back", "Used today"] {
+        assert!(whole.contains(want), "{want:?} missing:\n{whole}");
+    }
+    let inside: Vec<&str> = whole.lines().filter(|l| l.starts_with("│  │")).collect();
+    assert!(inside.len() >= 15, "{whole}");
+    for line in inside {
+        // Drop the outer frame, then the popup's own right border: what is left ends in a blank.
+        let popup = line.trim_end_matches('│').trim_end().strip_suffix('│').unwrap_or_else(|| panic!("the popup's border is cut: {line}"));
+        assert!(popup.ends_with(' '), "text touches the border: {line}");
+    }
+
+    // Esc closes the settings from any tab.
+    t.send(b"\x1b");
+    t.wait_gone("Settings file:");
+    t.send(b"q");
+    t.wait_exit();
+}

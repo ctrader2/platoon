@@ -1,9 +1,9 @@
-use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Page, Pane, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
+use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Pane, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
 use crate::dirs::tilde;
 use crate::client::Client;
 use crate::select::{Selection, Span as Cells};
 use crate::model::{NameSource, Session, Status};
-use crate::settings::{Kind, Step};
+use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
 use crate::usage::Usage;
 use crate::theme::{contrast, Theme};
 use ratatui::{
@@ -1077,22 +1077,76 @@ fn fit_start(s: &str, n: usize) -> String {
     format!("…{tail}")
 }
 
-/// The settings screen: one entry per `ITEMS`, each with its explanation and a value that steps with `‹` `›`.
+/// Rows the settings tabs take at the top of the popup: the tab titles, and a rule under them.
+const SETTINGS_TAB_ROWS: u16 = 2;
+
+/// The titles of the settings tabs as they are drawn: in full where they fit, shortened on a narrow terminal.
+fn settings_tab_labels(width: usize) -> Vec<String> {
+    let full: Vec<String> = SETTINGS_TABS.iter().map(|tab| format!(" {} ", tab.title)).collect();
+    let need = full.iter().map(|l| l.chars().count() + 1).sum::<usize>();
+    if need <= width + 1 {
+        return full;
+    }
+    // Only the first word of each, so "Smart features" becomes "Smart".
+    SETTINGS_TABS.iter().map(|tab| format!(" {} ", tab.title.split_whitespace().next().unwrap_or(tab.title))).collect()
+}
+
+/// The tabs of the settings screen, lit like the header's: the showing one on the raised color in bold, a hovered one
+/// raised, the rest quiet. A rule under them separates them from the entries. A click on a title shows that tab.
+fn draw_settings_tabs(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let mut spans = Vec::new();
+    let mut x = area.x;
+    for (i, label) in settings_tab_labels(area.width as usize).into_iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+            x += 1;
+        }
+        let w = label.chars().count() as u16;
+        let rect = Rect::new(x, area.y, w, 1).intersection(area);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::SettingsTab(i)));
+        }
+        let current = i == app.settings_tab;
+        let hover = !current && rect.contains(app.mouse.into());
+        let style = if current {
+            Style::new().fg(t.text).bg(t.surface).add_modifier(Modifier::BOLD)
+        } else if hover {
+            Style::new().fg(t.text).bg(t.surface)
+        } else {
+            Style::new().fg(t.dim).bg(t.bg)
+        };
+        spans.push(Span::styled(label, style));
+        x += w;
+    }
+    f.render_widget(Paragraph::new(Line::from(spans)), Rect::new(area.x, area.y, area.width, 1));
+    if area.height > 1 {
+        let rule = "─".repeat(area.width as usize);
+        f.render_widget(Paragraph::new(Span::styled(rule, Style::new().fg(t.border))), Rect::new(area.x, area.y + 1, area.width, 1));
+    }
+}
+
+/// The settings screen: the tabs, then one entry per item of the tab showing, each with its explanation and a value
+/// that steps with `‹` `›`.
 fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let items = app.items();
     let w = area.width as usize;
     let store = app.settings();
     let current = store.get();
+    // On a very short terminal the rule under the tabs goes first, so an entry still shows.
+    let tabs_h = if area.height >= 10 { SETTINGS_TAB_ROWS } else { 1 }.min(area.height);
+    draw_settings_tabs(f, app, Rect::new(area.x, area.y, area.width, tabs_h));
+    let area = Rect::new(area.x, area.y + tabs_h, area.width, area.height - tabs_h);
 
     // What goes under the entries, worked out first because its height decides how much room they get.
-    let mut notes = settings_notes(app, w);
+    let mut notes = settings_notes(app, app.settings_tab, w);
     let label = "Settings file: ";
     let file = tilde(&store.path().to_string_lossy(), &app.home);
     let hints = fit_hints(
-        vec![("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
+        vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
         w,
-        &["move"],
+        &["move", "next choice"],
     );
 
     // The file and the key hints sit at the bottom, always. The entries get what is left after the notes.
@@ -1105,8 +1159,8 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         let text_w = (area.width as usize).saturating_sub(4);
         let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
         let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top;
-        // (On the smart features screen the first note is the day's token count: that one stays.)
-        let keep = usize::from(app.page == Page::Smart);
+        // (On the smart features tab the first note is the day's token count: that one stays.)
+        let keep = usize::from(app.settings_tab == crate::settings::TAB_SMART);
         if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(keep) as usize) < 2 {
             notes.truncate(keep);
         }
@@ -1131,15 +1185,21 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, Rect::new(area.x, hints_y, area.width, 1), &hints, None);
 }
 
-/// What goes under the settings entries: how many tokens the smart features used today, a warning if the file was
-/// unreadable, then the latest notice or the reassurance that changes apply at once.
-fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
+/// What goes under the settings entries: on the smart features tab how many tokens they used today and why naming
+/// is waiting, if it is; on the sessions tab what naming the archived conversations would take; a warning if the file
+/// was unreadable, then the latest notice or the reassurance that changes apply at once.
+fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
     let t = app.effective_theme();
     let mut notes: Vec<(String, Color)> = Vec::new();
-    if app.page == Page::Smart {
+    if tab == crate::settings::TAB_SMART {
         let (used, cap) = (app.tokens_today, app.settings().get().ai_daily_tokens);
         let line = format!("Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(cap));
         notes.push((line, if used >= cap { t.warn } else { t.subtext }));
+        if let Some(why) = app.smart_idle() {
+            notes.extend(wrap(&format!("Naming is waiting: {why}"), w).into_iter().map(|l| (l, t.warn)));
+        }
+    }
+    if tab == crate::settings::TAB_SESSIONS {
         let e = app.archived_estimate();
         let archived = if e.conversations == 0 {
             "Archived: none waiting to be named".to_string()
@@ -1152,9 +1212,6 @@ fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
             )
         };
         notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
-        if let Some(why) = app.smart_idle() {
-            notes.extend(wrap(&format!("Naming is waiting: {why}"), w).into_iter().map(|l| (l, t.warn)));
-        }
     }
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
@@ -1167,13 +1224,17 @@ fn settings_notes(app: &App, w: usize) -> Vec<(String, Color)> {
     notes
 }
 
-/// Rows the popup's contents need when nothing has to be left out: every entry explained, the notes, the file
-/// path and the key hints.
+/// Rows the popup's contents need when nothing has to be left out: the tabs, every entry explained, the notes, the
+/// file path and the key hints. It is the most any tab needs, so the popup keeps its size and place as the tabs change.
 fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
-    let items = app.items();
-    let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1);
-    (entries + 1 + settings_notes(app, w).len() + 1 + 2) as u16
+    let need = |tab: usize| {
+        let items = &SETTINGS_TABS[tab].items;
+        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1);
+        entries + 1 + settings_notes(app, tab, w).len()
+    };
+    let most = (0..SETTINGS_TABS.len()).map(need).max().unwrap_or(0);
+    (SETTINGS_TAB_ROWS as usize + most + 1 + 2) as u16
 }
 
 /// Settings float over the list, like the other dialogs: the list fades behind, the popup is sized to its contents,
@@ -1194,7 +1255,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     let vpad = u16::from(need + 2 <= area.height);
     let r = centered(area, w, (need + 2 * vpad).min(area.height).max(1));
     f.render_widget(Clear, r);
-    let block = modal_block(t, if app.page == Page::Smart { crate::settings::SMART_SCREEN_TITLE } else { "Settings" });
+    let block = modal_block(t, "Settings");
     let inner = block.inner(r).inner(Margin::new(hpad, vpad));
     f.render_widget(block, r);
     draw_settings(f, app, inner);
@@ -1269,12 +1330,6 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let label = (item.label)(value);
                 let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
-            }
-            // The value is shown and the right arrow opens the screen; there is nothing to step back to.
-            Kind::Submenu => {
-                let label = (item.label)(item.value(current));
-                let vw = label.chars().count().max(3);
-                (label, vw, true, false, item.off == Some(item.value(current)))
             }
             Kind::Theme => {
                 let all = app.themes().all();
@@ -1706,7 +1761,7 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
     let mut lines: Vec<(String, Color)> = Vec::new();
     if !app.search_kinds().contains(&FIND_KIND) {
         let text = format!(
-            "Describe it is switched off. Press s in the list, open Smart features, and turn on \"{}\" and \"Find a session by description\".",
+            "Describe it is switched off. Press s in the list, go to the Smart features tab, and turn on \"{}\" and \"Find a session by description\".",
             crate::ai::MASTER_LABEL
         );
         lines.push((text, t.warn));

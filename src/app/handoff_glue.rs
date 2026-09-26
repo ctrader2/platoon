@@ -284,7 +284,7 @@ impl App {
         if let Err(r) = ai::gate_for(&settings, handoff::FEATURE, &self.cache, self.clock(), true) {
             let mut text = r.plain();
             if r.is_switch() {
-                text.push_str(" Turn it on in the settings (press s, then Smart features).");
+                text.push_str(" Turn it on in the settings (press s, then the Smart features tab).");
             }
             self.notify(format!("No hand-off: {text}"));
             return;

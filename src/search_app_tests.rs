@@ -877,7 +877,11 @@ fn a_new_prompt_length_reaches_the_index_only_once_the_settings_have_settled() {
     // A change on the settings screen holds the rebuild until it stops moving.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('s'));
-    let longest = crate::settings::ITEMS.iter().position(|i| i.name == "Longest message kept").unwrap();
+    // It is on the Search tab, the second: tab goes there.
+    let (tab, longest) = crate::settings::find_item("Longest message kept").unwrap();
+    for _ in 0..tab {
+        key(&mut app, KeyCode::Tab);
+    }
     for _ in 0..longest {
         key(&mut app, KeyCode::Down);
     }

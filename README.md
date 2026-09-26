@@ -176,7 +176,12 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it.
+`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in five
+tabs along the top: **General**, **Search**, **Smart features**, **Sessions** and **Projects**. `tab` goes to the next tab and
+`shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
+same size on every tab; a tab with more entries than fit scrolls, and on a small terminal only the selected entry is explained. Every setting keeps the name, choices and key in the file it had before the tabs.
+
+**General**
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
@@ -184,13 +189,49 @@ Details worth knowing:
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
+
+**Search**
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
 | Search archived | Whether the [Full-text search](#search) also looks in archived conversations. | Include archived (default), Skip archived |
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
-| Smart features | Opens a screen of its own (below) with everything that uses your Claude plan. The row shows the master switch: Off or On. | `enter` (or `→`, or a click) opens it |
+| Description search: conversations sent / results / wider search | How many conversations a search by description ([Describe it](#search)) sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
 
-`↑` `↓` pick a setting (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
+**Smart features**: whether your Claude plan is used at all, and how much. Under the entries: `Used today: N of M tokens`, and,
+when naming is held up, why (`Naming is waiting: ...`).
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
+| Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
+| Smart names and summaries, Find a session by description, Project notes, Project descriptions | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off / On (the two project ones are On once the master switch is) |
+| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
+| Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
+| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
+
+**Sessions**: what naming and summarizing your conversations reads, and how often. Under the entries:
+`Archived: N conversations, about X tokens to index (an estimate)`.
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
+| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
+| Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
+| Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
+| Recent messages sent | How many of a conversation's latest messages go into its summary, besides the first one. | 3, 5, 8 (default), 12, 20 messages |
+| Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
+| Archived conversations | Whether archived conversations are named too, slowly in the background. | Skip (default), In the background |
+| Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
+
+**Projects**
+
+| Setting | What it does | Choices |
+| --- | --- | --- |
+| Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
+| Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
+
+`↑` `↓` pick a setting on the tab showing (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its choices; `enter` goes to the
 next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter` opens the theme list
 instead, and `←` `→` switch to the previous or next theme and save it at once. With the mouse: click a row to select
 it, the `‹` `›` buttons to step, or the value itself to go to the next choice (on Theme, to open the list). Off is the same as `0` in the file.
@@ -222,32 +263,10 @@ setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minute
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
 (`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
-**Smart features** (`enter` on that row; `esc` goes back to the settings) holds every setting for the token features, so the main
-popup stays short. The screen keeps the same rules: it scrolls on a short terminal (80x24 shows a window of it), explains the selected
-entry, and has under the entries `Used today: N of M tokens` and `Archived: N conversations, about X tokens to index (an estimate)`.
-
-| Setting | What it does | Choices |
-| --- | --- | --- |
-| Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
-| Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
-| Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
-| Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
-| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
-| Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
-| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
-| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
-| Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
-| Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
-| Recent messages sent | How many of a conversation's latest messages go into its summary, besides the first one. | 3, 5, 8 (default), 12, 20 messages |
-| Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
-| Archived conversations | Whether archived conversations are named too, slowly in the background. | Skip (default), In the background |
-| Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
-| Description search: conversations sent / results / wider search | How many conversations a search by description sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
-
 ### Features that use tokens
 
 Four features ask Claude, which uses your own Claude plan. They are **off by default** and switched on by **Enable features which
-require tokens** in the settings (under **Smart features**) plus the switch of each feature:
+require tokens** in the settings (on the **Smart features** tab) plus the switch of each feature:
 
 - **Smart names and summaries**: gives each conversation a short name and a one- or two-sentence summary (shown under the list for
   the selected row, found by the search), and keeps them up to date as the conversation goes on.
@@ -265,7 +284,7 @@ hand-off and `platoon tokens test` appear there too, by name).
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send Claude the
 prompts you typed plus one line of Claude's last reply for each conversation (for a project's notes, more of that reply), in small batches, and that you can switch it off any
-time (`s`, then Smart features, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one
+time (`s`, then the Smart features tab, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one
 line saying how to turn them on. Turning a switch off stops a call already in progress and throws its answer away; names and
 summaries already saved stay.
 
@@ -534,7 +553,7 @@ Code; without it nothing happens automatically.
 tokens - and starts a small helper in the background. Putting a conversation **into** a project does the same: `m`, a session
 started under a project, or one the SessionStart hook places there all mark the project, so its notes catch up a few minutes
 later without you having to resume anything (a conversation you never open again would otherwise never be read at all). The helper waits until the project has been quiet for as long as
-**Update notes after** says (3 minutes unless you change it, in the [settings](#settings) under Smart features: 1, 3, 5, 15 or
+**Update notes after** says (3 minutes unless you change it, in the [settings](#settings) on the Projects tab: 1, 3, 5, 15 or
 30 minutes; another turn starts that timer over) and then makes **one** request to Claude. Only one helper runs per project,
 and it works whether the platoon window is open or closed. Archived projects, archived sessions, and projects whose notes
 file doesn't exist yet are skipped entirely: platoon never starts the notes for you, you do that with `e`.

@@ -14,7 +14,7 @@ use crate::names::{self, Names};
 use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
 use crate::select::{click_count, extract, Click, Point, Selection, Unit};
-use crate::settings::{Item, Kind, Settings, SettingsStore, Step, ITEMS, SMART_ITEMS};
+use crate::settings::{Item, Kind, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
@@ -183,6 +183,8 @@ pub enum Hit {
     SearchKind(usize),
     /// A row of the search dialog's list: selects it, and a click on the selected one takes it.
     SearchRow(usize),
+    /// A tab of the settings screen: shows it.
+    SettingsTab(usize),
     /// A row of the settings screen: selects it.
     Setting(usize),
     /// A step button (or the value) of a setting: changes it.
@@ -370,13 +372,6 @@ pub struct Search {
     pub find: FindData,
 }
 
-/// Which screen of the settings is showing: the main one, or the one behind its "Smart features" entry.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Page {
-    Main,
-    Smart,
-}
-
 /// A conversation being renamed.
 pub struct Rename {
     pub id: String,
@@ -520,9 +515,9 @@ pub struct App {
     summaries: Summaries,
     /// The naming worker and the description search's calls (see `smart_glue.rs`).
     smart: Engine,
-    /// The settings screen showing: the main one or "Smart features".
-    pub page: Page,
-    /// The selected line of the settings screen, an index into the entries of `page` (`items()`).
+    /// The tab of the settings screen showing, an index into `settings::TABS`.
+    pub settings_tab: usize,
+    /// The selected line of the settings screen, an index into the entries of that tab (`items()`).
     pub setting: usize,
     /// The first entry of the settings screen in view, when the entries don't all fit. Kept between frames so the list
     /// scrolls only as far as the selection needs, like the other lists.
@@ -664,7 +659,7 @@ impl App {
             names: Names::open(&config),
             summaries: Summaries::open(&config),
             smart: Engine::new(),
-            page: Page::Main,
+            settings_tab: 0,
             settings,
             setting: 0,
             setting_top: Cell::new(0),
@@ -1216,7 +1211,6 @@ impl App {
             }
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
             (Action::Cancel, Mode::Themes) => self.close_theme_list(),
-            (Action::Cancel, Mode::Settings) if self.page == Page::Smart => self.close_smart_settings(),
             (Action::Confirm, Mode::Search) => self.confirm_search(),
             (Action::Cancel, Mode::Search) => self.cancel_search(),
             (Action::Confirm, Mode::Rename) => self.save_rename(),
@@ -1483,7 +1477,7 @@ impl App {
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
         self.refresh_settings();
-        self.page = Page::Main;
+        self.settings_tab = 0;
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
@@ -1559,26 +1553,26 @@ impl App {
         }
     }
 
-    /// The entries of the settings screen showing.
+    /// The entries of the settings tab showing.
     pub fn items(&self) -> &'static [Item] {
-        match self.page {
-            Page::Main => &ITEMS,
-            Page::Smart => &SMART_ITEMS,
-        }
+        &SETTINGS_TABS[self.settings_tab.min(SETTINGS_TABS.len() - 1)].items
     }
 
-    /// Open the "Smart features" screen from the main one.
-    fn open_smart_settings(&mut self) {
-        self.page = Page::Smart;
+    /// Show another tab of the settings, on its first entry.
+    pub(crate) fn switch_settings_tab(&mut self, i: usize) {
+        if i >= SETTINGS_TABS.len() || i == self.settings_tab {
+            return;
+        }
+        self.settings_tab = i;
         self.setting = 0;
         self.setting_top.set(0);
+        self.notice = None;
     }
 
-    /// Back from the "Smart features" screen to the main one, on the entry that opened it.
-    fn close_smart_settings(&mut self) {
-        self.page = Page::Main;
-        self.setting = ITEMS.iter().position(|i| i.kind == Kind::Submenu).unwrap_or(0);
-        self.setting_top.set(0);
+    /// Tab and Shift+Tab: the next or the previous tab, round from the last to the first.
+    fn step_settings_tab(&mut self, delta: i32) {
+        let n = SETTINGS_TABS.len() as i32;
+        self.switch_settings_tab((self.settings_tab as i32 + delta).rem_euclid(n) as usize);
     }
 
     /// Move to another line of the settings screen.
@@ -1591,13 +1585,6 @@ impl App {
     fn change_setting(&mut self, i: usize, step: Step) {
         let Some(item) = self.items().get(i) else { return };
         self.notice = None;
-        if item.kind == Kind::Submenu {
-            // Enter, space and "next" open it; going "back" on it does nothing.
-            if step != Step::Prev {
-                self.open_smart_settings();
-            }
-            return;
-        }
         // Start from the file as it is now, in case it was edited since the screen last looked.
         self.refresh_settings();
         if item.kind == Kind::Theme {
@@ -2077,6 +2064,8 @@ impl App {
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
                 KeyCode::Up => self.move_setting(-1),
                 KeyCode::Down => self.move_setting(1),
+                KeyCode::Tab => self.step_settings_tab(1),
+                KeyCode::BackTab => self.step_settings_tab(-1),
                 KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
                 KeyCode::End | KeyCode::Char('G') => self.setting = self.items().len() - 1,
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
@@ -2311,6 +2300,7 @@ impl App {
                     Some(Hit::SearchRow(i)) if i == self.search_selected() => self.act(Action::Confirm),
                     Some(Hit::SearchRow(i)) => self.select_search_row(i),
                     Some(Hit::Setting(i)) => self.setting = i,
+                    Some(Hit::SettingsTab(i)) => self.switch_settings_tab(i),
                     Some(Hit::SettingStep(i, step)) => {
                         self.setting = i;
                         self.change_setting(i, step);

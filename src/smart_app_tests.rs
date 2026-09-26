@@ -2,7 +2,7 @@
 //! `claude` that records every call and answers from files, and what the list, the files and the screen show out. Every
 //! directory is a temp dir (`World`, `AiFake`); the real `claude` is never reached (the app refuses it in tests).
 
-use crate::app::{App, Mode, Page};
+use crate::app::{App, Mode};
 use crate::ledger::Ledger;
 use crate::model::NameSource;
 use crate::settings::{self, Settings};
@@ -700,70 +700,111 @@ fn generated_names_and_summaries_are_found_by_the_quick_filter_and_by_full_text(
 
 // ---- the settings screens ---------------------------------------------------------------------------------------
 
-#[test]
-fn the_main_settings_screen_has_one_entry_for_the_smart_features_that_shows_the_master_switch_and_opens_a_screen() {
-    let w = World::new("sm-menu");
-    let mut app = w.app();
-    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    key(&mut app, KeyCode::Char('s'));
-    let main = screen(&mut term, &app);
-    assert!(main.contains("Smart features") && main.contains("Longest message kept"), "{main}");
-    assert!(!main.contains(settings::SMART_ITEMS[0].name) && !main.contains("Daily token limit"), "the token entries moved off the main screen:\n{main}");
-    let row_text = main.lines().find(|l| l.contains("Smart features")).unwrap();
-    assert!(row_text.contains("Off") && row_text.contains('›'), "{row_text}");
-    smart(&w, |s| s.tokens_enabled = true);
-    app.refresh_for_test();
-    let main = screen(&mut term, &app);
-    assert!(main.lines().find(|l| l.contains("Smart features")).unwrap().contains("On"), "{main}");
-    // Enter opens the screen; esc goes back to the main one (not out), esc again closes.
-    key(&mut app, KeyCode::End);
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.page, Page::Smart);
-    let smart_screen = screen(&mut term, &app);
-    assert!(smart_screen.contains("Smart features ") && smart_screen.contains(settings::SMART_ITEMS[0].name) && smart_screen.contains("Used today"), "{smart_screen}");
-    key(&mut app, KeyCode::Esc);
-    assert_eq!((app.page, matches!(app.mode, Mode::Settings), app.setting), (Page::Main, true, settings::ITEMS.len() - 1), "back on the entry that opened it");
-    key(&mut app, KeyCode::Esc);
-    assert!(matches!(app.mode, Mode::List));
-    // The mouse: a click on the value opens it too.
-    key(&mut app, KeyCode::Char('s'));
-    screen(&mut term, &app);
-    let value = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::SettingStep(i, settings::Step::Cycle) if *i == settings::ITEMS.len() - 1)).map(|(r, _)| *r).unwrap();
-    app.on_mouse(ratatui::crossterm::event::MouseEvent { kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), column: value.x + 1, row: value.y, modifiers: KeyModifiers::NONE });
-    assert_eq!(app.page, Page::Smart);
-    // Left on the entry does nothing; opening it again from the top of the main screen starts on the first entry.
-    key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Left);
-    assert_eq!(app.page, Page::Main);
-    key(&mut app, KeyCode::Right);
-    assert_eq!((app.page, app.setting), (Page::Smart, 0));
+/// The settings, on the tab of the entry called `name`, with that entry selected.
+fn go(app: &mut App, name: &str) {
+    if !matches!(app.mode, Mode::Settings) {
+        key(app, KeyCode::Char('s'));
+    }
+    let (tab, at) = settings::find_item(name).unwrap_or_else(|| panic!("no entry called {name}"));
+    while app.settings_tab != tab {
+        key(app, KeyCode::Tab);
+    }
+    key(app, KeyCode::Home);
+    for _ in 0..at {
+        key(app, KeyCode::Down);
+    }
+}
+
+fn click_at(app: &mut App, x: u16, y: u16) {
+    use ratatui::crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: x, row: y, modifiers: KeyModifiers::NONE });
 }
 
 #[test]
-fn the_smart_features_screen_shows_todays_use_the_archived_estimate_and_the_selected_explanation_at_80_by_24() {
+fn the_settings_have_five_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
+    let w = World::new("sm-tabs");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    key(&mut app, KeyCode::Char('s'));
+    let general = screen(&mut term, &app);
+    let tabs_line = general.lines().find(|l| l.contains("General")).unwrap().to_string();
+    for title in ["General", "Search", "Smart features", "Sessions", "Projects"] {
+        assert!(tabs_line.contains(title), "{title} on the tab line: {tabs_line}");
+    }
+    assert!(general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"), "{general}");
+    // The showing tab is lit like the header's (raised background, bold), the others quiet.
+    let lit = |term: &Terminal<TestBackend>, title: &str| {
+        let buf = term.backend().buffer();
+        let (y, line) = (0..buf.area.height)
+            .map(|y| (y, (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()))
+            .find(|(_, l)| l.contains("General") && l.contains("Projects"))
+            .unwrap();
+        let x = line[..line.find(title).unwrap()].chars().count() as u16;
+        let cell = &buf[(x, y)];
+        (cell.bg, cell.fg, cell.modifier.contains(ratatui::style::Modifier::BOLD))
+    };
+    let t = app.theme.clone();
+    assert_eq!(lit(&term, "General"), (t.surface, t.text, true));
+    assert_eq!(lit(&term, "Search"), (t.bg, t.dim, false));
+    // Tab goes on, Shift+Tab back, both round the ends.
+    key(&mut app, KeyCode::Tab);
+    assert_eq!((app.settings_tab, app.setting), (1, 0));
+    screen(&mut term, &app);
+    assert_eq!(lit(&term, "Search"), (t.surface, t.text, true));
+    assert_eq!(lit(&term, "General"), (t.bg, t.dim, false));
+    key(&mut app, KeyCode::BackTab);
+    key(&mut app, KeyCode::BackTab);
+    assert_eq!(app.settings_tab, 4, "shift+tab from the first goes to the last");
+    let projects = screen(&mut term, &app);
+    assert!(projects.contains("Update notes after") && !projects.contains("Stop idle sessions after"), "{projects}");
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.settings_tab, 0, "tab from the last goes to the first");
+    // A click on a title shows that tab, starting on its first entry.
+    key(&mut app, KeyCode::Down);
+    screen(&mut term, &app);
+    let smart_title = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::SettingsTab(2))).map(|(r, _)| *r).unwrap();
+    click_at(&mut app, smart_title.x + 2, smart_title.y);
+    assert_eq!((app.settings_tab, app.setting, matches!(app.mode, Mode::Settings)), (2, 0, true));
+    let smart_tab = screen(&mut term, &app);
+    assert!(smart_tab.contains(settings::TABS[2].items[0].name) && smart_tab.contains("Used today"), "{smart_tab}");
+    assert_eq!(lit(&term, "Smart features"), (t.surface, t.text, true));
+    // The master switch's value reads Off, then On once it is on.
+    assert!(smart_tab.lines().find(|l| l.contains(settings::TABS[2].items[0].name)).unwrap().contains("Off"), "{smart_tab}");
+    smart(&w, |s| s.tokens_enabled = true);
+    app.refresh_for_test();
+    let smart_tab = screen(&mut term, &app);
+    assert!(smart_tab.lines().find(|l| l.contains(settings::TABS[2].items[0].name)).unwrap().contains("On"), "{smart_tab}");
+    // Esc closes the settings from any tab, and they open again on the first.
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    key(&mut app, KeyCode::Char('s'));
+    assert_eq!((app.settings_tab, app.setting), (0, 0));
+}
+
+#[test]
+fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
     let w = World::new("sm-screen");
     simple(&w, "arc1", "please look into the archived topic one", 900);
     simple(&w, "arc2", "please look into the archived topic two", 1000);
     archive(&w, &["arc1", "arc2"]);
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    key(&mut app, KeyCode::Char('s'));
-    key(&mut app, KeyCode::End);
-    key(&mut app, KeyCode::Enter);
-    for at in 0..settings::SMART_ITEMS.len() {
-        key(&mut app, KeyCode::Home);
-        for _ in 0..at {
-            key(&mut app, KeyCode::Down);
-        }
-        let shown = screen(&mut term, &app);
-        let flat = shown.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
-        let item = &settings::SMART_ITEMS[at];
-        assert!(shown.contains(item.name), "{}: selected entry visible at 80x24:\n{shown}", item.name);
-        assert!(flat.contains(&item.explain.split_whitespace().collect::<Vec<_>>().join(" ")), "{}: its explanation is whole at 80x24:\n{shown}", item.name);
-        assert!(shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("esc back"), "{}:\n{shown}", item.name);
-        assert!(flat.contains("Archived: 2 conversations, about ") && flat.contains(" tokens to index (an estimate)"), "{}:\n{shown}", item.name);
-        for line in shown.lines().filter(|l| l.starts_with('│')) {
-            assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border: {line}");
+    for (ti, tab) in settings::TABS.iter().enumerate() {
+        for item in &tab.items {
+            go(&mut app, item.name);
+            assert_eq!(app.settings_tab, ti);
+            let shown = screen(&mut term, &app);
+            let flat = shown.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(shown.contains(item.name), "{}: selected entry visible at 80x24:\n{shown}", item.name);
+            assert!(flat.contains(&item.explain.split_whitespace().collect::<Vec<_>>().join(" ")), "{}: its explanation is whole at 80x24:\n{shown}", item.name);
+            assert!(shown.contains("esc back") && shown.contains("Projects"), "{}:\n{shown}", item.name);
+            // The day's use is on the smart features tab; the archived estimate with the archived entries on Sessions.
+            assert_eq!(shown.contains("Used today: 0 of 500,000 tokens"), ti == settings::TAB_SMART, "{}:\n{shown}", item.name);
+            let estimate = flat.contains("Archived: 2 conversations, about ") && flat.contains(" tokens to index (an estimate)");
+            assert_eq!(estimate, ti == settings::TAB_SESSIONS, "{}:\n{shown}", item.name);
+            for line in shown.lines().filter(|l| l.starts_with('│')) {
+                assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border: {line}");
+            }
         }
     }
     // The estimate is the local formula: characters over four plus 450 for the one call.
@@ -773,9 +814,7 @@ fn the_smart_features_screen_shows_todays_use_the_archived_estimate_and_the_sele
     // With nothing archived, it says so.
     let w2 = World::new("sm-screen-none");
     let mut app2 = w2.app();
-    key(&mut app2, KeyCode::Char('s'));
-    key(&mut app2, KeyCode::End);
-    key(&mut app2, KeyCode::Enter);
+    go(&mut app2, "Archived conversations");
     assert!(screen(&mut term, &app2).contains("Archived: none waiting to be named"));
 }
 
@@ -783,16 +822,6 @@ fn the_smart_features_screen_shows_todays_use_the_archived_estimate_and_the_sele
 fn the_smart_features_screen_changes_the_new_settings_and_saves_them() {
     let w = World::new("sm-screen-keys");
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('s'));
-    key(&mut app, KeyCode::End);
-    key(&mut app, KeyCode::Enter);
-    let go = |app: &mut App, name: &str| {
-        key(app, KeyCode::Home);
-        let at = settings::SMART_ITEMS.iter().position(|i| i.name == name).unwrap();
-        for _ in 0..at {
-            key(app, KeyCode::Down);
-        }
-    };
     go(&mut app, "Archived conversations");
     key(&mut app, KeyCode::Right);
     assert!(settings::load(&w.config).0.ai_archived);

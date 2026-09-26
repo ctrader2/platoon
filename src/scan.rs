@@ -160,12 +160,12 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
             let (mut current, corrupt) = settings::load(env.config);
             current.ai_archived = true;
             if !corrupt && settings::save(env.config, &current).is_ok() {
-                let _ = writeln!(out, "Archived conversations will be named slowly in the background. Change it any time in the settings, under Smart features.");
+                let _ = writeln!(out, "Archived conversations will be named slowly in the background. Change it any time in the settings, on the Sessions tab.");
             } else {
                 let _ = writeln!(out, "Couldn't save that choice, so archived conversations are skipped.");
             }
         } else {
-            let _ = writeln!(out, "Skipped. You can change this any time in the settings, under Smart features.");
+            let _ = writeln!(out, "Skipped. You can change this any time in the settings, on the Sessions tab.");
         }
     }
     outcome
@@ -328,7 +328,7 @@ mod tests {
         // Archived: an estimate, and a default that leaves them alone.
         assert!(shown.contains("Archived: 2 archived conversations, about ") && shown.contains("tokens to name (an estimate)."), "{shown}");
         assert!(shown.contains("[S]kip / [b]ackground") && shown.contains("50% of what is left of the day's limit"), "{shown}");
-        assert!(shown.contains("Skipped. You can change this any time in the settings, under Smart features."), "{shown}");
+        assert!(shown.contains("Skipped. You can change this any time in the settings, on the Sessions tab."), "{shown}");
         assert!(!settings::load(&w.config).0.ai_archived);
         let lower = shown.to_lowercase();
         for jargon in ["json", "stdin", "batch", "index", "api"] {

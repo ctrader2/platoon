@@ -2,9 +2,9 @@
 //! reading and the screen out. Every directory is a temp dir (`World`); nothing here starts a `claude`.
 
 use crate::ai::{self, FEATURES, MASTER_LABEL, TEST_FEATURE};
-use crate::app::{App, Mode, Page};
+use crate::app::{App, Mode};
 use crate::ledger::{FailKind, Ledger, Usage};
-use crate::settings::{self, Settings, ITEMS, SMART_ITEMS};
+use crate::settings::{self, Settings};
 use crate::testkit::World;
 use crate::ui;
 use crate::usage;
@@ -24,23 +24,15 @@ fn screen(term: &mut Terminal<TestBackend>, app: &App) -> String {
     (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
-/// The settings screen (the main one, or "Smart features" for an entry that lives there) with the entry called `name`
-/// selected.
+/// The settings screen, on the tab of the entry called `name`, with that entry selected.
 fn select(app: &mut App, name: &str) {
     if !matches!(app.mode, Mode::Settings) {
         key(app, KeyCode::Char('s'));
     }
-    let smart_at = SMART_ITEMS.iter().position(|i| i.name == name);
-    match (smart_at, app.page) {
-        (Some(_), Page::Main) => {
-            key(app, KeyCode::End);
-            key(app, KeyCode::Enter);
-            assert_eq!(app.page, Page::Smart, "enter on the last entry opens the smart features");
-        }
-        (None, Page::Smart) => key(app, KeyCode::Esc),
-        _ => {}
+    let (tab, at) = settings::find_item(name).unwrap_or_else(|| panic!("no entry called {name}"));
+    while app.settings_tab != tab {
+        key(app, KeyCode::Tab);
     }
-    let at = smart_at.unwrap_or_else(|| ITEMS.iter().position(|i| i.name == name).unwrap());
     key(app, KeyCode::Home);
     for _ in 0..at {
         key(app, KeyCode::Down);
@@ -170,7 +162,7 @@ fn the_header_says_quietly_when_the_features_are_paused_shrinks_to_fit_and_goes_
 }
 
 #[test]
-fn how_long_to_wait_before_updating_a_projects_notes_is_on_the_smart_screen_and_saved_at_once() {
+fn how_long_to_wait_before_updating_a_projects_notes_is_on_the_projects_tab_and_saved_at_once() {
     let w = World::new("tok-quiet");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(110, 40)).unwrap();
@@ -193,12 +185,9 @@ fn how_long_to_wait_before_updating_a_projects_notes_is_on_the_smart_screen_and_
     }
     key(&mut app, KeyCode::Left);
     assert_eq!(on_disk(&w).notes_quiet_minutes, 1, "never no wait at all");
-    // It sits with the notes feature it belongs to, after the switches.
-    let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-    let at = names.iter().position(|n| *n == "Update notes after").unwrap();
-    assert_eq!(names[at - 1], "Project descriptions", "right after the last of the feature switches");
-    assert_eq!(names[at + 1], "Read Claude's last reply up to", "with how much of Claude's replies the notes read");
-    assert_eq!(names[at + 2], "Daily token limit");
+    // It sits on the Projects tab, with how much of Claude's replies the notes read.
+    assert_eq!((settings::TABS[app.settings_tab].title, app.setting), ("Projects", 0));
+    assert_eq!(settings::find_item("Read Claude's last reply up to"), Some((app.settings_tab, 1)));
 }
 
 #[test]
@@ -243,7 +232,7 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
     select(&mut app, MASTER_LABEL);
     let shown = screen(&mut term, &app);
-    for want in [MASTER_LABEL, "Smart names and summaries", "Find a session by description", "Daily token limit", "500K tokens", "Pause above plan usage", "80%", "Model for smart features", "Haiku", "Conversations per call", "30 conversations", "Refresh a summary after", "5 messages", "Used today"] {
+    for want in [MASTER_LABEL, "Smart names and summaries", "Find a session by description", "Daily token limit", "500K tokens", "Pause above plan usage", "80%", "Model for smart features", "Haiku", "Used today"] {
         assert!(shown.contains(want), "{want}:\n{shown}");
     }
     // The master's explanation is shown while it is selected, in plain words.
@@ -264,7 +253,7 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     assert_eq!(fg_at(&term, MASTER_LABEL, "On"), Some(app.theme.accent), "On stands out");
     // At 80x24 the selected entry is whole and the day's count is still there.
     let mut small = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    for name in [MASTER_LABEL, "Daily token limit", "Refresh a summary after"] {
+    for name in [MASTER_LABEL, "Daily token limit", "Model for smart features"] {
         select(&mut app, name);
         let shown = screen(&mut small, &app);
         assert!(shown.contains(name) && shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("esc back"), "{name}:\n{shown}");

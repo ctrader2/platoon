@@ -1293,7 +1293,10 @@ mod tests {
 
     // --- the settings screen ------------------------------------------------------------------------
 
-    use crate::settings::{self, Settings, ITEMS};
+    use crate::settings::{self, Settings};
+
+    /// The General tab: the one the settings open on.
+    static ITEMS: std::sync::LazyLock<&'static [settings::Item]> = std::sync::LazyLock::new(|| &settings::TABS[0].items);
 
     fn config_file(w: &World) -> std::path::PathBuf {
         w.config.join("settings.json")
@@ -1438,7 +1441,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 9, "eight entries and the one that opens the smart features");
+        assert_eq!(ITEMS.len(), 4, "the General tab: the theme and three numbers");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -1711,7 +1714,7 @@ mod tests {
             for (j, other) in ITEMS.iter().enumerate().filter(|(j, _)| *j != i) {
                 assert!(!text.contains(other.explain), "{} is explained only while selected ({}, {j})", other.name, item.name);
             }
-            assert!(shown.matches('›').count() >= 7, "a window of entries stays in view:\n{shown}");
+            assert!(shown.matches('›').count() >= ITEMS.len(), "every entry of the tab stays in view:\n{shown}");
         }
     }
 
@@ -1951,7 +1954,7 @@ mod tests {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
             assert!(rows < 30 || text.contains("Changes are saved and apply immediately."), "{ctx}");
-            assert!(!text.contains("Used today"), "the day's token count is on the smart features screen: {ctx}");
+            assert!(!text.contains("Used today"), "the day's token count is on the smart features tab: {ctx}");
             let lower = text.to_lowercase();
             for jargon in ["sigterm", "host", "index", "pid", "json:"] {
                 assert!(!lower.contains(jargon), "{jargon:?} in {ctx}");

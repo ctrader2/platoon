@@ -540,7 +540,7 @@ impl App {
             let mut text = r.plain();
             if r.is_switch() {
                 text.push(' ');
-                text.push_str("Turn it on in the settings (press s, then Smart features).");
+                text.push_str("Turn it on in the settings (press s, then the Smart features tab).");
             }
             self.search.find.state = FindState::Failed(text);
             return;
