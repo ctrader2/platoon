@@ -124,19 +124,6 @@ impl Lab {
         fs::write(self.config.join("projects.json"), v.to_string()).unwrap();
     }
 
-    /// Record that this session has been handed this version of the notes, as the two hooks do.
-    fn mark_sent(&self, session: &str, notes: &str) {
-        // FNV-1a of "<project id>\n<notes>", as `sessionhook::notes_hash` writes it.
-        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        for b in format!("pweb\n{notes}").as_bytes() {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0100_0000_01b3);
-        }
-        let dir = self.cache.join("notes-sent");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(session), format!("{h:016x}")).unwrap();
-    }
-
     /// Today, in the local calendar, as the ledger keys its days.
     fn today(&self) -> String {
         let out = std::process::Command::new("date").arg("+%F").output().unwrap();
@@ -234,7 +221,7 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     for heading in ["# Summary", "# Decisions"] {
         assert!(notes.contains(heading), "{heading} missing from the template:\n{notes}");
     }
-    assert!(notes.lines().next().unwrap().contains("the summary at the top, the sections in between"), "{notes}");
+    assert!(notes.starts_with("# Summary"), "the line about who writes what is the pane's now, not the file's:\n{notes}");
 
     // What is typed reaches the editor; when it exits, platoon is back and shows the file as it is now.
     t.send(b"Sell socks online.\r");
@@ -387,25 +374,6 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
 }
 
 #[test]
-fn the_pane_says_the_notes_go_to_every_session_and_how_many_have_the_latest() {
-    let lab = Lab::new("notes-reach");
-    lab.project(Some("# Overview\nSell socks.\n"));
-    // Two sessions in the project, one of which has already been handed these notes by a hook.
-    lab.session("sess-1", "A basket page");
-    lab.session("sess-2", "Card payments");
-    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
-    t.wait_for("enter open");
-    lab.open_notes(&mut t);
-    wait_pane(&mut t, "These notes go to every session in this project; 0 of 2 have the latest version.");
-    lab.mark_sent("sess-1", "# Overview\nSell socks.\n");
-    wait_pane(&mut t, "1 of 2 have the latest version.");
-    lab.mark_sent("sess-2", "# Overview\nSell socks.\n");
-    wait_pane(&mut t, "all 2 have the latest version.");
-    t.send(b"q");
-    t.wait_exit();
-}
-
-#[test]
 fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_when_the_reason_goes() {
     let lab = Lab::new("notes-paused");
     lab.project(Some("# Overview\nSell socks.\n"));
@@ -442,7 +410,7 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     lab.clear_the_plan();
     wait_pane_gone(&mut t, "not updating right now");
     t.wait_gone("smart features paused");
-    wait_pane(&mut t, "These notes go to every session in this project");
+    wait_pane(&mut t, "notes are added as context to each session in a project");
     t.send(b"q");
     t.wait_exit();
 }

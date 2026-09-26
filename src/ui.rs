@@ -496,18 +496,31 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
-    // Above the notes: whether platoon is updating them or when it last did, the editor it has open on them, and
-    // the warning when the file has grown big.
+    // Above the notes, one quiet line: whether platoon is updating them or when it last did, and where they go.
     let mut top_lines: Vec<Line> = Vec::new();
-    if app.notes_updating() {
-        top_lines.push(Line::styled("platoon is updating these notes now.", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
-        top_lines.push(Line::raw(""));
-    } else if let Some(at) = app.notes_updated_at() {
-        let when = ago(crate::usage::now() * 1000, at * 1000);
-        let when = if when == "now" { "just now".to_string() } else { format!("{when} ago") };
-        top_lines.push(Line::styled(format!("platoon last updated these {when}."), Style::new().fg(t.dim)));
-        top_lines.push(Line::raw(""));
+    let (first, first_color) = if app.notes_updating() {
+        (Some("platoon is currently updating the project notes.".to_string()), t.warn)
+    } else {
+        let when = app.notes_updated_at().map(|at| ago(crate::usage::now() * 1000, at * 1000));
+        let when = when.map(|w| if w == "now" { "just now".to_string() } else { format!("{w} ago") });
+        (when.map(|w| format!("platoon last updated these {w}.")), t.dim)
+    };
+    let reach = "notes are added as context to each session in a project";
+    let width = area.width as usize;
+    match first {
+        Some(first) if first.chars().count() + 1 + reach.chars().count() <= width => {
+            top_lines.push(Line::from(vec![Span::styled(first, Style::new().fg(first_color)), Span::styled(format!(" {reach}"), Style::new().fg(t.dim))]));
+        }
+        first => {
+            for line in first.iter().flat_map(|f| wrap(f, width)) {
+                top_lines.push(Line::styled(line, Style::new().fg(first_color)));
+            }
+            for line in wrap(reach, width) {
+                top_lines.push(Line::styled(line, Style::new().fg(t.dim)));
+            }
+        }
     }
+    top_lines.push(Line::raw(""));
     if let Some(name) = app.notes_editor_open() {
         top_lines.push(Line::styled(format!("Open in {name}, in a window of its own."), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
         top_lines.push(Line::styled("platoon reads them again when you are done.", Style::new().fg(t.subtext)));
@@ -517,13 +530,6 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     if let Some(why) = app.notes_stopped() {
         for line in wrap(&format!("These notes are not updating right now: {why}"), area.width as usize) {
             top_lines.push(Line::styled(line, Style::new().fg(t.warn)));
-        }
-        top_lines.push(Line::raw(""));
-    }
-    // Where the notes go, and how many of the project's sessions already have this version.
-    if let Some(reach) = app.notes_reach() {
-        for line in wrap(&reach, area.width as usize) {
-            top_lines.push(Line::styled(line, Style::new().fg(t.dim)));
         }
         top_lines.push(Line::raw(""));
     }
@@ -545,7 +551,8 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
     // The file stays plain Markdown; the pane shows it the way a Markdown viewer would, scrolled in drawn lines.
-    let lines = crate::mdview::render(&text, area.width as usize, t, app.plain_marker);
+    // A line platoon once wrote at the top saying who writes what is left out: the line above says it now.
+    let lines = crate::mdview::render(crate::notes::without_preamble(&text), area.width as usize, t, app.plain_marker);
     let rows = area.height as usize;
     let top = app.notes_top.get().min(lines.len().saturating_sub(rows));
     app.notes_top.set(top);

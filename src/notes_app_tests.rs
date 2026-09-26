@@ -314,41 +314,42 @@ fn long_notes_are_not_warned_about_at_all_and_nothing_is_cut() {
 }
 
 #[test]
-fn the_pane_says_the_notes_go_to_every_session_and_how_many_have_the_latest() {
+fn the_pane_says_in_one_line_when_platoon_last_updated_the_notes_and_where_they_go() {
     let (w, mut app, id) = on_the_notes("notes-reach");
-    // A second session in the project, and a third that is archived (those are left out of the count).
-    w.transcript("bbb-2", "/tmp", "another conversation", 20);
-    w.transcript("ccc-3", "/tmp", "an old conversation", 30);
-    app.projects.assign("bbb-2", Some(&id)).unwrap();
-    app.projects.assign("ccc-3", Some(&id)).unwrap();
-    set_notes(&w, &id, "# Overview\nSell socks.\n");
+    let reach = "notes are added as context to each session in a project";
+    // platoon's own old line at the top of the file is left out; the one line above the notes says it now.
+    set_notes(&w, &id, &format!("{}\n\n# Overview\nSell socks.\n", notes::OLD_PREAMBLES[0]));
     app.reload_for_test();
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("These notes go to every session in this project; 0 of 3 have the latest version."), "{shown}");
+    assert!(shown.contains(reach) && shown.contains("Sell socks."), "{shown}");
+    assert!(!shown.contains("platoon last updated") && !shown.contains("keeps these up to date"), "{shown}");
+    assert!(!shown.contains("latest version"), "no count of sessions any more: {shown}");
 
-    // The hook records what it handed over: one session has it.
-    let hash = crate::sessionhook::notes_hash(&id, "# Overview\nSell socks.\n");
-    crate::sessionhook::mark_sent(&w.cache, "aaa-1", &hash);
-    app.reload_for_test();
-    assert!(flat(&draw(&mut term, &app)).contains("1 of 3 have the latest version."), "{}", flat(&draw(&mut term, &app)));
-
-    // All of them, with the archived one never counted.
-    for s in ["bbb-2", "ccc-3"] {
-        crate::sessionhook::mark_sent(&w.cache, s, &hash);
-    }
-    app.reload_for_test();
+    // After an update: when, on the same line.
+    let mut state = crate::notesupdate::State::load(&w.config, &id);
+    state.last_update_at = crate::usage::now() - 300;
+    state.save(&w.config, &id).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("all 3 have the latest version."), "{shown}");
-    crate::archive::Archive::open(&w.config).archive("ccc-3", crate::usage::now()).unwrap();
-    app.reload_for_test();
-    let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("all 2 have the latest version."), "an archived session is left out: {shown}");
+    assert!(shown.contains(&format!("platoon last updated these 5m ago. {reach}")), "{shown}");
 
-    // Notes that change are nobody's latest again.
-    set_notes(&w, &id, "# Overview\nSell socks and hats.\n");
-    app.reload_for_test();
-    assert!(flat(&draw(&mut term, &app)).contains("0 of 2 have the latest version."), "{}", flat(&draw(&mut term, &app)));
+    // While an update runs (a live mark from this process): that part says so, in the theme's warning color.
+    let mark = crate::notesrun::running_path(&w.cache, &id);
+    std::fs::create_dir_all(mark.parent().unwrap()).unwrap();
+    std::fs::write(&mark, std::process::id().to_string()).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains(&format!("platoon is currently updating the project notes. {reach}")), "{shown}");
+    let t = app.effective_theme();
+    let buf = term.backend().buffer().clone();
+    // The color of the cell where `word` starts.
+    let at = |word: &str| {
+        let row = (0..buf.area.height).find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().contains(word)).unwrap();
+        let line: String = (0..buf.area.width).map(|x| buf[(x, row)].symbol()).collect();
+        let col = line[..line.find(word).unwrap()].chars().count() as u16;
+        buf[(col, row)].fg
+    };
+    assert_eq!(at("currently updating"), t.warn);
+    assert_eq!(at("notes are added"), t.dim);
 }
 
 #[test]

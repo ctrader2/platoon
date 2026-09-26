@@ -18,23 +18,29 @@ use std::{
 /// How many earlier versions of one project's notes are kept.
 pub const MAX_VERSIONS: usize = 20;
 
-/// The line at the top of the notes, saying who writes what. platoon replaces this one line (and only this one)
-/// in a file that still carries the one it wrote before the shape of the notes became fluid.
-pub const PREAMBLE: &str = "\
-platoon keeps these up to date: the summary at the top, the sections in between, and dated entries in Decisions. Your own words are always kept.
+/// The lines platoon itself once wrote at the top of the notes, saying who writes what. The notes pane now says
+/// that in one line of its own, so these are platoon's words to take out again: the pane leaves them out
+/// (`without_preamble`) and the next update drops them from the file. Word for word, so nothing the user wrote goes.
+pub const OLD_PREAMBLES: [&str; 2] = [
+    "platoon keeps these up to date: the summary at the top, the sections in between, and dated entries in Decisions. Your own words are always kept.",
+    "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.",
+];
 
-";
-
-/// What a new `project.md` starts from: that line, then the two headings that are always there. The sections in
-/// between are added as the work needs them (`notesupdate.rs`), and anyone may add their own with `e`.
+/// What a new `project.md` starts from: the two headings that are always there. The sections in between are
+/// added as the work needs them (`notesupdate.rs`), and anyone may add their own with `e`.
 pub const TEMPLATE: &str = "\
-platoon keeps these up to date: the summary at the top, the sections in between, and dated entries in Decisions. Your own words are always kept.
-
 # Summary
 
 # Decisions
 
 ";
+
+/// The notes without one of platoon's old lines at the top (and the blank lines after it); anything else as it is.
+pub fn without_preamble(text: &str) -> &str {
+    let rest = text.trim_start_matches('\n');
+    let (first, after) = rest.split_once('\n').unwrap_or((rest, ""));
+    if OLD_PREAMBLES.contains(&first.trim()) { after.trim_start_matches('\n') } else { text }
+}
 
 /// Where the earlier versions of a project's notes are kept.
 pub fn history_dir(config: &Path, id: &str) -> PathBuf {
@@ -274,18 +280,26 @@ mod tests {
     }
 
     #[test]
-    fn a_new_file_starts_from_the_template_with_the_two_fixed_headings_and_who_writes_what() {
+    fn a_new_file_starts_from_the_template_with_the_two_fixed_headings() {
         let mut at = 0;
         for heading in ["# Summary", "# Decisions"] {
             let found = TEMPLATE[at..].find(heading).unwrap_or_else(|| panic!("{heading} missing from the template:\n{TEMPLATE}"));
             at += found + heading.len();
         }
-        assert!(TEMPLATE.starts_with(PREAMBLE), "the template starts with the line that says who writes what");
-        let first = TEMPLATE.lines().next().unwrap();
-        assert!(first.contains("summary at the top") && first.contains("Decisions") && first.contains("Your own words"), "{first}");
+        assert!(TEMPLATE.starts_with("# Summary"), "the pane says who writes what, not the file:\n{TEMPLATE}");
         let lower = TEMPLATE.to_lowercase();
         for jargon in ["markdown", "prompt", "token", "llm", "context window"] {
             assert!(!lower.contains(jargon), "{jargon:?} in the template");
+        }
+    }
+
+    #[test]
+    fn platoon_s_old_lines_at_the_top_are_left_out_and_nothing_else_is() {
+        for old in OLD_PREAMBLES {
+            assert_eq!(without_preamble(&format!("{old}\n\n# Summary\n\nSocks.\n")), "# Summary\n\nSocks.\n");
+        }
+        for kept in ["# Summary\n\nSocks.\n", "My own line first.\n\n# Summary\n", "", "platoon keeps these up to date.\n# Summary\n"] {
+            assert_eq!(without_preamble(kept), kept);
         }
     }
 

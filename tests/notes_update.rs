@@ -291,7 +291,7 @@ fn the_notes_pane_says_while_an_update_is_running() {
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.base, 40, 120);
     lab.open_notes(&mut t);
-    t.wait_for_flat("platoon is updating these notes now");
+    t.wait_for_flat("platoon is currently updating the project notes.");
     assert_eq!(helper.wait().unwrap().code(), Some(0));
     until("the notes to be updated", || lab.notes().contains("The basket page is in."));
     // Once it is done the line changes to when it last ran, and the change is announced.

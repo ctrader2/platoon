@@ -974,14 +974,12 @@ fn open_questions(doc: &mut Doc, state: &State, text: &str, answered: bool, out:
     }
 }
 
-/// The one line of the old template, which said platoon kept five fixed sections. It is platoon's own words, word
-/// for word, so it is the one piece of an older file platoon replaces outright; anything else the user has written
-/// above the first heading is left alone.
-const OLD_PREAMBLE: &str = "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.";
-
+/// The line platoon once wrote at the top saying who writes what (now said by the notes pane) is platoon's own
+/// words, word for word, so it is the one piece above the first heading platoon takes out; anything else the user
+/// has written there is left alone.
 fn migrate_preamble(doc: &mut Doc) {
-    if doc.preamble.trim() == OLD_PREAMBLE {
-        doc.preamble = crate::notes::PREAMBLE.to_string();
+    if crate::notes::OLD_PREAMBLES.contains(&doc.preamble.trim()) {
+        doc.preamble.clear();
     }
 }
 
@@ -1147,9 +1145,9 @@ My own notes, in my own words.
         assert!(m.text.contains("# Summary\n\nA shop for socks."), "{}", m.text);
         assert!(m.text.contains("A checkout page."), "{}", m.text);
         assert!(m.text.contains(&format!("- {}: Ship on Friday.", day(NOW))), "{}", m.text);
-        // The one line of the old template, which described the fixed shape, is replaced by the one that fits.
-        assert!(!m.text.contains(OLD_PREAMBLE), "{}", m.text);
-        assert_eq!(Doc::parse(&m.text).preamble.trim(), crate::notes::PREAMBLE.trim());
+        // The one line of the old template, which described the fixed shape, is gone: the pane says who writes what.
+        assert!(!m.text.contains(crate::notes::OLD_PREAMBLES[1]), "{}", m.text);
+        assert_eq!(Doc::parse(&m.text).preamble, "");
         // The record moves on by heading, and "Notes" is simply a section like any other now.
         assert_eq!(m.mine.get("summary").map(String::as_str), Some("A shop for socks. The basket works; the checkout is next."));
         assert_eq!(m.mine.get("requirements").map(String::as_str), Some("A basket page.\nA checkout page."));

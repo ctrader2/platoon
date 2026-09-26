@@ -454,9 +454,6 @@ pub struct App {
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
     /// automatic update (or by anything else) while the screen is open is noticed and said once.
     pub notes_seen: Option<(String, crate::notes::Stamp)>,
-    /// For the open project: how many of its sessions have the version of the notes that is on disk now, of how
-    /// many sessions in all. Worked out with the rest of the state, not while drawing.
-    notes_reach_count: Option<(usize, usize)>,
     /// Why the open project's notes are not being kept up to date, in the words the pane shows. None while they are.
     notes_stopped: Option<String>,
     /// What the header says while nothing that spends tokens can run: the short form and the one with where to
@@ -625,7 +622,6 @@ impl App {
             pane: Pane::Sessions,
             notes_top: Cell::new(0),
             notes_seen: None,
-            notes_reach_count: None,
             notes_stopped: None,
             ai_note: None,
             archived_rows: 0,

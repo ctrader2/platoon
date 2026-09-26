@@ -120,19 +120,6 @@ impl App {
         self.notes_seen = Some((project, stamp));
     }
 
-    /// The line above the notes saying they go to every session in the project, and how many of them already have
-    /// this version. platoon knows from the hash it keeps per session (`sessionhook.rs`); archived sessions are
-    /// left out, as they are everywhere else in a project.
-    pub fn notes_reach(&self) -> Option<String> {
-        let (have, total) = self.notes_reach_count?;
-        let lead = "These notes go to every session in this project";
-        Some(match (have, total) {
-            (_, 0) => format!("{lead}."),
-            (have, total) if have == total => format!("{lead}; all {total} have the latest version."),
-            (have, total) => format!("{lead}; {have} of {total} have the latest version."),
-        })
-    }
-
     /// Why these notes are not being kept up to date right now (the master switch, this feature's switch, the daily
     /// limit, the plan pause, a back-off), with where to change it. None while the updater can run.
     pub fn notes_stopped(&self) -> Option<&str> {
@@ -153,25 +140,16 @@ impl App {
     }
 
     /// Work out, with the rest of the state, what the notes pane says about the open project: why its notes are
-    /// not updating, and how many of its sessions already have them. A handful of small reads, and nothing at all
-    /// while no project's screen is open.
+    /// not updating. A handful of small reads, and nothing at all while no project's screen is open.
     pub(super) fn poll_notes_status(&mut self) {
         let settings = self.settings.get();
         let now = self.clock();
         self.ai_note = ai::header_note(&settings, &self.cache, now);
-        let Some(project) = self.open_project.clone() else {
-            self.notes_reach_count = None;
+        if self.open_project.is_none() {
             self.notes_stopped = None;
             return;
-        };
+        }
         self.notes_stopped = ai::stopped_reason(&settings, notesrun::FEATURE, &self.cache, now);
-        let notes = std::fs::read_to_string(self.projects.notes_path(&project)).unwrap_or_default();
-        self.notes_reach_count = (!notes.trim().is_empty()).then(|| {
-            let hash = crate::sessionhook::notes_hash(&project, &notes);
-            let sessions: Vec<String> = self.projects.members_of(&project).into_iter().filter(|s| !self.archive.contains(s)).collect();
-            let have = sessions.iter().filter(|s| crate::sessionhook::sent_hash(&self.cache, s).as_deref() == Some(hash.as_str())).count();
-            (have, sessions.len())
-        });
     }
 
     // ---- starting an editor -----------------------------------------------------------------------------------
