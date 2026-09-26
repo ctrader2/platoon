@@ -378,7 +378,7 @@ mod tests {
         let id = r.project("someone", "# Overview\nSell socks.\n");
         let mut t = crate::tickets::Tickets::open(&r.config, &id);
         let n = t.add(crate::tickets::NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
         let text = r.prompt("lead-1").expect("the leader gets them");
         assert!(text.starts_with("These are the notes of the project \"Web shop\" that your ticket belongs to") && text.ends_with("Sell socks."), "{text}");
         assert_eq!(r.prompt("lead-1"), None);

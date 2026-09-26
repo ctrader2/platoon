@@ -381,7 +381,8 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
 
     // The switch off, with the features on: the pane says which switch, and where.
     lab.write_settings(json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": false}}));
-    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 150);
+    // Wide enough for the three tabs, the usage and the whole note beside them.
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 165);
     t.wait_for("enter open");
     lab.open_notes(&mut t);
     wait_pane(&mut t, "These notes are not updating right now: \"Project notes\" is switched off. Press s for the settings to switch it back on.");

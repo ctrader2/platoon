@@ -422,7 +422,9 @@ pub fn gather_results(config: &Path, id: &str, state: &State) -> (Vec<notesupdat
         .filter(|t| t.state == crate::tickets::State::Done)
         .filter_map(|t| {
             let leader = t.leader()?;
-            let squad = crate::squads::find(&leader.squad).map_or_else(|| leader.squad.clone(), |s| s.name.to_string());
+            // Its name as it was when the leader started (the snapshot), else as it is now.
+            let then = store.snapshot(leader).and_then(|text| crate::squads::Launch::from_json(&text)).map(|l| l.name).filter(|n| !n.is_empty());
+            let squad = then.unwrap_or_else(|| crate::squadfile::name_of(config, &leader.squad));
             Some(notesupdate::DoneTicket { number: t.number, squad, result: store.result(t.number)? })
         })
         .collect();
@@ -1396,8 +1398,8 @@ mod tests {
         let mut t = Tickets::open(&r.env.config, &id);
         let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
         let other = t.add(NewTicket { title: "Socks".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
-        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
         // Only Done results count: one that is Done, one whose ticket was reopened after its result was written.
         t.squad_says(n, &crate::tickets::State::Done, "", Some("Added the basket page on ticket/1.")).unwrap();
         t.squad_says(other, &crate::tickets::State::Done, "", Some("Socks are in.")).unwrap();

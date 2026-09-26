@@ -134,6 +134,10 @@ pub struct Leader {
     /// The names its session's agents were given when it started. A session is resumed with the names it began
     /// with, so a leader started before the names carried the squad's keeps its plain ones.
     pub names: AgentNames,
+    /// The file beside the ticket's body that holds what it was started with (`<NN>-squad-<k>.json`): continued
+    /// later, it runs with the squad as it was then. None for a leader started before there were snapshots (it
+    /// continues with the squad as it is now).
+    pub snapshot: Option<String>,
 }
 
 /// How a leader session's agents (`--agents`, `--agent`) are named.
@@ -357,6 +361,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                             session,
                             started: l.get("started").and_then(Value::as_u64).unwrap_or(0),
                             names: AgentNames::from_id(l.get("names").and_then(Value::as_str)),
+                            snapshot: l.get("snapshot").and_then(Value::as_str).filter(|f| is_snapshot_file(f)).map(String::from),
                         })
                     })
                     .collect()
@@ -731,6 +736,9 @@ impl Tickets {
         if let (Some(id), Some(o)) = (leader.names.id(), l.as_object_mut()) {
             o.insert("names".into(), json!(id));
         }
+        if let (Some(f), Some(o)) = (&leader.snapshot, l.as_object_mut()) {
+            o.insert("snapshot".into(), json!(f));
+        }
         let w: Vec<Value> = worktrees.iter().map(|w| json!({"folder": w.folder, "path": w.path, "branch": w.branch})).collect();
         self.edit(number, move |t, _| {
             match t.get_mut("leaders").and_then(Value::as_array_mut) {
@@ -796,6 +804,20 @@ impl Tickets {
         })
     }
 
+    /// Keep what a new leader of ticket `number` is started with, beside the ticket's body: the `k`th leader it has.
+    /// Returns the file's name, for the leader's entry.
+    pub fn save_snapshot(&self, number: u32, k: usize, text: &str) -> io::Result<String> {
+        let name = snapshot_file(number, k);
+        write_atomic(&bodies_dir(&self.config, &self.project).join(&name), text)?;
+        Ok(name)
+    }
+
+    /// The text of a leader's snapshot, if it has one and it can be read.
+    pub fn snapshot(&self, leader: &Leader) -> Option<String> {
+        let name = leader.snapshot.as_deref()?;
+        fs::read_to_string(bodies_dir(&self.config, &self.project).join(name)).ok()
+    }
+
     /// The squad's result for the ticket, if it has written one.
     pub fn result(&self, number: u32) -> Option<String> {
         let text = fs::read_to_string(bodies_dir(&self.config, &self.project).join(result_file(number))).ok()?;
@@ -835,6 +857,16 @@ impl Tickets {
     pub fn touch(&mut self, number: u32) -> io::Result<()> {
         self.edit(number, |_, _| Ok(()))
     }
+}
+
+/// The name of the file the `k`th leader of ticket `number` keeps what it was started with in, beside the bodies.
+pub fn snapshot_file(number: u32, k: usize) -> String {
+    format!("{number:02}-squad-{k}.json")
+}
+
+/// A snapshot's file name as the ticket names it: a plain name in the bodies' folder, never a path elsewhere.
+fn is_snapshot_file(name: &str) -> bool {
+    name.ends_with(".json") && !name.contains('/') && !name.contains('\\') && !name.starts_with('.')
 }
 
 /// The name of the file a squad's result for ticket `number` is kept in, beside the bodies.
@@ -1558,7 +1590,7 @@ mod tests {
         assert_eq!(x.handover, Some(Handover { squad: "coding".into(), kind: HandoverKind::Refused, says: "This is docs work.".into() }));
         t.handover_failed(n, "coding", HandoverKind::NoCheck, "Session limit has been reached").unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover.as_ref().map(|h| h.kind.clone()), Some(HandoverKind::NoCheck));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover, None, "a leader started: nothing to say any more");
         t.handover_failed(n, "coding", HandoverKind::NotStarted, "x").unwrap();
         t.set_state(n, &State::Cancelled).unwrap();
@@ -1570,7 +1602,7 @@ mod tests {
         let d = dir("permission");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
         let before = fs::read(t.path()).unwrap();
         assert!(!t.permission_answered(n).unwrap(), "Working: nothing to answer");
         assert_eq!(fs::read(t.path()).unwrap(), before, "and nothing written, not even the time");
@@ -1620,10 +1652,10 @@ mod tests {
         let d = dir("names");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "a");
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "new-1".into(), started: 1, names: AgentNames::SquadRole }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "new-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
         assert_eq!(saved(&d)["tickets"][0]["leaders"][0]["names"], "squad-role");
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().leader().unwrap().names, AgentNames::SquadRole);
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "old-1".into(), started: 2, names: AgentNames::Plain }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "old-1".into(), started: 2, names: AgentNames::Plain, snapshot: None }, &[]).unwrap();
         assert!(saved(&d)["tickets"][0]["leaders"][1].get("names").is_none(), "the plain names: nothing written, as before");
         // A leader written by the platoon before this one (no "names") was started with the plain names.
         let mut v = saved(&d);
@@ -1637,12 +1669,36 @@ mod tests {
     }
 
     #[test]
+    fn a_leader_keeps_its_snapshot_beside_the_body_and_only_by_a_plain_file_name() {
+        let d = dir("snapshot");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "a");
+        let name = t.save_snapshot(n, 1, "{\"agents\":{}}\n").unwrap();
+        assert_eq!(name, "01-squad-1.json");
+        assert!(bodies_dir(&d, "p1").join("01-squad-1.json").exists());
+        let l = Leader { squad: "coding".into(), session: "s-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(name) };
+        t.start_leader(n, &l, &[]).unwrap();
+        assert_eq!(saved(&d)["tickets"][0]["leaders"][0]["snapshot"], "01-squad-1.json");
+        let back = Tickets::open(&d, "p1");
+        let got = back.get(n).unwrap().leader().unwrap().clone();
+        assert_eq!(got, l);
+        assert_eq!(back.snapshot(&got).as_deref(), Some("{\"agents\":{}}\n"));
+        // Only a plain name in the bodies' folder is ever read: a path somewhere else is no snapshot.
+        let mut v = saved(&d);
+        if let Some(o) = v.pointer_mut("/tickets/0/leaders/0").and_then(Value::as_object_mut) {
+            o.insert("snapshot".into(), json!("../../../settings.json"));
+        }
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().leader().unwrap().snapshot, None);
+    }
+
+    #[test]
     fn only_the_current_leader_of_a_working_ticket_is_at_work() {
         let d = dir("at-work");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
         assert!(!leader_at_work(&d, "lead-1"));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
         assert!(leader_at_work(&d, "lead-1"));
         assert!(!leader_at_work(&d, "someone"));
         for s in [State::Waiting, State::Ready, State::Done, State::Cancelled, State::New] {
@@ -1650,7 +1706,7 @@ mod tests {
             assert!(!leader_at_work(&d, "lead-1"), "{s:?}");
         }
         t.set_state(n, &State::Working).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default() }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default(), snapshot: None }, &[]).unwrap();
         assert!(!leader_at_work(&d, "lead-1"), "an earlier leader");
         assert!(leader_at_work(&d, "lead-2"));
     }

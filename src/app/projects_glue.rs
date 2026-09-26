@@ -6,10 +6,11 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1`, `2`, ... (a third, Squads, may come later).
-pub const TOPS: &[&str] = &["Sessions", "Projects"];
+/// The top-level tabs, on `1`, `2`, `3`.
+pub const TOPS: &[&str] = &["Sessions", "Projects", "Squads"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_PROJECTS: usize = 1;
+pub const TOP_SQUADS: usize = 2;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
 pub const PTABS: &[(&str, &str)] = &[
@@ -36,6 +37,8 @@ pub enum NamePurpose {
     NewTicket,
     /// A new title for this ticket.
     TicketTitle(u32),
+    /// Something on the Squads tab: a squad's name, a member's.
+    Squad(super::SquadName),
 }
 
 pub struct NameBox {
@@ -78,6 +81,11 @@ pub struct PStat {
 }
 
 impl App {
+    /// The Squads tab is showing.
+    pub fn squads_tab_showing(&self) -> bool {
+        self.top == TOP_SQUADS && self.open_project.is_none()
+    }
+
     /// The Projects tab's list is showing (not a project's screen).
     pub fn projects_list_showing(&self) -> bool {
         self.top == TOP_PROJECTS && self.open_project.is_none()
@@ -241,9 +249,9 @@ impl App {
         match key.code {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
             KeyCode::Char('q') => return self.act(Action::Quit),
-            KeyCode::Char('/') if self.tk.open.is_none() => return self.act(Action::Search),
+            KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() => return self.act(Action::Search),
             // On a ticket (its screen, or its row in the Tickets pane) `s` is its state.
-            KeyCode::Char('s') if !self.ticket_has_keys() => return self.act(Action::Settings),
+            KeyCode::Char('s') if !ctrl && !self.ticket_has_keys() => return self.act(Action::Settings),
             // 1 is the first top-level tab, 2 the second; a number with no tab does nothing.
             KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => return self.switch_top(c as usize - '1' as usize),
             _ => {}
@@ -254,6 +262,8 @@ impl App {
             self.project_screen_key(key);
         } else if self.top == TOP_PROJECTS {
             self.projects_key(key);
+        } else if self.top == TOP_SQUADS {
+            self.squads_tab_key(key);
         } else {
             self.sessions_key(key);
         }
@@ -362,7 +372,9 @@ impl App {
 
     pub(super) fn wheel_list(&mut self, up: bool) {
         let d = if up { -1 } else { 1 };
-        if self.projects_list_showing() {
+        if self.squads_tab_showing() {
+            self.wheel_squads(up);
+        } else if self.projects_list_showing() {
             self.move_project(d);
         } else if self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets) {
             self.wheel_ticket(up);
@@ -393,7 +405,8 @@ impl App {
     }
 
     pub(super) fn type_project_name(&mut self, text: &str) {
-        let max = match self.name_box.purpose {
+        let max = match &self.name_box.purpose {
+            NamePurpose::Squad(p) => Self::squad_name_max(p),
             NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => crate::tickets::TITLE_MAX,
             _ => projects_mod::NAME_MAX,
         };
@@ -404,6 +417,7 @@ impl App {
     /// Enter in the name box.
     pub(super) fn save_name_box(&mut self) {
         match self.name_box.purpose.clone() {
+            NamePurpose::Squad(p) => return self.save_squad_name(p),
             NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {
                 let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
                 if title.is_empty() {
@@ -431,7 +445,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {}
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::Squad(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

@@ -33,6 +33,7 @@ mod scan;
 mod settings;
 mod smart;
 mod squads;
+mod squadfile;
 mod summaries;
 mod textbox;
 mod tickets;
@@ -61,6 +62,8 @@ mod smart_app_tests;
 mod testkit;
 #[cfg(test)]
 mod squads_app_tests;
+#[cfg(test)]
+mod squadtab_app_tests;
 #[cfg(test)]
 mod tickets_app_tests;
 #[cfg(test)]
@@ -556,7 +559,7 @@ mod tests {
         assert_eq!((app.top, app.tab), (0, 0));
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("1 Sessions 2 2 Projects 0") && shown.contains("Active 2 Archived 1"), "{shown}");
+        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 1") && shown.contains("Active 2 Archived 1"), "{shown}");
 
         // Left and right: Active and Archived.
         key(&mut app, KeyCode::Right);
@@ -566,12 +569,14 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 and 2: the top-level tabs. A number with no tab does nothing.
+        // 1, 2 and 3: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
-        ch(&mut app, '3');
-        assert_eq!(app.top, 1);
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
+        ch(&mut app, '3');
+        assert!(app.top == 2 && app.squads_tab_showing() && app.selected_session().is_none());
+        ch(&mut app, '4');
+        assert_eq!(app.top, 2);
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 
@@ -1615,9 +1620,11 @@ mod tests {
         let shown = draw(&mut term, &app);
         let (first, last) = underline(&shown).unwrap();
         assert!(first <= cell_index(&cells, "1 Sessions") && last > three, "{shown}");
-        let arch_cap = cells.iter().rposition(|c| c.symbol() == left).unwrap();
-        click(&mut app, arch_cap as u16, 1);
-        assert_eq!(app.top, 1);
+        let caps: Vec<usize> = cells.iter().enumerate().filter(|(_, c)| c.symbol() == left).map(|(i, _)| i).collect();
+        click(&mut app, caps[1] as u16, 1);
+        assert_eq!(app.top, 1, "the Projects tab's cap");
+        click(&mut app, caps[2] as u16, 1);
+        assert_eq!(app.top, 2, "the Squads tab's cap");
     }
 
     #[test]
@@ -1658,7 +1665,8 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-narrow");
         app.counts = vec![1234, 3];
         app.pcounts = [5678, 0];
-        for (cols, bars) in [(80u16, false), (100, true), (140, true)] {
+        // Three tabs with four-figure counts leave no room for the readout at 80 columns: it gives way there.
+        for (cols, bars) in [(100u16, false), (120, true), (140, true)] {
             app.usage = crate::usage::Usage::Ready(PlanUsage {
                 five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
                 seven_day: Some(Window { pct: 21, resets_at: 9_999_999_999 }),

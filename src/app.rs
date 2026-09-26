@@ -43,12 +43,14 @@ mod notes_glue;
 mod projects_glue;
 mod smart_glue;
 mod squads_glue;
+mod squadtab_glue;
 mod tickets_glue;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
+pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
+pub use squadtab_glue::{back_words, detail_rows, ChoiceFor, DRow, SqFocus, SquadName, SquadTab, TextFor};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -181,6 +183,12 @@ pub enum Hit {
     TicketPickRow(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
+    /// An entry of the Squads tab's list.
+    SquadEntry(usize),
+    /// A row of the selected squad's details.
+    SquadDetail(usize),
+    /// An entry of the small list open over the Squads tab.
+    SquadChoiceRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the editor list.
@@ -243,7 +251,13 @@ pub enum Confirm {
     /// A ticket was made Cancelled while its squad's leader runs: stop that session too? (`pid`: its `claude`.)
     StopSquad { number: u32, title: String, pid: u32 },
     /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
-    HandAnyway { number: u32, squad: &'static str, title: String, says: String },
+    HandAnyway { number: u32, squad: String, title: String, says: String },
+    /// Delete one of the user's own squads.
+    DeleteSquad { id: String, name: String },
+    /// Put a built-in squad the user changed back as platoon has it.
+    RestoreSquad { id: String, name: String },
+    /// Throw away the drafted squad that was never saved.
+    DiscardDraft { name: String },
 }
 
 #[derive(Clone)]
@@ -280,6 +294,11 @@ pub enum Mode {
     TicketPick,
     /// The squads a ticket can be handed to (`sq`).
     SquadPick,
+    /// A small list over the Squads tab: a model, a member, where a step sends the work back (`sqt.choice`).
+    SquadChoice,
+    /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
+    /// (`sqt.text`).
+    SquadText,
 }
 
 pub struct Picker {
@@ -475,6 +494,8 @@ pub struct App {
     pub tk: TicketsState,
     /// Squads: the picker, the split view, and which sessions are squads' leaders.
     pub sq: SquadState,
+    /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
+    pub sqt: SquadTab,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -652,6 +673,7 @@ impl App {
             left_pane: Pane::Sessions,
             tk: TicketsState::new(),
             sq: SquadState::new(),
+            sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -663,7 +685,7 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
-            epick: EditorPick { project: String::new(), instructions: None, ticket: None, options: Vec::new(), selected: 0, starred: String::new() },
+            epick: EditorPick { project: String::new(), instructions: None, ticket: None, squad: None, options: Vec::new(), selected: 0, starred: String::new() },
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
@@ -827,7 +849,7 @@ impl App {
             let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
             self.archived_rows = view.iter().filter(|&&i| self.sessions[i].archived).count();
             self.view = view;
-        } else if self.top == TOP_PROJECTS {
+        } else if self.top == TOP_PROJECTS || self.top == TOP_SQUADS {
             self.tab_view.clear();
             self.view.clear();
         } else {
@@ -1048,6 +1070,8 @@ impl App {
         self.refresh_prompts();
         self.poll_handoff();
         self.poll_squad_starts();
+        self.poll_squad_files();
+        self.poll_squad_draft();
         self.drive_smart();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
@@ -1229,7 +1253,11 @@ impl App {
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
             (Action::Confirm, Mode::Confirm(Confirm::StopSquad { number, pid, .. })) => self.stop_squad(number, pid),
-            (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, squad),
+            (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, &squad),
+            (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, .. })) => self.remove_squad(&id, false),
+            (Action::Confirm, Mode::Confirm(Confirm::RestoreSquad { id, .. })) => self.remove_squad(&id, true),
+            (Action::Confirm, Mode::Confirm(Confirm::DiscardDraft { .. })) => self.discard_draft(),
+            (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -2226,6 +2254,8 @@ impl App {
             },
             Mode::TicketPick => self.ticket_pick_key(key),
             Mode::SquadPick => self.squad_pick_key(key),
+            Mode::SquadChoice => self.squad_choice_key(key),
+            Mode::SquadText => self.squad_text_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2295,6 +2325,7 @@ impl App {
             Mode::Look => self.type_badge(&text.replace(['\n', '\r'], "")),
             Mode::EditNotes => self.editor_paste(text),
             Mode::Handoff => self.handoff_paste(text),
+            Mode::SquadText => self.squad_type(text),
             _ => {}
         }
         self.update_view();
@@ -2350,6 +2381,8 @@ impl App {
                     Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
                     Mode::TicketPick => self.move_ticket_pick(if up { -1 } else { 1 }),
                     Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
+                    Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
+                    Mode::SquadText => {}
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
@@ -2387,6 +2420,10 @@ impl App {
                     Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
                     Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
                     Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
+                    Some(Hit::SquadEntry(i)) => self.click_squad(i),
+                    Some(Hit::SquadDetail(i)) => self.click_squad_row(i),
+                    Some(Hit::SquadChoiceRow(i)) if i == self.sqt.choice.selected => self.act(Action::Confirm),
+                    Some(Hit::SquadChoiceRow(i)) => self.sqt.choice.selected = i,
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}

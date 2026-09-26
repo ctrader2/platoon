@@ -12,6 +12,7 @@ use crate::instructions;
 use crate::notes;
 use crate::notesrun;
 use crate::notesupdate;
+use super::squadtab_glue::SquadPromptEdit;
 
 /// A terminal editor running inside platoon's window on a project's notes, or on the instructions of an AI action.
 pub struct NotesEdit {
@@ -20,6 +21,8 @@ pub struct NotesEdit {
     pub instructions: Option<&'static str>,
     /// Editing the body of this ticket of `project` rather than its notes.
     pub ticket: Option<u32>,
+    /// Editing a squad's system prompt (on the Squads tab): `project` is empty.
+    pub squad: Option<SquadPromptEdit>,
     /// The instructions (or the ticket's body) as they were before the editor ran.
     before: String,
     /// The editor's plain name, for the status line.
@@ -35,6 +38,7 @@ pub struct NotesWindow {
     pub project: String,
     pub instructions: Option<&'static str>,
     pub ticket: Option<u32>,
+    pub squad: Option<SquadPromptEdit>,
     before: String,
     pub name: String,
     stamp: notes::Stamp,
@@ -48,6 +52,8 @@ pub struct EditorPick {
     pub instructions: Option<&'static str>,
     /// Opened for the body of this ticket of `project`.
     pub ticket: Option<u32>,
+    /// Opened for a squad's system prompt.
+    pub squad: Option<SquadPromptEdit>,
     pub options: Vec<Editor>,
     pub selected: usize,
     /// The id of the editor used last: the one with the star in front of it (empty when none has been used).
@@ -188,7 +194,7 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, instructions: None, ticket: None, options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, ticket: None, squad: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -201,7 +207,7 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project: String::new(), instructions: Some(id), ticket: None, options, selected: 0, starred };
+        self.epick = EditorPick { project: String::new(), instructions: Some(id), ticket: None, squad: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -215,8 +221,52 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, instructions: None, ticket: Some(number), options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, ticket: Some(number), squad: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
+    }
+
+    /// The same list of editors, for a squad's system prompt (its file is already written).
+    pub(super) fn pick_squad_editor(&mut self, edit: SquadPromptEdit) {
+        if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
+            let _ = std::fs::remove_file(&edit.path);
+            self.notify(format!("{name} is still open on something else. Close it first."));
+            return;
+        }
+        let last = self.settings.get().notes_editor;
+        let options = editors::in_order(&self.editors, &last);
+        let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
+        self.epick = EditorPick { project: String::new(), instructions: None, ticket: None, squad: Some(edit), options, selected: 0, starred };
+        self.mode = Mode::PickEditor;
+    }
+
+    /// Open a squad's system prompt, written to its own file, in `e`.
+    fn run_squad_editor(&mut self, edit: SquadPromptEdit, e: &Editor) {
+        let stamp = file_stamp(&edit.path);
+        if e.terminal {
+            let (rows, cols) = self.pty_size();
+            match editors::Running::spawn(e, &edit.path, rows, cols) {
+                Ok(run) => {
+                    self.editing = Some(NotesEdit { project: String::new(), instructions: None, ticket: None, squad: Some(edit), before: String::new(), name: e.name.clone(), stamp, run });
+                    self.mode = Mode::EditNotes;
+                    self.clear_selection();
+                }
+                Err(err) => {
+                    let _ = std::fs::remove_file(&edit.path);
+                    self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
+                }
+            }
+            return;
+        }
+        match editors::launch_window(e, &edit.path) {
+            Ok(child) => {
+                self.notify(format!("The system prompt opened in {}, in a window of its own.", e.name));
+                self.notes_window = Some(NotesWindow { project: String::new(), instructions: None, ticket: None, squad: Some(edit), before: String::new(), name: e.name.clone(), stamp, child });
+            }
+            Err(err) => {
+                let _ = std::fs::remove_file(&edit.path);
+                self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
+            }
+        }
     }
 
     /// Where esc, or the end of an edit, goes back to: the settings for instructions, else the list.
@@ -239,6 +289,9 @@ impl App {
         let project = self.epick.project.clone();
         self.mode = back;
         self.remember_editor(&e.id);
+        if let Some(edit) = self.epick.squad.take() {
+            return self.run_squad_editor(edit, &e);
+        }
         match (self.epick.instructions, self.epick.ticket) {
             (Some(id), _) => self.run_instructions_editor(id, &e),
             (None, Some(n)) => self.run_ticket_editor(&project, n, &e),
@@ -284,7 +337,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: None, before: String::new(), name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: None, squad: None, before: String::new(), name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -297,7 +350,7 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: None, before: String::new(), name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: None, squad: None, before: String::new(), name: e.name.clone(), stamp, child });
                 self.notify(format!("The notes opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -322,7 +375,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), ticket: None, before, name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), ticket: None, squad: None, before, name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -335,7 +388,7 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), ticket: None, before, name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), ticket: None, squad: None, before, name: e.name.clone(), stamp, child });
                 self.notify(format!("The system prompt for {what} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -366,7 +419,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: Some(number), before, name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: Some(number), squad: None, before, name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -376,7 +429,7 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: Some(number), before, name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: Some(number), squad: None, before, name: e.name.clone(), stamp, child });
                 self.notify(format!("#{number} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => self.notify(format!("Couldn't open #{number} in {}: {}", e.name, plain(&err))),
@@ -464,7 +517,8 @@ impl App {
             // Either the editor is done with the file, or it has written it: read the notes again either way.
             Some(w) => {
                 matches!(w.child.try_wait(), Ok(Some(_)))
-                    || match (w.instructions, w.ticket) {
+                    || w.squad.as_ref().is_some_and(|sp| file_stamp(&sp.path) != w.stamp)
+                    || w.squad.is_none() && match (w.instructions, w.ticket) {
                         (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
                         (None, Some(n)) => {
                             let path = self.tk.store.as_ref().filter(|s| s.project() == w.project).and_then(|s| s.get(n).map(|t| s.body_path(t)));
@@ -477,6 +531,10 @@ impl App {
         };
         if done {
             if let Some(w) = self.notes_window.take() {
+                if let Some(sp) = &w.squad {
+                    self.after_squad_prompt_edit(sp);
+                    return self.poll_notes_changes();
+                }
                 match (w.instructions, w.ticket) {
                     (Some(id), _) => self.after_instructions_edit(id, &w.before),
                     (None, Some(n)) => self.after_ticket_edit(&w.project, n, &w.before, &w.name),
@@ -491,6 +549,9 @@ impl App {
         let Some(ed) = self.editing.take() else { return };
         if matches!(self.mode, Mode::EditNotes) {
             self.mode = Self::after_pick_mode(ed.instructions);
+        }
+        if let Some(sp) = &ed.squad {
+            return self.after_squad_prompt_edit(sp);
         }
         if let Some(id) = ed.instructions {
             return self.after_instructions_edit(id, &ed.before);

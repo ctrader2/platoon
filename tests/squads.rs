@@ -310,7 +310,12 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
         [("coding-leader", "sonnet"), ("coding-planner", "opus"), ("coding-builder", "sonnet"), ("coding-reviewer", "opus"), ("coding-verifier", "haiku")].map(|(a, b)| (a.to_string(), b.to_string()))
     );
     let leader_prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
-    assert!(leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("Hand the ticket to coding-planner"), "{leader_prompt}");
+    assert!(leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("\n1. coding-planner: Reads the ticket"), "{leader_prompt}");
+    // What it started with is kept beside the ticket, for continuing it later with the squad as it was.
+    assert_eq!(tk["leaders"][0]["snapshot"], "01-squad-1.json", "{tk}");
+    let snap: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tickets/01-squad-1.json")).unwrap()).unwrap();
+    assert_eq!(snap["agents"], agents, "the very same agents");
+    assert_eq!((snap["agent"].as_str(), snap["model"].as_str(), snap["name"].as_str()), (Some("coding-leader"), Some("sonnet"), Some("Coding")));
     assert!(leader_prompt.contains("When it doesn't say how far, stop at local changes"), "{leader_prompt}");
     let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
     let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();

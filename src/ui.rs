@@ -7,6 +7,8 @@ use crate::model::{NameSource, Session, Status};
 use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
 use crate::usage::Usage;
 use crate::theme::{contrast, Theme};
+mod squads_view;
+
 use ratatui::{
     layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -72,7 +74,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
-    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none());
+    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing());
     let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = f.area().width;
     let [header, rule, shelf, titles, list, strip, footer] = Layout::vertical([
@@ -103,6 +105,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else if app.open_project.is_some() {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
         project_screen_hints(app)
+    } else if app.squads_tab_showing() {
+        squads_view::draw_squads_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
+        squads_view::squads_tab_hints(app)
     } else if app.projects_list_showing() {
         let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
         draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
@@ -148,7 +153,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -184,6 +189,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Handoff => draw_handoff(f, app, inner),
         Mode::TicketPick => draw_ticket_pick(f, app, inner),
         Mode::SquadPick => draw_squad_pick(f, app, inner),
+        Mode::SquadChoice => squads_view::draw_squad_choice(f, app, inner),
+        Mode::SquadText => squads_view::draw_squad_text(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -201,7 +208,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
-        ("1-2", "tabs", None),
+        ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("q", "quit", Some(Action::Quit)),
@@ -219,7 +226,7 @@ fn projects_hints(app: &App) -> Vec<Hint<'static>> {
         ("d", "delete", Some(Action::Delete)),
         ("/", "search", Some(Action::Search)),
         ("←→", "active/archived", None),
-        ("1-2", "tabs", None),
+        ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("q", "quit", Some(Action::Quit)),
@@ -739,7 +746,8 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     }
     // Which squad has it: "Coding squad" (whether its session runs shows beside the ticket, or as the enter hint).
     if let Some(l) = x.leader() {
-        let name = crate::squads::find(&l.squad).map_or(l.squad.as_str(), |s| s.name);
+        let name = app.squad_name(&l.squad);
+        let name = name.as_str();
         let mut spans = vec![Span::styled(fit_end(&format!("{name} squad"), w), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
         if x.go_ahead {
             spans.push(Span::styled(fit_end(" · you let it publish", w.saturating_sub(name.chars().count() + 6)), Style::new().fg(t.warn)));
@@ -1004,7 +1012,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut x = area.x + 10;
     let mut spans = Vec::new();
     // The top-level tabs count what is active: sessions, and projects.
-    let top_counts = [app.counts.first().copied().unwrap_or(0), app.pcounts[0]];
+    let top_counts = [app.counts.first().copied().unwrap_or(0), app.pcounts[0], app.squad_list().len()];
     for (i, tab) in TOPS.iter().enumerate() {
         if i > 0 {
             left.push(Span::raw(" "));
@@ -2396,6 +2404,12 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
         NamePurpose::New => ("new project", "Give it a name. Its color and badge can be changed later (c)."),
         NamePurpose::NewTicket => ("new ticket", "Its title. The body opens in your editor next."),
         NamePurpose::TicketTitle(_) => ("rename ticket", "The body and its file stay as they are."),
+        NamePurpose::Squad(ref p) => match p {
+            crate::app::SquadName::Name => ("squad name", "What the squad is called. Its agents keep their names."),
+            crate::app::SquadName::Copy => ("copy squad", "The copy is yours to change; the squad you copied stays as it is."),
+            crate::app::SquadName::Member(_) => ("member name", "Lowercase letters, digits and dashes. The steps it does follow the new name."),
+            crate::app::SquadName::NewMember => ("new member", "Its name: lowercase letters, digits and dashes (say, reviewer)."),
+        },
     };
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -2658,6 +2672,7 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
         None => match (edit.instructions, edit.ticket) {
             (Some(id), _) => format!("{} · the system prompt for {}", edit.name, crate::instructions::action(id).what),
             (None, Some(n)) => format!("{} · ticket #{n}", edit.name),
+            (None, None) if edit.squad.is_some() => format!("{} · a squad's system prompt", edit.name),
             (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
         },
     };
@@ -2810,6 +2825,24 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             ),
             "delete",
         ),
+        Confirm::DeleteSquad { id, name } => (
+            "delete squad",
+            format!("Delete the squad \"{name}\"?"),
+            format!("Tickets it already has keep it, as it was when they started. Its file is kept as {id}.json.bak in the squads folder."),
+            "delete",
+        ),
+        Confirm::RestoreSquad { id, name } => (
+            "restore squad",
+            format!("Put {name} back as platoon has it?"),
+            format!("Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tickets it already has keep what they started with."),
+            "restore",
+        ),
+        Confirm::DiscardDraft { name } => (
+            "discard draft",
+            format!("Throw away the draft \"{name}\"?"),
+            "It was never saved, so nothing of it is kept.".to_string(),
+            "discard",
+        ),
         Confirm::HandAnyway { number, title, says, .. } => (
             "hand it anyway",
             "The commander said this squad doesn't fit. Hand it anyway?".to_string(),
@@ -2936,7 +2969,15 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let Some(x) = app.ticket(app.sq.pick_ticket) else { return };
     let w = area.width.saturating_sub(8).clamp(30, 76);
     let inner_w = w.saturating_sub(6) as usize;
-    let rows: Vec<Vec<String>> = crate::squads::SQUADS.iter().map(|s| wrap(s.can_do, inner_w.saturating_sub(2))).collect();
+    let rows: Vec<Vec<String>> = app
+        .sq
+        .pick
+        .iter()
+        .map(|s| {
+            let text = if crate::squadfile::problems(s).is_empty() { s.can_do.clone() } else { format!("Needs fixing on the Squads tab first. {}", s.can_do) };
+            wrap(&text, inner_w.saturating_sub(2))
+        })
+        .collect();
     let list_h: u16 = rows.iter().map(|r| r.len() as u16 + 2).sum();
     let r = centered(area, w, (list_h + 6).min(area.height.saturating_sub(2)).max(8));
     f.render_widget(Clear, r);
@@ -2947,7 +2988,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(fit_end(&format!("#{} {}", x.number, x.title), head.width as usize)).style(Style::new().fg(t.text)), head);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let mut y = list.y;
-    for (i, (s, lines)) in crate::squads::SQUADS.iter().zip(&rows).enumerate() {
+    for (i, (s, lines)) in app.sq.pick.iter().zip(&rows).enumerate() {
         let h = (lines.len() as u16 + 1).min(list.bottom().saturating_sub(y));
         if h == 0 {
             break;
@@ -2957,7 +2998,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.sq.pick_selected;
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
-        let mut out = vec![Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(s.name, base.fg(t.text).add_modifier(Modifier::BOLD))])];
+        let mut out = vec![Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(s.name.clone(), base.fg(t.text).add_modifier(Modifier::BOLD))])];
         out.extend(lines.iter().map(|l| Line::from(vec![Span::styled("  ", base), Span::styled(l.clone(), base.fg(t.subtext))])));
         f.render_widget(Paragraph::new(out).style(base), rect);
         y += h + 1;

@@ -35,7 +35,7 @@ fn flat(text: &str) -> String {
 }
 
 fn lead(session: &str) -> Leader {
-    Leader { squad: "coding".into(), session: session.into(), started: 1, names: Default::default() }
+    Leader { squad: "coding".into(), session: session.into(), started: 1, names: Default::default(), snapshot: None }
 }
 
 /// A project "Web shop" with the user's session `user-1` in it, its screen open.
