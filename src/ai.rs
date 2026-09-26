@@ -771,7 +771,7 @@ impl Runner {
 
 /// Start the process, trying again a few times if the program is a script that another thread has only just finished
 /// writing ("text file busy").
-fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
+pub(crate) fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
     let mut tries = 0;
     loop {
         match cmd.spawn() {

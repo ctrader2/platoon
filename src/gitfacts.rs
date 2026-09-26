@@ -1,6 +1,7 @@
-//! What git can say about a folder, for the hand-off document: its branch, what is not committed yet, the last
-//! commit, and what was committed since a moment (the session's start). Read-only: only `rev-parse`,
-//! `symbolic-ref`, `status` and `log` are ever run, with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
+//! What git can say about a folder, for the hand-off document: its branch and how it stands against its upstream,
+//! what is not committed yet, the last commit, and what was committed since a moment (the session's start).
+//! Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never `fetch`: the
+//! upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
 //! refresh is written, and every command shares one short time budget.
 //!
 //! Nothing here is ever guessed: no `git`, a folder that is not a repository, or a git that fails gives `None`,
@@ -27,6 +28,8 @@ const MAX_COMMITS: usize = 500;
 pub const MAX_FILES: usize = 500;
 /// The longest path kept; a longer one keeps its end.
 pub const PATH_MAX: usize = 120;
+/// The longest commit subject kept.
+pub const SUBJECT_MAX: usize = 150;
 
 /// What kind of change a file not committed yet has.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +72,19 @@ pub struct Since {
     pub commits: usize,
     /// The files those commits touched, newest first, each once.
     pub files: Vec<String>,
+    /// Those commits' short ids and subjects (cleaned and cut), newest first.
+    pub subjects: Vec<(String, String)>,
+}
+
+/// How the branch stands against the branch it tracks, as git last saw it (nothing is fetched).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Upstream {
+    /// Its short name, e.g. `origin/main`.
+    pub name: String,
+    /// Commits here that the upstream doesn't have (not pushed yet).
+    pub ahead: usize,
+    /// Commits on the upstream that aren't here (not pulled yet).
+    pub behind: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -77,6 +93,8 @@ pub struct GitFacts {
     pub top: String,
     /// None on a detached HEAD, or when it couldn't be read.
     pub branch: Option<String>,
+    /// None with no branch, no upstream, or when it couldn't be read.
+    pub upstream: Option<Upstream>,
     /// What is not committed yet. None when it couldn't be read - never taken to mean "nothing".
     pub changes: Option<Vec<Change>>,
     /// The last commit's short id and subject. None in a repository with no commits yet.
@@ -121,7 +139,8 @@ fn run(program: &str, dir: &Path, args: &[&str], deadline: Instant) -> Option<St
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    let mut child = cmd.spawn().ok()?;
+    // A script (a stand-in in the tests) that another thread has only just written can be "busy" for a moment.
+    let mut child = crate::ai::spawn_retrying(&mut cmd).ok()?;
     let mut out = child.stdout.take()?;
     // Read on a thread of its own, so a big output can't fill the pipe and stall git while we wait for it.
     let reader = thread::spawn(move || {
@@ -158,14 +177,25 @@ pub fn gather(program: &str, dir: &Path, since_ms: Option<u64>, budget: Duration
     let branch = run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline)
         .map(|b| clean_path(b.trim()))
         .filter(|b| !b.is_empty());
+    // Only a branch can have an upstream; a detached HEAD, or a branch that tracks nothing, leaves it out.
+    let upstream = branch.as_ref().and_then(|_| {
+        let name = run(program, dir, &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], deadline)?;
+        let name = clean_path(name.trim());
+        if name.is_empty() {
+            return None;
+        }
+        let counts = run(program, dir, &["rev-list", "--left-right", "--count", "@{upstream}...HEAD"], deadline)?;
+        let (behind, ahead) = parse_counts(&counts)?;
+        Some(Upstream { name, ahead, behind })
+    });
     let changes = run(program, dir, &["status", "--porcelain=v1", "-z", "--untracked-files=normal"], deadline).map(|o| parse_status(&o));
     let last = run(program, dir, &["log", "-1", "--format=%h%x00%s"], deadline).and_then(|o| parse_last(&o));
     let since = since_ms.and_then(|ms| {
         let since = format!("--since=@{}", ms / 1000);
         let max = format!("--max-count={MAX_COMMITS}");
-        run(program, dir, &["log", &since, &max, "--format=@@commit %h", "--name-only"], deadline).map(|o| parse_log(&o))
+        run(program, dir, &["log", &since, &max, "--format=@@commit %h%x00%s", "--name-only"], deadline).map(|o| parse_log(&o))
     });
-    Some(GitFacts { top, branch, changes, last, since })
+    Some(GitFacts { top, branch, upstream, changes, last, since })
 }
 
 /// `git status --porcelain=v1 -z`: `XY path\0`, and for a rename or copy `XY new\0old\0`.
@@ -200,15 +230,29 @@ pub fn parse_status(out: &str) -> Vec<Change> {
 fn parse_last(out: &str) -> Option<(String, String)> {
     let (id, subject) = out.trim_end_matches('\n').split_once('\0')?;
     let id = id.trim();
-    (!id.is_empty()).then(|| (clean_path(id), crate::smart::clean_text(subject, 150)))
+    (!id.is_empty()).then(|| (clean_path(id), crate::smart::clean_text(subject, SUBJECT_MAX)))
 }
 
-/// `git log --format='@@commit %h' --name-only`: a marker line per commit, then the files it touched.
+/// `git rev-list --left-right --count @{upstream}...HEAD`: "behind<tab>ahead".
+fn parse_counts(out: &str) -> Option<(usize, usize)> {
+    let mut it = out.split_whitespace().map(str::parse::<usize>);
+    match (it.next(), it.next(), it.next()) {
+        (Some(Ok(behind)), Some(Ok(ahead)), None) => Some((behind, ahead)),
+        _ => None,
+    }
+}
+
+/// `git log --format='@@commit %h%x00%s' --name-only`: a marker line per commit with its id and subject, then the
+/// files it touched.
 pub fn parse_log(out: &str) -> Since {
     let mut s = Since::default();
     for line in out.lines() {
-        if line.starts_with("@@commit ") {
+        if let Some(rest) = line.strip_prefix("@@commit ") {
             s.commits += 1;
+            let (id, subject) = rest.split_once('\0').unwrap_or((rest, ""));
+            if s.subjects.len() < MAX_COMMITS {
+                s.subjects.push((clean_path(id.trim()), crate::smart::clean_text(subject, SUBJECT_MAX)));
+            }
         } else if !line.trim().is_empty() && s.files.len() < MAX_FILES {
             let path = clean_path(line);
             if !s.files.contains(&path) {
@@ -418,6 +462,105 @@ mod tests {
         assert!(!crate::testkit::alive(pid), "the hung git was ended");
     }
 
+    /// A clone of a bare "remote" in the same temp folder, with `main` tracking `origin/main`. Everything stays in
+    /// the temp folder: the remote is a path, and nothing is ever fetched from anywhere else.
+    fn cloned(name: &str) -> (Repo, Repo) {
+        let remote = Repo::new(&format!("{name}-remote"));
+        let seed = Repo::new(&format!("{name}-seed"));
+        seed.init();
+        seed.write("a.txt", "a");
+        seed.commit("Seed", None);
+        remote.git(&["init", "-q", "--bare", "-b", "main"]);
+        seed.git(&["push", "-q", remote.dir.to_str().unwrap(), "main"]);
+        let work = Repo::new(&format!("{name}-work"));
+        let _ = fs::remove_dir_all(&work.dir);
+        let out = Command::new("git")
+            .args(["clone", "-q", remote.dir.to_str().unwrap(), work.dir.to_str().unwrap()])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        drop(seed);
+        (remote, work)
+    }
+
+    /// Put a commit on the remote from a second clone, and fetch it into `work` (so `work` is behind by one).
+    fn commit_on_remote(remote: &Repo, work: &Repo, name: &str, msg: &str) {
+        let other = Repo::new(name);
+        let _ = fs::remove_dir_all(&other.dir);
+        let out = Command::new("git")
+            .args(["clone", "-q", remote.dir.to_str().unwrap(), other.dir.to_str().unwrap()])
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        other.write(&format!("{msg}.txt"), msg);
+        other.commit(msg, None);
+        other.git(&["push", "-q", "origin", "main"]);
+        work.git(&["fetch", "-q", "origin"]);
+    }
+
+    #[test]
+    fn a_branch_says_how_far_it_is_ahead_of_and_behind_its_upstream_and_nothing_when_it_has_none() {
+        let (remote, work) = cloned("upstream");
+        // Up to date.
+        let up = work.facts(None).unwrap().upstream.expect("main tracks origin/main");
+        assert_eq!(up, Upstream { name: "origin/main".into(), ahead: 0, behind: 0 });
+        // Two commits not pushed yet.
+        work.write("b.txt", "b");
+        work.commit("Local one", None);
+        work.write("c.txt", "c");
+        work.commit("Local two", None);
+        let up = work.facts(None).unwrap().upstream.unwrap();
+        assert_eq!((up.ahead, up.behind), (2, 0));
+        // And one on the remote not pulled yet: both.
+        commit_on_remote(&remote, &work, "upstream-other", "Remote one");
+        let up = work.facts(None).unwrap().upstream.unwrap();
+        assert_eq!((up.ahead, up.behind), (2, 1));
+        // Only behind.
+        work.git(&["reset", "-q", "--hard", "origin/main~1"]);
+        let up = work.facts(None).unwrap().upstream.unwrap();
+        assert_eq!((up.ahead, up.behind), (0, 1));
+        // A branch that tracks nothing, and a detached HEAD: left out, and the rest is still there.
+        work.git(&["checkout", "-q", "-b", "loose"]);
+        let f = work.facts(None).unwrap();
+        assert_eq!((f.branch.as_deref(), f.upstream), (Some("loose"), None));
+        work.git(&["checkout", "-q", "--detach"]);
+        let f = work.facts(None).unwrap();
+        assert_eq!((f.branch, f.upstream), (None, None));
+        assert!(f.last.is_some());
+        // Reading wrote nothing: no lock left.
+        assert!(!work.dir.join(".git/index.lock").exists());
+    }
+
+    #[test]
+    fn the_commits_made_during_the_session_come_with_their_subjects_newest_first_and_cleaned() {
+        let r = Repo::new("subjects");
+        r.init();
+        r.write("a", "0");
+        r.commit("Before", Some("2026-09-20T10:00:00Z"));
+        for i in 1..=12 {
+            r.write("a", &i.to_string());
+            r.commit(&format!("Change number {i}"), Some(&format!("2026-09-24T12:{i:02}:00Z")));
+        }
+        r.write("a", "evil");
+        r.commit(&format!("Evil \u{1b}[2J subject {}", "x".repeat(400)), Some("2026-09-24T13:00:00Z"));
+        let start = crate::claude::parse_iso_ms("2026-09-24T11:00:00.000Z").unwrap();
+        let since = r.facts(Some(start)).unwrap().since.unwrap();
+        assert_eq!(since.commits, 13);
+        assert_eq!(since.subjects.len(), 13, "all of them are kept here; the document decides how many to show");
+        let subjects: Vec<&str> = since.subjects.iter().map(|(_, s)| s.as_str()).collect();
+        assert!(subjects[0].starts_with("Evil subject xxx"), "cleaned: {:?}", subjects[0]);
+        assert!(!subjects[0].contains('\u{1b}') && subjects[0].chars().count() <= SUBJECT_MAX, "{:?}", subjects[0]);
+        assert_eq!(subjects[1..4], ["Change number 12", "Change number 11", "Change number 10"]);
+        assert_eq!(*subjects.last().unwrap(), "Change number 1");
+        assert!(!subjects.contains(&"Before"));
+        assert!(since.subjects.iter().all(|(id, _)| id.len() >= 7 && id.chars().all(|c| c.is_ascii_hexdigit())));
+        assert_eq!(since.files, ["a"]);
+    }
+
     #[test]
     fn file_names_can_never_carry_a_control_character_or_run_on_forever() {
         let s = parse_status(" M evil\u{1b}[2J.txt\0?? ok.txt\0");
@@ -429,7 +572,13 @@ mod tests {
         assert!(p.starts_with('…') && p.ends_with("file.rs"));
         // Rubbish in the status output is skipped, not misread.
         assert_eq!(parse_status("x\0\0MM\0"), []);
-        let log = parse_log("@@commit abc\n\na.rs\nb.rs\n@@commit def\n\na.rs\n");
+        let log = parse_log("@@commit abc\0First\n\na.rs\nb.rs\n@@commit def\n\na.rs\n");
         assert_eq!((log.commits, log.files), (2, vec!["a.rs".to_string(), "b.rs".into()]));
+        assert_eq!(log.subjects, [("abc".to_string(), "First".to_string()), ("def".into(), String::new())], "a line with no subject still counts");
+        // What `rev-list --count` says, and rubbish.
+        assert_eq!(parse_counts("1\t3\n"), Some((1, 3)));
+        for bad in ["", "1", "a\tb", "1\t2\t3", "-1\t2"] {
+            assert_eq!(parse_counts(bad), None, "{bad:?}");
+        }
     }
 }

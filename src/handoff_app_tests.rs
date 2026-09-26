@@ -88,7 +88,12 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     let text = app.handoff.text.clone();
     assert!(text.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "{text}");
     assert!(text.contains("- Project: Web shop\n"), "{text}");
-    assert!(text.contains(&format!("- Previous session: shop, in {}\n", shop(&w))), "{text}");
+    assert!(text.contains(&format!("- Previous session: shop, in {} (not running)\n", shop(&w))), "{text}");
+    // The id, so the new session can look back at the old one; where the project's notes are; what it spent.
+    assert!(text.contains("- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"), "{text}");
+    let notes = Projects::open(&w.config).notes_path(&project_id(&w));
+    assert!(text.contains(&format!("- Project notes: {}\n", notes.display())), "{text}");
+    assert!(text.contains("- Tokens the previous session used: 50,000 sent to Claude and 0 written by Claude\n"), "{text}");
     assert!(text.contains("- Started: ") && text.contains(" between)\n"), "{text}");
     assert!(text.contains("- Model: Sonnet 5, context "), "{text}");
     assert!(text.contains("- Messages from the user: 1 "), "{text}");
@@ -108,7 +113,8 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     assert!(sent.contains("Project: Web shop") && sent.contains("Folder: shop"), "{sent}");
     assert!(sent.contains("- Add a basket page to the shop"), "{sent}");
     assert!(sent.contains("not a git repository, so fill \"files\""), "{sent}");
-    assert!(!sent.contains("sess-1"), "{sent}");
+    assert!(!sent.contains("sess-1") && !sent.contains("--resume"), "the id is in the document, never in the request: {sent}");
+    assert!(!fake.argv(1).iter().any(|a| a.contains("sess-1")), "nor in the call's arguments: {:?}", fake.argv(1));
     // It is the user's own key press, so it goes as user-initiated work, and its spend is in the ledger.
     assert!(fake.argv(1).contains(&"-p".to_string()));
     let day = Ledger::open(&w.cache).today(usage::now());
@@ -375,7 +381,10 @@ fn in_a_git_repository_platoon_fills_the_branch_the_commits_and_the_files_itself
     assert!(text.contains("- Git branch: basket\n"), "{text}");
     assert!(text.contains("- Uncommitted changes: 2 files\n"), "{text}");
     assert!(text.contains(" Add the basket\n") && text.contains("- Last commit: "), "{text}");
-    assert!(text.contains("- Commits since the session started: 1\n"), "{text}");
+    assert!(text.contains("- Commits since the session started: 1, newest first:\n  - "), "{text}");
+    assert!(text.contains(" Add the basket\n- Last commit: ") || text.contains(" Add the basket\n\n## "), "the subject is listed: {text}");
+    assert!(!text.contains("Before the session\n"), "a commit from before the session is not: {text}");
+    assert!(!text.contains("- Compared with"), "no upstream, so nothing is said about one: {text}");
     assert!(
         text.contains("## Files affected\n\nNot committed yet:\n- old.rs (changed)\n- todo.txt (new, not yet added to git)\nCommitted since the session started:\n- basket.rs\n"),
         "{text}"
@@ -387,6 +396,38 @@ fn in_a_git_repository_platoon_fills_the_branch_the_commits_and_the_files_itself
     assert!(sent.contains("leave \"files\" out"), "{sent}");
     // Reading changed nothing in the repository.
     assert!(!dir.join(".git/index.lock").exists());
+}
+
+#[test]
+fn a_session_still_running_says_so_and_its_spend_counts_its_subagents_and_each_answer_once() {
+    let (mut w, fake) = world("handoff-running");
+    // The old session is still running, and its transcript has one answer written as two lines, and a subagent.
+    let path = crate::claude::find_transcript(&w.root, "sess-1").unwrap();
+    let answer = serde_json::json!({"type":"assistant","message":{"id":"msg-9","model":"claude-sonnet-5","usage":{"input_tokens":1,"cache_creation_input_tokens":2_000,"cache_read_input_tokens":30_000,"output_tokens":700}}}).to_string();
+    let mut t = fs::read_to_string(&path).unwrap();
+    t.push_str(&format!("{answer}\n{answer}\n"));
+    fs::write(&path, t).unwrap();
+    let sub = path.with_extension("").join("subagents");
+    fs::create_dir_all(&sub).unwrap();
+    fs::write(sub.join("agent-a.jsonl"), serde_json::json!({"type":"assistant","message":{"id":"msg-s","usage":{"input_tokens":9,"output_tokens":300}}}).to_string() + "\n").unwrap();
+    w.live("sess-1", &shop(&w), crate::testkit::now_ms(), "idle");
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    let text = app.handoff.text.clone();
+    assert!(text.contains(&format!("- Previous session: shop, in {} (still running)\n", shop(&w))), "{text}");
+    assert!(
+        text.contains("- Tokens the previous session used: 52,010 sent to Claude and 1,000 written by Claude, plus 30,000 read again from Claude's cache (its subagents included)\n"),
+        "{text}"
+    );
+    // A project whose notes file is gone: the path is left out rather than pointing at nothing.
+    key(&mut app, KeyCode::Esc);
+    fs::remove_file(Projects::open(&w.config).notes_path(&project_id(&w))).unwrap();
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    assert!(app.handoff.state == HandoffState::Ready && !app.handoff.text.contains("- Project notes"), "{}", app.handoff.text);
 }
 
 #[test]

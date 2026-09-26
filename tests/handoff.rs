@@ -107,6 +107,15 @@ impl Lab {
         fs::write(self.claude.join("projects/-shop").join(format!("{id}.jsonl")), line + "\n").unwrap();
     }
 
+    /// Add an answer with a usage record to a saved conversation.
+    fn answered(&self, id: &str, input: u64, output: u64) {
+        let line = json!({"type":"assistant","cwd":self.work,"timestamp":"2026-09-24T10:01:00.000Z","message":{"id":"msg-1","model":"claude-sonnet-5","usage":{"input_tokens":input,"output_tokens":output}}}).to_string();
+        let path = self.claude.join("projects/-shop").join(format!("{id}.jsonl"));
+        let mut t = fs::read_to_string(&path).unwrap();
+        t.push_str(&(line + "\n"));
+        fs::write(path, t).unwrap();
+    }
+
     fn reply(&self, text: &str) {
         fs::write(self.fake.join("reply"), text).unwrap();
     }
@@ -162,6 +171,7 @@ impl Drop for Lab {
 fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_same_project() {
     let lab = Lab::new("handoff-e2e");
     lab.save("sess-1", "Add a basket page to the shop");
+    lab.answered("sess-1", 1_234, 567);
     lab.project("sess-1");
     lab.reply(r#"{"summary":"The basket page is in.","done":["Baskets are session based"],"next":["Take card payments."]}"#);
 
@@ -183,6 +193,10 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
         "project Web",
         "# Session hand-off: shop",
         "- Project: Web",
+        "- Project notes: ",
+        "(not running)",
+        "- Previous session id: sess-1 (`claude --resume sess-1` opens it)",
+        "- Tokens the previous session used: 1,234 sent to Claude and 567 written by Claude",
         "## Executive summary",
         "The basket page is in.",
         "- Baskets are session based",
@@ -196,13 +210,13 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     assert_eq!(lab.calls(), 1);
     let sent = lab.sent(1);
     assert!(sent.contains("Project: Web") && sent.contains("Add a basket page to the shop"), "{sent}");
-    assert!(!sent.contains("sess-1"), "{sent}");
+    assert!(!sent.contains("sess-1") && !sent.contains("--resume"), "the id is only in the document: {sent}");
     let day = lab.ledger()["days"].as_object().unwrap().values().next().unwrap().clone();
     assert_eq!(day["features"]["handoff"]["calls"], 1, "{day}");
     assert!(day["features"]["handoff"]["tokens"].as_u64().unwrap() > 0, "{day}");
 
     // The user goes to the end (the cursor starts at the top), types into it, then accepts with ctrl+s.
-    for _ in 0..40 {
+    for _ in 0..60 {
         t.send(b"\x1b[B");
     }
     t.send(b"Sizes matter too.");
@@ -220,6 +234,8 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     let args = lab.started(1);
     assert!(args.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "one argument, the document: {args}");
     assert!(args.contains("## Executive summary\n\nThe basket page is in.\n"), "{args}");
+    assert!(args.contains("\n- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"), "the new session is given the old one's id: {args}");
+    assert!(args.contains(&format!("\n- Project notes: {}\n", lab.config.join("projects/pweb/project.md").display())), "{args}");
     assert!(args.trim_end().ends_with("1. Take card payments.\nSizes matter too."), "{args}");
 
     // The new session is put in the project as soon as platoon sees its id; the old one is untouched.
@@ -291,7 +307,9 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
         assert!(!line.contains('…'), "a row was cut short: {line:?}\n{screen}");
     }
 
-    // One PageDown: the summary, wrapped over several rows, every word of it whole.
+    // Two PageDowns (the facts come first): the summary, wrapped over several rows, every word of it whole.
+    t.send(b"\x1b[6~");
+    t.wait_for_all(&["more lines above", "- Previous session id: sess-1"]);
     t.send(b"\x1b[6~");
     t.wait_for_all(&["more lines above", "The basket page shows", "first loads."]);
     let screen = t.stable();

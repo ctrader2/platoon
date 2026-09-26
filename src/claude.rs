@@ -403,6 +403,89 @@ pub fn started_ms(path: &Path) -> Option<u64> {
     None
 }
 
+/// What one conversation spent, summed from the usage records in its transcript (and its subagents' transcripts).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Spent {
+    /// Sent to the model and not read from its cache: `input_tokens` plus `cache_creation_input_tokens`.
+    pub input: u64,
+    /// Written by the model (`output_tokens`, thinking included).
+    pub output: u64,
+    /// Read back from the model's cache (`cache_read_input_tokens`): the conversation so far, sent again each turn.
+    pub cache_read: u64,
+    /// Some of it was spent by the conversation's subagents.
+    pub subagents: bool,
+}
+
+type Usages = std::collections::HashMap<String, (u64, u64, u64)>;
+
+/// What a conversation spent, read from its whole transcript and from its subagents' transcripts beside it
+/// (`<id>/subagents/*.jsonl`). Claude Code writes one line per piece of an answer, each carrying the same message
+/// id and usage, so an answer is counted once (its last line wins). Lines that aren't JSON, or aren't an
+/// assistant's answer with a usage record, are skipped. None when there is no usage record at all.
+///
+/// It reads every line of possibly large files: never call it on the UI thread.
+pub fn spent(path: &Path) -> Option<Spent> {
+    let mut seen = Usages::new();
+    let mut unkeyed = 0usize;
+    let main = add_usage(path, &mut seen, &mut unkeyed);
+    let mut from_subagents = false;
+    if let Ok(entries) = fs::read_dir(path.with_extension("").join("subagents")) {
+        let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
+        files.sort();
+        for f in files {
+            from_subagents |= add_usage(&f, &mut seen, &mut unkeyed);
+        }
+    }
+    if !main && !from_subagents {
+        return None;
+    }
+    let mut s = Spent { subagents: from_subagents, ..Spent::default() };
+    for (input, output, cache_read) in seen.values() {
+        s.input += input;
+        s.output += output;
+        s.cache_read += cache_read;
+    }
+    Some(s)
+}
+
+/// Add one transcript's usage records to `seen` (keyed by message id, or request id, else one key per line).
+/// True if it had any.
+fn add_usage(path: &Path, seen: &mut Usages, unkeyed: &mut usize) -> bool {
+    let Ok(file) = File::open(path) else { return false };
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    let mut any = false;
+    loop {
+        line.clear();
+        if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line);
+        if !text.contains("\"usage\"") || !text.contains("\"assistant\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        if v.get("type").and_then(Value::as_str) != Some("assistant") {
+            continue;
+        }
+        let Some(msg) = v.get("message") else { continue };
+        let Some(u) = msg.get("usage").filter(|u| u.is_object()) else { continue };
+        let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+        let counts = (n("input_tokens") + n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens"));
+        let key = match (msg.get("id").and_then(Value::as_str), v.get("requestId").and_then(Value::as_str)) {
+            (Some(id), _) if !id.is_empty() => format!("m:{id}"),
+            (_, Some(req)) if !req.is_empty() => format!("r:{req}"),
+            _ => {
+                *unkeyed += 1;
+                format!("l:{unkeyed}")
+            }
+        };
+        seen.insert(key, counts);
+        any = true;
+    }
+    any
+}
+
 fn scan_head(file: &File, t: &mut Transcript) {
     let mut reader = BufReader::new(file.take(HEAD_BYTES));
     let mut line = Vec::new();
@@ -997,6 +1080,54 @@ mod hidden_tests {
         fs::write(&p, r#"{"type":"user","message":{"content":"no time"}}"#.to_string() + "\n").unwrap();
         assert_eq!(started_ms(&p), None);
         assert_eq!(started_ms(&base.join("missing.jsonl")), None);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn what_a_conversation_spent_is_summed_once_per_answer_from_its_transcript_and_its_subagents() {
+        let base = tmp("spent");
+        let p = base.join("abc.jsonl");
+        let answer = |id: &str, input: u64, output: u64, write: u64, read: u64| {
+            serde_json::json!({"type":"assistant","requestId":format!("req-{id}"),"message":{"id":id,"model":"claude-sonnet-5","usage":{
+                "input_tokens":input,"output_tokens":output,"cache_creation_input_tokens":write,"cache_read_input_tokens":read}}})
+            .to_string()
+        };
+        let lines = [
+            r#"{"type":"user","message":{"content":"the word \"usage\" in a prompt, and \"assistant\" too"}}"#.to_string(),
+            // One answer written as two lines (a thinking block and a text block): counted once, the last line wins.
+            answer("m1", 2, 100, 1000, 0),
+            answer("m1", 2, 120, 1000, 0),
+            answer("m2", 3, 50, 10, 2000),
+            "{\"type\":\"assistant\",\"message\":{\"usage\":".to_string(), // cut off mid-line
+            "not json at all \"usage\" \"assistant\"".to_string(),
+            r#"{"type":"assistant","message":{"usage":"not an object"}}"#.to_string(),
+            // A request id and no message id: keyed by the request.
+            r#"{"type":"assistant","requestId":"rq","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#.to_string(),
+            r#"{"type":"assistant","requestId":"rq","message":{"usage":{"input_tokens":1,"output_tokens":1}}}"#.to_string(),
+            // No ids at all: every such line counts on its own.
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5,"output_tokens":6}}}"#.to_string(),
+            r#"{"type":"assistant","message":{"usage":{"input_tokens":5,"output_tokens":6}}}"#.to_string(),
+        ];
+        fs::write(&p, lines.join("\n") + "\n").unwrap();
+        let s = spent(&p).unwrap();
+        assert_eq!(s, Spent { input: 2 + 1000 + 3 + 10 + 1 + 5 + 5, output: 120 + 50 + 1 + 6 + 6, cache_read: 2000, subagents: false });
+
+        // Its subagents' transcripts count too, and it says so; files that aren't transcripts don't.
+        let sub = base.join("abc/subagents");
+        fs::create_dir_all(&sub).unwrap();
+        fs::write(sub.join("agent-1.jsonl"), answer("s1", 7, 8, 0, 9) + "\n").unwrap();
+        fs::write(sub.join("agent-1.meta.json"), answer("s2", 999, 999, 999, 999)).unwrap();
+        let s2 = spent(&p).unwrap();
+        assert_eq!((s2.input, s2.output, s2.cache_read, s2.subagents), (s.input + 7, s.output + 8, s.cache_read + 9, true));
+
+        // No usage record anywhere, a file of rubbish, or no file: nothing is said.
+        let q = base.join("none.jsonl");
+        fs::write(&q, r#"{"type":"user","message":{"content":"hi"}}"#.to_string() + "\n{broken\n").unwrap();
+        assert_eq!(spent(&q), None);
+        assert_eq!(spent(&base.join("missing.jsonl")), None);
+        // An empty usage record is still a record: zero, not unknown.
+        fs::write(&q, r#"{"type":"assistant","message":{"id":"z","usage":{}}}"#.to_string() + "\n").unwrap();
+        assert_eq!(spent(&q), Some(Spent::default()));
         let _ = fs::remove_dir_all(&base);
     }
 }

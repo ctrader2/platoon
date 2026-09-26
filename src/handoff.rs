@@ -14,8 +14,9 @@
 //! ## Next steps            (numbered)
 //! ```
 //!
-//! A section with nothing in it is left out. **platoon fills the facts** (date, project, the previous session,
-//! its model and context, how many messages, and what git says) and **the files, from git**, where the folder is a
+//! A section with nothing in it is left out. **platoon fills the facts** (date, project and where its notes are,
+//! the previous session - its id, whether it is still running, its model and context, how many messages, the
+//! tokens it used - and what git says, down to the subjects of the commits made during the session) and **the files, from git**, where the folder is a
 //! repository; **Claude writes only** the summary, the work completed, the gotchas and the next steps (and its own
 //! account of the files when git can't say). Anything platoon cannot determine is left out, never guessed.
 //!
@@ -55,6 +56,12 @@ pub const MESSAGES: usize = 12;
 pub const MESSAGE_CHARS: usize = 300;
 /// The longest a name (the session's, the project's, a branch) may be in the document.
 const NAME_MAX: usize = 100;
+/// The most commits made during the session whose subjects the document lists (the rest are counted).
+pub const SUBJECTS_SHOWN: usize = 10;
+/// The longest one of those subjects may be in the document.
+pub const SUBJECT_MAX: usize = 100;
+/// The longest a path (the session's folder, the notes file) may be in the document.
+const PATH_MAX: usize = 200;
 /// The longest document the user may hand on (they can type into it). It is passed to `claude` as one argument:
 /// 20,000 characters is at most 80 KB, well inside the 128 KB Linux allows for one argument. Every cap above
 /// together keeps what platoon writes under it.
@@ -301,6 +308,15 @@ pub struct Facts {
     /// How many real messages the user sent (short replies like "yes" not counted).
     pub messages: Option<usize>,
     pub git: Option<GitFacts>,
+    /// The previous session's id, so the new one can look back at it. It goes into the document only: never
+    /// into the request (`prompt` has no way to see it).
+    pub session_id: Option<String>,
+    /// Where the project's notes file is (home as `~`), when it exists.
+    pub notes: Option<String>,
+    /// Whether the previous session is still running, as the list knew it when `h` was pressed.
+    pub running: Option<bool>,
+    /// What the previous session spent, from its transcript.
+    pub tokens: Option<crate::claude::Spent>,
 }
 
 /// A moment in the user's own time zone: `2026-09-25 14:03`. None if the system can't say (then it is left out).
@@ -344,9 +360,21 @@ pub fn facts_block(f: &Facts) -> String {
         lines.push(format!("- Written: {at}"));
     }
     lines.push(format!("- Project: {}", clean_text(&f.project, NAME_MAX)));
-    match &f.folder {
-        Some(dir) => lines.push(format!("- Previous session: {}, in {}", clean_text(&f.session, NAME_MAX), clean_text(dir, 200))),
-        None => lines.push(format!("- Previous session: {}", clean_text(&f.session, NAME_MAX))),
+    if let Some(notes) = &f.notes {
+        lines.push(format!("- Project notes: {}", clean_text(notes, PATH_MAX)));
+    }
+    let mut prev = format!("- Previous session: {}", clean_text(&f.session, NAME_MAX));
+    if let Some(dir) = &f.folder {
+        prev.push_str(&format!(", in {}", clean_text(dir, PATH_MAX)));
+    }
+    match f.running {
+        Some(true) => prev.push_str(" (still running)"),
+        Some(false) => prev.push_str(" (not running)"),
+        None => {}
+    }
+    lines.push(prev);
+    if let Some(id) = f.session_id.as_deref().map(|id| clean_text(id, NAME_MAX)).filter(|id| !id.is_empty()) {
+        lines.push(format!("- Previous session id: {id} (`claude --resume {id}` opens it)"));
     }
     let when = |ms: Option<u64>| ms.and_then(|ms| local_time(ms / 1000));
     match (when(f.started_ms), when(f.last_ms)) {
@@ -370,9 +398,15 @@ pub fn facts_block(f: &Facts) -> String {
     if let Some(n) = f.messages {
         lines.push(format!("- Messages from the user: {n} (short replies like \"yes\" not counted)"));
     }
+    if let Some(t) = &f.tokens {
+        lines.push(tokens_line(t));
+    }
     if let Some(g) = &f.git {
         if let Some(b) = &g.branch {
             lines.push(format!("- Git branch: {}", clean_text(b, NAME_MAX)));
+        }
+        if let Some(u) = &g.upstream {
+            lines.push(format!("- Compared with {}, as of the last fetch: {}", clean_text(&u.name, NAME_MAX), upstream_words(u.ahead, u.behind)));
         }
         if let Some(changes) = &g.changes {
             if changes.is_empty() {
@@ -385,10 +419,48 @@ pub fn facts_block(f: &Facts) -> String {
             lines.push(format!("- Last commit: {id} {subject}"));
         }
         if let Some(s) = &g.since {
-            lines.push(format!("- Commits since the session started: {}", s.commits));
+            if s.subjects.is_empty() {
+                lines.push(format!("- Commits since the session started: {}", s.commits));
+            } else {
+                lines.push(format!("- Commits since the session started: {}, newest first:", s.commits));
+                for (id, subject) in s.subjects.iter().take(SUBJECTS_SHOWN) {
+                    let subject = clean_text(subject, SUBJECT_MAX);
+                    lines.push(format!("  - {} {subject}", clean_text(id, 20)).trim_end().to_string());
+                }
+                let shown = s.subjects.len().min(SUBJECTS_SHOWN);
+                if s.commits > shown {
+                    lines.push(format!("  - … and {} more", s.commits - shown));
+                }
+            }
         }
     }
     lines.join("\n") + "\n"
+}
+
+/// What the previous session spent, in plain words: what went in and what came out, and - said apart, because it
+/// is mostly the same conversation sent again each turn - what was read back from the cache. Never money.
+fn tokens_line(t: &crate::claude::Spent) -> String {
+    let n = crate::settings::thousands;
+    let mut line = format!("- Tokens the previous session used: {} sent to Claude and {} written by Claude", n(t.input), n(t.output));
+    if t.cache_read > 0 {
+        line.push_str(&format!(", plus {} read again from Claude's cache", n(t.cache_read)));
+    }
+    if t.subagents {
+        line.push_str(" (its subagents included)");
+    }
+    line
+}
+
+/// "3 commits not pushed yet, 1 commit on the remote not pulled yet", or "up to date".
+pub fn upstream_words(ahead: usize, behind: usize) -> String {
+    let mut parts = Vec::new();
+    if ahead > 0 {
+        parts.push(format!("{} not pushed yet", plural(ahead, "commit", "commits")));
+    }
+    if behind > 0 {
+        parts.push(format!("{} on the remote not pulled yet", plural(behind, "commit", "commits")));
+    }
+    if parts.is_empty() { "up to date".into() } else { parts.join(", ") }
 }
 
 /// The "Files affected" section's body, or None when there is nothing to list. From git when it could say, and
@@ -480,7 +552,8 @@ pub fn why_not(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gitfacts::{Change, Kind, Since};
+    use crate::claude::Spent;
+    use crate::gitfacts::{Change, Kind, Since, Upstream};
 
     fn material() -> Material {
         Material {
@@ -497,14 +570,21 @@ mod tests {
         GitFacts {
             top: "/home/u/shop".into(),
             branch: Some("main".into()),
+            upstream: Some(Upstream { name: "origin/main".into(), ahead: 2, behind: 1 }),
             changes: Some(vec![
                 Change { path: "src/basket.rs".into(), kind: Kind::Changed },
                 Change { path: "notes.txt".into(), kind: Kind::Untracked },
             ]),
             last: Some(("a1b2c3d".into(), "Add the basket".into())),
-            since: Some(Since { commits: 2, files: vec!["src/basket.rs".into(), "src/totals.rs".into()] }),
+            since: Some(Since {
+                commits: 2,
+                files: vec!["src/basket.rs".into(), "src/totals.rs".into()],
+                subjects: vec![("a1b2c3d".into(), "Add the basket".into()), ("9f8e7d6".into(), "Start the totals".into())],
+            }),
         }
     }
+
+    const ID: &str = "0b5e7c1a-2f3d-4e5f-8a9b-0c1d2e3f4a5b";
 
     /// Every fact known, at fixed times.
     fn facts() -> Facts {
@@ -520,6 +600,10 @@ mod tests {
             context: Some((42, true)),
             messages: Some(14),
             git: Some(git()),
+            session_id: Some(ID.into()),
+            notes: Some("~/.config/platoon/projects/p1/project.md".into()),
+            running: Some(false),
+            tokens: Some(Spent { input: 45_210, output: 12_034, cache_read: 1_234_567, subagents: false }),
         }
     }
 
@@ -663,14 +747,20 @@ mod tests {
              This is context for this session. The user will prompt you for the next course of action.\n\n\
              - Written: {}\n\
              - Project: Web shop\n\
-             - Previous session: Basket page, in ~/shop\n\
+             - Project notes: ~/.config/platoon/projects/p1/project.md\n\
+             - Previous session: Basket page, in ~/shop (not running)\n\
+             - Previous session id: {ID} (`claude --resume {ID}` opens it)\n\
              - Started: {}, last active {} (2 h 5 min between)\n\
              - Model: Sonnet 5, context 42% full\n\
              - Messages from the user: 14 (short replies like \"yes\" not counted)\n\
+             - Tokens the previous session used: 45,210 sent to Claude and 12,034 written by Claude, plus 1,234,567 read again from Claude's cache\n\
              - Git branch: main\n\
+             - Compared with origin/main, as of the last fetch: 2 commits not pushed yet, 1 commit on the remote not pulled yet\n\
              - Uncommitted changes: 2 files\n\
              - Last commit: a1b2c3d Add the basket\n\
-             - Commits since the session started: 2\n\
+             - Commits since the session started: 2, newest first:\n\
+             \x20 - a1b2c3d Add the basket\n\
+             \x20 - 9f8e7d6 Start the totals\n\
              \n## Executive summary\n\nThe basket page is built and totals are next.\n\
              \n## Work completed\n\n- Added the basket page\n- Stored baskets per session\n\
              \n## Files affected\n\nNot committed yet:\n- src/basket.rs (changed)\n- notes.txt (new, not yet added to git)\n\
@@ -704,6 +794,8 @@ mod tests {
     fn each_fact_platoon_cannot_determine_is_left_out_rather_than_guessed() {
         let bare = Facts { project: "Web shop".into(), session: "Basket page".into(), ..Facts::default() };
         assert_eq!(facts_block(&bare), "- Project: Web shop\n- Previous session: Basket page\n");
+        // An id that is empty once cleaned says nothing.
+        assert!(!facts_block(&Facts { session_id: Some("\u{7}".into()), ..facts() }).contains("session id"));
         let full = facts_block(&facts());
         // Each fact on its own, taken away, takes only its own line with it.
         let cases: Vec<(Facts, &str)> = vec![
@@ -718,11 +810,20 @@ mod tests {
             (Facts { git: Some(GitFacts { changes: None, ..git() }), ..facts() }, "- Uncommitted"),
             (Facts { git: Some(GitFacts { last: None, ..git() }), ..facts() }, "- Last commit"),
             (Facts { git: Some(GitFacts { since: None, ..git() }), ..facts() }, "- Commits since"),
+            (Facts { git: Some(GitFacts { since: None, ..git() }), ..facts() }, "9f8e7d6 Start the totals"),
+            (Facts { git: Some(GitFacts { upstream: None, ..git() }), ..facts() }, "- Compared with"),
+            (Facts { session_id: None, ..facts() }, "- Previous session id"),
+            (Facts { notes: None, ..facts() }, "- Project notes"),
+            (Facts { running: None, ..facts() }, "running)"),
+            (Facts { tokens: None, ..facts() }, "- Tokens"),
         ];
         for (f, gone) in cases {
             let b = facts_block(&f);
             assert!(!b.contains(gone) && full.contains(gone), "{gone}: {b}");
-            assert!(b.lines().count() >= full.lines().count() - 4, "only that fact went: {b}");
+            // No git at all takes every git line with it; any other fact takes at most its own few lines.
+            if f.git.is_some() {
+                assert!(b.lines().count() >= full.lines().count() - 3, "only that fact went: {b}");
+            }
         }
         // What is left when part of a fact is known.
         assert!(facts_block(&Facts { started_ms: None, ..facts() }).contains(&format!("- Last active: {}\n", t(1_789_997_500))));
@@ -733,6 +834,65 @@ mod tests {
         // A last entry before the first can't be a length of time: only the start is said.
         let odd = facts_block(&Facts { last_ms: Some(1), ..facts() });
         assert!(odd.contains(&format!("- Started: {}\n", t(1_789_990_000))) && !odd.contains("between"), "{odd}");
+    }
+
+    #[test]
+    fn the_six_later_facts_are_worded_plainly_in_each_of_their_forms() {
+        let line = |f: Facts, starts: &str| facts_block(&f).lines().find(|l| l.starts_with(starts)).map(str::to_string);
+        // Still running, or not.
+        assert_eq!(line(Facts { running: Some(true), ..facts() }, "- Previous session:").unwrap(), "- Previous session: Basket page, in ~/shop (still running)");
+        assert_eq!(line(Facts { running: Some(false), folder: None, ..facts() }, "- Previous session:").unwrap(), "- Previous session: Basket page (not running)");
+        // Tokens: nothing read from the cache leaves that part out; subagents are said to be counted.
+        let spent = |input, output, cache_read, subagents| Facts { tokens: Some(Spent { input, output, cache_read, subagents }), ..facts() };
+        assert_eq!(line(spent(900, 12, 0, false), "- Tokens").unwrap(), "- Tokens the previous session used: 900 sent to Claude and 12 written by Claude");
+        assert_eq!(
+            line(spent(1_000, 2_000, 3_000_000, true), "- Tokens").unwrap(),
+            "- Tokens the previous session used: 1,000 sent to Claude and 2,000 written by Claude, plus 3,000,000 read again from Claude's cache (its subagents included)"
+        );
+        assert!(!facts_block(&facts()).contains('$') && !facts_block(&facts()).to_lowercase().contains("cost"), "never money");
+        // Ahead and behind.
+        assert_eq!(upstream_words(0, 0), "up to date");
+        assert_eq!(upstream_words(3, 0), "3 commits not pushed yet");
+        assert_eq!(upstream_words(1, 0), "1 commit not pushed yet");
+        assert_eq!(upstream_words(0, 1), "1 commit on the remote not pulled yet");
+        assert_eq!(upstream_words(3, 2), "3 commits not pushed yet, 2 commits on the remote not pulled yet");
+        let up = Facts { git: Some(GitFacts { upstream: Some(Upstream { name: "origin/main".into(), ahead: 0, behind: 0 }), ..git() }), ..facts() };
+        assert_eq!(line(up, "- Compared").unwrap(), "- Compared with origin/main, as of the last fetch: up to date");
+        // The notes path and the id are as given; the id is how the old session is opened again.
+        assert_eq!(line(facts(), "- Project notes").unwrap(), "- Project notes: ~/.config/platoon/projects/p1/project.md");
+        assert_eq!(line(facts(), "- Previous session id").unwrap(), format!("- Previous session id: {ID} (`claude --resume {ID}` opens it)"));
+        // Commit subjects: at most so many, newest first, the rest counted, each cut and cleaned.
+        let many = Since {
+            commits: 14,
+            files: vec![],
+            subjects: (0..14).rev().map(|i| (format!("c{i:06}"), format!("Commit {i} \u{1b}[31m{}", "y".repeat(300)))).collect(),
+        };
+        let block = facts_block(&Facts { git: Some(GitFacts { since: Some(many), ..git() }), ..facts() });
+        assert!(block.contains("- Commits since the session started: 14, newest first:\n  - c000013 Commit 13 yyy"), "{block}");
+        let listed: Vec<&str> = block.lines().filter(|l| l.starts_with("  - c")).collect();
+        assert_eq!(listed.len(), SUBJECTS_SHOWN);
+        assert!(listed.iter().all(|l| l.chars().count() <= SUBJECT_MAX + 16 && !l.contains('\u{1b}')), "{listed:?}");
+        assert!(listed.last().unwrap().starts_with("  - c000004 Commit 4 "), "{block}");
+        assert!(block.contains("\n  - … and 4 more\n"), "{block}");
+        // More commits than git gave subjects for (it lists at most 500): the rest are still counted.
+        let capped = Since { commits: 600, files: vec![], subjects: vec![("abc1234".into(), "One".into())] };
+        let block = facts_block(&Facts { git: Some(GitFacts { since: Some(capped), ..git() }), ..facts() });
+        assert!(block.contains("  - abc1234 One\n  - … and 599 more\n"), "{block}");
+        // No commits: just the count.
+        let none = facts_block(&Facts { git: Some(GitFacts { since: Some(Since::default()), ..git() }), ..facts() });
+        assert!(none.contains("- Commits since the session started: 0\n") && !none.contains("newest first"), "{none}");
+    }
+
+    #[test]
+    fn the_previous_sessions_id_is_in_the_document_and_never_in_the_request() {
+        let doc = document(&facts(), &brief());
+        assert!(doc.contains(ID), "{doc}");
+        // The request is made only from the material (which has no id) and git's facts: whatever git says, and
+        // whatever the conversation is called, the id can't get into it.
+        for g in [None, Some(git())] {
+            let p = prompt(&material(), g.as_ref());
+            assert!(!p.contains(ID) && !p.contains("--resume") && !p.contains("session id"), "{p}");
+        }
     }
 
     #[test]
@@ -754,7 +914,7 @@ mod tests {
         // Very many: so many are listed and the rest counted.
         let many = GitFacts {
             changes: Some((0..20).map(|i| Change { path: format!("c{i}.rs"), kind: Kind::Changed }).collect()),
-            since: Some(Since { commits: 9, files: (0..30).map(|i| format!("k{i}.rs")).collect() }),
+            since: Some(Since { commits: 9, files: (0..30).map(|i| format!("k{i}.rs")).collect(), subjects: vec![] }),
             ..git()
         };
         let block = files_block(&Facts { git: Some(many), ..facts() }, &brief()).unwrap();
@@ -784,12 +944,21 @@ mod tests {
             project: long(500),
             folder: Some(long(500)),
             model: Some(long(500)),
+            session_id: Some(long(500)),
+            notes: Some(long(500)),
+            running: Some(true),
+            tokens: Some(Spent { input: u64::MAX, output: u64::MAX, cache_read: u64::MAX, subagents: true }),
             git: Some(GitFacts {
                 top: long(500),
                 branch: Some(long(500)),
+                upstream: Some(Upstream { name: long(500), ahead: usize::MAX, behind: usize::MAX }),
                 changes: Some((0..500).map(|i| Change { path: format!("{i}{}", long(200)), kind: Kind::Renamed(long(120)) }).collect()),
                 last: Some((long(10), long(150))),
-                since: Some(Since { commits: 500, files: (0..500).map(|i| format!("{i}{}", long(120))).collect() }),
+                since: Some(Since {
+                    commits: usize::MAX,
+                    files: (0..500).map(|i| format!("{i}{}", long(120))).collect(),
+                    subjects: (0..500).map(|_| (long(500), long(500))).collect(),
+                }),
             }),
             ..facts()
         };

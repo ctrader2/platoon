@@ -4,13 +4,14 @@
 //! project with that text as its first message. The old session is left exactly as it is: nothing is archived and
 //! nothing is stopped.
 //!
-//! Git and the call run on a thread of their own, one after the other (git first, so the files it names can go to
-//! Claude), while the screen keeps going. What is sent, what an answer may be and what the document reads like is
+//! The transcript's token count, git and the call run on a thread of their own, one after the other (git before
+//! the call, so the files it names can go to Claude), while the screen keeps going. What is sent, what an answer may be and what the document reads like is
 //! in `handoff.rs`; how the box wraps and scrolls is in `textbox.rs`; this file gathers the material and the facts,
 //! runs the work, keeps the box and starts the session.
 
 use super::*;
 use crate::ai::{AiError, Reply, Request};
+use crate::claude::Spent;
 use crate::gitfacts::{self, GitFacts};
 use crate::handoff::{self, Brief, Facts};
 use crate::textbox;
@@ -20,8 +21,9 @@ use std::sync::mpsc::{channel, TryRecvError};
 /// key press, so it gets a little longer than a background one.
 const HANDOFF_TIMEOUT: Duration = Duration::from_secs(90);
 
-/// What the worker sends back: what git said (None: not a repository, or git couldn't say), and Claude's answer.
-pub(super) type HandoffAnswer = (Option<GitFacts>, Result<Reply, AiError>);
+/// What the worker sends back: what git said (None: not a repository, or git couldn't say), what the old session
+/// spent (None: no usage records), and Claude's answer.
+pub(super) type HandoffAnswer = (Option<GitFacts>, Option<Spent>, Result<Reply, AiError>);
 
 /// What the hand-off box is showing.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -240,6 +242,10 @@ impl App {
             last_ms: Some(s.last_active).filter(|&ms| ms > 0),
             model: s.model.clone().filter(|m| !m.is_empty()),
             context: (s.context_pct > 0).then_some((s.context_pct, s.context_exact)),
+            // For the document only: the id never goes into the request.
+            session_id: Some(s.id.clone()).filter(|id| !id.is_empty()),
+            // The list's own knowledge of the processes running it, as of the last refresh.
+            running: Some(!s.procs.is_empty()),
             ..Facts::default()
         };
         let Some(project) = self.projects.of(&session).cloned() else {
@@ -264,7 +270,9 @@ impl App {
             return;
         }
         facts.project = project.name.clone();
-        let material = self.handoff_material(&session, &session_name, &cwd, &project.name, &mut facts);
+        let notes = self.projects.notes_path(&project.id);
+        facts.notes = notes.is_file().then(|| crate::dirs::tilde(&notes.to_string_lossy(), &self.home));
+        let (material, transcript) = self.handoff_material(&session, &session_name, &cwd, &project.name, &mut facts);
         if material.is_empty() {
             self.notify(format!("There is nothing in \"{session_name}\" yet to hand on."));
             return;
@@ -273,7 +281,7 @@ impl App {
         req.user_initiated = true;
         req.timeout = HANDOFF_TIMEOUT;
         req.cancel = self.switchboard.token(handoff::FEATURE);
-        let rx = self.spawn_handoff(settings.clone(), req, material, cwd.clone(), facts.started_ms);
+        let rx = self.spawn_handoff(settings.clone(), req, material, cwd.clone(), facts.started_ms, transcript);
         self.handoff = HandoffBox {
             session,
             session_name,
@@ -287,9 +295,18 @@ impl App {
         self.mode = Mode::Handoff;
     }
 
-    /// Read git, then make the call, on a thread of their own: git can block (a huge repository, a network
-    /// folder), and it goes first so the files it names can be given to Claude.
-    fn spawn_handoff(&self, settings: Settings, mut req: Request, material: handoff::Material, cwd: String, since_ms: Option<u64>) -> Receiver<HandoffAnswer> {
+    /// Count what the old session spent, read git, then make the call, on a thread of their own: the whole
+    /// transcript is read for the count and git can block (a huge repository, a network folder); git goes before
+    /// the call so the files it names can be given to Claude.
+    fn spawn_handoff(
+        &self,
+        settings: Settings,
+        mut req: Request,
+        material: handoff::Material,
+        cwd: String,
+        since_ms: Option<u64>,
+        transcript: Option<PathBuf>,
+    ) -> Receiver<HandoffAnswer> {
         let (tx, rx) = channel();
         let program = self.ai_program();
         let git_program = self.git_program.clone();
@@ -297,21 +314,23 @@ impl App {
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
         let never = cfg!(test) && program == "claude";
         thread::spawn(move || {
+            let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(crate::claude::spent) };
             let git = if req.cancel.is_cancelled() { None } else { gitfacts::gather(&git_program, Path::new(&cwd), since_ms, gitfacts::BUDGET) };
             req.prompt = handoff::prompt(&material, git.as_ref());
             let answer = if never { Err(AiError::Cancelled) } else { runner.run(&settings, &req) };
-            let _ = tx.send((git, answer));
+            let _ = tx.send((git, spent, answer));
         });
         rx
     }
 
     /// What one hand-off call is about: what platoon already knows this conversation is, and the last few things
     /// said in it. The project's notes are deliberately not in it - the new session gets those from the hook.
-    /// The facts the transcript gives (when it started, how many messages) are put in `facts` on the way.
+    /// The facts the transcript gives (when it started, how many messages) are put in `facts` on the way, and the
+    /// transcript's path comes back so the worker can count what the session spent.
     ///
     /// The conversation is read from its transcript there and then, not from the prompt index: the document has to
     /// reflect what was said a moment ago, and a session platoon has only just noticed may not be indexed yet.
-    fn handoff_material(&self, session: &str, name: &str, cwd: &str, project: &str, facts: &mut Facts) -> handoff::Material {
+    fn handoff_material(&self, session: &str, name: &str, cwd: &str, project: &str, facts: &mut Facts) -> (handoff::Material, Option<PathBuf>) {
         let folder = Path::new(cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(cwd).to_string();
         let mut m = handoff::Material {
             project: project.to_string(),
@@ -320,7 +339,7 @@ impl App {
             summary: self.summaries.get(session).map(|e| e.summary.clone()).filter(|s| !s.is_empty()),
             ..handoff::Material::default()
         };
-        let Some(path) = crate::claude::find_transcript(self.reader.root(), session) else { return m };
+        let Some(path) = crate::claude::find_transcript(self.reader.root(), session) else { return (m, None) };
         facts.started_ms = crate::claude::started_ms(&path);
         let read = crate::notesrun::read_session(&path, handoff::MESSAGE_CHARS);
         facts.messages = Some(read.total).filter(|&n| n > 0);
@@ -333,19 +352,19 @@ impl App {
         }
         m.messages = messages;
         m.reply = read.reply;
-        m
+        (m, Some(path))
     }
 
     /// Take the answer in when it arrives. Called on every refresh; cheap when nothing is out.
     pub(super) fn poll_handoff(&mut self) {
         let Some(rx) = self.handoff_flight.take() else { return };
-        let (git, answer) = match rx.try_recv() {
+        let (git, spent, answer) = match rx.try_recv() {
             Ok(a) => a,
             Err(TryRecvError::Empty) => {
                 self.handoff_flight = Some(rx);
                 return;
             }
-            Err(TryRecvError::Disconnected) => (None, Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })),
+            Err(TryRecvError::Disconnected) => (None, None, Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })),
         };
         // The box was closed while it ran: nobody is waiting for this.
         if !matches!(self.mode, Mode::Handoff) || self.handoff.state != HandoffState::Asking {
@@ -354,7 +373,7 @@ impl App {
         self.handoff.top.set(0);
         match answer {
             Ok(reply) => match handoff::parse(&reply.text, !handoff::git_lists_files(git.as_ref())) {
-                Some(brief) => self.show_brief(&brief, git),
+                Some(brief) => self.show_brief(&brief, git, spent),
                 None => self.handoff.state = HandoffState::Failed("Claude's answer couldn't be understood, so there is no brief. Nothing has changed.".into()),
             },
             Err(AiError::Cancelled) => self.mode = Mode::List,
@@ -362,9 +381,10 @@ impl App {
         }
     }
 
-    fn show_brief(&mut self, brief: &Brief, git: Option<GitFacts>) {
+    fn show_brief(&mut self, brief: &Brief, git: Option<GitFacts>, spent: Option<Spent>) {
         let mut facts = self.handoff.facts.clone();
         facts.git = git;
+        facts.tokens = spent;
         facts.written = Some(self.clock());
         self.handoff.text = handoff::document(&facts, brief);
         self.handoff.facts = facts;
