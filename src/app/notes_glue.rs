@@ -53,8 +53,6 @@ pub struct EditorPick {
 pub struct Changes {
     pub lines: Vec<(notes::Mark, String)>,
     pub top: Cell<usize>,
-    /// The built-in text of these instructions against the user's, opened from the settings.
-    pub instructions: Option<&'static str>,
 }
 
 fn plain(e: &io::Error) -> String {
@@ -278,7 +276,7 @@ impl App {
         let (path, before) = match instructions::prepare_edit(&self.config, id) {
             Ok(v) => v,
             Err(err) => {
-                self.notify(format!("Couldn't start the instructions file: {}", plain(&err)));
+                self.notify(format!("Couldn't start the system prompt file: {}", plain(&err)));
                 return;
             }
         };
@@ -294,7 +292,7 @@ impl App {
                 }
                 Err(err) => {
                     instructions::after_edit(&self.config, id, &before);
-                    self.notify(format!("Couldn't open the instructions in {}: {}", e.name, plain(&err)));
+                    self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
                 }
             }
             return;
@@ -302,47 +300,31 @@ impl App {
         match editors::launch_window(e, &path) {
             Ok(child) => {
                 self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), before, name: e.name.clone(), stamp, child });
-                self.notify(format!("The instructions for {what} opened in {}, in a window of its own.", e.name));
+                self.notify(format!("The system prompt for {what} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
                 instructions::after_edit(&self.config, id, &before);
-                self.notify(format!("Couldn't open the instructions in {}: {}", e.name, plain(&err)));
+                self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
             }
         }
     }
 
     /// What to say once an editor has been and gone from the instructions (see `instructions::after_edit`).
-    fn after_instructions_edit(&mut self, id: &'static str, before: &str, name: &str) {
+    fn after_instructions_edit(&mut self, id: &'static str, before: &str) {
         let what = instructions::action(id).what;
         let said = match instructions::after_edit(&self.config, id, before) {
-            instructions::Edited::Unchanged => format!("The instructions for {what} are unchanged ({name} left them as they were)."),
-            instructions::Edited::BuiltIn => format!("The instructions for {what} are the built-in ones again."),
-            instructions::Edited::Changed => format!("Saved: platoon uses your instructions for {what} from the next time it asks Claude."),
+            // Nothing changed: nothing to say (the entry still reads "Enter to change" or "Changed").
+            instructions::Edited::Unchanged => return,
+            instructions::Edited::BuiltIn => format!("The system prompt for {what} is platoon's default again."),
+            instructions::Edited::Changed => format!("Saved: platoon uses your system prompt for {what} from the next time it asks Claude."),
         };
         self.notify(said);
     }
 
-    /// `c` on an instructions entry: the built-in text as it is now against what is sent instead, then the part
-    /// platoon keeps, read-only.
-    pub(super) fn compare_instructions(&mut self, id: &'static str) {
-        let (builtin, theirs) = instructions::compare(&self.config, id);
-        let mut lines = if builtin == theirs {
-            builtin.lines().map(|l| (notes::Mark::Same, l.to_string())).collect()
-        } else {
-            notes::diff(&builtin, &theirs)
-        };
-        lines.push((notes::Mark::Gap, String::new()));
-        lines.push((notes::Mark::Gap, "Kept by platoon and always sent (you can't change this part):".to_string()));
-        // (The view wraps these lines to its width.)
-        lines.extend((instructions::action(id).fixed)().lines().map(|l| (notes::Mark::Same, l.to_string())));
-        self.changes = Changes { lines, top: Cell::new(0), instructions: Some(id) };
-        self.mode = Mode::Changes;
-    }
-
-    /// `r` on an instructions entry: asks first, unless there is nothing to put back.
+    /// `r` on an instructions entry: restore platoon's default, after asking. Only a changed prompt offers it, so on
+    /// one that is platoon's default already the key does nothing.
     pub(super) fn ask_reset_instructions(&mut self, id: &'static str) {
-        if instructions::status(&self.config, id) == instructions::Status::BuiltIn {
-            self.notify("These are the built-in instructions already.");
+        if !instructions::status(&self.config, id).restorable() {
             return;
         }
         self.mode = Mode::Confirm(Confirm::ResetInstructions { id });
@@ -351,12 +333,9 @@ impl App {
     pub(super) fn reset_instructions(&mut self, id: &'static str) {
         self.mode = Mode::Settings;
         match instructions::reset(&self.config, id) {
-            Ok(()) => self.notify(format!(
-                "The instructions for {} are the built-in ones again. Yours are kept as {}.bak.",
-                instructions::action(id).what,
-                instructions::path(&self.config, id).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
-            )),
-            Err(err) => self.notify(format!("Couldn't put the built-in instructions back: {}", plain(&err))),
+            // (The confirm said where the user's version is kept.)
+            Ok(()) => self.notify(format!("Restored platoon's default system prompt for {}.", instructions::action(id).what)),
+            Err(err) => self.notify(format!("Couldn't restore the default system prompt: {}", plain(&err))),
         }
     }
 
@@ -406,7 +385,7 @@ impl App {
         if done {
             if let Some(w) = self.notes_window.take() {
                 match w.instructions {
-                    Some(id) => self.after_instructions_edit(id, &w.before, &w.name),
+                    Some(id) => self.after_instructions_edit(id, &w.before),
                     None => self.after_edit(&w.project, w.stamp, &w.name),
                 }
             }
@@ -420,7 +399,7 @@ impl App {
             self.mode = Self::after_pick_mode(ed.instructions);
         }
         if let Some(id) = ed.instructions {
-            return self.after_instructions_edit(id, &ed.before, &ed.name);
+            return self.after_instructions_edit(id, &ed.before);
         }
         self.notes_top.set(0);
         self.after_edit(&ed.project, ed.stamp, &ed.name);
@@ -460,7 +439,7 @@ impl App {
             self.notify("Nothing has changed since the last copy platoon kept.");
             return;
         }
-        self.changes = Changes { lines, top: Cell::new(0), instructions: None };
+        self.changes = Changes { lines, top: Cell::new(0) };
         self.mode = Mode::Changes;
     }
 

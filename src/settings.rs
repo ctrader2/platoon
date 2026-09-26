@@ -393,8 +393,8 @@ pub enum Kind {
     /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
     /// `enter` opens the theme picker.
     Theme,
-    /// The instructions for one AI action (`instructions::ACTIONS`), by id. It has no steps: enter (or a click on
-    /// the value) opens the user's own text in an editor, and the value says whether it is the built-in text.
+    /// The system prompt of one AI action (`instructions::ACTIONS`), by id. It has no steps: enter (or a click on
+    /// the value) opens the user's own text in an editor, and the value says "Enter to change" or "Changed".
     Instructions(&'static str),
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
@@ -1285,7 +1285,7 @@ mod tests {
                 "Description search: conversations sent",
                 "Description search: results",
                 "Description search: wider search",
-                "Instructions for Describe it"
+                "System prompt for Describe it"
             ]
         );
         assert_eq!(
@@ -1302,12 +1302,12 @@ mod tests {
                 "Longest message sent",
                 "Archived conversations",
                 "Share for archived",
-                "Instructions for naming"
+                "System prompt for naming"
             ]
         );
         assert_eq!(
             names("Projects"),
-            ["Update notes after", "Read Claude's last reply up to", "Instructions for project notes", "Instructions for project descriptions", "Instructions for the hand-off"]
+            ["Update notes after", "Read Claude's last reply up to", "System prompt for project notes", "System prompt for project descriptions", "System prompt for the hand-off"]
         );
         // Every AI action's instructions are an entry, on the tab it belongs to, and nothing else is of that kind.
         let kinds: Vec<(usize, Kind)> =
@@ -1323,7 +1323,13 @@ mod tests {
             ]
         );
         for item in all_items().filter(|i| matches!(i.kind, Kind::Instructions(_))) {
-            assert!(item.choices.is_empty() && item.explain.contains("kept by platoon") && item.explain.len() < 300, "{}", item.name);
+            assert!(item.choices.is_empty() && item.name.starts_with("System prompt for ") && item.explain.len() < 300, "{}", item.name);
+            // The line under the entry only says what the prompt is for: the footer shows the keys.
+            let lower = item.explain.to_lowercase();
+            for key_help in ["enter", "press", " c ", " r ", "(h)", "editor", "kept by platoon", "built-in", "instructions", "restore"] {
+                assert!(!lower.contains(key_help), "{}: {:?} in {:?}", item.name, key_help, item.explain);
+            }
+            assert!(item.explain.starts_with("What platoon asks Claude for") || item.explain.starts_with("How platoon asks Claude to"), "{}", item.explain);
         }
         // No entry is on two tabs, and every one can be found by name.
         let all: Vec<&str> = all_items().map(|i| i.name).collect();

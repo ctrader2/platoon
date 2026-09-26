@@ -228,7 +228,7 @@ pub enum Confirm {
     ArchiveProject { id: String, name: String, running: usize, busy: bool, outside: bool },
     /// Deleting a project always asks: its notes go too.
     DeleteProject { id: String, name: String, sessions: usize },
-    /// Putting the built-in instructions of an AI action back (`r` in the settings) replaces the user's own.
+    /// Restoring platoon's default system prompt of an AI action (`r` in the settings) replaces the user's own.
     ResetInstructions { id: &'static str },
 }
 
@@ -632,7 +632,7 @@ impl App {
             editing: None,
             notes_window: None,
             epick: EditorPick { project: String::new(), instructions: None, options: Vec::new(), selected: 0, starred: String::new() },
-            changes: Changes { lines: Vec::new(), top: Cell::new(0), instructions: None },
+            changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
             git_program: "git".into(),
@@ -1191,7 +1191,6 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::ResetInstructions { id })) => self.reset_instructions(id),
             (Action::Cancel, Mode::Confirm(Confirm::ResetInstructions { .. })) => self.mode = Mode::Settings,
             (Action::Cancel, Mode::PickEditor) if self.epick.instructions.is_some() => self.mode = Mode::Settings,
-            (Action::Cancel, Mode::Changes) if self.changes.instructions.is_some() => self.mode = Mode::Settings,
             (Action::Confirm, Mode::Confirm(Confirm::DeleteProject { id, .. })) => {
                 self.mode = Mode::List;
                 self.delete_project(&id);
@@ -2080,14 +2079,10 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
                 KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
                 KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
+                // Restore platoon's default system prompt (only a changed one has one to go back to).
                 KeyCode::Char('r') => {
                     if let Some(Kind::Instructions(id)) = self.items().get(self.setting).map(|i| i.kind) {
                         self.ask_reset_instructions(id);
-                    }
-                }
-                KeyCode::Char('c') if !ctrl => {
-                    if let Some(Kind::Instructions(id)) = self.items().get(self.setting).map(|i| i.kind) {
-                        self.compare_instructions(id);
                     }
                 }
                 _ => {}

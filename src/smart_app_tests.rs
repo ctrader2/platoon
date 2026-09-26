@@ -1621,26 +1621,33 @@ fn describe_it_sends_the_users_own_guidance_then_the_fixed_part() {
 }
 
 #[test]
-fn an_instructions_entry_opens_the_editor_list_on_enter_or_a_click_and_c_and_r_belong_to_it_alone() {
+fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restores_only_a_changed_one() {
     let w = World::new("sm-own-keys");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    let footer = |shown: &str| shown.lines().rev().find(|l| l.contains("esc back")).unwrap_or_else(|| panic!("no footer:\n{shown}")).to_string();
     // On an ordinary entry c and r do nothing.
     go(&mut app, "Update notes after");
     key(&mut app, KeyCode::Char('c'));
     key(&mut app, KeyCode::Char('r'));
     assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_none());
-    // The arrows have nothing to step on an instructions entry; enter opens the editor list, and esc comes back.
-    go(&mut app, "Instructions for project notes");
+    // An unchanged prompt invites a change, and offers no restore: r and c do nothing on it.
+    go(&mut app, "System prompt for project notes");
     let shown = screen(&mut term, &app);
-    assert!(shown.lines().find(|l| l.contains("Instructions for project notes")).unwrap().contains("Built-in"), "{shown}");
+    assert!(shown.lines().find(|l| l.contains("System prompt for project notes")).unwrap().contains("Enter to change"), "{shown}");
+    assert!(footer(&shown).contains("enter edit") && !footer(&shown).contains("restore") && !shown.contains("compare"), "{shown}");
+    for c in ['r', 'c'] {
+        key(&mut app, KeyCode::Char(c));
+        assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_none(), "{c} does nothing here");
+    }
+    // The arrows have nothing to step; enter opens the editor list, and esc comes back.
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Left);
     assert!(matches!(app.mode, Mode::Settings));
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.instructions == Some(crate::instructions::NOTES));
     let shown = screen(&mut term, &app);
-    assert!(shown.contains("edit the instructions with") && shown.contains("Instructions for project notes"), "the settings stay behind it:\n{shown}");
+    assert!(shown.contains("edit the system prompt with") && shown.contains("System prompt for project notes"), "the settings stay behind it:\n{shown}");
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings), "esc goes back to the settings, not the list");
     // A click on the value does what enter does.
@@ -1649,16 +1656,31 @@ fn an_instructions_entry_opens_the_editor_list_on_enter_or_a_click_and_c_and_r_b
     click_at(&mut app, value.x + 1, value.y);
     assert!(matches!(app.mode, Mode::PickEditor));
     key(&mut app, KeyCode::Esc);
-    // c shows the built-in text (nothing differs) and the part platoon keeps; esc comes back.
+    assert!(!w.config.join("prompts").exists(), "none of this wrote anything");
+
+    // Changed: the value says so, the footer offers restore, and c still does nothing.
+    own_guidance(&w, crate::instructions::NOTES, "Keep the notes short.");
+    let shown = screen(&mut term, &app);
+    assert!(shown.lines().find(|l| l.contains("System prompt for project notes")).unwrap().contains("Changed"), "{shown}");
+    assert!(footer(&shown).contains("r restore"), "{shown}");
     key(&mut app, KeyCode::Char('c'));
-    assert!(matches!(app.mode, Mode::Changes) && app.changes.instructions.is_some());
-    assert!(app.changes.lines.iter().all(|(m, _)| !matches!(m, crate::notes::Mark::Added | crate::notes::Mark::Removed)));
-    assert!(app.changes.lines.iter().any(|(_, l)| l.contains("Kept by platoon")));
+    assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_none(), "no compare view");
+    // r asks first; esc keeps the user's version.
+    key(&mut app, KeyCode::Char('r'));
+    assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::ResetInstructions { id: "project-notes" })));
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Restore platoon's default system prompt for project notes?") && shown.contains("project-notes.md.bak"), "{shown}");
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings));
-    // r with nothing to put back says so and asks nothing.
+    assert!(w.config.join("prompts/project-notes.md").exists());
+    // y restores: the entry invites a change again, and the user's version is kept beside it.
     key(&mut app, KeyCode::Char('r'));
+    key(&mut app, KeyCode::Char('y'));
     assert!(matches!(app.mode, Mode::Settings));
-    assert_eq!(app.active_notice(), Some("These are the built-in instructions already."));
-    assert!(!w.config.join("prompts").exists(), "none of this wrote anything");
+    assert_eq!(app.active_notice(), Some("Restored platoon's default system prompt for project notes."));
+    assert!(!w.config.join("prompts/project-notes.md").exists());
+    assert_eq!(fs::read_to_string(w.config.join("prompts/project-notes.md.bak")).unwrap(), "Keep the notes short.");
+    let shown = screen(&mut term, &app);
+    assert!(shown.lines().find(|l| l.contains("System prompt for project notes")).unwrap().contains("Enter to change"), "{shown}");
+    assert!(!footer(&shown).contains("restore"), "{shown}");
 }

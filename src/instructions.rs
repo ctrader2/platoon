@@ -1,4 +1,5 @@
-//! The instructions platoon gives Claude for each thing it asks of it, and the user's own version of them.
+//! The instructions platoon gives Claude for each thing it asks of it, and the user's own version of them. The user
+//! sees them as "System prompt for ...", and the built-in text as "platoon's default".
 //!
 //! Every AI action's system prompt is two parts: the **guidance** (what to aim for, the tone, what to put in and
 //! leave out), which the user may rewrite, and the **fixed part** (the exact shape of the reply that platoon's checks
@@ -28,13 +29,15 @@ pub struct Action {
     pub id: &'static str,
     /// The settings entry that edits it.
     pub entry: &'static str,
-    /// What it is about, for messages: "the instructions for {what}".
+    /// What it is about, for messages: "the system prompt for {what}".
     pub what: &'static str,
-    /// The settings entry's explanation.
+    /// The settings entry's explanation: only what this system prompt is for (the footer shows the keys).
     pub explain: &'static str,
     /// The built-in guidance.
     pub builtin: &'static str,
-    /// The part platoon keeps, as it is sent with the standard settings (shown read-only).
+    /// The part platoon keeps, as it is sent with the standard settings. Only the tests read it here (they check it
+    /// never overlaps the guidance); the callers build their own, with the settings as they are.
+    #[allow(dead_code)]
     pub fixed: fn() -> String,
 }
 
@@ -44,52 +47,44 @@ pub const NOTES: &str = "project-notes";
 pub const DESCRIPTION: &str = "project-description";
 pub const HANDOFF: &str = "hand-off";
 
-/// The second half of every entry's explanation.
-macro_rules! how_to_edit {
-    () => {
-        " Enter opens it in an editor, c shows how yours differs from the built-in text, r puts the built-in text back. \
-         How Claude must answer, and the safety rules, are kept by platoon and always sent."
-    };
-}
-
 pub static ACTIONS: [Action; 5] = [
     Action {
         id: NAMES,
-        entry: "Instructions for naming",
+        entry: "System prompt for naming",
         what: "naming",
-        explain: concat!("What platoon asks for when it names and summarizes your conversations.", how_to_edit!()),
+        explain: "What platoon asks Claude for when it names and summarizes your conversations.",
         builtin: crate::smart::NAMES_GUIDANCE,
         fixed: || crate::smart::NAMES_FIXED.to_string(),
     },
     Action {
         id: FIND,
-        entry: "Instructions for Describe it",
+        entry: "System prompt for Describe it",
         what: "Describe it",
-        explain: concat!("What platoon asks for when you search by describing a conversation.", how_to_edit!()),
+        explain: "What platoon asks Claude for when you search by describing a conversation.",
         builtin: crate::smart::FIND_GUIDANCE,
         fixed: || crate::smart::find_fixed(crate::settings::DEFAULT_FIND_RESULTS as usize),
     },
     Action {
         id: NOTES,
-        entry: "Instructions for project notes",
+        entry: "System prompt for project notes",
         what: "project notes",
-        explain: concat!("How platoon writes a project's notes when it brings them up to date.", how_to_edit!()),
+        explain: "How platoon asks Claude to write a project's notes when it brings them up to date.",
         builtin: crate::notesupdate::GUIDANCE,
         fixed: || crate::notesupdate::FIXED.to_string(),
     },
     Action {
         id: DESCRIPTION,
-        entry: "Instructions for project descriptions",
+        entry: "System prompt for project descriptions",
         what: "project descriptions",
-        explain: concat!("How platoon writes the one line under a project's name that says what it is.", how_to_edit!()),
+        explain: "How platoon asks Claude to write the one line under a project's name that says what it is.",
         builtin: crate::describe::GUIDANCE,
         fixed: crate::describe::fixed,
     },
     Action {
         id: HANDOFF,
-        entry: "Instructions for the hand-off",
+        entry: "System prompt for the hand-off",
         what: "the hand-off",
-        explain: concat!("What platoon asks for when it writes a hand-off to a new session (h).", how_to_edit!()),
+        explain: "What platoon asks Claude for when it writes a hand-off to a new session.",
         builtin: crate::handoff::GUIDANCE,
         fixed: || crate::handoff::FIXED.to_string(),
     },
@@ -145,22 +140,28 @@ pub fn guidance(config: &Path, id: &str) -> String {
     own(config, a).unwrap_or_else(|| a.builtin.trim().to_string())
 }
 
-/// What the settings entry says.
+/// What the settings entry says. The user sees "system prompt" and "platoon's default"; the code keeps "built-in".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
+    /// platoon's default is used: the entry invites a change.
     BuiltIn,
     Changed,
-    /// Changed, and the built-in text is not the one the user's started from any more.
+    /// Changed, and platoon's default is not the one the user's started from any more.
     BuiltInUpdated,
 }
 
 impl Status {
     pub fn label(self) -> &'static str {
         match self {
-            Status::BuiltIn => "Built-in",
+            Status::BuiltIn => "Enter to change",
             Status::Changed => "Changed",
-            Status::BuiltInUpdated => "Changed · built-in updated",
+            Status::BuiltInUpdated => "Changed · default updated",
         }
+    }
+
+    /// Only a prompt the user has changed has a default to go back to (`r`).
+    pub fn restorable(self) -> bool {
+        self != Status::BuiltIn
     }
 }
 
@@ -247,8 +248,8 @@ pub fn after_edit(config: &Path, id: &str, before: &str) -> Edited {
     Edited::Changed
 }
 
-/// Put the built-in text back: the user's file becomes `<id>.md.bak` (one copy, replaced by the next reset), so a
-/// reset by mistake can still be undone by hand.
+/// Restore platoon's default: the user's file becomes `<id>.md.bak` (one copy, replaced by the next restore), so a
+/// restore by mistake can still be undone by hand.
 pub fn reset(config: &Path, id: &str) -> io::Result<()> {
     let p = path(config, id);
     if p.exists() {
@@ -261,11 +262,6 @@ pub fn reset(config: &Path, id: &str) -> io::Result<()> {
 pub fn stamp(config: &Path, id: &str) -> crate::notes::Stamp {
     let m = fs::metadata(path(config, id)).ok()?;
     Some((m.modified().ok()?, m.len()))
-}
-
-/// The two texts for the comparison view: the built-in text as it is now, and what is sent instead.
-pub fn compare(config: &Path, id: &str) -> (String, String) {
-    (action(id).builtin.trim().to_string(), guidance(config, id))
 }
 
 #[cfg(test)]
@@ -307,6 +303,19 @@ mod tests {
             assert!(a.builtin.chars().count() < MAX_CHARS / 2, "{}", a.id);
             assert!(compose(a.builtin, &fixed).starts_with(a.builtin.trim()) && compose(a.builtin, &fixed).ends_with(fixed.trim()));
         }
+    }
+
+    #[test]
+    fn the_entry_invites_a_change_says_changed_and_only_a_changed_prompt_can_be_restored() {
+        assert_eq!(Status::BuiltIn.label(), "Enter to change");
+        assert_eq!(Status::Changed.label(), "Changed");
+        assert_eq!(Status::BuiltInUpdated.label(), "Changed · default updated");
+        assert!(!Status::BuiltIn.restorable() && Status::Changed.restorable() && Status::BuiltInUpdated.restorable());
+        let entries: Vec<&str> = ACTIONS.iter().map(|a| a.entry).collect();
+        assert_eq!(
+            entries,
+            ["System prompt for naming", "System prompt for Describe it", "System prompt for project notes", "System prompt for project descriptions", "System prompt for the hand-off"]
+        );
     }
 
     #[test]
@@ -380,10 +389,8 @@ mod tests {
         hashes.insert("some-future-action".into(), Value::String("abc".into()));
         save_hashes(&c, &hashes).unwrap();
         assert_eq!(status(&c, FIND), Status::BuiltInUpdated);
-        assert_eq!(Status::BuiltInUpdated.label(), "Changed · built-in updated");
+        assert_eq!(Status::BuiltInUpdated.label(), "Changed · default updated");
         assert_eq!(guidance(&c, FIND), "Look for the one about invoices first.", "the user's text is kept");
-        let (builtin, theirs) = compare(&c, FIND);
-        assert_eq!((builtin.as_str(), theirs.as_str()), (action(FIND).builtin.trim(), "Look for the one about invoices first."));
         // The same hash as today's built-in: just changed.
         set_hash(&c, FIND, Some(hash(action(FIND).builtin))).unwrap();
         assert_eq!(status(&c, FIND), Status::Changed);
