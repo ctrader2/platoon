@@ -1327,7 +1327,8 @@ pub fn squad_stop(input: &str, config: &Path) -> Option<(String, u32, State)> {
     }
     let mut store = Tickets::open(config, &project);
     let t = store.get(number)?;
-    if matches!(t.state, State::New | State::Cancelled) {
+    // A ticket in the line for a free squad isn't this leader's to move: it waits for a new one.
+    if matches!(t.state, State::New | State::Cancelled) || t.queued.is_some() {
         return None;
     }
     let message = v.get("last_assistant_message").and_then(Value::as_str).unwrap_or("");
@@ -1639,6 +1640,7 @@ mod tests {
             handover: None,
             permission: false,
             busy: None,
+            queued: None,
         }
     }
 
@@ -1973,6 +1975,12 @@ mod tests {
         assert_eq!(squad_stop(&stop_input(&s, "SQUAD: working", json!([])), &c), None);
         assert_eq!(Tickets::open(&c, "p1").get(n).unwrap().state, State::Cancelled);
         assert_eq!(squad_stop("not json", &c), None);
+        // Back to New and into the line for another squad: this leader's turns don't move it either.
+        Tickets::open(&c, "p1").set_state(n, &State::New).unwrap();
+        Tickets::open(&c, "p1").queue(n, "docs", false).unwrap();
+        assert_eq!(squad_stop(&stop_input(&s, "SQUAD: done", json!([])), &c), None);
+        let t = Tickets::open(&c, "p1");
+        assert!(t.get(n).unwrap().state == State::Working && t.get(n).unwrap().queued.is_some());
     }
 
     #[test]

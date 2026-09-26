@@ -209,6 +209,22 @@ pub struct Handover {
 /// What the ticket says while its leader is stuck on Claude's permission prompt.
 pub const PERMISSION_REASON: &str = "Waiting for your OK on a command";
 
+/// What a ticket in the line for a free squad says (the file too, beside Working).
+pub const QUEUED_WORDS: &str = "waiting for a free squad";
+
+/// A ticket in the line for a free squad: handed over (the commander said it fits, or the user said "hand it anyway")
+/// while as many squads as the limit allows were at work. It is Working in the file, with this on it, so the line
+/// outlasts platoon; the platoon app starts it when a place frees, oldest first. Its worktrees are made then, not now.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Queued {
+    /// The squad's id it goes to.
+    pub squad: String,
+    /// When it joined the line, seconds since the epoch.
+    pub since: u64,
+    /// The user said "hand it anyway" over the commander's no.
+    pub anyway: bool,
+}
+
 /// A git worktree platoon made for a ticket (Coding tickets always get their own).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
@@ -249,6 +265,8 @@ pub struct Ticket {
     /// What the app is doing for it before a leader is written on it (the commander's check, the worktrees): the
     /// ticket shows Working with these words. Never in the file.
     pub busy: Option<String>,
+    /// In the line for a free squad (the file says Working).
+    pub queued: Option<Queued>,
 }
 
 impl Ticket {
@@ -390,6 +408,17 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         }),
         permission: o.get("permission").and_then(Value::as_bool).unwrap_or(false),
         busy: None,
+        // Only on a Working ticket: a line mark left on any other state (written by hand) means nothing.
+        queued: o.get("queued").filter(|_| o.get("state").and_then(Value::as_str) == Some(State::Working.id())).and_then(queued_from),
+    })
+}
+
+/// A line entry as the file holds it; None without a squad.
+fn queued_from(q: &Value) -> Option<Queued> {
+    Some(Queued {
+        squad: q.get("squad")?.as_str().filter(|s| !s.is_empty())?.to_string(),
+        since: q.get("since").and_then(Value::as_u64).unwrap_or(0),
+        anyway: q.get("anyway").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -667,6 +696,8 @@ impl Tickets {
             t.remove("reason");
             t.remove("handover");
             t.remove("permission");
+            // Any state the user picks takes it out of the line for a free squad.
+            t.remove("queued");
             if !keep {
                 t.remove("go_ahead");
             }
@@ -680,6 +711,7 @@ impl Tickets {
         self.edit(number, move |t, _| {
             t.insert("state".into(), json!(State::New.id()));
             t.insert("handover".into(), h);
+            t.remove("queued");
             t.remove("reason");
             t.remove("permission");
             t.remove("go_ahead");
@@ -691,7 +723,8 @@ impl Tickets {
     /// Waiting on you ("Waiting for your OK on a command"); any other state is left alone. True when it changed.
     pub fn permission_wait(&mut self, number: u32) -> io::Result<bool> {
         self.edit_when(number, |t| {
-            if t.get("state").and_then(Value::as_str) != Some(State::Working.id()) {
+            // A ticket in the line for a free squad has no leader at work: an earlier one's prompt is not its.
+            if t.get("state").and_then(Value::as_str) != Some(State::Working.id()) || t.contains_key("queued") {
                 return false;
             }
             t.insert("state".into(), json!(State::Waiting.id()));
@@ -749,6 +782,7 @@ impl Tickets {
             }
             t.insert("worktrees".into(), Value::Array(w));
             t.insert("state".into(), json!(State::Working.id()));
+            t.remove("queued");
             t.remove("reason");
             t.remove("go_ahead");
             t.remove("handover");
@@ -786,11 +820,52 @@ impl Tickets {
                 t.insert("reason".into(), json!(reason));
             }
             t.remove("permission");
+            t.remove("queued");
             if !keep {
                 t.remove("go_ahead");
             }
             Ok(())
         })
+    }
+
+    /// Ticket `number` joins the line for a free squad: Working, with the squad it goes to, when it joined and
+    /// whether the user overruled the commander. What the last squad said, a failed hand-over and a go-ahead go.
+    pub fn queue(&mut self, number: u32, squad: &str, anyway: bool) -> io::Result<()> {
+        let q = json!({"squad": squad, "since": now_secs(), "anyway": anyway, "says": QUEUED_WORDS});
+        self.edit(number, move |t, _| {
+            if t.get("state").and_then(Value::as_str) != Some(State::New.id()) {
+                return Err(format!("#{number} was changed meanwhile, so it wasn't handed over"));
+            }
+            t.insert("state".into(), json!(State::Working.id()));
+            t.insert("queued".into(), q);
+            t.remove("reason");
+            t.remove("handover");
+            t.remove("permission");
+            t.remove("go_ahead");
+            Ok(())
+        })
+    }
+
+    /// Take ticket `number` out of the line to start it now. Under the tickets lock, from the file as it is: only
+    /// a ticket still Working in the line is taken (it goes back to New, as a ticket being handed over is until its
+    /// leader is written on it), so two platoons can never both start it. The line entry it had, or None when it
+    /// is no longer in the line (the user moved it, or another platoon took it first).
+    pub fn claim_queued(&mut self, number: u32) -> io::Result<Option<Queued>> {
+        let mut taken = None;
+        let slot = &mut taken;
+        let changed = self.edit_when(number, |t| {
+            if t.get("state").and_then(Value::as_str) != Some(State::Working.id()) {
+                return false;
+            }
+            let Some(q) = t.get("queued").and_then(queued_from) else {
+                return false;
+            };
+            t.remove("queued");
+            t.insert("state".into(), json!(State::New.id()));
+            *slot = Some(q);
+            true
+        })?;
+        Ok(if changed { taken } else { None })
     }
 
     /// `p` on a Ready ticket: the user lets the squad publish. The ticket is Working again.
@@ -899,6 +974,15 @@ pub fn all_files(config: &Path) -> Vec<(String, PathBuf)> {
     out
 }
 
+/// Every ticket of every project, with its project's id (a file that can't be read gives none).
+pub fn every_ticket(config: &Path) -> Vec<(String, Ticket)> {
+    let mut out = Vec::new();
+    for (project, _) in all_files(config) {
+        out.extend(Tickets::open(config, &project).all().iter().cloned().map(|t| (project.clone(), t)));
+    }
+    out
+}
+
 /// The session ids of every squad leader any ticket in any project ever had. These sessions belong to their tickets
 /// only: they are never listed with the user's own sessions (the one place that decides this is here).
 pub fn leader_ids(config: &Path) -> std::collections::HashSet<String> {
@@ -932,7 +1016,7 @@ pub fn find_leader(config: &Path, session: &str) -> Option<(String, u32, bool)> 
 /// may be at work while nobody watches it. Waiting on you, Ready, Done and Cancelled don't hold it.
 pub fn leader_at_work(config: &Path, session: &str) -> bool {
     let Some((project, number, true)) = find_leader(config, session) else { return false };
-    Tickets::open(config, &project).get(number).is_some_and(|t| t.state == State::Working)
+    Tickets::open(config, &project).get(number).is_some_and(|t| t.state == State::Working && t.queued.is_none())
 }
 
 /// Why `ticket` can't be blocked by `blocker`, or Ok.
@@ -1151,7 +1235,9 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         }
         let line = |t: &Ticket| {
             let wait = waiting_for(t, all);
-            let tail = if !wait.is_empty() && !t.state.closed() {
+            let tail = if t.queued.is_some() {
+                format!("  {QUEUED_WORDS}")
+            } else if !wait.is_empty() && !t.state.closed() {
                 format!("  waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
             } else if is_ready(t, all) {
                 "  ready".to_string()
@@ -1380,7 +1466,7 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None }
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None, queued: None }
     }
 
     #[test]
@@ -1732,5 +1818,75 @@ mod tests {
         t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default(), snapshot: None }, &[]).unwrap();
         assert!(!leader_at_work(&d, "lead-1"), "an earlier leader");
         assert!(leader_at_work(&d, "lead-2"));
+    }
+
+    #[test]
+    fn a_ticket_waits_in_the_line_as_working_and_any_state_the_user_picks_takes_it_out() {
+        let d = dir("queue");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        t.handover_failed(n, "coding", HandoverKind::Refused, "No.").unwrap();
+        t.queue(n, "coding", true).unwrap();
+        let v = saved(&d);
+        let q = &v["tickets"][0];
+        assert_eq!((q["state"].as_str(), q["queued"]["squad"].as_str(), q["queued"]["anyway"].as_bool(), q["queued"]["says"].as_str()), (Some("working"), Some("coding"), Some(true), Some(QUEUED_WORDS)));
+        assert!(q["queued"]["since"].as_u64().unwrap() > 0 && q.get("handover").is_none(), "{q}");
+        // Read again (another platoon, or the next one): the line survives.
+        let again = Tickets::open(&d, "p1");
+        let got = again.get(n).unwrap();
+        assert_eq!((got.state.clone(), got.queued.as_ref().map(|q| (q.squad.as_str(), q.anyway))), (State::Working, Some(("coding", true))));
+        // Only a New ticket joins the line.
+        assert!(t.queue(n, "coding", false).is_err());
+        for s in [State::New, State::Cancelled, State::Done, State::Working] {
+            t.set_state(n, &State::New).unwrap();
+            t.queue(n, "docs", false).unwrap();
+            t.set_state(n, &s).unwrap();
+            assert!(t.get(n).unwrap().queued.is_none() && saved(&d)["tickets"][0].get("queued").is_none(), "{s:?}");
+        }
+        // A mark left on a ticket that isn't Working (written by hand) means nothing.
+        let mut v = saved(&d);
+        v["tickets"][0]["state"] = json!("new");
+        v["tickets"][0]["queued"] = json!({"squad": "coding", "since": 1});
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        assert!(Tickets::open(&d, "p1").get(n).unwrap().queued.is_none());
+        assert_eq!(Tickets::open(&d, "p1").claim_queued(n).unwrap(), None);
+    }
+
+    #[test]
+    fn a_ticket_in_the_line_is_taken_out_once_however_many_try_at_once() {
+        let d = dir("claim");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        t.queue(n, "coding", false).unwrap();
+        // Eight platoons (or eight tries of one) at the same moment: exactly one gets it, and it is New again, for
+        // the hand-over to go on as usual.
+        let got: Vec<Option<Queued>> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..8).map(|_| s.spawn(|| Tickets::open(&d, "p1").claim_queued(n).unwrap())).collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(got.iter().filter(|g| g.is_some()).count(), 1, "{got:?}");
+        assert_eq!(got.into_iter().flatten().next().map(|q| q.squad), Some("coding".to_string()));
+        let now = Tickets::open(&d, "p1");
+        assert_eq!((now.get(n).unwrap().state.clone(), now.get(n).unwrap().queued.clone()), (State::New, None));
+        // Moved by the user meanwhile: nothing to take.
+        t.queue(n, "coding", false).unwrap();
+        t.set_state(n, &State::Cancelled).unwrap();
+        assert_eq!(t.claim_queued(n).unwrap(), None);
+        assert_eq!(t.get(n).unwrap().state, State::Cancelled);
+    }
+
+    #[test]
+    fn a_leader_of_a_ticket_in_the_line_is_not_at_work_and_its_hooks_leave_the_ticket_alone() {
+        let d = dir("queue-hooks");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        let old = Leader { squad: "coding".into(), session: "old-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: None };
+        t.start_leader(n, &old, &[]).unwrap();
+        assert!(leader_at_work(&d, "old-1"));
+        t.set_state(n, &State::New).unwrap();
+        t.queue(n, "docs", false).unwrap();
+        assert!(!leader_at_work(&d, "old-1"), "the ticket waits for a new squad: the old leader may be idle-stopped");
+        assert!(!t.permission_wait(n).unwrap(), "an old leader's permission prompt doesn't move it");
+        assert!(t.get(n).unwrap().queued.is_some());
     }
 }

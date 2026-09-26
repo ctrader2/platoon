@@ -96,7 +96,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     let hints: Vec<Hint> = if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
         // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
         let body = Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y);
-        if app.ticket(n).is_some_and(|t| t.leader().is_some()) {
+        // In the line for a free squad, its squad's place beside it is not there yet (an earlier squad's isn't its).
+        if app.ticket(n).is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
             draw_ticket_with_squad(f, app, n, body, term_w);
         } else {
             draw_ticket_screen(f, app, n, body);
@@ -278,7 +279,7 @@ fn handable(app: &App, t: &Ticket) -> bool {
 fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
     let t = app.ticket(n);
     let mut out: Vec<Hint<'static>> = Vec::new();
-    if t.is_some_and(|t| t.leader().is_some()) {
+    if t.is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
         out.push(("enter", if app.leader_running(n) { "the squad's session" } else { "continue the squad" }, None));
     }
     if t.is_some_and(|t| handable(app, t)) {
@@ -607,6 +608,9 @@ fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
     if let Some(busy) = &t.busy {
         return (busy.clone(), false);
     }
+    if t.queued.is_some() {
+        return (tickets::QUEUED_WORDS.to_string(), false);
+    }
     if t.state.closed() {
         return (if with_state { t.state.label().to_string() } else { String::new() }, false);
     }
@@ -642,7 +646,17 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let shown: Vec<&Ticket> = rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
     let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
     let want_state = shown.iter().map(|x| x.state.label().chars().count()).max().unwrap_or(0);
-    let want_tail = |with_state: bool| shown.iter().map(|x| ticket_tail(x, all, with_state).0.chars().count()).max().unwrap_or(0);
+    // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
+    let tokens: std::collections::HashMap<u32, String> = shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
+    let tail_of = |x: &Ticket, with_state: bool| -> (String, bool) {
+        let (tail, ready) = ticket_tail(x, all, with_state);
+        match tokens.get(&x.number) {
+            Some(n) if tail.is_empty() => (n.clone(), ready),
+            Some(n) => (format!("{tail} · {n}"), ready),
+            None => (tail, ready),
+        }
+    };
+    let want_tail = |with_state: bool| shown.iter().map(|x| tail_of(x, with_state).0.chars().count()).max().unwrap_or(0);
     let mut c = ticket_cols(area.width as usize, num, want_state, want_tail(false));
     // No room for the state's own column: the rows that have nothing else to say at the end say their state there.
     let merged = c.state == 0 && want_state > 0;
@@ -683,11 +697,13 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     spans.push(Span::styled(format!("  {}", fit(x.state.label(), c.state)), base.fg(state_color(t, &x.state))));
                 }
                 if c.tail > 0 {
-                    let (tail, ready) = ticket_tail(x, all, merged);
+                    let (tail, ready) = tail_of(x, merged);
                     let color = if ready {
                         t.ok
                     } else if tail.starts_with("waits for") {
                         t.warn
+                    } else if tokens.get(&x.number) == Some(&tail) {
+                        t.subtext
                     } else {
                         state_color(t, &x.state)
                     };
@@ -784,6 +800,8 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         let done = all.iter().any(|o| o.number == *b && o.state == State::Done);
         head.push(Line::from(vec![label(if i == 0 { "Waits for" } else { "" }), Span::styled(fit_end(&what, w.saturating_sub(LABEL)), Style::new().fg(if done { t.dim } else { t.text }))]));
     }
+    // What its squads spent and what they did, from their leaders' transcripts.
+    ticket_work_lines(app, x, w, &mut head);
     if let Some(name) = app.ticket_window_open(number) {
         head.push(Line::styled(format!("Open in {name}, in a window of its own. platoon reads it again when you are done."), Style::new().fg(t.accent)));
     }
@@ -809,6 +827,66 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     app.tk.body_top.set(top);
     for (n, l) in lines.into_iter().skip(top).take(rows).enumerate() {
         f.render_widget(Paragraph::new(l), Rect::new(body.x, body.y + n as u16, body.width, 1));
+    }
+}
+
+/// The ticket screen's two parts about its squads' work: the tokens they used (in all, what that counts, and a line per
+/// agent), and what the squad has done (each member's run, in order, and who is at work now). Nothing until a
+/// leader's transcript has been read.
+fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'static>>) {
+    let t = app.effective_theme();
+    let heading = |s: &str| Line::styled(s.to_string(), Style::new().fg(t.subtext).add_modifier(Modifier::BOLD));
+    if let Some(tk) = app.ticket_tokens(x) {
+        head.push(Line::raw(""));
+        head.push(Line::from(vec![
+            Span::styled("Tokens used  ", Style::new().fg(t.subtext).add_modifier(Modifier::BOLD)),
+            Span::styled(format!("{} in all", crate::squadwork::short(tk.total.total())), Style::new().fg(t.text)),
+        ]));
+        for l in wrap(&crate::squadwork::explained(&tk), w.saturating_sub(2)) {
+            head.push(Line::styled(format!("  {l}"), Style::new().fg(t.dim)));
+        }
+        let name_w = tk.agents.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).min(w.saturating_sub(10));
+        for (name, s) in &tk.agents {
+            head.push(Line::from(vec![
+                Span::styled(format!("  {:<name_w$}", fit(name, name_w)), Style::new().fg(t.text)),
+                Span::styled(format!("  {:>5}", crate::squadwork::short(s.total())), Style::new().fg(t.subtext)),
+            ]));
+        }
+    }
+    // The members' runs, per leader (with its squad's name when the ticket has had more than one).
+    let current = x.leader().map(|l| l.session.clone());
+    let several = x.leaders.len() > 1;
+    let mut first = true;
+    for l in &x.leaders {
+        let Some(log) = app.leader_log(&l.session) else { continue };
+        if log.runs.is_empty() {
+            continue;
+        }
+        if first {
+            head.push(Line::raw(""));
+            head.push(heading("What the squad has done"));
+            first = false;
+        }
+        if several {
+            head.push(Line::styled(format!("  {} squad", app.squad_name(&l.squad)), Style::new().fg(t.subtext)));
+        }
+        // Only the current leader, while it runs, has members at work; an earlier one's are over.
+        let running = current.as_deref() == Some(l.session.as_str()) && x.queued.is_none() && app.leader_session_running(&l.session);
+        for r in &log.runs {
+            let (st, line) = crate::squadwork::run_line(r, running);
+            let color = match st {
+                crate::squadwork::RunState::Finished => t.text,
+                crate::squadwork::RunState::Running => t.busy,
+                crate::squadwork::RunState::Failed | crate::squadwork::RunState::Unfinished => t.warn,
+            };
+            // Wrapped under its own text: the description is the leader's words, and says the most at its end too.
+            for (i, part) in wrap(&line, w.saturating_sub(6).max(10)).into_iter().enumerate() {
+                head.push(Line::styled(format!("{}{part}", if i == 0 { "  " } else { "      " }), Style::new().fg(color)));
+            }
+        }
+        if let Some(now) = crate::squadwork::now_line(&log.runs, running) {
+            head.push(Line::styled(fit_end(&format!("  {now}"), w), Style::new().fg(t.busy).add_modifier(Modifier::BOLD)));
+        }
     }
 }
 

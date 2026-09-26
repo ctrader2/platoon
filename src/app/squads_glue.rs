@@ -107,6 +107,15 @@ pub struct SquadState {
     stamps: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
     /// Tickets being handed to a squad right now.
     starting: Vec<Starting>,
+    /// Every ticket of every project, as the files said when `stamps` were taken: for the places taken and the line.
+    all_tickets: Vec<(String, Ticket)>,
+    /// The leader sessions running now (hosted by any platoon, or registered by Claude Code).
+    running: HashSet<String>,
+    /// This window starts the tickets in the line for a free squad while it holds this lock (`<config>/squad-line.lock`):
+    /// with two platoon windows open only one does, so they never both fill the same free place.
+    line_lock: Option<std::fs::File>,
+    /// Tickets taken from the line and being started: they start without taking the screen (nobody asked just now).
+    from_line: HashSet<(String, u32)>,
     /// In unit tests no session is ever started (the program would be the test binary): the leaders that would
     /// have been, by ticket number.
     #[cfg(test)]
@@ -126,6 +135,10 @@ impl SquadState {
             leaders: HashSet::new(),
             stamps: Vec::new(),
             starting: Vec::new(),
+            all_tickets: Vec::new(),
+            running: HashSet::new(),
+            line_lock: None,
+            from_line: HashSet::new(),
             #[cfg(test)]
             launched: Vec::new(),
             #[cfg(test)]
@@ -155,7 +168,8 @@ impl App {
             return false;
         }
         self.sq.stamps = stamps;
-        let ids = crate::tickets::leader_ids(&self.config);
+        self.sq.all_tickets = crate::tickets::every_ticket(&self.config);
+        let ids: HashSet<String> = self.sq.all_tickets.iter().flat_map(|(_, t)| t.leaders.iter().map(|l| l.session.clone())).collect();
         if ids == self.sq.leaders {
             return false;
         }
@@ -167,6 +181,21 @@ impl App {
     /// resumed).
     pub fn leader_host(&self, session: &str) -> Option<&HostInfo> {
         self.hosts.iter().find(|h| h.args.iter().any(|a| a == session))
+    }
+
+    /// Note which leader sessions Claude Code says are running (from the whole list, before leaders are left out).
+    pub(super) fn note_running_leaders(&mut self, live: &[Live]) {
+        self.sq.running = live.iter().filter(|l| self.sq.leaders_contains(&l.id)).map(|l| l.id.clone()).collect();
+    }
+
+    /// How many squads are at work now (see `squadqueue`): from the tickets as last read, and the tickets this window
+    /// is starting (their leaders aren't written yet).
+    pub fn squads_at_work(&self) -> usize {
+        let now = usage::now();
+        let taken = crate::squadqueue::places_taken(&self.sq.all_tickets, &|s| self.leader_session_running(s), now);
+        // Past the commander's check, making its worktrees: its leader starts next.
+        let starting = self.sq.starting.iter().filter(|st| st.stage == Stage::Worktrees).count();
+        taken + starting
     }
 
     /// Ticket `number`'s current leader is running under platoon.
@@ -183,6 +212,8 @@ impl App {
             Some(format!("#{number}: {busy}"))
         } else if self.open_project().is_some_and(|p| p.archived) {
             Some(crate::tickets::archived_refusal(&self.open_project().map(|p| p.name.clone()).unwrap_or_default()))
+        } else if t.queued.is_some() {
+            Some(format!("#{number} is waiting for a free squad already. Change its state to take it out of the line."))
         } else if t.state != State::New {
             Some(format!("#{number} is {}. Only a New ticket can be handed to a squad.", t.state.label()))
         } else if let Some(first) = crate::tickets::waiting_for(t, self.tickets()).first() {
@@ -270,13 +301,14 @@ impl App {
             return self.notify(why);
         }
         self.notify(format!("Handing #{number} to the {} squad, as you said.", squad.name));
-        self.make_worktrees(&project, number, squad);
+        self.start_or_queue(&project, number, squad, true);
     }
 
     /// The commander's check, off the UI thread (the ticket shows Working, "Commander is checking…"). If the gate
     /// says no there is no call at all: the ticket stays New, with why.
     fn ask_commander(&mut self, number: u32, squad: Squad) {
         let Some(project) = self.open_project.clone() else { return };
+        self.sq.from_line.remove(&(project.clone(), number));
         let Some(t) = self.ticket(number).cloned() else { return };
         let settings = self.settings.get();
         // The user asked for this by pressing a key: the plan-usage pause doesn't apply, every other gate does.
@@ -382,6 +414,7 @@ impl App {
 
     /// Nothing is handed over: the ticket stays New with why not on it, and a notice says the same.
     fn not_handed(&mut self, project: &str, number: u32, squad: &Squad, kind: HandoverKind, says: &str, notice: String) {
+        self.sq.from_line.remove(&(project.to_string(), number));
         if let Err(e) = self.with_tickets(project, |s| s.handover_failed(number, &squad.id, kind, says)) {
             self.report_squad_error(e);
             return;
@@ -393,11 +426,99 @@ impl App {
         match squads::after_check(number, &squad.name, &check) {
             AfterCheck::Start => {
                 if self.still_new(project, number) {
-                    self.make_worktrees(project, number, squad);
+                    self.start_or_queue(project, number, squad, false);
                 }
             }
             AfterCheck::BackToNew { says, kind, notice } => self.not_handed(project, number, &squad, kind, &says, notice),
         }
+    }
+
+    /// Read the tickets files again if they changed (the places taken and the line come from them).
+    fn reread_tickets(&mut self) {
+        if self.refresh_leaders() {
+            self.built.0 = u64::MAX;
+        }
+    }
+
+    /// The ticket may go to its squad (the commander said it fits, or the user said "hand it anyway"): it starts now
+    /// if a place is free and nobody is in the line before it; otherwise it joins the line (Working, "waiting for a
+    /// free squad") and starts by itself when a place frees, oldest first.
+    fn start_or_queue(&mut self, project: &str, number: u32, squad: Squad, anyway: bool) {
+        self.reread_tickets();
+        let limit = self.settings.get().squads_at_once;
+        let nobody_before = crate::squadqueue::line(&self.sq.all_tickets).is_empty();
+        if nobody_before && crate::squadqueue::free_places(limit, self.squads_at_work()) > 0 {
+            return self.make_worktrees(project, number, squad);
+        }
+        match self.with_tickets(project, |s| s.queue(number, &squad.id, anyway)) {
+            Ok(()) => {
+                self.reread_tickets();
+                self.notify(crate::squadqueue::queued_notice(number, &squad.name, limit));
+            }
+            Err(e) => self.report_squad_error(e),
+        }
+    }
+
+    /// Take this window's turn at starting the tickets in the line: only the platoon that holds the line's lock does
+    /// (the first one opened; another takes over when it closes). True while this one holds it.
+    fn hold_line_lock(&mut self) -> bool {
+        if self.sq.line_lock.is_some() {
+            return true;
+        }
+        use std::os::fd::AsRawFd;
+        if std::fs::create_dir_all(&self.config).is_err() {
+            return false;
+        }
+        let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.config.join("squad-line.lock")) else { return false };
+        // SAFETY: a plain advisory lock, not waited for, on a file we hold open; released when it is dropped.
+        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return false;
+        }
+        self.sq.line_lock = Some(f);
+        true
+    }
+
+    /// Start the tickets waiting for a free squad, oldest first, while places are free. Called on every refresh;
+    /// nothing is read when nobody is in the line. Each is taken out of the line under the tickets lock first, so a
+    /// ticket is never started twice (by two windows, or twice by one).
+    pub(super) fn start_from_line(&mut self) {
+        let line = crate::squadqueue::line(&self.sq.all_tickets);
+        if line.is_empty() || !self.hold_line_lock() {
+            return;
+        }
+        let mut free = crate::squadqueue::free_places(self.settings.get().squads_at_once, self.squads_at_work());
+        for (project, number, _) in line {
+            if free == 0 {
+                break;
+            }
+            let q = match self.with_tickets(&project, |s| s.claim_queued(number)) {
+                Ok(Some(q)) => q,
+                Ok(None) => continue,
+                Err(e) => {
+                    self.report_squad_error(e);
+                    continue;
+                }
+            };
+            free -= 1;
+            let squad = crate::squadfile::get(&self.config, &q.squad);
+            let broken = squad.as_ref().and_then(|s| crate::squadfile::problems(s).into_iter().next());
+            match (squad, broken) {
+                (Some(squad), None) => {
+                    self.sq.from_line.insert((project.clone(), number));
+                    self.make_worktrees(&project, number, squad);
+                }
+                (Some(squad), Some(first)) => {
+                    let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);
+                    self.not_handed(&project, number, &squad, HandoverKind::NotStarted, &says, format!("#{number} didn't start: {says}"));
+                }
+                (None, _) => {
+                    let says = format!("The squad \"{}\" isn't there any more, or its file can't be read.", q.squad);
+                    let _ = self.with_tickets(&project, |s| s.handover_failed(number, &q.squad, HandoverKind::NotStarted, &says));
+                    self.notify(format!("#{number} didn't start: {says}"));
+                }
+            }
+        }
+        self.reread_tickets();
     }
 
     /// A worktree for each git folder, off the UI thread (git can be slow on a big repository or a network folder);
@@ -476,10 +597,13 @@ impl App {
         let body = Tickets::open(&self.config, project).body(&t);
         let project_name = self.projects.get(project).map(|p| p.name.clone()).unwrap_or_default();
         let first = squads::first_message(&t, &project_name, &body, place, &work.to_string_lossy());
-        // Beside the ticket only if the user is still on that project's screen and not in another session.
-        let show = self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
+        // Beside the ticket only if the user is still on that project's screen and not in another session, and not
+        // for a ticket that waited in the line (it starts by itself, while the user may be doing anything).
+        let from_line = self.sq.from_line.remove(&(project.to_string(), number));
+        let show = !from_line && self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
         match self.launch_leader_in(project, number, Some(&first), show) {
             Ok(()) if show => self.notify(format!("#{number} is with the {} squad now. ctrl+space goes back to the project.", squad.name)),
+            Ok(()) if from_line => self.notify(format!("A squad is free: #{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Ok(()) => self.notify(format!("#{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Err(e) => {
                 // Only a New ticket is ever handed to a squad: that is what it goes back to.
@@ -581,6 +705,10 @@ impl App {
 
     /// Enter on a ticket that has a leader: its session beside it, running or continued.
     pub(super) fn open_leader(&mut self, number: u32) {
+        if self.ticket(number).is_some_and(|t| t.queued.is_some()) {
+            self.notify(format!("#{number} is waiting for a free squad. It starts by itself when one is free."));
+            return;
+        }
         let Some(session) = self.ticket(number).and_then(|t| t.leader()).map(|l| l.session.clone()) else { return };
         self.tk.open = Some(number);
         match self.leader_host(&session).map(|h| h.claude_pid) {
@@ -686,6 +814,11 @@ fn type_into(sock: &Path, rows: u16, cols: u16, text: &str) {
 }
 
 impl SquadState {
+    /// Is this leader session registered as running by Claude Code?
+    pub fn running_contains(&self, id: &str) -> bool {
+        self.running.contains(id)
+    }
+
     /// Is this session a squad's leader?
     pub fn leaders_contains(&self, id: &str) -> bool {
         !self.leaders.is_empty() && self.leaders.contains(id)

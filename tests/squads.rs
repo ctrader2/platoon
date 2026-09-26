@@ -789,3 +789,147 @@ fn docs_works_in_a_folder_outside_git_as_it_is() {
     t.send(b"q");
     t.wait_exit();
 }
+
+// ---- squads at work at once, and the line ---------------------------------------------------------------------------
+
+/// Tickets #1..#n in the shop (a git repository), all New, and the limit of squads at once set to `at_once`.
+fn line_lab(name: &str, n: u32, at_once: u64) -> Lab {
+    let lab = Lab::new(name);
+    let tickets: Vec<Value> = (1..=n)
+        .map(|k| {
+            fs::write(lab.config.join(format!("projects/pweb/tickets/0{k}-t{k}.md")), format!("## What it should do\n\nPart {k}.\n")).unwrap();
+            json!({"number": k, "title": format!("Part {k}"), "file": format!("0{k}-t{k}.md"), "state": "new", "folders": [lab.shop.to_string_lossy()], "blocked_by": [], "created": 1, "updated": 1})
+        })
+        .collect();
+    fs::write(lab.tickets_path(), json!({"next": n + 1, "tickets": tickets}).to_string()).unwrap();
+    let settings = json!({"auto_archive_days": 0, "tokens_enabled": true, "tokens_asked": true, "squads_at_once": at_once});
+    fs::write(lab.config.join("settings.json"), settings.to_string()).unwrap();
+    lab
+}
+
+fn ticket_n(lab: &Lab, n: usize) -> Value {
+    let v: Value = serde_json::from_str(&fs::read_to_string(lab.tickets_path()).unwrap()).unwrap();
+    v["tickets"][n - 1].clone()
+}
+
+#[test]
+fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_platoon() {
+    let lab = line_lab("sq-line", 3, 1);
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    // #1 goes to the Coding squad: the one place.
+    hand_over(&lab, &mut t);
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.wait_for_flat("n new ticket");
+    // #2 and #3: checked by the commander, then in the line.
+    for k in [2, 3] {
+        t.send(b"\x1b[B");
+        t.send(b"a");
+        t.wait_for_all(&["hand to a squad", "enter hand it over"]);
+        t.send(b"\r");
+        t.wait_gone("enter hand it over");
+        until("the ticket to join the line", || ticket_n(&lab, k)["queued"]["squad"] == "coding");
+    }
+    t.wait_for_all(&["#2 Part 2", "#3 Part 3", "waiting for a free squad"]);
+    let screen = t.stable();
+    assert_eq!(screen.matches("waiting for a free squad").count(), 2, "{screen}");
+    assert_eq!((lab.started(), lab.checks()), (1, 3), "one squad started; each ticket was checked");
+    assert_eq!(ticket_n(&lab, 2)["state"], "working");
+    assert!(!lab.base.join("shop-worktrees/ticket-2").exists(), "worktrees are made when it starts, not when it joins the line");
+
+    // #1's leader stops to ask something (its Stop hook, run as its settings give it): the place frees and #2, the
+    // oldest in the line, starts by itself (not beside its ticket: the project's screen stays).
+    let sid1 = ticket_n(&lab, 1)["leaders"][0]["session"].as_str().unwrap().to_string();
+    let settings: Value = serde_json::from_str(value_after(&lab.args(1), "--settings")).unwrap();
+    let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let stop_input = |sid: &str, msg: &str| json!({"session_id": sid, "last_assistant_message": msg, "background_tasks": [], "stop_hook_active": false, "transcript_path": "/x.jsonl", "cwd": "/tmp", "hook_event_name": "Stop"});
+    assert_eq!(lab.run_hook_command(&stop, &stop_input(&sid1, "SQUAD: question - Red or blue?")), 0);
+    until("#2 to start by itself", || lab.started() == 2);
+    t.wait_for("A squad is free: #2 is with the Coding squad now.");
+    let two = ticket_n(&lab, 2);
+    assert!(two.get("queued").is_none() && two["leaders"][0]["squad"] == "coding", "{two}");
+    assert_eq!(value_after(&lab.args(2), "-n"), "Coding squad · #2 Part 2");
+    assert!(lab.base.join("shop-worktrees/ticket-2/README").exists());
+    assert_eq!(lab.checks(), 3, "no second check when it leaves the line");
+    t.wait_for_flat("n new ticket");
+    assert!(!t.text().contains("ctrl+space back to the project"), "it didn't take the screen");
+    assert_eq!(ticket_n(&lab, 3)["queued"]["squad"], "coding", "#3 still waits: #2 holds the place");
+
+    // platoon closes with #3 in the line; meanwhile #2 finishes.
+    t.send(b"q");
+    t.wait_exit();
+    let sid2 = two["leaders"][0]["session"].as_str().unwrap().to_string();
+    assert_eq!(lab.run_hook_command(&stop, &stop_input(&sid2, "Done.\nSQUAD: done")), 0);
+    assert_eq!(ticket_n(&lab, 2)["state"], "done");
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(lab.started(), 2, "nothing starts the line while no platoon is open");
+    assert_eq!(ticket_n(&lab, 3)["state"], "working");
+    // The next platoon picks the line up.
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    until("#3 to start when platoon opens again", || lab.started() == 3);
+    assert_eq!(value_after(&lab.args(3), "-n"), "Coding squad · #3 Part 3");
+    assert!(ticket_n(&lab, 3).get("queued").is_none());
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
+    let lab = Lab::new("sq-work");
+    let sid = "1a2b3c4d-0000-4000-8000-000000000001";
+    lab.ticket(json!({"state": "waiting", "reason": "Asks: which colour?", "leaders": [{"squad": "coding", "session": sid, "started": 1, "names": "squad-role"}], "worktrees": []}));
+    // The leader's transcript, shaped like a real one: its agent, its answers, three member runs (the reviewer's
+    // result is not back), and the members' own transcripts beside it.
+    let answer = |m: &str, input: u64, output: u64, read: u64| json!({"type":"assistant","message":{"id":m,"usage":{"input_tokens":input,"output_tokens":output,"cache_read_input_tokens":read}}}).to_string();
+    let call = |m: &str, c: &str, agent: &str, what: &str| json!({"type":"assistant","message":{"id":m,"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":agent,"description":what,"prompt":"go"}}]}}).to_string();
+    let launched = |c: &str, a: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":a}}).to_string();
+    let back = |c: &str| json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string();
+    let lines = [
+        json!({"type":"agent-setting","agentSetting":"coding-leader"}).to_string(),
+        answer("l1", 20_000, 5_000, 300_000),
+        call("l2", "c1", "coding-planner", "Plan the basket page"),
+        launched("c1", "p1"),
+        back("c1"),
+        call("l3", "c2", "coding-builder", "Build the basket page"),
+        launched("c2", "b1"),
+        back("c2"),
+        call("l4", "c3", "coding-reviewer", "Review the basket page"),
+        launched("c3", "r1"),
+    ];
+    let path = lab.claude.join(format!("projects/-work/{sid}.jsonl"));
+    fs::write(&path, lines.join("\n") + "\n").unwrap();
+    let sub = lab.claude.join(format!("projects/-work/{sid}/subagents"));
+    fs::create_dir_all(&sub).unwrap();
+    for (id, agent, input) in [("p1", "coding-planner", 400_000u64), ("b1", "coding-builder", 480_000), ("r1", "coding-reviewer", 10_000)] {
+        fs::write(sub.join(format!("agent-{id}.jsonl")), answer(&format!("{id}-m"), input, 0, 0) + "\n").unwrap();
+        fs::write(sub.join(format!("agent-{id}.meta.json")), json!({"agentType": agent, "description": "x"}).to_string()).unwrap();
+    }
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 44, 130);
+    lab.open_tickets(&mut t);
+    // The pane: the short total on the ticket's row (1,215,000 in all).
+    t.wait_for("1.2M tokens");
+    let screen = t.stable();
+    let row = screen.lines().find(|l| l.contains("#1 Basket")).unwrap();
+    assert!(row.contains("Waiting on you") && row.contains("1.2M tokens"), "{screen}");
+    // Its screen: the total, what it counts, a line per agent, and the members' runs in order. Its session isn't
+    // running, so the reviewer's run that never came back says it didn't finish, and nothing is "Now".
+    t.send(b"\r");
+    t.wait_for_all(&["Tokens used", "1.2M in all", "What the squad has done", "[x] coding-planner · Plan the basket page", "[x] coding-builder · Build the basket page", "[-] coding-reviewer"]);
+    let screen = t.stable();
+    // The ticket's side only (the session's place is on the right).
+    let left: Vec<String> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+    let at = |needle: &str| left.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle}:\n{screen}"));
+    for (agent, n) in [("coding-leader", "325K"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")] {
+        assert_eq!(left[at(&format!("{agent} "))], format!("{agent} {n}"), "{screen}");
+    }
+    assert!(at("coding-leader ") < at("coding-planner ") && at("coding-builder ") < at("coding-reviewer "), "in the order they worked:\n{screen}");
+    let said = left[at("Tokens used")..at("coding-leader ")].join(" ");
+    assert!(said.contains("910K sent to Claude, 5K written by Claude and 300K read again from Claude's cache"), "{said}");
+    assert!(at("[x] coding-planner") < at("[x] coding-builder") && at("[x] coding-builder") < at("[-] coding-reviewer"), "{screen}");
+    assert!(left[at("[-] coding-reviewer")..].join(" ").contains("Review the basket page (didn't finish)"), "{screen}");
+    assert!(!screen.contains("Now:"), "{screen}");
+    assert_eq!(lab.started(), 0);
+    t.send(b"q");
+    t.wait_exit();
+}

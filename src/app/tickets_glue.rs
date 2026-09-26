@@ -247,7 +247,7 @@ impl App {
         self.tk.body_top.set(0);
         // A ticket whose squad is at work opens beside its live session. One whose session isn't running shows the
         // ticket with the way to continue it (enter), rather than starting it by itself.
-        if self.leader_running(number) {
+        if self.leader_running(number) && self.ticket(number).is_some_and(|t| t.queued.is_none()) {
             self.open_leader(number);
         }
     }
@@ -358,7 +358,9 @@ impl App {
         let Some(t) = self.ticket(p.number) else { return Vec::new() };
         match p.kind {
             PickKind::State => {
-                let states: &[State] = if t.leader().is_some() { &LEADER_STATES } else { &USER_STATES };
+                // In the line for a free squad: New or Cancelled takes it out (Working is where it is, and an earlier
+                // squad's leader isn't continued from here).
+                let states: &[State] = if t.leader().is_some() && t.queued.is_none() { &LEADER_STATES } else { &USER_STATES };
                 states.iter().map(|s| (PickOpt::State(s.clone()), *s == t.state)).collect()
             }
             PickKind::BlockedBy => {

@@ -43,6 +43,7 @@ mod notes_glue;
 mod projects_glue;
 mod smart_glue;
 mod squads_glue;
+mod squadwork_glue;
 mod squadtab_glue;
 mod tickets_glue;
 pub use handoff_glue::{HandoffBox, HandoffState};
@@ -494,6 +495,8 @@ pub struct App {
     pub tk: TicketsState,
     /// Squads: the picker, the split view, and which sessions are squads' leaders.
     pub sq: SquadState,
+    /// What the open project's squads have done (tokens, members' runs), read off the UI thread.
+    pub sw: squadwork_glue::WorkState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
     /// The first line of the notes in view.
@@ -673,6 +676,7 @@ impl App {
             left_pane: Pane::Sessions,
             tk: TicketsState::new(),
             sq: SquadState::new(),
+            sw: squadwork_glue::WorkState::default(),
             sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
             notes_seen: None,
@@ -978,7 +982,10 @@ impl App {
         if self.refresh_leaders() {
             self.built.0 = u64::MAX;
         }
-        let live: Vec<Live> = self.reader.live().into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
+        let all_live = self.reader.live();
+        // Which leaders run, for the squads at work at once; then they are left out like everywhere else.
+        self.note_running_leaders(&all_live);
+        let live: Vec<Live> = all_live.into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
         let ids: Vec<(u32, String, u64)> = live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
@@ -1070,6 +1077,8 @@ impl App {
         self.refresh_prompts();
         self.poll_handoff();
         self.poll_squad_starts();
+        self.start_from_line();
+        self.poll_squad_work();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();

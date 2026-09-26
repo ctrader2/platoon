@@ -65,6 +65,10 @@ pub const MAX_QUIET_SECONDS: u64 = 3600;
 pub const DEFAULT_NOTES_QUIET_MINUTES: u64 = 3;
 pub const MIN_NOTES_QUIET_MINUTES: u64 = 1;
 pub const MAX_NOTES_QUIET_MINUTES: u64 = 60;
+/// How many squads may be at work at once (see `squadqueue.rs`).
+pub const DEFAULT_SQUADS_AT_ONCE: u64 = 3;
+pub const MIN_SQUADS_AT_ONCE: u64 = 1;
+pub const MAX_SQUADS_AT_ONCE: u64 = 10;
 /// How much of Claude's last reply in each session the notes updater reads (characters).
 pub const DEFAULT_NOTES_REPLY_CHARS: u64 = 1500;
 pub const MIN_NOTES_REPLY_CHARS: u64 = 200;
@@ -146,6 +150,8 @@ pub struct Settings {
     pub ai_find_candidates: u64,
     pub ai_find_results: u64,
     pub ai_find_wide_candidates: u64,
+    /// How many squads may be at work at once; a ticket handed over when all are waits for a free one.
+    pub squads_at_once: u64,
 }
 
 impl Default for Settings {
@@ -178,6 +184,7 @@ impl Default for Settings {
             ai_find_candidates: DEFAULT_FIND_CANDIDATES,
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
+            squads_at_once: DEFAULT_SQUADS_AT_ONCE,
         }
     }
 }
@@ -204,6 +211,7 @@ impl Settings {
             ai_find_candidates: self.ai_find_candidates.clamp(MIN_FIND_CANDIDATES, MAX_FIND_CANDIDATES),
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
+            squads_at_once: self.squads_at_once.clamp(MIN_SQUADS_AT_ONCE, MAX_SQUADS_AT_ONCE),
             ..self
         }
     }
@@ -290,6 +298,7 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
+            squads_at_once: number("squads_at_once", d.squads_at_once),
         }
         .clamped(),
     )
@@ -359,6 +368,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
+    object.insert("squads_at_once".into(), json!(s.squads_at_once));
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
     let mut features = match object.get("token_features") {
@@ -438,6 +448,10 @@ pub fn days_label(d: u64) -> String {
 
 pub fn chars_label(n: u64) -> String {
     plural(n, "character")
+}
+
+pub fn squads_label(n: u64) -> String {
+    plural(n, "squad")
 }
 
 pub fn results_label(n: u64) -> String {
@@ -828,6 +842,17 @@ fn projects_items() -> Vec<Item> {
             label: chars_label,
             off: None,
         },
+        Item {
+            name: "Squads at work at once",
+            explain: "How many squads may work on tickets at the same time, in all projects. One more handed over waits for a \
+                      free squad and starts by itself, oldest first. A squad waiting for you doesn't count. Lowering it never stops a squad at work.",
+            kind: Kind::Steps,
+            choices: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            get: |s| s.squads_at_once,
+            set: |s, v| s.squads_at_once = v,
+            label: squads_label,
+            off: None,
+        },
         instructions_item(crate::instructions::NOTES),
         instructions_item(crate::instructions::DESCRIPTION),
         instructions_item(crate::instructions::HANDOFF),
@@ -1057,7 +1082,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1312,6 +1337,7 @@ mod tests {
             [
                 "Update notes after",
                 "Read Claude's last reply up to",
+                "Squads at work at once",
                 "System prompt for project notes",
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
@@ -1564,7 +1590,7 @@ mod tests {
         assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
             token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "", "", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "3 squads", "", "", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
         );
         let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");
@@ -1609,5 +1635,21 @@ mod tests {
         assert_eq!(load(&dir).0, s);
         save(&dir, &Settings::default()).unwrap();
         assert_eq!(saved(&dir)["ai_archived"], "off");
+    }
+
+    #[test]
+    fn squads_at_once_is_three_unless_set_and_stays_between_one_and_ten() {
+        assert_eq!(Settings::default().squads_at_once, 3);
+        assert_eq!(parse(r#"{"squads_at_once": 5}"#).unwrap().squads_at_once, 5);
+        assert_eq!(parse(r#"{"squads_at_once": 0}"#).unwrap().squads_at_once, 1, "at least one: 0 would never start a squad");
+        assert_eq!(parse(r#"{"squads_at_once": 99}"#).unwrap().squads_at_once, 10);
+        assert_eq!(parse(r#"{"squads_at_once": -2}"#).unwrap().squads_at_once, 3, "nonsense keeps the default");
+        assert_eq!(parse(r#"{"squads_at_once": "four"}"#).unwrap().squads_at_once, 3);
+        let item = tab("Projects").iter().find(|i| i.name == "Squads at work at once").unwrap();
+        assert_eq!(item.choices.first().copied(), Some(1));
+        assert_eq!(item.choices.last().copied(), Some(10));
+        assert_eq!(item.step(10, Step::Next), 10, "no further than ten");
+        assert_eq!(item.step(1, Step::Prev), 1, "no fewer than one");
+        assert_eq!(((item.label)(1), (item.label)(3)), ("1 squad".to_string(), "3 squads".to_string()));
     }
 }

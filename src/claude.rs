@@ -500,13 +500,7 @@ pub fn spent(path: &Path) -> Option<Spent> {
     if !main && !from_subagents {
         return None;
     }
-    let mut s = Spent { subagents: from_subagents, ..Spent::default() };
-    for (input, output, cache_read) in seen.values() {
-        s.input += input;
-        s.output += output;
-        s.cache_read += cache_read;
-    }
-    Some(s)
+    Some(Spent { subagents: from_subagents, ..sum(&seen) })
 }
 
 /// Add one transcript's usage records to `seen` (keyed by message id, or request id, else one key per line).
@@ -526,25 +520,216 @@ fn add_usage(path: &Path, seen: &mut Usages, unkeyed: &mut usize) -> bool {
             continue;
         }
         let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
-        if v.get("type").and_then(Value::as_str) != Some("assistant") {
-            continue;
-        }
-        let Some(msg) = v.get("message") else { continue };
-        let Some(u) = msg.get("usage").filter(|u| u.is_object()) else { continue };
-        let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-        let counts = (n("input_tokens") + n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens"));
-        let key = match (msg.get("id").and_then(Value::as_str), v.get("requestId").and_then(Value::as_str)) {
-            (Some(id), _) if !id.is_empty() => format!("m:{id}"),
-            (_, Some(req)) if !req.is_empty() => format!("r:{req}"),
-            _ => {
-                *unkeyed += 1;
-                format!("l:{unkeyed}")
-            }
-        };
-        seen.insert(key, counts);
-        any = true;
+        any |= usage_of(&v, seen, unkeyed);
     }
     any
+}
+
+/// Add one transcript entry's usage record to `seen`, if it is an assistant's answer with one. True if it was.
+fn usage_of(v: &Value, seen: &mut Usages, unkeyed: &mut usize) -> bool {
+    if v.get("type").and_then(Value::as_str) != Some("assistant") {
+        return false;
+    }
+    let Some(msg) = v.get("message") else { return false };
+    let Some(u) = msg.get("usage").filter(|u| u.is_object()) else { return false };
+    let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let counts = (n("input_tokens") + n("cache_creation_input_tokens"), n("output_tokens"), n("cache_read_input_tokens"));
+    let key = match (msg.get("id").and_then(Value::as_str), v.get("requestId").and_then(Value::as_str)) {
+        (Some(id), _) if !id.is_empty() => format!("m:{id}"),
+        (_, Some(req)) if !req.is_empty() => format!("r:{req}"),
+        _ => {
+            *unkeyed += 1;
+            format!("l:{unkeyed}")
+        }
+    };
+    seen.insert(key, counts);
+    true
+}
+
+impl Spent {
+    /// Everything it counts: sent, written and read again from the cache.
+    pub fn total(&self) -> u64 {
+        self.input + self.output + self.cache_read
+    }
+
+    pub fn add(&mut self, other: &Spent) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.subagents |= other.subagents;
+    }
+}
+
+/// One piece of work a squad's leader handed to a member (an `Agent` tool call, `Task` in older Claude Code), as its
+/// transcript shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MemberRun {
+    /// The tool call's id: the result, and the notice that a background run finished, name it.
+    pub call: String,
+    /// The member's agent name (`subagent_type`), e.g. `coding-planner`.
+    pub agent: String,
+    /// The short description the leader gave the run.
+    pub description: String,
+    /// None while no result has come back; else how it ended as Claude Code said it (`completed`, `failed`, ...).
+    pub ended: Option<String>,
+}
+
+/// What a squad leader's transcript says about its squad: the leader's own agent name, what each agent spent, and
+/// the members' runs in the order the leader started them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LeaderLog {
+    /// The agent the session ran as (`--agent`), from its `agent-setting` entry.
+    pub leader_agent: Option<String>,
+    /// What the leader itself spent (its own transcript).
+    pub leader: Spent,
+    /// What each member spent (its subagent transcripts), by agent name, in the order they first ran.
+    pub members: Vec<(String, Spent)>,
+    pub runs: Vec<MemberRun>,
+}
+
+/// Read a squad leader's transcript and its members' transcripts beside it (`<id>/subagents/agent-<agentId>.jsonl`).
+///
+/// - Tokens are counted as `spent` counts them (each answer once, by message id; sent / written / cache reads), but
+///   kept apart per agent: the leader's own file, and each subagent file under the member's agent name, from its
+///   `agent-<agentId>.meta.json` (`agentType`), else from the leader's call that started it (the call's result
+///   names the `agentId`), else "member".
+/// - A run is each `Agent` (or `Task`) call in the leader's own entries (not a subagent's). It has finished when its
+///   result has come back: a tool result that is not "async launched" (a member run in the foreground returns its
+///   answer as the result), or, for a member run in the background, Claude Code's `<task-notification>` naming the
+///   call (`<tool-use-id>`), in a user entry or the queue entry that carries it. Until then it is running.
+///
+/// None when the transcript can't be read. Lines that aren't JSON (a line still being written) are skipped. It reads
+/// every line: never call it on the UI thread.
+pub fn read_leader(path: &Path) -> Option<LeaderLog> {
+    let file = File::open(path).ok()?;
+    let mut log = LeaderLog::default();
+    let mut seen = Usages::new();
+    let mut unkeyed = 0usize;
+    // agentId -> the call that started it.
+    let mut started_by: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut reader = BufReader::new(file);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            break;
+        }
+        let text = String::from_utf8_lossy(&line);
+        let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
+        let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
+        // Every answer in the leader's own file counts as the leader's (as `spent` counts it).
+        usage_of(&v, &mut seen, &mut unkeyed);
+        match kind {
+            "agent-setting" => {
+                if let Some(a) = v.get("agentSetting").and_then(Value::as_str).filter(|a| !a.is_empty()) {
+                    log.leader_agent = Some(a.to_string());
+                }
+            }
+            "queue-operation" => {
+                if let Some(c) = v.get("content").and_then(Value::as_str) {
+                    finish_from_notice(c, &mut log.runs);
+                }
+            }
+            "assistant" | "user" if v.get("isSidechain").and_then(Value::as_bool) != Some(true) => {
+                let content = v.get("message").and_then(|m| m.get("content"));
+                if let Some(c) = content.and_then(Value::as_str) {
+                    finish_from_notice(c, &mut log.runs);
+                }
+                for block in content.and_then(Value::as_array).into_iter().flatten() {
+                    match block.get("type").and_then(Value::as_str) {
+                        Some("tool_use") if kind == "assistant" => {
+                            let name = block.get("name").and_then(Value::as_str).unwrap_or("");
+                            let (Some(call), true) = (block.get("id").and_then(Value::as_str), name == "Agent" || name == "Task") else { continue };
+                            if log.runs.iter().any(|r| r.call == call) {
+                                continue; // the same call written again
+                            }
+                            let input = block.get("input");
+                            let s = |k: &str| input.and_then(|i| i.get(k)).and_then(Value::as_str).unwrap_or("").trim().to_string();
+                            let agent = s("subagent_type");
+                            log.runs.push(MemberRun { call: call.to_string(), agent: if agent.is_empty() { "general-purpose".into() } else { agent }, description: s("description"), ended: None });
+                        }
+                        Some("tool_result") => {
+                            let Some(call) = block.get("tool_use_id").and_then(Value::as_str) else { continue };
+                            let Some(run) = log.runs.iter_mut().find(|r| r.call == call) else { continue };
+                            let result = v.get("toolUseResult");
+                            if let Some(id) = result.and_then(|r| r.get("agentId")).and_then(Value::as_str) {
+                                started_by.insert(id.to_string(), call.to_string());
+                            }
+                            let launched = result.is_some_and(|r| r.get("status").and_then(Value::as_str) == Some("async_launched") || r.get("isAsync").and_then(Value::as_bool) == Some(true));
+                            if !launched && run.ended.is_none() {
+                                let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
+                                run.ended = Some(if failed { "failed" } else { "completed" }.to_string());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    log.leader = sum(&seen);
+    // The members' own transcripts, each under its agent's name.
+    let dir = path.with_extension("").join("subagents");
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
+    files.sort();
+    let mut by_agent: Vec<(String, Usages)> = Vec::new();
+    for f in files {
+        let stem = f.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_string();
+        let id = stem.strip_prefix("agent-").unwrap_or(&stem).to_string();
+        let meta = fs::read_to_string(f.with_extension("meta.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        let name = meta
+            .as_ref()
+            .and_then(|m| m.get("agentType"))
+            .and_then(Value::as_str)
+            .filter(|a| !a.is_empty())
+            .map(String::from)
+            .or_else(|| started_by.get(&id).and_then(|call| log.runs.iter().find(|r| &r.call == call)).map(|r| r.agent.clone()))
+            .unwrap_or_else(|| "member".into());
+        let at = match by_agent.iter().position(|(n, _)| *n == name) {
+            Some(i) => i,
+            None => {
+                by_agent.push((name, Usages::new()));
+                by_agent.len() - 1
+            }
+        };
+        add_usage(&f, &mut by_agent[at].1, &mut unkeyed);
+    }
+    // In the order the members first ran; any the runs don't name after them.
+    let first_run = |name: &str| log.runs.iter().position(|r| r.agent == name).unwrap_or(usize::MAX);
+    by_agent.sort_by_key(|(n, _)| first_run(n));
+    log.members = by_agent.into_iter().map(|(n, u)| (n, Spent { subagents: true, ..sum(&u) })).collect();
+    Some(log)
+}
+
+fn sum(u: &Usages) -> Spent {
+    let mut s = Spent::default();
+    for (input, output, cache_read) in u.values() {
+        s.input += input;
+        s.output += output;
+        s.cache_read += cache_read;
+    }
+    s
+}
+
+/// A background member's run finished: Claude Code tells the leader with a `<task-notification>` that names the
+/// call (`<tool-use-id>`) and how it ended (`<status>`).
+fn finish_from_notice(text: &str, runs: &mut [MemberRun]) {
+    if !text.contains("<task-notification>") {
+        return;
+    }
+    let between = |open: &str, close: &str| -> Option<String> {
+        let from = text.find(open)? + open.len();
+        let to = text[from..].find(close)? + from;
+        Some(text[from..to].trim().to_string())
+    };
+    let Some(call) = between("<tool-use-id>", "</tool-use-id>") else { return };
+    let status = between("<status>", "</status>").filter(|s| !s.is_empty()).unwrap_or_else(|| "completed".into());
+    if let Some(run) = runs.iter_mut().find(|r| r.call == call) {
+        if run.ended.is_none() {
+            run.ended = Some(status);
+        }
+    }
 }
 
 fn scan_head(file: &File, t: &mut Transcript) {
@@ -1251,6 +1436,119 @@ mod hidden_tests {
         // An empty usage record is still a record: zero, not unknown.
         fs::write(&q, r#"{"type":"assistant","message":{"id":"z","usage":{}}}"#.to_string() + "\n").unwrap();
         assert_eq!(spent(&q), Some(Spent::default()));
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// Lines shaped like a real squad leader's transcript (Claude Code 2.1.283, read by hand from a real run).
+    mod leader_lines {
+        use serde_json::json;
+        pub fn setting(agent: &str) -> String {
+            json!({"type":"agent-setting","agentSetting":agent,"sessionId":"L"}).to_string()
+        }
+        pub fn answer(id: &str, input: u64, output: u64, read: u64) -> String {
+            json!({"type":"assistant","isSidechain":false,"requestId":format!("req-{id}"),"message":{"id":id,"role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"..."}],
+                "usage":{"input_tokens":input,"output_tokens":output,"cache_creation_input_tokens":0,"cache_read_input_tokens":read}}}).to_string()
+        }
+        pub fn call(msg: &str, call: &str, agent: &str, what: &str) -> String {
+            json!({"type":"assistant","isSidechain":false,"message":{"id":msg,"role":"assistant","content":[{"type":"tool_use","id":call,"name":"Agent","input":{"description":what,"subagent_type":agent,"prompt":"do it"}}],
+                "usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
+        }
+        pub fn launched(call: &str, agent_id: &str) -> String {
+            json!({"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":call,"type":"tool_result","content":[{"type":"text","text":"Async agent launched successfully."}]}]},
+                "toolUseResult":{"isAsync":true,"status":"async_launched","agentId":agent_id,"description":"x"}}).to_string()
+        }
+        pub fn returned(call: &str, agent_id: &str) -> String {
+            json!({"type":"user","isSidechain":false,"message":{"role":"user","content":[{"tool_use_id":call,"type":"tool_result","content":[{"type":"text","text":"The plan is ..."}]}]},
+                "toolUseResult":{"status":"completed","agentId":agent_id}}).to_string()
+        }
+        pub fn notice(call: &str, status: &str) -> String {
+            let text = format!("<task-notification>\n<task-id>x</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>{status}</status>\n<summary>Agent finished</summary>\n</task-notification>");
+            json!({"type":"user","isSidechain":false,"origin":{"kind":"task-notification"},"message":{"role":"user","content":text}}).to_string()
+        }
+        pub fn queued_notice(call: &str) -> String {
+            let text = format!("<task-notification>\n<tool-use-id>{call}</tool-use-id>\n<status>completed</status>\n</task-notification>");
+            json!({"type":"queue-operation","operation":"enqueue","content":text}).to_string()
+        }
+    }
+
+    #[test]
+    fn a_leaders_transcript_gives_its_members_runs_in_order_and_what_each_agent_spent() {
+        use leader_lines::*;
+        let base = tmp("leader");
+        let p = base.join("L.jsonl");
+        let lines = [
+            setting("coding-leader"),
+            answer("a1", 10, 20, 1000),
+            answer("a1", 10, 25, 1000), // the same answer again: once
+            call("a2", "c1", "coding-planner", "Plan the change"),
+            launched("c1", "p1"),
+            notice("c1", "completed"),
+            call("a3", "c2", "coding-builder", "Make the change"),
+            launched("c2", "b1"),
+            notice("c2", "completed"),
+            call("a4", "c3", "coding-reviewer", "Review the change"),
+            launched("c3", "r1"),
+            notice("c3", "completed"),
+            // Sent back: the builder runs again.
+            call("a5", "c4", "coding-builder", "Fix what the reviewer found"),
+            launched("c4", "b2"),
+            queued_notice("c4"), // waiting in the queue to be told: the result is back all the same
+            // A member run in the foreground: its result is its answer.
+            call("a6", "c5", "coding-verifier", "Run the tests"),
+            returned("c5", "v1"),
+            // Still out: running.
+            call("a7", "c6", "coding-reviewer", "Review again"),
+            launched("c6", "r2"),
+            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"c9\",\"name\":\"Agent\"".to_string(), // being written
+        ];
+        fs::write(&p, lines.join("\n")).unwrap();
+        let sub = base.join("L/subagents");
+        fs::create_dir_all(&sub).unwrap();
+        let member = |id: &str, agent: Option<&str>, answers: &[(&str, u64)]| {
+            let text: Vec<String> = answers.iter().map(|(m, n)| answer(m, *n, 1, 0)).collect();
+            fs::write(sub.join(format!("agent-{id}.jsonl")), text.join("\n") + "\n").unwrap();
+            if let Some(a) = agent {
+                fs::write(sub.join(format!("agent-{id}.meta.json")), serde_json::json!({"agentType":a,"description":"x","toolUseId":"c"}).to_string()).unwrap();
+            }
+        };
+        member("p1", Some("coding-planner"), &[("p-1", 100), ("p-1", 100), ("p-2", 50)]);
+        member("b1", Some("coding-builder"), &[("b-1", 7)]);
+        member("b2", Some("coding-builder"), &[("b-2", 3)]);
+        // No meta file: named from the leader's call that started it.
+        member("r1", None, &[("r-1", 40)]);
+        // Neither: "member".
+        member("zz", None, &[("z-1", 9)]);
+
+        let log = read_leader(&p).unwrap();
+        assert_eq!(log.leader_agent.as_deref(), Some("coding-leader"));
+        // The leader's own answers: a1 once (its last line), and the six calls' one token each.
+        assert_eq!((log.leader.input, log.leader.output, log.leader.cache_read), (10 + 6, 25 + 6, 1000));
+        let runs: Vec<(&str, &str, Option<&str>)> = log.runs.iter().map(|r| (r.agent.as_str(), r.description.as_str(), r.ended.as_deref())).collect();
+        assert_eq!(
+            runs,
+            [
+                ("coding-planner", "Plan the change", Some("completed")),
+                ("coding-builder", "Make the change", Some("completed")),
+                ("coding-reviewer", "Review the change", Some("completed")),
+                ("coding-builder", "Fix what the reviewer found", Some("completed")),
+                ("coding-verifier", "Run the tests", Some("completed")),
+                ("coding-reviewer", "Review again", None),
+            ]
+        );
+        let members: Vec<(&str, u64, u64)> = log.members.iter().map(|(n, s)| (n.as_str(), s.input, s.output)).collect();
+        assert_eq!(members, [("coding-planner", 150, 2), ("coding-builder", 10, 2), ("coding-reviewer", 40, 1), ("member", 9, 1)], "in the order they first ran, each answer once");
+        assert!(log.members.iter().all(|(_, s)| s.subagents));
+
+        // A failed background run says so; an error result from a foreground one too.
+        let q = base.join("F.jsonl");
+        let err = serde_json::json!({"type":"user","message":{"content":[{"tool_use_id":"f2","type":"tool_result","is_error":true,"content":"boom"}]}}).to_string();
+        fs::write(&q, [call("x1", "f1", "coding-builder", "Build"), launched("f1", "q1"), notice("f1", "failed"), call("x2", "f2", "coding-builder", "Build again"), err].join("\n") + "\n").unwrap();
+        let ended: Vec<Option<String>> = read_leader(&q).unwrap().runs.into_iter().map(|r| r.ended).collect();
+        assert_eq!(ended, [Some("failed".to_string()), Some("failed".to_string())]);
+        // No file: nothing. An empty one: nothing spent, nothing run.
+        assert_eq!(read_leader(&base.join("missing.jsonl")), None);
+        fs::write(&q, "").unwrap();
+        assert_eq!(read_leader(&q), Some(LeaderLog::default()));
         let _ = fs::remove_dir_all(&base);
     }
 }

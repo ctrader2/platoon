@@ -34,6 +34,8 @@ mod settings;
 mod smart;
 mod squads;
 mod squadfile;
+mod squadqueue;
+mod squadwork;
 mod summaries;
 mod textbox;
 mod tickets;
@@ -62,6 +64,8 @@ mod smart_app_tests;
 mod testkit;
 #[cfg(test)]
 mod squads_app_tests;
+#[cfg(test)]
+mod squadqueue_app_tests;
 #[cfg(test)]
 mod squadtab_app_tests;
 #[cfg(test)]

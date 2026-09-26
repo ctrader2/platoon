@@ -232,6 +232,7 @@ when naming is held up, why (`Naming is waiting: ...`).
 | --- | --- | --- |
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
+| Squads at work at once | How many [squads](#handing-a-ticket-to-a-squad) may work on tickets at the same time, in all projects. One more handed over waits for a free squad and starts by itself, oldest first. Lowering it never stops a squad at work. | 1 to 10 squads (default 3) |
 | System prompt for project notes, for project descriptions, for the hand-off | How platoon asks Claude to write a project's notes, the line under a project's name, and a hand-off (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 #### System prompts for each smart feature
@@ -287,7 +288,7 @@ by hand too:
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Features that use tokens
 
@@ -861,6 +862,27 @@ squad that doesn't need one (Research, Summarize); a squad that needs a folder (
   ticket side follows along: its state, and what the squad last said. On a terminal narrower than 100 columns the session
   gets the whole width, with one line about the ticket above it. When the squad's session isn't running (it finished,
   or platoon or the computer restarted), the right side says so, and `enter` continues the same conversation.
+
+**How many squads work at once.** At most 3 squads work at the same time, across all your projects (**Squads at work
+at once** on the Projects tab of the settings, 1 to 10). A squad counts while its ticket is Working and its leader's
+session is running; one waiting on you, ready to publish, done or cancelled doesn't. When you hand a ticket over (the
+commander said it fits, or you said "hand it anyway") and every place is taken, the ticket shows **Working · waiting for
+a free squad** and starts by itself when a place frees, the one that has waited longest first, without taking over your
+screen (a notice says so). Its worktree is made then, not while it waits. The line is written on the ticket, so it
+outlasts platoon: the next platoon you open starts it. Only an open platoon starts tickets from the line; with two
+platoon windows open, the first one opened does it (the other takes over when it closes), and a ticket is never started
+twice. To take a ticket out of the line, change its state (`s`: New, Done or Cancelled). Lowering the number never stops
+a squad; new ones just wait.
+
+**What the squad has done, and the tokens it used.** A ticket's screen lists the members' runs in the order the leader
+started them, as its session shows them (not the workflow on paper): each member by its agent name, with the short
+description the leader gave it, `[x]` once its result has come back and `[>]` while it runs (`[-]` for a run whose
+leader stopped before it reported), and "Now: coding-reviewer" while one is at work. Below the ticket's details it also
+shows the tokens its squads used: the total, what that counts (what was sent to Claude, what Claude wrote, and what was
+read again from Claude's cache, each answer once, the members' own work included), and a line per agent - the leader
+and each member - added up over every squad the ticket has had. The Tickets pane shows the short total ("1.2M tokens")
+on each ticket that has one. platoon reads this from the squad's session files in the background, every couple of
+seconds, only for the open project's tickets that have had a squad.
 
 The ticket's state follows the squad: at the end of each of its turns the leader says in one last line whether it is
 done, still working (members running), has a question, is stuck, or is ready to publish, and platoon sets **Working**,
