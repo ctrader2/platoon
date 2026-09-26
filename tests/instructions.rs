@@ -1,6 +1,6 @@
 //! The system prompt of each AI action, edited from the settings, end to end with the real binary: an unchanged
 //! entry reads "Enter to change" and offers no restore, enter opens the editor list and a stand-in editor, an edit
-//! that changes nothing says nothing, a change makes it "Changed" and offers `r` (restore platoon's default, after
+//! that changes nothing says nothing, a change makes it "User Modified" and offers `r` (restore platoon's default, after
 //! asking, keeping the user's version as a `.bak`), a default that changed under the user's own says so in the warning
 //! color, and `c` does nothing on these entries.
 //!
@@ -145,7 +145,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     assert!(!screen.contains("unchanged") && !screen.contains("Saved") && !screen.contains("left them"), "no message:\n{screen}");
     assert!(!file.exists(), "an unchanged default is not kept");
 
-    // A real change: saved, "Changed", and now the footer offers restore.
+    // A real change: saved, "User Modified", and now the footer offers restore.
     t.send(b"\r");
     t.wait_for("╭ edit the system prompt with");
     t.send(b"\r");
@@ -153,7 +153,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.send(b"Keep it to one screen.\r");
     t.wait_for_all(&["Saved: platoon uses your system prompt for the hand-off", "Settings file:"]);
     assert_eq!(fs::read_to_string(&file).unwrap(), format!("{started}Keep it to one screen.\n"));
-    t.wait_for_flat("System prompt for the hand-off Changed");
+    t.wait_for_flat("System prompt for the hand-off User Modified");
     t.wait_for("r restore");
     let hashes: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.prompts().join("built-in.json")).unwrap()).unwrap();
     assert!(hashes["hand-off"].as_str().is_some_and(|h| h.len() == 16), "{hashes}");
@@ -207,14 +207,14 @@ fn a_default_that_changed_under_the_users_own_says_so_in_the_warning_color_and_c
     t.send(b"\t");
     t.wait_for("Search archived");
     t.send(b"G");
-    t.wait_for_all(&["System prompt for Describe it", "Changed · default updated", "r restore", "when you search by describing"]);
+    t.wait_for_all(&["System prompt for Describe it", "User Modified · default updated", "r restore", "when you search by describing"]);
     // The whole name and the whole value fit at 80 columns, and the value is in the warning color.
     let screen = t.stable();
     let row = line_with(&screen, "System prompt for Describe it");
-    assert!(row.contains("Changed · default updated"), "{screen}");
-    let (y, x) = t.find("Changed · default updated").unwrap();
+    assert!(row.contains("User Modified · default updated"), "{screen}");
+    let (y, x) = t.find("User Modified · default updated").unwrap();
     t.wait_fg(y, x, Rgb(0xf9, 0xe2, 0xaf)); // Catppuccin Mocha's warning yellow
-    t.wait_fg(y, x + "Changed · default updated".chars().count() as u16 - 1, Rgb(0xf9, 0xe2, 0xaf));
+    t.wait_fg(y, x + "User Modified · default updated".chars().count() as u16 - 1, Rgb(0xf9, 0xe2, 0xaf));
 
     // c does nothing: once the key after it has been handled, there is no view and no message.
     t.send(b"c");
@@ -223,7 +223,7 @@ fn a_default_that_changed_under_the_users_own_says_so_in_the_warning_color_and_c
     t.wait_gone("r restore");
     let screen = t.stable();
     assert!(!screen.contains("yours") && !screen.contains("only in") && !screen.contains("Kept by platoon"), "no compare view:\n{screen}");
-    assert!(line_with(&screen, "System prompt for Describe it").contains("Changed · default updated"), "{screen}");
+    assert!(line_with(&screen, "System prompt for Describe it").contains("User Modified · default updated"), "{screen}");
     assert!(fs::read_to_string(lab.prompts().join("describe-it.md")).unwrap().contains("Look at invoices first."), "nothing changes");
     t.send(b"\x1b");
     t.wait_gone("Settings file:");

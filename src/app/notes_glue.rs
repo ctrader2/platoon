@@ -313,7 +313,7 @@ impl App {
     fn after_instructions_edit(&mut self, id: &'static str, before: &str) {
         let what = instructions::action(id).what;
         let said = match instructions::after_edit(&self.config, id, before) {
-            // Nothing changed: nothing to say (the entry still reads "Enter to change" or "Changed").
+            // Nothing changed: nothing to say (the entry still reads "Enter to change" or "User Modified").
             instructions::Edited::Unchanged => return,
             instructions::Edited::BuiltIn => format!("The system prompt for {what} is platoon's default again."),
             instructions::Edited::Changed => format!("Saved: platoon uses your system prompt for {what} from the next time it asks Claude."),

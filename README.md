@@ -199,7 +199,7 @@ same size on every tab; a tab with more entries than fit scrolls, and on a small
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
 | Description search: conversations sent / results / wider search | How many conversations a search by description ([Describe it](#search)) sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
-| System prompt for Describe it | What platoon asks Claude for when you search by describing a conversation (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, Changed |
+| System prompt for Describe it | What platoon asks Claude for when you search by describing a conversation (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 **Smart features**: whether your Claude plan is used at all, and how much. Under the entries: `Used today: N of M tokens`, and,
 when naming is held up, why (`Naming is waiting: ...`).
@@ -224,7 +224,7 @@ when naming is held up, why (`Naming is waiting: ...`).
 | Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
 | Archived conversations | Whether archived conversations are named too, slowly in the background. | Skip (default), In the background |
 | Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
-| System prompt for naming | What platoon asks Claude for when it names and summarizes your conversations (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, Changed |
+| System prompt for naming | What platoon asks Claude for when it names and summarizes your conversations (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 **Projects**
 
@@ -232,13 +232,13 @@ when naming is held up, why (`Naming is waiting: ...`).
 | --- | --- | --- |
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
-| System prompt for project notes, for project descriptions, for the hand-off | How platoon asks Claude to write a project's notes, the line under a project's name, and a hand-off (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, Changed |
+| System prompt for project notes, for project descriptions, for the hand-off | How platoon asks Claude to write a project's notes, the line under a project's name, and a hand-off (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 #### System prompts for each smart feature
 
 Each thing platoon asks Claude for - names and summaries, Describe it, a project's notes, a project's description, the
 hand-off - comes with a system prompt, and each has an entry on the tab it belongs to. It reads **Enter to change** while
-it is platoon's default, and **Changed** once you have changed it. Only the part that says what to aim for is yours to
+it is platoon's default, and **User Modified** once you have changed it. Only the part that says what to aim for is yours to
 change: the tone, what to put in and what to leave out. The exact shape of Claude's answer, which platoon checks, and the
 rule that what Claude is shown is data and never orders, are kept by platoon and always sent after your text, so an edit
 can't break the replies.
@@ -250,7 +250,7 @@ can't break the replies.
 - `r` restores platoon's default, after asking. It is only offered (and shown in the footer) once you have changed that
   system prompt. Your version is kept as `<name>.md.bak` (one copy, replaced by the next restore).
 - When a newer platoon changes the default of a system prompt you have changed, your text is kept and the entry says
-  **Changed · default updated** (in the warning color) until you edit it again or restore the default.
+  **User Modified · default updated** (in the warning color) until you edit it again or restore the default.
 
 The files are `~/.config/platoon/prompts/<name>.md` (`names`, `describe-it`, `project-notes`, `project-description`,
 `hand-off`), only once you have changed something, with `built-in.json` beside them remembering which default each

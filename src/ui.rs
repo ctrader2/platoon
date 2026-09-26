@@ -1363,11 +1363,14 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
             }
-            // "Enter to change" or "Changed", with no arrows: enter (or a click on it) opens the editor list.
+            // "Enter to change" or "User Modified", with no arrows: enter (or a click on it) opens the editor list.
+            // No buttons to keep in place, so it is only as wide as what it says: the longest ("User Modified ·
+            // default updated") would cut every system prompt's name at 80 columns.
             Kind::Instructions(id) => {
                 let status = app.instructions_status(id);
-                let vw = crate::instructions::Status::BuiltInUpdated.label().chars().count();
-                (status.label().to_string(), vw, true, true, status == crate::instructions::Status::BuiltIn)
+                let label = status.label().to_string();
+                let vw = label.chars().count();
+                (label, vw, true, true, status == crate::instructions::Status::BuiltIn)
             }
             Kind::Theme => {
                 let all = app.themes().all();

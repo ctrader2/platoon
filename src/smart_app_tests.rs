@@ -1658,10 +1658,10 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     key(&mut app, KeyCode::Esc);
     assert!(!w.config.join("prompts").exists(), "none of this wrote anything");
 
-    // Changed: the value says so, the footer offers restore, and c still does nothing.
+    // User Modified: the value says so, the footer offers restore, and c still does nothing.
     own_guidance(&w, crate::instructions::NOTES, "Keep the notes short.");
     let shown = screen(&mut term, &app);
-    assert!(shown.lines().find(|l| l.contains("System prompt for project notes")).unwrap().contains("Changed"), "{shown}");
+    assert!(shown.lines().find(|l| l.contains("System prompt for project notes")).unwrap().contains("User Modified"), "{shown}");
     assert!(footer(&shown).contains("r restore"), "{shown}");
     key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_none(), "no compare view");

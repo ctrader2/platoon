@@ -154,8 +154,8 @@ impl Status {
     pub fn label(self) -> &'static str {
         match self {
             Status::BuiltIn => "Enter to change",
-            Status::Changed => "Changed",
-            Status::BuiltInUpdated => "Changed · default updated",
+            Status::Changed => "User Modified",
+            Status::BuiltInUpdated => "User Modified · default updated",
         }
     }
 
@@ -308,8 +308,8 @@ mod tests {
     #[test]
     fn the_entry_invites_a_change_says_changed_and_only_a_changed_prompt_can_be_restored() {
         assert_eq!(Status::BuiltIn.label(), "Enter to change");
-        assert_eq!(Status::Changed.label(), "Changed");
-        assert_eq!(Status::BuiltInUpdated.label(), "Changed · default updated");
+        assert_eq!(Status::Changed.label(), "User Modified");
+        assert_eq!(Status::BuiltInUpdated.label(), "User Modified · default updated");
         assert!(!Status::BuiltIn.restorable() && Status::Changed.restorable() && Status::BuiltInUpdated.restorable());
         let entries: Vec<&str> = ACTIONS.iter().map(|a| a.entry).collect();
         assert_eq!(
@@ -389,7 +389,7 @@ mod tests {
         hashes.insert("some-future-action".into(), Value::String("abc".into()));
         save_hashes(&c, &hashes).unwrap();
         assert_eq!(status(&c, FIND), Status::BuiltInUpdated);
-        assert_eq!(Status::BuiltInUpdated.label(), "Changed · default updated");
+        assert_eq!(Status::BuiltInUpdated.label(), "User Modified · default updated");
         assert_eq!(guidance(&c, FIND), "Look for the one about invoices first.", "the user's text is kept");
         // The same hash as today's built-in: just changed.
         set_hash(&c, FIND, Some(hash(action(FIND).builtin))).unwrap();

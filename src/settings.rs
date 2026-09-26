@@ -394,7 +394,7 @@ pub enum Kind {
     /// `enter` opens the theme picker.
     Theme,
     /// The system prompt of one AI action (`instructions::ACTIONS`), by id. It has no steps: enter (or a click on
-    /// the value) opens the user's own text in an editor, and the value says "Enter to change" or "Changed".
+    /// the value) opens the user's own text in an editor, and the value says "Enter to change" or "User Modified".
     Instructions(&'static str),
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
