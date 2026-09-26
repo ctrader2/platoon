@@ -1,5 +1,5 @@
 //! Tickets end to end, in a real terminal with the real binary: the three panes of a project's screen and moving
-//! between them, making a ticket with `n` and a stand-in editor, the Done and cancelled group, blocked by and ready,
+//! between them, making a ticket with `n` and a stand-in editor, the Done and cancelled group, waits for and ready,
 //! a ticket's own screen, `platoon ticket add` and `list` while the app is open, and an 80-column terminal.
 //!
 //! The editor is a small script in a folder of the test's own (`PLATOON_EDITOR_PATH` is the only place platoon looks),
@@ -231,15 +231,15 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_and_back_with_s(
     let screen = t.stable();
     assert!(!screen.contains("#1 Base"), "folded:\n{screen}");
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("#2 Middle New local ready") && flat.contains("#3 Top New local blocked by #2"), "{screen}");
-    // Colors, by cell: the picked row has the highlight, ready is green, blocked by is yellow.
+    assert!(flat.contains("#2 Middle New local ready") && flat.contains("#3 Top New local waits for #2"), "{screen}");
+    // Colors, by cell: the picked row has the highlight, ready is green, waits for is yellow.
     let (r2, c2) = find(&mut t, "#2 Middle");
     let (r3, c3) = find(&mut t, "#3 Top");
     t.wait_bg(r2, c2, SURFACE);
     assert_eq!(t.bg_at(r3, c3), BG, "another row");
     let (ry, rx) = find(&mut t, "ready");
     assert_eq!(t.fg_at(ry, rx), OK);
-    let (by, bx) = find(&mut t, "blocked by #2");
+    let (by, bx) = find(&mut t, "waits for #2");
     assert_eq!(t.fg_at(by, bx), WARN);
     // Enter on the divider unfolds it.
     t.send(b"G\r");
@@ -286,7 +286,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.send(b"\t");
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["#2 Basket page", "State", "New · blocked by #1", "How far", "Local changes only", "Folders", "No folder yet", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
+    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "How far", "Local changes only", "Folders", "No folder yet", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
     t.wait_for_flat("e edit r rename s state h how far f folders b waits for");
     assert!(!t.text().contains("step 40"));
     for _ in 0..80 {
@@ -294,7 +294,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     }
     t.wait_for("step 60");
     t.wait_gone("The basket keeps its items.");
-    assert!(t.text().contains("New · blocked by #1"), "the fields stay where they are");
+    assert!(t.text().contains("New · waits for #1"), "the fields stay where they are");
     t.send(b"g");
     t.wait_for("The basket keeps its items.");
     // How far, in the user's own words.
@@ -324,9 +324,9 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "From the command line", "--how-far", "local commit", "--folder", "."], "## Body\npiped in\n");
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
     t.wait_for_flat("#1 From the command line New commit ready");
-    let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--blocked-by", "1"], "");
+    let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--waits-for", "1"], "");
     assert_eq!((code, out.as_str()), (0, "#2\n"));
-    t.wait_for_flat("#2 Second New local blocked by #1");
+    t.wait_for_flat("#2 Second New local waits for #1");
     // Refusals say one plain line and make nothing.
     let (code, out, err) = lab.cli(&["add", "--project", "Nope", "--title", "x"], "");
     assert!(code != 0 && out.is_empty() && err.trim() == "platoon ticket add: there is no project called \"Nope\"", "{err}");
@@ -340,6 +340,7 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!((v[0]["title"].as_str(), v[0]["folders"][0].as_str()), (Some("From the command line"), Some(lab.work.canonicalize().unwrap().to_str().unwrap())));
     assert_eq!((v[1]["ready"].as_bool(), v[1]["blocked_by"].clone()), (Some(false), json!([1])));
+    assert_eq!(v[1]["folders"], json!([lab.work.canonicalize().unwrap().to_str().unwrap()]), "no --folder: the folder it was run in");
     t.send(b"q");
     t.wait_exit();
 }
@@ -351,7 +352,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 24, 80);
     lab.open_project(&mut t);
     t.send(b"\t");
-    t.wait_for_all(&["#1 A rather", "ready", "#2 Second", "blocked by #1", "Done and cancelled · 1"]);
+    t.wait_for_all(&["#1 A rather", "ready", "#2 Second", "waits for #1", "Done and cancelled · 1"]);
     t.send(b"G\r");
     t.wait_for("#3 Third");
     let screen = t.stable();
@@ -364,7 +365,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let (row, _) = find(&mut t, "#2 Second");
     let line = screen.lines().nth(row as usize).unwrap();
     let pane = line.split('│').nth(2).unwrap_or("");
-    assert!(pane.contains("blocked by #1"), "inside its own pane: {line}");
+    assert!(pane.contains("waits for #1"), "inside its own pane: {line}");
     t.send(b"q");
     t.wait_exit();
 }

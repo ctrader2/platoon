@@ -743,13 +743,14 @@ a list you keep, and only you move a ticket along.
 
 The **Tickets** pane sits under Sessions on a project's screen. Open tickets come first; the Done and Cancelled ones are
 kept apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the
-number, the title, the state, how far it goes and, for an open ticket, what it is still waiting for ("blocked by #2, #4")
-or a quiet **ready** when it is New and everything it waits for is Done. On a narrow terminal how far goes first, then the
+number, the title, the state, how far it goes and, for an open ticket, what it is still waiting for ("waits for #2, #4")
+or a quiet **ready** when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones
+waiting for it: only Done lets them go). On a narrow terminal how far goes first, then the
 state's own column (a Done, Cancelled or otherwise not-New ticket then says its state at the end of its row).
 
 | Key (Tickets pane) | Does |
 | --- | --- |
-| `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes) |
+| `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes). An archived project takes no new tickets |
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
 | `s` `e` `r` `h` `f` `b` | as on the ticket's own screen, for the ticket picked |
 
@@ -782,13 +783,15 @@ From the command line (a later `/ticket` skill will use the same command, so tic
 
 ```
 platoon ticket add --project "Web shop" --title "Log in with a link" --how-far "local commit" --folder ~/repos/web
-platoon ticket add --project "Web shop" --title "Basket page" --blocked-by 1 < body.md   # the body piped in
+platoon ticket add --project "Web shop" --title "Basket page" --waits-for 1 < body.md    # the body piped in
 platoon ticket list --project "Web shop"            # open ones first, then Done and cancelled
 platoon ticket list --json                          # every project, with each body file's full path
 ```
 
 `add` prints the new ticket's number (`#3`). The project is found by its id or its name (any case). The body comes from
-`--body-file`, else from what is piped in, else the template; with no `--folder` the ticket has no folder yet. A project
+`--body-file`, else from what is piped in, else the template; with no `--folder` the ticket works in the folder you ran the command in
+(its full path), and each `--folder` you give replaces that. A project that is archived takes no new tickets (restore it
+first; its tickets can still be opened and changed in platoon). A project
 that isn't there (or a name two projects share), a ticket to wait for that isn't there or would make a circle, or a folder
 that doesn't exist is refused with one plain line and nothing is made. A running platoon shows the new ticket within a
 second.

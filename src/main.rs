@@ -112,7 +112,8 @@ fn main() -> io::Result<()> {
         }
         Some(_) => {
             eprintln!("usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  open --project <name>   start a new session here, in that project\n  setup           add platoon to Claude Code: plan usage in the status line, a guard that\n                  stops two copies of one session from overwriting each other, and two hooks\n                  that hand a project's notes to its sessions and keep them up to date\n  ticket add --project <name> --title <text> [--body-file <path>] [--how-far <text>] [--folder <path>]...
-                  [--blocked-by <number>]...   make a ticket in that project and print its number (#N)
+                  [--waits-for <number>]...   make a ticket in that project and print its number (#N);
+                  with no --folder it works in the current folder
   ticket list [--project <name>] [--json]   the tickets, open ones first
   themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, notes-update   internal: run by\n                  Claude Code, or by platoon itself");
             std::process::exit(2);

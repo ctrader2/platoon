@@ -179,7 +179,7 @@ impl App {
     /// Keys of the Tickets pane (the ones it shares with the other panes are handled before this).
     pub(super) fn tickets_pane_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Char('n') => self.open_name_box(NamePurpose::NewTicket),
+            KeyCode::Char('n') => self.start_new_ticket(),
             KeyCode::Enter => match self.ticket_rows().get(self.ticket_selected()) {
                 Some(TRow::Divider(_)) => self.tk.unfolded = !self.tk.unfolded,
                 Some(TRow::Ticket(n)) => {
@@ -274,11 +274,29 @@ impl App {
 
     // ---- a new ticket -----------------------------------------------------------------------------------------
 
+    /// `n`: the name box for a new ticket, unless the project is archived (it takes no new tickets; the ones it has
+    /// can still be opened and changed).
+    fn start_new_ticket(&mut self) {
+        if !self.refuse_ticket_if_archived() {
+            self.open_name_box(NamePurpose::NewTicket);
+        }
+    }
+
+    /// The open project is archived: say so (the same line as `platoon ticket add`) and return true.
+    fn refuse_ticket_if_archived(&mut self) -> bool {
+        let Some(name) = self.open_project().filter(|p| p.archived).map(|p| p.name.clone()) else { return false };
+        self.notify(tickets::archived_refusal(&name));
+        true
+    }
+
     /// Enter in the name box for a new ticket: the next number, the template body, "Local changes only", the folder
     /// of the project's most recently used session (none when it has no sessions), New. Then the body opens in the
     /// editor, the same way the notes do.
     pub(super) fn make_ticket(&mut self, title: &str) {
         let Some(project) = self.open_project.clone() else { return };
+        if self.refuse_ticket_if_archived() {
+            return;
+        }
         let folders: Vec<String> = self.project_folders(&project).into_iter().take(1).collect();
         let Some(store) = self.tk.store.as_mut() else { return };
         match store.add(tickets::NewTicket { title: title.to_string(), folders, ..Default::default() }) {

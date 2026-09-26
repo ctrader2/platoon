@@ -218,7 +218,8 @@ pub fn waiting_for(t: &Ticket, all: &[Ticket]) -> Vec<u32> {
     t.blocked_by.iter().copied().filter(|n| all.iter().any(|o| o.number == *n && o.state != State::Done)).collect()
 }
 
-/// A ticket is ready to be worked on when it is New and everything it is blocked by is Done.
+/// A ticket is ready to be worked on when it is New and everything it is blocked by is Done. Only Done lets a ticket
+/// go: one waiting for a Cancelled ticket stays held up until the user takes that wait away (decided 2026-09-26).
 pub fn is_ready(t: &Ticket, all: &[Ticket]) -> bool {
     t.state == State::New && waiting_for(t, all).is_empty()
 }
@@ -593,6 +594,11 @@ fn next_number(root: &Map<String, Value>) -> u32 {
 
 // ---- the command line ---------------------------------------------------------------------------------------------
 
+/// Why an archived project takes no new ticket (the command line and the app say the same).
+pub fn archived_refusal(name: &str) -> String {
+    format!("\"{name}\" is archived; restore it first")
+}
+
 /// The project `want` names: its id, else its name ignoring case. A name two projects share is refused rather
 /// than guessed.
 pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> Result<&'a crate::projects::Project, String> {
@@ -613,10 +619,10 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
 }
 
 const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>] [--how-far <text>]
-                           [--folder <path>]... [--blocked-by <number>]...
+                           [--folder <path>]... [--waits-for <number>]...
        platoon ticket list [--project <name or id>] [--json]
   add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
-         in, else the template. --how-far takes \"Local changes only\", \"Local commit\", \"Commit, push and open a
+         in, else the template. Without --folder the ticket works in the current folder. --how-far takes \"Local changes only\", \"Local commit\", \"Commit, push and open a
          merge request\" or \"Publish a document or page\"; anything else is kept as your own words
   list   the tickets, open ones first, then the Done and Cancelled ones";
 
@@ -677,9 +683,11 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
                     folders.push(p);
                 }
             }
-            "--blocked-by" => {
-                let b = value(args, &mut i, "--blocked-by")?;
-                let n = b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("--blocked-by takes a ticket number, not \"{b}\""))?;
+            // `--blocked-by` is the name it had first, still taken quietly.
+            flag @ ("--waits-for" | "--blocked-by") => {
+                let flag = flag.to_string();
+                let b = value(args, &mut i, &flag)?;
+                let n = b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("{flag} takes a ticket number, not \"{b}\""))?;
                 blocked.push(n);
             }
             other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
@@ -702,6 +710,13 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
     };
     let projects = crate::projects::Projects::open(config);
     let p = find_project(&projects, &project)?;
+    if p.archived {
+        return Err(archived_refusal(&p.name));
+    }
+    // No --folder: the folder it was run in (where a session asking for the ticket is working).
+    if folders.is_empty() {
+        folders.push(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()).to_string_lossy().into_owned());
+    }
     let mut tickets = Tickets::open(config, &p.id);
     if tickets.is_corrupt() {
         return Err(CORRUPT.into());
@@ -754,7 +769,7 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         let line = |t: &Ticket| {
             let wait = waiting_for(t, all);
             let tail = if !wait.is_empty() && !t.state.closed() {
-                format!("  blocked by {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+                format!("  waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
             } else if is_ready(t, all) {
                 "  ready".to_string()
             } else {
@@ -1077,7 +1092,7 @@ mod tests {
         let id = crate::projects::Projects::open(&d).create("Web shop").unwrap();
         fs::create_dir_all(d.join("work")).unwrap();
         assert_eq!(run(&d, &["add", "--project", "web shop", "--title", "Login"], "", true), (0, "#1\n".into(), String::new()));
-        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--how-far", "local commit", "--folder", "work", "--blocked-by", "#1"], "## Body\nfrom stdin\n", false);
+        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--how-far", "local commit", "--folder", "work", "--waits-for", "#1"], "## Body\nfrom stdin\n", false);
         assert_eq!((code, out.as_str()), (0, "#2\n"));
         let t = Tickets::open(&d, &id);
         let two = t.get(2).unwrap();
@@ -1085,6 +1100,7 @@ mod tests {
         assert_eq!(two.folders, [d.join("work").canonicalize().unwrap().to_string_lossy().into_owned()]);
         assert_eq!(t.body(two), "## Body\nfrom stdin\n");
         assert_eq!(t.body(t.get(1).unwrap()), TEMPLATE, "nothing piped in: the template");
+        assert_eq!(t.get(1).unwrap().folders, [d.canonicalize().unwrap().to_string_lossy().into_owned()], "no --folder: where it was run");
         fs::write(d.join("body.md"), "from a file").unwrap();
         let (code, _, _) = run(&d, &["add", "--project", "Web shop", "--title", "Own", "--body-file", "body.md", "--how-far", "Until it's live"], "ignored", false);
         assert_eq!(code, 0);
@@ -1097,7 +1113,7 @@ mod tests {
             (vec!["add", "--project", "Web shop", "--title", "x", "--folder", "/no/such/folder"], "does not exist"),
             (vec!["add", "--project", "Web shop"], "title"),
             (vec!["add", "--title", "x"], "--project"),
-            (vec!["add", "--project", "Web shop", "--title", "x", "--blocked-by", "two"], "ticket number"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--waits-for", "two"], "--waits-for takes a ticket number"),
         ] {
             let (code, out, err) = run(&d, &args, "", true);
             assert!(code != 0 && out.is_empty() && err.contains(says) && err.lines().count() == 1, "{args:?}: {err}");
@@ -1122,5 +1138,84 @@ mod tests {
         assert_eq!(first["blocked_by"], json!([1]));
         assert!(first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute());
         assert_eq!(v[2]["number"], 1, "the Done one last");
+    }
+
+    #[test]
+    fn a_cancelled_ticket_still_holds_up_the_ones_waiting_for_it_and_only_done_lets_them_go() {
+        let d = dir("cancelled");
+        let mut t = Tickets::open(&d, "p1");
+        add(&mut t, "Base");
+        t.add(NewTicket { title: "After".into(), blocked_by: vec![1], ..Default::default() }).unwrap();
+        t.set_state(1, &State::Cancelled).unwrap();
+        assert_eq!(waiting_for(t.get(2).unwrap(), t.all()), [1], "a Cancelled ticket is still waited for");
+        assert!(!is_ready(t.get(2).unwrap(), t.all()));
+        t.set_state(1, &State::Done).unwrap();
+        assert!(waiting_for(t.get(2).unwrap(), t.all()).is_empty() && is_ready(t.get(2).unwrap(), t.all()), "Done lets it go");
+        // The command line says the same.
+        let id = crate::projects::Projects::open(&d).create("Web").unwrap();
+        run(&d, &["add", "--project", "Web", "--title", "Base"], "", true);
+        run(&d, &["add", "--project", "Web", "--title", "After", "--waits-for", "1"], "", true);
+        Tickets::open(&d, &id).set_state(1, &State::Cancelled).unwrap();
+        let (_, out, _) = run(&d, &["list", "--project", "Web"], "", true);
+        assert!(out.lines().nth(1).unwrap().contains("#2") && out.lines().nth(1).unwrap().ends_with("waits for #1"), "{out}");
+    }
+
+    #[test]
+    fn with_no_folder_a_ticket_works_where_the_command_was_run_and_folders_given_replace_that() {
+        let d = dir("cwd");
+        let id = crate::projects::Projects::open(&d).create("Web").unwrap();
+        let here = d.join("here");
+        let other = d.join("other");
+        fs::create_dir_all(&here).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        let call = |args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            // Run "in" `here`, given as a path with a `..` in it: the ticket keeps the full, plain path.
+            let code = cli(&args, &d, &mut "".as_bytes(), true, &here.join("..").join("here"), &mut out, &mut err);
+            assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
+        };
+        call(&["add", "--project", "Web", "--title", "Here"]);
+        call(&["add", "--project", "Web", "--title", "There", "--folder", other.to_str().unwrap()]);
+        let t = Tickets::open(&d, &id);
+        let full = |p: &Path| p.canonicalize().unwrap().to_string_lossy().into_owned();
+        assert_eq!(t.get(1).unwrap().folders, [full(&here)]);
+        assert_eq!(t.get(2).unwrap().folders, [full(&other)], "an explicit --folder replaces the current folder");
+    }
+
+    #[test]
+    fn an_archived_project_takes_no_new_tickets_from_the_command_line() {
+        let d = dir("archived");
+        let mut p = crate::projects::Projects::open(&d);
+        let id = p.create("Web shop").unwrap();
+        assert_eq!(run(&d, &["add", "--project", "Web shop", "--title", "Before"], "", true).0, 0);
+        p.archive(&id, &[]).unwrap();
+        let (code, out, err) = run(&d, &["add", "--project", "web shop", "--title", "After"], "", true);
+        assert_eq!((code, out.as_str(), err.as_str()), (1, "", "platoon ticket add: \"Web shop\" is archived; restore it first\n"));
+        assert_eq!(Tickets::open(&d, &id).all().len(), 1, "nothing made");
+        // Its tickets can still be listed and changed.
+        assert!(run(&d, &["list", "--project", "Web shop"], "", true).1.contains("#1"));
+        Tickets::open(&d, &id).set_state(1, &State::Done).unwrap();
+        // Restored, it takes them again.
+        p.restore(&id).unwrap();
+        assert_eq!(run(&d, &["add", "--project", "Web shop", "--title", "After"], "", true), (0, "#2\n".into(), String::new()));
+    }
+
+    #[test]
+    fn waits_for_is_the_flag_and_blocked_by_still_works_quietly() {
+        let d = dir("alias");
+        let id = crate::projects::Projects::open(&d).create("Web").unwrap();
+        run(&d, &["add", "--project", "Web", "--title", "One"], "", true);
+        run(&d, &["add", "--project", "Web", "--title", "Two"], "", true);
+        assert_eq!(run(&d, &["add", "--project", "Web", "--title", "Three", "--waits-for", "1", "--blocked-by", "#2"], "", true).0, 0);
+        assert_eq!(Tickets::open(&d, &id).get(3).unwrap().blocked_by, [1, 2]);
+        let (code, _, err) = run(&d, &["add", "--project", "Web", "--title", "x", "--blocked-by", "nine"], "", true);
+        assert!(code == 1 && err.contains("--blocked-by takes a ticket number"), "the flag it was given: {err}");
+        let (code, _, err) = run(&d, &["add", "--project", "Web", "--title", "x", "--waits-for"], "", true);
+        assert!(code == 1 && err.contains("--waits-for needs a value"), "{err}");
+        // The usage text shows only the new name.
+        let (code, _, usage) = run(&d, &[], "", true);
+        assert_eq!(code, 2);
+        assert!(usage.contains("--waits-for <number>") && !usage.contains("blocked"), "{usage}");
     }
 }

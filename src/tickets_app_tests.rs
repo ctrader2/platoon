@@ -274,7 +274,7 @@ fn done_and_cancelled_are_folded_under_a_divider_and_come_back_up_when_new_again
 }
 
 #[test]
-fn rows_show_blocked_by_and_ready_in_their_colors_and_the_picked_row_is_highlighted() {
+fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlighted() {
     let (w, mut app, id) = on_the_project("t-blocked");
     add(&w, &mut app, &id, "Base", &[]);
     add(&w, &mut app, &id, "Middle", &[]);
@@ -284,12 +284,12 @@ fn rows_show_blocked_by_and_ready_in_their_colors_and_the_picked_row_is_highligh
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("#2 Middle New local ready"), "{shown}");
-    assert!(shown.contains("#3 Top New local blocked by #2"), "only the unfinished blocker: {shown}");
+    assert!(shown.contains("#3 Top New local waits for #2"), "only the unfinished blocker: {shown}");
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
     let (ry, rx) = find(&term, "ready").unwrap();
     assert_eq!(buf[(rx, ry)].fg, t.ok, "ready is quiet green");
-    let (by, bx) = find(&term, "blocked by #2").unwrap();
+    let (by, bx) = find(&term, "waits for #2").unwrap();
     assert_eq!(buf[(bx, by)].fg, t.warn);
     // The picked row (the first) has the highlight and the bar; the other rows don't.
     let (my, mx) = find(&term, "#2 ").unwrap();
@@ -377,7 +377,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("#2 Basket page"), "{shown}");
-    assert!(f.contains("State New · blocked by #1"), "{shown}");
+    assert!(f.contains("State New · waits for #1"), "{shown}");
     assert!(f.contains("How far Commit, push and open a merge request"), "{shown}");
     assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
@@ -462,7 +462,7 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_how_far_f
     let f = flat(&shown);
     assert!(f.contains("Sessions") && f.contains("Tickets") && f.contains("Notes"), "{shown}");
     assert!(f.contains("#1 A rather long") && f.contains("… ready"), "{shown}");
-    assert!(f.contains("#2 Second blocked by #1"), "{shown}");
+    assert!(f.contains("#2 Second waits for #1"), "{shown}");
     assert!(!f.contains("local") && !f.contains(" New"), "how far goes first, then the state's own column: {shown}");
     assert!(f.contains("#3 Third Cancelled"), "a row with nothing else to say says its state: {shown}");
     // No row runs past its pane.
@@ -482,7 +482,7 @@ fn ticket_columns_share_the_width_and_drop_how_far_then_the_tail_then_the_state(
             assert!(c.tail > 0 && c.state > 0, "how far goes first: {width} {c:?}");
         }
         if c.state > 0 {
-            assert!(c.tail > 0, "then the state, then blocked by / ready: {width} {c:?}");
+            assert!(c.tail > 0, "then the state, then waits for / ready: {width} {c:?}");
         }
         if c.state > 0 || c.how > 0 || c.tail > 0 {
             assert!(c.title >= 12, "{width}: {c:?}");
@@ -492,3 +492,27 @@ fn ticket_columns_share_the_width_and_drop_how_far_then_the_tail_then_the_state(
     assert_eq!((c.state, c.how, c.tail, c.title), (3, 5, 5, 120 - 4 - 5 - 7 - 7));
 }
 
+
+#[test]
+fn an_archived_project_takes_no_new_ticket_but_its_tickets_can_still_be_changed() {
+    let (w, mut app, id) = on_the_project("t-archived");
+    add(&w, &mut app, &id, "Old work", &[]);
+    app.projects.archive(&id, &[]).unwrap();
+    app.reload_for_test();
+    assert!(app.open_project().is_some_and(|p| p.archived), "still on its screen");
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.pane, Pane::Tickets);
+    key(&mut app, KeyCode::Char('n'));
+    assert!(matches!(app.mode, Mode::List), "no name box");
+    assert_eq!(app.active_notice(), Some("\"Web shop\" is archived; restore it first"));
+    assert_eq!(app.tickets().len(), 1, "nothing made");
+    // The ticket it has: opened, and its state changed.
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tk.open, Some(1));
+    key(&mut app, KeyCode::Char('s'));
+    assert!(matches!(app.mode, Mode::TicketPick));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.ticket(1).unwrap().state, State::Done);
+    assert_eq!(Tickets::open(&w.config, &id).get(1).unwrap().state, State::Done, "saved");
+}

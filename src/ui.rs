@@ -543,7 +543,7 @@ pub(crate) struct TCols {
 const TICKET_TITLE_MIN: usize = 12;
 
 /// How the Tickets pane's `width` is shared: the number, then the title (whatever is left), then the state, how far
-/// and "blocked by / ready", each as wide as its longest value (`want`). When the title would get fewer than
+/// and "waits for / ready", each as wide as its longest value (`want`). When the title would get fewer than
 /// `TICKET_TITLE_MIN` cells, how far goes first, then the state (whose words then move into the last column on the
 /// rows that have nothing else to say there, see `ticket_tail`), then the last column.
 pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_how: usize, want_tail: usize) -> TCols {
@@ -557,7 +557,7 @@ pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_how:
         state = 0;
     }
     if width < used(state, how, tail) + TICKET_TITLE_MIN {
-        // The last column is cut (with `…`) before it goes: "blocked by #2, …" still says the most.
+        // The last column is cut (with `…`) before it goes: "waits for #2, …" still says the most.
         let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_MIN);
         tail = if room >= 8 { tail.min(room) } else { 0 };
     }
@@ -574,7 +574,7 @@ fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
     }
     let wait = tickets::waiting_for(t, all);
     if !wait.is_empty() {
-        return (format!("blocked by {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")), false);
+        return (format!("waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")), false);
     }
     if tickets::is_ready(t, all) {
         return ("ready".into(), true);
@@ -652,7 +652,7 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     let (tail, ready) = ticket_tail(x, all, merged);
                     let color = if ready {
                         t.ok
-                    } else if tail.starts_with("blocked by") {
+                    } else if tail.starts_with("waits for") {
                         t.warn
                     } else {
                         state_color(t, &x.state)
