@@ -249,9 +249,12 @@ fn leader_transcript(w: &World, id: &str, leader_tokens: u64) {
     };
     let launched = |c: &str, a: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"status":"async_launched","agentId":a}}).to_string();
     let notice = |c: &str| json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string();
+    // An answer that mostly read the conversation again from the cache: counted apart from the rest.
+    let cached = json!({"type":"assistant","message":{"id":format!("{id}-k"),"usage":{"input_tokens":0,"output_tokens":5_000,"cache_read_input_tokens":900_000}}}).to_string();
     let lines = vec![
         json!({"type":"agent-setting","agentSetting":"summarize-leader"}).to_string(),
         answer(&format!("{id}-a"), leader_tokens),
+        cached,
         call(&format!("{id}-b"), &format!("{id}-c1"), "summarize-summarizer", "Sum up the thread"),
         launched(&format!("{id}-c1"), &format!("{id}p")),
         notice(&format!("{id}-c1")),
@@ -282,26 +285,75 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     app.refresh_until_for_test(20, "the transcripts to be read", |a| a.ticket(1).and_then(|t| a.ticket_tokens(t)).is_some_and(|t| t.agents.len() == 3));
     let tk = app.ticket(1).map(|t| app.ticket_tokens(t).unwrap()).unwrap();
     let agents: Vec<(&str, u64)> = tk.agents.iter().map(|(n, s)| (n.as_str(), s.total())).collect();
-    assert_eq!(agents, [("summarize-leader", 50_000), ("summarize-summarizer", 2_000_000), ("summarize-checker", 400_000)]);
-    // The pane: the short total on the row that has one, and nothing on the one that hasn't.
+    assert_eq!(agents, [("summarize-leader", 50_000 + 10_000 + 1_800_000), ("summarize-summarizer", 2_000_000), ("summarize-checker", 400_000)]);
+    // The pane: the short total on the row that has one (sent and written: 2.46M, no cache reads, which would make
+    // it 4.3M), and nothing on the one that hasn't.
     let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let row = |n: &str| shown.lines().find(|l| l.contains(n)).unwrap().to_string();
-    assert!(row("#1 Ticket 1").contains("2.5M tokens"), "{shown}");
+    assert!(row("#1 Ticket 1").contains("2.5M tokens") && !row("#1 Ticket 1").contains("4.3M"), "{shown}");
     assert!(!row("#2 Ticket 2").contains("tokens"), "{shown}");
     // The screen (its session isn't running: the checker's run never came back, and says so).
     pick(&mut app, 1);
     key(&mut app, KeyCode::Enter);
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("Tokens used 2.5M in all"), "{f}");
-    assert!(f.contains("2.5M sent to Claude, 0 written by Claude and 0 read again from Claude's cache"), "{f}");
-    assert!(f.contains("summarize-leader 50K summarize-summarizer 2M summarize-checker 400K"), "{f}");
+    // The screen: the pane's number, said as what it is, and the cache reads beside it.
+    assert!(f.contains("Tokens used 2.5M sent and written, plus 1.8M read again from Claude's cache"), "{f}");
+    // (The note about the session sits beside the explanation's first line, so it is checked in two pieces.)
+    assert!(f.contains("2.5M sent to Claude and 10K written by Claude:") && f.contains("the number the Tickets list shows. Read again from the cache"), "{f}");
+    assert!(!f.contains("in all"), "{f}");
+    assert!(f.contains("summarize-leader 60K + 1.8M from cache summarize-summarizer 2M summarize-checker 400K"), "{f}");
     assert!(
         f.contains("What the squad has done Summarize squad [x] summarize-summarizer · Sum up the thread [-] summarize-checker · Check the summary (didn't finish) Summarize squad [x]"),
         "{f}"
     );
     assert!(!f.contains("Now:"), "nothing runs now: {f}");
+}
+
+#[test]
+fn the_ticket_screen_shows_the_last_eight_runs_and_how_many_came_before() {
+    let (w, mut app, id, _fake) = world("sqq-runs", 1, 3);
+    let call = |c: &str, what: &str| {
+        json!({"type":"assistant","message":{"id":format!("m-{c}"),"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":"summarize-summarizer","description":what,"prompt":"go"}}],"usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
+    };
+    let done = |c: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"done"}]}}).to_string();
+    let mut lines = vec![json!({"type":"agent-setting","agentSetting":"summarize-leader"}).to_string()];
+    for k in 1..=12 {
+        lines.push(call(&format!("c{k}"), &format!("Pass {k:02}")));
+        lines.push(done(&format!("c{k}")));
+    }
+    w.transcript_lines("lead-r", &lines);
+    let mut t = Tickets::open(&w.config, &id);
+    t.start_leader(1, &Leader { squad: "summarize".into(), session: "lead-r".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+    app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-r").is_some_and(|l| l.runs.len() == 12));
+    pick(&mut app, 1);
+    key(&mut app, KeyCode::Enter);
+    let mut term = Terminal::new(TestBackend::new(130, 60)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    // (The note beside the ticket about its session sits between the heading and the runs in this flattened text.)
+    assert!(f.contains("What the squad has done") && f.contains("and 4 earlier [x] summarize-summarizer · Pass 05"), "{f}");
+    for k in 1..=4 {
+        assert!(!f.contains(&format!("Pass {k:02}")), "run {k} is folded: {f}");
+    }
+    for k in 5..=12 {
+        assert!(f.contains(&format!("[x] summarize-summarizer · Pass {k:02}")), "run {k}: {f}");
+    }
+    assert_eq!(f.matches("[x] summarize-summarizer").count(), 8, "{f}");
+}
+
+#[test]
+fn eight_runs_or_fewer_are_all_shown_with_no_earlier_line() {
+    let (w, mut app, id, _fake) = world("sqq-runs8", 1, 3);
+    leader_transcript(&w, "lead-e", 5);
+    let mut t = Tickets::open(&w.config, &id);
+    t.start_leader(1, &Leader { squad: "summarize".into(), session: "lead-e".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+    app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-e").is_some_and(|l| l.runs.len() == 2));
+    pick(&mut app, 1);
+    key(&mut app, KeyCode::Enter);
+    let mut term = Terminal::new(TestBackend::new(130, 60)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("What the squad has done [x] summarize-summarizer · Sum up the thread") && !f.contains("earlier"), "{f}");
 }
 
 #[test]

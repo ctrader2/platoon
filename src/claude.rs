@@ -547,7 +547,8 @@ fn usage_of(v: &Value, seen: &mut Usages, unkeyed: &mut usize) -> bool {
 }
 
 impl Spent {
-    /// Everything it counts: sent, written and read again from the cache.
+    /// Everything it counts: sent, written and read again from the cache (the tests check the parts add up).
+    #[cfg(test)]
     pub fn total(&self) -> u64 {
         self.input + self.output + self.cache_read
     }

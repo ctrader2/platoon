@@ -109,7 +109,7 @@ fn the_tab_lists_the_built_in_squad_with_its_details_in_four_sections() {
     assert!(f.contains("3 Squads 4"), "the tab and how many squads: {f}");
     assert!(f.contains("Coding 4 members Built in Research 4 members Built in Docs 3 members Built in Summarize 1 member Built in") || f.contains("Research 4 members"), "{f}");
     assert!(f.contains("▎ Coding 4 members") && f.contains("Built in"), "{f}");
-    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Needs a folder Yes", "Worktree Always", "Leader", "Model Sonnet", "System prompt You are given one ticket", "Members", "Can change files No", "Can run commands Yes", "Can use the web No"] {
+    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Needs a folder Yes", "Use a worktree for git folders Yes", "Leader", "Model Sonnet", "System prompt You are given one ticket", "Members", "Can change files No", "Can run commands Yes", "Can use the web No"] {
         assert!(f.contains(s), "{s}: {shown}");
     }
     assert!(f.contains("n describe a new squad") && f.contains("c copy") && !f.contains("d delete"), "a built-in as platoon has it: nothing to delete or restore: {f}");
@@ -304,7 +304,7 @@ fn a_system_prompt_is_edited_in_the_editor_and_saved_into_the_squad() {
     assert_eq!(app.active_notice(), Some("A system prompt can't be empty, so the leader's is as it was."));
 }
 
-const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.","needs_folder":true,"worktree":"always",
+const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.","needs_folder":true,"use_worktree":true,
  "leader":{"model":"sonnet","guidance":"Lead briefly."},
  "members":[
   {"name":"reader","model":"haiku","can_change_files":false,"can_run_commands":false,"can_use_web":true,"guidance":"Read the error."},
@@ -363,11 +363,11 @@ fn describe_drafts_a_squad_with_claude_which_is_edited_then_saved() {
     assert!(!squadfile::dir(&w.config).join("sentry-triage.json").exists());
     // The draft's two settings are the ones Claude gave it.
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Needs a folder Yes") && f.contains("Worktree Always"), "{f}");
+    assert!(f.contains("Needs a folder Yes") && f.contains("Use a worktree for git folders Yes"), "{f}");
     ctrl(&mut app, 's');
     assert_eq!(app.active_notice(), Some("Saved the squad \"Sentry triage\". Tickets can be handed to it now."));
     let v = file(&w, "sentry-triage");
-    assert_eq!((v["needs_folder"].as_bool(), v["worktree"].as_str()), (Some(true), Some("always")));
+    assert_eq!((v["needs_folder"].as_bool(), v["use_worktree"].as_bool(), v.get("worktree")), (Some(true), Some(true), None));
     assert_eq!((v["members"][1]["model"].as_str(), v["workflow"][2]["back_to"].as_u64()), (Some("sonnet"), Some(2)));
     assert!(v.get("builtin").is_none());
     assert!(app.sqt.draft.is_none());
@@ -563,11 +563,11 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
 #[test]
 fn needs_a_folder_and_worktree_are_shown_in_about_and_changed_there() {
     let (w, mut app) = on_the_tab("sqt-settings");
-    // Research: no folder needed, never a worktree.
+    // Research: no folder needed, no worktree.
     key(&mut app, KeyCode::Down);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Name Research") && f.contains("Needs a folder No") && f.contains("Worktree Never"), "{f}");
+    assert!(f.contains("Name Research") && f.contains("Needs a folder No") && f.contains("Use a worktree for git folders No"), "{f}");
     // Space switches "Needs a folder"; the file says so, and it is User Modified.
     go(&mut app, DRow::NeedsFolder);
     let f = flat(&draw(&mut term, &app));
@@ -577,22 +577,57 @@ fn needs_a_folder_and_worktree_are_shown_in_about_and_changed_there() {
     assert_eq!((file(&w, "research")["needs_folder"].as_bool(), file(&w, "research")["builtin"].as_str()), (Some(true), Some("research")));
     assert!(squadfile::get(&w.config, "research").unwrap().needs_folder);
     assert!(flat(&draw(&mut term, &app)).contains("Needs a folder Yes"));
-    // Enter on "Worktree": the three choices.
+    // Space switches "Use a worktree for git folders" too: one switch, no list to choose from.
     go(&mut app, DRow::Worktree);
-    key(&mut app, KeyCode::Enter);
+    app.notice = None;
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Always") && f.contains("When the folder is a git repo") && f.contains("Never"), "{f}");
-    choose(&mut app, "When the folder");
-    assert_eq!(file(&w, "research")["worktree"], "when-git");
-    assert!(app.active_notice().unwrap().starts_with("The squad works in a git worktree when the ticket's folder is a git repo now"), "{:?}", app.active_notice());
-    assert!(flat(&draw(&mut term, &app)).contains("Worktree When the folder is a git repo"));
-    assert_eq!(squadfile::get(&w.config, "research").unwrap().worktree, squadfile::WorktreeRule::WhenGit);
+    assert!(f.contains("space switch"), "{f}");
+    key(&mut app, KeyCode::Char(' '));
+    assert!(matches!(app.mode, Mode::List), "no list opens");
+    assert_eq!(
+        app.active_notice(),
+        Some("The Research squad works in a git worktree of each of the ticket's folders in git now; other folders are used as they are.")
+    );
+    assert_eq!((file(&w, "research")["use_worktree"].as_bool(), file(&w, "research").get("worktree")), (Some(true), None));
+    assert!(flat(&draw(&mut term, &app)).contains("Use a worktree for git folders Yes"));
+    assert!(squadfile::get(&w.config, "research").unwrap().use_worktree);
+    // Enter does the same as space.
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.active_notice(),
+        Some("The Research squad never uses a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.")
+    );
+    assert_eq!(file(&w, "research")["use_worktree"].as_bool(), Some(false));
     // Back as platoon has them: no file any more.
     go(&mut app, DRow::NeedsFolder);
     key(&mut app, KeyCode::Char(' '));
-    go(&mut app, DRow::Worktree);
-    key(&mut app, KeyCode::Enter);
-    choose(&mut app, "Never");
     assert!(!squadfile::path(&w.config, "research").exists(), "the built-in as it was needs no file");
     assert_eq!(app.squad_list()[1].kind, Kind::BuiltIn);
+}
+
+#[test]
+fn an_older_squad_files_worktree_choice_shows_as_the_switch_and_is_rewritten_when_saved() {
+    let w = World::new("sqt-old-worktree");
+    // Docs, changed before the switch: "when-git" in the old form, and a key platoon doesn't know.
+    let mut v = squadfile::to_value(&squadfile::builtin("docs").unwrap(), Some("docs"));
+    let o = v.as_object_mut().unwrap();
+    o.remove("use_worktree");
+    o.insert("worktree".into(), serde_json::json!("when-git"));
+    o.insert("can_do".into(), serde_json::json!("Writes docs, carefully."));
+    o.insert("colour".into(), serde_json::json!("teal"));
+    std::fs::create_dir_all(squadfile::dir(&w.config)).unwrap();
+    std::fs::write(squadfile::path(&w.config, "docs"), v.to_string()).unwrap();
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Name Docs") && f.contains("Use a worktree for git folders Yes"), "{f}");
+    assert_eq!(file(&w, "docs")["worktree"].as_str(), Some("when-git"), "shown, not rewritten");
+    // Switched off, then saved: the new form only, the unknown key kept.
+    go(&mut app, DRow::Worktree);
+    key(&mut app, KeyCode::Char(' '));
+    let v = file(&w, "docs");
+    assert_eq!((v["use_worktree"].as_bool(), v.get("worktree"), v["colour"].as_str()), (Some(false), None, Some("teal")));
 }

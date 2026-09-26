@@ -838,41 +838,54 @@ fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'stati
     let heading = |s: &str| Line::styled(s.to_string(), Style::new().fg(t.subtext).add_modifier(Modifier::BOLD));
     if let Some(tk) = app.ticket_tokens(x) {
         head.push(Line::raw(""));
-        head.push(Line::from(vec![
-            Span::styled("Tokens used  ", Style::new().fg(t.subtext).add_modifier(Modifier::BOLD)),
-            Span::styled(format!("{} in all", crate::squadwork::short(tk.total.total())), Style::new().fg(t.text)),
-        ]));
+        // "Tokens used  84K sent and written, plus 1.9M read again from Claude's cache", wrapped under itself.
+        const LEAD: &str = "Tokens used  ";
+        let lead_w = LEAD.chars().count();
+        for (i, part) in wrap(&crate::squadwork::screen_total(&tk), w.saturating_sub(lead_w).max(10)).into_iter().enumerate() {
+            let lead = if i == 0 { LEAD.to_string() } else { " ".repeat(lead_w) };
+            head.push(Line::from(vec![
+                Span::styled(lead, Style::new().fg(t.subtext).add_modifier(Modifier::BOLD)),
+                Span::styled(part, Style::new().fg(t.text)),
+            ]));
+        }
         for l in wrap(&crate::squadwork::explained(&tk), w.saturating_sub(2)) {
             head.push(Line::styled(format!("  {l}"), Style::new().fg(t.dim)));
         }
+        // Per agent: sent and written, then what it read again from the cache (cut first when narrow).
         let name_w = tk.agents.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0).min(w.saturating_sub(10));
         for (name, s) in &tk.agents {
-            head.push(Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!("  {:<name_w$}", fit(name, name_w)), Style::new().fg(t.text)),
-                Span::styled(format!("  {:>5}", crate::squadwork::short(s.total())), Style::new().fg(t.subtext)),
-            ]));
+                Span::styled(format!("  {:>5}", crate::squadwork::short(crate::squadwork::sent_and_written(s))), Style::new().fg(t.subtext)),
+            ];
+            if s.cache_read > 0 {
+                spans.push(Span::styled(format!("  + {} from cache", crate::squadwork::short(s.cache_read)), Style::new().fg(t.dim)));
+            }
+            head.push(Line::from(spans));
         }
     }
-    // The members' runs, per leader (with its squad's name when the ticket has had more than one).
+    // The members' runs, per leader (with its squad's name when the ticket has had more than one): the last
+    // `RUNS_SHOWN` of them in all, with a line for how many came before.
     let current = x.leader().map(|l| l.session.clone());
     let several = x.leaders.len() > 1;
-    let mut first = true;
-    for l in &x.leaders {
-        let Some(log) = app.leader_log(&l.session) else { continue };
-        if log.runs.is_empty() {
-            continue;
-        }
-        if first {
-            head.push(Line::raw(""));
-            head.push(heading("What the squad has done"));
-            first = false;
-        }
-        if several {
-            head.push(Line::styled(format!("  {} squad", app.squad_name(&l.squad)), Style::new().fg(t.subtext)));
-        }
+    let logs: Vec<_> = x.leaders.iter().filter_map(|l| app.leader_log(&l.session).filter(|log| !log.runs.is_empty()).map(|log| (l, log))).collect();
+    let (mut skip, earlier) = crate::squadwork::earlier(logs.iter().map(|(_, log)| log.runs.len()).sum());
+    if !logs.is_empty() {
+        head.push(Line::raw(""));
+        head.push(heading("What the squad has done"));
+    }
+    if let Some(e) = earlier {
+        head.push(Line::styled(format!("  {e}"), Style::new().fg(t.dim)));
+    }
+    for (l, log) in logs {
         // Only the current leader, while it runs, has members at work; an earlier one's are over.
         let running = current.as_deref() == Some(l.session.as_str()) && x.queued.is_none() && app.leader_session_running(&l.session);
-        for r in &log.runs {
+        let hidden = skip.min(log.runs.len());
+        skip -= hidden;
+        if hidden < log.runs.len() && several {
+            head.push(Line::styled(format!("  {} squad", app.squad_name(&l.squad)), Style::new().fg(t.subtext)));
+        }
+        for r in &log.runs[hidden..] {
             let (st, line) = crate::squadwork::run_line(r, running);
             let color = match st {
                 crate::squadwork::RunState::Finished => t.text,

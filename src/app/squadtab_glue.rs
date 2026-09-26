@@ -8,7 +8,7 @@
 use super::*;
 use crate::ai::{AiError, Reply, Request};
 use crate::instructions;
-use crate::squadfile::{self, Back, Kind, Listed, Squad, Step as WStep, WorktreeRule};
+use crate::squadfile::{self, Back, Kind, Listed, Squad, Step as WStep};
 use std::sync::mpsc::TryRecvError;
 
 /// How long drafting a squad may take before it is given up on.
@@ -28,7 +28,7 @@ pub enum DRow {
     CanDo,
     /// A ticket must have a folder for it (a switch).
     NeedsFolder,
-    /// Whether it works in a git worktree (always, when the folder is a git repo, never).
+    /// "Use a worktree for git folders" (a switch).
     Worktree,
     LeaderModel,
     LeaderPrompt,
@@ -94,8 +94,6 @@ pub enum TextFor {
 /// What the small list open over the tab is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceFor {
-    /// Whether the squad works in a git worktree.
-    Worktree,
     LeaderModel,
     MemberModel(usize),
     /// Who does step `i`.
@@ -461,11 +459,7 @@ impl App {
         match row {
             DRow::Name => self.open_squad_name(SquadName::Name, &s.name),
             DRow::CanDo => self.open_squad_text(TextFor::CanDo, &s.can_do, squadfile::CAN_DO_MAX),
-            DRow::NeedsFolder => self.squad_toggle(),
-            DRow::Worktree => {
-                let options = WorktreeRule::ALL.iter().map(|r| (r.label().to_string(), r.id().to_string())).collect();
-                self.open_choice(ChoiceFor::Worktree, "Does the squad work in a git worktree of the ticket's folder", options, s.worktree.id());
-            }
+            DRow::NeedsFolder | DRow::Worktree => self.squad_toggle(),
             DRow::LeaderModel => self.open_choice(ChoiceFor::LeaderModel, "Model for the leader", model_options(), &s.leader.model),
             DRow::MemberModel(i) => {
                 let (name, model) = (s.members[i].name.clone(), s.members[i].model.clone());
@@ -491,6 +485,19 @@ impl App {
                 format!("The {} squad needs a folder now: a ticket without one can't be handed to it.", s.name)
             } else {
                 format!("The {} squad takes tickets without a folder now; it works in the ticket's own work folder then.", s.name)
+            };
+            if self.commit_squad(s) {
+                self.notify(said);
+            }
+            return;
+        }
+        if row == DRow::Worktree {
+            let Some(mut s) = self.squad_to_change() else { return };
+            s.use_worktree = !s.use_worktree;
+            let said = if s.use_worktree {
+                format!("The {} squad works in a git worktree of each of the ticket's folders in git now; other folders are used as they are.", s.name)
+            } else {
+                format!("The {} squad never uses a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.", s.name)
             };
             if self.commit_squad(s) {
                 self.notify(said);
@@ -658,18 +665,6 @@ impl App {
         }
         let Some(mut s) = self.squad_to_change() else { return };
         let said = match purpose {
-            ChoiceFor::Worktree => {
-                let Some(rule) = WorktreeRule::from_id(&value) else { return };
-                if s.worktree == rule {
-                    return;
-                }
-                s.worktree = rule;
-                match rule {
-                    WorktreeRule::Always => "The squad works in a git worktree of each of the ticket's folders in git now; other folders as they are.".to_string(),
-                    WorktreeRule::WhenGit => "The squad works in a git worktree when the ticket's folder is a git repo now, and in the folder itself when it isn't.".to_string(),
-                    WorktreeRule::Never => "The squad never works in a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.".to_string(),
-                }
-            }
             ChoiceFor::LeaderModel => {
                 s.leader.model = value;
                 format!("The leader runs on {label} now.")

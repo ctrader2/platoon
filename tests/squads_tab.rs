@@ -64,7 +64,7 @@ read line
 printf '%s\n' "$line" >> "$f"
 "#;
 
-const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.","needs_folder":true,"worktree":"always",
+const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.","needs_folder":true,"use_worktree":true,
  "leader":{"model":"sonnet","guidance":"Lead calmly and ask when unsure."},
  "members":[
   {"name":"planner","model":"opus","can_change_files":false,"can_run_commands":true,"can_use_web":false,"guidance":"Plan the change."},

@@ -531,7 +531,7 @@ impl App {
             let says = format!("The {} squad needs a folder to work in, and #{number} has none.", squad.name);
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &says, says.clone());
         }
-        if !squad.worktree.makes_worktrees() || t.folders.is_empty() {
+        if !squad.use_worktree || t.folders.is_empty() {
             return self.after_worktrees(project, number, squad, Ok(Vec::new()));
         }
         let git = self.git_program.clone();
@@ -563,7 +563,7 @@ impl App {
         let place = match self.ticket_on_disk(project, number) {
             Some(mut t) => {
                 t.worktrees = worktrees.clone();
-                Place::of(squad.worktree, &t)
+                Place::of(squad.use_worktree, &t)
             }
             None => return,
         };
@@ -700,7 +700,7 @@ impl App {
                 .ok_or_else(|| "what it was started with can't be read any more".to_string());
         }
         let squad = crate::squadfile::get(&self.config, &leader.squad).ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
-        Ok(Launch::of(&squad, leader.names, Place::of(squad.worktree, t)))
+        Ok(Launch::of(&squad, leader.names, Place::of(squad.use_worktree, t)))
     }
 
     /// Enter on a ticket that has a leader: its session beside it, running or continued.

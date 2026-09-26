@@ -53,19 +53,45 @@ pub fn short(n: u64) -> String {
     }
 }
 
-/// The short total the Tickets pane shows on a ticket's row: "1.2M tokens".
-pub fn pane_total(t: &TicketTokens) -> String {
-    format!("{} tokens", short(t.total.total()))
+/// What the short totals count: tokens sent to Claude and written by it. Cache reads (the conversation so far,
+/// read back each turn) are left out: they are cheap and would make every total look huge. The ticket screen gives
+/// them on their own.
+pub fn sent_and_written(s: &Spent) -> u64 {
+    s.input + s.output
 }
 
-/// What the number counts, in plain words, with its three parts.
+/// The short total the Tickets pane shows on a ticket's row: "84K tokens" (sent and written, no cache reads).
+pub fn pane_total(t: &TicketTokens) -> String {
+    format!("{} tokens", short(sent_and_written(&t.total)))
+}
+
+/// The ticket screen's total: the pane's number, said as what it is, then the cache reads beside it:
+/// "84K sent and written, plus 1.9M read again from Claude's cache".
+pub fn screen_total(t: &TicketTokens) -> String {
+    let main = format!("{} sent and written", short(sent_and_written(&t.total)));
+    if t.total.cache_read == 0 {
+        return main;
+    }
+    format!("{main}, plus {} read again from Claude's cache", short(t.total.cache_read))
+}
+
+/// What the numbers count, in plain words, with their parts.
 pub fn explained(t: &TicketTokens) -> String {
     format!(
-        "{} sent to Claude, {} written by Claude and {} read again from Claude's cache (the conversation so far, sent again each turn). Each answer counted once; the members' own work included.",
+        "{} sent to Claude and {} written by Claude: the number the Tickets list shows. Read again from the cache is the \
+         conversation so far, sent again each turn, counted apart. Each answer counted once; the members' own work included.",
         short(t.total.input),
         short(t.total.output),
-        short(t.total.cache_read)
     )
+}
+
+/// The ticket screen shows this many of the members' latest runs; the ones before are summed up in a line.
+pub const RUNS_SHOWN: usize = 8;
+
+/// Of `total` runs, how many earlier ones are left out, and the line that says so ("and 4 earlier").
+pub fn earlier(total: usize) -> (usize, Option<String>) {
+    let skip = total.saturating_sub(RUNS_SHOWN);
+    (skip, (skip > 0).then(|| format!("and {skip} earlier")))
 }
 
 /// How a member's run stands.
@@ -171,12 +197,25 @@ mod tests {
         for (n, want) in cases {
             assert_eq!(short(n), want, "{n}");
         }
-        let t = TicketTokens { total: spent(40_000, 12_000, 1_150_000), agents: vec![] };
-        assert_eq!(pane_total(&t), "1.2M tokens");
+        let t = TicketTokens { total: spent(40_000, 44_000, 1_900_000), agents: vec![] };
+        // The pane's number leaves the cache reads out; the screen says the same number, then the cache reads apart.
+        assert_eq!(pane_total(&t), "84K tokens");
+        assert_eq!(screen_total(&t), "84K sent and written, plus 1.9M read again from Claude's cache");
         assert_eq!(
             explained(&t),
-            "40K sent to Claude, 12K written by Claude and 1.2M read again from Claude's cache (the conversation so far, sent again each turn). Each answer counted once; the members' own work included."
+            "40K sent to Claude and 44K written by Claude: the number the Tickets list shows. Read again from the cache is the conversation so far, sent again each turn, counted apart. Each answer counted once; the members' own work included."
         );
+        // No cache reads: nothing to add.
+        assert_eq!(screen_total(&TicketTokens { total: spent(900, 100, 0), agents: vec![] }), "1K sent and written");
+        assert_eq!(sent_and_written(&spent(1, 2, 1000)), 3);
+    }
+
+    #[test]
+    fn only_the_last_eight_runs_are_shown() {
+        assert_eq!(earlier(0), (0, None));
+        assert_eq!(earlier(8), (0, None));
+        assert_eq!(earlier(9), (1, Some("and 1 earlier".into())));
+        assert_eq!(earlier(12), (4, Some("and 4 earlier".into())));
     }
 
     #[test]

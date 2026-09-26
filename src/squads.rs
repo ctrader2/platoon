@@ -29,7 +29,7 @@ use std::{
 
 // ---- names and tools ----------------------------------------------------------------------------------------------
 
-pub use crate::squadfile::{Squad, WorktreeRule, LEADER_ROLE};
+pub use crate::squadfile::{Squad, LEADER_ROLE};
 
 /// The name an agent of squad `id` has in the session (`--agents`, `--agent`, and what Claude Code shows in its lines
 /// and status bar): `coding-leader`, `coding-planner`, ... A leader started before the names carried the squad
@@ -121,10 +121,11 @@ impl Place {
     #[cfg(test)]
     pub const WORKTREE: Place = Place::Folders { worktrees: true, as_is: false };
 
-    /// Where a squad with this worktree rule works on `t` (with the worktrees made for it on it): a squad that
-    /// never uses a worktree, and any squad given a ticket without a folder, works in the ticket's work folder.
-    pub fn of(rule: WorktreeRule, t: &Ticket) -> Place {
-        if rule == WorktreeRule::Never || t.folders.is_empty() {
+    /// Where a squad works on `t` (with the worktrees made for it on it), given its "Use a worktree for git
+    /// folders" switch: a squad without it, and any squad given a ticket without a folder, works in the ticket's work
+    /// folder.
+    pub fn of(use_worktree: bool, t: &Ticket) -> Place {
+        if !use_worktree || t.folders.is_empty() {
             return Place::WorkFolder { reads: !t.folders.is_empty() };
         }
         let has = |f: &String| t.worktrees.iter().any(|w| w.folder == *f);
@@ -1647,7 +1648,7 @@ mod tests {
     #[test]
     fn the_first_message_says_the_ticket_how_far_goes_by_its_text_and_where_to_work() {
         let t = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
-        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n", Place::of(WorktreeRule::Always, &t), "/c/tickets/07-work");
+        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n", Place::of(true, &t), "/c/tickets/07-work");
         assert!(m.starts_with("Ticket #7: Add a basket page\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket.\n\nHow far: a local commit.\n\n## How far to take it\n\n"), "{m}");
         assert!(
             m.contains("\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes: leave the change where you made it, uncommitted. No commit, no push.\n\n## Where to work"),
@@ -1674,12 +1675,12 @@ mod tests {
         let plain = ticket(&["/w/notes"], &[]);
         let both = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
         let none = ticket(&[], &[]);
-        assert_eq!(Place::of(WorktreeRule::Always, &git), Place::WORKTREE);
-        assert_eq!(Place::of(WorktreeRule::WhenGit, &plain), Place::Folders { worktrees: false, as_is: true });
-        assert_eq!(Place::of(WorktreeRule::Always, &both), Place::Folders { worktrees: true, as_is: true });
-        assert_eq!(Place::of(WorktreeRule::Never, &git), Place::WorkFolder { reads: true }, "never: the work folder, the folders to read");
-        assert_eq!(Place::of(WorktreeRule::Never, &none), Place::WorkFolder { reads: false });
-        assert_eq!(Place::of(WorktreeRule::Always, &none), Place::WorkFolder { reads: false }, "a ticket with no folder works in its work folder, whatever the squad");
+        assert_eq!(Place::of(true, &git), Place::WORKTREE);
+        assert_eq!(Place::of(true, &plain), Place::Folders { worktrees: false, as_is: true });
+        assert_eq!(Place::of(true, &both), Place::Folders { worktrees: true, as_is: true });
+        assert_eq!(Place::of(false, &git), Place::WorkFolder { reads: true }, "never: the work folder, the folders to read");
+        assert_eq!(Place::of(false, &none), Place::WorkFolder { reads: false });
+        assert_eq!(Place::of(true, &none), Place::WorkFolder { reads: false }, "a ticket with no folder works in its work folder, whatever the squad");
         // Where the session starts and what it is given with --add-dir.
         let work = "/c/projects/p/tickets/07-work";
         assert_eq!(start_dirs(&git, false, work), Some(("/w/shop-worktrees/ticket-7".into(), vec![work.to_string()])));
@@ -1702,7 +1703,7 @@ mod tests {
         assert!(m.contains("leave the change in the worktree, uncommitted") && m.contains("the session starts here)\n- /c/tickets/07-work (the ticket's private work folder"), "{m}");
         // The folder as it is (Docs on a folder outside git).
         let plain = ticket(&["/w/notes"], &[]);
-        let place = Place::of(WorktreeRule::WhenGit, &plain);
+        let place = Place::of(true, &plain);
         let fixed = leader_fixed(place);
         assert!(fixed.contains("stop at local changes: the change stays in the ticket's folder, uncommitted. No commit, no push."), "{fixed}");
         assert!(!fixed.contains("worktree"), "no worktree to speak of: {fixed}");
@@ -1710,7 +1711,7 @@ mod tests {
         assert!(m.contains("leave the change in the ticket's folder, uncommitted") && m.contains("- /w/notes (used as it is, not a git worktree; the session starts here)\n"), "{m}");
         assert!(!m.contains("in the worktree"), "{m}");
         // The work folder, with the ticket's folders to read (Research with a folder).
-        let place = Place::of(WorktreeRule::Never, &plain);
+        let place = Place::of(false, &plain);
         let fixed = leader_fixed(place);
         assert!(fixed.contains("- You and your members work in the ticket's work folder, the folder this session starts in. Anything the squad makes (a report, notes, drafts) goes there, unless the ticket says to put it somewhere else."), "{fixed}");
         assert!(fixed.contains("stop once the result is written: nothing is committed, pushed or sent anywhere."), "{fixed}");
@@ -1721,7 +1722,7 @@ mod tests {
         assert!(m.contains("stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere.") && !m.contains("worktree"), "{m}");
         // The work folder and no folder at all (a folderless Research or Summarize ticket).
         let none = ticket(&[], &[]);
-        let place = Place::of(WorktreeRule::Never, &none);
+        let place = Place::of(false, &none);
         let fixed = leader_fixed(place);
         assert!(fixed.contains("work in the ticket's work folder") && !fixed.contains("for reading only"), "nothing to read: {fixed}");
         let m = first_message(&none, "Web", body, place, work);

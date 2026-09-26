@@ -907,25 +907,28 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     }
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 44, 130);
     lab.open_tickets(&mut t);
-    // The pane: the short total on the ticket's row (1,215,000 in all).
-    t.wait_for("1.2M tokens");
+    // The pane: the short total on the ticket's row: sent and written only (915,000; with the 300,000 read again
+    // from the cache it would be 1.2M).
+    t.wait_for("915K tokens");
     let screen = t.stable();
     let row = screen.lines().find(|l| l.contains("#1 Basket")).unwrap();
-    assert!(row.contains("Waiting on you") && row.contains("1.2M tokens"), "{screen}");
+    assert!(row.contains("Waiting on you") && row.contains("915K tokens") && !row.contains("1.2M"), "{screen}");
     // Its screen: the total, what it counts, a line per agent, and the members' runs in order. Its session isn't
     // running, so the reviewer's run that never came back says it didn't finish, and nothing is "Now".
     t.send(b"\r");
-    t.wait_for_all(&["Tokens used", "1.2M in all", "What the squad has done", "[x] coding-planner · Plan the basket page", "[x] coding-builder · Build the basket page", "[-] coding-reviewer"]);
+    t.wait_for_all(&["Tokens used", "915K sent and written", "What the squad has done", "[x] coding-planner · Plan the basket page", "[x] coding-builder · Build the basket page", "[-] coding-reviewer"]);
     let screen = t.stable();
     // The ticket's side only (the session's place is on the right).
     let left: Vec<String> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
     let at = |needle: &str| left.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle}:\n{screen}"));
-    for (agent, n) in [("coding-leader", "325K"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")] {
+    for (agent, n) in [("coding-leader", "25K + 300K from cache"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")] {
         assert_eq!(left[at(&format!("{agent} "))], format!("{agent} {n}"), "{screen}");
     }
     assert!(at("coding-leader ") < at("coding-planner ") && at("coding-builder ") < at("coding-reviewer "), "in the order they worked:\n{screen}");
     let said = left[at("Tokens used")..at("coding-leader ")].join(" ");
-    assert!(said.contains("910K sent to Claude, 5K written by Claude and 300K read again from Claude's cache"), "{said}");
+    // The same number as the pane, said as what it is, with the cache reads beside it and the parts explained.
+    assert!(said.starts_with("Tokens used 915K sent and written, plus 300K read again from Claude's cache"), "{said}");
+    assert!(said.contains("910K sent to Claude and 5K written by Claude: the number the Tickets list shows."), "{said}");
     assert!(at("[x] coding-planner") < at("[x] coding-builder") && at("[x] coding-builder") < at("[-] coding-reviewer"), "{screen}");
     assert!(left[at("[-] coding-reviewer")..].join(" ").contains("Review the basket page (didn't finish)"), "{screen}");
     assert!(!screen.contains("Now:"), "{screen}");

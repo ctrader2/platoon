@@ -35,7 +35,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
         }
         SqFocus::Detail => {
             match sqt.drow() {
-                Some(DRow::NeedsFolder | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_)) => out.push(("space", "switch", None)),
+                Some(DRow::NeedsFolder | DRow::Worktree | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_)) => out.push(("space", "switch", None)),
                 Some(DRow::LeaderPrompt | DRow::MemberPrompt(_)) => out.push(("enter", "edit", None)),
                 Some(DRow::AddMember | DRow::AddStep) => out.push(("enter", "add", None)),
                 Some(_) => out.push(("enter", "change", None)),
@@ -191,7 +191,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
             DRow::Name => ("Name".into(), s.name.clone()),
             DRow::CanDo => ("What it can do".into(), s.can_do.clone()),
             DRow::NeedsFolder => ("Needs a folder".into(), yes_no(s.needs_folder)),
-            DRow::Worktree => ("Worktree".into(), s.worktree.label().to_string()),
+            DRow::Worktree => ("Use a worktree for git folders".into(), yes_no(s.use_worktree)),
             DRow::LeaderModel => ("Model".into(), squadfile::model_label(&s.leader.model).to_string()),
             DRow::LeaderPrompt => ("System prompt".into(), first_line(&s.leader.guidance)),
             DRow::MemberName(i) => ("Name".into(), s.members[i].name.clone()),
@@ -210,8 +210,8 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         let marker = Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent));
         let indent = if matches!(row.section(), 2) && !matches!(row, DRow::AddMember) { "  " } else { "" };
         let value_style = match row {
-            DRow::NeedsFolder | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_) if value == "Yes" => base.fg(t.ok),
-            DRow::NeedsFolder | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_) => base.fg(t.dim),
+            DRow::NeedsFolder | DRow::Worktree | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_) if value == "Yes" => base.fg(t.ok),
+            DRow::NeedsFolder | DRow::Worktree | DRow::MemberFiles(_) | DRow::MemberCommands(_) | DRow::MemberWeb(_) => base.fg(t.dim),
             DRow::LeaderPrompt | DRow::MemberPrompt(_) => base.fg(t.subtext),
             _ => base.fg(t.text),
         };
@@ -283,7 +283,6 @@ pub(super) fn draw_squad_choice(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 76), h);
     f.render_widget(Clear, r);
     let title = match c.purpose {
-        ChoiceFor::Worktree => "worktree",
         ChoiceFor::LeaderModel | ChoiceFor::MemberModel(_) => "model",
         ChoiceFor::StepMember(_) | ChoiceFor::NewStepMember => "member",
         ChoiceFor::BackTo(_) | ChoiceFor::BackTimes(..) => "send back",
