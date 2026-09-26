@@ -10,6 +10,7 @@
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::index::Scanner;
+use crate::instructions;
 use crate::ledger::Ledger;
 use crate::prompts::{FilePrompts, Store};
 use crate::settings::{self, thousands, Settings};
@@ -213,7 +214,7 @@ fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Se
             return finish(out, ScanOutcome::Stopped { named }, &format!("Stopping: {} platoon will carry on later while it is open.", r.plain()));
         }
         let digests: Vec<Digest> = batch.iter().map(|(_, d)| d.clone()).collect();
-        let mut req = Request::new("names", smart::names_system(), smart::names_prompt(&digests));
+        let mut req = Request::new("names", smart::names_system_with(&instructions::guidance(env.config, instructions::NAMES)), smart::names_prompt(&digests));
         let cancel = ai::Cancel::new();
         req.cancel = cancel.clone();
         let (tx, rx) = mpsc::channel();
@@ -334,6 +335,19 @@ mod tests {
         for jargon in ["json", "stdin", "batch", "index", "api"] {
             assert!(!lower.contains(jargon), "{jargon}: {shown}");
         }
+    }
+
+    #[test]
+    fn the_first_pass_sends_the_users_own_guidance_for_naming() {
+        let w = World::new("sc-own");
+        fill(&w, 2, 0);
+        on(&w, |_| {});
+        fs::create_dir_all(w.config.join("prompts")).unwrap();
+        fs::write(w.config.join("prompts/names.md"), "Name them after the file they are about.").unwrap();
+        let fake = AiFake::new("sc-own");
+        let (outcome, _) = run(&w, &fake, "\n", true, &never);
+        assert_eq!(outcome, ScanOutcome::Done { named: 2 });
+        assert!(fake.has_arg(1, &crate::instructions::compose("Name them after the file they are about.", smart::NAMES_FIXED)), "{:?}", fake.argv(1));
     }
 
     #[test]

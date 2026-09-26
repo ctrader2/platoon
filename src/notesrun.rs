@@ -24,6 +24,7 @@ use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::claude;
 use crate::describe;
+use crate::instructions;
 use crate::notes;
 use crate::notesupdate::{self, Doc, Material, SessionMaterial, State};
 use crate::projects::Projects;
@@ -501,7 +502,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         return Round::NothingNew;
     }
     let text = notesupdate::prompt(&Doc::parse(&before), &state, &material);
-    let mut req = Request::new(FEATURE, notesupdate::system(), text);
+    let mut req = Request::new(FEATURE, notesupdate::system_with(&instructions::guidance(&env.config, instructions::NOTES)), text);
     req.timeout = CALL_TIMEOUT;
 
     let running = running_path(&env.cache, id);
@@ -592,7 +593,7 @@ pub fn describe_once(env: &Env, id: &str) -> Described {
     if material.is_empty() {
         return Described::Nothing;
     }
-    let mut req = Request::new(describe::FEATURE, describe::system(), describe::prompt(&material));
+    let mut req = Request::new(describe::FEATURE, describe::system_with(&instructions::guidance(&env.config, instructions::DESCRIPTION)), describe::prompt(&material));
     req.timeout = DESCRIBE_TIMEOUT;
     let reply = match env.runner().run(&settings, &req) {
         Ok(r) => r.text,
@@ -1156,6 +1157,27 @@ mod tests {
     }
 
     #[test]
+    fn the_update_and_the_description_send_the_users_own_guidance_then_the_fixed_part() {
+        let r = Rig::new("own");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        r.fake.reply(1, r#"{"sections":[{"heading":"Status","body":"The basket page is in."}]}"#);
+        r.fake.reply(2, r#"{"description":"A sock shop with a basket."}"#);
+        fs::create_dir_all(r.env.config.join("prompts")).unwrap();
+        fs::write(r.env.config.join("prompts/project-notes.md"), "Keep every section under ten bullets.").unwrap();
+        fs::write(r.env.config.join("prompts/project-description.md"), "Start with a verb.").unwrap();
+        mark_due(&r.env.cache, &id, now_ms()).unwrap();
+        helper_loop(&r.env, &id, 0);
+        assert_eq!(r.fake.calls(), 2);
+        assert!(r.fake.has_arg(1, &notesupdate::system_with("Keep every section under ten bullets.")), "{:?}", r.fake.argv(1));
+        assert!(!r.fake.call_text_has(1, "How to write (Markdown)"), "the built-in guidance is not sent as well");
+        assert!(r.fake.has_arg(2, &describe::system_with("Start with a verb.")), "{:?}", r.fake.argv(2));
+        // The replies are read exactly as with the built-in text: the rules are platoon's.
+        assert!(r.notes(&id).contains("The basket page is in."));
+        assert_eq!(Projects::open(&r.env.config).get(&id).unwrap().description, "A sock shop with a basket.");
+    }
+
+    #[test]
     fn the_helper_waits_for_quiet_then_runs_once_and_stops() {
         let r = Rig::new("loop");
         let id = r.project(NOTES);
@@ -1166,7 +1188,7 @@ mod tests {
         helper_loop(&r.env, &id, 0);
         // One update, then the description that follows it, and then it stopped.
         assert_eq!(r.fake.calls(), 2, "the update and the description that follows it");
-        assert!(r.fake.stdin(2).contains("Write one short line"), "the second call is the description: {}", r.fake.stdin(2));
+        assert!(r.fake.stdin(2).contains("Write the line for this project."), "the second call is the description: {}", r.fake.stdin(2));
         assert!(r.notes(&id).contains("The basket page is in."));
         // The stand-in answered the description call with the update's own JSON, which is not a description: so
         // nothing was written for it.

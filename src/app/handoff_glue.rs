@@ -14,6 +14,7 @@ use crate::ai::{AiError, Reply, Request};
 use crate::claude::Spent;
 use crate::gitfacts::{self, GitFacts};
 use crate::handoff::{self, Brief, Facts};
+use crate::instructions;
 use crate::textbox;
 use std::sync::mpsc::{channel, TryRecvError};
 
@@ -294,7 +295,7 @@ impl App {
         facts.notes = notes.is_file().then(|| crate::dirs::tilde(&notes.to_string_lossy(), &self.home));
         let material = self.handoff_material(&session, &session_name, &cwd, &project.name);
         let transcript = (self.reader.root().to_path_buf(), session.clone());
-        let mut req = Request::new(handoff::FEATURE, handoff::system(), String::new());
+        let mut req = Request::new(handoff::FEATURE, handoff::system_with(&instructions::guidance(&self.config, instructions::HANDOFF)), String::new());
         req.user_initiated = true;
         req.timeout = HANDOFF_TIMEOUT;
         req.cancel = self.switchboard.token(handoff::FEATURE);

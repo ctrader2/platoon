@@ -228,6 +228,8 @@ pub enum Confirm {
     ArchiveProject { id: String, name: String, running: usize, busy: bool, outside: bool },
     /// Deleting a project always asks: its notes go too.
     DeleteProject { id: String, name: String, sessions: usize },
+    /// Putting the built-in instructions of an AI action back (`r` in the settings) replaces the user's own.
+    ResetInstructions { id: &'static str },
 }
 
 #[derive(Clone)]
@@ -633,8 +635,8 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
-            epick: EditorPick { project: String::new(), options: Vec::new(), selected: 0, starred: String::new() },
-            changes: Changes { lines: Vec::new(), top: Cell::new(0) },
+            epick: EditorPick { project: String::new(), instructions: None, options: Vec::new(), selected: 0, starred: String::new() },
+            changes: Changes { lines: Vec::new(), top: Cell::new(0), instructions: None },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
             git_program: "git".into(),
@@ -1190,6 +1192,10 @@ impl App {
                 self.mode = Mode::List;
                 self.archive_project(&id);
             }
+            (Action::Confirm, Mode::Confirm(Confirm::ResetInstructions { id })) => self.reset_instructions(id),
+            (Action::Cancel, Mode::Confirm(Confirm::ResetInstructions { .. })) => self.mode = Mode::Settings,
+            (Action::Cancel, Mode::PickEditor) if self.epick.instructions.is_some() => self.mode = Mode::Settings,
+            (Action::Cancel, Mode::Changes) if self.changes.instructions.is_some() => self.mode = Mode::Settings,
             (Action::Confirm, Mode::Confirm(Confirm::DeleteProject { id, .. })) => {
                 self.mode = Mode::List;
                 self.delete_project(&id);
@@ -1585,6 +1591,13 @@ impl App {
     fn change_setting(&mut self, i: usize, step: Step) {
         let Some(item) = self.items().get(i) else { return };
         self.notice = None;
+        if let Kind::Instructions(id) = item.kind {
+            // Enter, space and a click on the value open the editor list; the arrows have nothing to step through.
+            if step == Step::Cycle {
+                self.edit_instructions(id);
+            }
+            return;
+        }
         // Start from the file as it is now, in case it was edited since the screen last looked.
         self.refresh_settings();
         if item.kind == Kind::Theme {
@@ -2071,6 +2084,16 @@ impl App {
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
                 KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
                 KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
+                KeyCode::Char('r') => {
+                    if let Some(Kind::Instructions(id)) = self.items().get(self.setting).map(|i| i.kind) {
+                        self.ask_reset_instructions(id);
+                    }
+                }
+                KeyCode::Char('c') if !ctrl => {
+                    if let Some(Kind::Instructions(id)) = self.items().get(self.setting).map(|i| i.kind) {
+                        self.compare_instructions(id);
+                    }
+                }
                 _ => {}
             },
             Mode::Themes => match key.code {

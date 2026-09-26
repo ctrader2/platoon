@@ -148,15 +148,30 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     match &app.mode {
         Mode::Picker => draw_picker(f, app, inner),
-        Mode::Confirm(c) => draw_confirm(f, app, c, inner),
+        Mode::Confirm(c) => {
+            if matches!(c, Confirm::ResetInstructions { .. }) {
+                draw_settings_modal(f, app, inner);
+            }
+            draw_confirm(f, app, c, inner)
+        }
         Mode::Settings => draw_settings_modal(f, app, inner),
         Mode::Search => draw_search(f, app, inner),
         Mode::Rename => draw_rename(f, app, inner),
         Mode::ProjectName => draw_name_box(f, app, inner),
         Mode::Assign => draw_assign(f, app, inner),
         Mode::Look => draw_look(f, app, inner),
-        Mode::PickEditor => draw_editor_pick(f, app, inner),
-        Mode::Changes => draw_changes(f, app, inner),
+        Mode::PickEditor => {
+            if app.epick.instructions.is_some() {
+                draw_settings_modal(f, app, inner);
+            }
+            draw_editor_pick(f, app, inner)
+        }
+        Mode::Changes => {
+            if app.changes.instructions.is_some() {
+                draw_settings_modal(f, app, inner);
+            }
+            draw_changes(f, app, inner)
+        }
         Mode::Handoff => draw_handoff(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
@@ -1143,11 +1158,21 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let mut notes = settings_notes(app, app.settings_tab, w);
     let label = "Settings file: ";
     let file = tilde(&store.path().to_string_lossy(), &app.home);
-    let hints = fit_hints(
-        vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
-        w,
-        &["move", "next choice"],
-    );
+    // On an instructions entry the arrows have nothing to change: its own keys take their place.
+    let on_instructions = matches!(items.get(app.setting).map(|i| i.kind), Some(Kind::Instructions(_)));
+    let hints = if on_instructions {
+        fit_hints(
+            vec![("tab", "tabs", None), ("↑↓", "move", None), ("enter", "edit", None), ("c", "compare", None), ("r", "built-in text", None), ("esc", "back", Some(Action::Cancel))],
+            w,
+            &["move", "tabs"],
+        )
+    } else {
+        fit_hints(
+            vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
+            w,
+            &["move", "next choice"],
+        )
+    };
 
     // The file and the key hints sit at the bottom, always. The entries get what is left after the notes.
     let hints_y = area.bottom().saturating_sub(1).max(area.y);
@@ -1331,6 +1356,12 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
             }
+            // Built-in or changed, with no arrows: enter (or a click on it) opens the editor list.
+            Kind::Instructions(id) => {
+                let status = app.instructions_status(id);
+                let vw = crate::instructions::Status::BuiltInUpdated.label().chars().count();
+                (status.label().to_string(), vw, true, true, status == crate::instructions::Status::BuiltIn)
+            }
             Kind::Theme => {
                 let all = app.themes().all();
                 let at = all.iter().position(|t| t.id == app.theme.id).unwrap_or(0);
@@ -1338,10 +1369,17 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 (fit_end(&app.theme.name, vw), vw, at == 0, at + 1 >= all.len(), false)
             }
         };
-        let ctrl_w = 2 + vw + 2;
-        let cx = (row.right() as usize).saturating_sub(ctrl_w + 1).max(row.x as usize + 2) as u16;
+        let plain = matches!(item.kind, Kind::Instructions(_));
+        let ctrl_w = if plain { 1 + vw + 1 } else { 2 + vw + 2 };
+        // (A value with no arrows ends in a blank of its own, which is the margin, so its last letter lines up with the `›`s.)
+        let cx = (row.right() as usize).saturating_sub(ctrl_w + usize::from(!plain)).max(row.x as usize + 2) as u16;
         let button = |x: u16| Rect::new(x, row.y, 2, 1);
-        let (prev, val, next) = (button(cx), Rect::new(cx + 2, row.y, vw as u16, 1), button(cx + 2 + vw as u16));
+        let (prev, val, next) = if plain {
+            // No buttons: the value alone, clickable, in the same place the others' values are.
+            (Rect::new(cx, row.y, 0, 0), Rect::new(cx + 1, row.y, vw as u16, 1), Rect::new(cx, row.y, 0, 0))
+        } else {
+            (button(cx), Rect::new(cx + 2, row.y, vw as u16, 1), button(cx + 2 + vw as u16))
+        };
         let mut hits = app.hits.borrow_mut();
         // Buttons first: the first region under the pointer wins, and the row covers them.
         hits.push((prev, Hit::SettingStep(i, Step::Prev)));
@@ -1358,11 +1396,20 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         // "Off" reads as switched off: muted, where an active value is bold and colored.
         let value_style = if off { Style::new().fg(t.dim) } else { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) };
         let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
-        let control = Line::from(vec![
-            arrow("‹ ", prev, at_start),
-            Span::styled(format!("{label:^vw$}"), value_style.patch(hot_value)),
-            arrow(" ›", next, at_end),
-        ]);
+        // The built-in text updated under the user's own: said in the warning color, so it is noticed.
+        let value_style = match item.kind {
+            Kind::Instructions(id) if app.instructions_status(id) == crate::instructions::Status::BuiltInUpdated => Style::new().fg(t.warn).add_modifier(Modifier::BOLD),
+            _ => value_style,
+        };
+        let control = if plain {
+            Line::from(vec![Span::styled(" ", Style::new().bg(bg)), Span::styled(format!("{label:>vw$}"), value_style.patch(hot_value)), Span::styled(" ", Style::new().bg(bg))])
+        } else {
+            Line::from(vec![
+                arrow("‹ ", prev, at_start),
+                Span::styled(format!("{label:^vw$}"), value_style.patch(hot_value)),
+                arrow(" ›", next, at_end),
+            ])
+        };
         f.render_widget(Paragraph::new(control), Rect::new(cx, row.y, ctrl_w as u16, 1));
 
         let name_w = (cx as usize).saturating_sub(row.x as usize + 3);
@@ -1979,7 +2026,7 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 62), h);
     f.render_widget(Clear, r);
-    let block = modal_block(t, "edit the notes with");
+    let block = modal_block(t, if pick.instructions.is_some() { "edit the instructions with" } else { "edit the notes with" });
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, list, note, foot] = Layout::vertical([
@@ -2029,23 +2076,31 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(6).max(30), area.height.saturating_sub(2).max(8));
     f.render_widget(Clear, r);
-    let block = modal_block(t, "what changed last");
+    let ours = ch.instructions.is_some();
+    let block = modal_block(t, if ours { "the built-in instructions and yours" } else { "what changed last" });
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, body, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let (was, now) = if ours { ("only in the built-in text    ", "only in yours") } else { ("was there before    ", "is there now") };
     let legend = Line::from(vec![
         Span::styled("- ", Style::new().fg(t.err).add_modifier(Modifier::BOLD)),
-        Span::styled("was there before    ", Style::new().fg(t.subtext)),
+        Span::styled(was, Style::new().fg(t.subtext)),
         Span::styled("+ ", Style::new().fg(t.ok).add_modifier(Modifier::BOLD)),
-        Span::styled("is there now", Style::new().fg(t.subtext)),
+        Span::styled(now, Style::new().fg(t.subtext)),
     ]);
     f.render_widget(Paragraph::new(legend), head);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let rows = body.height as usize;
-    let top = ch.top.get().min(ch.lines.len().saturating_sub(rows));
-    ch.top.set(top);
     let w = body.width as usize;
-    for (n, (mark, line)) in ch.lines.iter().skip(top).take(rows).enumerate() {
+    // Instructions are written in long lines, so they wrap (keeping their indent); a project's notes are cut to fit.
+    let lines: Vec<(crate::notes::Mark, String)> = if ours {
+        ch.lines.iter().flat_map(|(mark, line)| wrap_indented(line, w.saturating_sub(2)).into_iter().map(move |l| (*mark, l))).collect()
+    } else {
+        ch.lines.clone()
+    };
+    let top = ch.top.get().min(lines.len().saturating_sub(rows));
+    ch.top.set(top);
+    for (n, (mark, line)) in lines.iter().skip(top).take(rows).enumerate() {
         let color = match mark {
             crate::notes::Mark::Removed => t.err,
             crate::notes::Mark::Added => t.ok,
@@ -2058,8 +2113,22 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
             Rect::new(body.x, body.y + n as u16, body.width, 1),
         );
     }
-    let hints: [Hint; 3] = [("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    let hints: Vec<Hint> = if ours {
+        vec![("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None)]
+    } else {
+        vec![("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))]
+    };
     draw_footer(f, app, foot, &hints, None);
+}
+
+/// `wrap`, keeping the line's own indent on every row it becomes; an empty line stays one empty row.
+fn wrap_indented(line: &str, width: usize) -> Vec<String> {
+    let indent: String = line.chars().take_while(|c| *c == ' ').collect();
+    let rows = wrap(line.trim_start(), width.saturating_sub(indent.len()).max(10));
+    if rows.is_empty() {
+        return vec![String::new()];
+    }
+    rows.into_iter().map(|r| format!("{indent}{r}")).collect()
 }
 
 /// The hand-off box: the brief Claude wrote, which the user may edit before it becomes the first message of a
@@ -2159,7 +2228,10 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
     }
     let right = match app.active_notice() {
         Some(n) => n.to_string(),
-        None => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
+        None => match edit.instructions {
+            Some(id) => format!("{} · the instructions for {}", edit.name, crate::instructions::action(id).what),
+            None => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
+        },
     };
     let hints: [Hint; 1] = [("ctrl+space", "stop the editor", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
@@ -2309,6 +2381,18 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             ),
             "delete",
         ),
+        Confirm::ResetInstructions { id } => {
+            let a = crate::instructions::action(id);
+            (
+                "put the built-in text back",
+                format!("Use the built-in instructions for {} again?", a.what),
+                format!(
+                    "Your own text stops being used. It is kept as {}.bak in the prompts folder, until the next time you do this.",
+                    crate::instructions::path(std::path::Path::new(""), id).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                ),
+                "put it back",
+            )
+        }
         Confirm::Adopt { pids, name, busy, kind, .. } => {
             let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
             match kind {

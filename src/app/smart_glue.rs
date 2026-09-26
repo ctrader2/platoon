@@ -8,6 +8,7 @@
 
 use super::*;
 use crate::ai::{AiError, Reply, Request, Runner};
+use crate::instructions;
 use crate::smart::{self, Digest, Estimate, FindItem, Misses, Rules};
 use crate::summaries::{Entry as Summary, Summaries};
 use std::collections::HashSet;
@@ -271,7 +272,7 @@ impl App {
             self.smart.retry_at = now + IDLE_RECHECK_SECS;
             return;
         }
-        let system = smart::names_system();
+        let system = smart::names_system_with(&instructions::guidance(&self.config, instructions::NAMES));
         let prompt = smart::names_prompt(&p.digests);
         if p.archived {
             let est = smart::estimate([system.len() + prompt.len()], 1).tokens;
@@ -495,7 +496,7 @@ impl App {
         }
         let settings = self.settings.get();
         let (_, texts) = self.find_texts(&settings, true);
-        let system = smart::find_system(settings.ai_find_results as usize);
+        let system = smart::find_system_with(&instructions::guidance(&self.config, instructions::FIND), settings.ai_find_results as usize);
         let chars = texts.iter().map(String::len).sum::<usize>() + system.len() + self.search.text.len() + 60;
         let estimate = smart::estimate([chars], 1);
         self.search.find.before_confirm = Some(self.search.find.state.clone());
@@ -550,7 +551,7 @@ impl App {
             self.search.find.state = FindState::Failed("There are no conversations to search yet.".into());
             return;
         }
-        let mut req = Request::new("find", smart::find_system(settings.ai_find_results as usize), smart::find_prompt(&query, &texts));
+        let mut req = Request::new("find", smart::find_system_with(&instructions::guidance(&self.config, instructions::FIND), settings.ai_find_results as usize), smart::find_prompt(&query, &texts));
         req.user_initiated = true;
         req.timeout = FIND_TIMEOUT;
         req.cancel = self.switchboard.token("find");

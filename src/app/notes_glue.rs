@@ -8,13 +8,18 @@
 
 use super::*;
 use crate::editors::{self, Editor};
+use crate::instructions;
 use crate::notes;
 use crate::notesrun;
 use crate::notesupdate;
 
-/// A terminal editor running inside platoon's window on a project's notes.
+/// A terminal editor running inside platoon's window on a project's notes, or on the instructions of an AI action.
 pub struct NotesEdit {
     pub project: String,
+    /// Editing these instructions (`instructions::ACTIONS`) rather than a project's notes: `project` is empty.
+    pub instructions: Option<&'static str>,
+    /// The instructions as they were before the editor ran.
+    before: String,
     /// The editor's plain name, for the status line.
     pub name: String,
     /// What the file looked like when the editor started, so platoon can tell whether anything came of it.
@@ -26,6 +31,8 @@ pub struct NotesEdit {
 /// reads the notes again when the editor is done with them, or as soon as the file changes.
 pub struct NotesWindow {
     pub project: String,
+    pub instructions: Option<&'static str>,
+    before: String,
     pub name: String,
     stamp: notes::Stamp,
     child: std::process::Child,
@@ -34,6 +41,8 @@ pub struct NotesWindow {
 /// The list of editors, which `e` opens. The one used last is first and picked, so enter is one keystroke.
 pub struct EditorPick {
     pub project: String,
+    /// Opened from the settings, for these instructions: `project` is empty.
+    pub instructions: Option<&'static str>,
     pub options: Vec<Editor>,
     pub selected: usize,
     /// The id of the editor used last: the one with the star in front of it (empty when none has been used).
@@ -44,6 +53,8 @@ pub struct EditorPick {
 pub struct Changes {
     pub lines: Vec<(notes::Mark, String)>,
     pub top: Cell<usize>,
+    /// The built-in text of these instructions against the user's, opened from the settings.
+    pub instructions: Option<&'static str>,
 }
 
 fn plain(e: &io::Error) -> String {
@@ -55,6 +66,11 @@ impl App {
     #[cfg(test)]
     pub fn set_editors_for_test(&mut self, list: Vec<Editor>) {
         self.editors = list;
+    }
+
+    /// Whether the instructions for `id` are the built-in ones, the user's, or the user's with a newer built-in text.
+    pub fn instructions_status(&self, id: &str) -> instructions::Status {
+        instructions::status(&self.config, id)
     }
 
     /// An editor platoon started is open on some project's notes, so platoon must not write them itself.
@@ -175,8 +191,26 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
+    }
+
+    /// Enter on an instructions entry of the settings: the same list of editors as the notes.
+    pub(super) fn edit_instructions(&mut self, id: &'static str) {
+        if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
+            self.notify(format!("{name} is still open on something else. Close it first."));
+            return;
+        }
+        let last = self.settings.get().notes_editor;
+        let options = editors::in_order(&self.editors, &last);
+        let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
+        self.epick = EditorPick { project: String::new(), instructions: Some(id), options, selected: 0, starred };
+        self.mode = Mode::PickEditor;
+    }
+
+    /// Where esc, or the end of an edit, goes back to: the settings for instructions, else the list.
+    pub(super) fn after_pick_mode(instructions: Option<&'static str>) -> Mode {
+        if instructions.is_some() { Mode::Settings } else { Mode::List }
     }
 
     pub(super) fn move_editor_pick(&mut self, delta: i32) {
@@ -186,14 +220,18 @@ impl App {
 
     /// Enter in the editor list: use that editor, and remember it as the one to offer first next time.
     pub(super) fn take_editor_pick(&mut self) {
+        let back = Self::after_pick_mode(self.epick.instructions);
         let Some(e) = self.epick.options.get(self.epick.selected).cloned() else {
-            self.mode = Mode::List;
+            self.mode = back;
             return;
         };
         let project = self.epick.project.clone();
-        self.mode = Mode::List;
+        self.mode = back;
         self.remember_editor(&e.id);
-        self.run_editor(&project, &e);
+        match self.epick.instructions {
+            Some(id) => self.run_instructions_editor(id, &e),
+            None => self.run_editor(&project, &e),
+        }
     }
 
     /// Keep this editor as the last one used (`notes_editor` in the settings file). A save that fails is said
@@ -234,7 +272,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, before: String::new(), name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -247,13 +285,100 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, before: String::new(), name: e.name.clone(), stamp, child });
                 self.notify(format!("The notes opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
                 notesrun::clear_marker(&notesrun::editing_path(&self.cache, project));
                 self.notify(format!("Couldn't open the notes in {}: {}", e.name, plain(&err)));
             }
+        }
+    }
+
+    /// Open the user's own instructions for `id` in `e`, starting the file from the built-in text if there is none.
+    fn run_instructions_editor(&mut self, id: &'static str, e: &Editor) {
+        let (path, before) = match instructions::prepare_edit(&self.config, id) {
+            Ok(v) => v,
+            Err(err) => {
+                self.notify(format!("Couldn't start the instructions file: {}", plain(&err)));
+                return;
+            }
+        };
+        let stamp = instructions::stamp(&self.config, id);
+        let what = instructions::action(id).what;
+        if e.terminal {
+            let (rows, cols) = self.pty_size();
+            match editors::Running::spawn(e, &path, rows, cols) {
+                Ok(run) => {
+                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), before, name: e.name.clone(), stamp, run });
+                    self.mode = Mode::EditNotes;
+                    self.clear_selection();
+                }
+                Err(err) => {
+                    instructions::after_edit(&self.config, id, &before);
+                    self.notify(format!("Couldn't open the instructions in {}: {}", e.name, plain(&err)));
+                }
+            }
+            return;
+        }
+        match editors::launch_window(e, &path) {
+            Ok(child) => {
+                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), before, name: e.name.clone(), stamp, child });
+                self.notify(format!("The instructions for {what} opened in {}, in a window of its own.", e.name));
+            }
+            Err(err) => {
+                instructions::after_edit(&self.config, id, &before);
+                self.notify(format!("Couldn't open the instructions in {}: {}", e.name, plain(&err)));
+            }
+        }
+    }
+
+    /// What to say once an editor has been and gone from the instructions (see `instructions::after_edit`).
+    fn after_instructions_edit(&mut self, id: &'static str, before: &str, name: &str) {
+        let what = instructions::action(id).what;
+        let said = match instructions::after_edit(&self.config, id, before) {
+            instructions::Edited::Unchanged => format!("The instructions for {what} are unchanged ({name} left them as they were)."),
+            instructions::Edited::BuiltIn => format!("The instructions for {what} are the built-in ones again."),
+            instructions::Edited::Changed => format!("Saved: platoon uses your instructions for {what} from the next time it asks Claude."),
+        };
+        self.notify(said);
+    }
+
+    /// `c` on an instructions entry: the built-in text as it is now against what is sent instead, then the part
+    /// platoon keeps, read-only.
+    pub(super) fn compare_instructions(&mut self, id: &'static str) {
+        let (builtin, theirs) = instructions::compare(&self.config, id);
+        let mut lines = if builtin == theirs {
+            builtin.lines().map(|l| (notes::Mark::Same, l.to_string())).collect()
+        } else {
+            notes::diff(&builtin, &theirs)
+        };
+        lines.push((notes::Mark::Gap, String::new()));
+        lines.push((notes::Mark::Gap, "Kept by platoon and always sent (you can't change this part):".to_string()));
+        // (The view wraps these lines to its width.)
+        lines.extend((instructions::action(id).fixed)().lines().map(|l| (notes::Mark::Same, l.to_string())));
+        self.changes = Changes { lines, top: Cell::new(0), instructions: Some(id) };
+        self.mode = Mode::Changes;
+    }
+
+    /// `r` on an instructions entry: asks first, unless there is nothing to put back.
+    pub(super) fn ask_reset_instructions(&mut self, id: &'static str) {
+        if instructions::status(&self.config, id) == instructions::Status::BuiltIn {
+            self.notify("These are the built-in instructions already.");
+            return;
+        }
+        self.mode = Mode::Confirm(Confirm::ResetInstructions { id });
+    }
+
+    pub(super) fn reset_instructions(&mut self, id: &'static str) {
+        self.mode = Mode::Settings;
+        match instructions::reset(&self.config, id) {
+            Ok(()) => self.notify(format!(
+                "The instructions for {} are the built-in ones again. Yours are kept as {}.bak.",
+                instructions::action(id).what,
+                instructions::path(&self.config, id).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+            )),
+            Err(err) => self.notify(format!("Couldn't put the built-in instructions back: {}", plain(&err))),
         }
     }
 
@@ -291,12 +416,21 @@ impl App {
         }
         let done = match self.notes_window.as_mut() {
             // Either the editor is done with the file, or it has written it: read the notes again either way.
-            Some(w) => matches!(w.child.try_wait(), Ok(Some(_))) || notes::changed_on_disk(&self.config, &w.project, w.stamp),
+            Some(w) => {
+                matches!(w.child.try_wait(), Ok(Some(_)))
+                    || match w.instructions {
+                        Some(id) => instructions::stamp(&self.config, id) != w.stamp,
+                        None => notes::changed_on_disk(&self.config, &w.project, w.stamp),
+                    }
+            }
             None => false,
         };
         if done {
             if let Some(w) = self.notes_window.take() {
-                self.after_edit(&w.project, w.stamp, &w.name);
+                match w.instructions {
+                    Some(id) => self.after_instructions_edit(id, &w.before, &w.name),
+                    None => self.after_edit(&w.project, w.stamp, &w.name),
+                }
             }
         }
         self.poll_notes_changes();
@@ -305,7 +439,10 @@ impl App {
     fn finish_edit(&mut self) {
         let Some(ed) = self.editing.take() else { return };
         if matches!(self.mode, Mode::EditNotes) {
-            self.mode = Mode::List;
+            self.mode = Self::after_pick_mode(ed.instructions);
+        }
+        if let Some(id) = ed.instructions {
+            return self.after_instructions_edit(id, &ed.before, &ed.name);
         }
         self.notes_top.set(0);
         self.after_edit(&ed.project, ed.stamp, &ed.name);
@@ -345,7 +482,7 @@ impl App {
             self.notify("Nothing has changed since the last copy platoon kept.");
             return;
         }
-        self.changes = Changes { lines, top: Cell::new(0) };
+        self.changes = Changes { lines, top: Cell::new(0), instructions: None };
         self.mode = Mode::Changes;
     }
 

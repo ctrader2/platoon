@@ -13,6 +13,7 @@ mod gitfacts;
 mod handoff;
 mod host;
 mod index;
+mod instructions;
 mod ledger;
 mod mcp;
 mod mdview;

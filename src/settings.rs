@@ -393,6 +393,9 @@ pub enum Kind {
     /// `choices`, `get`, `set` and `label` are unused and the app steps through its theme list instead;
     /// `enter` opens the theme picker.
     Theme,
+    /// The instructions for one AI action (`instructions::ACTIONS`), by id. It has no steps: enter (or a click on
+    /// the value) opens the user's own text in an editor, and the value says whether it is the built-in text.
+    Instructions(&'static str),
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
@@ -522,6 +525,12 @@ fn tabs() -> Vec<Tab> {
     ]
 }
 
+/// The entry that edits the instructions of one AI action.
+fn instructions_item(id: &'static str) -> Item {
+    let a = crate::instructions::action(id);
+    Item { name: a.entry, explain: a.explain, kind: Kind::Instructions(id), choices: &[], get: |_| 0, set: |_, _| {}, label: |_| String::new(), off: None }
+}
+
 /// Everyday behaviour: the colors and the two automatic clean-ups.
 fn general_items() -> Vec<Item> {
     vec![
@@ -649,6 +658,7 @@ fn search_items() -> Vec<Item> {
             label: conversations_label,
             off: None,
         },
+        instructions_item(crate::instructions::FIND),
     ]
 }
 
@@ -789,6 +799,7 @@ fn sessions_items() -> Vec<Item> {
             label: |v| format!("{v}%"),
             off: None,
         },
+        instructions_item(crate::instructions::NAMES),
     ]
 }
 
@@ -817,6 +828,9 @@ fn projects_items() -> Vec<Item> {
             label: chars_label,
             off: None,
         },
+        instructions_item(crate::instructions::NOTES),
+        instructions_item(crate::instructions::DESCRIPTION),
+        instructions_item(crate::instructions::HANDOFF),
     ]
 }
 
@@ -1248,7 +1262,7 @@ mod tests {
         assert_eq!(items[0].kind, Kind::Theme);
         assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
         assert!(!all_items().any(|i| i.name == "Edit notes with"), "the editor is remembered from the last one used, not chosen here");
-        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_))), "the theme is the only one of its kind");
+        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_))), "the theme is the only one of its kind");
         assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
         assert_eq!((items[0].step(0, Step::Next), items[0].step(0, Step::Prev), items[0].step(0, Step::Cycle)), (0, 0, 0));
@@ -1270,7 +1284,8 @@ mod tests {
                 "Longest message kept",
                 "Description search: conversations sent",
                 "Description search: results",
-                "Description search: wider search"
+                "Description search: wider search",
+                "Instructions for Describe it"
             ]
         );
         assert_eq!(
@@ -1279,9 +1294,37 @@ mod tests {
         );
         assert_eq!(
             names("Sessions"),
-            ["Conversations per call", "Refresh a summary after", "Wait for quiet before refreshing", "Recent messages sent", "Longest message sent", "Archived conversations", "Share for archived"]
+            [
+                "Conversations per call",
+                "Refresh a summary after",
+                "Wait for quiet before refreshing",
+                "Recent messages sent",
+                "Longest message sent",
+                "Archived conversations",
+                "Share for archived",
+                "Instructions for naming"
+            ]
         );
-        assert_eq!(names("Projects"), ["Update notes after", "Read Claude's last reply up to"]);
+        assert_eq!(
+            names("Projects"),
+            ["Update notes after", "Read Claude's last reply up to", "Instructions for project notes", "Instructions for project descriptions", "Instructions for the hand-off"]
+        );
+        // Every AI action's instructions are an entry, on the tab it belongs to, and nothing else is of that kind.
+        let kinds: Vec<(usize, Kind)> =
+            TABS.iter().enumerate().flat_map(|(t, tab)| tab.items.iter().filter(|i| matches!(i.kind, Kind::Instructions(_))).map(move |i| (t, i.kind))).collect();
+        assert_eq!(
+            kinds,
+            [
+                (1, Kind::Instructions("describe-it")),
+                (TAB_SESSIONS, Kind::Instructions("names")),
+                (4, Kind::Instructions("project-notes")),
+                (4, Kind::Instructions("project-description")),
+                (4, Kind::Instructions("hand-off"))
+            ]
+        );
+        for item in all_items().filter(|i| matches!(i.kind, Kind::Instructions(_))) {
+            assert!(item.choices.is_empty() && item.explain.contains("kept by platoon") && item.explain.len() < 300, "{}", item.name);
+        }
         // No entry is on two tabs, and every one can be found by name.
         let all: Vec<&str> = all_items().map(|i| i.name).collect();
         let unique: std::collections::BTreeSet<&str> = all.iter().copied().collect();
@@ -1503,7 +1546,7 @@ mod tests {
         assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
             token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "3 minutes", "1500 characters", "50 conversations", "10 results", "200 conversations"]
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
         );
         let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");

@@ -236,6 +236,16 @@ impl AiFake {
         self.call_file(k, "argv").lines().map(String::from).collect()
     }
 
+    /// Whether anything call `k` was given as arguments contains `text`.
+    pub fn call_text_has(&self, k: usize, text: &str) -> bool {
+        self.call_file(k, "argv").contains(text)
+    }
+
+    /// Whether call `k` was given exactly this argument (one that may run over several lines, as a system prompt does).
+    pub fn has_arg(&self, k: usize, arg: &str) -> bool {
+        format!("\n{}", self.call_file(k, "argv")).contains(&format!("\n{arg}\n"))
+    }
+
     pub fn cwd(&self, k: usize) -> String {
         self.call_file(k, "cwd").trim().to_string()
     }

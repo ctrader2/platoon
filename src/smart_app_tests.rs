@@ -1569,3 +1569,96 @@ fn every_call_carries_the_no_thinking_and_helper_marks_in_its_environment() {
     assert_eq!(argv[..2], ["-p", "--model"]);
     assert!(!argv.iter().any(|a| a.contains("thinking")), "{argv:?}");
 }
+
+// ---- the user's own instructions ------------------------------------------------------------------------------------
+
+/// The user's own guidance for an action, as if they had edited it in the settings.
+fn own_guidance(w: &World, id: &str, text: &str) {
+    fs::create_dir_all(w.config.join("prompts")).unwrap();
+    fs::write(w.config.join("prompts").join(format!("{id}.md")), text).unwrap();
+}
+
+#[test]
+fn naming_sends_the_users_own_guidance_then_the_fixed_part_and_the_built_in_text_without_it() {
+    use crate::instructions::{compose, NAMES};
+    let w = World::new("sm-own-names");
+    simple(&w, "aaa", "please fix the login redirect", 300);
+    smart(&w, |_| {});
+    let fake = AiFake::new("sm-own-names");
+    let mut app = app_with(&w, &fake);
+    app.settle_ai_for_test(10);
+    assert!(fake.has_arg(1, &crate::smart::names_system()), "the built-in guidance, then the fixed part: {:?}", fake.argv(1));
+    // With the user's own words, those replace the guidance and the fixed part still follows.
+    let w = World::new("sm-own-names-2");
+    simple(&w, "aaa", "please fix the login redirect", 300);
+    smart(&w, |_| {});
+    own_guidance(&w, NAMES, "Name each one like a ship.\nNo more than three words.\n");
+    let fake = AiFake::new("sm-own-names-2");
+    let mut app = app_with(&w, &fake);
+    app.settle_ai_for_test(10);
+    let want = compose("Name each one like a ship.\nNo more than three words.", crate::smart::NAMES_FIXED);
+    assert!(fake.has_arg(1, &want), "{:?}", fake.argv(1));
+    assert!(!fake.call_text_has(1, "two to six words"), "the built-in guidance is not sent as well");
+}
+
+#[test]
+fn describe_it_sends_the_users_own_guidance_then_the_fixed_part() {
+    use crate::instructions::{compose, FIND};
+    let w = World::new("fd-own");
+    many(&w, 4, "billing");
+    smart(&w, |s| s.set_feature("names", false));
+    own_guidance(&w, FIND, "Prefer the newest conversation when two match.");
+    let fake = AiFake::new("fd-own");
+    let mut app = app_with(&w, &fake);
+    open_find(&mut app);
+    type_str(&mut app, "the billing one");
+    key(&mut app, KeyCode::Enter);
+    app.settle_ai_for_test(10);
+    assert_eq!(fake.calls(), 1);
+    let want = compose("Prefer the newest conversation when two match.", &crate::smart::find_fixed(settings::DEFAULT_FIND_RESULTS as usize));
+    assert!(fake.has_arg(1, &want), "{:?}", fake.argv(1));
+    assert_eq!(state(&app), FindState::Done, "the answer is read as always");
+}
+
+#[test]
+fn an_instructions_entry_opens_the_editor_list_on_enter_or_a_click_and_c_and_r_belong_to_it_alone() {
+    let w = World::new("sm-own-keys");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
+    // On an ordinary entry c and r do nothing.
+    go(&mut app, "Update notes after");
+    key(&mut app, KeyCode::Char('c'));
+    key(&mut app, KeyCode::Char('r'));
+    assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_none());
+    // The arrows have nothing to step on an instructions entry; enter opens the editor list, and esc comes back.
+    go(&mut app, "Instructions for project notes");
+    let shown = screen(&mut term, &app);
+    assert!(shown.lines().find(|l| l.contains("Instructions for project notes")).unwrap().contains("Built-in"), "{shown}");
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Left);
+    assert!(matches!(app.mode, Mode::Settings));
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::PickEditor) && app.epick.instructions == Some(crate::instructions::NOTES));
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("edit the instructions with") && shown.contains("Instructions for project notes"), "the settings stay behind it:\n{shown}");
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Settings), "esc goes back to the settings, not the list");
+    // A click on the value does what enter does.
+    screen(&mut term, &app);
+    let value = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::SettingStep(i, settings::Step::Cycle) if *i == app.setting)).map(|(r, _)| *r).unwrap();
+    click_at(&mut app, value.x + 1, value.y);
+    assert!(matches!(app.mode, Mode::PickEditor));
+    key(&mut app, KeyCode::Esc);
+    // c shows the built-in text (nothing differs) and the part platoon keeps; esc comes back.
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Changes) && app.changes.instructions.is_some());
+    assert!(app.changes.lines.iter().all(|(m, _)| !matches!(m, crate::notes::Mark::Added | crate::notes::Mark::Removed)));
+    assert!(app.changes.lines.iter().any(|(_, l)| l.contains("Kept by platoon")));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Settings));
+    // r with nothing to put back says so and asks nothing.
+    key(&mut app, KeyCode::Char('r'));
+    assert!(matches!(app.mode, Mode::Settings));
+    assert_eq!(app.active_notice(), Some("These are the built-in instructions already."));
+    assert!(!w.config.join("prompts").exists(), "none of this wrote anything");
+}

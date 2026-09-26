@@ -783,3 +783,18 @@ fn the_session_start_hook_marks_the_project_it_places_a_session_into() {
     crate::sessionhook::session_start(&input, Some(&id), &w.config, &w.cache);
     assert_eq!(due(&w, &id), was);
 }
+
+#[test]
+fn the_hand_off_sends_the_users_own_guidance_then_the_fixed_part() {
+    let (w, fake) = world("handoff-own");
+    fake.reply_default(BRIEF);
+    fs::create_dir_all(w.config.join("prompts")).unwrap();
+    fs::write(w.config.join("prompts/hand-off.md"), "Write it for someone new to the code.\n").unwrap();
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    assert_eq!(app.handoff.state, HandoffState::Ready, "the answer is read as always");
+    assert!(fake.has_arg(1, &format!("Write it for someone new to the code.\n\n{}", handoff::FIXED)), "{:?}", fake.argv(1));
+    assert!(!fake.call_text_has(1, "two to four plain sentences"), "the built-in guidance is not sent as well");
+}
