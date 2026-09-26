@@ -213,13 +213,14 @@ by hand too:
  "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
- "ai_find_wide_candidates": 200, "notes_editor": "ask", "notes_quiet_minutes": 3}
+ "ai_find_wide_candidates": 200, "notes_editor": "ask", "notes_quiet_minutes": 3,
+ "notes_reply_chars": 1500}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 **Smart features** (`enter` on that row; `esc` goes back to the settings) holds every setting for the token features, so the main
 popup stays short. The screen keeps the same rules: it scrolls on a short terminal (80x24 shows a window of it), explains the selected
@@ -230,6 +231,7 @@ entry, and has under the entries `Used today: N of M tokens` and `Archived: N co
 | Enable features which require tokens | The master switch for everything that uses your Claude plan (see [Features that use tokens](#features-that-use-tokens)). | Off (default), On |
 | Smart names and summaries, Find a session by description | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off (default), On |
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
+| Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
 | Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
 | Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
 | Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
@@ -262,7 +264,7 @@ the master switch on and still counts against the daily limit, like everything e
 hand-off and `platoon tokens test` appear there too, by name).
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send Claude the
-prompts you typed plus one line of Claude's last reply for each conversation, in small batches, and that you can switch it off any
+prompts you typed plus one line of Claude's last reply for each conversation (for a project's notes, more of that reply), in small batches, and that you can switch it off any
 time (`s`, then Smart features, then the master switch). Without a terminal setup asks nothing, leaves everything off and prints one
 line saying how to turn them on. Turning a switch off stops a call already in progress and throws its answer away; names and
 summaries already saved stay.
@@ -491,15 +493,27 @@ of the project's sessions already have the notes as they are now (see below).
 
 ### The shape of the notes
 
-Two parts of `project.md` are fixed, and everything else fits the work:
+Three parts of `project.md` are fixed, and everything else fits the work:
 
 - **Summary**, at the top: a few lines saying what this project is and where it stands, so a new session (and you) can
   read it in ten seconds.
+- **Open questions**, right after the summary: only what is **still open** - questions nobody has answered yet and
+  matters not settled yet - grouped under subheadings that fit the project (by area, or "Waiting on the user",
+  "Undecided"), plain bullets, nothing tagged onto them. It is not a to-do list. When a question is answered or a matter
+  settled, it is **taken out** (not ticked) and the answer appears as a new entry in Decisions. A notes file that already
+  had an Open questions section somewhere in the middle has it moved up here, word for word, the next time platoon
+  writes; one without it gets it when something first comes up.
 - **Decisions**, at the end: dated entries, added one at a time and never rewritten.
 - **In between, whatever the project needs.** Requirements and Status while something is being built; Symptoms, Ruled out
-  and Leads while a problem is being chased; Questions and Findings while something is being looked into; **Open
-  questions** as a plain list, one question a line, with nothing tagged onto them. When the work changes, the headings
-  change with it: platoon may add one, rename one, fold two into one or put them in another order.
+  and Leads while a problem is being chased; Questions and Findings while something is being looked into. When the work
+  changes, the headings change with it: platoon may add one, rename one, fold two into one or put them in another order.
+
+**How it is written.** The file is Markdown: short bullets with one fact each, indented bullets for detail, `##`
+subheadings to group things inside a section, bold now and then, and short paragraphs only in the summary. A section
+platoon wrote as paragraphs before this may come back as bullets. The notes pane shows it the way a Markdown viewer
+would: headings without their `#`, bullets as `•` with wrapped lines lined up under the text, bold, italic, code and
+quotes styled, links as their words (the address stays in the file). On the Linux console, or with
+`PLATOON_GLYPHS=plain`, bullets are `-` and `*`.
 
 **Nothing is ever deleted by a change of heading.** A section platoon doesn't mention stays exactly where it is, word for
 word. A heading can only go away by being carried into the one that replaces it, and everything of yours that was under
@@ -526,8 +540,9 @@ and it works whether the platoon window is open or closed. Archived projects, ar
 file doesn't exist yet are skipped entirely: platoon never starts the notes for you, you do that with `e`.
 
 **What it reads.** Only what is new since the last update: for each active session in the project, the messages you typed
-since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus one line of Claude's last
-reply. A session that platoon has never read before - a new project, or one you have just added a session to - is read in
+since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus Claude's last reply, up to
+**Read Claude's last reply up to** characters (1500 unless you change it), because what is still open in a conversation is
+usually in Claude's answers. A session that platoon has never read before - a new project, or one you have just added a session to - is read in
 full once: its first message and its last 20.
 
 **What it may write.**
@@ -536,6 +551,7 @@ full once: its first message and its last 20.
 | --- | --- |
 | Summary | rewrite it, keeping it short; it is added at the top if it isn't there |
 | The sections in between | add one, reword **what platoon itself wrote** in one, rename one, fold two into one, put them in another order |
+| Open questions | rewrite it; take out what has been answered. **A line of yours there may only go in the same update that adds its answer to Decisions**; it may move to another subheading |
 | Decisions | append dated entries; nothing already there is ever changed. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
 
 platoon remembers exactly which sentences it wrote itself, under which heading, so every other line of a section is

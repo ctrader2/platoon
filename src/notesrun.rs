@@ -282,7 +282,7 @@ pub fn mark_joined(config: &Path, cache: &Path, project: &str, session: &str, at
 // ---- reading what is new in a session ---------------------------------------------------------------------------
 
 /// What one transcript holds, read once: its first message, its latest messages, how many substantive ones there
-/// are in all, and one line of Claude's last reply. Nothing else of it is ever kept.
+/// are in all, and Claude's last reply (one line of it, or as much as the notes ask for). Nothing else is kept.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Read1 {
     pub first: Option<String>,
@@ -295,6 +295,12 @@ pub struct Read1 {
 /// and Claude's last reply. Only the last `KEEP_RECENT` messages are held, so a huge conversation costs no more
 /// memory than a small one.
 pub fn read_session(path: &Path, cap: usize) -> Read1 {
+    read_session_with(path, cap, None)
+}
+
+/// `read_session`, with Claude's last reply read the way the notes need it: up to `reply_chars` characters, its
+/// lines kept (`claude::reply_text_in_line`). None: one line of it, as everything else reads it.
+pub fn read_session_with(path: &Path, cap: usize, reply_chars: Option<usize>) -> Read1 {
     let Ok(file) = fs::File::open(path) else { return Read1::default() };
     let mut reader = BufReader::new(file);
     let mut out = Read1::default();
@@ -329,7 +335,11 @@ pub fn read_session(path: &Path, cap: usize) -> Read1 {
                 }
             }
         } else if claude::may_be_reply(text) {
-            if let Some(r) = claude::reply_in_line(text, claude::REPLY_CHARS) {
+            let reply = match reply_chars {
+                Some(n) => claude::reply_text_in_line(text, n),
+                None => claude::reply_in_line(text, claude::REPLY_CHARS),
+            };
+            if let Some(r) = reply {
                 out.reply = Some(r);
             }
         }
@@ -357,7 +367,7 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
             continue; // archived sessions are skipped entirely
         }
         let Some(path) = claude::find_transcript(root, &sid) else { continue };
-        let read = read_session(&path, cap);
+        let read = read_session_with(&path, cap, Some(settings.notes_reply_chars as usize));
         if read.total == 0 {
             continue;
         }
@@ -988,6 +998,36 @@ mod tests {
         Archive::open(&r.env.config).archive("s1", usage::now()).unwrap();
         let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
         assert!(m.sessions.is_empty() && seen.is_empty());
+    }
+
+    #[test]
+    fn the_notes_read_claudes_last_reply_up_to_the_setting_with_its_lines_kept() {
+        let r = Rig::new("reply");
+        let id = r.project(NOTES);
+        let mut reply = String::from("Done.\n\nStill open:\n- \u{1b}[1mWhich card provider?\u{1b}[0m\n- Does VAT go in the total?\n\n");
+        for n in 0..400 {
+            reply.push_str(&format!("Detail {n} of a long answer.\n"));
+        }
+        r.session(&id, "s1", &["Add a basket page to the shop"], &reply);
+        let mut settings = crate::settings::load(&r.env.config).0;
+        assert_eq!(settings.notes_reply_chars, 1500, "about 1500 characters unless the user says otherwise");
+        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        let got = m.sessions[0].reply.clone().unwrap();
+        assert!(got.starts_with("Done.\n\nStill open:\n- Which card provider?\n- Does VAT go in the total?"), "{got}");
+        assert_eq!(got.chars().count(), 1501, "cut at the setting, with a mark where");
+        assert!(!got.contains('\u{1b}'));
+        // The prompt carries all of it, set off from the rest so a line of it can't pass for a heading of the notes.
+        let p = notesupdate::prompt(&Doc::parse(NOTES), &State::default(), &m);
+        assert!(p.contains("Claude's last reply:\n  Done.\n\n  Still open:\n  - Which card provider?"), "{p}");
+        for chars in [500u64, 3000] {
+            settings.notes_reply_chars = chars;
+            let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+            assert_eq!(m.sessions[0].reply.as_ref().unwrap().chars().count() as u64, chars + 1);
+        }
+        // Everything else that reads a session still gets one line of the reply.
+        let path = claude::find_transcript(&r.env.root, "s1").unwrap();
+        let one = read_session(&path, 300).reply.unwrap();
+        assert_eq!((one.lines().count(), one.chars().count()), (1, claude::REPLY_CHARS));
     }
 
     #[test]

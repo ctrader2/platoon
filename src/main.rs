@@ -15,6 +15,7 @@ mod host;
 mod index;
 mod ledger;
 mod mcp;
+mod mdview;
 mod model;
 mod names;
 mod notes;

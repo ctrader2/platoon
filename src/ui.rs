@@ -529,25 +529,13 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
         return;
     };
-    let w = area.width as usize;
-    let mut lines: Vec<String> = Vec::new();
-    for raw in text.lines() {
-        if raw.trim().is_empty() {
-            lines.push(String::new());
-        } else {
-            // Keep a line's indent; wrap the rest at word boundaries.
-            let indent: String = raw.chars().take_while(|c| *c == ' ').collect();
-            for (k, l) in wrap(raw, w.saturating_sub(indent.len()).max(1)).into_iter().enumerate() {
-                lines.push(if k == 0 { format!("{indent}{l}") } else { format!("{indent}{l}") });
-            }
-        }
-    }
+    // The file stays plain Markdown; the pane shows it the way a Markdown viewer would, scrolled in drawn lines.
+    let lines = crate::mdview::render(&text, area.width as usize, t, app.plain_marker);
     let rows = area.height as usize;
     let top = app.notes_top.get().min(lines.len().saturating_sub(rows));
     app.notes_top.set(top);
-    for (n, l) in lines.iter().skip(top).take(rows).enumerate() {
-        let style = if l.starts_with('#') { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.text) };
-        f.render_widget(Paragraph::new(Span::styled(l.clone(), style)), Rect::new(area.x, area.y + n as u16, area.width, 1));
+    for (n, l) in lines.into_iter().skip(top).take(rows).enumerate() {
+        f.render_widget(Paragraph::new(l), Rect::new(area.x, area.y + n as u16, area.width, 1));
     }
 }
 

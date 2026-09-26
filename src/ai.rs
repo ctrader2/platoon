@@ -140,8 +140,8 @@ pub fn consent_text() -> String {
         t.push_str(&format!("  - {}: {}\n", f.label, f.description));
     }
     t.push_str(
-        "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each conversation, in small \
-         batches, and it counts against your Claude plan. Nothing is sent if you say no.\n",
+        "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each conversation (for a \
+         project's notes, more of that reply), in small batches, and it counts against your Claude plan. Nothing is sent if you say no.\n",
     );
     t.push_str(&format!(
         "You can switch this off at any time: press s in platoon, then turn off \"{MASTER_LABEL}\".\n\nTurn these features on?"

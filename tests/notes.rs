@@ -446,3 +446,94 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     t.send(b"q");
     t.wait_exit();
 }
+
+/// Notes written in Markdown, the way the updater now writes them.
+const FORMATTED: &str = "platoon keeps these up to date.
+
+# Summary
+
+A shop that sells **socks** online.
+
+# Open questions
+
+## Pricing
+
+- Does VAT go in the basket total?
+  - only for the EU
+- A long question that keeps on going about shipping costs and whether they belong in the total the customer sees first
+
+Run it with `cargo test`:
+
+```
+cargo test --release
+```
+
+# Decisions
+
+";
+
+#[test]
+fn the_pane_draws_the_markdown_styled_with_hanging_bullets_and_scrolls_in_drawn_lines() {
+    let lab = Lab::new("notes-md");
+    let mut notes = FORMATTED.to_string();
+    for n in 1..=40 {
+        notes.push_str(&format!("- 2026-09-25: decision number {n}\n"));
+    }
+    lab.project(Some(&notes));
+    // With NO_COLOR set (as the harness sets it) the terminal library turns every color change into a full reset,
+    // which takes bold and underline with it; empty, it is off, and the cells show what platoon asked for.
+    let mut env = lab.env();
+    env.push(("NO_COLOR", String::new()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
+    t.wait_for("enter open");
+    lab.open_notes(&mut t);
+    t.wait_for_all(&["Summary", "A shop that sells socks online.", "Pricing", "• Does VAT go in the basket total?", "◦ only for the EU"]);
+    let screen = t.stable();
+    // The marks are gone from the screen (the file keeps them).
+    for gone in ["# Summary", "## Pricing", "**", "`cargo", "```"] {
+        assert!(!screen.contains(gone), "{gone:?} is drawn:\n{screen}");
+    }
+    assert!(lab.notes().contains("# Summary") && lab.notes().contains("**socks**"), "the file is untouched");
+    // Headings and bold are drawn as such, not only colored.
+    let (r, c) = t.find("Summary").unwrap();
+    let (bold, _, underline) = t.attrs_at(r, c);
+    assert!(bold && underline, "a section heading is bold and underlined: {:?} at {r},{c}\n{screen}", t.attrs_at(r, c));
+    let (r, c) = t.find("Pricing").unwrap();
+    assert_eq!(t.attrs_at(r, c), (true, false, false), "a subheading is bold, without the underline");
+    let (r, c) = t.find("socks online").unwrap();
+    assert!(t.attrs_at(r, c).0, "**socks** is bold");
+    assert!(!t.attrs_at(r, c - 2).0, "the words around it are not");
+    // The long bullet wraps under its own text, not under the bullet.
+    let (r, c) = t.find("• A long question").unwrap();
+    let next: String = screen.lines().nth(r as usize + 1).unwrap().chars().skip(c as usize).take(4).collect();
+    assert!(next.starts_with("  ") && next.chars().nth(2).is_some_and(|ch| ch.is_alphabetic()), "hanging indent: {next:?}\n{screen}");
+    // Scrolling moves through the drawn lines. One line down: the top line goes, one more comes in at the bottom.
+    assert!(!screen.contains("decision number 40") && !screen.contains("cargo test --release"));
+    t.send(b"\x1b[B");
+    t.wait_gone("platoon keeps these up to date.");
+    // A page down: the code, with its words and without its marks.
+    t.send(b"\x1b[6~");
+    t.wait_for_all(&["Run it with cargo test:", "cargo test --release"]);
+    // To the end: the last decision, and the top has gone.
+    for _ in 0..8 {
+        t.send(b"\x1b[6~");
+    }
+    t.wait_for("decision number 40");
+    let screen = t.stable();
+    assert!(!screen.contains("A shop that sells socks online."), "{screen}");
+    t.send(b"\x1b[H"); // home: back to the top
+    t.wait_for("A shop that sells socks online.");
+    t.send(b"q");
+    t.wait_exit();
+
+    // With plain glyphs (the Linux console), bullets are plain too.
+    let mut env = lab.env();
+    env.push(("PLATOON_GLYPHS", "plain".into()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
+    t.wait_for("enter open");
+    lab.open_notes(&mut t);
+    t.wait_for_all(&["- Does VAT go in the basket total?", "* only for the EU"]);
+    assert!(!t.stable().contains('•'));
+    t.send(b"q");
+    t.wait_exit();
+}

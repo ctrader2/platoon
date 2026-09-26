@@ -197,7 +197,8 @@ fn how_long_to_wait_before_updating_a_projects_notes_is_on_the_smart_screen_and_
     let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
     let at = names.iter().position(|n| *n == "Update notes after").unwrap();
     assert_eq!(names[at - 1], "Project descriptions", "right after the last of the feature switches");
-    assert_eq!(names[at + 1], "Daily token limit");
+    assert_eq!(names[at + 1], "Read Claude's last reply up to", "with how much of Claude's replies the notes read");
+    assert_eq!(names[at + 2], "Daily token limit");
 }
 
 #[test]

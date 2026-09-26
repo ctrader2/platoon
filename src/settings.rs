@@ -65,6 +65,10 @@ pub const MAX_QUIET_SECONDS: u64 = 3600;
 pub const DEFAULT_NOTES_QUIET_MINUTES: u64 = 3;
 pub const MIN_NOTES_QUIET_MINUTES: u64 = 1;
 pub const MAX_NOTES_QUIET_MINUTES: u64 = 60;
+/// How much of Claude's last reply in each session the notes updater reads (characters).
+pub const DEFAULT_NOTES_REPLY_CHARS: u64 = 1500;
+pub const MIN_NOTES_REPLY_CHARS: u64 = 200;
+pub const MAX_NOTES_REPLY_CHARS: u64 = 5000;
 /// Token features: archived conversations may use at most this percent of what is left of the day's limit.
 pub const DEFAULT_ARCHIVED_SHARE: u64 = 50;
 pub const MIN_ARCHIVED_SHARE: u64 = 5;
@@ -136,6 +140,8 @@ pub struct Settings {
     pub notes_editor: String,
     /// How long a project must be quiet before platoon brings its notes up to date, in minutes.
     pub notes_quiet_minutes: u64,
+    /// How much of Claude's last reply in each session a notes update reads, in characters.
+    pub notes_reply_chars: u64,
     /// Finding by description: how many conversations one search sends, how many it shows, how many a wider search sends.
     pub ai_find_candidates: u64,
     pub ai_find_results: u64,
@@ -168,6 +174,7 @@ impl Default for Settings {
             ai_archived_share: DEFAULT_ARCHIVED_SHARE,
             notes_editor: crate::editors::ASK.into(),
             notes_quiet_minutes: DEFAULT_NOTES_QUIET_MINUTES,
+            notes_reply_chars: DEFAULT_NOTES_REPLY_CHARS,
             ai_find_candidates: DEFAULT_FIND_CANDIDATES,
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
@@ -193,6 +200,7 @@ impl Settings {
             ai_quiet_seconds: self.ai_quiet_seconds.min(MAX_QUIET_SECONDS),
             ai_archived_share: self.ai_archived_share.clamp(MIN_ARCHIVED_SHARE, MAX_ARCHIVED_SHARE),
             notes_quiet_minutes: self.notes_quiet_minutes.clamp(MIN_NOTES_QUIET_MINUTES, MAX_NOTES_QUIET_MINUTES),
+            notes_reply_chars: self.notes_reply_chars.clamp(MIN_NOTES_REPLY_CHARS, MAX_NOTES_REPLY_CHARS),
             ai_find_candidates: self.ai_find_candidates.clamp(MIN_FIND_CANDIDATES, MAX_FIND_CANDIDATES),
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
@@ -278,6 +286,7 @@ fn parse(text: &str) -> Option<Settings> {
             ai_archived_share: number("ai_archived_share", d.ai_archived_share),
             notes_editor: o.get("notes_editor").and_then(Value::as_str).map_or(d.notes_editor.clone(), str::to_string),
             notes_quiet_minutes: number("notes_quiet_minutes", d.notes_quiet_minutes),
+            notes_reply_chars: number("notes_reply_chars", d.notes_reply_chars),
             ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
@@ -346,6 +355,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_archived_share".into(), json!(s.ai_archived_share));
     object.insert("notes_editor".into(), json!(s.notes_editor));
     object.insert("notes_quiet_minutes".into(), json!(s.notes_quiet_minutes));
+    object.insert("notes_reply_chars".into(), json!(s.notes_reply_chars));
     object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
@@ -600,7 +610,7 @@ fn smart_items() -> Vec<Item> {
     // The master switch, one switch per feature (from the feature table), then the numbers that limit them.
     v.push(Item {
         name: MASTER_LABEL,
-        explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus one line \
+        explain: "Lets platoon use your own Claude plan for the smart features below. It sends the messages you typed plus part \
                   of Claude's last reply, in small batches. While this is Off nothing is sent, and turning it Off stops any call in progress.",
         kind: Kind::Steps,
         choices: &[0, 1],
@@ -631,6 +641,17 @@ fn smart_items() -> Vec<Item> {
             get: |s| s.notes_quiet_minutes,
             set: |s, v| s.notes_quiet_minutes = v,
             label: minutes_label,
+            off: None,
+        },
+        Item {
+            name: "Read Claude's last reply up to",
+            explain: "How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. \
+                      What is still open is usually in Claude's answers; more of them uses a little more of your plan.",
+            kind: Kind::Steps,
+            choices: &[500, 1500, 3000],
+            get: |s| s.notes_reply_chars,
+            set: |s, v| s.notes_reply_chars = v,
+            label: chars_label,
             off: None,
         },
         Item {
@@ -981,7 +1002,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1361,8 +1382,8 @@ mod tests {
     #[test]
     fn a_feature_gets_a_switch_on_the_smart_features_screen_from_the_table_alone() {
         let names: Vec<&str> = SMART_ITEMS.iter().map(|i| i.name).collect();
-        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Update notes after", "Daily token limit", "Pause above plan usage"]);
-        assert_eq!(names.len(), 19, "the master switch, one per feature, and fourteen limits, all on the screen of their own");
+        assert_eq!(names[..8], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Update notes after", "Read Claude's last reply up to", "Daily token limit"]);
+        assert_eq!(names.len(), 20, "the master switch, one per feature, and fifteen limits, all on the screen of their own");
         for (f, item) in FEATURES.iter().zip(&SMART_ITEMS[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
             let mut s = Settings::default();
@@ -1405,7 +1426,7 @@ mod tests {
         let label = |i: usize| (SMART_ITEMS[i].label)(SMART_ITEMS[i].value(&d));
         assert_eq!(
             (0..SMART_ITEMS.len()).map(label).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "3 minutes", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
+            ["Off", "Off", "Off", "On", "On", "3 minutes", "1500 characters", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "50 conversations", "10 results", "200 conversations"]
         );
         let by_name = |name: &str| SMART_ITEMS.iter().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");

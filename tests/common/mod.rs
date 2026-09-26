@@ -129,6 +129,25 @@ impl Term {
         self.screen.screen().cell(row, col).map(|c| c.fgcolor()).unwrap()
     }
 
+    /// Whether a screen cell is drawn (bold, italic, underlined).
+    pub fn attrs_at(&mut self, row: u16, col: u16) -> (bool, bool, bool) {
+        self.text();
+        self.screen.screen().cell(row, col).map(|c| (c.bold(), c.italic(), c.underline())).unwrap()
+    }
+
+    /// Where `needle` starts on the screen (row, column), if it is on it. Columns count cells, so a line holding
+    /// wide characters before the needle is measured the way the terminal draws it.
+    pub fn find(&mut self, needle: &str) -> Option<(u16, u16)> {
+        let text = self.text();
+        for (row, line) in text.lines().enumerate() {
+            if let Some(at) = line.find(needle) {
+                let col = line[..at].chars().count();
+                return Some((row as u16, col as u16));
+            }
+        }
+        None
+    }
+
     /// Waits until a cell has the given foreground.
     pub fn wait_fg(&mut self, row: u16, col: u16, want: vt100::Color) {
         let start = Instant::now();

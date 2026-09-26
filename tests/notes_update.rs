@@ -212,7 +212,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     assert_eq!(lab.calls(), 2, "the update, then the description");
     let sent = lab.sent(1);
     assert!(sent.contains("Project: Web") && sent.contains("Add a basket page to the shop"), "{sent}");
-    assert!(sent.contains("Claude's last reply: I added the basket page."), "{sent}");
+    assert!(sent.contains("Claude's last reply:\n  I added the basket page."), "{sent}");
     assert!(!sent.contains("sess-1"), "{sent}");
     let described = lab.sent(2);
     assert!(described.contains("Write one short line") && described.contains("Project: Web"), "{described}");
@@ -223,7 +223,8 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     // and not a word of the file it started from is gone.
     let after = lab.notes();
     let headings: Vec<&str> = after.lines().filter(|l| l.starts_with("# ")).collect();
-    assert_eq!(headings, ["# Summary", "# Overview", "# Requirements", "# Where it stands", "# Open questions", "# Decisions", "# Notes"], "{after}");
+    // Open questions, sent as a section, is the fixed one: right after the summary.
+    assert_eq!(headings, ["# Summary", "# Open questions", "# Overview", "# Requirements", "# Where it stands", "# Decisions", "# Notes"], "{after}");
     assert!(after.contains("# Summary\n\nA sock shop. The basket works and the totals add up."), "{after}");
     assert!(after.contains("# Where it stands\n\nThe basket totals add up."), "{after}");
     assert!(after.contains("# Open questions\n\n- Does VAT go in the basket total?"), "{after}");

@@ -507,12 +507,12 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     draw(&mut term, &app);
     click_hit(&mut app, |h| matches!(h, Hit::Pane(Pane::Notes)));
     assert_eq!(app.pane, Pane::Notes);
-    // Notes: read only, shown as written.
+    // Notes: read only, drawn as a Markdown viewer would (the file itself keeps its marks).
     let notes = app.projects.notes_path(&a);
     fs::create_dir_all(notes.parent().unwrap()).unwrap();
     fs::write(&notes, "# Overview\nA shop for fruit.\n\n## Decisions\n- apples first\n").unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("# Overview") && f.contains("A shop for fruit.") && f.contains("- apples first") && !f.contains("No notes yet"), "{f}");
+    assert!(f.contains("Overview") && !f.contains("# Overview") && f.contains("A shop for fruit.") && f.contains("• apples first") && !f.contains("No notes yet"), "{f}");
     // Esc goes back to the Projects tab with the project selected; the Projects tab shows the counts and notes.
     key(&mut app, KeyCode::Esc);
     assert!(app.open_project.is_none() && app.projects_list_showing());

@@ -559,6 +559,47 @@ pub fn reply_in_line(line: &str, cap: usize) -> Option<String> {
     (!text.is_empty()).then(|| truncate_to(text, cap))
 }
 
+/// The words Claude said in this line of a transcript as it wrote them, line breaks kept, for the notes updater:
+/// what is still open in a conversation lives in Claude's replies, and one line of one is not enough to see it. The
+/// same entries as `reply_in_line` (text blocks of an assistant entry that is not a subagent's; never tool calls,
+/// tool output or thinking); each line cleaned of escape sequences and control characters, runs of blank lines
+/// folded into one, and the whole cut to `cap` characters with `…` where it was cut. None when there is no text.
+pub fn reply_text_in_line(line: &str, cap: usize) -> Option<String> {
+    let v: Value = serde_json::from_str(line).ok()?;
+    if v["type"].as_str() != Some("assistant") || v["isSidechain"].as_bool() == Some(true) {
+        return None;
+    }
+    let raw = match &v["message"]["content"] {
+        Value::String(s) => s.clone(),
+        Value::Array(a) => a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n\n"),
+        _ => return None,
+    };
+    // A reply can be enormous: far more than could ever be kept is not even looked at.
+    let raw: String = raw.chars().take(cap.saturating_mul(4).max(64)).collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut blank = false;
+    for l in raw.split('\n') {
+        let l = crate::smart::clean_text(l, cap.max(1));
+        if l.trim().is_empty() {
+            blank = !lines.is_empty();
+            continue;
+        }
+        if blank {
+            lines.push(String::new());
+            blank = false;
+        }
+        lines.push(l);
+    }
+    let text = lines.join("\n");
+    if text.is_empty() {
+        return None;
+    }
+    Some(match text.char_indices().nth(cap) {
+        Some((at, _)) => format!("{}…", text[..at].trim_end()),
+        None => text,
+    })
+}
+
 fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -836,6 +877,40 @@ mod transcript_tests {
         assert_eq!(reply_in_line(&asst(json!([{"type":"text","text":"   "}])), 200), None);
         assert_eq!(reply_in_line("not json", 200), None);
         assert_eq!(reply_in_line(&asst(json!("plain string")), 200).as_deref(), Some("plain string"));
+    }
+
+    #[test]
+    fn the_notes_read_a_reply_with_its_lines_kept_cleaned_and_cut_to_the_length_asked_for() {
+        use serde_json::json;
+        let asst = |c: Value| json!({"type":"assistant","message":{"model":"claude-sonnet-5","content":c}}).to_string();
+        // A long reply of many lines, with an escape sequence, a bell and a run of blank lines in it.
+        let mut text = String::from("Done. Two things are still open:\n\n\n\n- \u{1b}[31mWhich card provider?\u{1b}[0m\u{7}\n- Does VAT go in the total?\n\n");
+        for n in 0..200 {
+            text.push_str(&format!("Line {n} of the rest of a long answer.\n"));
+        }
+        let line = asst(json!([{"type":"text","text":text},{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"Last words."}]));
+        let got = reply_text_in_line(&line, 1500).unwrap();
+        assert!(got.starts_with("Done. Two things are still open:\n\n- Which card provider?\n- Does VAT go in the total?\n\nLine 0"), "{got}");
+        assert!(!got.chars().any(|c| c.is_control() && c != '\n'), "{got:?}");
+        assert!(!got.contains("\n\n\n"), "blank runs fold into one");
+        assert_eq!(got.chars().count(), 1501, "cut to the length asked for, with a mark where it was cut");
+        assert!(got.ends_with('…'));
+        // Each length the setting offers.
+        for cap in [500, 1500, 3000] {
+            assert!(reply_text_in_line(&line, cap).unwrap().chars().count() <= cap + 1);
+        }
+        // A short one comes back whole, with the tool call left out between its two parts.
+        let short = asst(json!([{"type":"text","text":"one\ntwo"},{"type":"tool_use","name":"Bash","input":{}},{"type":"text","text":"three"}]));
+        assert_eq!(reply_text_in_line(&short, 1500).as_deref(), Some("one\ntwo\n\nthree"));
+        // Not replies, exactly as for the one-line reading.
+        let side = json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}).to_string();
+        assert_eq!(reply_text_in_line(&side, 1500), None);
+        assert_eq!(reply_text_in_line(&asst(json!([{"type":"thinking","thinking":"hmm"}])), 1500), None);
+        assert_eq!(reply_text_in_line(&asst(json!([{"type":"text","text":" \n\n "}])), 1500), None);
+        assert_eq!(reply_text_in_line("not json", 1500), None);
+        // And the one-line reading the prompt index and the smart names use is unchanged.
+        assert_eq!(reply_in_line(&line, REPLY_CHARS).unwrap().lines().count(), 1);
+        assert_eq!(reply_in_line(&line, REPLY_CHARS).unwrap().chars().count(), REPLY_CHARS);
     }
 }
 
