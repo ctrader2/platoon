@@ -151,7 +151,7 @@ fn wait_title(t: &mut Term, name: &str, color: vt100::Color) {
 }
 
 #[test]
-fn the_project_screen_has_three_panes_and_tab_left_and_right_move_between_them_while_the_old_keys_still_work() {
+fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_between_them_while_the_old_keys_still_work() {
     let lab = Lab::new("tk-panes");
     let mut t = Term::spawn(&[], &lab.colored_env(), &lab.work, 30, 120);
     lab.open_project(&mut t);
@@ -159,28 +159,56 @@ fn the_project_screen_has_three_panes_and_tab_left_and_right_move_between_them_w
     let (s, k, n) = (find(&mut t, "╭ Sessions"), find(&mut t, "╭ Tickets"), find(&mut t, "╭ Notes"));
     assert!(s.1 == k.1 && k.0 > s.0 && n.0 == s.0 && n.1 > s.1, "Sessions over Tickets on the left, Notes on the right:\n{}", t.text());
     wait_title(&mut t, "Sessions", ACCENT);
+    t.wait_for_flat("tab shift+arrows panes");
     t.send(b"\t");
     wait_title(&mut t, "Tickets", ACCENT);
     assert_ne!(t.fg_at(s.0, s.1 + 2), ACCENT, "only the focused pane's title is in the accent");
     t.wait_for_flat("n new ticket");
     t.send(b"\t");
     wait_title(&mut t, "Notes", ACCENT);
-    t.send(b"\x1b[D"); // left: back to Tickets, the one of the left column used last
-    wait_title(&mut t, "Tickets", ACCENT);
     t.send(b"\x1b[Z"); // shift+tab
+    wait_title(&mut t, "Tickets", ACCENT);
+    t.send(b"\x1b[Z");
     wait_title(&mut t, "Sessions", ACCENT);
+    // The xterm forms of Shift+arrow (`ESC [1;2x`) and Ctrl+arrow (`ESC [1;5x`) do the same.
+    for (m, name) in [(b'2', "shift"), (b'5', "ctrl")] {
+        let arrow = |c: u8| vec![0x1b, b'[', b'1', b';', m, c];
+        t.send(&arrow(b'B')); // down: Tickets
+        wait_title(&mut t, "Tickets", ACCENT);
+        t.send(&arrow(b'C')); // right: Notes
+        wait_title(&mut t, "Notes", ACCENT);
+        t.send(&arrow(b'D')); // left: back to Tickets, the one of the left column used last
+        wait_title(&mut t, "Tickets", ACCENT);
+        t.send(&arrow(b'A')); // up: Sessions
+        wait_title(&mut t, "Sessions", ACCENT);
+        t.send(&arrow(b'C'));
+        wait_title(&mut t, "Notes", ACCENT);
+        t.send(&arrow(b'D'));
+        wait_title(&mut t, "Sessions", ACCENT);
+        assert_ne!(t.fg_at(n.0, n.1 + 2), ACCENT, "{name}");
+    }
+    // Plain left and right stay in the pane (each key after them shows where the focus was). Sessions: → then tab
+    // lands on Tickets (had → gone to Notes, tab would be back on Sessions).
+    t.send(b"\x1b[C\t");
+    wait_title(&mut t, "Tickets", ACCENT);
+    // Tickets: → then tab lands on Notes.
+    t.send(b"\x1b[C\t");
+    wait_title(&mut t, "Notes", ACCENT);
+    // Notes: ← then `e` is still the editor list for the notes (in the Tickets pane `e` would do nothing here).
+    t.send(b"\x1b[De");
+    t.wait_for("╭ edit the notes with");
+    t.send(b"\x1b");
+    t.wait_gone("edit the notes with");
+    wait_title(&mut t, "Notes", ACCENT);
     // The Sessions pane's keys: n is still a new session (the folder picker).
+    t.send(b"\x1b[1;5D"); // ctrl+left: Tickets, the one of the left column used last
+    wait_title(&mut t, "Tickets", ACCENT);
+    t.send(b"\x1b[1;5A"); // ctrl+up: Sessions
+    wait_title(&mut t, "Sessions", ACCENT);
     t.send(b"n");
     t.wait_for("pick a directory");
     t.send(b"\x1b");
     t.wait_gone("pick a directory");
-    // The Notes pane's keys: e is still the editor list for the notes.
-    t.send(b"\x1b[C");
-    wait_title(&mut t, "Notes", ACCENT);
-    t.send(b"e");
-    t.wait_for("╭ edit the notes with");
-    t.send(b"\x1b");
-    t.wait_gone("edit the notes with");
     t.send(b"q");
     t.wait_exit();
 }
@@ -209,13 +237,15 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
     t.wait_for("nano · ticket #1");
     t.send(b"A link by email logs you in.\r");
     t.wait_for("Saved the body of #1.");
-    t.wait_for_flat("#1 Log in with a link New local ready");
+    t.wait_for_flat("#1 Log in with a link New ready");
     let v = lab.tickets();
     let one = &v["tickets"][0];
-    assert_eq!((one["number"].as_u64(), one["state"].as_str(), one["how_far"].as_str(), one["file"].as_str()), (Some(1), Some("new"), Some("Local changes only"), Some("01-log-in-with-a-link.md")));
+    assert_eq!((one["number"].as_u64(), one["state"].as_str(), one["file"].as_str()), (Some(1), Some("new"), Some("01-log-in-with-a-link.md")));
+    assert!(one.get("how_far").is_none(), "the ticket's text says how far: {one}");
     assert_eq!(one["folders"], json!([lab.work.to_string_lossy()]), "the folder of the project's session");
     let body = fs::read_to_string(lab.config.join("projects/pweb/tickets/01-log-in-with-a-link.md")).unwrap();
     assert!(body.starts_with("## What it should do") && body.contains("## Acceptance") && body.ends_with("A link by email logs you in.\n"), "{body}");
+    assert!(body.contains("How far: local changes only (say if you want a commit, or a push and merge request)."), "{body}");
     t.send(b"q");
     t.wait_exit();
 }
@@ -231,7 +261,7 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_and_back_with_s(
     let screen = t.stable();
     assert!(!screen.contains("#1 Base"), "folded:\n{screen}");
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("#2 Middle New local ready") && flat.contains("#3 Top New local waits for #2"), "{screen}");
+    assert!(flat.contains("#2 Middle New ready") && flat.contains("#3 Top New waits for #2"), "{screen}");
     // Colors, by cell: the picked row has the highlight, ready is green, waits for is yellow.
     let (r2, c2) = find(&mut t, "#2 Middle");
     let (r3, c3) = find(&mut t, "#3 Top");
@@ -286,8 +316,10 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.send(b"\t");
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "How far", "Local changes only", "Folders", "No folder yet", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
-    t.wait_for_flat("e edit r rename s state h how far f folders b waits for");
+    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "No folder yet", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
+    t.wait_for_flat("e edit r rename s state f folders b waits for");
+    let screen = t.stable();
+    assert!(!screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"), "no how far, though the file has one:\n{screen}");
     assert!(!t.text().contains("step 40"));
     for _ in 0..80 {
         t.send(b"\x1b[B");
@@ -297,20 +329,19 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     assert!(t.text().contains("New · waits for #1"), "the fields stay where they are");
     t.send(b"g");
     t.wait_for("The basket keeps its items.");
-    // How far, in the user's own words.
-    t.send(b"h");
-    t.wait_for_all(&["╭ how far #2 goes", "In my own words…"]);
-    t.send(b"G\r");
-    t.wait_for("╭ how far");
-    t.send(b"Until the tests pass\r");
-    t.wait_for_flat("How far Until the tests pass");
-    assert_eq!(lab.tickets()["tickets"][1]["how_far"], "Until the tests pass");
+    // `h` was how far: it opens nothing now (the rename box after it proves the key was read).
+    t.send(b"hr");
+    t.wait_for("╭ rename ticket");
+    assert!(!t.text().contains("how far"), "{}", t.text());
+    t.send(b"\x1b");
+    t.wait_gone("╭ rename ticket");
+    assert_eq!(lab.tickets()["tickets"][1]["how_far"], "Local changes only", "an old value stays in the file");
     // Esc: the project's screen, the same ticket picked.
     t.send(b"\x1b");
     t.wait_for("╭ Tickets");
     t.wait_for_flat("enter open n new ticket s state");
     t.send(b"\r");
-    t.wait_for_all(&["Waits for", "#1 Base · New", "Until the tests pass"]);
+    t.wait_for_all(&["Waits for", "#1 Base · New", "The basket keeps its items."]);
     t.send(b"q");
     t.wait_exit();
 }
@@ -321,12 +352,16 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     lab.open_project(&mut t);
     t.wait_for("No tickets yet");
-    let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "From the command line", "--how-far", "local commit", "--folder", "."], "## Body\npiped in\n");
+    // --how-far is gone: refused, with where to say it instead.
+    let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "x", "--how-far", "local commit"], "");
+    assert!(code == 1 && out.is_empty() && err.trim() == format!("platoon ticket add: don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")"), "{err}");
+    assert!(!lab.tickets_path().exists(), "nothing made");
+    let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "From the command line", "--folder", "."], "## Body\npiped in\n\nHow far: a local commit.\n");
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
-    t.wait_for_flat("#1 From the command line New commit ready");
+    t.wait_for_flat("#1 From the command line New ready");
     let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--waits-for", "1"], "");
     assert_eq!((code, out.as_str()), (0, "#2\n"));
-    t.wait_for_flat("#2 Second New local waits for #1");
+    t.wait_for_flat("#2 Second New waits for #1");
     // Refusals say one plain line and make nothing.
     let (code, out, err) = lab.cli(&["add", "--project", "Nope", "--title", "x"], "");
     assert!(code != 0 && out.is_empty() && err.trim() == "platoon ticket add: there is no project called \"Nope\"", "{err}");
@@ -334,12 +369,15 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     assert!(code != 0 && err.contains("no ticket #7"), "{err}");
     assert_eq!(lab.tickets()["tickets"].as_array().unwrap().len(), 2);
     let body = fs::read_to_string(lab.config.join("projects/pweb/tickets/01-from-the-command-line.md")).unwrap();
-    assert_eq!(body, "## Body\npiped in\n");
+    assert_eq!(body, "## Body\npiped in\n\nHow far: a local commit.\n");
     let (code, out, _) = lab.cli(&["list", "--json"], "");
     assert_eq!(code, 0);
     let v: Value = serde_json::from_str(&out).unwrap();
     assert_eq!((v[0]["title"].as_str(), v[0]["folders"][0].as_str()), (Some("From the command line"), Some(lab.work.canonicalize().unwrap().to_str().unwrap())));
     assert_eq!((v[1]["ready"].as_bool(), v[1]["blocked_by"].clone()), (Some(false), json!([1])));
+    assert!(v[0].get("how_far").is_none() && v[1].get("how_far").is_none(), "{out}");
+    let (_, out, _) = lab.cli(&["list"], "");
+    assert!(out.contains("#1   From the command line  ·  New  ready") && !out.contains("Local"), "{out}");
     assert_eq!(v[1]["folders"], json!([lab.work.canonicalize().unwrap().to_str().unwrap()]), "no --folder: the folder it was run in");
     t.send(b"q");
     t.wait_exit();
@@ -358,7 +396,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let screen = t.stable();
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(flat.contains("#3 Third Cancelled"), "{screen}");
-    assert!(!flat.contains("local"), "how far is the first to go:\n{screen}");
+    assert!(!flat.contains("local"), "no how far:\n{screen}");
     for line in screen.lines() {
         assert!(line.chars().count() <= 80, "{line}");
     }

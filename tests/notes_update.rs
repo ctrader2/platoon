@@ -174,7 +174,7 @@ impl Lab {
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for("╭ Notes");
-        t.send(b"\x1b[C");
+        t.send(b"\x1b[1;2C"); // shift+right: the notes pane
         t.wait_for_flat("e edit notes");
     }
 }
@@ -255,7 +255,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     t.send(b"\r");
     t.wait_for("╭ Notes");
     t.wait_for("A sock shop, now with a basket that adds up.");
-    t.send(b"\x1b[C");
+    t.send(b"\x1b[1;2C"); // shift+right: the notes pane
     t.wait_for_flat("e edit notes");
     t.wait_for_flat("platoon last updated these just now.");
     t.wait_for("A sock shop.");

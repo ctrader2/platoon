@@ -148,7 +148,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "how far", "edit"]);
+    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit"]);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -255,7 +255,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     }
     out.extend([
         ("/", "search", Some(Action::Search)),
-        ("tab ←→", "panes", None),
+        ("tab shift+arrows", "panes", None),
         ("esc", "back", Some(Action::Leave)),
         ("q", "quit", Some(Action::Quit)),
     ]);
@@ -284,7 +284,6 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
         ("e", "edit", None),
         ("r", "rename", None),
         ("s", "state", None),
-        ("h", "how far", None),
         ("f", "folders", None),
         ("b", "waits for", None),
         ("↑↓", "scroll", None),
@@ -567,37 +566,33 @@ pub(crate) struct TCols {
     pub num: usize,
     pub title: usize,
     pub state: usize,
-    pub how: usize,
     pub tail: usize,
 }
 
 /// The title never gets fewer cells than this while another column is still shown.
 const TICKET_TITLE_MIN: usize = 12;
 
-/// How the Tickets pane's `width` is shared: the number, then the title (whatever is left), then the state, how far
-/// and "waits for / ready", each as wide as its longest value (`want`). When the title would get fewer than
-/// `TICKET_TITLE_MIN` cells, how far goes first, then the state (whose words then move into the last column on the
-/// rows that have nothing else to say there, see `ticket_tail`), then the last column.
-pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_how: usize, want_tail: usize) -> TCols {
+/// How the Tickets pane's `width` is shared: the number, then the title (whatever is left), then the state and
+/// "waits for / ready", each as wide as its longest value (`want`). When the title would get fewer than
+/// `TICKET_TITLE_MIN` cells, the state goes first (its words then move into the last column on the rows that have
+/// nothing else to say there, see `ticket_tail`), then the last column.
+pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_tail: usize) -> TCols {
     let fixed = 1 + num + 1;
-    let (mut state, mut how, mut tail) = (want_state.min(21), want_how.min(14), want_tail.min(24));
-    let used = |s: usize, h: usize, t: usize| fixed + [s, h, t].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
-    if width < used(state, how, tail) + TICKET_TITLE_MIN {
-        how = 0;
-    }
-    if width < used(state, how, tail) + TICKET_TITLE_MIN {
+    let (mut state, mut tail) = (want_state.min(21), want_tail.min(24));
+    let used = |s: usize, t: usize| fixed + [s, t].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
+    if width < used(state, tail) + TICKET_TITLE_MIN {
         state = 0;
     }
-    if width < used(state, how, tail) + TICKET_TITLE_MIN {
+    if width < used(state, tail) + TICKET_TITLE_MIN {
         // The last column is cut (with `…`) before it goes: "waits for #2, …" still says the most.
         let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_MIN);
         tail = if room >= 8 { tail.min(room) } else { 0 };
     }
-    let title = width.saturating_sub(used(state, how, tail));
-    TCols { num, title, state, how, tail }
+    let title = width.saturating_sub(used(state, tail));
+    TCols { num, title, state, tail }
 }
 
-/// What a ticket's row says after its how-far: the tickets it still waits for, or a quiet "ready". `with_state`: the
+/// What a ticket's row says after its state: the tickets it still waits for, or a quiet "ready". `with_state`: the
 /// state has no column of its own (a narrow pane), so a row with nothing else to say there says its state, unless
 /// that is plain New.
 fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
@@ -640,13 +635,12 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let shown: Vec<&Ticket> = rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
     let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
     let want_state = shown.iter().map(|x| x.state.label().chars().count()).max().unwrap_or(0);
-    let want_how = shown.iter().map(|x| x.how_far.short().chars().count()).max().unwrap_or(0);
     let want_tail = |with_state: bool| shown.iter().map(|x| ticket_tail(x, all, with_state).0.chars().count()).max().unwrap_or(0);
-    let mut c = ticket_cols(area.width as usize, num, want_state, want_how, want_tail(false));
+    let mut c = ticket_cols(area.width as usize, num, want_state, want_tail(false));
     // No room for the state's own column: the rows that have nothing else to say at the end say their state there.
     let merged = c.state == 0 && want_state > 0;
     if merged {
-        c = ticket_cols(area.width as usize, num, 0, 0, want_tail(true));
+        c = ticket_cols(area.width as usize, num, 0, want_tail(true));
     }
     let selected = app.ticket_selected();
     let height = area.height as usize;
@@ -681,9 +675,6 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                 if c.state > 0 {
                     spans.push(Span::styled(format!("  {}", fit(x.state.label(), c.state)), base.fg(state_color(t, &x.state))));
                 }
-                if c.how > 0 {
-                    spans.push(Span::styled(format!("  {}", fit(x.how_far.short(), c.how)), base.fg(t.dim)));
-                }
                 if c.tail > 0 {
                     let (tail, ready) = ticket_tail(x, all, merged);
                     let color = if ready {
@@ -702,7 +693,7 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// A ticket's own screen, in `area`: its number and title, its state, how far it goes, its folders and what it
+/// A ticket's own screen, in `area`: its number and title, its state, its squad, its folders and what it
 /// waits for, then its body drawn from the Markdown, scrolled with the arrows. It takes any `area`, so a split view
 /// can put a session beside it.
 fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
@@ -746,17 +737,19 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
     }
+    // Which squad has it: "Coding squad" (whether its session runs shows beside the ticket, or as the enter hint).
     if let Some(l) = x.leader() {
         let name = crate::squads::find(&l.squad).map_or(l.squad.as_str(), |s| s.name);
-        let running = if app.leader_running(x.number) { "its session is running" } else { "its session isn't running" };
-        let publish = if x.go_ahead { " · you let it publish" } else { "" };
-        head.push(Line::from(vec![label("Squad"), Span::styled(fit_end(&format!("{name} · {running}{publish}"), w.saturating_sub(LABEL)), Style::new().fg(t.text))]));
+        let mut spans = vec![Span::styled(fit_end(&format!("{name} squad"), w), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
+        if x.go_ahead {
+            spans.push(Span::styled(fit_end(" · you let it publish", w.saturating_sub(name.chars().count() + 6)), Style::new().fg(t.warn)));
+        }
+        head.push(Line::from(spans));
     }
     for (i, wt) in x.worktrees.iter().enumerate() {
         let shown = fit_start(&format!("{} ({})", tilde(&wt.path, &app.home), wt.branch), w.saturating_sub(LABEL));
         head.push(Line::from(vec![label(if i == 0 { "Worktree" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
     }
-    head.push(Line::from(vec![label("How far"), Span::styled(fit_end(x.how_far.text(), w.saturating_sub(LABEL)), Style::new().fg(t.text))]));
     if x.folders.is_empty() {
         head.push(Line::from(vec![label("Folders"), Span::styled("No folder yet", Style::new().fg(t.subtext))]));
     }
@@ -803,7 +796,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     }
 }
 
-/// A list over a ticket: its state (New, Done, Cancelled), how far it goes, the tickets it waits for, or its folders.
+/// A list over a ticket: its state (New, Done, Cancelled), the tickets it waits for, or its folders.
 fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let pick = &app.tk.pick;
@@ -812,7 +805,6 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let Some(x) = app.ticket(pick.number) else { return };
     let (title, head, hints): (String, String, Vec<Hint>) = match pick.kind {
         PickKind::State => (format!("state of #{}", x.number), x.title.clone(), vec![("enter", "choose", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)]),
-        PickKind::HowFar => (format!("how far #{} goes", x.number), "When is it finished?".into(), vec![("enter", "choose", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)]),
         PickKind::BlockedBy => (
             format!("#{} waits for", x.number),
             format!("#{} is ready once these are Done:", x.number),
@@ -853,11 +845,6 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
         let (text, color) = match opt {
             PickOpt::State(State::Working) if x.leader().is_some() => ("Working · continue with the squad".to_string(), state_color(t, &State::Working)),
             PickOpt::State(s) => (s.label().to_string(), state_color(t, s)),
-            PickOpt::HowFar(i) => (tickets::HOW_FAR[*i].0.to_string(), t.text),
-            PickOpt::OwnWords => match &x.how_far {
-                tickets::HowFar::Own(words) => (format!("{} {words}", tickets::OWN_WORDS), t.text),
-                _ => (tickets::OWN_WORDS.to_string(), t.text),
-            },
             PickOpt::Blocker(n) => match app.ticket(*n) {
                 Some(o) => (format!("#{n} {} · {}", o.title, o.state.label()), t.text),
                 None => (format!("#{n}"), t.text),
@@ -2400,7 +2387,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let nb = &app.name_box;
     app.hits.borrow_mut().clear();
-    let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::OwnWords(_));
+    let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_));
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
     f.render_widget(Clear, r);
     let (title, note) = match nb.purpose {
@@ -2409,7 +2396,6 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
         NamePurpose::New => ("new project", "Give it a name. Its color and badge can be changed later (c)."),
         NamePurpose::NewTicket => ("new ticket", "Its title. The body opens in your editor next."),
         NamePurpose::TicketTitle(_) => ("rename ticket", "The body and its file stay as they are."),
-        NamePurpose::OwnWords(_) => ("how far", "In your own words: when is this ticket finished?"),
     };
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));

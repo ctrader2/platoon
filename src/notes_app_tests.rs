@@ -24,6 +24,11 @@ fn key(app: &mut App, code: KeyCode) {
     app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
 }
 
+/// Shift+arrow: moves between the panes of a project's screen.
+fn shift(app: &mut App, code: KeyCode) {
+    app.on_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+}
+
 fn typed(app: &mut App, text: &str) {
     for c in text.chars() {
         key(app, KeyCode::Char(c));
@@ -60,7 +65,7 @@ fn on_the_notes(name: &str) -> (World, App, String) {
     key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
-    key(&mut app, KeyCode::Right);
+    shift(&mut app, KeyCode::Right);
     assert_eq!(app.pane, Pane::Notes);
     (w, app, id)
 }
@@ -228,9 +233,9 @@ fn an_editor_with_its_own_window_says_so_and_platoon_carries_on() {
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Open in winded, in a window of its own."), "{shown}");
     // The list still works while it is open, and platoon refuses to write the notes itself.
-    key(&mut app, KeyCode::Left);
+    shift(&mut app, KeyCode::Left);
     assert_eq!(app.pane, Pane::Sessions);
-    key(&mut app, KeyCode::Right);
+    shift(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Char('u'));
     assert!(app.active_notice().is_some_and(|n| n.contains("open in winded")), "{:?}", app.active_notice());
     assert_eq!(notes_of(&w, &id), "# Overview\nBefore.\n");
@@ -362,7 +367,7 @@ fn the_notes_pane_offers_its_keys_and_the_sessions_pane_keeps_its_own() {
         assert!(shown.contains(hint), "{hint:?} missing from the footer:\n{shown}");
     }
     assert!(!shown.contains("E editor"), "the separate editor key is retired:\n{shown}");
-    key(&mut app, KeyCode::Left);
+    shift(&mut app, KeyCode::Left);
     let shown = draw(&mut term, &app);
     assert!(shown.contains("a archive") && !shown.contains("c changes"), "the sessions pane keeps its own keys:\n{shown}");
     // The notes keys do nothing there: `u` on a session is not an undo.

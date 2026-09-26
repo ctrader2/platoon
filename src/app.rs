@@ -177,7 +177,7 @@ pub enum Hit {
     ProjectRow(usize),
     /// A row of the Tickets pane of a project's screen.
     TicketRow(usize),
-    /// An entry of a list open over a ticket (its state, how far, folders, what it waits for).
+    /// An entry of a list open over a ticket (its state, folders, what it waits for).
     TicketPickRow(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
@@ -276,7 +276,7 @@ pub enum Mode {
     Changes,
     /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
     Handoff,
-    /// A list open over a ticket: its state, how far it goes, its folders or what it waits for (`tk.pick`).
+    /// A list open over a ticket: its state, its folders or what it waits for (`tk.pick`).
     TicketPick,
     /// The squads a ticket can be handed to (`sq`).
     SquadPick,

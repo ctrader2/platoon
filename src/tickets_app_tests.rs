@@ -6,7 +6,7 @@
 use crate::app::{App, Hit, Mode, Pane, PickKind, TRow};
 use crate::editors::Editor;
 use crate::testkit::World;
-use crate::tickets::{self, HowFar, NewTicket, State, Tickets};
+use crate::tickets::{self, NewTicket, State, Tickets};
 use crate::ui;
 use ratatui::{
     backend::TestBackend,
@@ -23,6 +23,11 @@ use std::{
 
 fn key(app: &mut App, code: KeyCode) {
     app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+}
+
+/// Shift+arrow: moves between the panes of a project's screen.
+fn shift(app: &mut App, code: KeyCode) {
+    app.on_key(KeyEvent::new(code, KeyModifiers::SHIFT));
 }
 
 fn typed(app: &mut App, text: &str) {
@@ -94,7 +99,7 @@ fn set_state(w: &World, app: &mut App, id: &str, n: u32, s: State) {
 }
 
 #[test]
-fn the_project_screen_has_three_panes_and_tab_left_and_right_move_between_them() {
+fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_between_them() {
     let (_w, mut app, _id) = on_the_project("t-panes");
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = draw(&mut term, &app);
@@ -111,14 +116,52 @@ fn the_project_screen_has_three_panes_and_tab_left_and_right_move_between_them()
     assert_eq!(app.pane, Pane::Sessions, "round again");
     app.on_key(KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT));
     assert_eq!(app.pane, Pane::Notes);
-    // Left goes back to the one of the left column used last.
-    key(&mut app, KeyCode::Left);
+    // Shift and Ctrl do the same (some terminals keep one of them for themselves).
+    for m in [KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+        let press = |app: &mut App, code: KeyCode| app.on_key(KeyEvent::new(code, m));
+        while app.pane != Pane::Sessions {
+            key(&mut app, KeyCode::Tab);
+        }
+        // Left goes back to the one of the left column used last; right to the notes.
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.pane, Pane::Notes, "{m:?}");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.pane, Pane::Sessions, "{m:?}");
+        // Down and up: between Sessions and Tickets.
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.pane, Pane::Tickets, "{m:?}");
+        press(&mut app, KeyCode::Right);
+        assert_eq!(app.pane, Pane::Notes, "{m:?}");
+        press(&mut app, KeyCode::Left);
+        assert_eq!(app.pane, Pane::Tickets, "the Tickets pane was the last of the left column ({m:?})");
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.pane, Pane::Sessions, "{m:?}");
+        press(&mut app, KeyCode::Up);
+        assert_eq!(app.pane, Pane::Sessions, "nothing above Sessions ({m:?})");
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.pane, Pane::Tickets, "nothing below Tickets ({m:?})");
+        press(&mut app, KeyCode::Up);
+    }
+    // Plain left and right no longer leave a pane, from any of the three.
+    for pane in [Pane::Sessions, Pane::Tickets, Pane::Notes] {
+        while app.pane != pane {
+            key(&mut app, KeyCode::Tab);
+        }
+        key(&mut app, KeyCode::Right);
+        assert_eq!(app.pane, pane);
+        key(&mut app, KeyCode::Left);
+        assert_eq!(app.pane, pane);
+    }
+    // Plain up and down still move inside a pane, not between them.
+    while app.pane != Pane::Sessions {
+        key(&mut app, KeyCode::Tab);
+    }
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Up);
     assert_eq!(app.pane, Pane::Sessions);
     key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Right);
-    assert_eq!(app.pane, Pane::Notes);
-    key(&mut app, KeyCode::Left);
-    assert_eq!(app.pane, Pane::Tickets, "the Tickets pane was the last of the left column");
+    assert_eq!(app.pane, Pane::Tickets);
     // The focused pane's border is the accent, the others' not.
     draw(&mut term, &app);
     let t = app.effective_theme().clone();
@@ -141,7 +184,7 @@ fn the_sessions_and_notes_keys_still_work_on_the_project_screen() {
     assert!(matches!(app.mode, Mode::Picker), "the folder picker for a new session");
     assert!(app.picker.ticket.is_none());
     key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Right);
+    shift(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Char('n'));
     assert!(matches!(app.mode, Mode::Picker));
     key(&mut app, KeyCode::Esc);
@@ -150,7 +193,7 @@ fn the_sessions_and_notes_keys_still_work_on_the_project_screen() {
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.ticket.is_none() && app.epick.instructions.is_none());
     key(&mut app, KeyCode::Esc);
     // `s` outside the Tickets pane is still the settings.
-    key(&mut app, KeyCode::Left);
+    shift(&mut app, KeyCode::Left);
     key(&mut app, KeyCode::Char('s'));
     assert!(matches!(app.mode, Mode::Settings));
     key(&mut app, KeyCode::Esc);
@@ -179,9 +222,9 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     assert!(matches!(app.mode, Mode::ProjectName) && app.active_notice() == Some("A ticket needs a title"));
     typed(&mut app, "Log in with a link");
     key(&mut app, KeyCode::Enter);
-    // Made: #1, New, "Local changes only", the folder of the project's session, the template.
+    // Made: #1, New, the folder of the project's session, the template (which says how far).
     let t = app.ticket(1).expect("made").clone();
-    assert_eq!((t.title.as_str(), &t.state, &t.how_far, t.folders.as_slice()), ("Log in with a link", &State::New, &HowFar::Preset(0), &["/tmp".to_string()][..]));
+    assert_eq!((t.title.as_str(), &t.state, t.folders.as_slice()), ("Log in with a link", &State::New, &["/tmp".to_string()][..]));
     assert_eq!(app.tickets_store().unwrap().body(&t), tickets::TEMPLATE);
     // Then the editor list, for the ticket; enter runs the (stand-in) editor on the body.
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.ticket == Some(1));
@@ -200,7 +243,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // The row is picked, in the Tickets pane.
     assert_eq!((app.pane, app.selected_ticket().map(|t| t.number)), (Pane::Tickets, Some(1)));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#1 Log in with a link New local ready"), "{shown}");
+    assert!(shown.contains("#1 Log in with a link New ready"), "{shown}");
 }
 
 #[test]
@@ -283,8 +326,8 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     key(&mut app, KeyCode::Tab);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#2 Middle New local ready"), "{shown}");
-    assert!(shown.contains("#3 Top New local waits for #2"), "only the unfinished blocker: {shown}");
+    assert!(shown.contains("#2 Middle New ready"), "{shown}");
+    assert!(shown.contains("#3 Top New waits for #2"), "only the unfinished blocker: {shown}");
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
     let (ry, rx) = find(&term, "ready").unwrap();
@@ -322,7 +365,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     // Once #2 is Done too, #3 is ready.
     set_state(&w, &mut app, &id, 2, State::Done);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#3 Top New local ready"), "{shown}");
+    assert!(shown.contains("#3 Top New ready"), "{shown}");
 }
 
 #[test]
@@ -359,8 +402,14 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     let (w, mut app, id) = on_the_project("t-screen");
     add(&w, &mut app, &id, "Base", &[]);
     add(&w, &mut app, &id, "Basket page", &[1]);
+    // A ticket written when "how far" was a field of its own: the value stays in the file and nothing shows it.
+    let path = tickets::path_in(&w.config, &id);
+    let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    if let Some(t) = v.get_mut("tickets").and_then(|t| t.get_mut(1)).and_then(|t| t.as_object_mut()) {
+        t.insert("how_far".into(), "Commit, push and open a merge request".into());
+    }
+    fs::write(&path, v.to_string()).unwrap();
     let mut store = Tickets::open(&w.config, &id);
-    store.set_how_far(2, &HowFar::Preset(2)).unwrap();
     let home = app.home.clone();
     let folder = w.base.join("work");
     fs::create_dir_all(&folder).unwrap();
@@ -378,11 +427,12 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     let f = flat(&shown);
     assert!(f.contains("#2 Basket page"), "{shown}");
     assert!(f.contains("State New · waits for #1"), "{shown}");
-    assert!(f.contains("How far Commit, push and open a merge request"), "{shown}");
+    assert!(!f.contains("How far") && !f.contains("merge request"), "no how-far line: {shown}");
     assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
     assert!(f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"), "the Markdown drawn: {shown}");
-    assert!(f.contains("e edit") && f.contains("s state") && f.contains("h how far") && f.contains("esc back"), "the keys: {shown}");
+    assert!(f.contains("e edit") && f.contains("s state") && f.contains("esc back"), "the keys: {shown}");
+    assert!(!f.contains("h how far") && !f.contains("how far"), "no how-far key: {shown}");
     assert!(!f.contains("step 60"));
     // The bold word is bold.
     let buf = buffer(&term);
@@ -396,20 +446,16 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     assert!(f.contains("step 60") && !f.contains("step 1 ") && f.contains("State New"), "the fields stay: {f}");
     key(&mut app, KeyCode::Char('g'));
     assert!(flat(&draw(&mut term, &app)).contains("The basket keeps its items."));
-    // Rename, how far in own words, folders, from the screen.
+    // Rename and folders from the screen; `h` (how far, once) does nothing now.
     key(&mut app, KeyCode::Char('r'));
     assert_eq!(app.name_box.input, "Basket page");
     typed(&mut app, "s");
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.ticket(2).unwrap().title, "Basket pages");
+    let before = fs::read_to_string(&path).unwrap();
     key(&mut app, KeyCode::Char('h'));
-    key(&mut app, KeyCode::Char('G'));
-    key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::ProjectName));
-    typed(&mut app, "Until the tests pass");
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.ticket(2).unwrap().how_far, HowFar::Own("Until the tests pass".into()));
-    assert!(flat(&draw(&mut term, &app)).contains("How far Until the tests pass"));
+    assert!(matches!(app.mode, Mode::List) && app.tk.open == Some(2), "no list opens");
+    assert_eq!(fs::read_to_string(&path).unwrap(), before, "nothing changed");
     key(&mut app, KeyCode::Char('f'));
     assert!(flat(&draw(&mut term, &app)).contains("Add a folder…"));
     key(&mut app, KeyCode::Char('d'));
@@ -427,6 +473,10 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     key(&mut app, KeyCode::Esc);
     assert_eq!((app.tk.open, app.pane, app.selected_ticket().map(|t| t.number)), (None, Pane::Tickets, Some(2)));
     assert!(app.open_project().is_some());
+    // Every change above kept the old value in the file (keys platoon doesn't read are kept).
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(v["tickets"][1]["how_far"], "Commit, push and open a merge request");
+    assert_eq!(v["tickets"][1]["title"], "Basket pages");
 }
 
 #[test]
@@ -450,7 +500,7 @@ fn a_ticket_added_from_outside_shows_on_the_next_refresh_and_a_corrupt_file_is_s
 }
 
 #[test]
-fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_how_far_first() {
+fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_the_state_first() {
     let (w, mut app, id) = on_the_project("t-80");
     add(&w, &mut app, &id, "A rather long title for a ticket", &[]);
     add(&w, &mut app, &id, "Second", &[1]);
@@ -463,7 +513,7 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_how_far_f
     assert!(f.contains("Sessions") && f.contains("Tickets") && f.contains("Notes"), "{shown}");
     assert!(f.contains("#1 A rather long") && f.contains("… ready"), "{shown}");
     assert!(f.contains("#2 Second waits for #1"), "{shown}");
-    assert!(!f.contains("local") && !f.contains(" New"), "how far goes first, then the state's own column: {shown}");
+    assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state's own column goes first: {shown}");
     assert!(f.contains("#3 Third Cancelled"), "a row with nothing else to say says its state: {shown}");
     // No row runs past its pane.
     let (y, x) = find(&term, "#2").unwrap();
@@ -473,25 +523,21 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_how_far_f
 }
 
 #[test]
-fn ticket_columns_share_the_width_and_drop_how_far_then_the_tail_then_the_state() {
+fn ticket_columns_share_the_width_and_drop_the_state_then_the_tail() {
     for width in 0..200usize {
-        let c = ui::ticket_cols(width, 2, 21, 9, 16);
-        let used = 1 + c.num + 1 + c.title + [c.state, c.how, c.tail].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
+        let c = ui::ticket_cols(width, 2, 21, 16);
+        let used = 1 + c.num + 1 + c.title + [c.state, c.tail].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
         assert!(used <= width.max(4) || c.title == 0, "{width}: {c:?}");
-        if c.how > 0 {
-            assert!(c.tail > 0 && c.state > 0, "how far goes first: {width} {c:?}");
-        }
         if c.state > 0 {
-            assert!(c.tail > 0, "then the state, then waits for / ready: {width} {c:?}");
+            assert!(c.tail > 0, "the state goes first, then waits for / ready: {width} {c:?}");
         }
-        if c.state > 0 || c.how > 0 || c.tail > 0 {
+        if c.state > 0 || c.tail > 0 {
             assert!(c.title >= 12, "{width}: {c:?}");
         }
     }
-    let c = ui::ticket_cols(120, 2, 3, 5, 5);
-    assert_eq!((c.state, c.how, c.tail, c.title), (3, 5, 5, 120 - 4 - 5 - 7 - 7));
+    let c = ui::ticket_cols(120, 2, 3, 5);
+    assert_eq!((c.state, c.tail, c.title), (3, 5, 120 - 4 - 5 - 7));
 }
-
 
 #[test]
 fn an_archived_project_takes_no_new_ticket_but_its_tickets_can_still_be_changed() {

@@ -1,10 +1,10 @@
 //! Tickets inside the app: the Tickets pane of a project's screen (open tickets, then "Done and cancelled", folded),
-//! a ticket's own screen, the lists that change its state, how far it goes, its folders and what it waits for, and
+//! a ticket's own screen, the lists that change its state, its folders and what it waits for, and
 //! making a new one. The data itself is in `tickets.rs`; editing a body goes through the notes' editor flow
 //! (`notes_glue.rs`).
 
 use super::*;
-use crate::tickets::{self, HowFar, State, Ticket, Tickets, HOW_FAR, LEADER_STATES, USER_STATES};
+use crate::tickets::{self, State, Ticket, Tickets, LEADER_STATES, USER_STATES};
 
 /// A row of the Tickets pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -18,7 +18,6 @@ pub enum TRow {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickKind {
     State,
-    HowFar,
     BlockedBy,
     Folders,
 }
@@ -27,8 +26,6 @@ pub enum PickKind {
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum PickOpt {
     State(State),
-    HowFar(usize),
-    OwnWords,
     Blocker(u32),
     Folder(String),
     AddFolder,
@@ -217,7 +214,6 @@ impl App {
             KeyCode::Char('e') => self.edit_ticket(number),
             KeyCode::Char('r') => self.open_name_box(NamePurpose::TicketTitle(number)),
             KeyCode::Char('s') => self.open_ticket_pick(PickKind::State, number),
-            KeyCode::Char('h') => self.open_ticket_pick(PickKind::HowFar, number),
             KeyCode::Char('f') => self.open_ticket_pick(PickKind::Folders, number),
             KeyCode::Char('b') => self.open_ticket_pick(PickKind::BlockedBy, number),
             KeyCode::Char('a') => self.ask_hand_to_squad(number),
@@ -307,7 +303,7 @@ impl App {
         true
     }
 
-    /// Enter in the name box for a new ticket: the next number, the template body, "Local changes only", the folder
+    /// Enter in the name box for a new ticket: the next number, the template body (which says how far), the folder
     /// of the project's most recently used session (none when it has no sessions), New. Then the body opens in the
     /// editor, the same way the notes do.
     pub(super) fn make_ticket(&mut self, title: &str) {
@@ -365,11 +361,6 @@ impl App {
                 let states: &[State] = if t.leader().is_some() { &LEADER_STATES } else { &USER_STATES };
                 states.iter().map(|s| (PickOpt::State(s.clone()), *s == t.state)).collect()
             }
-            PickKind::HowFar => {
-                let mut v: Vec<(PickOpt, bool)> = (0..HOW_FAR.len()).map(|i| (PickOpt::HowFar(i), t.how_far == HowFar::Preset(i))).collect();
-                v.push((PickOpt::OwnWords, matches!(t.how_far, HowFar::Own(_))));
-                v
-            }
             PickKind::BlockedBy => {
                 let mut others: Vec<&Ticket> = self.tickets().iter().filter(|o| o.number != t.number).collect();
                 others.sort_by_key(|o| o.number);
@@ -404,7 +395,7 @@ impl App {
         }
     }
 
-    /// Enter in the list: take that choice. The state and how-far lists close; "what it waits for" stays open so
+    /// Enter in the list: take that choice. The state list closes; "what it waits for" stays open so
     /// several can be ticked; the folders list opens the folder picker for "Add a folder…".
     pub(super) fn take_ticket_pick(&mut self) {
         let number = self.tk.pick.number;
@@ -416,22 +407,6 @@ impl App {
             PickOpt::State(s) => {
                 self.mode = Mode::List;
                 self.set_ticket_state(number, &s);
-            }
-            PickOpt::HowFar(i) => {
-                self.mode = Mode::List;
-                let Some(store) = self.tk.store.as_mut() else { return };
-                match store.set_how_far(number, &HowFar::Preset(i)) {
-                    Ok(()) => self.notify(format!("#{number} goes as far as: {}", HOW_FAR[i].0)),
-                    Err(e) => self.report_tickets_error(e),
-                }
-            }
-            PickOpt::OwnWords => {
-                let now = match self.ticket(number).map(|t| t.how_far.clone()) {
-                    Some(HowFar::Own(s)) => s,
-                    _ => String::new(),
-                };
-                self.open_name_box(NamePurpose::OwnWords(number));
-                self.name_box.input = now;
             }
             PickOpt::Blocker(b) => {
                 let Some(store) = self.tk.store.as_mut() else { return };
@@ -464,15 +439,6 @@ impl App {
                     self.after_cancel(number);
                 }
             }
-            Err(e) => self.report_tickets_error(e),
-        }
-    }
-
-    pub(super) fn save_own_words(&mut self, number: u32, text: &str) {
-        let Some(store) = self.tk.store.as_mut() else { return };
-        let how = HowFar::parse(text);
-        match store.set_how_far(number, &how) {
-            Ok(()) => self.notify(format!("#{number} goes as far as: {}", how.text())),
             Err(e) => self.report_tickets_error(e),
         }
     }

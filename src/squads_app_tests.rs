@@ -35,7 +35,7 @@ fn flat(text: &str) -> String {
 }
 
 fn lead(session: &str) -> Leader {
-    Leader { squad: "coding".into(), session: session.into(), started: 1 }
+    Leader { squad: "coding".into(), session: session.into(), started: 1, names: Default::default() }
 }
 
 /// A project "Web shop" with the user's session `user-1` in it, its screen open.
@@ -190,6 +190,11 @@ fn p_lets_a_ready_ticket_publish_and_nothing_else() {
     let t = app.ticket(n).unwrap();
     assert!(t.go_ahead && t.state == State::Working && t.reason.is_empty(), "{t:?}");
     assert!(app.active_notice().unwrap().starts_with("#1 may publish now. Its squad's session isn't running"), "{:?}", app.active_notice());
+    // Its screen says the squad let it publish, beside the squad's name.
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tk.open, Some(n));
+    let shown = draw(&mut term, &app);
+    assert!(shown.lines().any(|l| l.contains("Coding squad · you let it publish")), "{shown}");
 }
 
 #[test]
@@ -210,7 +215,10 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
     let f = flat(&shown);
     assert!(f.contains("The squad's session isn't running. Enter to continue it."), "{shown}");
     assert!(f.contains("Squad says Asks: Red or blue?"), "{shown}");
-    assert!(f.contains("Squad Coding · its session isn't running"), "{shown}");
+    // The squad by its name, and nothing more: whether its session runs is on the right.
+    let squad_line = shown.lines().find(|l| l.contains("Coding squad")).expect(&shown);
+    assert!(squad_line.split('│').nth(1).unwrap().trim() == "Coding squad", "just \"Coding squad\": {squad_line}");
+    assert!(!f.contains("Squad Coding") && !f.contains("its session isn't running") && !f.contains("let it publish"), "{shown}");
     assert!(f.contains("Worktree …/shop-worktrees/ticket-1 (ticket/1)"), "cut from the start when narrow: {shown}");
     assert!(f.contains("enter continue the squad"), "{shown}");
     // The message is on the right, the ticket on the left.

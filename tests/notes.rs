@@ -159,7 +159,7 @@ impl Lab {
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for("╭ Notes");
-        t.send(b"\x1b[C"); // right: the notes pane
+        t.send(b"\x1b[1;2C"); // shift+right: the notes pane
         t.wait_for_flat("e edit notes");
     }
 }
@@ -291,9 +291,9 @@ fn an_editor_with_its_own_window_says_so_platoon_carries_on_and_the_notes_come_b
     t.wait_gone("edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
     // platoon is not blocked: the panes still answer, and the project's screen is still drawn.
-    t.send(b"\x1b[D");
+    t.send(b"\x1b[1;5D"); // ctrl+left: the sessions
     t.wait_for_flat("a archive");
-    t.send(b"\x1b[C");
+    t.send(b"\x1b[1;5C"); // ctrl+right: the notes
     t.wait_for_flat("e edit notes");
     // When the editor is done, the notes are read again by themselves.
     until("the other window to write", || lab.notes().contains("written in the other window"));

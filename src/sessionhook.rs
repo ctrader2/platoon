@@ -231,7 +231,7 @@ mod tests {
         r.notes(&p, &b, "notes of b");
         let mut t = crate::tickets::Tickets::open(&r.config, &a);
         let n = t.add(crate::tickets::NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
         let before = fs::read_to_string(Projects::open(&r.config).path()).unwrap();
         // Even with PLATOON_PROJECT naming the other project (it must never get that far, but if it did).
         let text = context(&r.run("lead-1", "startup", Some(&b)).expect("the ticket's project's notes"));

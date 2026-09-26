@@ -36,8 +36,6 @@ pub enum NamePurpose {
     NewTicket,
     /// A new title for this ticket.
     TicketTitle(u32),
-    /// How far this ticket goes, in the user's own words.
-    OwnWords(u32),
 }
 
 pub struct NameBox {
@@ -311,9 +309,16 @@ impl App {
     }
 
     fn project_screen_key(&mut self, key: KeyEvent) {
+        // Plain arrows move inside a pane. With Shift or Ctrl (both, because some terminals keep one of them for
+        // themselves) they move between the panes: up and down between Sessions and Tickets, left to whichever of
+        // those two was used last, right to the notes.
+        let across = key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Left => self.focus_pane(self.left_pane),
-            KeyCode::Right => self.focus_pane(Pane::Notes),
+            KeyCode::Up if across => self.focus_pane(Pane::Sessions),
+            KeyCode::Down if across => self.focus_pane(Pane::Tickets),
+            KeyCode::Left if across => self.focus_pane(self.left_pane),
+            KeyCode::Right if across => self.focus_pane(Pane::Notes),
+            KeyCode::Left | KeyCode::Right => {}
             KeyCode::Tab => self.cycle_pane(1),
             KeyCode::BackTab => self.cycle_pane(-1),
             KeyCode::Esc if !self.filter.is_empty() => {
@@ -390,7 +395,6 @@ impl App {
     pub(super) fn type_project_name(&mut self, text: &str) {
         let max = match self.name_box.purpose {
             NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => crate::tickets::TITLE_MAX,
-            NamePurpose::OwnWords(_) => crate::tickets::OWN_WORDS_MAX,
             _ => projects_mod::NAME_MAX,
         };
         let room = max.saturating_sub(self.name_box.input.chars().count());
@@ -413,15 +417,6 @@ impl App {
                 }
                 return;
             }
-            NamePurpose::OwnWords(n) => {
-                let words = crate::tickets::clean(&self.name_box.input, crate::tickets::OWN_WORDS_MAX);
-                if words.is_empty() {
-                    self.notify("Say in a few words when this ticket is finished");
-                    return;
-                }
-                self.mode = Mode::List;
-                return self.save_own_words(n, &words);
-            }
             _ => {}
         }
         let name = projects_mod::clean(&self.name_box.input, projects_mod::NAME_MAX);
@@ -436,7 +431,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::OwnWords(_) => {}
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

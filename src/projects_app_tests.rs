@@ -18,6 +18,11 @@ fn key(app: &mut App, code: KeyCode) {
     app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
 }
 
+/// Shift+arrow: moves between the panes of a project's screen.
+fn shift(app: &mut App, code: KeyCode) {
+    app.on_key(KeyEvent::new(code, KeyModifiers::SHIFT));
+}
+
 fn type_str(app: &mut App, text: &str) {
     for c in text.chars() {
         key(app, KeyCode::Char(c));
@@ -509,13 +514,13 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     assert!(f.contains("Sessions") && f.contains("Notes") && f.contains("No notes yet"), "{shown}");
     assert!(f.contains("They live in") && f.contains("project.md"), "says where they live: {shown}");
     assert!(!f.contains("beta talks"), "{shown}");
-    // Focus: left and right move it between the panes; the focused pane has the accent border.
+    // Focus: shift+left and shift+right move it between the panes; the focused pane has the accent border.
     assert_eq!(app.pane, Pane::Sessions);
-    key(&mut app, KeyCode::Right);
+    shift(&mut app, KeyCode::Right);
     assert_eq!(app.pane, Pane::Notes);
     key(&mut app, KeyCode::Down); // scrolls the notes, not the sessions
     assert_eq!(app.selected, 0);
-    key(&mut app, KeyCode::Left);
+    shift(&mut app, KeyCode::Left);
     key(&mut app, KeyCode::Down);
     assert_eq!(app.selected, 1);
     // A click on a pane focuses it.
@@ -775,7 +780,7 @@ fn the_new_screens_fit_small_terminals() {
         draw(&mut term, &app);
         key(&mut app, KeyCode::Enter);
         draw(&mut term, &app);
-        key(&mut app, KeyCode::Right);
+        shift(&mut app, KeyCode::Right);
         draw(&mut term, &app);
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('c'));

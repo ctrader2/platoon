@@ -1,11 +1,11 @@
 //! Tickets: one piece of work in a project. A ticket has a number (per project, from 1, never used twice), a title,
-//! a body in Markdown (a file of its own the user edits), the folders it works in, how far to take it (the definition
-//! of done), the tickets it waits for (`blocked_by`) and a state. Squads (a later version) work on them; for now only
-//! the user moves a ticket along, and only platoon ever writes a ticket's state.
+//! a body in Markdown (a file of its own the user edits; it also says how far to take the work), the folders it works
+//! in, the tickets it waits for (`blocked_by`) and a state. Only platoon ever writes a ticket's state (for the user, or
+//! for the squad working on it).
 //!
 //! A project's tickets live beside its notes:
-//! `<config>/projects/<id>/tickets.json` = `{"next": 4, "tickets": [{"number", "title", "file", "state", "how_far",
-//! "folders", "blocked_by", "created", "updated"}]}` and the bodies in `<config>/projects/<id>/tickets/<NN>-<slug>.md`
+//! `<config>/projects/<id>/tickets.json` = `{"next": 4, "tickets": [{"number", "title", "file", "state", "folders",
+//! "blocked_by", "created", "updated", ...}]}` and the bodies in `<config>/projects/<id>/tickets/<NN>-<slug>.md`
 //! (`file` holds that name; a rename of the title keeps the file).
 //!
 //! Like platoon's other files: writes are atomic (temp file + rename) and happen under a lock (`tickets.lock` beside
@@ -23,14 +23,14 @@ use std::{
 
 /// The longest title kept, in characters.
 pub const TITLE_MAX: usize = 100;
-/// The longest "in my own words" line kept, in characters.
-pub const OWN_WORDS_MAX: usize = 120;
 
 /// What a new ticket's body starts from: what should work when it is finished, and how to tell.
 pub const TEMPLATE: &str = "\
 ## What it should do
 
 What should work when this is finished, as behaviour, not a list of changes. It should fit in one fresh session.
+
+How far: local changes only (say if you want a commit, or a push and merge request).
 
 ## Acceptance
 
@@ -119,66 +119,6 @@ impl State {
     }
 }
 
-// ---- how far ------------------------------------------------------------------------------------------------------
-
-/// The ready-made answers to "how far should this go", in the words the screen and the file use, with a short form
-/// for the list.
-pub const HOW_FAR: [(&str, &str); 4] = [
-    ("Local changes only", "local"),
-    ("Local commit", "commit"),
-    ("Commit, push and open a merge request", "push + MR"),
-    ("Publish a document or page", "publish"),
-];
-
-/// The last choice of the how-far list: the user writes their own line.
-pub const OWN_WORDS: &str = "In my own words…";
-
-/// How far to take a ticket: one of `HOW_FAR`, or the user's own words. The file holds the words themselves either
-/// way, so it reads plainly to a person and to a squad.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HowFar {
-    Preset(usize),
-    Own(String),
-}
-
-impl Default for HowFar {
-    fn default() -> Self {
-        HowFar::Preset(0)
-    }
-}
-
-impl HowFar {
-    /// A preset's words (or its short form, or its number from 1), ignoring case; anything else is the user's own.
-    pub fn parse(text: &str) -> HowFar {
-        let one = clean(text, OWN_WORDS_MAX);
-        let low = one.to_lowercase();
-        if let Some(i) = HOW_FAR.iter().position(|(long, short)| long.to_lowercase() == low || short.to_lowercase() == low) {
-            return HowFar::Preset(i);
-        }
-        if let Ok(n) = low.parse::<usize>() {
-            if (1..=HOW_FAR.len()).contains(&n) {
-                return HowFar::Preset(n - 1);
-            }
-        }
-        if one.is_empty() { HowFar::default() } else { HowFar::Own(one) }
-    }
-
-    pub fn text(&self) -> &str {
-        match self {
-            HowFar::Preset(i) => HOW_FAR[(*i).min(HOW_FAR.len() - 1)].0,
-            HowFar::Own(s) => s,
-        }
-    }
-
-    /// For the list, where room is short.
-    pub fn short(&self) -> &str {
-        match self {
-            HowFar::Preset(i) => HOW_FAR[(*i).min(HOW_FAR.len() - 1)].1,
-            HowFar::Own(s) => s,
-        }
-    }
-}
-
 // ---- a ticket -----------------------------------------------------------------------------------------------------
 
 /// A squad's leader session, started for a ticket. A ticket keeps every one it had, in order; the last is the one
@@ -191,6 +131,37 @@ pub struct Leader {
     pub session: String,
     /// Seconds since the epoch.
     pub started: u64,
+    /// The names its session's agents were given when it started. A session is resumed with the names it began
+    /// with, so a leader started before the names carried the squad's keeps its plain ones.
+    pub names: AgentNames,
+}
+
+/// How a leader session's agents (`--agents`, `--agent`) are named.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum AgentNames {
+    /// `leader`, `planner`, `builder`, ...: the leaders started before 2026-09-26. The file has no `names` for them.
+    Plain,
+    /// `coding-leader`, `coding-planner`, ...: the squad's id, then the role, so Claude Code shows whose squad it is.
+    /// The file says `"names": "squad-role"`.
+    #[default]
+    SquadRole,
+}
+
+impl AgentNames {
+    fn id(&self) -> Option<&'static str> {
+        match self {
+            AgentNames::Plain => None,
+            AgentNames::SquadRole => Some("squad-role"),
+        }
+    }
+
+    /// What the file says; a leader with no `names` (or one this platoon doesn't know) was started with plain ones.
+    fn from_id(id: Option<&str>) -> AgentNames {
+        match id {
+            Some("squad-role") => AgentNames::SquadRole,
+            _ => AgentNames::Plain,
+        }
+    }
 }
 
 /// Why a hand-over to a squad didn't happen, written on the ticket (it stays New) so the user sees it there.
@@ -251,7 +222,6 @@ pub struct Ticket {
     /// The body's file name inside the project's `tickets/` folder.
     pub file: String,
     pub state: State,
-    pub how_far: HowFar,
     /// Absolute paths.
     pub folders: Vec<String>,
     /// Numbers of tickets in the same project that must be Done first.
@@ -367,7 +337,6 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         title: o.get("title").and_then(Value::as_str).map(|t| clean(t, TITLE_MAX)).unwrap_or_default(),
         file: o.get("file").and_then(Value::as_str).unwrap_or_default().to_string(),
         state: State::from_id(o.get("state").and_then(Value::as_str).unwrap_or("new")),
-        how_far: HowFar::parse(o.get("how_far").and_then(Value::as_str).unwrap_or("")),
         folders: strings("folders"),
         blocked_by: o
             .get("blocked_by")
@@ -387,6 +356,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                             squad: l.get("squad").and_then(Value::as_str).unwrap_or_default().to_string(),
                             session,
                             started: l.get("started").and_then(Value::as_u64).unwrap_or(0),
+                            names: AgentNames::from_id(l.get("names").and_then(Value::as_str)),
                         })
                     })
                     .collect()
@@ -424,7 +394,6 @@ pub struct NewTicket {
     pub title: String,
     /// None: the template.
     pub body: Option<String>,
-    pub how_far: HowFar,
     pub folders: Vec<String>,
     pub blocked_by: Vec<u32>,
 }
@@ -638,7 +607,6 @@ impl Tickets {
                 "title": title,
                 "file": file,
                 "state": State::New.id(),
-                "how_far": new.how_far.text(),
                 "folders": new.folders,
                 "blocked_by": blocked,
                 "created": now,
@@ -759,7 +727,10 @@ impl Tickets {
     /// A squad's leader was started for the ticket: it is listed on the ticket (last, so it is the one working on it
     /// now), with the worktrees made for it, and the ticket is Working.
     pub fn start_leader(&mut self, number: u32, leader: &Leader, worktrees: &[Worktree]) -> io::Result<()> {
-        let l = json!({"squad": leader.squad, "session": leader.session, "started": leader.started});
+        let mut l = json!({"squad": leader.squad, "session": leader.session, "started": leader.started});
+        if let (Some(id), Some(o)) = (leader.names.id(), l.as_object_mut()) {
+            o.insert("names".into(), json!(id));
+        }
         let w: Vec<Value> = worktrees.iter().map(|w| json!({"folder": w.folder, "path": w.path, "branch": w.branch})).collect();
         self.edit(number, move |t, _| {
             match t.get_mut("leaders").and_then(Value::as_array_mut) {
@@ -829,14 +800,6 @@ impl Tickets {
     pub fn result(&self, number: u32) -> Option<String> {
         let text = fs::read_to_string(bodies_dir(&self.config, &self.project).join(result_file(number))).ok()?;
         (!text.trim().is_empty()).then_some(text)
-    }
-
-    pub fn set_how_far(&mut self, number: u32, how_far: &HowFar) -> io::Result<()> {
-        let text = how_far.text().to_string();
-        self.edit(number, |t, _| {
-            t.insert("how_far".into(), json!(text));
-            Ok(())
-        })
     }
 
     pub fn set_folders(&mut self, number: u32, folders: &[String]) -> io::Result<()> {
@@ -988,13 +951,16 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     }
 }
 
-const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>] [--how-far <text>]
+const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>]
                            [--folder <path>]... [--waits-for <number>]...
        platoon ticket list [--project <name or id>] [--json]
   add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
-         in, else the template. Without --folder the ticket works in the current folder. --how-far takes \"Local changes only\", \"Local commit\", \"Commit, push and open a
-         merge request\" or \"Publish a document or page\"; anything else is kept as your own words
+         in, else the template. Without --folder the ticket works in the current folder. Say in the body how
+         far to take the work (\"How far: a local commit\", say); a squad stops at local changes when it doesn't say
   list   the tickets, open ones first, then the Done and Cancelled ones";
+
+/// What `platoon ticket add --how-far` says: the flag is gone, and where "how far" goes now.
+pub const HOW_FAR_GONE: &str = "don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")";
 
 /// `platoon ticket ...`. Returns the exit code; what it prints goes to `out`, problems to `err`.
 pub fn cli(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path, out: &mut dyn io::Write, err: &mut dyn io::Write) -> i32 {
@@ -1033,7 +999,7 @@ fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, S
 }
 
 fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path) -> Result<u32, String> {
-    let (mut project, mut title, mut body_file, mut how_far) = (None, None, None, None);
+    let (mut project, mut title, mut body_file) = (None, None, None);
     let (mut folders, mut blocked): (Vec<String>, Vec<u32>) = (Vec::new(), Vec::new());
     let mut i = 0;
     while i < args.len() {
@@ -1041,7 +1007,8 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
             "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
             "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
             "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
-            "--how-far" => how_far = Some(value(args, &mut i, "--how-far")?.to_string()),
+            // How far to take the work is no field any more: the ticket's own text says it.
+            f if f == "--how-far" || f.starts_with("--how-far=") => return Err(HOW_FAR_GONE.into()),
             "--folder" => {
                 let f = value(args, &mut i, "--folder")?;
                 let p = if Path::new(f).is_absolute() { PathBuf::from(f) } else { cwd.join(f) };
@@ -1091,7 +1058,7 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
     if tickets.is_corrupt() {
         return Err(CORRUPT.into());
     }
-    let new = NewTicket { title, body, how_far: how_far.map(|h| HowFar::parse(&h)).unwrap_or_default(), folders, blocked_by: blocked };
+    let new = NewTicket { title, body, folders, blocked_by: blocked };
     tickets.add(new).map_err(|e| plain(&e))
 }
 
@@ -1145,7 +1112,7 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
             } else {
                 String::new()
             };
-            format!("  #{:<3} {}  ·  {}  ·  {}{tail}\n", t.number, t.title, t.state.label(), t.how_far.text())
+            format!("  #{:<3} {}  ·  {}{tail}\n", t.number, t.title, t.state.label())
         };
         for t in &open {
             text.push_str(&line(t));
@@ -1164,7 +1131,6 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
                 "number": t.number,
                 "title": t.title,
                 "state": t.state.label(),
-                "how_far": t.how_far.text(),
                 "folders": t.folders,
                 "blocked_by": t.blocked_by,
                 "ready": is_ready(t, all),
@@ -1220,7 +1186,8 @@ mod tests {
         assert_eq!(add(&mut Tickets::open(&d, "p1"), "Fifth"), 5);
         let t = Tickets::open(&d, "p1");
         let first = t.get(1).unwrap();
-        assert_eq!((first.title.as_str(), first.file.as_str(), &first.state, &first.how_far), ("First thing", "01-first-thing.md", &State::New, &HowFar::Preset(0)));
+        assert_eq!((first.title.as_str(), first.file.as_str(), &first.state), ("First thing", "01-first-thing.md", &State::New));
+        assert!(saved(&d)["tickets"][0].get("how_far").is_none(), "how far is no field: the ticket's text says it");
         assert_eq!(t.body(first), TEMPLATE, "the template body");
         assert!(bodies_dir(&d, "p1").join("05-fifth.md").exists());
         assert!(add_err(&mut Tickets::open(&d, "p1"), "   ").contains("title"));
@@ -1236,6 +1203,9 @@ mod tests {
         assert!(TEMPLATE.contains("as behaviour, not a list of changes. It should fit in one fresh session."));
         assert!(TEMPLATE.contains("## Acceptance\n\n- [ ] \n- [ ] \n"));
         assert!(!TEMPLATE.contains('/'), "no paths");
+        // How far to take the work is said in the text, under what it should do.
+        let hint = TEMPLATE.find("How far: local changes only (say if you want a commit, or a push and merge request).").unwrap();
+        assert!(TEMPLATE.find("## What it should do").unwrap() < hint && hint < TEMPLATE.find("## Acceptance").unwrap());
     }
 
     #[test]
@@ -1275,7 +1245,6 @@ mod tests {
         assert_eq!(t.get(1).unwrap().state, State::Other("reviewing".into()));
         assert_eq!(t.get(1).unwrap().state.label(), "reviewing", "shown as written");
         assert!(!t.get(1).unwrap().state.closed(), "listed with the open ones");
-        assert_eq!(t.get(2).unwrap().how_far, HowFar::Own("Ship it on Friday".into()));
         t.rename(1, "Uno").unwrap();
         t.set_state(2, &State::Done).unwrap();
         add(&mut t, "Three");
@@ -1285,6 +1254,9 @@ mod tests {
         assert_eq!((one["squad"].as_str(), one["leader"].as_str(), one["state"].as_str(), one["title"].as_str()), (Some("coding"), Some("abc"), Some("reviewing"), Some("Uno")));
         assert_eq!(v["tickets"][2], "not a ticket");
         assert_eq!(v["tickets"][1]["state"], "done");
+        // "how far" was a field once: a ticket that has it keeps it in the file, and nothing reads it.
+        assert_eq!((v["tickets"][0]["how_far"].as_str(), v["tickets"][1]["how_far"].as_str()), (Some("Local commit"), Some("Ship it on Friday")));
+        assert!(v["tickets"][3].get("how_far").is_none());
         assert_eq!(v["next"], 4);
     }
 
@@ -1362,7 +1334,7 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None }
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None }
     }
 
     #[test]
@@ -1406,26 +1378,6 @@ mod tests {
     }
 
     #[test]
-    fn how_far_takes_the_preset_words_in_any_case_and_keeps_anything_else_as_written() {
-        assert_eq!(HowFar::parse("local changes only"), HowFar::Preset(0));
-        assert_eq!(HowFar::parse("LOCAL COMMIT"), HowFar::Preset(1));
-        assert_eq!(HowFar::parse("Commit, push and open a merge request"), HowFar::Preset(2));
-        assert_eq!(HowFar::parse(" publish a document or page "), HowFar::Preset(3));
-        assert_eq!(HowFar::parse("commit"), HowFar::Preset(1), "the short form too");
-        assert_eq!(HowFar::parse(""), HowFar::Preset(0), "nothing: the default");
-        assert_eq!(HowFar::parse("Up to a draft PR"), HowFar::Own("Up to a draft PR".into()));
-        assert_eq!(HowFar::Own("x".into()).text(), "x");
-        assert_eq!(HowFar::Preset(2).short(), "push + MR");
-        let d = dir("howfar");
-        let mut t = Tickets::open(&d, "p1");
-        add(&mut t, "a");
-        t.set_how_far(1, &HowFar::Own("Until the tests pass".into())).unwrap();
-        assert_eq!(saved(&d)["tickets"][0]["how_far"], "Until the tests pass");
-        t.set_how_far(1, &HowFar::Preset(1)).unwrap();
-        assert_eq!(saved(&d)["tickets"][0]["how_far"], "Local commit", "the words themselves");
-    }
-
-    #[test]
     fn states_have_the_words_of_the_screen() {
         let words: Vec<String> = ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
         assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to push/publish", "Done", "Cancelled"]);
@@ -1462,20 +1414,20 @@ mod tests {
         let id = crate::projects::Projects::open(&d).create("Web shop").unwrap();
         fs::create_dir_all(d.join("work")).unwrap();
         assert_eq!(run(&d, &["add", "--project", "web shop", "--title", "Login"], "", true), (0, "#1\n".into(), String::new()));
-        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--how-far", "local commit", "--folder", "work", "--waits-for", "#1"], "## Body\nfrom stdin\n", false);
+        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--folder", "work", "--waits-for", "#1"], "## Body\nfrom stdin\n", false);
         assert_eq!((code, out.as_str()), (0, "#2\n"));
         let t = Tickets::open(&d, &id);
         let two = t.get(2).unwrap();
-        assert_eq!((&two.how_far, two.blocked_by.as_slice()), (&HowFar::Preset(1), &[1][..]));
+        assert_eq!(two.blocked_by.as_slice(), &[1][..]);
         assert_eq!(two.folders, [d.join("work").canonicalize().unwrap().to_string_lossy().into_owned()]);
         assert_eq!(t.body(two), "## Body\nfrom stdin\n");
         assert_eq!(t.body(t.get(1).unwrap()), TEMPLATE, "nothing piped in: the template");
         assert_eq!(t.get(1).unwrap().folders, [d.canonicalize().unwrap().to_string_lossy().into_owned()], "no --folder: where it was run");
         fs::write(d.join("body.md"), "from a file").unwrap();
-        let (code, _, _) = run(&d, &["add", "--project", "Web shop", "--title", "Own", "--body-file", "body.md", "--how-far", "Until it's live"], "ignored", false);
+        let (code, _, _) = run(&d, &["add", "--project", "Web shop", "--title", "Own", "--body-file", "body.md"], "ignored", false);
         assert_eq!(code, 0);
         let t = Tickets::open(&d, &id);
-        assert_eq!((t.body(t.get(3).unwrap()), t.get(3).unwrap().how_far.clone()), ("from a file".to_string(), HowFar::Own("Until it's live".into())));
+        assert_eq!(t.body(t.get(3).unwrap()), "from a file");
         // Refusals: one plain line each, and nothing made.
         for (args, says) in [
             (vec!["add", "--project", "Nope", "--title", "x"], "no project called"),
@@ -1484,6 +1436,9 @@ mod tests {
             (vec!["add", "--project", "Web shop"], "title"),
             (vec!["add", "--title", "x"], "--project"),
             (vec!["add", "--project", "Web shop", "--title", "x", "--waits-for", "two"], "--waits-for takes a ticket number"),
+            // How far is said in the ticket's text now: the flag is refused, with where it goes instead.
+            (vec!["add", "--project", "Web shop", "--title", "x", "--how-far", "local commit"], "in the ticket's text instead"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--how-far=local commit"], "don't know \"--how-far\""),
         ] {
             let (code, out, err) = run(&d, &args, "", true);
             assert!(code != 0 && out.is_empty() && err.contains(says) && err.lines().count() == 1, "{args:?}: {err}");
@@ -1498,13 +1453,15 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "Web shop");
         assert!(lines[1].contains("#2") && lines[1].contains("ready"), "{out}");
-        assert!(lines[2].contains("#3") && lines[2].contains("Until it's live"), "{out}");
+        assert_eq!(lines[2], "  #3   Own  ·  New  ready", "{out}");
+        assert!(lines[1].starts_with("  #2   Basket  ·  New  ready"), "number, title, state, then what it waits for: {out}");
         assert_eq!(lines[3], "  Done and cancelled · 1");
         assert!(lines[4].contains("#1") && lines[4].contains("Done"), "{out}");
         let (_, out, _) = run(&d, &["list", "--json"], "", true);
         let v: Value = serde_json::from_str(&out).unwrap();
         let first = &v[0];
-        assert_eq!((first["number"].as_u64(), first["state"].as_str(), first["ready"].as_bool(), first["how_far"].as_str()), (Some(2), Some("New"), Some(true), Some("Local commit")));
+        assert_eq!((first["number"].as_u64(), first["state"].as_str(), first["ready"].as_bool()), (Some(2), Some("New"), Some(true)));
+        assert!(v.as_array().unwrap().iter().all(|t| t.get("how_far").is_none()), "no how far in the JSON: {out}");
         assert_eq!(first["blocked_by"], json!([1]));
         assert!(first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute());
         assert_eq!(v[2]["number"], 1, "the Done one last");
@@ -1601,7 +1558,7 @@ mod tests {
         assert_eq!(x.handover, Some(Handover { squad: "coding".into(), kind: HandoverKind::Refused, says: "This is docs work.".into() }));
         t.handover_failed(n, "coding", HandoverKind::NoCheck, "Session limit has been reached").unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover.as_ref().map(|h| h.kind.clone()), Some(HandoverKind::NoCheck));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default() }, &[]).unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover, None, "a leader started: nothing to say any more");
         t.handover_failed(n, "coding", HandoverKind::NotStarted, "x").unwrap();
         t.set_state(n, &State::Cancelled).unwrap();
@@ -1613,7 +1570,7 @@ mod tests {
         let d = dir("permission");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default() }, &[]).unwrap();
         let before = fs::read(t.path()).unwrap();
         assert!(!t.permission_answered(n).unwrap(), "Working: nothing to answer");
         assert_eq!(fs::read(t.path()).unwrap(), before, "and nothing written, not even the time");
@@ -1659,12 +1616,33 @@ mod tests {
     }
 
     #[test]
+    fn a_leader_remembers_how_its_agents_were_named_and_one_written_before_that_had_the_plain_names() {
+        let d = dir("names");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "a");
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "new-1".into(), started: 1, names: AgentNames::SquadRole }, &[]).unwrap();
+        assert_eq!(saved(&d)["tickets"][0]["leaders"][0]["names"], "squad-role");
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().leader().unwrap().names, AgentNames::SquadRole);
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "old-1".into(), started: 2, names: AgentNames::Plain }, &[]).unwrap();
+        assert!(saved(&d)["tickets"][0]["leaders"][1].get("names").is_none(), "the plain names: nothing written, as before");
+        // A leader written by the platoon before this one (no "names") was started with the plain names.
+        let mut v = saved(&d);
+        if let Some(l) = v.pointer_mut("/tickets/0/leaders/0").and_then(Value::as_object_mut) {
+            l.remove("names");
+        }
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        let t = Tickets::open(&d, "p1");
+        assert_eq!(t.get(n).unwrap().leaders.iter().map(|l| l.names).collect::<Vec<_>>(), [AgentNames::Plain, AgentNames::Plain]);
+        assert_eq!(AgentNames::default(), AgentNames::SquadRole, "new leaders get the squad's names");
+    }
+
+    #[test]
     fn only_the_current_leader_of_a_working_ticket_is_at_work() {
         let d = dir("at-work");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
         assert!(!leader_at_work(&d, "lead-1"));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
         assert!(leader_at_work(&d, "lead-1"));
         assert!(!leader_at_work(&d, "someone"));
         for s in [State::Waiting, State::Ready, State::Done, State::Cancelled, State::New] {
@@ -1672,7 +1650,7 @@ mod tests {
             assert!(!leader_at_work(&d, "lead-1"), "{s:?}");
         }
         t.set_state(n, &State::Working).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default() }, &[]).unwrap();
         assert!(!leader_at_work(&d, "lead-1"), "an earlier leader");
         assert!(leader_at_work(&d, "lead-2"));
     }

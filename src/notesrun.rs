@@ -1396,8 +1396,8 @@ mod tests {
         let mut t = Tickets::open(&r.env.config, &id);
         let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
         let other = t.add(NewTicket { title: "Socks".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
-        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
+        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1, names: Default::default() }, &[]).unwrap();
         // Only Done results count: one that is Done, one whose ticket was reopened after its result was written.
         t.squad_says(n, &crate::tickets::State::Done, "", Some("Added the basket page on ticket/1.")).unwrap();
         t.squad_says(other, &crate::tickets::State::Done, "", Some("Socks are in.")).unwrap();

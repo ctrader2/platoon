@@ -17,7 +17,7 @@
 //! rewrite, and a fixed part platoon keeps.
 
 use crate::instructions;
-use crate::tickets::{self, HowFar, State, Ticket, Tickets, Worktree};
+use crate::tickets::{self, AgentNames, State, Ticket, Tickets, Worktree};
 use serde_json::{json, Map, Value};
 use std::{
     fs,
@@ -36,7 +36,8 @@ pub struct LeaderSpec {
 
 /// One member: a Claude Code subagent inside the leader's session.
 pub struct Member {
-    /// The name the leader hands work to.
+    /// Its role: `planner`, `builder`, ... Its name in the session is the squad's id, then this
+    /// (`coding-planner`), see `agent_name`.
     pub name: &'static str,
     /// What the leader reads to pick it.
     pub description: &'static str,
@@ -56,8 +57,18 @@ pub struct Squad {
     pub members: &'static [Member],
 }
 
-/// The name the leader's own entry has in `--agents` (and `--agent` picks).
-pub const LEADER_AGENT: &str = "leader";
+/// The leader's role: its own entry in `--agents` (the one `--agent` picks) is named after it.
+pub const LEADER_ROLE: &str = "leader";
+
+/// The name an agent of `squad` has in the session (`--agents`, `--agent`, and what Claude Code shows in its lines
+/// and status bar): `coding-leader`, `coding-planner`, ... A leader started before the names carried the squad
+/// (`AgentNames::Plain`) is resumed with the plain role it began with.
+pub fn agent_name(squad: &Squad, role: &str, names: AgentNames) -> String {
+    match names {
+        AgentNames::SquadRole => format!("{}-{role}", squad.id),
+        AgentNames::Plain => role.to_string(),
+    }
+}
 
 /// Only reading and running things: the members that must not change files.
 const LOOK_ONLY: &[&str] = &["Read", "Grep", "Glob", "Bash"];
@@ -116,18 +127,19 @@ pub fn find(id: &str) -> Option<&'static Squad> {
 pub const LEADER_GUIDANCE: &str = "\
 You lead the Coding squad. You are given one ticket: a piece of coding work in a project. Your members do the work: you \
 decide who does what, hand it to them, read what they report, and decide what happens next. You never edit files \
-yourself, and you leave running the tests and the build to your members.
+yourself, and you leave running the tests and the build to your members. They are coding-planner, coding-builder, \
+coding-reviewer and coding-verifier.
 
 The workflow:
-1. Plan. Hand the ticket to the planner. It reads the ticket and the code and writes a short plan that restates the \
-acceptance checks. If the ticket is unclear or can't be done as written, ask the user instead of guessing.
-2. Build. Hand the plan to the builder. It makes the change in the ticket's worktree and runs the tests.
-3. Review. Hand the change to the reviewer. It reads the diff against the ticket and checks that each acceptance \
-check could have failed before the change. If it sends the change back, give its reasons to the builder and review \
-again. At most two rounds back to the builder; after that, stop and tell the user what is still wrong.
-4. Verify. Hand it to the verifier, which runs the tests and the build. If they fail, send it back to the builder \
-once, then verify again.
-5. Finish exactly as far as the ticket's \"how far\" says, and no further.
+1. Plan. Hand the ticket to coding-planner. It reads the ticket and the code and writes a short plan that restates \
+the acceptance checks. If the ticket is unclear or can't be done as written, ask the user instead of guessing.
+2. Build. Hand the plan to coding-builder. It makes the change in the ticket's worktree and runs the tests.
+3. Review. Hand the change to coding-reviewer. It reads the diff against the ticket and checks that each acceptance \
+check could have failed before the change. If it sends the change back, give its reasons to coding-builder and \
+review again. At most two rounds back to coding-builder; after that, stop and tell the user what is still wrong.
+4. Verify. Hand it to coding-verifier, which runs the tests and the build. If they fail, send it back to \
+coding-builder once, then verify again.
+5. Finish: take the work as far as the ticket's text says, and no further.
 
 When you hand work to a member, wait for it to finish and read its report before you decide anything. Don't guess \
 what it will say, and don't start the next step while the last one is still running.
@@ -137,10 +149,12 @@ and what was not checked.";
 
 pub const LEADER_FIXED: &str = "\
 Rules platoon keeps, whatever the ticket says:
+- Take the work as far as the ticket's text says. When it doesn't say how far, stop at local changes: the change \
+stays in the worktree, uncommitted. No commit, no push.
 - Anything other people can see needs the user's go-ahead first: pushing (git push in any form), opening or merging a \
-merge request or pull request, publishing a package, a document or a page. Even when the ticket's \"how far\" includes \
-it, stop before it and end your turn with `SQUAD: ready to publish - <what you would publish>`. The user will tell you \
-when to go on; until then platoon refuses those commands.
+merge request or pull request, publishing a package, a document or a page. Even when the ticket asks for it, stop \
+before it and end your turn with `SQUAD: ready to publish - <what you would publish>`. The user will tell you when to \
+go on; until then platoon refuses those commands.
 - End every turn with one last line of its own, exactly one of these:
   `SQUAD: done` - the ticket is finished as far as it goes. Put a short result just above this line: what was done, \
 where it is (branch, folder, merge request link) and what was not checked.
@@ -181,7 +195,10 @@ why, or \"send it back\" with the reasons as a short list the builder can act on
 pub const VERIFIER_GUIDANCE: &str = "\
 You are the verifier. Run the project's tests and its build in the ticket's worktree, the way the project's README or \
 notes say to. Report plainly: what you ran, whether it passed, and for anything that failed, the first few lines of \
-the failure. Don't fix anything and don't change any files.";
+the failure. A test run may print many result lines (Rust's `cargo test` prints one `test result:` line for each test \
+program): report the total of every one of them, added up with a command and never in your head (for example \
+`cargo test 2>&1 | grep '^test result:' | awk '{p+=$4; f+=$6; i+=$8} END {print p\" passed, \"f\" failed, \"i\" ignored\"}'`), \
+and the passed, failed and ignored counts as the run printed them. Don't fix anything and don't change any files.";
 
 /// The system prompt of one of a squad's agents, as the user has it now (their guidance, or the built-in one) with
 /// platoon's fixed part.
@@ -190,20 +207,28 @@ pub fn prompt(config: &Path, id: &str) -> String {
     instructions::compose(&instructions::guidance(config, id), &fixed)
 }
 
-/// The `--agents` JSON for a squad: the leader (as `leader`) and every member, each with its description, its
-/// system prompt as the user has it now, its model and (for some) the tools it may use.
-pub fn agents_json(squad: &Squad, config: &Path) -> String {
+/// The `--agents` JSON for a squad: the leader and every member, named as `names` says (`coding-leader`,
+/// `coding-planner`, ...), each with its description, its system prompt as the user has it now, its model and (for
+/// some) the tools it may use. For a leader resumed with the plain names it began with, the leader's prompt calls
+/// its members by those plain names too.
+pub fn agents_json(squad: &Squad, config: &Path, names: AgentNames) -> String {
+    let mut leader_prompt = prompt(config, squad.leader.prompt);
+    if names == AgentNames::Plain {
+        for role in squad.members.iter().map(|m| m.name).chain([LEADER_ROLE]) {
+            leader_prompt = leader_prompt.replace(&agent_name(squad, role, AgentNames::SquadRole), role);
+        }
+    }
     let mut agents = Map::new();
     agents.insert(
-        LEADER_AGENT.into(),
-        json!({"description": format!("Leads the {} squad through one ticket.", squad.name), "prompt": prompt(config, squad.leader.prompt), "model": squad.leader.model, "tools": LEADER_TOOLS}),
+        agent_name(squad, LEADER_ROLE, names),
+        json!({"description": format!("Leads the {} squad through one ticket.", squad.name), "prompt": leader_prompt, "model": squad.leader.model, "tools": LEADER_TOOLS}),
     );
     for m in squad.members {
         let mut a = json!({"description": m.description, "prompt": prompt(config, m.prompt), "model": m.model});
         if let (Some(tools), Some(o)) = (m.tools, a.as_object_mut()) {
             o.insert("tools".into(), json!(tools));
         }
-        agents.insert(m.name.into(), a);
+        agents.insert(agent_name(squad, m.name, names), a);
     }
     Value::Object(agents).to_string()
 }
@@ -274,11 +299,11 @@ fn cut_chars(s: &str, n: usize) -> String {
     }
 }
 
-/// The request: the squad (its name and what it can do) and the ticket (number, title, how far, its folders, its
-/// body cut to `BODY_IN_PROMPT`).
+/// The request: the squad (its name and what it can do) and the ticket (number, title, its folders, its body cut to
+/// `BODY_IN_PROMPT`).
 pub fn commander_prompt(squad: &Squad, t: &Ticket, body: &str, folders: &[FolderFact]) -> String {
     let mut out = format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do);
-    out.push_str(&format!("The ticket: #{} {}\nHow far to take it: {}\n", t.number, t.title, t.how_far.text()));
+    out.push_str(&format!("The ticket: #{} {}\n", t.number, t.title));
     if !folders.is_empty() {
         out.push_str("Where it works:\n");
         for f in folders {
@@ -393,36 +418,20 @@ pub fn after_check(number: u32, squad: &Squad, check: &Check) -> AfterCheck {
 
 // ---- the leader's first message -----------------------------------------------------------------------------------
 
-/// "How far" spelled out for the leader: what finished means for this ticket, concretely.
-pub fn how_far_words(how: &HowFar, branch: Option<&str>) -> String {
-    let branch = branch.map_or_else(|| "the ticket's branch".to_string(), |b| format!("the ticket's branch ({b})"));
-    match how {
-        HowFar::Preset(0) => "Local changes only: make the change in the worktree and leave it there, uncommitted. No commit, no push.".into(),
-        HowFar::Preset(1) => format!("Local commit: commit the change on {branch} with a message that says why. No push."),
-        HowFar::Preset(2) => format!(
-            "Commit, push and open a merge request: commit on {branch}, push it and open a merge request. Ask first: stop \
-             with `SQUAD: ready to publish - <what>` before pushing, and go on only when the user says so."
-        ),
-        HowFar::Preset(_) => "Publish a document or page: make it, then ask first: stop with `SQUAD: ready to publish - <what>` \
-                              before publishing it anywhere other people can see."
-            .into(),
-        HowFar::Own(words) => format!(
-            "In the user's own words: \"{words}\". Anything other people would see still needs the user's go-ahead first \
-             (`SQUAD: ready to publish - <what>`)."
-        ),
-    }
-}
+/// How far to take the work, as the first message says it: the ticket's own text decides; when it doesn't say, the
+/// squad stops at local changes (the leader's fixed part says the same).
+pub const HOW_FAR: &str = "As far as the ticket's text says, and no further. When it doesn't say, stop at local changes: \
+leave the change in the worktree, uncommitted. No commit, no push.";
 
 /// The leader's first message: the ticket (number, title, body), how far to take it, where to work. The project's
 /// notes are not in it: they arrive separately (the SessionStart hook).
 pub fn first_message(t: &Ticket, project: &str, body: &str) -> String {
-    let branch = t.worktrees.first().map(|w| w.branch.as_str());
     let mut out = format!("Ticket #{}: {}\nProject: {project}\n\n", t.number, t.title);
     let body = body.trim();
     out.push_str("## The ticket\n\n");
     out.push_str(if body.is_empty() { "(The ticket has no description beyond its title.)" } else { body });
     out.push_str("\n\n## How far to take it\n\n");
-    out.push_str(&how_far_words(&t.how_far, branch));
+    out.push_str(HOW_FAR);
     out.push_str("\n\n## Where to work\n\n");
     for (i, f) in t.folders.iter().enumerate() {
         let here = if i == 0 { "; the session starts here" } else { "" };
@@ -999,7 +1008,10 @@ pub fn hook_settings(exe: &str) -> String {
 /// What `claude` is started with for a ticket's leader: a new session (`first` is its first message, given its id
 /// and name) or, with no first message, the same session resumed. The same squad flags either way. Every
 /// `--add-dir` comes before the others, so none of them can take the first message for a folder.
-pub fn leader_args(squad: &Squad, config: &Path, exe: &str, session: &str, name: &str, add_dirs: &[String], first: Option<&str>) -> Vec<String> {
+///
+/// `names`: how the session's agents are named, the way it was started (a resumed session keeps its names).
+#[allow(clippy::too_many_arguments)]
+pub fn leader_args(squad: &Squad, config: &Path, exe: &str, session: &str, name: &str, add_dirs: &[String], first: Option<&str>, names: AgentNames) -> Vec<String> {
     let mut a: Vec<String> = Vec::new();
     for d in add_dirs {
         a.extend(["--add-dir".to_string(), d.clone()]);
@@ -1010,9 +1022,9 @@ pub fn leader_args(squad: &Squad, config: &Path, exe: &str, session: &str, name:
     }
     a.extend([
         "--agents".into(),
-        agents_json(squad, config),
+        agents_json(squad, config, names),
         "--agent".into(),
-        LEADER_AGENT.into(),
+        agent_name(squad, LEADER_ROLE, names),
         "--model".into(),
         squad.leader.model.into(),
         "--permission-mode".into(),
@@ -1026,9 +1038,9 @@ pub fn leader_args(squad: &Squad, config: &Path, exe: &str, session: &str, name:
     a
 }
 
-/// The name the leader's session gets: `#N title`.
-pub fn session_name(t: &Ticket) -> String {
-    format!("#{} {}", t.number, t.title)
+/// The name the leader's session gets: `Coding squad · #N title`.
+pub fn session_name(squad: &Squad, t: &Ticket) -> String {
+    format!("{} squad · #{} {}", squad.name, t.number, t.title)
 }
 
 // ---- the two hooks ------------------------------------------------------------------------------------------------
@@ -1194,31 +1206,55 @@ mod tests {
     #[test]
     fn the_agents_json_carries_every_member_with_its_model_and_the_users_edited_prompt() {
         let c = dir("agents");
-        let v: Value = serde_json::from_str(&agents_json(&CODING, &c)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&CODING, &c, AgentNames::SquadRole)).unwrap();
         let o = v.as_object().unwrap();
-        assert_eq!(o.keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
-        assert_eq!(v["leader"]["model"], "sonnet");
-        assert_eq!(v["planner"]["model"], "opus");
-        assert_eq!(v["builder"]["model"], "sonnet");
-        assert_eq!(v["reviewer"]["model"], "opus");
-        assert_eq!(v["verifier"]["model"], "haiku");
-        assert!(v["builder"].get("tools").is_none(), "the builder may use every tool");
-        assert_eq!(v["leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]), "the leader hands work on, reads and runs; it never edits");
-        assert_eq!(v["reviewer"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
-        for name in ["leader", "planner", "builder", "reviewer", "verifier"] {
+        let names = ["coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"];
+        assert_eq!(o.keys().map(String::as_str).collect::<Vec<_>>(), names, "named after the squad, so Claude Code shows whose they are");
+        assert_eq!(v["coding-leader"]["model"], "sonnet");
+        assert_eq!(v["coding-planner"]["model"], "opus");
+        assert_eq!(v["coding-builder"]["model"], "sonnet");
+        assert_eq!(v["coding-reviewer"]["model"], "opus");
+        assert_eq!(v["coding-verifier"]["model"], "haiku");
+        assert!(v["coding-builder"].get("tools").is_none(), "the builder may use every tool");
+        assert_eq!(v["coding-leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]), "the leader hands work on, reads and runs; it never edits");
+        assert_eq!(v["coding-reviewer"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
+        for name in names {
             assert!(!v[name]["description"].as_str().unwrap().is_empty(), "{name}");
         }
         // Built-in guidance, then the fixed part.
-        let leader = v["leader"]["prompt"].as_str().unwrap();
+        let leader = v["coding-leader"]["prompt"].as_str().unwrap();
         assert!(leader.starts_with(LEADER_GUIDANCE.trim()) && leader.ends_with(LEADER_FIXED.trim()), "{leader}");
-        let planner = v["planner"]["prompt"].as_str().unwrap();
+        let planner = v["coding-planner"]["prompt"].as_str().unwrap();
         assert!(planner.starts_with(PLANNER_GUIDANCE.trim()) && planner.ends_with(MEMBER_FIXED.trim()));
         // The user's own words for the builder go in; the fixed part stays.
         fs::create_dir_all(c.join("prompts")).unwrap();
         fs::write(c.join("prompts/coding-builder.md"), "Build it in small commits.\n").unwrap();
-        let v: Value = serde_json::from_str(&agents_json(&CODING, &c)).unwrap();
-        assert_eq!(v["builder"]["prompt"], format!("Build it in small commits.\n\n{}", MEMBER_FIXED.trim()));
-        assert_eq!(v["planner"]["prompt"].as_str().unwrap(), planner, "the others are as they were");
+        let v: Value = serde_json::from_str(&agents_json(&CODING, &c, AgentNames::SquadRole)).unwrap();
+        assert_eq!(v["coding-builder"]["prompt"], format!("Build it in small commits.\n\n{}", MEMBER_FIXED.trim()));
+        assert_eq!(v["coding-planner"]["prompt"].as_str().unwrap(), planner, "the others are as they were");
+    }
+
+    #[test]
+    fn the_leaders_guidance_calls_the_members_by_their_names_in_the_session() {
+        for m in CODING.members {
+            let name = agent_name(&CODING, m.name, AgentNames::SquadRole);
+            assert!(LEADER_GUIDANCE.contains(&name), "{name}");
+        }
+        assert!(LEADER_GUIDANCE.contains("Hand the ticket to coding-planner") && LEADER_GUIDANCE.contains("Hand it to coding-verifier"));
+        assert!(!LEADER_GUIDANCE.contains("the planner") && !LEADER_GUIDANCE.contains("the builder"), "no plain role names left");
+        assert_eq!(agent_name(&CODING, LEADER_ROLE, AgentNames::SquadRole), "coding-leader");
+        assert_eq!(agent_name(&CODING, "verifier", AgentNames::Plain), "verifier");
+    }
+
+    #[test]
+    fn a_leader_started_with_the_plain_names_keeps_them_and_its_prompt_calls_the_members_by_them() {
+        let c = dir("plain");
+        let v: Value = serde_json::from_str(&agents_json(&CODING, &c, AgentNames::Plain)).unwrap();
+        assert_eq!(v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
+        let leader = v["leader"]["prompt"].as_str().unwrap();
+        assert!(!leader.contains("coding-") && leader.contains("Hand the ticket to planner") && leader.contains("back to builder"), "{leader}");
+        assert!(leader.ends_with(LEADER_FIXED.trim()), "the fixed part is the same");
+        assert_eq!(v["planner"]["model"], "opus");
     }
 
     #[test]
@@ -1233,17 +1269,44 @@ mod tests {
         }
         assert!(REVIEWER_GUIDANCE.contains("could have failed before the change"));
         assert!(LEADER_GUIDANCE.contains("two rounds") && LEADER_GUIDANCE.contains("wait for it to finish") && LEADER_GUIDANCE.contains("never edit files"));
+        // How far: the ticket's text says; when it doesn't, local changes only. That default is platoon's rule, next to
+        // the one about what others can see.
+        assert!(LEADER_GUIDANCE.contains("as far as the ticket's text says") && !LEADER_GUIDANCE.contains("\"how far\""), "{LEADER_GUIDANCE}");
+        let default = LEADER_FIXED.find("When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.").expect(LEADER_FIXED);
+        let others = LEADER_FIXED.find("Anything other people can see needs the user's go-ahead first").unwrap();
+        assert!(default < others && LEADER_FIXED[default..others].lines().count() <= 2, "side by side");
+        assert!(!LEADER_FIXED.contains("\"how far\"") && LEADER_FIXED.contains("Even when the ticket asks for it, stop"), "{LEADER_FIXED}");
+    }
+
+    #[test]
+    fn the_verifier_totals_every_test_result_line_with_a_command() {
+        let g = VERIFIER_GUIDANCE;
+        assert!(g.contains("`test result:` line for each test program") && g.contains("report the total of every one of them"), "{g}");
+        assert!(g.contains("added up with a command and never in your head"), "{g}");
+        assert!(g.contains("passed, failed and ignored counts as the run printed them"), "{g}");
+        assert!(g.contains("grep '^test result:'") && g.contains("awk"), "an example of the sum: {g}");
+        // The example adds the right fields up: "test result: ok. 5 passed; 1 failed; 2 ignored; ..." twice.
+        let awk = g.split("awk '").nth(1).and_then(|r| r.split("'`").next()).unwrap();
+        let lines = "test result: ok. 5 passed; 1 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.01s\n\
+                     test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.20s\n";
+        let out = Command::new("awk").arg(awk).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().and_then(|mut c| {
+            use std::io::Write;
+            c.stdin.take().unwrap().write_all(lines.as_bytes())?;
+            c.wait_with_output()
+        });
+        if let Ok(o) = out {
+            assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "15 passed, 1 failed, 3 ignored");
+        }
     }
 
     // ---- the first message ----
 
-    fn ticket(how: HowFar, folders: &[&str], worktrees: &[(&str, &str)]) -> Ticket {
+    fn ticket(folders: &[&str], worktrees: &[(&str, &str)]) -> Ticket {
         Ticket {
             number: 7,
             title: "Add a basket page".into(),
             file: "07-x.md".into(),
             state: State::New,
-            how_far: how,
             folders: folders.iter().map(|s| s.to_string()).collect(),
             blocked_by: vec![],
             created: 1,
@@ -1259,27 +1322,22 @@ mod tests {
     }
 
     #[test]
-    fn the_first_message_says_the_ticket_how_far_concretely_and_where_to_work() {
-        let t = ticket(HowFar::Preset(1), &["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
-        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n");
-        assert!(m.starts_with("Ticket #7: Add a basket page\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket.\n\n## How far to take it\n\n"), "{m}");
-        assert!(m.contains("Local commit: commit the change on the ticket's branch (ticket/7) with a message that says why. No push."), "{m}");
+    fn the_first_message_says_the_ticket_how_far_goes_by_its_text_and_where_to_work() {
+        let t = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
+        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n");
+        assert!(m.starts_with("Ticket #7: Add a basket page\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket.\n\nHow far: a local commit.\n\n## How far to take it\n\n"), "{m}");
+        assert!(
+            m.contains("\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes: leave the change in the worktree, uncommitted. No commit, no push.\n\n## Where to work"),
+            "the text decides; local changes when it doesn't say: {m}"
+        );
+        for preset in ["Local commit:", "merge request", "In the user's own words", "Publish a document"] {
+            assert!(!m.contains(preset), "no how-far preset spelled out any more ({preset}): {m}");
+        }
         assert!(m.contains("- /w/shop-worktrees/ticket-7 (a git worktree of /w/shop, on the branch ticket/7; the session starts here)\n"), "{m}");
         assert!(m.contains("- /w/notes (used as it is, not a git worktree)\n"), "{m}");
         assert!(m.trim_end().ends_with("The project's notes, if it has any, arrive separately."), "{m}");
         assert!(m.len() < 1200, "no more than needed: {}", m.len());
-
-        let words = |h: HowFar| first_message(&ticket(h, &["/w/shop"], &[]), "Web", "x");
-        let local = words(HowFar::Preset(0));
-        assert!(local.contains("Local changes only: make the change in the worktree and leave it there, uncommitted. No commit, no push."), "{local}");
-        let mr = words(HowFar::Preset(2));
-        assert!(mr.contains("push it and open a merge request") && mr.contains("Ask first") && mr.contains("before pushing"), "{mr}");
-        let publish = words(HowFar::Preset(3));
-        assert!(publish.contains("Publish a document or page") && publish.contains("ask first") && publish.contains("before publishing"), "{publish}");
-        let own = words(HowFar::Own("Just a draft PR".into()));
-        assert!(own.contains("In the user's own words: \"Just a draft PR\"") && own.contains("go-ahead first"), "{own}");
-        assert!(words(HowFar::Preset(1)).contains("on the ticket's branch with"), "no worktree: no branch name");
-        let empty = first_message(&ticket(HowFar::Preset(0), &["/w"], &[]), "Web", "  \n");
+        let empty = first_message(&ticket(&["/w"], &[]), "Web", "  \n");
         assert!(empty.contains("(The ticket has no description beyond its title.)"));
     }
 
@@ -1428,7 +1486,7 @@ mod tests {
     fn with_leader(c: &Path, state: State) -> (String, u32) {
         let mut store = Tickets::open(c, "p1");
         let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-        store.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 5 }, &[]).unwrap();
+        store.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 5, names: Default::default() }, &[]).unwrap();
         if state != State::Working {
             store.set_state(n, &state).unwrap();
         }
@@ -1485,11 +1543,15 @@ mod tests {
     #[test]
     fn the_leader_is_started_with_the_squad_flags_and_resumed_with_the_same_ones() {
         let c = dir("args");
-        let a = leader_args(&CODING, &c, "/opt/my tools/platoon", "sid-1", "#7 Basket", &["/w/b".into(), "/w/c".into()], Some("Ticket #7"));
+        let t = ticket(&["/w/a"], &[]);
+        assert_eq!(session_name(&CODING, &t), "Coding squad · #7 Add a basket page");
+        let a = leader_args(&CODING, &c, "/opt/my tools/platoon", "sid-1", &session_name(&CODING, &t), &["/w/b".into(), "/w/c".into()], Some("Ticket #7"), AgentNames::SquadRole);
         let at = |k: &str| a.iter().position(|x| x == k).unwrap();
         assert_eq!(&a[..4], ["--add-dir", "/w/b", "--add-dir", "/w/c"]);
-        assert_eq!((a[at("--session-id") + 1].as_str(), a[at("-n") + 1].as_str()), ("sid-1", "#7 Basket"));
-        assert_eq!((a[at("--agent") + 1].as_str(), a[at("--model") + 1].as_str(), a[at("--permission-mode") + 1].as_str()), ("leader", "sonnet", "acceptEdits"));
+        assert_eq!((a[at("--session-id") + 1].as_str(), a[at("-n") + 1].as_str()), ("sid-1", "Coding squad · #7 Add a basket page"));
+        assert_eq!((a[at("--agent") + 1].as_str(), a[at("--model") + 1].as_str(), a[at("--permission-mode") + 1].as_str()), ("coding-leader", "sonnet", "acceptEdits"));
+        let agents: Value = serde_json::from_str(&a[at("--agents") + 1]).unwrap();
+        assert!(agents.get("coding-leader").is_some() && agents.get("coding-verifier").is_some() && agents.get("leader").is_none(), "{agents}");
         let settings: Value = serde_json::from_str(&a[at("--settings") + 1]).unwrap();
         assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-stop");
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
@@ -1499,10 +1561,17 @@ mod tests {
         assert_eq!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-tool");
         assert_eq!(a.last().unwrap(), "Ticket #7", "the first message comes last, after a flag that takes one value");
         assert_eq!(a[a.len() - 3], "--settings");
-        let r = leader_args(&CODING, &c, "/bin/platoon", "sid-1", "#7 Basket", &[], None);
+        let r = leader_args(&CODING, &c, "/bin/platoon", "sid-1", "ignored", &[], None, AgentNames::SquadRole);
         assert_eq!(&r[..2], ["--resume", "sid-1"]);
         assert!(!r.contains(&"--session-id".to_string()) && r[r.len() - 2] == "--settings", "{r:?}");
         assert_eq!(r[r.iter().position(|x| x == "--agents").unwrap() + 1], a[at("--agents") + 1], "the same squad");
+        assert!(!r.contains(&"-n".to_string()), "a resumed session keeps its name");
+        // A leader started before the agents carried the squad's name is resumed with the names it began with.
+        let old = leader_args(&CODING, &c, "/bin/platoon", "sid-0", "ignored", &[], None, AgentNames::Plain);
+        let pos = |k: &str| old.iter().position(|x| x == k).unwrap();
+        assert_eq!((old[0].as_str(), old[1].as_str(), old[pos("--agent") + 1].as_str()), ("--resume", "sid-0", "leader"));
+        let agents: Value = serde_json::from_str(&old[pos("--agents") + 1]).unwrap();
+        assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
         assert_eq!(shell_word("/usr/bin/platoon"), "/usr/bin/platoon");
         assert_eq!(shell_word("/a/it's"), "'/a/it'\\''s'");
         let id = new_session_id();
@@ -1575,10 +1644,11 @@ mod tests {
         assert_eq!(system, format!("Be generous: say it fits unless it plainly doesn't.\n\n{}", fixed.trim()));
         assert_eq!(instructions::action(instructions::COMMANDER).entry, "System prompt for the squad commander");
 
-        let t = ticket(HowFar::Preset(1), &["/w/shop", "/w/notes"], &[]);
+        let t = ticket(&["/w/shop", "/w/notes"], &[]);
         let facts = [FolderFact { path: "/w/shop".into(), git: true }, FolderFact { path: "/w/notes".into(), git: false }];
         let p = commander_prompt(&CODING, &t, "## What it should do\n\nA basket.\n", &facts);
-        assert!(p.starts_with(&format!("The squad: Coding\nWhat it can do: {}\n\nThe ticket: #7 Add a basket page\nHow far to take it: Local commit\n", CODING.can_do)), "{p}");
+        assert!(p.starts_with(&format!("The squad: Coding\nWhat it can do: {}\n\nThe ticket: #7 Add a basket page\nWhere it works:\n", CODING.can_do)), "{p}");
+        assert!(!p.contains("How far to take it"), "the ticket's text says how far: {p}");
         assert!(p.contains("- /w/shop (in a git repository)\n- /w/notes (not in a git repository)\n"), "{p}");
         assert!(p.ends_with("What the ticket says:\n## What it should do\n\nA basket.\n"), "{p}");
         let long = commander_prompt(&CODING, &t, &"x".repeat(BODY_IN_PROMPT + 100), &[]);

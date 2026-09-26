@@ -288,6 +288,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert_eq!(tk["state"], "working", "{tk}");
     let sid = tk["leaders"][0]["session"].as_str().unwrap().to_string();
     assert_eq!((sid.len(), tk["leaders"][0]["squad"].as_str()), (36, Some("coding")), "{tk}");
+    assert_eq!(tk["leaders"][0]["names"], "squad-role", "the names it was started with, for resuming it: {tk}");
     let wt = lab.base.join("shop-worktrees/ticket-1");
     assert_eq!(tk["worktrees"][0]["path"], wt.to_string_lossy().as_ref());
     assert_eq!(tk["worktrees"][0]["branch"], "ticket/1");
@@ -297,8 +298,8 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert_eq!(lab.started(), 1);
     let args = lab.args(1);
     assert_eq!(value_after(&args, "--session-id"), sid);
-    assert_eq!(value_after(&args, "-n"), "#1 Basket");
-    assert_eq!(value_after(&args, "--agent"), "leader");
+    assert_eq!(value_after(&args, "-n"), "Coding squad · #1 Basket");
+    assert_eq!(value_after(&args, "--agent"), "coding-leader");
     assert_eq!(value_after(&args, "--model"), "sonnet");
     assert_eq!(value_after(&args, "--permission-mode"), "acceptEdits");
     assert_eq!(value_after(&args, "--add-dir"), lab.docs.to_string_lossy(), "the other folder, as it is");
@@ -306,9 +307,11 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let models: Vec<(String, String)> = agents.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string())).collect();
     assert_eq!(
         models,
-        [("leader", "sonnet"), ("planner", "opus"), ("builder", "sonnet"), ("reviewer", "opus"), ("verifier", "haiku")].map(|(a, b)| (a.to_string(), b.to_string()))
+        [("coding-leader", "sonnet"), ("coding-planner", "opus"), ("coding-builder", "sonnet"), ("coding-reviewer", "opus"), ("coding-verifier", "haiku")].map(|(a, b)| (a.to_string(), b.to_string()))
     );
-    assert!(agents["leader"]["prompt"].as_str().unwrap().contains("SQUAD: ready to publish"));
+    let leader_prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
+    assert!(leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("Hand the ticket to coding-planner"), "{leader_prompt}");
+    assert!(leader_prompt.contains("When it doesn't say how far, stop at local changes"), "{leader_prompt}");
     let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
     let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
     let gate = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
@@ -319,7 +322,8 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(stop.starts_with(BIN) || stop.starts_with(&format!("'{BIN}")), "the platoon that is running: {stop}");
     let first = args.last().unwrap();
     assert!(first.starts_with("Ticket #1: Basket\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket page."), "{first}");
-    assert!(first.contains("Local commit: commit the change on the ticket's branch (ticket/1)"), "{first}");
+    assert!(first.contains("## How far to take it\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes"), "{first}");
+    assert!(!first.contains("Local commit"), "an old how_far in the file is not read: {first}");
     assert!(!first.contains("Sell socks"), "the notes arrive separately");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let env = lab.rec(1, "env");
@@ -328,7 +332,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     }
     assert!(env.lines().any(|l| l == "CLAUDE_CODE_USE_BEDROCK=0") && env.lines().any(|l| l.starts_with("CLAUDE_CONFIG_DIR=")), "the user's own settings are: {env}");
     // The leader may hand work on, read and run things; it never edits a file itself.
-    assert_eq!(agents["leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]));
+    assert_eq!(agents["coding-leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]));
     // The commander was asked first: one `claude -p` call on Haiku, with the ticket and the squad, and the same
     // markers taken away.
     assert_eq!(lab.checks(), 1);
@@ -336,6 +340,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(argv.contains("\n--model\nhaiku\n"), "{argv}");
     let asked = lab.check_file(1, "stdin");
     assert!(asked.starts_with("The squad: Coding\n") && asked.contains("The ticket: #1 Basket") && asked.contains("A basket page."), "{asked}");
+    assert!(!asked.contains("How far"), "{asked}");
     assert!(asked.contains(&format!("- {} (in a git repository)", lab.shop.display())) && asked.contains(&format!("- {} (not in a git repository)", lab.docs.display())), "{asked}");
     let check_env = lab.check_file(1, "env");
     assert!(!check_env.contains("CLAUDE_CODE_SESSION_ID") && !check_env.contains("CLAUDE_CODE_CHILD_SESSION") && check_env.contains("CLAUDE_CODE_USE_BEDROCK=0"), "{check_env}");
@@ -346,7 +351,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let screen = t.stable();
     let (ticket_at, session_at) = (t.find("#1 Basket").unwrap(), t.find("FAKE LEADER").unwrap());
     assert!(session_at.1 > ticket_at.1 + 40, "side by side:\n{screen}");
-    assert!(screen.contains("Working") && screen.contains("Coding · its session is running"), "{screen}");
+    assert!(screen.contains("Working") && screen.contains("Coding squad") && !screen.contains("its session is running"), "{screen}");
     t.send(b"hello squad\r");
     t.wait_for("GOT:hello squad");
     assert_eq!(lab.rec(1, "typed"), "hello squad\n");
@@ -493,9 +498,12 @@ fn a_ticket_whose_squad_isnt_running_continues_it_with_the_same_flags_and_narrow
     let args = lab.args(1);
     assert_eq!(value_after(&args, "--resume"), sid);
     assert!(!args.iter().any(|a| a == "--session-id" || a == "-n"), "{args:?}");
+    // A leader started before its agents carried the squad's name (no "names" on it) keeps the names it began with.
     assert_eq!(value_after(&args, "--agent"), "leader");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
     assert_eq!(agents["verifier"]["model"], "haiku");
+    assert!(!agents["leader"]["prompt"].as_str().unwrap().contains("coding-"), "its prompt calls them by those names too");
     let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
     assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("hook squad-stop"));
     assert_eq!(args.last().unwrap(), &settings.to_string(), "no first message this time");

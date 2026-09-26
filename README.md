@@ -468,7 +468,10 @@ columns share a wide terminal's spare width the same way.
 
 A **project's screen** shows its name and that same description across the top (in full, wrapped when it is long), its sessions at the top left (active ones
 first, then an `Archived (N)` group, dimmed), its [tickets](#tickets) under them and its notes on the right. `tab` and `shift+tab` go round the three
-panes; `←` goes to the left side (to whichever of Sessions and Tickets you used last) and `→` to the notes; `↑` `↓` move in the sessions or tickets or scroll the notes.
+panes. `shift` with an arrow moves between them too: `shift+↑` to Sessions, `shift+↓` to Tickets, `shift+→` to the notes
+and `shift+←` back to whichever of Sessions and Tickets you used last. `ctrl` with an arrow does the same, for terminals
+that keep `shift`+arrows for themselves. The plain arrows stay inside a pane: `↑` `↓` move in the sessions or tickets or
+scroll the notes, and `←` `→` do nothing there.
 `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
 sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
@@ -737,38 +740,41 @@ understood, platoon says so plainly and nothing is started.
 
 ### Tickets
 
-A **ticket** is one piece of work in a project: a title, a body you write in Markdown, the folder or folders it works in,
-**how far** to take it, the tickets it **waits for**, and where it is (its state). Each ticket has a number in its project
+A **ticket** is one piece of work in a project: a title, a body you write in Markdown (which also says how far to take
+the work), the folder or folders it works in, the tickets it **waits for**, and where it is (its state). Each ticket has a number in its project
 (`#1`, `#2`, ...), which is never given to another ticket. You can keep them as a list, or hand one to a squad (see
 [Handing a ticket to a squad](#handing-a-ticket-to-a-squad)).
 
 The **Tickets** pane sits under Sessions on a project's screen. Open tickets come first; the Done and Cancelled ones are
 kept apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the
-number, the title, the state, how far it goes and, for an open ticket, what it is still waiting for ("waits for #2, #4")
+number, the title, the state and, for an open ticket, what it is still waiting for ("waits for #2, #4")
 or a quiet **ready** when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones
-waiting for it: only Done lets them go). On a narrow terminal how far goes first, then the
-state's own column (a Done, Cancelled or otherwise not-New ticket then says its state at the end of its row).
+waiting for it: only Done lets them go). On a narrow terminal the state's own column goes first (a Done, Cancelled or
+otherwise not-New ticket then says its state at the end of its row).
 
 | Key (Tickets pane) | Does |
 | --- | --- |
 | `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes). An archived project takes no new tickets |
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
-| `s` `e` `r` `h` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
+| `s` `e` `r` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
 
-A new ticket starts as **New**, goes as far as **Local changes only**, works in the folder of the project's most recently
-used session (or "No folder yet" when the project has no sessions), and its body starts from a short template: a
-**What it should do** heading (what should work when it is finished, as behaviour, and small enough for one fresh
-session) and an **Acceptance** heading with two empty checkboxes.
+A new ticket starts as **New**, works in the folder of the project's most recently used session (or "No folder yet" when
+the project has no sessions), and its body starts from a short template: a **What it should do** heading (what should
+work when it is finished, as behaviour, and small enough for one fresh session), with the line **How far: local changes
+only (say if you want a commit, or a push and merge request).** under it, and an **Acceptance** heading with two empty
+checkboxes. **How far to take the work is said in the ticket's text**: write "a local commit", "push it and open a merge
+request" or anything else there. When the text doesn't say, a squad stops at local changes: it changes the files in its
+worktree and commits nothing. (Tickets made by an older platoon may have a separate "how far" in `tickets.json`: it is
+kept there and no longer read.)
 
-**A ticket's own screen** (`enter`) shows its number and title, its state, how far it goes, its folders, what it waits
-for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
+**A ticket's own screen** (`enter`) shows its number and title, its state, the squad that has it ("Coding squad"), its
+folders, what it waits for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
 
 | Key (a ticket's screen) | Does |
 | --- | --- |
 | `e` | edit the body in your editor |
 | `r` | rename it (its file keeps its name) |
 | `s` | its state: New, Done or Cancelled. A Done or Cancelled ticket made New again comes back up with the open ones |
-| `h` | how far: Local changes only, Local commit, Commit, push and open a merge request, Publish a document or page, or in your own words |
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
 | `a` | hand it to a squad (see below) |
@@ -786,7 +792,7 @@ copy of its tickets with the rest of its backup; archiving it leaves them as the
 From the command line (a later `/ticket` skill will use the same command, so tickets are always made through platoon):
 
 ```
-platoon ticket add --project "Web shop" --title "Log in with a link" --how-far "local commit" --folder ~/repos/web
+platoon ticket add --project "Web shop" --title "Log in with a link" --folder ~/repos/web
 platoon ticket add --project "Web shop" --title "Basket page" --waits-for 1 < body.md    # the body piped in
 platoon ticket list --project "Web shop"            # open ones first, then Done and cancelled
 platoon ticket list --json                          # every project, with each body file's full path
@@ -797,8 +803,8 @@ platoon ticket list --json                          # every project, with each b
 (its full path), and each `--folder` you give replaces that. A project that is archived takes no new tickets (restore it
 first; its tickets can still be opened and changed in platoon). A project
 that isn't there (or a name two projects share), a ticket to wait for that isn't there or would make a circle, or a folder
-that doesn't exist is refused with one plain line and nothing is made. A running platoon shows the new ticket within a
-second.
+that doesn't exist is refused with one plain line and nothing is made. There is no `--how-far`: say how far in the body
+(`--how-far` is refused with a line that says so). A running platoon shows the new ticket within a second.
 
 ### Handing a ticket to a squad
 
@@ -807,8 +813,11 @@ its own, and **members** it hands the pieces to, each with its own job and its o
 **Coding**: its leader (Sonnet) hands the ticket to the **planner** (Opus), which reads the code and writes a short plan;
 then to the **builder** (Sonnet), which makes the change and runs the tests; then to the **reviewer** (Opus), which checks
 the change against the ticket (and that each acceptance check could have failed before it), sending it back to the builder
-at most twice; then to the **verifier** (Haiku), which runs the tests and the build. The leader waits for each of them
-before it decides anything, and takes the ticket exactly as far as its **how far** says.
+at most twice; then to the **verifier** (Haiku), which runs the tests and the build and reports the total of every test
+result line (added up with a command). The leader waits for each of them before it decides anything, and takes the work
+as far as the ticket's text says; when the text doesn't say, it stops at local changes, with nothing committed. In the
+squad's session they are named after the squad, `coding-leader`, `coding-planner`, `coding-builder`, `coding-reviewer`
+and `coding-verifier`, so Claude's own lines and status bar show which of them is at work.
 
 Press `a` on a New ticket (in the Tickets pane or on its screen), pick the squad and press `enter`. A ticket that is not
 New, that still waits for another ticket, or that has no folder is refused with one line saying why.
@@ -832,7 +841,7 @@ New, that still waits for another ticket, or that has no folder is refused with 
   worktree…"); if it can't be made, the ticket goes back to New with the reason, and one already made stays for the next
   try.
 - **Its own session.** The leader starts in a platoon session of its own (it keeps running when platoon closes), named
-  `#N title`, with the ticket as its first message and the project's notes given to it as context. It belongs to the
+  `Coding squad · #N title`, with the ticket as its first message and the project's notes given to it as context. It belongs to the
   ticket only: it is never listed on the Sessions tab, in the project's sessions, in searches or counts, and it never
   joins the project.
 - **Beside the ticket.** Opening a ticket that has a squad shows the ticket on the left and the squad's live session on
@@ -853,7 +862,7 @@ command"); once you answer and it carries on, the ticket is Working again. The l
 idle while its ticket is Working (its members may be at work while nobody watches); once the ticket is Waiting on you,
 Ready, Done or Cancelled, it is stopped like any idle session.
 
-**Anything other people can see asks you first**, even when the ticket's how far includes it: pushing, opening or merging
+**Anything other people can see asks you first**, even when the ticket asks for it: pushing, opening or merging
 a merge request, publishing a package or a page. platoon refuses those commands in the squad's session until you say so,
 and the squad stops at **Ready to push/publish**, saying what it wants to publish. Press `p` on the ticket to let it: the
 ticket goes back to Working and platoon types "Go ahead and publish." into the squad's session. That go-ahead lasts while

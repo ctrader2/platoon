@@ -792,7 +792,7 @@ mod tests {
         let config = rig.dir.join("config");
         let mut t = Tickets::open(&config, "p1");
         let n = t.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default() }, &[]).unwrap();
         let t0 = Instant::now();
         assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::LeaderAtWork));
         for s in [State::Waiting, State::Ready, State::Done, State::Cancelled] {

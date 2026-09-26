@@ -8,7 +8,7 @@ use super::*;
 use crate::ai::Request;
 use crate::instructions;
 use crate::squads::{self, AfterCheck, Check, FolderFact, Squad};
-use crate::tickets::{HandoverKind, Leader, State, Ticket, Tickets, Worktree};
+use crate::tickets::{AgentNames, HandoverKind, Leader, State, Ticket, Tickets, Worktree};
 use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::time::SystemTime;
@@ -394,7 +394,7 @@ impl App {
             return;
         }
         let session = squads::new_session_id();
-        let leader = Leader { squad: squad.id.to_string(), session: session.clone(), started: usage::now() };
+        let leader = Leader { squad: squad.id.to_string(), session: session.clone(), started: usage::now(), names: AgentNames::SquadRole };
         if let Err(e) = self.with_tickets(project, |s| s.start_leader(number, &leader, &worktrees)) {
             self.report_squad_error(e);
             return;
@@ -452,7 +452,7 @@ impl App {
             return Err(format!("{} doesn't exist any more", dirs::tilde(&dir, &self.home)));
         }
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
-        let args = squads::leader_args(squad, &self.config, &exe, &leader.session, &squads::session_name(&t), &folders[1..], first);
+        let args = squads::leader_args(squad, &self.config, &exe, &leader.session, &squads::session_name(squad, &t), &folders[1..], first, leader.names);
         // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
         #[cfg(test)]
         {
