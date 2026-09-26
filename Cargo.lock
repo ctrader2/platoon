@@ -1143,6 +1143,7 @@ dependencies = [
  "portable-pty",
  "ratatui",
  "serde_json",
+ "unicode-width",
  "vt100",
 ]
 

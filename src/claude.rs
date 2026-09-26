@@ -377,6 +377,32 @@ pub fn read_transcript(path: &Path, prev: Option<&Transcript>) -> Option<Transcr
     Some(t)
 }
 
+/// When a conversation started: the time of the first user or assistant entry in its transcript (ms since the
+/// epoch). Only the head of the file is read. None when there is no such entry there, or no time on it.
+pub fn started_ms(path: &Path) -> Option<u64> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file.take(HEAD_BYTES));
+    let mut line = Vec::new();
+    for _ in 0..HEAD_LINES {
+        line.clear();
+        if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            return None;
+        }
+        let line = String::from_utf8_lossy(&line);
+        if !(line.contains("\"type\":\"user\"") || line.contains("\"type\":\"assistant\"")) || !line.contains("\"timestamp\"") {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+        if v["isSidechain"].as_bool() == Some(true) {
+            continue;
+        }
+        if let Some(ms) = v["timestamp"].as_str().and_then(parse_iso_ms) {
+            return Some(ms);
+        }
+    }
+    None
+}
+
 fn scan_head(file: &File, t: &mut Transcript) {
     let mut reader = BufReader::new(file.take(HEAD_BYTES));
     let mut line = Vec::new();
@@ -878,6 +904,24 @@ mod hidden_tests {
         assert_eq!(ids(&r), ["helper", "helper-bg", "near", "real"], "shown while nothing is hidden");
         r.hide(Hidden::new(&work));
         assert_eq!(ids(&r), ["near", "real"]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_conversation_started_at_its_first_real_entry_and_a_file_without_one_has_no_start() {
+        let base = tmp("started");
+        let p = base.join("s.jsonl");
+        let lines = [
+            r#"{"type":"mode","mode":"normal","timestamp":"2026-09-20T09:00:00.000Z"}"#,
+            r#"{"type":"user","isSidechain":true,"timestamp":"2026-09-20T09:30:00.000Z"}"#,
+            r#"{"type":"user","timestamp":"2026-09-24T10:00:00.500Z","message":{"content":"hi"}}"#,
+            r#"{"type":"assistant","timestamp":"2026-09-24T10:01:00.000Z"}"#,
+        ];
+        fs::write(&p, lines.join("\n") + "\n").unwrap();
+        assert_eq!(started_ms(&p), parse_iso_ms("2026-09-24T10:00:00.500Z"));
+        fs::write(&p, r#"{"type":"user","message":{"content":"no time"}}"#.to_string() + "\n").unwrap();
+        assert_eq!(started_ms(&p), None);
+        assert_eq!(started_ms(&base.join("missing.jsonl")), None);
         let _ = fs::remove_dir_all(&base);
     }
 }

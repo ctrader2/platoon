@@ -2025,7 +2025,7 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let h = &app.handoff;
     app.hits.borrow_mut().clear();
-    let r = centered(area, area.width.saturating_sub(6).clamp(40, 100), area.height.saturating_sub(2).clamp(10, 26));
+    let r = centered(area, area.width.saturating_sub(6).clamp(40, 100), area.height.saturating_sub(2).clamp(10, 40));
     f.render_widget(Clear, r);
     let block = modal_block(t, "hand this work on");
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -2041,49 +2041,68 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
     .areas(inner);
     let title = format!("A new session in {} · project {}", fit_start(&h.cwd, 40), h.project_name);
     f.render_widget(Paragraph::new(Span::styled(fit_end(&title, head.width as usize), Style::new().fg(t.subtext))), head);
-    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
-    let w = body.width as usize;
-    match &h.state {
-        HandoffState::Asking => {
-            let text = format!("Asking Claude what to hand on from \"{}\"…", h.session_name);
-            f.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), body);
-        }
-        HandoffState::Failed(why) => {
-            f.render_widget(Paragraph::new(why.clone()).wrap(Wrap { trim: true }).style(Style::new().fg(t.warn)), body);
-        }
-        HandoffState::Ready => {
-            let lines = h.lines();
-            let rows = body.height as usize;
-            let (cy, cx) = h.cursor_at();
-            // Keep the cursor's line in view, scrolling as little as it takes.
-            let mut top = h.top.get().min(lines.len().saturating_sub(1));
-            top = top.min(cy);
-            if rows > 0 && cy >= top + rows {
-                top = cy + 1 - rows;
-            }
-            h.top.set(top);
-            for (n, line) in lines.iter().skip(top).take(rows).enumerate() {
-                f.render_widget(
-                    Paragraph::new(Span::styled(fit_end(line, w), Style::new().fg(t.text))),
-                    Rect::new(body.x, body.y + n as u16, body.width, 1),
-                );
-            }
-            if cy >= top && cy < top + rows {
-                f.set_cursor_position((body.x + (cx as u16).min(body.width.saturating_sub(1)), body.y + (cy - top) as u16));
-            }
+    // The text wraps at the box's width (one column kept spare for the cursor) and scrolls; the rulers above and
+    // below it say, in words, when there is more than shows.
+    let (width, visible) = (crate::textbox::content_width(body.width as usize), body.height as usize);
+    h.view.set((width, visible));
+    let (shown, style, cursor) = match &h.state {
+        HandoffState::Asking => (h.shown(), Style::new().fg(t.dim), None),
+        HandoffState::Failed(_) => (h.shown(), Style::new().fg(t.warn), None),
+        HandoffState::Ready => (h.shown(), Style::new().fg(t.text), Some(h.cursor)),
+    };
+    let chars: Vec<char> = shown.chars().collect();
+    let rows = crate::textbox::layout(&chars, width);
+    let at = cursor.map(|c| crate::textbox::locate(&rows, &chars, c));
+    let top = match at {
+        Some((row, _)) => crate::textbox::clamp_top(h.top.get(), row, visible, rows.len()),
+        None => crate::textbox::clamp_view(h.top.get(), visible, rows.len()),
+    };
+    h.top.set(top);
+    for (n, r) in rows.iter().skip(top).take(visible).enumerate() {
+        let line: String = chars[r.start..r.end].iter().collect();
+        f.render_widget(Paragraph::new(Span::styled(line, style)), Rect::new(body.x, body.y + n as u16, body.width, 1));
+    }
+    if let Some((row, col)) = at {
+        if row >= top && row < top + visible {
+            f.set_cursor_position((body.x + (col as u16).min(body.width.saturating_sub(1)), body.y + (row - top) as u16));
         }
     }
-    f.render_widget(Paragraph::new("─".repeat(sep2.width as usize)).style(Style::new().fg(t.border)), sep2);
+    let below = rows.len().saturating_sub(top + visible);
+    handoff_ruler(f, t, sep, crate::textbox::more_label(top, true));
+    handoff_ruler(f, t, sep2, crate::textbox::more_label(below, false));
     let note_text = match &h.state {
         HandoffState::Ready => "Edit it if you like. The old session is left exactly as it is. The project's notes go to the new session by themselves.",
         _ => "The old session is left exactly as it is.",
     };
     f.render_widget(Paragraph::new(fit_end(note_text, note.width as usize)).style(Style::new().fg(t.dim)), note);
     let hints: Vec<Hint> = match h.state {
-        HandoffState::Ready => vec![("ctrl+s", "start the new session", Some(Action::Confirm)), ("enter", "new line", None), ("esc", "cancel", Some(Action::Cancel))],
+        HandoffState::Ready => vec![
+            ("ctrl+s", "start the new session", Some(Action::Confirm)),
+            ("enter", "new line", None),
+            ("esc", "cancel", Some(Action::Cancel)),
+            ("pgup/pgdn", "scroll", None),
+        ],
         _ => vec![("esc", "cancel", Some(Action::Cancel))],
     };
     draw_footer(f, app, foot, &hints, None);
+}
+
+/// A ruler across the hand-off box, with "↑ 3 more lines above" (or below) near its right end when there is more.
+fn handoff_ruler(f: &mut Frame, t: &Theme, area: Rect, label: Option<String>) {
+    let w = area.width as usize;
+    let line = match label {
+        Some(l) if l.chars().count() + 6 <= w => {
+            let l = format!(" {l} ");
+            let left = w - l.chars().count() - 3;
+            Line::from(vec![
+                Span::styled("─".repeat(left), Style::new().fg(t.border)),
+                Span::styled(l, Style::new().fg(t.subtext)),
+                Span::styled("─".repeat(3), Style::new().fg(t.border)),
+            ])
+        }
+        _ => Line::from(Span::styled("─".repeat(w), Style::new().fg(t.border))),
+    };
+    f.render_widget(Paragraph::new(line), area);
 }
 
 /// A terminal editor running inside platoon's window on a project's notes: its screen, and one line saying how to

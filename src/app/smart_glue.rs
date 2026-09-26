@@ -137,8 +137,13 @@ impl App {
         usage::now() + self.smart.offset
     }
 
-    fn ai_program(&self) -> String {
+    pub(super) fn ai_program(&self) -> String {
         self.smart.program.clone().unwrap_or_else(|| self.program.clone())
+    }
+
+    /// The runner every call of the app goes through: the stand-in `claude` in tests, and the test clock.
+    pub(super) fn ai_runner(&self, program: &str) -> Runner {
+        Runner::with_program(&self.cache, program).with_clock_offset(self.smart.offset)
     }
 
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.
@@ -150,7 +155,7 @@ impl App {
             let _ = tx.send(Err(AiError::Cancelled));
             return rx;
         }
-        let runner = Runner::with_program(&self.cache, &program).with_clock_offset(self.smart.offset);
+        let runner = self.ai_runner(&program);
         thread::spawn(move || {
             let _ = tx.send(runner.run(&settings, &req));
         });

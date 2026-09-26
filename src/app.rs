@@ -478,9 +478,11 @@ pub struct App {
     notes_window: Option<NotesWindow>,
     pub epick: EditorPick,
     pub changes: Changes,
-    /// The hand-off box (`H`), and the call it is waiting for.
+    /// The hand-off box (`h`), and the git reading and the call it is waiting for.
     pub handoff: HandoffBox,
-    handoff_flight: Option<Receiver<Result<crate::ai::Reply, crate::ai::AiError>>>,
+    handoff_flight: Option<Receiver<handoff_glue::HandoffAnswer>>,
+    /// The `git` the hand-off reads the folder with (a stand-in in tests).
+    git_program: String,
     /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
     pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
@@ -640,6 +642,7 @@ impl App {
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
+            git_program: "git".into(),
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             config: config.clone(),
@@ -2272,8 +2275,7 @@ impl App {
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
-                    // The brief is scrolled by the cursor, not the wheel: nothing to do here.
-                    Mode::Handoff => {}
+                    Mode::Handoff => self.handoff_wheel(up),
                     Mode::ProjectName | Mode::Look => {}
                     Mode::Search => self.move_search(if up { -1 } else { 1 }),
                     Mode::Rename => {}

@@ -13,7 +13,7 @@ use crate::usage;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::fs;
 
-const BRIEF: &str = r#"{"done":"The basket page is in.","decisions":["Baskets are session based"],"next":"Take card payments."}"#;
+const BRIEF: &str = r#"{"summary":"The basket page is in.","done":["Baskets are session based"],"state":["Totals ignore VAT"],"next":["Take card payments."],"files":["claude-says.rs: made up"]}"#;
 
 /// A world with one conversation in one project, the token features on, and a stand-in `claude`.
 fn world(name: &str) -> (World, AiFake) {
@@ -84,19 +84,30 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     wait_ready(&mut app);
     assert_eq!(app.handoff.state, HandoffState::Ready);
 
-    // The brief is platoon's own shape, filled with what came back.
+    // The document is platoon's fixed shape: its own facts, then what came back.
     let text = app.handoff.text.clone();
-    assert!(text.starts_with("Carrying on from an earlier session."), "{text}");
-    assert!(text.contains("What was done:\nThe basket page is in."), "{text}");
-    assert!(text.contains("- Baskets are session based"), "{text}");
-    assert!(text.contains("What is next:\nTake card payments."), "{text}");
+    assert!(text.starts_with("# Session hand-off: shop\n\n- Written: "), "{text}");
+    assert!(text.contains("- Project: Web shop\n"), "{text}");
+    assert!(text.contains(&format!("- Previous session: shop, in {}\n", shop(&w))), "{text}");
+    assert!(text.contains("- Started: ") && text.contains(" between)\n"), "{text}");
+    assert!(text.contains("- Model: Sonnet 5, context "), "{text}");
+    assert!(text.contains("- Messages from the user: 1 "), "{text}");
+    assert!(text.contains("## Executive summary\n\nThe basket page is in.\n"), "{text}");
+    assert!(text.contains("## Work completed\n\n- Baskets are session based\n"), "{text}");
+    assert!(text.contains("## Current state and known gotchas\n\n- Totals ignore VAT\n"), "{text}");
+    assert!(text.contains("## Next steps\n\n1. Take card payments.\n"), "{text}");
+    // The folder is no git repository: no git facts, and the files are Claude's own account, said to be so.
+    assert!(!text.contains("Git branch"), "{text}");
+    assert!(text.contains("As Claude described them (this folder is not a git repository):\n- claude-says.rs: made up"), "{text}");
     assert!(!text.contains("Sell socks."), "the project's notes are not repeated: {text}");
+    assert!(handoff::why_not(&text).is_none());
 
     // What was sent: this conversation, its folder and its project, and never its session id.
     assert_eq!(fake.calls(), 1);
     let sent = fake.stdin(1);
     assert!(sent.contains("Project: Web shop") && sent.contains("Folder: shop"), "{sent}");
     assert!(sent.contains("- Add a basket page to the shop"), "{sent}");
+    assert!(sent.contains("not a git repository, so fill \"files\""), "{sent}");
     assert!(!sent.contains("sess-1"), "{sent}");
     // It is the user's own key press, so it goes as user-initiated work, and its spend is in the ledger.
     assert!(fake.argv(1).contains(&"-p".to_string()));
@@ -139,7 +150,12 @@ fn the_brief_can_be_typed_into_before_it_is_accepted() {
     wait_ready(&mut app);
     let before = app.handoff.text.clone();
 
-    // The cursor starts at the end; typing goes in there.
+    // The cursor starts at the top, where the document starts; Down and End take it to the end.
+    assert_eq!(app.handoff.cursor, 0);
+    for _ in 0..before.lines().count() + 5 {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::End);
     assert_eq!(app.handoff.cursor, before.chars().count());
     for c in " Also: sizes.".chars() {
         key(&mut app, KeyCode::Char(c));
@@ -302,7 +318,7 @@ fn a_brief_that_could_not_be_handed_on_is_refused_with_the_box_left_as_it_was() 
     // Emptied: there is nothing to start a session with.
     let was = app.handoff.text.chars().count();
     for _ in 0..was {
-        key(&mut app, KeyCode::Backspace);
+        key(&mut app, KeyCode::Delete);
     }
     ctrl(&mut app, 's');
     assert!(matches!(app.mode, Mode::Handoff), "the box stays open");
@@ -316,6 +332,262 @@ fn a_brief_that_could_not_be_handed_on_is_refused_with_the_box_left_as_it_was() 
     assert_eq!(app.handoff.text, "--resume trouble", "the text is left exactly as it was");
     assert!(app.active_notice().unwrap_or_default().contains("start with a dash"), "{:?}", app.active_notice());
     assert_eq!(app.sessions.len(), 1, "and no session was started");
+}
+
+// ---- the document's facts from git, and the box that wraps and scrolls -----------------------------------------
+
+/// A git command that writes, only ever in a test's own temp folder, with a fixed author and none of the user's
+/// own git settings.
+fn git(dir: &std::path::Path, args: &[&str], date: Option<&str>) {
+    let mut c = std::process::Command::new("git");
+    c.arg("-C").arg(dir).args(args);
+    c.env("GIT_CONFIG_GLOBAL", "/dev/null").env("GIT_CONFIG_NOSYSTEM", "1");
+    c.env("GIT_AUTHOR_NAME", "Test").env("GIT_AUTHOR_EMAIL", "test@example.com");
+    c.env("GIT_COMMITTER_NAME", "Test").env("GIT_COMMITTER_EMAIL", "test@example.com");
+    if let Some(d) = date {
+        c.env("GIT_AUTHOR_DATE", d).env("GIT_COMMITTER_DATE", d);
+    }
+    let out = c.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::piped()).output().unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn in_a_git_repository_platoon_fills_the_branch_the_commits_and_the_files_itself() {
+    let (w, fake) = world("handoff-git");
+    let dir = w.base.join("shop");
+    // Before the session: one commit. During it (the transcript starts 5 minutes ago): another, and some work
+    // not committed yet.
+    git(&dir, &["init", "-q", "-b", "basket"], None);
+    fs::write(dir.join("old.rs"), "old").unwrap();
+    git(&dir, &["add", "-A"], None);
+    git(&dir, &["commit", "-q", "-m", "Before the session"], Some("2020-01-01T00:00:00Z"));
+    fs::write(dir.join("basket.rs"), "basket").unwrap();
+    git(&dir, &["add", "-A"], None);
+    git(&dir, &["commit", "-q", "-m", "Add the basket"], None);
+    fs::write(dir.join("old.rs"), "changed").unwrap();
+    fs::write(dir.join("todo.txt"), "new").unwrap();
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    let text = app.handoff.text.clone();
+    assert!(text.contains("- Git branch: basket\n"), "{text}");
+    assert!(text.contains("- Uncommitted changes: 2 files\n"), "{text}");
+    assert!(text.contains(" Add the basket\n") && text.contains("- Last commit: "), "{text}");
+    assert!(text.contains("- Commits since the session started: 1\n"), "{text}");
+    assert!(
+        text.contains("## Files affected\n\nNot committed yet:\n- old.rs (changed)\n- todo.txt (new, not yet added to git)\nCommitted since the session started:\n- basket.rs\n"),
+        "{text}"
+    );
+    // Git knows the files, so Claude's own list is not used, and Claude was told the files instead of asked.
+    assert!(!text.contains("claude-says.rs"), "{text}");
+    let sent = fake.stdin(1);
+    assert!(sent.contains("- old.rs (changed, not committed)") && sent.contains("- basket.rs (committed during the session)"), "{sent}");
+    assert!(sent.contains("leave \"files\" out"), "{sent}");
+    // Reading changed nothing in the repository.
+    assert!(!dir.join(".git/index.lock").exists());
+}
+
+#[test]
+fn a_git_that_fails_just_leaves_the_git_facts_out() {
+    let (w, fake) = world("handoff-git-fails");
+    let bad = w.base.join("bad-git");
+    fs::write(&bad, "#!/bin/sh\nexit 128\n").unwrap();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut fs::metadata(&bad).unwrap().permissions(), 0o755);
+    fs::set_permissions(&bad, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    app.set_git_program_for_test(bad.to_str().unwrap());
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    let text = app.handoff.text.clone();
+    assert_eq!(app.handoff.state, HandoffState::Ready, "the document is still made");
+    assert!(!text.contains("Git branch") && !text.contains("Uncommitted") && !text.contains("Last commit"), "{text}");
+    assert!(text.contains("- claude-says.rs: made up"), "Claude's account stands in: {text}");
+}
+
+/// A long answer: a summary that wraps many times, and many steps.
+fn long_brief() -> String {
+    let summary = "The basket page shows every item with its size, colour and price, and the totals at the foot of it now \
+                   add up across currencies once the rates are fetched, which happens when the page first loads.";
+    let next: Vec<String> = (1..=handoff::NEXT_MAX)
+        .map(|i| format!("\"Step number {i} of the plan, written out long enough to need several rows in a narrow box: check the totals, the sizes, the colours and the prices before the next one\""))
+        .collect();
+    format!(r#"{{"summary":"{summary}","next":[{}]}}"#, next.join(","))
+}
+
+fn term(w: u16, h: u16) -> ratatui::Terminal<ratatui::backend::TestBackend> {
+    ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap()
+}
+
+/// The screen, one string per line (a wide character's second cell is empty, so the text reads as typed).
+fn draw(t: &mut ratatui::Terminal<ratatui::backend::TestBackend>, app: &App) -> Vec<String> {
+    t.draw(|f| crate::ui::draw(f, app)).unwrap();
+    let buf = t.backend().buffer();
+    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect()
+}
+
+/// The box's own rows of text: the lines between its two rulers, without the border.
+fn body(screen: &[String]) -> Vec<String> {
+    let rulers: Vec<usize> = screen.iter().enumerate().filter(|(_, l)| l.contains("│ ───") || l.contains("│──")).map(|(n, _)| n).collect();
+    let (a, b) = (rulers[0], rulers[rulers.len() - 1]);
+    screen[a + 1..b].iter().map(|l| l.trim_matches(|c| c == ' ' || c == '│').to_string()).collect()
+}
+
+#[test]
+fn a_long_document_wraps_at_the_box_edge_and_scrolls_with_the_cursor_and_says_what_is_above_and_below() {
+    let (w, fake) = world("handoff-wrap");
+    fake.reply_default(&long_brief());
+    let mut app = app_of(&w, &fake);
+    let mut t = term(70, 40);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    let screen = draw(&mut t, &app);
+    let joined = screen.join("\n");
+    // The top of the document, nothing above it, and a count of what is below.
+    assert!(joined.contains("# Session hand-off:"), "{joined}");
+    assert!(!joined.contains("more line") || !joined.contains("above"), "{joined}");
+    assert!(screen.iter().any(|l| l.contains("↓ ") && l.contains(" more lines below")), "{joined}");
+    // No row of the box runs past its edge: every word of the long summary is on screen whole, over several rows.
+    let rows = body(&screen);
+    let inside = rows.join(" ");
+    for word in "The basket page shows every item with its size, colour and price, and the totals at the foot".split(' ') {
+        assert!(inside.split_whitespace().any(|x| x == word), "{word:?} is not whole on screen:\n{joined}");
+    }
+    let (width, _) = app.handoff.view.get();
+    for r in &rows {
+        assert!(crate::textbox::width_of(&r.trim_end().chars().collect::<Vec<_>>()) <= width, "{r:?}");
+    }
+    // The cursor is at the top left of the text.
+    let pos = t.get_cursor_position().unwrap();
+    assert_eq!(screen[pos.y as usize].chars().nth(pos.x as usize), Some('#'), "{pos:?}");
+
+    // PageDown moves down a page: the view shows what was below and says there is more above now.
+    key(&mut app, KeyCode::PageDown);
+    let screen = draw(&mut t, &app);
+    let joined = screen.join("\n");
+    assert!(screen.iter().any(|l| l.contains("↑ ") && l.contains(" more lines above")), "{joined}");
+    assert!(!joined.contains("# Session hand-off:"), "{joined}");
+    // Down through the whole document: the view follows, and the last step comes into view with nothing below.
+    for _ in 0..200 {
+        key(&mut app, KeyCode::Down);
+    }
+    let screen = draw(&mut t, &app);
+    let joined = screen.join("\n");
+    assert!(joined.contains(&format!("{n}. Step number {n}", n = handoff::NEXT_MAX)), "{joined}");
+    assert!(!joined.contains("more lines below") && !joined.contains("more line below"), "{joined}");
+    let pos = t.get_cursor_position().unwrap();
+    // The document ends with a line break, so the very end is the empty row under the last step.
+    assert!(screen[pos.y as usize - 1].contains("the next one"), "the cursor is on the last row:\n{joined}");
+    assert_eq!(app.handoff.cursor, app.handoff.text.chars().count());
+    // Typing at the cursor lands where the cursor is shown.
+    key(&mut app, KeyCode::End);
+    for c in " Done.".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let screen = draw(&mut t, &app);
+    let pos = t.get_cursor_position().unwrap();
+    let before: String = screen[pos.y as usize].chars().take(pos.x as usize).collect();
+    assert!(before.ends_with("Done."), "{before:?}");
+    // PageUp all the way back to the top.
+    for _ in 0..20 {
+        key(&mut app, KeyCode::PageUp);
+    }
+    let screen = draw(&mut t, &app);
+    assert!(screen.join("\n").contains("# Session hand-off:"));
+    assert!(!screen.iter().any(|l| l.contains("above")));
+}
+
+#[test]
+fn up_and_down_move_by_rows_on_screen_and_keep_their_column() {
+    let (w, fake) = world("handoff-rows");
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    // A box 20 columns wide, 5 rows high, holding one long line.
+    app.handoff.view.set((20, 5));
+    let line = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    app.handoff.text = line.to_string();
+    app.handoff.cursor = 0;
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.handoff.cursor_row_col(), (1, 2), "one row down, same column");
+    assert_eq!(app.handoff.cursor_at().0, 0, "and still the same line as typed");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
+    assert_eq!(app.handoff.cursor_row_col().0, 3);
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.handoff.cursor_row_col(), (2, 2));
+    // Home and End go to the ends of the line as typed, not of the row.
+    key(&mut app, KeyCode::End);
+    assert_eq!(app.handoff.cursor, line.chars().count());
+    key(&mut app, KeyCode::Home);
+    assert_eq!(app.handoff.cursor, 0);
+    // Wide characters and a paste: the cursor's column counts two for each wide character.
+    app.on_paste("日本語 ");
+    assert_eq!(app.handoff.cursor, 4);
+    assert_eq!(app.handoff.cursor_row_col(), (0, 7));
+    // A paste can't bring a control character or an escape sequence in with it.
+    app.on_paste("\u{1b}[2Jx\ty\r\nz");
+    assert!(app.handoff.text.starts_with("日本語 [2Jx    y\nzalpha"), "{:?}", app.handoff.text);
+}
+
+#[test]
+fn the_wheel_scrolls_the_document_and_a_long_message_while_there_is_no_document() {
+    use ratatui::crossterm::event::{MouseEvent, MouseEventKind};
+    let wheel = |app: &mut App, down: bool| {
+        let kind = if down { MouseEventKind::ScrollDown } else { MouseEventKind::ScrollUp };
+        app.on_mouse(MouseEvent { kind, column: 30, row: 10, modifiers: KeyModifiers::NONE });
+    };
+    let (w, fake) = world("handoff-wheel");
+    fake.reply_default(&long_brief());
+    let mut app = app_of(&w, &fake);
+    let mut t = term(70, 24);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    wait_ready(&mut app);
+    draw(&mut t, &app);
+    wheel(&mut app, false);
+    assert_eq!(app.handoff.top.get(), 0, "nothing above the top");
+    wheel(&mut app, true);
+    wheel(&mut app, true);
+    let screen = draw(&mut t, &app);
+    assert_eq!(app.handoff.top.get(), 6, "three rows a turn");
+    assert!(screen.iter().any(|l| l.contains("↑ 6 more lines above")), "{}", screen.join("\n"));
+    // The cursor was taken along so it stays in view (the draw would otherwise pull the view back to it).
+    assert_eq!(app.handoff.cursor_row_col().0, 6, "on the top row that shows");
+    let pos = t.get_cursor_position().unwrap();
+    let first = screen.iter().position(|l| l.contains("↑ 6 more lines above")).unwrap();
+    assert_eq!(pos.y as usize, first + 1, "and drawn there");
+    key(&mut app, KeyCode::Esc);
+
+    // A failure message too long for the box can be scrolled to its end with the wheel and the arrows. (No real
+    // failure says this much today; the box must still cope if one ever does.)
+    fake.hang(true);
+    key(&mut app, KeyCode::Char('h'));
+    let long = format!("{} Nothing has changed.", "The call could not be made because of something long. ".repeat(40));
+    app.handoff.state = HandoffState::Failed(long);
+    let screen = draw(&mut t, &app);
+    assert!(screen.iter().any(|l| l.contains("more lines below")), "{}", screen.join("\n"));
+    for _ in 0..100 {
+        wheel(&mut app, true);
+    }
+    let screen = draw(&mut t, &app);
+    let joined = screen.join("\n");
+    assert!(joined.contains("Nothing has changed.") && !joined.contains("more lines below"), "{joined}");
+    assert!(joined.contains("more lines above"), "{joined}");
+    // And back up with the arrow keys, a row at a time.
+    let top = app.handoff.top.get();
+    key(&mut app, KeyCode::Up);
+    assert_eq!(app.handoff.top.get(), top - 1);
+    key(&mut app, KeyCode::Esc);
+    app.refresh_until_for_test(10, "the cancelled call to end", |a| !a.handoff_busy());
 }
 
 // ---- a session joining a project tells the notes -------------------------------------------------------------

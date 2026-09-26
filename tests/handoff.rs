@@ -163,7 +163,7 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     let lab = Lab::new("handoff-e2e");
     lab.save("sess-1", "Add a basket page to the shop");
     lab.project("sess-1");
-    lab.reply(r#"{"done":"The basket page is in.","decisions":["Baskets are session based"],"next":"Take card payments."}"#);
+    lab.reply(r#"{"summary":"The basket page is in.","done":["Baskets are session based"],"next":["Take card payments."]}"#);
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Add a basket page to the shop");
@@ -181,10 +181,12 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     t.wait_for_all(&[
         "hand this work on",
         "project Web",
-        "What was done:",
+        "# Session hand-off: shop",
+        "- Project: Web",
+        "## Executive summary",
         "The basket page is in.",
         "- Baskets are session based",
-        "Take card payments.",
+        "1. Take card payments.",
         "ctrl+s start the new session",
     ]);
     let screen = t.stable();
@@ -199,8 +201,11 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     assert_eq!(day["features"]["handoff"]["calls"], 1, "{day}");
     assert!(day["features"]["handoff"]["tokens"].as_u64().unwrap() > 0, "{day}");
 
-    // The user types into it, then accepts with ctrl+s.
-    t.send(b" Sizes matter too.");
+    // The user goes to the end (the cursor starts at the top), types into it, then accepts with ctrl+s.
+    for _ in 0..40 {
+        t.send(b"\x1b[B");
+    }
+    t.send(b"Sizes matter too.");
     t.wait_for("Sizes matter too.");
     t.send(b"\x13");
     t.wait_gone("hand this work on");
@@ -209,13 +214,13 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     t.wait_for_all(&[
         "STARTED project:pweb",
         "FIRST MESSAGE:",
-        "Carrying on from an earlier session.",
+        "# Session hand-off: shop",
         "Sizes matter too.", // the user's own words went with it
     ]);
     let args = lab.started(1);
-    assert!(args.starts_with("Carrying on from an earlier session."), "one argument, the brief: {args}");
-    assert!(args.contains("What was done:\nThe basket page is in."), "{args}");
-    assert!(args.trim_end().ends_with("Sizes matter too."), "{args}");
+    assert!(args.starts_with("# Session hand-off: shop\n\n- Written: "), "one argument, the document: {args}");
+    assert!(args.contains("## Executive summary\n\nThe basket page is in.\n"), "{args}");
+    assert!(args.trim_end().ends_with("1. Take card payments.\nSizes matter too."), "{args}");
 
     // The new session is put in the project as soon as platoon sees its id; the old one is untouched.
     until("the new session to be placed in the project", || lab.projects()["sessions"]["new-0001"] == json!("pweb"));
@@ -229,13 +234,12 @@ fn esc_leaves_the_hand_off_and_everything_else_exactly_as_it_was() {
     let lab = Lab::new("handoff-esc");
     lab.save("sess-1", "Add a basket page to the shop");
     lab.project("sess-1");
-    lab.reply(r#"{"done":"The basket page is in.","next":"Take card payments."}"#);
+    lab.reply(r#"{"summary":"The basket page is in.","next":["Take card payments."]}"#);
 
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Add a basket page to the shop");
     t.send(b"h");
-    t.wait_for("hand this work on");
-    t.wait_for("What was done:");
+    t.wait_for_all(&["hand this work on", "## Executive summary", "esc cancel"]);
     t.send(b"\x1b");
     t.wait_gone("hand this work on");
     t.wait_for("Add a basket page to the shop");
@@ -259,4 +263,62 @@ fn a_session_in_no_project_is_told_what_to_do_instead_and_nothing_is_asked() {
     t.wait_for_flat("is in no project. Press m to put it in one first.");
     assert_eq!(lab.calls(), 0, "nothing was asked of Claude");
     assert!(!lab.fake.join("started").exists());
+}
+
+#[test]
+fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_it() {
+    let lab = Lab::new("handoff-long");
+    lab.save("sess-1", "Add a basket page to the shop");
+    lab.project("sess-1");
+    let summary = "The basket page shows every item with its size, colour and price, and the totals at the foot of it \
+                   now add up across currencies once the exchange rates are fetched when the page first loads.";
+    let steps: Vec<String> = (1..=8)
+        .map(|i| format!("Step {i}: check the totals, the sizes, the colours and the prices on the basket page before moving on to step {}", i + 1))
+        .collect();
+    let next: Vec<String> = steps.iter().map(|s| format!("\"{s}\"")).collect();
+    lab.reply(&format!(r#"{{"summary":"{summary}","done":["Built the basket page"],"next":[{}]}}"#, next.join(",")));
+
+    // A small terminal: the box is 64 columns wide and shows 13 rows of text.
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 22, 70);
+    t.wait_for("Add a basket page to the shop");
+    t.send(b"h");
+    t.wait_for_all(&["hand this work on", "# Session hand-off: shop", "more lines below", "esc cancel"]);
+    let screen = t.stable();
+    assert!(!screen.contains("more lines above") && !screen.contains("more line above"), "{screen}");
+    // Nothing is cut at the box's edge: every row of text ends inside the box, with its border after it.
+    for line in screen.lines().filter(|l| l.contains("│ - ") || l.contains("│ # ")) {
+        assert!(line.trim_end().ends_with("│   │") || line.trim_end().ends_with('│'), "{line:?}\n{screen}");
+        assert!(!line.contains('…'), "a row was cut short: {line:?}\n{screen}");
+    }
+
+    // One PageDown: the summary, wrapped over several rows, every word of it whole.
+    t.send(b"\x1b[6~");
+    t.wait_for_all(&["more lines above", "The basket page shows", "first loads."]);
+    let screen = t.stable();
+    let words: Vec<&str> = screen.split(|c: char| c.is_whitespace() || c == '│').filter(|w| !w.is_empty()).collect();
+    for w in summary.split_whitespace() {
+        assert!(words.contains(&w), "{w:?} is not whole on screen:\n{screen}");
+    }
+
+    // On to the end: the last step in view, nothing more below.
+    for _ in 0..6 {
+        t.send(b"\x1b[6~");
+    }
+    t.wait_for_all(&["8. Step 8: check", "moving on to step 9", "more lines above"]);
+    t.wait_gone("more lines below");
+
+    // ctrl+s: the new session gets the whole document, not just what was on screen.
+    t.send(b"\x13");
+    t.wait_gone("hand this work on");
+    // (The stand-in prints the whole document, so its first line scrolls off this small screen: read its record.)
+    until("the new session's arguments to be written", || lab.started(1).contains("## Next steps"));
+    let args = lab.started(1);
+    assert!(args.starts_with("# Session hand-off: shop\n\n- Written: "), "{args}");
+    assert!(args.contains(&format!("## Executive summary\n\n{summary}\n")), "{args}");
+    assert!(args.contains("## Work completed\n\n- Built the basket page\n"), "{args}");
+    for (n, s) in steps.iter().enumerate() {
+        assert!(args.contains(&format!("{}. {s}\n", n + 1)), "step {}: {args}", n + 1);
+    }
+    assert_eq!(args.lines().filter(|l| l.starts_with("## ")).count(), 3, "summary, work completed, next steps: {args}");
+    until("the new session to be placed in the project", || lab.projects()["sessions"]["new-0001"] == json!("pweb"));
 }
