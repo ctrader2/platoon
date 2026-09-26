@@ -235,7 +235,35 @@ impl App {
             KeyCode::Char('g') | KeyCode::Home => self.tk.body_top.set(0),
             // A ticket with a squad: its session, beside it (continued, when it isn't running).
             KeyCode::Enter if self.ticket(number).is_some_and(|t| t.leader().is_some()) => self.open_leader(number),
+            // One made from a session (the "From" line): that session, the way enter opens it on the Sessions tab.
+            // `o` does the same when enter is the squad's.
+            KeyCode::Enter | KeyCode::Char('o') if self.ticket(number).is_some_and(|t| t.from.is_some()) => self.open_ticket_source(number),
             _ => self.ticket_key(number, key),
+        }
+    }
+
+    /// The key that opens the session a ticket came from, on its screen: enter, unless enter is its squad's session.
+    pub fn ticket_source_key(&self, t: &Ticket) -> &'static str {
+        if t.leader().is_some() { "o" } else { "enter" }
+    }
+
+    /// How a ticket's screen names the session it came from: its name as the Sessions tab shows it, else its first
+    /// prompt (or Claude's title for it), else its short id.
+    pub fn ticket_source_name(&self, from: &tickets::Source) -> String {
+        match self.sessions.iter().find(|s| s.id == from.session) {
+            Some(s) if s.name_source != crate::model::NameSource::Folder => s.name.clone(),
+            Some(s) if !s.description.trim().is_empty() => s.description.split_whitespace().collect::<Vec<_>>().join(" "),
+            _ => crate::claude::short_id(&from.session),
+        }
+    }
+
+    /// Open the session ticket `number` came from, the way enter on the Sessions tab does.
+    fn open_ticket_source(&mut self, number: u32) {
+        let Some(from) = self.ticket(number).and_then(|t| t.from.clone()) else { return };
+        if self.sessions.iter().any(|s| s.id == from.session) {
+            self.jump_to(&from.session);
+        } else {
+            self.notify(format!("The conversation #{number} came from ({}) isn't in platoon's list any more.", crate::claude::short_id(&from.session)));
         }
     }
 

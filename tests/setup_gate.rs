@@ -58,17 +58,50 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "{shown}");
     assert!(shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"), "{shown}");
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
 
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
-    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 5, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 5, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
+}
+
+#[test]
+fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_out_again() {
+    let (claude, cache) = dirs("skill");
+    let out = platoon(&claude, &cache, &["setup"]);
+    assert!(out.status.success());
+    let shown = text(&out.stdout);
+    let skill = claude.join("skills/to-tickets/SKILL.md");
+    assert!(shown.contains("Tickets skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
+    let text_on_disk = fs::read_to_string(&skill).unwrap();
+    assert!(text_on_disk.starts_with("---\nname: to-tickets\n") && text_on_disk.contains("disable-model-invocation: true"), "{text_on_disk}");
+    // Out of date (an older platoon wrote it): setup says so and updates it.
+    fs::write(&skill, "---\nname: to-tickets\n---\nold\n").unwrap();
+    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
+    assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
+    assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
+    // Taken out on request: only it.
+    let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
+    let out = platoon(&claude, &cache, &["setup", "--remove", "to-tickets"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(text(&out.stdout).starts_with("Removed the /to-tickets skill"), "{out:?}");
+    assert!(!claude.join("skills/to-tickets").exists());
+    assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings);
+    // Without it platoon still starts; the next setup adds it back.
+    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
+    assert!(screen.contains("No conversations yet"), "{screen}");
+    let out = platoon(&claude, &cache, &["setup", "--remove", "everything"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out.stderr).contains("can remove: to-tickets"));
+    assert_eq!(platoon(&claude, &cache, &["setup", "--nope"]).status.code(), Some(2));
+    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
+    assert!(shown.contains("Tickets skill") && shown.contains("added") && skill.is_file(), "{shown}");
 }
 
 /// Runs `platoon` in a real terminal; returns the screen text once it shows `wait_for`, then quits it.
@@ -142,7 +175,7 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
     assert!(screen.contains("No conversations yet"), "the missing notes hook must not block starting:\n{screen}");
     let out = platoon(&claude, &cache, &["setup"]);
     let shown = text(&out.stdout);
-    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
     assert!(shown.contains("Project notes") && shown.contains("added"), "{shown}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();

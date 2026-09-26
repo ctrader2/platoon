@@ -66,6 +66,7 @@ mod tests {
             permission: false,
             busy: None,
             queued: queued.map(|since| Queued { squad: "coding".into(), since, anyway: false }),
+            from: None,
         }
     }
 

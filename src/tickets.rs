@@ -267,6 +267,15 @@ pub struct Ticket {
     pub busy: Option<String>,
     /// In the line for a free squad (the file says Working).
     pub queued: Option<Queued>,
+    /// The session it was made from (`platoon ticket add --from-session`, the `/to-tickets` skill).
+    pub from: Option<Source>,
+}
+
+/// Where a ticket came from: the Claude Code session it was made in, and that session's project then.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Source {
+    pub session: String,
+    pub project: String,
 }
 
 impl Ticket {
@@ -410,6 +419,10 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         busy: None,
         // Only on a Working ticket: a line mark left on any other state (written by hand) means nothing.
         queued: o.get("queued").filter(|_| o.get("state").and_then(Value::as_str) == Some(State::Working.id())).and_then(queued_from),
+        from: o.get("from").and_then(|f| {
+            let session = f.get("session")?.as_str().filter(|s| !s.is_empty())?.to_string();
+            Some(Source { session, project: f.get("project").and_then(Value::as_str).unwrap_or_default().to_string() })
+        }),
     })
 }
 
@@ -430,6 +443,8 @@ pub struct NewTicket {
     pub body: Option<String>,
     pub folders: Vec<String>,
     pub blocked_by: Vec<u32>,
+    /// The session it is made from, if any.
+    pub from: Option<Source>,
 }
 
 /// Where a project's tickets file is.
@@ -636,7 +651,7 @@ impl Tickets {
             let mut blocked = new.blocked_by.clone();
             blocked.sort_unstable();
             blocked.dedup();
-            let t = json!({
+            let mut t = json!({
                 "number": number,
                 "title": title,
                 "file": file,
@@ -646,6 +661,9 @@ impl Tickets {
                 "created": now,
                 "updated": now,
             });
+            if let (Some(f), Some(o)) = (&new.from, t.as_object_mut()) {
+                o.insert("from".into(), json!({"session": f.session, "project": f.project}));
+            }
             root.get_mut("tickets").and_then(Value::as_array_mut).ok_or("tickets")?.push(t);
             root.insert("next".into(), json!(number + 1));
             Ok(number)
@@ -1074,14 +1092,18 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     }
 }
 
-const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>]
-                           [--folder <path>... | --no-folder] [--waits-for <number>]...
+const USAGE: &str = "usage: platoon ticket add (--project <name or id> | --from-session <session id>) --title <text>
+                           [--body-file <path>] [--folder <path>... | --no-folder] [--waits-for <number>]...
        platoon ticket list [--project <name or id>] [--json]
+       platoon ticket where --session <session id>
   add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
          in, else the template. Without --folder the ticket works in the current folder; --no-folder makes one
          without a folder (for a squad that needs none: research, a summary). Say in the body how
-         far to take the work (\"How far: a local commit\", say); a squad stops at local changes when it doesn't say
-  list   the tickets, open ones first, then the Done and Cancelled ones";
+         far to take the work (\"How far: a local commit\", say); a squad stops at local changes when it doesn't say.
+         --from-session puts it in the project that Claude Code session belongs to, and the ticket shows
+         where it came from
+  list   the tickets, open ones first, then the Done and Cancelled ones
+  where  the project a Claude Code session belongs to (exit 1 when it belongs to none)";
 
 /// What `platoon ticket add --how-far` says: the flag is gone, and where "how far" goes now.
 pub const HOW_FAR_GONE: &str = "don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")";
@@ -1096,6 +1118,16 @@ pub fn cli(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
             }
             Err(why) => {
                 let _ = writeln!(err, "platoon ticket add: {why}");
+                1
+            }
+        },
+        Some("where") => match cli_where(&args[1..], config) {
+            Ok(text) => {
+                let _ = writeln!(out, "{text}");
+                0
+            }
+            Err(why) => {
+                let _ = writeln!(err, "{why}");
                 1
             }
         },
@@ -1123,13 +1155,14 @@ fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, S
 }
 
 fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path) -> Result<u32, String> {
-    let (mut project, mut title, mut body_file) = (None, None, None);
+    let (mut project, mut title, mut body_file, mut from_session) = (None, None, None, None);
     let (mut folders, mut blocked): (Vec<String>, Vec<u32>) = (Vec::new(), Vec::new());
     let mut no_folder = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
+            "--from-session" => from_session = Some(value(args, &mut i, "--from-session")?.trim().to_string()),
             "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
             "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
             // A ticket for a squad that needs no folder (research, a summary).
@@ -1158,7 +1191,9 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
         }
         i += 1;
     }
-    let project = project.ok_or("say which project with --project <name>")?;
+    if project.is_none() && from_session.is_none() {
+        return Err("say which project with --project <name>".into());
+    }
     let title = title.filter(|t| !clean(t, TITLE_MAX).is_empty()).ok_or("give the ticket a title with --title <text>")?;
     let body = match body_file {
         Some(f) => {
@@ -1173,10 +1208,25 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
         None => None,
     };
     let projects = crate::projects::Projects::open(config);
-    let p = find_project(&projects, &project)?;
+    let p = match (&from_session, &project) {
+        (Some(session), named) => {
+            let theirs = session_project(&projects, session)?;
+            // Both given: they must agree, or the ticket would land somewhere the session isn't.
+            if let Some(want) = named {
+                let named = find_project(&projects, want)?;
+                if named.id != theirs.id {
+                    return Err(format!("that session belongs to the project \"{}\", not \"{}\"", theirs.name, named.name));
+                }
+            }
+            theirs
+        }
+        (None, Some(want)) => find_project(&projects, want)?,
+        (None, None) => unreachable!(),
+    };
     if p.archived {
         return Err(archived_refusal(&p.name));
     }
+    let from = from_session.map(|session| Source { session, project: p.id.clone() });
     if no_folder && !folders.is_empty() {
         return Err("--no-folder and --folder don't go together".into());
     }
@@ -1188,8 +1238,47 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
     if tickets.is_corrupt() {
         return Err(CORRUPT.into());
     }
-    let new = NewTicket { title, body, folders, blocked_by: blocked };
+    let new = NewTicket { title, body, folders, blocked_by: blocked, from };
     tickets.add(new).map_err(|e| plain(&e))
+}
+
+/// What `platoon ticket where` and `--from-session` say when a session belongs to no project.
+pub const NO_PROJECT: &str = "this session isn't in a project, so it can't make tickets. Add it to a project first: in platoon, pick the session on the Sessions tab and press m.";
+
+/// The project `session` belongs to. A session id that can't be one, and a session in no project, are refused.
+pub fn session_project<'a>(projects: &'a crate::projects::Projects, session: &str) -> Result<&'a crate::projects::Project, String> {
+    let session = session.trim();
+    if session.is_empty() {
+        return Err("no session id was given (inside Claude Code it is in $CLAUDE_CODE_SESSION_ID)".into());
+    }
+    if !crate::sessionhook::safe_name(session) {
+        return Err(format!("\"{session}\" isn't a session id"));
+    }
+    if projects.is_corrupt() {
+        return Err("projects.json can't be read, so platoon can't tell which project this session is in".into());
+    }
+    projects.of(session).ok_or_else(|| NO_PROJECT.to_string())
+}
+
+/// `platoon ticket where --session <id>`: the project a session belongs to, as `<name> (id <id>)`.
+fn cli_where(args: &[String], config: &Path) -> Result<String, String> {
+    let mut session = None;
+    let mut i = 0;
+    let fail = |why: String| format!("platoon ticket where: {why}");
+    while i < args.len() {
+        match args[i].as_str() {
+            "--session" => session = Some(value(args, &mut i, "--session").map_err(fail)?.to_string()),
+            other => return Err(fail(format!("don't know \"{other}\" (see platoon ticket)"))),
+        }
+        i += 1;
+    }
+    let session = session.ok_or_else(|| fail("say which session with --session <id>".into()))?;
+    let projects = crate::projects::Projects::open(config);
+    let p = session_project(&projects, &session).map_err(fail)?;
+    if p.archived {
+        return Err(fail(format!("this session's project {}", archived_refusal(&p.name))));
+    }
+    Ok(format!("{} (id {})", p.name, p.id))
 }
 
 fn plain(e: &io::Error) -> String {
@@ -1268,6 +1357,9 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
                 "ready": is_ready(t, all),
                 "file": tickets.body_path(t).to_string_lossy(),
             }));
+            if let (Some(f), Some(o)) = (&t.from, rows.last_mut().and_then(Value::as_object_mut)) {
+                o.insert("from".into(), json!({"session": f.session, "project": f.project}));
+            }
         }
     }
     if as_json {
@@ -1466,7 +1558,7 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None, queued: None }
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None, queued: None, from: None }
     }
 
     #[test]
@@ -1685,6 +1777,90 @@ mod tests {
         let (code, _, usage) = run(&d, &[], "", true);
         assert_eq!(code, 2);
         assert!(usage.contains("--waits-for <number>") && !usage.contains("blocked"), "{usage}");
+    }
+
+    #[test]
+    fn where_says_which_project_a_session_is_in_and_fails_plainly_when_none() {
+        let d = dir("where");
+        let mut p = crate::projects::Projects::open(&d);
+        let id = p.create("Web shop").unwrap();
+        p.assign("sess-1", Some(&id)).unwrap();
+        assert_eq!(run(&d, &["where", "--session", "sess-1"], "", true), (0, format!("Web shop (id {id})\n"), String::new()));
+        // In no project: one plain line that says what to do, exit 1.
+        let (code, out, err) = run(&d, &["where", "--session", "sess-2"], "", true);
+        assert_eq!((code, out.as_str()), (1, ""));
+        assert_eq!(err, format!("platoon ticket where: {NO_PROJECT}\n"));
+        assert!(err.contains("press m") && err.lines().count() == 1, "{err}");
+        // No id (the variable was empty), an id that can't be one, no --session.
+        for (args, says) in [
+            (vec!["where", "--session", ""], "no session id was given"),
+            (vec!["where", "--session", "../x"], "isn't a session id"),
+            (vec!["where"], "--session"),
+            (vec!["where", "--session"], "needs a value"),
+            (vec!["where", "--project", "Web shop"], "don't know"),
+        ] {
+            let (code, out, err) = run(&d, &args, "", true);
+            assert!(code == 1 && out.is_empty() && err.starts_with("platoon ticket where: ") && err.contains(says) && err.lines().count() == 1, "{args:?}: {err}");
+        }
+        // An archived project takes no tickets, so `where` says so too.
+        p.archive(&id, &[]).unwrap();
+        let (code, _, err) = run(&d, &["where", "--session", "sess-1"], "", true);
+        assert!(code == 1 && err.contains("\"Web shop\" is archived; restore it first"), "{err}");
+    }
+
+    #[test]
+    fn from_session_puts_the_ticket_in_that_sessions_project_and_the_ticket_remembers_it() {
+        let d = dir("from");
+        let mut p = crate::projects::Projects::open(&d);
+        let web = p.create("Web shop").unwrap();
+        let docs = p.create("Docs").unwrap();
+        p.assign("sess-1", Some(&web)).unwrap();
+        assert_eq!(run(&d, &["add", "--from-session", "sess-1", "--title", "Basket"], "", true), (0, "#1\n".into(), String::new()));
+        let t = Tickets::open(&d, &web);
+        assert_eq!(t.get(1).unwrap().from, Some(Source { session: "sess-1".into(), project: web.clone() }));
+        assert!(Tickets::open(&d, &docs).all().is_empty());
+        // The same project named as well: fine. Another one: refused, nothing made.
+        assert_eq!(run(&d, &["add", "--from-session", "sess-1", "--project", "web shop", "--title", "Two"], "", true).0, 0);
+        let (code, out, err) = run(&d, &["add", "--from-session", "sess-1", "--project", "Docs", "--title", "Three"], "", true);
+        assert_eq!((code, out.as_str()), (1, ""));
+        assert_eq!(err, "platoon ticket add: that session belongs to the project \"Web shop\", not \"Docs\"\n");
+        // A session in no project: refused with the line `where` gives, nothing made anywhere.
+        let (code, _, err) = run(&d, &["add", "--from-session", "sess-9", "--title", "Four"], "", true);
+        assert_eq!((code, err), (1, format!("platoon ticket add: {NO_PROJECT}\n")));
+        let (code, _, err) = run(&d, &["add", "--from-session", "sess-9", "--project", "Docs", "--title", "Four"], "", true);
+        assert!(code == 1 && err.contains("isn't in a project"), "a project named beside it doesn't make up for it: {err}");
+        assert_eq!((Tickets::open(&d, &web).all().len(), Tickets::open(&d, &docs).all().len()), (2, 0));
+        // Blockers, folders and the body work as with --project.
+        fs::create_dir_all(d.join("a")).unwrap();
+        fs::create_dir_all(d.join("b")).unwrap();
+        fs::write(d.join("body.md"), "## What it should do\n\nIt works.\n").unwrap();
+        let (code, out, _) = run(&d, &["add", "--from-session", "sess-1", "--title", "Five", "--body-file", "body.md", "--folder", "a", "--folder", "b", "--waits-for", "1", "--waits-for", "2"], "", true);
+        assert_eq!((code, out.as_str()), (0, "#3\n"));
+        let t = Tickets::open(&d, &web);
+        let five = t.get(3).unwrap();
+        assert_eq!((five.blocked_by.clone(), five.folders.len(), t.body(five)), (vec![1, 2], 2, "## What it should do\n\nIt works.\n".to_string()));
+        // It is in the file and in `list --json`, and survives every rewrite of the ticket.
+        let saved_from = |d: &Path| -> Value { serde_json::from_str::<Value>(&fs::read_to_string(path_in(d, &web)).unwrap()).unwrap()["tickets"][0]["from"].clone() };
+        assert_eq!(saved_from(&d), json!({"session": "sess-1", "project": web}));
+        let mut t = Tickets::open(&d, &web);
+        t.rename(1, "Basket page").unwrap();
+        t.set_state(1, &State::Done).unwrap();
+        t.set_folders(1, &[]).unwrap();
+        assert!(t.toggle_blocker(1, 2).unwrap());
+        assert_eq!(saved_from(&d), json!({"session": "sess-1", "project": web}));
+        assert_eq!(Tickets::open(&d, &web).get(1).unwrap().from.as_ref().map(|f| f.session.as_str()), Some("sess-1"));
+        let (_, out, _) = run(&d, &["list", "--project", "Web shop", "--json"], "", true);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let one = v.as_array().unwrap().iter().find(|t| t["number"] == 1).unwrap();
+        assert_eq!(one["from"], json!({"session": "sess-1", "project": web}));
+        assert!(v.as_array().unwrap().iter().find(|t| t["number"] == 2).unwrap()["from"]["session"] == "sess-1");
+        // A ticket made in the app or with --project has none.
+        run(&d, &["add", "--project", "Web shop", "--title", "Plain"], "", true);
+        let (_, out, _) = run(&d, &["list", "--project", "Web shop", "--json"], "", true);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert!(v.as_array().unwrap().iter().find(|t| t["number"] == 4).unwrap().get("from").is_none());
+        assert!(Tickets::open(&d, &web).get(4).unwrap().from.is_none());
+        assert!(USAGE.contains("--from-session") && USAGE.contains("ticket where --session"));
     }
 
     #[test]

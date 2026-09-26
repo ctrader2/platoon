@@ -40,6 +40,7 @@ mod summaries;
 mod textbox;
 mod tickets;
 mod theme;
+mod totickets;
 mod ui;
 mod usertheme;
 #[cfg(test)]
@@ -89,7 +90,16 @@ fn main() -> io::Result<()> {
     match std::env::args().nth(1).as_deref() {
         None => {}
         Some("statusline") => return statusline(),
+        Some("setup") if std::env::args().nth(2).is_some() => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(setup_with(&args));
+        }
         Some("setup") => return setup(),
+        Some("squads") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let (mut out, mut err) = (io::stdout(), io::stderr());
+            std::process::exit(totickets::squads_cli(&args, &archive::config_dir(), &mut out, &mut err));
+        }
         Some("themes") => return themes(),
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -126,11 +136,7 @@ fn main() -> io::Result<()> {
             std::process::exit(tickets::cli(&args, &archive::config_dir(), &mut io::stdin().lock(), terminal, &cwd, &mut out, &mut err));
         }
         Some(_) => {
-            eprintln!("usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | themes | tokens]\n  (no arguments)  open the session manager\n  open [id]       show a session live in this terminal (starts or resumes it if needed);\n                  with no id, start a new one here. Ctrl+Space detaches; it keeps running\n  open --project <name>   start a new session here, in that project\n  setup           add platoon to Claude Code: plan usage in the status line, a guard that\n                  stops two copies of one session from overwriting each other, and two hooks\n                  that hand a project's notes to its sessions and keep them up to date\n  ticket add --project <name> --title <text> [--body-file <path>] [--folder <path>... | --no-folder]
-                  [--waits-for <number>]...   make a ticket in that project and print its number (#N);
-                  with no --folder it works in the current folder (--no-folder: none)
-  ticket list [--project <name>] [--json]   the tickets, open ones first
-  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,\n                  hook squad-notify, hook squad-tool,\n                  notes-update   internal: run by\n                  Claude Code, or by platoon itself");
+            eprintln!("{USAGE}");
             std::process::exit(2);
         }
     }
@@ -156,6 +162,32 @@ fn main() -> io::Result<()> {
     }
     Ok(())
 }
+
+const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
+               squads --kinds | themes | tokens]
+  (no arguments)  open the session manager
+  open [id]       show a session live in this terminal (starts or resumes it if needed);
+                  with no id, start a new one here. Ctrl+Space detaches; it keeps running
+  open --project <name>   start a new session here, in that project
+  setup           add platoon to Claude Code: plan usage in the status line, a guard that
+                  stops two copies of one session from overwriting each other, two hooks
+                  that hand a project's notes to its sessions and keep them up to date, and
+                  the /to-tickets skill that turns a conversation into tickets
+  setup --remove to-tickets   take the /to-tickets skill out again
+  ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
+                  [--folder <path>... | --no-folder] [--waits-for <number>]...
+                  make a ticket in that project and print its number (#N); with no --folder it
+                  works in the current folder (--no-folder: none). --from-session: in the project
+                  that session belongs to, and the ticket shows where it came from
+  ticket list [--project <name>] [--json]   the tickets, open ones first
+  ticket where --session <id>   the project a session belongs to (exit 1 when none)
+  squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
+  themes          list the color themes, the built-in ones and your own
+  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
+  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
+                  hook squad-notify, hook squad-tool,
+                  notes-update   internal: run by
+                  Claude Code, or by platoon itself";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
 fn statusline() -> io::Result<()> {
@@ -210,6 +242,26 @@ fn setup() -> io::Result<()> {
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
     Ok(())
+}
+
+/// `platoon setup <args>`: only `--remove <step>` so far.
+fn setup_with(args: &[String]) -> i32 {
+    match args {
+        [flag, what] if flag == "--remove" => match setup::remove_step(&claude::claude_root(), what) {
+            Ok(line) => {
+                println!("{line}");
+                0
+            }
+            Err(why) => {
+                eprintln!("{why}");
+                1
+            }
+        },
+        _ => {
+            eprintln!("usage: platoon setup [--remove {}]", setup::REMOVABLE.join(" | "));
+            2
+        }
+    }
 }
 
 /// Runs the UI. Returns how many platoon-hosted sessions are still running when it exits.

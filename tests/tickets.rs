@@ -407,3 +407,54 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     t.send(b"q");
     t.wait_exit();
 }
+
+/// Ends the session host a test started (the stand-in claude), even when the test fails half way.
+struct EndHost(PathBuf);
+
+impl Drop for EndHost {
+    fn drop(&mut self) {
+        if let Some((pid, _)) = find_host(&self.0) {
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) }; // the stand-in this test started
+            until("the stand-in claude to exit", || !alive(pid));
+        }
+    }
+}
+
+#[test]
+fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_session() {
+    let lab = Lab::new("tk-from");
+    // The stand-in for claude: says how it was started, then waits.
+    let fake = lab.bin.join("fake-claude");
+    fs::write(&fake, "#!/bin/sh\necho \"FAKE CLAUDE ARGS: $*\"\nexec sh\n").unwrap();
+    fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    let _end = EndHost(lab.cache.clone());
+    let mut env = lab.env();
+    env.push(("PLATOON_CLAUDE_BIN", fake.to_string_lossy().into()));
+    // What the skill runs, from inside session s-1 (in the project "Web").
+    assert_eq!(lab.cli(&["where", "--session", "s-1"], ""), (0, "Web (id pweb)\n".into(), String::new()));
+    let (code, _, err) = lab.cli(&["where", "--session", "s-nowhere"], "");
+    assert!(code == 1 && err.contains("isn't in a project") && err.contains("press m"), "{err}");
+    let body = lab.base.join("body.md");
+    fs::write(&body, "## What it should do\n\nA basket.\n").unwrap();
+    let (code, out, err) = lab.cli(&["add", "--from-session", "s-1", "--title", "Basket page", "--body-file", body.to_str().unwrap(), "--folder", lab.work.to_str().unwrap()], "");
+    assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
+    assert_eq!(lab.tickets()["tickets"][0]["from"], json!({"session": "s-1", "project": "pweb"}));
+    let kinds = Command::new(BIN).args(["squads", "--kinds"]).envs(lab.env()).output().unwrap();
+    assert!(String::from_utf8_lossy(&kinds.stdout).starts_with("Coding (needs a folder)\n"), "{kinds:?}");
+
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
+    lab.open_project(&mut t);
+    t.send(b"\t");
+    t.wait_for_all(&["#1 Basket page", "n new ticket"]);
+    t.send(b"\r");
+    // Its name on the Sessions tab is its folder, so the ticket names it by its first prompt.
+    t.wait_for_all(&["From", "make the shop", "enter opens it", "A basket."]);
+    t.wait_for_flat("enter where it came from");
+    t.send(b"\r");
+    t.wait_for("FAKE CLAUDE ARGS: --resume s-1");
+    // Ctrl+Space: back to the ticket.
+    t.send(&[0]);
+    t.wait_for_all(&["From", "make the shop"]);
+    t.send(b"q");
+    t.wait_exit();
+}

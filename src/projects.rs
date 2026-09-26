@@ -169,7 +169,6 @@ impl Projects {
         path_in(&self.config)
     }
 
-    #[cfg(test)]
     pub fn is_corrupt(&self) -> bool {
         self.corrupt
     }

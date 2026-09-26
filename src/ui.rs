@@ -282,6 +282,9 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
     if t.is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
         out.push(("enter", if app.leader_running(n) { "the squad's session" } else { "continue the squad" }, None));
     }
+    if let Some(t) = t.filter(|t| t.from.is_some()) {
+        out.push((app.ticket_source_key(t), "where it came from", None));
+    }
     if t.is_some_and(|t| handable(app, t)) {
         out.push(("a", "hand to a squad", None));
     }
@@ -747,6 +750,16 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         state.push(Span::styled(format!(" · {tail}"), Style::new().fg(if ready { t.ok } else { t.warn })));
     }
     head.push(Line::from(state));
+    // The session it was made in (`/to-tickets`): its name, and the key that opens it.
+    if let Some(from) = &x.from {
+        let hint = format!("  {} opens it", app.ticket_source_key(x));
+        let room = w.saturating_sub(LABEL + hint.chars().count());
+        head.push(Line::from(vec![
+            label("From"),
+            Span::styled(fit_end(&app.ticket_source_name(from), room.max(8)), Style::new().fg(t.text)),
+            Span::styled(hint, Style::new().fg(t.dim)),
+        ]));
+    }
     // What the squad said when it stopped: its question, why it is stuck, what it wants to publish.
     if !x.reason.is_empty() {
         for (i, l) in wrap(&x.reason, w.saturating_sub(LABEL)).into_iter().enumerate() {

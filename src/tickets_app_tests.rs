@@ -562,3 +562,46 @@ fn an_archived_project_takes_no_new_ticket_but_its_tickets_can_still_be_changed(
     assert_eq!(app.ticket(1).unwrap().state, State::Done);
     assert_eq!(Tickets::open(&w.config, &id).get(1).unwrap().state, State::Done, "saved");
 }
+
+#[test]
+fn a_ticket_made_from_a_session_says_where_it_came_from_and_enter_opens_that_session() {
+    let (w, mut app, id) = on_the_project("t-from");
+    // The session it came from ran in a folder that is gone: enter gets as far as opening it, and says so, without
+    // starting anything.
+    w.transcript("src-1", "/nonexistent/platoon-test-from", "plan the basket work", 5);
+    app.projects.assign("src-1", Some(&id)).unwrap();
+    let from = tickets::Source { session: "src-1".into(), project: id.clone() };
+    let n = Tickets::open(&w.config, &id).add(NewTicket { title: "Basket page".into(), from: Some(from.clone()), ..Default::default() }).unwrap();
+    add(&w, &mut app, &id, "Plain", &[]);
+    app.reload_for_test();
+    // No name yet: its first prompt.
+    assert_eq!(app.ticket_source_name(&from), "plan the basket work");
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.pane, Pane::Tickets);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tk.open, Some(n));
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(flat(&shown).contains("From plan the basket work enter opens it"), "{shown}");
+    assert!(flat(&shown).contains("enter where it came from"), "the footer says it too: {shown}");
+    // A name given in platoon wins.
+    crate::names::Names::open(&w.config).set("src-1", "Basket planning").unwrap();
+    app.reload_for_test();
+    assert!(flat(&draw(&mut term, &app)).contains("From Basket planning enter opens it"));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.active_notice(), Some("Can't open \"Basket planning\": /nonexistent/platoon-test-from no longer exists"));
+    assert!(app.hosts.is_empty(), "nothing started");
+    // `o` does the same.
+    app.notify("");
+    key(&mut app, KeyCode::Char('o'));
+    assert!(app.active_notice().unwrap_or("").contains("Basket planning"), "{:?}", app.active_notice());
+    // A ticket without one has no From line, and enter does nothing there.
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tk.open, Some(2));
+    assert!(!flat(&draw(&mut term, &app)).contains("From "));
+    // Gone from platoon's list (its transcript deleted): the short id, and enter says it isn't there.
+    let gone = tickets::Source { session: "0123456789abcdef".into(), project: id.clone() };
+    assert_eq!(app.ticket_source_name(&gone), "01234567");
+}

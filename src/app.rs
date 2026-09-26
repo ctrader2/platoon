@@ -1767,12 +1767,17 @@ impl App {
         }
     }
 
-    /// Decide what Enter does on the selected row. Nothing running it: resume it from the saved history.
+    /// What Enter does on the selected row (see `jump_plan_of`).
+    #[cfg(test)]
+    pub fn jump_plan(&self) -> Option<JumpPlan> {
+        self.jump_plan_of(self.selected_session()?)
+    }
+
+    /// Decide what Enter does on a conversation. Nothing running it: resume it from the saved history.
     /// A copy that platoon hosts and that is still in sync is simply attached to. Anything else (another
     /// terminal's copy, several copies, or a copy that fell out of sync) means ending the process(es)
     /// and reopening from the saved history, which is destructive, so it is confirmed first.
-    pub fn jump_plan(&self) -> Option<JumpPlan> {
-        let s = self.selected_session()?;
+    fn jump_plan_of(&self, s: &Session) -> Option<JumpPlan> {
         if s.procs.is_empty() {
             return Some(JumpPlan::Resume);
         }
@@ -1792,8 +1797,14 @@ impl App {
     }
 
     fn jump(&mut self) {
-        let Some(plan) = self.jump_plan() else { return };
-        let Some(s) = self.selected_session() else { return };
+        let Some(id) = self.selected_session().map(|s| s.id.clone()) else { return };
+        self.jump_to(&id);
+    }
+
+    /// Enter on a conversation, wherever it was picked (a row, or the "From" line of a ticket).
+    pub(crate) fn jump_to(&mut self, id: &str) {
+        let Some(s) = self.sessions.iter().find(|s| s.id == id) else { return };
+        let Some(plan) = self.jump_plan_of(s) else { return };
         let (id, name, cwd, restore) = (s.id.clone(), s.name.clone(), s.cwd.clone(), s.archived);
         match plan {
             JumpPlan::Attach(pid) => {

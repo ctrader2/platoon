@@ -24,6 +24,7 @@ already done, and a step whose command points at a platoon that no longer exists
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](#projects) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
+| Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). When platoon's copy has changed, the step says "out of date" and `platoon setup` puts the new one in (keeping the old one as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out; the next `platoon setup` adds it again |
 
 ## The list
 
@@ -768,7 +769,8 @@ worktree (or the folder) and commits nothing; a squad that works in the ticket's
 written there. (Tickets made by an older platoon may have a separate "how far" in `tickets.json`: it is
 kept there and no longer read.)
 
-**A ticket's own screen** (`enter`) shows its number and title, its state, the squad that has it ("Coding squad"), its
+**A ticket's own screen** (`enter`) shows its number and title, its state, **From** (the session it was made in with
+[`/to-tickets`](#making-tickets-from-a-conversation): its name as the Sessions tab shows it, else its first prompt), the squad that has it ("Coding squad"), its
 folders, its **work folder** once a squad has had it, what it waits for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
 
 | Key (a ticket's screen) | Does |
@@ -780,7 +782,8 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
 | `a` | hand it to a squad (see below) |
 | `p` | let its squad publish, when it is Ready to push/publish |
-| `enter` | on a ticket a squad has: its squad's session, beside the ticket |
+| `enter` | on a ticket a squad has: its squad's session, beside the ticket. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
+| `o` | the session the ticket was made from (the **From** line), also when `enter` is the squad's |
 | `esc` | back to the project, on the same ticket |
 
 The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**; you pick New, Done or Cancelled
@@ -790,7 +793,7 @@ Tickets live next to the project's notes: the list in `~/.config/platoon/project
 `tickets/<NN>-<title>.md` in the same folder, yours to edit. Only platoon writes the list. Deleting a project keeps a
 copy of its tickets with the rest of its backup; archiving it leaves them as they are.
 
-From the command line (a later `/ticket` skill will use the same command, so tickets are always made through platoon):
+From the command line (the [`/to-tickets`](#making-tickets-from-a-conversation) skill uses the same command, so tickets are always made through platoon):
 
 ```
 platoon ticket add --project "Web shop" --title "Log in with a link" --folder ~/repos/web
@@ -807,6 +810,40 @@ first; its tickets can still be opened and changed in platoon). A project
 that isn't there (or a name two projects share), a ticket to wait for that isn't there or would make a circle, or a folder
 that doesn't exist is refused with one plain line and nothing is made. There is no `--how-far`: say how far in the body
 (`--how-far` is refused with a line that says so). A running platoon shows the new ticket within a second.
+
+### Making tickets from a conversation
+
+Type **`/to-tickets`** in a Claude Code session that is in a project (the **Tickets skill** step of `platoon setup` adds it;
+Claude never runs it by itself). You can add what to turn into tickets after it, such as a plan file; without that it uses
+what the conversation has agreed on. It goes like this:
+
+1. It asks platoon which project the session is in (`platoon ticket where`). If the session isn't in one, it says so in
+   one line and stops: add the session to a project first (`m` on the Sessions tab), then type `/to-tickets` again.
+2. It reads what kinds of work your squads do (`platoon squads --kinds`) and shapes the tickets to fit, for example a
+   coding part apart from a documentation part. It never picks a squad: you do that on the ticket (`a`).
+3. It drafts the tickets. Each is one thin, complete piece that fits in one fresh session (whoever picks it up has never
+   seen the conversation), says what should work when it is done rather than which files change, has acceptance checks
+   that would fail before the work, a **How far:** line (local changes only, unless the conversation asked for more), no
+   file paths or code, and which of the new tickets it waits for. Preparation work comes first.
+4. It shows them as a numbered list (title, what it waits for, what it delivers) and asks whether the sizes are right,
+   whether the waits are real, and what to merge or split. **Nothing is written until you approve the list.**
+5. It makes them through platoon, the ones others wait for first: `platoon ticket add --from-session ... --body-file ...`
+   with every working folder the session has (or `--no-folder` for a ticket that needs none, such as research). Then it
+   lists the numbers platoon gave them. They are on the project's screen, in the Tickets pane.
+
+Each ticket remembers the session it came from: its screen shows **From** with the session's name, and `enter` there (or
+`o`) opens that session. The commands it uses work on their own too:
+
+```
+platoon ticket where --session <session id>     # "Web shop (id …)", or one line and exit 1 when it's in no project
+platoon squads --kinds [--json]                 # each squad: its name, what it can do, whether it needs a folder
+platoon ticket add --from-session <session id> --title "…" [--project "…"]   # in that session's project
+```
+
+`--from-session` puts the ticket in the project that session belongs to and records where it came from (`"from":
+{"session", "project"}` in `tickets.json` and in `ticket list --json`). A session in no project, or a `--project` that
+names a different project, is refused with one line and nothing is made. Inside Claude Code a session's own id is in
+`$CLAUDE_CODE_SESSION_ID`.
 
 ### Handing a ticket to a squad
 
