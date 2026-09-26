@@ -243,7 +243,8 @@ impl Refusal {
 /// The plan's highest used percentage among the windows that are still running, with the window's name. None when no
 /// Claude session has reported a figure (Claude Code only reports it for Pro and Max, after its first answer): no
 /// figure never pauses anything. A window's figure only goes up until it resets, and a reset window is dropped by
-/// `usage::load`, so a figure that is still listed is a true lower bound however old the report.
+/// `usage::load`, so a figure that is still listed is a true lower bound however old the report. A 5-hour window that
+/// hasn't started is listed as 0% (see `usage::load`): also a lower bound, and never above any pause setting.
 pub fn plan_percent(cache: &Path, now: u64) -> Option<(u8, &'static str)> {
     let plan = usage::load(cache, now).plan?;
     [(plan.five_hour, "5-hour limit"), (plan.seven_day, "weekly limit")]

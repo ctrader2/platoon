@@ -82,7 +82,7 @@ impl Session {
 #[derive(Clone, Copy)]
 pub struct Window {
     pub pct: u8,
-    /// Unix epoch seconds when it resets.
+    /// Unix epoch seconds when it resets; 0 when unknown (a 5-hour window that hasn't started, read as 0%).
     #[allow(dead_code)] // Will be shown as a countdown.
     pub resets_at: u64,
 }

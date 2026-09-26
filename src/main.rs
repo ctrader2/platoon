@@ -1678,6 +1678,24 @@ mod tests {
     }
 
     #[test]
+    fn a_five_hour_window_that_has_not_started_shows_zero_not_n_a() {
+        // Right after a reset Claude Code reports the weekly figure but leaves the 5-hour one out.
+        let (w, mut app) = mixed_app("usage-zero");
+        let cache = w.base.join("usage-zero-cache");
+        std::fs::create_dir_all(cache.join("status")).unwrap();
+        let json = serde_json::json!({"ts": 1_000, "context_pct": 5.0, "five_hour": null, "seven_day": {"pct": 3, "resets_at": 9_000}});
+        std::fs::write(cache.join("status/aaaa.json"), json.to_string()).unwrap();
+        for (cols, bars) in [(80u16, false), (140, true)] {
+            app.usage = crate::usage::Usage::Ready(crate::usage::load(&cache, 1_001).plan.unwrap());
+            let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
+            let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
+            assert!(header.contains("5h") && header.contains("0%") && header.contains("7d") && header.contains("3%"), "{cols}: {header}");
+            assert!(!header.contains("n/a"), "{cols}: {header}");
+            assert_eq!(header.contains('━'), bars, "{cols}: {header}");
+        }
+    }
+
+    #[test]
     fn settings_float_over_a_faded_list_and_a_click_outside_closes_them() {
         let (_w, mut app) = mixed_app("popup");
         ch(&mut app, 's');
