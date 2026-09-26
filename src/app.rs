@@ -561,6 +561,9 @@ impl App {
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
+        // Know the running hosts before the first frame: until then every session platoon hosts looks like a copy
+        // running in another terminal, and Enter on it would offer to take it over instead of opening it.
+        app.refresh();
         app
     }
 
@@ -678,7 +681,7 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
-        // Real inputs (running hosts, the guard setting) come with the first `refresh`; until then assume none.
+        // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app
     }

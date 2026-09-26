@@ -206,3 +206,71 @@ fn quitting_the_ui_leaves_the_session_running() {
     unsafe { libc::kill(pid as i32, libc::SIGKILL) }; // tidy up (interactive sh ignores SIGTERM)
     until("shell to exit", || !alive(pid));
 }
+
+/// Coming back to platoon while one of its sessions still runs: Enter pressed the moment the row shows must attach
+/// to platoon's own host. Before platoon knew its hosts from the first frame, it took its own session for a copy
+/// running in some other terminal for up to a second, and offered to take it over (which would have ended it).
+#[test]
+fn enter_right_after_starting_attaches_to_a_session_platoon_already_hosts() {
+    let base = cache("reopen");
+    let (claude, work) = (base.join("claude"), base.join("work"));
+    for d in [claude.join("sessions"), claude.join("projects/-work"), work.clone()] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    let line = format!(
+        r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"2026-09-19T05:00:00.000Z","message":{{"role":"user","content":"refactor the widget"}}}}"#,
+        work.display()
+    );
+    std::fs::write(claude.join("projects/-work/aaaa-0001.jsonl"), line + "\n").unwrap();
+    let env = [
+        ("CLAUDE_CONFIG_DIR", claude.to_string_lossy().into_owned()),
+        ("PLATOON_CACHE_DIR", base.join("cache").to_string_lossy().into_owned()),
+        ("PLATOON_CONFIG_DIR", base.join("config").to_string_lossy().into_owned()),
+        ("PLATOON_CLAUDE_BIN", "/nonexistent/claude-is-never-started-here".into()),
+        ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
+    ];
+    std::fs::create_dir_all(base.join("config")).unwrap();
+    std::fs::write(base.join("config/settings.json"), r#"{"auto_archive_days":0}"#).unwrap();
+
+    // The session a previous platoon started and left running: a host of ours, with a stand-in for claude inside,
+    // registered the way Claude registers a session.
+    let mut cmd = Command::new(BIN);
+    cmd.args(["host", "--program", "sh", "--dir"])
+        .arg(&work)
+        .args(["--rows", "24", "--cols", "80", "--", "-c", "echo reopened-$((40+2)); exec sleep 60"])
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut host = cmd.spawn().unwrap();
+    until("host to publish itself", || find_host(&base.join("cache")).is_some());
+    let (pid, _) = find_host(&base.join("cache")).unwrap();
+    // Ends the stand-in our own host started (and so the host), even when the test fails.
+    struct Reap(u32);
+    impl Drop for Reap {
+        fn drop(&mut self) {
+            unsafe { libc::kill(self.0 as i32, libc::SIGKILL) };
+        }
+    }
+    let reap = Reap(pid);
+    let reg = serde_json::json!({"pid": pid, "sessionId": "aaaa-0001", "cwd": work, "kind": "interactive", "startedAt": 1, "status": "idle"});
+    std::fs::write(claude.join("sessions").join(format!("{pid}.json")), reg.to_string()).unwrap();
+
+    let mut t = common::Term::spawn(&[], &env, &work, 30, 110);
+    t.wait_for("refactor the widget");
+    t.send(b"\r");
+    t.wait_for("reopened-42");
+    assert!(!t.text().to_lowercase().contains("take over"), "{}", t.text());
+    drop(t);
+
+    drop(reap);
+    until("stand-in to exit", || !alive(pid));
+    let _ = host.kill();
+    let _ = host.wait();
+}
