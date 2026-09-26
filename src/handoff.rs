@@ -5,6 +5,7 @@
 //!
 //! ```text
 //! # Session hand-off: <session name>
+//! This is context for this session. The user will prompt you for the next course of action.
 //! <the facts platoon knows itself>
 //! ## Executive summary
 //! ## Work completed
@@ -437,8 +438,12 @@ pub fn files_block(f: &Facts, b: &Brief) -> Option<String> {
 
 /// The whole document, as the user sees it and as the new session receives it. Sections with nothing in them are
 /// left out; the next steps are numbered.
+/// Said to the new session straight under the title: the document is background, and the user says what comes next
+/// (without it, Claude takes "Next steps" as its orders and starts on them).
+pub const CONTEXT_ONLY: &str = "This is context for this session. The user will prompt you for the next course of action.";
+
 pub fn document(f: &Facts, b: &Brief) -> String {
-    let mut t = format!("# Session hand-off: {}\n\n", clean_text(&f.session, NAME_MAX));
+    let mut t = format!("# Session hand-off: {}\n\n{CONTEXT_ONLY}\n\n", clean_text(&f.session, NAME_MAX));
     t.push_str(&facts_block(f));
     let section = |t: &mut String, heading: &str, body: String| {
         if !body.is_empty() {
@@ -655,6 +660,7 @@ mod tests {
         let doc = document(&facts(), &brief());
         let expected = format!(
             "# Session hand-off: Basket page\n\n\
+             This is context for this session. The user will prompt you for the next course of action.\n\n\
              - Written: {}\n\
              - Project: Web shop\n\
              - Previous session: Basket page, in ~/shop\n\

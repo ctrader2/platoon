@@ -86,7 +86,7 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
 
     // The document is platoon's fixed shape: its own facts, then what came back.
     let text = app.handoff.text.clone();
-    assert!(text.starts_with("# Session hand-off: shop\n\n- Written: "), "{text}");
+    assert!(text.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "{text}");
     assert!(text.contains("- Project: Web shop\n"), "{text}");
     assert!(text.contains(&format!("- Previous session: shop, in {}\n", shop(&w))), "{text}");
     assert!(text.contains("- Started: ") && text.contains(" between)\n"), "{text}");

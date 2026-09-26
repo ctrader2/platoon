@@ -218,7 +218,7 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
         "Sizes matter too.", // the user's own words went with it
     ]);
     let args = lab.started(1);
-    assert!(args.starts_with("# Session hand-off: shop\n\n- Written: "), "one argument, the document: {args}");
+    assert!(args.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "one argument, the document: {args}");
     assert!(args.contains("## Executive summary\n\nThe basket page is in.\n"), "{args}");
     assert!(args.trim_end().ends_with("1. Take card payments.\nSizes matter too."), "{args}");
 
@@ -313,7 +313,7 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
     // (The stand-in prints the whole document, so its first line scrolls off this small screen: read its record.)
     until("the new session's arguments to be written", || lab.started(1).contains("## Next steps"));
     let args = lab.started(1);
-    assert!(args.starts_with("# Session hand-off: shop\n\n- Written: "), "{args}");
+    assert!(args.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "{args}");
     assert!(args.contains(&format!("## Executive summary\n\n{summary}\n")), "{args}");
     assert!(args.contains("## Work completed\n\n- Built the basket page\n"), "{args}");
     for (n, s) in steps.iter().enumerate() {
