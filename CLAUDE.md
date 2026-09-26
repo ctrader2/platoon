@@ -7,8 +7,9 @@ shared sessions, archive, themes. Private repo `ctrader2/platoon`, branch `main`
 
 1. Read **"Where we are"** at the top of `docs/requirements.md` (a session-start hook prints it). It says what is built,
    what is in progress (including any uncommitted work), what is unverified and what is next.
-2. `git status -sb` and `git log --oneline -5`. If there is uncommitted work you did not write, find out what it is before
-   building on top of it, and never sweep it into an unrelated commit (`git add` files by explicit path).
+2. `git status -sb`, `git log --oneline -5` and `git worktree list` (work in progress lives in worktrees, see "Parallel
+   work"). If there is uncommitted work you did not write, find out what it is before building on top of it, and never
+   sweep it into an unrelated commit (`git add` files by explicit path).
 
 ## The notes (`docs/`)
 
@@ -24,13 +25,32 @@ It holds `requirements.md` (design notes and decisions) and `agent-brief-templat
 
 - **Discuss before building** anything non-trivial: plan, ask the questions that change the answer, then build.
 - **Commit when a change is finished and green**: `cargo test` fully passes and `cargo build --release` has no warnings.
-  Then commit with a message that says why, ending with the trailer
-  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`, and `git push` to `origin main`. Never commit a failing or
-  half-built state. No force push, no amending or rewriting pushed commits.
+  Commit with a message that says why, ending with the trailer
+  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`. Never commit a failing or half-built state. No force push, no
+  amending or rewriting pushed commits.
 - **Implementation steps go to a fresh agent** with a full brief (`docs/agent-brief-template.md`): context, the user's
-  decisions, the task, the safety rules, the quality bar, and the report format. An agent's report is a claim: **verify it
-  yourself** with `/verify` (commit is on origin, tests run twice, release build, the user's real files untouched, no stray
-  processes) before telling the user it is done.
+  decisions, the task, the safety rules, the quality bar, and the report format. An agent's report is a claim: verify it
+  yourself before telling the user it is done.
+
+## Parallel work: one worktree per piece of work (decided 2026-09-25)
+
+Up to **three** pieces of work run at once, each in its own git worktree. `~/repos/platoon` itself stays on a clean `main`
+(the user reinstalls from it) and nobody builds features there.
+
+1. **Start**: `git worktree add ~/repos/platoon-worktrees/<name> -b work/<name> main`. The agent's brief names that folder;
+   the agent works, builds and tests only there (its own `target/`, so the first build is from scratch).
+2. **The agent** commits on `work/<name>` when green (full suite twice, release build clean) and stops. It does **not**
+   rebase, merge or push, and it does **not** edit `docs/` (a worktree has no `docs/`): its "built" write-up for the notes
+   goes in its final report.
+3. **Landing** (`/land <name>`), done by the orchestrator, **one branch at a time**: rebase the branch onto the latest
+   `main`, resolve conflicts, then `/verify` checks on the combined code (tests twice, release build, the user's files,
+   stray processes); only when green, fast-forward `main`, `git push origin main`, write the notes, and remove the worktree
+   and the branch. After each landing, every branch still waiting is rebased and retested again before it can land.
+4. **Conflicts**: the orchestrator resolves the mechanical ones; anything that needs judgement goes back to the agent that
+   wrote the code (it keeps its context), and the result is retested.
+5. **Branches stay local** until they land (so they can be rebased freely without a force push); only `main` is pushed.
+6. Parallel work goes best when the pieces touch different areas: `app.rs`, `ui.rs`, `main.rs`, `settings.rs` and the
+   file table below are where conflicts will come from; say so in the brief when two pieces share one.
 - Tell the user plainly what was verified and what was not. Nobody here can see colors, run macOS, or use a real `claude`
   past its trust-folder prompt: say so, and say what to eyeball.
 - The user's terminal is Xfce Terminal on X11 (Ghostty is installed too). Explain in plain language; the user does not want
@@ -92,4 +112,5 @@ Claude's file formats stays in `claude.rs`; the settings file preserves keys it 
 
 ## Commands
 
-`/verify` checks a finished piece of work the way I check an agent's report.
+`/verify` checks a finished piece of work the way I check an agent's report. `/land <name>` brings a worktree's branch
+onto `main` (rebase, resolve, `/verify` on the combined code, push, notes, clean up).
