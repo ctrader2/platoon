@@ -319,7 +319,8 @@ fn where_the_terminal_has_the_glyphs_the_project_pill_is_round() {
 fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     let w = four("p-long");
     let mut app = w.app();
-    let a = make_project(&mut app, "A project with a rather long name");
+    // 51 characters: past the 40 a pill shows in full.
+    let a = make_project(&mut app, "A project with a rather long name that goes on and on");
     put_in(&mut app, "alpha-1", &a);
     let b = make_project(&mut app, "Tiny");
     put_in(&mut app, "beta-2", &b);
@@ -327,21 +328,35 @@ fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     app.notice = None;
     let t = app.theme.clone();
     let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
+    let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
+    draw(&mut term, &app);
+    let lines = cells(&term);
+    let h = header_row(&lines);
+    let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    // At most 43 columns: the pill holds 40 characters, the last one `…`, then the caps and a gap (plus the
+    // column's share of the screen's spare width, which is clear air after the pill).
+    let want = 43 + share(&lines[h]);
+    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
+    let row = &lines[pill_rows(&lines, color)[0]];
+    assert_eq!(col_of(row, " A project with a rather long name that … "), Some(proj_x), "{}", text_of(row));
+    // The short name sits in the same column.
+    let tiny = projects::slot_color(&t, &app.projects.get(&b).unwrap().color);
+    assert_ne!(tiny, color, "each project its own color");
+    assert_eq!(col_of(&lines[pill_rows(&lines, tiny)[0]], " Tiny "), Some(proj_x));
+
+    // At 120 columns there is less room than that: the column gives way so NAME and DIR keep their least, and
+    // the name is cut shorter.
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     draw(&mut term, &app);
     let lines = cells(&term);
     let h = header_row(&lines);
     let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
-    // At most 18 columns of text: the pill holds 15 characters, the last one `…` (plus the column's share
-    // of the screen's spare width, which is clear air after the pill).
-    let want = 18 + share(&lines[h]);
-    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
+    assert!(dir_x - proj_x < 43, "{}", text_of(&lines[h]));
     let row = &lines[pill_rows(&lines, color)[0]];
-    assert_eq!(col_of(row, " A project with… "), Some(proj_x), "{}", text_of(row));
-    // The short name sits in the same column.
-    let tiny = projects::slot_color(&t, &app.projects.get(&b).unwrap().color);
-    assert_ne!(tiny, color, "each project its own color");
-    assert_eq!(col_of(&lines[pill_rows(&lines, tiny)[0]], " Tiny "), Some(proj_x));
+    assert!(text_of(row).contains("A project with") && text_of(row).contains('…') && !text_of(row).contains("goes on"), "{}", text_of(row));
+    for l in &lines {
+        assert_eq!(text_of(l).chars().count(), 120, "nothing runs past the right edge");
+    }
 
     // Below 90 columns (where BRANCH goes): the badge letters, the column as wide as its title needs.
     let mut term = Terminal::new(TestBackend::new(89, 30)).unwrap();
@@ -778,4 +793,155 @@ fn the_new_screens_fit_small_terminals() {
     for want in ["enter open", "a archive", "/ search", "q quit"] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
+}
+
+#[test]
+fn a_24_character_project_name_shows_in_full_on_a_wide_terminal() {
+    let w = four("p-wide-name");
+    let mut app = w.app();
+    let a = make_project(&mut app, "Platoon Projects Feature");
+    put_in(&mut app, "alpha-1", &a);
+    key(&mut app, KeyCode::Char('1'));
+    app.notice = None;
+    let t = app.theme.clone();
+    let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
+    let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
+    draw(&mut term, &app);
+    let lines = cells(&term);
+    let h = header_row(&lines);
+    let (proj_x, dir_x) = (col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    let row = &lines[pill_rows(&lines, color)[0]];
+    assert_eq!(col_of(row, " Platoon Projects Feature "), Some(proj_x), "{}", text_of(row));
+    assert!(!text_of(row).contains('…'), "{}", text_of(row));
+    // The column is as wide as that pill and its gap, and no wider (bar its share of the spare width).
+    let want = 24 + 3 + share(&lines[h]);
+    assert!([want, want + 1].contains(&(dir_x - proj_x)), "{}", text_of(&lines[h]));
+}
+
+/// A description of about 100 characters, as platoon writes them, with words that are easy to find.
+const LONG_DESC: &str = "Keeps every Claude Code conversation in one list with live sessions, projects and notes kept current";
+
+/// The line numbers of a frame on which `text` appears.
+fn lines_with(shown: &str, text: &str) -> Vec<usize> {
+    shown.lines().enumerate().filter(|(_, l)| l.contains(text)).map(|(i, _)| i).collect()
+}
+
+#[test]
+fn a_long_description_on_the_projects_list_wraps_and_the_next_row_starts_after_it() {
+    let w = four("p-desc-wrap");
+    let mut app = w.app();
+    for n in ["Alpha", "Bravo", "Charlie"] {
+        make_project(&mut app, n);
+    }
+    key(&mut app, KeyCode::Char('2'));
+    app.notice = None;
+    // The long description goes on the middle row, so there is a row above it and one after it.
+    let order: Vec<(String, String)> = app.project_rows().iter().map(|&i| app.projects.all()[i].clone()).map(|p| (p.id, p.name)).collect();
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    app.projects.set_description(&order[1].0, &desc, 1).unwrap();
+    app.pselected = 0;
+    let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    // Every word is there, nothing is cut with `…`, and it takes more than one line.
+    let f = flat(&shown);
+    for word in desc.split_whitespace() {
+        assert!(f.contains(word), "{word}: {shown}");
+    }
+    assert!(!shown.contains('…'), "{shown}");
+    let at = |name: &str| lines_with(&shown, name)[0];
+    let (above, long, next) = (at(&order[0].1), at(&order[1].1), at(&order[2].1));
+    let first = at("Keeps every");
+    let last = at("current");
+    assert_eq!(long, above + 3, "the row above is as tall as ever (name, empty line, spacer): {shown}");
+    assert_eq!(first, long + 1, "the description starts under the name: {shown}");
+    assert!(last > first, "it wraps: {shown}");
+    assert_eq!(next, last + 2, "the next project comes after it and a spacer: {shown}");
+    // The wrapped lines all start where the first one does, under the name.
+    let col = |i: usize| shown.lines().nth(i).unwrap().chars().position(|c| c != ' ' && c != '▎' && c != '│').unwrap();
+    for i in first..=last {
+        assert_eq!(col(i), col(first), "line {i}: {shown}");
+    }
+    // The row's click area covers the whole description, and a click on its last line selects the project.
+    let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::ProjectRow(1))).map(|(r, _)| *r).unwrap();
+    assert!(r.y as usize == long && last < (r.y + r.height) as usize, "{r:?}");
+    app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: 10, row: last as u16, modifiers: KeyModifiers::NONE });
+    assert_eq!(app.pselected, 1);
+}
+
+#[test]
+fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen() {
+    let w = four("p-desc-scroll");
+    let mut app = w.app();
+    let names = ["One", "Two", "Three", "Four", "Five", "Six"];
+    let ids: Vec<String> = names.iter().map(|n| make_project(&mut app, n)).collect();
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    // Every other project has a long description, including (whatever the order) some near the end.
+    for id in ids.iter().step_by(2) {
+        app.projects.set_description(id, &desc, 1).unwrap();
+    }
+    for id in ids.iter().skip(1).step_by(2) {
+        app.projects.set_description(id, "Short.", 1).unwrap();
+    }
+    key(&mut app, KeyCode::Char('2'));
+    app.notice = None;
+    // Too short for all six rows at once.
+    let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
+    let order: Vec<String> = app.project_rows().iter().map(|&i| app.projects.all()[i].name.clone()).collect();
+    for sel in 0..order.len() {
+        app.pselected = sel;
+        let shown = draw(&mut term, &app);
+        let name = &order[sel];
+        let at = lines_with(&shown, name);
+        assert_eq!(at.len(), 1, "{name}: {shown}");
+        let hit = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::ProjectRow(i) if *i == sel)).map(|(r, _)| *r);
+        let r = hit.unwrap_or_else(|| panic!("{name} is drawn: {shown}"));
+        assert_eq!(r.y as usize, at[0]);
+        // Its description is shown to the last word, above the footer.
+        let long = ids.iter().step_by(2).any(|id| app.projects.get(id).unwrap().name == *name);
+        let end = if long { "current" } else { "Short." };
+        let end_line = lines_with(&shown, end).into_iter().find(|&l| l > at[0]).unwrap_or_else(|| panic!("{name}: {shown}"));
+        assert!(end_line < (r.y + r.height) as usize, "{name}: {shown}");
+        // Rows drawn never overlap, and no row is drawn with its text cut off at the bottom.
+        let hits: Vec<ratatui::layout::Rect> = app.hits.borrow().iter().filter(|(_, h)| matches!(h, Hit::ProjectRow(_))).map(|(r, _)| *r).collect();
+        for pair in hits.windows(2) {
+            assert!(pair[0].y + pair[0].height <= pair[1].y, "{name}: {hits:?}");
+        }
+    }
+    // The last one, reached with the keys: it sits at the bottom with its whole description.
+    key(&mut app, KeyCode::Char('G'));
+    let shown = draw(&mut term, &app);
+    let last = order.len() - 1;
+    assert_eq!(app.pselected, last);
+    assert!(shown.contains(order[last].as_str()) && app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::ProjectRow(i) if *i == last)), "{shown}");
+}
+
+#[test]
+fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() {
+    let w = four("p-desc-screen");
+    let mut app = w.app();
+    let a = make_project(&mut app, "Fruit");
+    put_in(&mut app, "alpha-1", &a);
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
+    // Without a description: one empty line between the title and the panes, as always.
+    let shown = draw(&mut term, &app);
+    let top = |shown: &str| lines_with(shown, "╭ Sessions")[0];
+    let title = lines_with(&shown, "Fruit")[0];
+    let bare = top(&shown);
+    assert_eq!(bare, title + 2, "{shown}");
+    let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
+    app.projects.set_description(&a, &desc, 1).unwrap();
+    let shown = draw(&mut term, &app);
+    let f = flat(&shown);
+    for word in desc.split_whitespace() {
+        assert!(f.contains(word), "{word}: {shown}");
+    }
+    assert!(!shown.contains('…'), "{shown}");
+    let first = lines_with(&shown, "Keeps every")[0];
+    let last = lines_with(&shown, "current")[0];
+    assert!(last > first, "wrapped at 60 columns: {shown}");
+    assert_eq!(first, title + 1, "{shown}");
+    assert_eq!(top(&shown), last + 1, "the panes start on the line after it: {shown}");
+    assert!(shown.contains("Sessions") && shown.contains("Notes"), "{shown}");
 }

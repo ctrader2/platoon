@@ -444,14 +444,14 @@ A project is a name, a color and a badge, and the conversations you put in it. I
 hold conversations from any number of folders, and each keeps its own. A conversation is in at most one project, and any
 conversation can be put in one, including ones you started outside platoon. Conversations in a project still show on the
 Sessions tab, with a **PROJECT** column after the name: the project's name in a pill of its color (round ends where the
-terminal has the glyphs, like the count badges). The pill is as wide as the longest project name on the tab needs (at most
-18 columns; longer names are cut), sized from every conversation on the tab, so it doesn't jump about while you type in the
+terminal has the glyphs, like the count badges). The pill is as wide as the longest project name on the tab needs (a name of
+up to 40 characters shows in full on a wide enough terminal; longer names are cut), sized from every conversation on the tab, so it doesn't jump about while you type in the
 quick filter; on a wide terminal the column also takes its share of the spare width, as clear air after the pill. Below 90
 terminal columns the pill shows the project's badge letters instead. A tab where no conversation is in a project has no such
 column.
 
-On the **Projects** tab each row shows the badge and name, [what the project is](#the-line-that-says-what-a-project-is) in one
-line under it, how many active and archived sessions the project has, when its notes last changed and when it was last used. Its name column, too, holds only as much as the projects on show need, and its
+On the **Projects** tab each row shows the badge and name, [what the project is](#the-line-that-says-what-a-project-is) under it
+(in full: a long one wraps onto a further line and that row grows to fit), how many active and archived sessions the project has, when its notes last changed and when it was last used. Its name column, too, holds only as much as the projects on show need, and its
 columns share a wide terminal's spare width the same way.
 
 | Key (Projects tab) | Does |
@@ -465,7 +465,7 @@ columns share a wide terminal's spare width the same way.
 | `/` | narrow the list of projects as you type |
 | `←` `→` | Active or Archived projects |
 
-A **project's screen** shows its name and that same one-line description across the top, its sessions on the left (active ones
+A **project's screen** shows its name and that same description across the top (in full, wrapped when it is long), its sessions on the left (active ones
 first, then an `Archived (N)` group, dimmed) and its notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
 `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's

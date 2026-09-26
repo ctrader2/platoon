@@ -338,21 +338,58 @@ fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(line), area);
 }
 
+/// A project row's description, wrapped at word boundaries into the room beside its indent: as many lines
+/// as it needs, and one empty line when there is none yet, so a row is never shorter than it always was.
+fn project_desc_lines(p: &crate::projects::Project, width: u16) -> Vec<String> {
+    let room = (width as usize).saturating_sub(project_desc_indent(p) + 1);
+    let lines = if room == 0 { Vec::new() } else { wrap(&p.description, room) };
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
+}
+
+/// Where a project row's description starts: under the name, past the badge.
+fn project_desc_indent(p: &crate::projects::Project) -> usize {
+    2 + badge_width(p) + 1
+}
+
+/// The first row to draw so that the selected one is fully on screen, given each row's height. As before,
+/// the list only scrolls when the selection would otherwise fall off the bottom, and then the selection is
+/// the last row shown. A row's spacer line may be left off the bottom; its text never is.
+fn project_list_start(heights: &[u16], selected: usize, room: u16) -> usize {
+    let Some(&h) = heights.get(selected) else { return 0 };
+    let mut used = h.saturating_sub(1);
+    let mut start = selected;
+    while start > 0 && used + heights[start - 1] <= room {
+        used += heights[start - 1];
+        start -= 1;
+    }
+    start
+}
+
 fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
-    const ROW_H: u16 = 3; // the name line, the description line (left empty until descriptions exist), a spacer
+    // A row is the name line, the description (one line, or more when a long one wraps; blank until there is
+    // one), then a spacer. Rows differ in height, so where each one goes is worked out from the descriptions.
     let t = app.effective_theme();
-    let rows = (area.height / ROW_H).max(1) as usize;
     let now = crate::usage::now() * 1000;
-    let start = app.pselected.saturating_sub(rows.saturating_sub(1));
     let c = project_cols(area.width, project_name_width(app));
     let all = app.projects.all();
-    for (i, &idx) in app.project_rows().iter().enumerate().skip(start).take(rows) {
+    let shown = app.project_rows();
+    let descs: Vec<Vec<String>> = shown.iter().map(|&idx| project_desc_lines(&all[idx], area.width)).collect();
+    let heights: Vec<u16> = descs.iter().map(|d| d.len() as u16 + 2).collect();
+    let start = project_list_start(&heights, app.pselected, area.height);
+    let mut y = area.y;
+    for (i, &idx) in shown.iter().enumerate().skip(start) {
         let p = &all[idx];
-        let y = area.y + (i - start) as u16 * ROW_H;
-        if y >= area.bottom() {
+        let h = heights[i];
+        // A row whose text would not fit is left for scrolling to (the first one is drawn whatever happens).
+        if y >= area.bottom() || (i > start && y + h - 1 > area.bottom()) {
             break;
         }
-        let row = Rect::new(area.x, y, area.width, ROW_H.min(area.bottom() - y));
+        let row = Rect::new(area.x, y, area.width, h.min(area.bottom() - y));
+        y += h;
         app.hits.borrow_mut().push((row, Hit::ProjectRow(i)));
         let selected = i == app.pselected;
         let bg = if selected || row.contains(app.mouse.into()) { t.surface } else { t.bg };
@@ -381,21 +418,23 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(format!("{:>w$}", ago(now, st.last_active), w = LAST_W + c.pad.last), base.fg(t.dim)),
         ]);
         f.render_widget(Paragraph::new(l1).style(base), Rect::new(row.x, row.y, row.width, 1));
-        if row.height > 1 {
-            // Under the name: the one line platoon generated saying what the project is (blank until it has).
-            let indent = 2 + bw;
-            let room = (row.width as usize).saturating_sub(indent + 1);
-            let line = Line::from(vec![lead, gap(indent - 1, base), Span::styled(fit_end(&p.description, room), base.fg(t.dim))]);
-            f.render_widget(Paragraph::new(line).style(base), Rect::new(row.x, row.y + 1, row.width, 1));
+        // Under the name: what platoon wrote the project is, in full, each line starting under the name.
+        let indent = project_desc_indent(p);
+        for (n, d) in descs[i].iter().enumerate() {
+            let ly = row.y + 1 + n as u16;
+            if ly >= row.bottom() {
+                break;
+            }
+            let line = Line::from(vec![lead.clone(), gap(indent - 1, base), Span::styled(d.clone(), base.fg(t.dim))]);
+            f.render_widget(Paragraph::new(line).style(base), Rect::new(row.x, ly, row.width, 1));
         }
-        if row.height > 2 {
-            f.render_widget(Block::default().style(Style::new().bg(t.bg)), Rect::new(row.x, row.y + 2, row.width, 1));
+        if row.height == h {
+            f.render_widget(Block::default().style(Style::new().bg(t.bg)), Rect::new(row.x, row.bottom() - 1, row.width, 1));
         }
     }
 }
 
-/// A project's screen: its name (and, one day, its description) at the top, its sessions on the left and its notes
-/// on the right.
+/// A project's screen: its name and description at the top, its sessions on the left and its notes on the right.
 fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     let t = app.effective_theme();
     let Some(p) = app.open_project() else { return };
@@ -410,10 +449,12 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
         spans.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), title);
-    // The description across the top: empty until platoon has written one for this project.
-    let [desc, panes] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(body);
-    if !p.description.is_empty() {
-        f.render_widget(Paragraph::new(Span::styled(fit_end(&p.description, desc.width as usize), Style::new().fg(t.subtext))), desc);
+    // The description across the top, in full: as many lines as it needs, the panes below it. Until platoon has
+    // written one for this project, the line stays empty.
+    let lines: Vec<Line> = wrap(&p.description, body.width as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
+    let [desc, panes] = Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Min(1)]).areas(body);
+    if !lines.is_empty() {
+        f.render_widget(Paragraph::new(lines), desc);
     }
     let left_w = if panes.width >= 60 { panes.width * 45 / 100 } else { panes.width / 2 };
     let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(panes);
@@ -768,8 +809,11 @@ fn gap(n: usize, style: Style) -> Span<'static> {
 /// Width of the "last active" column, right-aligned, at the end of the row.
 const LAST_W: usize = 6;
 
-/// The widest the PROJECT column gets (pill caps and the gap after it included); longer names are cut with `…`.
-const PROJECT_MAX: usize = 18;
+/// The longest project name a row's pill shows in full; a longer one is cut with `…`.
+const PROJECT_NAME_MAX: usize = 40;
+/// The widest the PROJECT column gets: that name plus the pill's two caps and the gap after it. A wide screen
+/// has room for it; on a narrower one the column still gives way to NAME and DIR (see `cols`).
+const PROJECT_MAX: usize = PROJECT_NAME_MAX + 3;
 /// The PROJECT column is never narrower than its title and a space.
 const PROJECT_MIN: usize = 8;
 /// Below this many columns a row's project pill shows the project's short badge letters instead of its name.
@@ -2731,8 +2775,12 @@ mod tests {
                 }
             }
         }
-        // At 120 there is room for the widest column; at the narrowest there is none.
-        assert_eq!(cols(114, PROJECT_MAX, GREEDY).project, PROJECT_MAX);
+        // From 126 columns there is room for the widest column (a 40-character name in full) with NAME and DIR
+        // keeping their least; a little narrower it shrinks to what is over, and at the narrowest there is none.
+        assert_eq!(cols(126, PROJECT_MAX, GREEDY).project, PROJECT_MAX);
+        assert!(cols(125, PROJECT_MAX, GREEDY).project < PROJECT_MAX);
+        let c = cols(114, PROJECT_MAX, GREEDY);
+        assert_eq!((c.project, c.name + c.dir), (31, NAME_DIR_MIN), "it gives way before NAME and DIR drop below their least");
         assert_eq!(cols(40, PROJECT_MAX, GREEDY).project, 0);
     }
 
@@ -2777,6 +2825,23 @@ mod tests {
         let flex = 80 - (fixed + 0 + 0);
         assert_eq!((narrow.name, narrow.dir), (flex * 2 / 5, flex - flex * 2 / 5));
         assert_eq!(narrow.pad.sum(), 0);
+    }
+
+    #[test]
+    fn the_projects_list_scrolls_just_far_enough_to_show_the_selected_row_whole() {
+        // Rows of 3 (name, empty description, spacer) and 5 (a description of three lines).
+        let h = [3u16, 5, 3, 5, 3];
+        // Everything up to the selection fits: no scrolling.
+        assert_eq!(project_list_start(&h, 0, 9), 0);
+        assert_eq!(project_list_start(&h, 1, 9), 0, "3 + the selected row's 4 text lines");
+        // The selection's spacer may fall off the bottom, its text may not.
+        assert_eq!(project_list_start(&h, 2, 10), 0, "3 + 5 + 2");
+        assert_eq!(project_list_start(&h, 2, 9), 1, "5 + 2");
+        assert_eq!(project_list_start(&h, 3, 9), 2, "3 + 4");
+        assert_eq!(project_list_start(&h, 4, 9), 3, "5 + 2");
+        // A row taller than the whole list starts at the top; nothing selected (an empty list) starts at 0.
+        assert_eq!(project_list_start(&h, 3, 2), 3);
+        assert_eq!(project_list_start(&[], 0, 9), 0);
     }
 
     #[test]
