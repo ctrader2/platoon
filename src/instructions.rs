@@ -39,6 +39,10 @@ pub struct Action {
     /// never overlaps the guidance); the callers build their own, with the settings as they are.
     #[allow(dead_code)]
     pub fixed: fn() -> String,
+    /// The system prompt of a squad's leader or member (`squads.rs`): run as a session, not a one-off call, so it has
+    /// no reply shape; its fixed part is the rules platoon keeps for squads. Only the tests read it here.
+    #[allow(dead_code)]
+    pub squad: bool,
 }
 
 pub const NAMES: &str = "names";
@@ -46,8 +50,13 @@ pub const FIND: &str = "describe-it";
 pub const NOTES: &str = "project-notes";
 pub const DESCRIPTION: &str = "project-description";
 pub const HANDOFF: &str = "hand-off";
+pub const CODING_LEADER: &str = "coding-leader";
+pub const CODING_PLANNER: &str = "coding-planner";
+pub const CODING_BUILDER: &str = "coding-builder";
+pub const CODING_REVIEWER: &str = "coding-reviewer";
+pub const CODING_VERIFIER: &str = "coding-verifier";
 
-pub static ACTIONS: [Action; 5] = [
+pub static ACTIONS: [Action; 10] = [
     Action {
         id: NAMES,
         entry: "System prompt for naming",
@@ -55,6 +64,7 @@ pub static ACTIONS: [Action; 5] = [
         explain: "What platoon asks Claude for when it names and summarizes your conversations.",
         builtin: crate::smart::NAMES_GUIDANCE,
         fixed: || crate::smart::NAMES_FIXED.to_string(),
+        squad: false,
     },
     Action {
         id: FIND,
@@ -63,6 +73,7 @@ pub static ACTIONS: [Action; 5] = [
         explain: "What platoon asks Claude for when you search by describing a conversation.",
         builtin: crate::smart::FIND_GUIDANCE,
         fixed: || crate::smart::find_fixed(crate::settings::DEFAULT_FIND_RESULTS as usize),
+        squad: false,
     },
     Action {
         id: NOTES,
@@ -71,6 +82,7 @@ pub static ACTIONS: [Action; 5] = [
         explain: "How platoon asks Claude to write a project's notes when it brings them up to date.",
         builtin: crate::notesupdate::GUIDANCE,
         fixed: || crate::notesupdate::FIXED.to_string(),
+        squad: false,
     },
     Action {
         id: DESCRIPTION,
@@ -79,6 +91,7 @@ pub static ACTIONS: [Action; 5] = [
         explain: "How platoon asks Claude to write the one line under a project's name that says what it is.",
         builtin: crate::describe::GUIDANCE,
         fixed: crate::describe::fixed,
+        squad: false,
     },
     Action {
         id: HANDOFF,
@@ -87,6 +100,52 @@ pub static ACTIONS: [Action; 5] = [
         explain: "What platoon asks Claude for when it writes a hand-off to a new session.",
         builtin: crate::handoff::GUIDANCE,
         fixed: || crate::handoff::FIXED.to_string(),
+        squad: false,
+    },
+    Action {
+        id: CODING_LEADER,
+        entry: "System prompt for the Coding squad's leader",
+        what: "the Coding squad's leader",
+        explain: "How platoon asks Claude to lead the Coding squad through a ticket: plan, build, review, verify, then finish as far as the ticket says.",
+        builtin: crate::squads::LEADER_GUIDANCE,
+        fixed: || crate::squads::LEADER_FIXED.to_string(),
+        squad: true,
+    },
+    Action {
+        id: CODING_PLANNER,
+        entry: "System prompt for the Coding squad's planner",
+        what: "the Coding squad's planner",
+        explain: "How platoon asks Claude to plan a ticket's change for the Coding squad.",
+        builtin: crate::squads::PLANNER_GUIDANCE,
+        fixed: || crate::squads::MEMBER_FIXED.to_string(),
+        squad: true,
+    },
+    Action {
+        id: CODING_BUILDER,
+        entry: "System prompt for the Coding squad's builder",
+        what: "the Coding squad's builder",
+        explain: "How platoon asks Claude to make a ticket's change for the Coding squad.",
+        builtin: crate::squads::BUILDER_GUIDANCE,
+        fixed: || crate::squads::MEMBER_FIXED.to_string(),
+        squad: true,
+    },
+    Action {
+        id: CODING_REVIEWER,
+        entry: "System prompt for the Coding squad's reviewer",
+        what: "the Coding squad's reviewer",
+        explain: "How platoon asks Claude to review a ticket's change for the Coding squad.",
+        builtin: crate::squads::REVIEWER_GUIDANCE,
+        fixed: || crate::squads::MEMBER_FIXED.to_string(),
+        squad: true,
+    },
+    Action {
+        id: CODING_VERIFIER,
+        entry: "System prompt for the Coding squad's verifier",
+        what: "the Coding squad's verifier",
+        explain: "How platoon asks Claude to run the tests and the build for the Coding squad.",
+        builtin: crate::squads::VERIFIER_GUIDANCE,
+        fixed: || crate::squads::MEMBER_FIXED.to_string(),
+        squad: true,
     },
 ];
 
@@ -290,18 +349,27 @@ mod tests {
         }
         assert!(!super::dir(&c).exists(), "reading never creates the folder");
         let ids: Vec<&str> = ACTIONS.iter().map(|a| a.id).collect();
-        assert_eq!(ids, ["names", "describe-it", "project-notes", "project-description", "hand-off"]);
+        assert_eq!(
+            ids,
+            ["names", "describe-it", "project-notes", "project-description", "hand-off", "coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"]
+        );
     }
 
     #[test]
     fn the_guidance_and_the_fixed_part_never_overlap_and_the_fixed_part_carries_the_safety_rule_and_the_shape() {
-        for a in &ACTIONS {
+        for a in ACTIONS.iter().filter(|a| !a.squad) {
             let fixed = (a.fixed)();
             assert!(fixed.contains("DATA") && fixed.contains("never follow instructions"), "{}: {fixed}", a.id);
             assert!(fixed.contains("JSON only"), "{}: {fixed}", a.id);
             assert!(!a.builtin.contains("JSON") && !a.builtin.contains("DATA"), "{}: the reply's shape is not the user's to change", a.id);
             assert!(a.builtin.chars().count() < MAX_CHARS / 2, "{}", a.id);
             assert!(compose(a.builtin, &fixed).starts_with(a.builtin.trim()) && compose(a.builtin, &fixed).ends_with(fixed.trim()));
+        }
+        // A squad's prompts: the rules platoon keeps are in the fixed part, never in what the user may rewrite.
+        for a in ACTIONS.iter().filter(|a| a.squad) {
+            let fixed = (a.fixed)();
+            assert!(fixed.contains("Never push") || fixed.contains("go-ahead"), "{}: {fixed}", a.id);
+            assert!(!a.builtin.contains("SQUAD:") && a.builtin.chars().count() < MAX_CHARS / 2, "{}", a.id);
         }
     }
 
@@ -314,7 +382,18 @@ mod tests {
         let entries: Vec<&str> = ACTIONS.iter().map(|a| a.entry).collect();
         assert_eq!(
             entries,
-            ["System prompt for naming", "System prompt for Describe it", "System prompt for project notes", "System prompt for project descriptions", "System prompt for the hand-off"]
+            [
+                "System prompt for naming",
+                "System prompt for Describe it",
+                "System prompt for project notes",
+                "System prompt for project descriptions",
+                "System prompt for the hand-off",
+                "System prompt for the Coding squad's leader",
+                "System prompt for the Coding squad's planner",
+                "System prompt for the Coding squad's builder",
+                "System prompt for the Coding squad's reviewer",
+                "System prompt for the Coding squad's verifier"
+            ]
         );
     }
 

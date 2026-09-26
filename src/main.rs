@@ -32,6 +32,7 @@ mod setup;
 mod scan;
 mod settings;
 mod smart;
+mod squads;
 mod summaries;
 mod textbox;
 mod tickets;
@@ -58,6 +59,8 @@ mod select_app_tests;
 mod smart_app_tests;
 #[cfg(test)]
 mod testkit;
+#[cfg(test)]
+mod squads_app_tests;
 #[cfg(test)]
 mod tickets_app_tests;
 #[cfg(test)]
@@ -94,6 +97,9 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook()),
+        // Given only to a squad's leader session, with `--settings` (never installed in the user's own settings).
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-stop") => std::process::exit(squads::run_stop_hook()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-gate") => std::process::exit(squads::run_gate_hook()),
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -115,7 +121,7 @@ fn main() -> io::Result<()> {
                   [--waits-for <number>]...   make a ticket in that project and print its number (#N);
                   with no --folder it works in the current folder
   ticket list [--project <name>] [--json]   the tickets, open ones first
-  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, notes-update   internal: run by\n                  Claude Code, or by platoon itself");
+  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,\n                  notes-update   internal: run by\n                  Claude Code, or by platoon itself");
             std::process::exit(2);
         }
     }

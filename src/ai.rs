@@ -686,6 +686,8 @@ impl Runner {
             .env("PLATOON_AI", "1")
             // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
             .env("MAX_THINKING_TOKENS", "0")
+            // Started from inside a Claude Code session, this marker is inherited; it isn't this call's to carry.
+            .env_remove("CLAUDE_CODE_CHILD_SESSION")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

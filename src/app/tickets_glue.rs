@@ -4,7 +4,7 @@
 //! (`notes_glue.rs`).
 
 use super::*;
-use crate::tickets::{self, HowFar, State, Ticket, Tickets, HOW_FAR, USER_STATES};
+use crate::tickets::{self, HowFar, State, Ticket, Tickets, HOW_FAR, LEADER_STATES, USER_STATES};
 
 /// A row of the Tickets pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -211,6 +211,8 @@ impl App {
             KeyCode::Char('h') => self.open_ticket_pick(PickKind::HowFar, number),
             KeyCode::Char('f') => self.open_ticket_pick(PickKind::Folders, number),
             KeyCode::Char('b') => self.open_ticket_pick(PickKind::BlockedBy, number),
+            KeyCode::Char('a') => self.ask_hand_to_squad(number),
+            KeyCode::Char('p') => self.let_it_publish(number),
             _ => {}
         }
     }
@@ -226,6 +228,8 @@ impl App {
             KeyCode::PageDown => scroll(self, 10),
             KeyCode::PageUp => scroll(self, -10),
             KeyCode::Char('g') | KeyCode::Home => self.tk.body_top.set(0),
+            // A ticket with a squad: its session, beside it (continued, when it isn't running).
+            KeyCode::Enter if self.ticket(number).is_some_and(|t| t.leader().is_some()) => self.open_leader(number),
             _ => self.ticket_key(number, key),
         }
     }
@@ -236,6 +240,11 @@ impl App {
         }
         self.tk.open = Some(number);
         self.tk.body_top.set(0);
+        // A ticket whose squad is at work opens beside its live session. One whose session isn't running shows the
+        // ticket with the way to continue it (enter), rather than starting it by itself.
+        if self.leader_running(number) {
+            self.open_leader(number);
+        }
     }
 
     /// Esc on a ticket's screen: back to the project's screen, with the same ticket picked.
@@ -343,7 +352,10 @@ impl App {
         let p = &self.tk.pick;
         let Some(t) = self.ticket(p.number) else { return Vec::new() };
         match p.kind {
-            PickKind::State => USER_STATES.iter().map(|s| (PickOpt::State(s.clone()), *s == t.state)).collect(),
+            PickKind::State => {
+                let states: &[State] = if t.leader().is_some() { &LEADER_STATES } else { &USER_STATES };
+                states.iter().map(|s| (PickOpt::State(s.clone()), *s == t.state)).collect()
+            }
             PickKind::HowFar => {
                 let mut v: Vec<(PickOpt, bool)> = (0..HOW_FAR.len()).map(|i| (PickOpt::HowFar(i), t.how_far == HowFar::Preset(i))).collect();
                 v.push((PickOpt::OwnWords, matches!(t.how_far, HowFar::Own(_))));
@@ -439,6 +451,9 @@ impl App {
                     _ => format!("#{number} is {} now.", s.label()),
                 };
                 self.notify(msg);
+                if *s == State::Cancelled {
+                    self.after_cancel(number);
+                }
             }
             Err(e) => self.report_tickets_error(e),
         }

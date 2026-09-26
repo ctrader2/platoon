@@ -61,8 +61,11 @@ const STATE_NAMES: [(&str, &str); 6] = [
     ("cancelled", "Cancelled"),
 ];
 
-/// The states the user can pick by hand in this version (the others belong to squads).
+/// The states the user can pick by hand on a ticket no squad has had (the others belong to squads).
 pub const USER_STATES: [State; 3] = [State::New, State::Done, State::Cancelled];
+
+/// The states the user can pick on a ticket that has a squad's leader: Working continues with that squad.
+pub const LEADER_STATES: [State; 4] = [State::New, State::Working, State::Done, State::Cancelled];
 
 impl State {
     pub fn from_id(id: &str) -> State {
@@ -108,6 +111,11 @@ impl State {
     /// Done and Cancelled are listed apart from the rest.
     pub fn closed(&self) -> bool {
         matches!(self, State::Done | State::Cancelled)
+    }
+
+    /// The user's go-ahead to publish lasts only while the squad is at it: Working or Ready.
+    pub fn keeps_go_ahead(&self) -> bool {
+        matches!(self, State::Working | State::Ready)
     }
 }
 
@@ -173,6 +181,28 @@ impl HowFar {
 
 // ---- a ticket -----------------------------------------------------------------------------------------------------
 
+/// A squad's leader session, started for a ticket. A ticket keeps every one it had, in order; the last is the one
+/// working on it now (a ticket handed to another squad after Done gets that squad's own leader).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Leader {
+    /// The squad's id (`squads::Squad::id`).
+    pub squad: String,
+    /// The leader's Claude Code session id, chosen by platoon when it started it.
+    pub session: String,
+    /// Seconds since the epoch.
+    pub started: u64,
+}
+
+/// A git worktree platoon made for a ticket (Coding tickets always get their own).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Worktree {
+    /// The ticket's folder it stands in for.
+    pub folder: String,
+    /// Where the squad works instead: the same place inside the worktree.
+    pub path: String,
+    pub branch: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Ticket {
     pub number: u32,
@@ -188,6 +218,26 @@ pub struct Ticket {
     /// Seconds since the epoch.
     pub created: u64,
     pub updated: u64,
+    /// The squads' leader sessions it had, oldest first.
+    pub leaders: Vec<Leader>,
+    pub worktrees: Vec<Worktree>,
+    /// What the squad said when it stopped (its question, why it is stuck, what it wants to publish), in the words
+    /// the screen shows. Empty when there is nothing to say.
+    pub reason: String,
+    /// The user let the squad publish (push, merge request, a page): lasts while the ticket is Working or Ready.
+    pub go_ahead: bool,
+}
+
+impl Ticket {
+    /// The leader working on it now: the last one it was handed to.
+    pub fn leader(&self) -> Option<&Leader> {
+        self.leaders.last()
+    }
+
+    /// Where a squad works: each folder, or its worktree when it has one.
+    pub fn work_folders(&self) -> Vec<String> {
+        self.folders.iter().map(|f| self.worktrees.iter().find(|w| w.folder == *f).map_or_else(|| f.clone(), |w| w.path.clone())).collect()
+    }
 }
 
 /// One line, trimmed, at most `max` characters.
@@ -277,6 +327,36 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
             .unwrap_or_default(),
         created: o.get("created").and_then(Value::as_u64).unwrap_or(0),
         updated: o.get("updated").and_then(Value::as_u64).unwrap_or(0),
+        leaders: o
+            .get("leaders")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|l| {
+                        let session = l.get("session")?.as_str()?.to_string();
+                        (!session.is_empty()).then(|| Leader {
+                            squad: l.get("squad").and_then(Value::as_str).unwrap_or_default().to_string(),
+                            session,
+                            started: l.get("started").and_then(Value::as_u64).unwrap_or(0),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        worktrees: o
+            .get("worktrees")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|w| {
+                        let s = |k: &str| w.get(k).and_then(Value::as_str).map(String::from);
+                        Some(Worktree { folder: s("folder")?, path: s("path")?, branch: s("branch").unwrap_or_default() })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        reason: o.get("reason").and_then(Value::as_str).unwrap_or_default().to_string(),
+        go_ahead: o.get("go_ahead").and_then(Value::as_bool).unwrap_or(false),
     })
 }
 
@@ -512,12 +592,90 @@ impl Tickets {
         })
     }
 
+    /// The user moves a ticket along. What the squad last said goes (it was about the state being left), and so
+    /// does the go-ahead to publish unless the ticket stays with the squad (Working or Ready).
     pub fn set_state(&mut self, number: u32, state: &State) -> io::Result<()> {
         let id = state.id().to_string();
+        let keep = state.keeps_go_ahead();
         self.edit(number, |t, _| {
+            t.insert("state".into(), json!(id));
+            t.remove("reason");
+            if !keep {
+                t.remove("go_ahead");
+            }
+            Ok(())
+        })
+    }
+
+    /// A squad's leader was started for the ticket: it is listed on the ticket (last, so it is the one working on it
+    /// now), with the worktrees made for it, and the ticket is Working.
+    pub fn start_leader(&mut self, number: u32, leader: &Leader, worktrees: &[Worktree]) -> io::Result<()> {
+        let l = json!({"squad": leader.squad, "session": leader.session, "started": leader.started});
+        let w: Vec<Value> = worktrees.iter().map(|w| json!({"folder": w.folder, "path": w.path, "branch": w.branch})).collect();
+        self.edit(number, move |t, _| {
+            match t.get_mut("leaders").and_then(Value::as_array_mut) {
+                Some(a) => a.push(l),
+                None => {
+                    t.insert("leaders".into(), json!([l]));
+                }
+            }
+            t.insert("worktrees".into(), Value::Array(w));
+            t.insert("state".into(), json!(State::Working.id()));
+            t.remove("reason");
+            t.remove("go_ahead");
+            Ok(())
+        })
+    }
+
+    /// The leader couldn't be started after all: take it off the ticket again, and put the ticket back as it was.
+    pub fn forget_leader(&mut self, number: u32, session: &str, state: &State) -> io::Result<()> {
+        let (session, id) = (session.to_string(), state.id().to_string());
+        self.edit(number, move |t, _| {
+            if let Some(a) = t.get_mut("leaders").and_then(Value::as_array_mut) {
+                a.retain(|l| l.get("session").and_then(Value::as_str) != Some(session.as_str()));
+            }
             t.insert("state".into(), json!(id));
             Ok(())
         })
+    }
+
+    /// What a squad's turn ended with (`platoon hook squad-stop`): the state, what it said, and on Done its result,
+    /// written beside the body as `tickets/<NN>-result.md`. The go-ahead goes once the ticket leaves Working/Ready.
+    pub fn squad_says(&mut self, number: u32, state: &State, reason: &str, result: Option<&str>) -> io::Result<()> {
+        if let Some(text) = result {
+            let dir = bodies_dir(&self.config, &self.project);
+            fs::create_dir_all(&dir)?;
+            write_atomic(&dir.join(result_file(number)), &format!("{}\n", text.trim_end()))?;
+        }
+        let (id, reason, keep) = (state.id().to_string(), reason.to_string(), state.keeps_go_ahead());
+        self.edit(number, move |t, _| {
+            t.insert("state".into(), json!(id));
+            if reason.is_empty() {
+                t.remove("reason");
+            } else {
+                t.insert("reason".into(), json!(reason));
+            }
+            if !keep {
+                t.remove("go_ahead");
+            }
+            Ok(())
+        })
+    }
+
+    /// `p` on a Ready ticket: the user lets the squad publish. The ticket is Working again.
+    pub fn give_go_ahead(&mut self, number: u32) -> io::Result<()> {
+        self.edit(number, |t, _| {
+            t.insert("go_ahead".into(), json!(true));
+            t.insert("state".into(), json!(State::Working.id()));
+            t.remove("reason");
+            Ok(())
+        })
+    }
+
+    /// The squad's result for the ticket, if it has written one.
+    pub fn result(&self, number: u32) -> Option<String> {
+        let text = fs::read_to_string(bodies_dir(&self.config, &self.project).join(result_file(number))).ok()?;
+        (!text.trim().is_empty()).then_some(text)
     }
 
     pub fn set_how_far(&mut self, number: u32, how_far: &HowFar) -> io::Result<()> {
@@ -561,6 +719,58 @@ impl Tickets {
     pub fn touch(&mut self, number: u32) -> io::Result<()> {
         self.edit(number, |_, _| Ok(()))
     }
+}
+
+/// The name of the file a squad's result for ticket `number` is kept in, beside the bodies.
+pub fn result_file(number: u32) -> String {
+    format!("{number:02}-result.md")
+}
+
+// ---- leaders across every project ---------------------------------------------------------------------------------
+
+/// Every project's tickets file there is (`<config>/projects/<id>/tickets.json`), with its project id.
+pub fn all_files(config: &Path) -> Vec<(String, PathBuf)> {
+    let mut out: Vec<(String, PathBuf)> = fs::read_dir(config.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let id = e.file_name().to_str()?.to_string();
+            let p = e.path().join("tickets.json");
+            p.is_file().then_some((id, p))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// The session ids of every squad leader any ticket in any project ever had. These sessions belong to their tickets
+/// only: they are never listed with the user's own sessions (the one place that decides this is here).
+pub fn leader_ids(config: &Path) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for (project, _) in all_files(config) {
+        for t in Tickets::open(config, &project).all() {
+            ids.extend(t.leaders.iter().map(|l| l.session.clone()));
+        }
+    }
+    ids
+}
+
+/// Where a leader session belongs: its project's id, the ticket's number, and whether it is the ticket's current
+/// leader (a ticket handed to another squad after Done keeps its earlier leaders, which no longer move it along).
+pub fn find_leader(config: &Path, session: &str) -> Option<(String, u32, bool)> {
+    if session.is_empty() {
+        return None;
+    }
+    for (project, _) in all_files(config) {
+        for t in Tickets::open(config, &project).all() {
+            if t.leaders.iter().any(|l| l.session == session) {
+                let current = t.leader().is_some_and(|l| l.session == session);
+                return Some((project, t.number, current));
+            }
+        }
+    }
+    None
 }
 
 /// Why `ticket` can't be blocked by `blocker`, or Ok.
@@ -992,7 +1202,7 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0 }
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false }
     }
 
     #[test]

@@ -43,6 +43,11 @@ const LEFTOVER_GRACE: Duration = Duration::from_secs(3);
 const CLAUDE_EXIT_WAIT: Duration = Duration::from_secs(20);
 
 pub const SCROLLBACK: usize = 5000;
+
+/// What a process started from inside a Claude Code session inherits and must not pass on to a `claude` platoon
+/// starts: the markers that make a new session think it is a child of that one. `CLAUDE_CODE_CHILD_SESSION` turns
+/// off saving the transcript (seen with Claude Code 2.1.283).
+pub const INHERITED_FROM_CLAUDE: [&str; 3] = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"];
 pub const F_INPUT: u8 = b'I';
 pub const F_RESIZE: u8 = b'R';
 pub const F_OUTPUT: u8 = b'O';
@@ -201,9 +206,11 @@ pub fn run(args: &[String]) -> i32 {
     cmd.cwd(&dir);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    // If platoon itself was started from inside Claude Code, don't leak that into the child.
-    cmd.env_remove("CLAUDECODE");
-    cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+    // If platoon itself was started from inside Claude Code, don't leak that into the child (with
+    // CLAUDE_CODE_CHILD_SESSION inherited, a session saves no transcript: no resume, no tokens, no list row).
+    for k in INHERITED_FROM_CLAUDE {
+        cmd.env_remove(k);
+    }
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,
         Err(e) => return fail(format!("couldn't start {program}: {e}")),

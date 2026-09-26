@@ -164,7 +164,15 @@ pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool)
         return None;
     }
     let projects = crate::projects::Projects::open(config);
-    let project = projects.of(session).filter(|p| !p.archived)?;
+    // A squad's leader is in no project, but its ticket is: it gets that project's notes too.
+    let leader = if projects.of(session).is_none() { crate::tickets::find_leader(config, session).and_then(|(p, _, _)| projects.get(&p).cloned()) } else { None };
+    let project = match &leader {
+        Some(p) => p,
+        None => projects.of(session)?,
+    };
+    if project.archived {
+        return None;
+    }
     if crate::archive::Archive::open(config).contains(session) {
         return None;
     }
@@ -177,7 +185,7 @@ pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool)
         return None;
     }
     sessionhook::mark_sent(cache, session, &hash);
-    Some(sessionhook::context_text(&project.name, &notes))
+    Some(if leader.is_some() { sessionhook::ticket_context_text(&project.name, &notes) } else { sessionhook::context_text(&project.name, &notes) })
 }
 
 /// What the hook prints when it lets a prompt through and the notes have changed: context for the conversation.
@@ -362,6 +370,20 @@ mod tests {
         // What was written down is the hash, nothing else.
         let written = fs::read_to_string(crate::sessionhook::sent_path(&r.cache, "sess-1")).unwrap();
         assert_eq!(written.len(), 16, "{written:?}");
+    }
+
+    #[test]
+    fn a_squads_leader_gets_its_tickets_project_notes_from_the_guard_too_without_joining() {
+        let r = NotesRig::new("leader");
+        let id = r.project("someone", "# Overview\nSell socks.\n");
+        let mut t = crate::tickets::Tickets::open(&r.config, &id);
+        let n = t.add(crate::tickets::NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
+        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        let text = r.prompt("lead-1").expect("the leader gets them");
+        assert!(text.starts_with("These are the notes of the project \"Web shop\" that your ticket belongs to") && text.ends_with("Sell socks."), "{text}");
+        assert_eq!(r.prompt("lead-1"), None);
+        assert!(crate::projects::Projects::open(&r.config).of("lead-1").is_none());
+        assert_eq!(r.prompt("not-a-leader"), None);
     }
 
     #[test]

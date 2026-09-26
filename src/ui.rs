@@ -1,4 +1,4 @@
-use crate::app::{Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Pane, PickKind, PickOpt, TRow, FIND_KIND, PTABS, SEARCH_KINDS, TABS, TOPS};
+use crate::app::{split_areas, Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Pane, PickKind, PickOpt, TRow, FIND_KIND, PTABS, SEARCH_KINDS, SPLIT_MIN_WIDTH, TABS, TOPS};
 use crate::tickets::{self, State, Ticket};
 use crate::dirs::tilde;
 use crate::client::Client;
@@ -57,6 +57,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     f.render_widget(frame, f.area());
 
     if let (Mode::Attached(pid), Some(client)) = (&app.mode, &app.client) {
+        if let Some(n) = app.split_showing() {
+            draw_split(f, app, client, n);
+            return;
+        }
         let dir = app.hosts.iter().find(|h| h.claude_pid == *pid).map(|h| h.dir.as_str()).unwrap_or("");
         draw_attached(f, app, client, dir, inner);
         return;
@@ -88,9 +92,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
     let hints: Vec<Hint> = if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
-        // A ticket's own screen takes the whole body (and later, the left half of a split beside its session).
-        draw_ticket_screen(f, app, n, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
-        ticket_screen_hints()
+        // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
+        let body = Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y);
+        if app.ticket(n).is_some_and(|t| t.leader().is_some()) {
+            draw_ticket_with_squad(f, app, n, body, term_w);
+        } else {
+            draw_ticket_screen(f, app, n, body);
+        }
+        ticket_screen_hints(app, n)
     } else if app.open_project.is_some() {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
         project_screen_hints(app)
@@ -174,6 +183,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::Changes => draw_changes(f, app, inner),
         Mode::Handoff => draw_handoff(f, app, inner),
         Mode::TicketPick => draw_ticket_pick(f, app, inner),
+        Mode::SquadPick => draw_squad_pick(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -226,7 +236,12 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     } else if app.pane == Pane::Tickets {
         let on_divider = matches!(app.ticket_rows().get(app.ticket_selected()), Some(TRow::Divider(_)));
         out = vec![("enter", if on_divider { "show/hide" } else { "open" }, None), ("n", "new ticket", None)];
-        if app.selected_ticket().is_some() {
+        if let Some(t) = app.selected_ticket() {
+            if t.state == State::Ready {
+                out.push(("p", "let it publish", None));
+            } else if handable(app, t) {
+                out.push(("a", "hand to a squad", None));
+            }
             out.extend([("s", "state", None), ("e", "edit", None)]);
         }
     } else {
@@ -247,9 +262,25 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     out
 }
 
+/// A ticket `a` would hand to a squad now (the hint is only offered then; `a` says why not otherwise).
+fn handable(app: &App, t: &Ticket) -> bool {
+    t.state == State::New && !t.folders.is_empty() && tickets::is_ready(t, app.tickets())
+}
+
 /// The keys of a ticket's own screen.
-fn ticket_screen_hints() -> Vec<Hint<'static>> {
-    vec![
+fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
+    let t = app.ticket(n);
+    let mut out: Vec<Hint<'static>> = Vec::new();
+    if t.is_some_and(|t| t.leader().is_some()) {
+        out.push(("enter", if app.leader_running(n) { "the squad's session" } else { "continue the squad" }, None));
+    }
+    if t.is_some_and(|t| handable(app, t)) {
+        out.push(("a", "hand to a squad", None));
+    }
+    if t.is_some_and(|t| t.state == State::Ready) {
+        out.push(("p", "let it publish", None));
+    }
+    out.extend([
         ("e", "edit", None),
         ("r", "rename", None),
         ("s", "state", None),
@@ -259,7 +290,8 @@ fn ticket_screen_hints() -> Vec<Hint<'static>> {
         ("↑↓", "scroll", None),
         ("esc", "back", Some(Action::Leave)),
         ("q", "quit", Some(Action::Quit)),
-    ]
+    ]);
+    out
 }
 
 /// The line under the rule: Active and Archived of the tab showing, with their counts; the arrows switch them.
@@ -697,6 +729,22 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         state.push(Span::styled(format!(" · {tail}"), Style::new().fg(if ready { t.ok } else { t.warn })));
     }
     head.push(Line::from(state));
+    // What the squad said when it stopped: its question, why it is stuck, what it wants to publish.
+    if !x.reason.is_empty() {
+        for (i, l) in wrap(&x.reason, w.saturating_sub(LABEL)).into_iter().enumerate() {
+            head.push(Line::from(vec![label(if i == 0 { "Squad says" } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
+        }
+    }
+    if let Some(l) = x.leader() {
+        let name = crate::squads::find(&l.squad).map_or(l.squad.as_str(), |s| s.name);
+        let running = if app.leader_running(x.number) { "its session is running" } else { "its session isn't running" };
+        let publish = if x.go_ahead { " · you let it publish" } else { "" };
+        head.push(Line::from(vec![label("Squad"), Span::styled(fit_end(&format!("{name} · {running}{publish}"), w.saturating_sub(LABEL)), Style::new().fg(t.text))]));
+    }
+    for (i, wt) in x.worktrees.iter().enumerate() {
+        let shown = fit_start(&format!("{} ({})", tilde(&wt.path, &app.home), wt.branch), w.saturating_sub(LABEL));
+        head.push(Line::from(vec![label(if i == 0 { "Worktree" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
+    }
     head.push(Line::from(vec![label("How far"), Span::styled(fit_end(x.how_far.text(), w.saturating_sub(LABEL)), Style::new().fg(t.text))]));
     if x.folders.is_empty() {
         head.push(Line::from(vec![label("Folders"), Span::styled("No folder yet", Style::new().fg(t.subtext))]));
@@ -726,7 +774,11 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     if body.height == 0 {
         return;
     }
-    let text = app.tickets_store().map(|s| s.body(x)).unwrap_or_default();
+    let mut text = app.tickets_store().map(|s| s.body(x)).unwrap_or_default();
+    // The squad's result comes first: on a Done ticket it is what the user opened it for.
+    if let Some(result) = app.tickets_store().and_then(|s| s.result(x.number)) {
+        text = format!("## Result\n\n{}\n\n{text}", result.trim_end());
+    }
     if text.trim().is_empty() {
         f.render_widget(Paragraph::new("Nothing written yet. Press e to write it.").style(Style::new().fg(t.subtext)), body);
         return;
@@ -788,6 +840,7 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
         };
         let room = (rect.width as usize).saturating_sub(2 + check.chars().count());
         let (text, color) = match opt {
+            PickOpt::State(State::Working) if x.leader().is_some() => ("Working · continue with the squad".to_string(), state_color(t, &State::Working)),
             PickOpt::State(s) => (s.label().to_string(), state_color(t, s)),
             PickOpt::HowFar(i) => (tickets::HOW_FAR[*i].0.to_string(), t.text),
             PickOpt::OwnWords => match &x.how_far {
@@ -2760,6 +2813,12 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             ),
             "delete",
         ),
+        Confirm::StopSquad { number, title, .. } => (
+            "stop the squad",
+            "Stop the squad's session too?".to_string(),
+            format!("#{number} {title} is Cancelled. Its squad's session is still running. Stopping it keeps its conversation: choosing Working later continues it."),
+            "stop it",
+        ),
         Confirm::ResetInstructions { id } => {
             let a = crate::instructions::action(id);
             (
@@ -2808,7 +2867,99 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
-    let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", "cancel", Some(Action::Cancel))];
+    let no = if matches!(c, Confirm::StopSquad { .. }) { "leave it running" } else { "cancel" };
+    let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, None);
+}
+
+/// The split view: the ticket on the left, its squad's live session on the right. Too narrow for that, the session
+/// gets the width and the ticket one line above it.
+fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
+    let t = app.effective_theme();
+    let size = f.area();
+    let a = split_areas(size.width, size.height);
+    if a.wide {
+        draw_ticket_screen(f, app, number, a.ticket);
+        for y in a.term.y..a.bar.bottom() {
+            f.render_widget(Paragraph::new("│").style(Style::new().fg(t.border)), Rect::new(a.rule_x, y, 1, 1));
+        }
+    } else if let Some(x) = app.ticket(number) {
+        let mut line = format!("#{} {} · {}", x.number, x.title, x.state.label());
+        if !x.reason.is_empty() {
+            line.push_str(&format!(" · {}", x.reason));
+        }
+        f.render_widget(Paragraph::new(fit_end(&line, a.ticket.width as usize)).style(Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)), a.ticket);
+    }
+    let paused = app.attached_paused();
+    draw_terminal(f, t, client, a.term, if paused { None } else { app.selection });
+    let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
+    let right = if let Some(notice) = app.active_notice() {
+        notice.to_string()
+    } else if scrolled > 0 {
+        format!("↑ scrolled {scrolled} lines · type to return")
+    } else {
+        app.ticket(number).map(|x| format!("#{} · {}", x.number, x.state.label())).unwrap_or_default()
+    };
+    let hints: [Hint; 1] = [("ctrl+space", "back to the project", Some(Action::Back))];
+    let color = if app.active_notice().is_some() { t.warn } else { t.dim };
+    draw_footer(f, app, a.bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
+}
+
+/// A ticket with a squad, while its session isn't showing: the ticket, and beside it (or above it, when narrow) what
+/// the session is doing and how to open or continue it.
+fn draw_ticket_with_squad(f: &mut Frame, app: &App, number: u32, area: Rect, term_w: u16) {
+    let t = app.effective_theme();
+    let running = app.leader_running(number);
+    let msg = if running { "The squad's session is running. Enter to open it." } else { "The squad's session isn't running. Enter to continue it." };
+    if term_w >= SPLIT_MIN_WIDTH {
+        let left = area.width * 2 / 5;
+        draw_ticket_screen(f, app, number, Rect::new(area.x, area.y, left.saturating_sub(1), area.height));
+        let right = Rect::new(area.x + left + 1, area.y, area.width.saturating_sub(left + 1), area.height);
+        for y in area.y..area.bottom() {
+            f.render_widget(Paragraph::new("│").style(Style::new().fg(t.border)), Rect::new(area.x + left, y, 1, 1));
+        }
+        let at = Rect::new(right.x + 2, right.y + right.height / 3, right.width.saturating_sub(4), 2);
+        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).alignment(Alignment::Center).style(Style::new().fg(if running { t.subtext } else { t.warn })), at);
+    } else {
+        f.render_widget(Paragraph::new(fit_end(msg, area.width as usize)).style(Style::new().fg(if running { t.subtext } else { t.warn })), Rect::new(area.x, area.y, area.width, 1));
+        draw_ticket_screen(f, app, number, Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
+    }
+}
+
+/// The squads a ticket can be handed to, each with what it can do.
+fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    app.hits.borrow_mut().clear();
+    let Some(x) = app.ticket(app.sq.pick_ticket) else { return };
+    let w = area.width.saturating_sub(8).clamp(30, 76);
+    let inner_w = w.saturating_sub(6) as usize;
+    let rows: Vec<Vec<String>> = crate::squads::SQUADS.iter().map(|s| wrap(s.can_do, inner_w.saturating_sub(2))).collect();
+    let list_h: u16 = rows.iter().map(|r| r.len() as u16 + 2).sum();
+    let r = centered(area, w, (list_h + 6).min(area.height.saturating_sub(2)).max(8));
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "hand to a squad");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, list, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new(fit_end(&format!("#{} {}", x.number, x.title), head.width as usize)).style(Style::new().fg(t.text)), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let mut y = list.y;
+    for (i, (s, lines)) in crate::squads::SQUADS.iter().zip(&rows).enumerate() {
+        let h = (lines.len() as u16 + 1).min(list.bottom().saturating_sub(y));
+        if h == 0 {
+            break;
+        }
+        let rect = Rect::new(list.x, y, list.width, h);
+        app.hits.borrow_mut().push((rect, Hit::SquadRow(i)));
+        let sel = i == app.sq.pick_selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let mut out = vec![Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(s.name, base.fg(t.text).add_modifier(Modifier::BOLD))])];
+        out.extend(lines.iter().map(|l| Line::from(vec![Span::styled("  ", base), Span::styled(l.clone(), base.fg(t.subtext))])));
+        f.render_widget(Paragraph::new(out).style(base), rect);
+        y += h + 1;
+    }
+    let hints: [Hint; 3] = [("enter", "hand it over", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }
 

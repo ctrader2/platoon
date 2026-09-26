@@ -84,7 +84,8 @@ const DESCRIPTION_EXPLAIN: &str = "How platoon asks Claude to write";
 
 /// The words on the rows under the entry `name`, up to the settings' closing note, without the frame.
 fn under(screen: &str, name: &str) -> String {
-    let rows: Vec<&str> = screen.lines().skip_while(|l| !l.contains(name)).skip(1).take_while(|l| !l.contains("Changes are saved")).collect();
+    // Up to the next entry (an entry's name starts "System prompt for"), or the end of the list.
+    let rows: Vec<&str> = screen.lines().skip_while(|l| !l.contains(name)).skip(1).take_while(|l| !l.contains("Changes are saved") && !l.contains("System prompt for")).collect();
     rows.iter().flat_map(|l| l.split_whitespace()).filter(|w| *w != "│").collect::<Vec<_>>().join(" ")
 }
 
@@ -103,12 +104,14 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     let lab = Lab::new("instructions-edit");
     let mut t = Term::spawn(&[], &lab.env(), &lab.base, 30, 100);
     t.wait_for("enter open");
-    // The Projects tab (the fifth), then down to the last of its entries: the hand-off's system prompt.
+    // The Projects tab (the fifth), then to the hand-off's system prompt: the last entry, less the Coding squad's five.
     t.send(b"s");
     t.wait_for("Settings file:");
     t.send(b"\x1b[Z");
     t.wait_for_all(&["Update notes after", "System prompt for project notes", "System prompt for the hand-off"]);
     t.send(b"G");
+    t.wait_for("How platoon asks Claude to run the tests and the build");
+    t.send(b"\x1b[A\x1b[A\x1b[A\x1b[A\x1b[A");
     t.wait_for_all(&[HANDOFF_SHOWN, "enter edit"]);
     let screen = t.stable();
     assert!(line_with(&screen, "System prompt for the hand-off").contains("Enter to change"), "{screen}");

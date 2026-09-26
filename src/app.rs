@@ -42,11 +42,13 @@ mod handoff_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
+mod squads_glue;
 mod tickets_glue;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
+pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -177,6 +179,8 @@ pub enum Hit {
     TicketRow(usize),
     /// An entry of a list open over a ticket (its state, how far, folders, what it waits for).
     TicketPickRow(usize),
+    /// An entry of the squad picker.
+    SquadRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the editor list.
@@ -236,6 +240,8 @@ pub enum Confirm {
     DeleteProject { id: String, name: String, sessions: usize },
     /// Restoring platoon's default system prompt of an AI action (`r` in the settings) replaces the user's own.
     ResetInstructions { id: &'static str },
+    /// A ticket was made Cancelled while its squad's leader runs: stop that session too? (`pid`: its `claude`.)
+    StopSquad { number: u32, title: String, pid: u32 },
 }
 
 #[derive(Clone)]
@@ -270,6 +276,8 @@ pub enum Mode {
     Handoff,
     /// A list open over a ticket: its state, how far it goes, its folders or what it waits for (`tk.pick`).
     TicketPick,
+    /// The squads a ticket can be handed to (`sq`).
+    SquadPick,
 }
 
 pub struct Picker {
@@ -463,6 +471,8 @@ pub struct App {
     pub left_pane: Pane,
     /// The open project's tickets, the Tickets pane and a ticket's own screen.
     pub tk: TicketsState,
+    /// Squads: the picker, the split view, and which sessions are squads' leaders.
+    pub sq: SquadState,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -639,6 +649,7 @@ impl App {
             pane: Pane::Sessions,
             left_pane: Pane::Sessions,
             tk: TicketsState::new(),
+            sq: SquadState::new(),
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -858,8 +869,11 @@ impl App {
         }
     }
 
-    /// (rows, cols) of the terminal area inside the attached view.
+    /// (rows, cols) of the terminal area inside the attached view (beside a ticket, in the split view).
     fn pty_size(&self) -> (u16, u16) {
+        if self.sq.split.is_some() {
+            return squads_glue::split_size(self.size);
+        }
         (self.size.1.saturating_sub(3).max(1), self.size.0.saturating_sub(2).max(1))
     }
 
@@ -881,6 +895,9 @@ impl App {
     /// Where the session's screen is drawn in the attached view: inside the frame and above the status bar.
     /// The same numbers as `pty_size` and `ui::draw_attached`.
     pub fn term_area(&self) -> Rect {
+        if self.sq.split.is_some() {
+            return split_areas(self.size.0, self.size.1).term;
+        }
         let (rows, cols) = self.pty_size();
         Rect::new(1, 1, cols, rows)
     }
@@ -912,7 +929,12 @@ impl App {
                 self.mode = Mode::List;
                 self.client = None;
                 self.clear_selection();
-                self.notify("Session ended");
+                // A squad's session that ended leaves its ticket showing, with the way to continue it.
+                if self.sq.split.take().is_some() {
+                    self.notify("The squad's session ended.");
+                } else {
+                    self.notify("Session ended");
+                }
             }
         }
 
@@ -927,7 +949,12 @@ impl App {
         if self.names.reload_if_changed() {
             self.built.0 = u64::MAX;
         }
-        let live = self.reader.live();
+        // Squads' leader sessions belong to their tickets: from here on nothing sees them (rows, counts, search,
+        // naming, archiving, "Take over?"), because they are never in `live` or `sessions`.
+        if self.refresh_leaders() {
+            self.built.0 = u64::MAX;
+        }
+        let live: Vec<Live> = self.reader.live().into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
         let ids: Vec<(u32, String, u64)> = live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
@@ -1103,7 +1130,7 @@ impl App {
     fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
         // The same id can be saved under two project folders; the most recently active file wins.
         let mut latest: HashMap<&str, &Arc<Entry>> = HashMap::new();
-        for e in self.indexer.entries.values() {
+        for e in self.indexer.entries.values().filter(|e| !self.sq.leaders_contains(&e.id)) {
             let slot = latest.entry(e.id.as_str()).or_insert(e);
             if (e.last_active_ms(), e.mtime) > (slot.last_active_ms(), slot.mtime) {
                 *slot = e;
@@ -1197,6 +1224,8 @@ impl App {
             (Action::Leave, Mode::List) if self.tk.open.is_some() => self.close_ticket_screen(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
+            (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
+            (Action::Confirm, Mode::Confirm(Confirm::StopSquad { number, pid, .. })) => self.stop_squad(number, pid),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -1657,11 +1686,15 @@ impl App {
         self.apply_after.is_some()
     }
 
-    /// Leave the attached view. Only our connection closes; the session keeps running.
+    /// Leave the attached view. Only our connection closes; the session keeps running. From the split view, that is
+    /// back to the project's screen, on the ticket.
     fn detach(&mut self) {
         self.client = None;
         self.mode = Mode::List;
         self.clear_selection();
+        if self.sq.split.take().is_some() {
+            self.close_ticket_screen();
+        }
     }
 
     fn attach(&mut self, pid: u32) {
@@ -2188,6 +2221,7 @@ impl App {
                 _ => {}
             },
             Mode::TicketPick => self.ticket_pick_key(key),
+            Mode::SquadPick => self.squad_pick_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2277,6 +2311,9 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
+                    Mode::Attached(_) if self.sq.split.is_some() && split_areas(self.size.0, self.size.1).wide && split_areas(self.size.0, self.size.1).ticket.contains((m.column, m.row).into()) => {
+                        self.wheel_ticket(up);
+                    }
                     Mode::Attached(_) => {
                         // Scrolling changes which text is under the highlight, and a selection is only of what is
                         // on screen, so it is dropped.
@@ -2308,6 +2345,7 @@ impl App {
                     Mode::List => self.wheel_list(up),
                     Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
                     Mode::TicketPick => self.move_ticket_pick(if up { -1 } else { 1 }),
+                    Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
@@ -2343,6 +2381,8 @@ impl App {
                     Some(Hit::TicketRow(i)) => self.click_ticket_row(i),
                     Some(Hit::TicketPickRow(i)) if i == self.tk.pick.selected => self.act(Action::Confirm),
                     Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
+                    Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
+                    Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}

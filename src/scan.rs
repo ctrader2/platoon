@@ -71,8 +71,13 @@ fn load_world(env: &ScanEnv, settings: &Settings) -> Vec<Held> {
     let mut store = Store::load(env.cache, settings.search_prompt_chars as usize);
     store.scan(&entries, settings.search_prompt_chars as usize, true, &mut |_| true);
     let archive = Archive::open(env.config);
+    // A squad's leader sessions belong to their tickets: never named with the user's own conversations.
+    let leaders = crate::tickets::leader_ids(env.config);
     let mut by_id: std::collections::HashMap<String, Held> = std::collections::HashMap::new();
     for fp in store.snapshot() {
+        if leaders.contains(&fp.id) {
+            continue;
+        }
         let Some(e) = entries.iter().find(|e| e.path == fp.path) else { continue };
         let held = Held { id: fp.id.clone(), archived: archive.contains(&fp.id), last_active_ms: e.last_active_ms(), fp };
         // The same id under two project folders: the most recently active file wins.

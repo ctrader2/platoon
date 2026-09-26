@@ -831,6 +831,11 @@ fn projects_items() -> Vec<Item> {
         instructions_item(crate::instructions::NOTES),
         instructions_item(crate::instructions::DESCRIPTION),
         instructions_item(crate::instructions::HANDOFF),
+        instructions_item(crate::instructions::CODING_LEADER),
+        instructions_item(crate::instructions::CODING_PLANNER),
+        instructions_item(crate::instructions::CODING_BUILDER),
+        instructions_item(crate::instructions::CODING_REVIEWER),
+        instructions_item(crate::instructions::CODING_VERIFIER),
     ]
 }
 
@@ -1307,7 +1312,18 @@ mod tests {
         );
         assert_eq!(
             names("Projects"),
-            ["Update notes after", "Read Claude's last reply up to", "System prompt for project notes", "System prompt for project descriptions", "System prompt for the hand-off"]
+            [
+                "Update notes after",
+                "Read Claude's last reply up to",
+                "System prompt for project notes",
+                "System prompt for project descriptions",
+                "System prompt for the hand-off",
+                "System prompt for the Coding squad's leader",
+                "System prompt for the Coding squad's planner",
+                "System prompt for the Coding squad's builder",
+                "System prompt for the Coding squad's reviewer",
+                "System prompt for the Coding squad's verifier"
+            ]
         );
         // Every AI action's instructions are an entry, on the tab it belongs to, and nothing else is of that kind.
         let kinds: Vec<(usize, Kind)> =
@@ -1319,7 +1335,12 @@ mod tests {
                 (TAB_SESSIONS, Kind::Instructions("names")),
                 (4, Kind::Instructions("project-notes")),
                 (4, Kind::Instructions("project-description")),
-                (4, Kind::Instructions("hand-off"))
+                (4, Kind::Instructions("hand-off")),
+                (4, Kind::Instructions("coding-leader")),
+                (4, Kind::Instructions("coding-planner")),
+                (4, Kind::Instructions("coding-builder")),
+                (4, Kind::Instructions("coding-reviewer")),
+                (4, Kind::Instructions("coding-verifier"))
             ]
         );
         for item in all_items().filter(|i| matches!(i.kind, Kind::Instructions(_))) {
@@ -1552,7 +1573,7 @@ mod tests {
         assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
             token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "", "", "", "", "", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
         );
         let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");

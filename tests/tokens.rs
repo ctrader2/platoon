@@ -80,7 +80,7 @@ impl Lab {
 
     fn run(&self, args: &[&str], bin: &str) -> Output {
         let mut c = Command::new(BIN);
-        c.args(args).env("NO_COLOR", "1").env("PLATOON_FORBID_REAL_CLAUDE", "1").stdin(Stdio::null());
+        c.args(args).env("NO_COLOR", "1").env("PLATOON_FORBID_REAL_CLAUDE", "1").env("CLAUDE_CODE_CHILD_SESSION", "1").stdin(Stdio::null());
         for (k, v) in self.env(bin) {
             c.env(k, v);
         }
@@ -140,6 +140,7 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     assert_eq!(fs::canonicalize(lab.rec("cwd").trim()).unwrap(), fs::canonicalize(lab.cache().join("ai-work")).unwrap());
     assert!(lab.rec("env").lines().any(|l| l == "PLATOON_AI=1"));
     assert!(lab.rec("env").lines().any(|l| l == "MAX_THINKING_TOKENS=0"), "no hidden thinking tokens");
+    assert!(!lab.rec("env").contains("CLAUDE_CODE_CHILD_SESSION"), "platoon ran inside Claude Code must not pass that on");
 
     // Only the cache dir got anything, and the settings file is exactly as it was.
     assert_eq!(fs::read(lab.config().join("settings.json")).unwrap(), settings_before);
