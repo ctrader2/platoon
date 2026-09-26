@@ -44,10 +44,6 @@ const CLAUDE_EXIT_WAIT: Duration = Duration::from_secs(20);
 
 pub const SCROLLBACK: usize = 5000;
 
-/// What a process started from inside a Claude Code session inherits and must not pass on to a `claude` platoon
-/// starts: the markers that make a new session think it is a child of that one. `CLAUDE_CODE_CHILD_SESSION` turns
-/// off saving the transcript (seen with Claude Code 2.1.283).
-pub const INHERITED_FROM_CLAUDE: [&str; 3] = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_CHILD_SESSION"];
 pub const F_INPUT: u8 = b'I';
 pub const F_RESIZE: u8 = b'R';
 pub const F_OUTPUT: u8 = b'O';
@@ -206,9 +202,10 @@ pub fn run(args: &[String]) -> i32 {
     cmd.cwd(&dir);
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
-    // If platoon itself was started from inside Claude Code, don't leak that into the child (with
-    // CLAUDE_CODE_CHILD_SESSION inherited, a session saves no transcript: no resume, no tokens, no list row).
-    for k in INHERITED_FROM_CLAUDE {
+    // If platoon itself was started from inside Claude Code, don't leak that session's markers into the child (with
+    // CLAUDE_CODE_CHILD_SESSION inherited, a session saves no transcript: no resume, no tokens, no list row). Which
+    // ones, and why: `claude::SESSION_MARKERS`.
+    for k in crate::claude::inherited_session_markers() {
         cmd.env_remove(k);
     }
     let mut child = match pair.slave.spawn_command(cmd) {
@@ -265,7 +262,7 @@ pub fn run(args: &[String]) -> i32 {
 
     {
         let shared = shared.clone();
-        let dog = Watchdog::new(claude_pid, me, &dir);
+        let dog = Watchdog::new(claude_pid, me, &dir, &rest);
         thread::spawn(move || watch(&shared, dog));
     }
 
@@ -334,6 +331,8 @@ enum Reason {
     NotIdle,
     /// Not quiet for the whole threshold yet: recent output, or a window left recently.
     RecentOutput,
+    /// A squad's leader whose ticket is Working: its members may be at work while nobody watches.
+    LeaderAtWork,
     /// The process table couldn't be read, so what runs under claude is unknown.
     ProcessesUnknown,
     /// "Never stop if any run" is chosen and this process runs under claude.
@@ -369,10 +368,21 @@ struct Watchdog {
     /// Where the MCP configuration lives, for the session's directory.
     sources: mcp::Sources,
     leftover_grace: Duration,
+    /// The session this host runs, when its arguments name it (`--session-id` or `--resume`): a squad's leader is
+    /// found by it.
+    session: Option<String>,
+    /// platoon's config folder, where the tickets are.
+    config: PathBuf,
+}
+
+/// The session id a host's arguments name: the value after `--session-id` (a new session platoon chose the id of)
+/// or `--resume`.
+pub fn session_of_args(args: &[String]) -> Option<String> {
+    args.windows(2).find(|w| w[0] == "--session-id" || w[0] == "--resume").map(|w| w[1].clone()).filter(|s| !s.is_empty())
 }
 
 impl Watchdog {
-    fn new(claude_pid: u32, host_pid: u32, dir: &str) -> Self {
+    fn new(claude_pid: u32, host_pid: u32, dir: &str, args: &[String]) -> Self {
         let scaled = std::env::var("PLATOON_IDLE_SECS_PER_MINUTE").ok().and_then(|v| v.parse::<u64>().ok());
         Self {
             claude_pid,
@@ -383,6 +393,8 @@ impl Watchdog {
             check_every: if scaled.is_some() { Duration::from_millis(200) } else { IDLE_CHECK_EVERY },
             sources: mcp::Sources::from_env(dir),
             leftover_grace: if scaled.is_some() { Duration::from_secs(1) } else { LEFTOVER_GRACE },
+            session: session_of_args(args),
+            config: config_dir(),
         }
     }
 
@@ -410,6 +422,10 @@ impl Watchdog {
         }
         if now.saturating_duration_since(*quiet_since) < threshold {
             return Decision::Keep(Reason::RecentOutput);
+        }
+        // Only now, when everything else says stop: a few small reads of the tickets files.
+        if self.session.as_deref().is_some_and(|s| crate::tickets::leader_at_work(&self.config, s)) {
+            return Decision::Keep(Reason::LeaderAtWork);
         }
         self.decide_processes(settings.idle_stop_ignores_mcp)
     }
@@ -615,6 +631,8 @@ mod tests {
                     vars: [("PATH".to_string(), std::env::var("PATH").unwrap_or_default())].into(),
                 },
                 leftover_grace: Duration::from_millis(300),
+                session: None,
+                config: dir.join("config"),
             };
             Rig { dog, dir, child }
         }
@@ -762,6 +780,29 @@ mod tests {
         let t0 = Instant::now();
         assert!(!rig.dog.should_stop(t0 + 119 * MIN, 0, &mut { t0 }));
         assert!(rig.dog.should_stop(t0 + 120 * MIN, 0, &mut { t0 }));
+    }
+
+    #[test]
+    fn a_squads_leader_is_not_stopped_while_its_ticket_is_working_and_is_like_any_session_after() {
+        use crate::tickets::{Leader, NewTicket, State, Tickets};
+        let mut rig = Rig::new("leader", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
+        rig.status("idle");
+        rig.dog.session = session_of_args(&["--add-dir".into(), "/x".into(), "--session-id".into(), "lead-1".into(), "-n".into(), "#1 x".into()]);
+        assert_eq!(rig.dog.session.as_deref(), Some("lead-1"));
+        let config = rig.dir.join("config");
+        let mut t = Tickets::open(&config, "p1");
+        let n = t.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        let t0 = Instant::now();
+        assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::LeaderAtWork));
+        for s in [State::Waiting, State::Ready, State::Done, State::Cancelled] {
+            Tickets::open(&config, "p1").set_state(n, &s).unwrap();
+            assert!(rig.dog.should_stop(t0 + 500 * MIN, 0, &mut { t0 }), "{s:?}");
+        }
+        // Any other session, and a resumed leader.
+        assert_eq!(session_of_args(&["--resume".into(), "lead-1".into(), "--agents".into()]).as_deref(), Some("lead-1"));
+        assert_eq!(session_of_args(&[]), None);
+        assert_eq!(session_of_args(&["attach".into(), "abc".into()]), None);
     }
 
     // --- MCP servers -------------------------------------------------------------------------------------

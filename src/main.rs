@@ -100,6 +100,8 @@ fn main() -> io::Result<()> {
         // Given only to a squad's leader session, with `--settings` (never installed in the user's own settings).
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-stop") => std::process::exit(squads::run_stop_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-gate") => std::process::exit(squads::run_gate_hook()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-notify") => std::process::exit(squads::run_notify_hook()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-tool") => std::process::exit(squads::run_tool_hook()),
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -121,7 +123,7 @@ fn main() -> io::Result<()> {
                   [--waits-for <number>]...   make a ticket in that project and print its number (#N);
                   with no --folder it works in the current folder
   ticket list [--project <name>] [--json]   the tickets, open ones first
-  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,\n                  notes-update   internal: run by\n                  Claude Code, or by platoon itself");
+  themes          list the color themes, the built-in ones and your own\n  tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call\n  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,\n                  hook squad-notify, hook squad-tool,\n                  notes-update   internal: run by\n                  Claude Code, or by platoon itself");
             std::process::exit(2);
         }
     }
@@ -220,7 +222,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();

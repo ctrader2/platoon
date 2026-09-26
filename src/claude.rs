@@ -60,6 +60,67 @@ impl Live {
     }
 }
 
+// ---- what a process started inside a Claude Code session inherits ------------------------------------------------
+
+/// The one place that decides which inherited environment variables a `claude` platoon starts (a hosted session, a
+/// squad's leader, a `claude -p` call) must NOT get.
+///
+/// A process started from inside a Claude Code session (platoon run from Claude's own terminal, or by an agent)
+/// inherits variables that describe **that calling session**, and a new `claude` that sees them takes itself for a
+/// part of it: with `CLAUDE_CODE_CHILD_SESSION` it saves no transcript at all (seen with Claude Code 2.1.283), so
+/// no resume, no tokens and no row. Dropped, by name (all seen in a session of 2.1.283):
+/// - `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`: "running inside Claude Code, started as the CLI".
+/// - `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ATTENDED`: the calling session's kind.
+/// - `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_PID`: the calling session's ids and process.
+/// - `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`: the way back into the calling session.
+/// - `CLAUDE_EFFORT`: the calling session's effort level (a new session picks its own).
+/// - `AI_AGENT`: "run by an agent", said by the calling session about its own tools.
+///
+/// And by shape, so a newer Claude Code's marker is dropped too: any other `CLAUDE_CODE_*` whose name says it is
+/// about a session, its parent, child, bridge, messaging, entry point, attendance, IDE port or process id.
+///
+/// Kept, because they configure Claude for the user rather than describe the caller: `CLAUDE_CONFIG_DIR`,
+/// `ANTHROPIC_*` (API key, base URL, models), `CLAUDE_CODE_USE_*` (Bedrock, Vertex), `CLAUDE_CODE_OAUTH_TOKEN` (the
+/// user's login), `CLAUDE_CODE_EXECPATH` (only a path to Claude's own files), and every other variable.
+pub const SESSION_MARKERS: [&str; 11] = [
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_BRIDGE_SESSION_ID",
+    "CLAUDE_PID",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_EFFORT",
+    "AI_AGENT",
+];
+
+/// The words that make any other `CLAUDE_CODE_*` variable a marker of the calling session.
+const MARKER_WORDS: [&str; 9] = ["SESSION", "PARENT", "CHILD", "BRIDGE", "MESSAGING", "ENTRYPOINT", "ATTENDED", "SSE_PORT", "_PID"];
+
+/// Is this inherited variable a marker of the calling Claude Code session (see `SESSION_MARKERS`)?
+pub fn is_session_marker(name: &str) -> bool {
+    if SESSION_MARKERS.contains(&name) {
+        return true;
+    }
+    let Some(rest) = name.strip_prefix("CLAUDE_CODE_") else { return false };
+    if rest.starts_with("USE_") || name == "CLAUDE_CODE_OAUTH_TOKEN" || name == "CLAUDE_CODE_EXECPATH" {
+        return false;
+    }
+    MARKER_WORDS.iter().any(|w| name.contains(w))
+}
+
+/// The markers among these variable names.
+pub fn session_markers_in(names: impl IntoIterator<Item = String>) -> Vec<String> {
+    names.into_iter().filter(|n| is_session_marker(n)).collect()
+}
+
+/// The markers in this process's own environment: what a `claude` platoon starts must have taken away.
+pub fn inherited_session_markers() -> Vec<String> {
+    session_markers_in(std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()))
+}
+
 /// The arguments that open a background session's screen: `claude attach <id>`.
 pub fn attach_args(attach_id: &str) -> [String; 2] {
     ["attach".to_string(), attach_id.to_string()]
@@ -784,6 +845,68 @@ mod tests {
     fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
         assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
         assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
+    }
+
+    #[test]
+    fn the_calling_sessions_markers_are_dropped_and_what_configures_claude_is_kept() {
+        // Everything a Claude Code 2.1.283 session gave its shell, plus the user's own settings.
+        let seen = [
+            "AI_AGENT",
+            "CLAUDECODE",
+            "CLAUDE_CODE_BRIDGE_SESSION_ID",
+            "CLAUDE_CODE_CHILD_SESSION",
+            "CLAUDE_CODE_ENTRYPOINT",
+            "CLAUDE_CODE_EXECPATH",
+            "CLAUDE_CODE_MESSAGING_SOCKET",
+            "CLAUDE_CODE_MESSAGING_TOKEN",
+            "CLAUDE_CODE_SESSION_ATTENDED",
+            "CLAUDE_CODE_SESSION_ID",
+            "CLAUDE_EFFORT",
+            "CLAUDE_PID",
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_USE_VERTEX",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_BASE_URL",
+            "MAX_THINKING_TOKENS",
+            "PATH",
+            "HOME",
+            "PLATOON_CONFIG_DIR",
+            // Shapes a newer Claude Code might add.
+            "CLAUDE_CODE_PARENT_SESSION_ID",
+            "CLAUDE_CODE_SSE_PORT",
+            "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+            "CLAUDE_CODE_CALLER_PID",
+        ];
+        let dropped = session_markers_in(seen.iter().map(|s| s.to_string()));
+        assert_eq!(
+            dropped,
+            [
+                "AI_AGENT",
+                "CLAUDECODE",
+                "CLAUDE_CODE_BRIDGE_SESSION_ID",
+                "CLAUDE_CODE_CHILD_SESSION",
+                "CLAUDE_CODE_ENTRYPOINT",
+                "CLAUDE_CODE_MESSAGING_SOCKET",
+                "CLAUDE_CODE_MESSAGING_TOKEN",
+                "CLAUDE_CODE_SESSION_ATTENDED",
+                "CLAUDE_CODE_SESSION_ID",
+                "CLAUDE_EFFORT",
+                "CLAUDE_PID",
+                "CLAUDE_CODE_PARENT_SESSION_ID",
+                "CLAUDE_CODE_SSE_PORT",
+                "CLAUDE_CODE_SESSION_ACCESS_TOKEN",
+                "CLAUDE_CODE_CALLER_PID",
+            ]
+        );
+        for kept in ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_EXECPATH", "ANTHROPIC_API_KEY", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"] {
+            assert!(!is_session_marker(kept), "{kept}");
+        }
+        for m in SESSION_MARKERS {
+            assert!(is_session_marker(m), "{m}");
+        }
     }
 
     /// A pid that certainly belongs to no live process: a child that has been waited for.

@@ -253,7 +253,7 @@ can't break the replies.
   **User Modified · default updated** (in the warning color) until you edit it again or restore the default.
 
 The files are `~/.config/platoon/prompts/<name>.md` (`names`, `describe-it`, `project-notes`, `project-description`,
-`hand-off`, and the Coding squad's `coding-leader`, `coding-planner`, `coding-builder`, `coding-reviewer`,
+`hand-off`, `squad-commander`, and the Coding squad's `coding-leader`, `coding-planner`, `coding-builder`, `coding-reviewer`,
 `coding-verifier`), only once you have changed something, with `built-in.json` beside them remembering which default each
 started from. Every part of platoon reads them, the notes helper and `platoon setup`'s first naming pass included. A file
 that is missing, can't be read or is empty means platoon's default, and at most the first 8,000 characters of one are sent.
@@ -813,11 +813,24 @@ before it decides anything, and takes the ticket exactly as far as its **how far
 Press `a` on a New ticket (in the Tickets pane or on its screen), pick the squad and press `enter`. A ticket that is not
 New, that still waits for another ticket, or that has no folder is refused with one line saying why.
 
+- **The commander checks first.** Before anything starts, the **squad commander** (one quick call to Claude, on Haiku,
+  counted with your smart features' tokens) reads the ticket and what the squad can do, and says whether the squad can
+  handle it. Meanwhile the ticket shows **Working** with "Commander is checking…", and platoon keeps going as usual. If
+  the squad fits, the ticket goes on to it. If it doesn't, the ticket stays **New** and says why ("Commander: This is
+  docs work; ..."); press `a` and pick the same squad again to be asked "Hand it anyway?", and `y` hands it over without
+  another check (another squad gets a check of its own). If the commander can't run - today's token limit is used up,
+  or smart features are paused after a failure - **nothing is handed over**: the ticket stays New and says **Session
+  limit has been reached** (or "AI features are switched off" when they are). A check that fails says so, and hands
+  nothing over either. Its system prompt is **System prompt for the squad commander**, on the Projects tab of the
+  settings.
+
 - **Its own worktree.** For each of the ticket's folders that is in a git repository, platoon makes a git worktree next
   to the repository, `<repo>-worktrees/ticket-<N>`, on a new branch `ticket/<N>` from where the repository is now, and
   the squad works there, never in your own checkout. A worktree already made for the ticket is used again; if the
   branch name `ticket/<N>` is taken by something else, platoon says so and stops. Folders outside git are used as they
-  are. platoon never removes these worktrees.
+  are. platoon never removes these worktrees. The worktree is made in the background (the ticket says "Making the
+  worktree…"); if it can't be made, the ticket goes back to New with the reason, and one already made stays for the next
+  try.
 - **Its own session.** The leader starts in a platoon session of its own (it keeps running when platoon closes), named
   `#N title`, with the ticket as its first message and the project's notes given to it as context. It belongs to the
   ticket only: it is never listed on the Sessions tab, in the project's sessions, in searches or counts, and it never
@@ -832,7 +845,13 @@ The ticket's state follows the squad: at the end of each of its turns the leader
 done, still working (members running), has a question, is stuck, or is ready to publish, and platoon sets **Working**,
 **Done**, **Waiting on you** (with its question or why it is stuck; a turn that ends without that line counts as "the
 squad stopped without saying why") or **Ready to push/publish**. When it is Done, the leader's result shows at the top of
-the ticket's screen (it is kept in `tickets/<NN>-result.md`).
+the ticket's screen (it is kept in `tickets/<NN>-result.md`), and that result, and nothing else of the squad's
+conversation, goes to the project's notes at their next update, as "Ticket #N (Coding squad)" (once).
+
+While the leader is stuck on Claude's permission prompt, the ticket shows **Waiting on you** ("Waiting for your OK on a
+command"); once you answer and it carries on, the ticket is Working again. The leader's session is not stopped for being
+idle while its ticket is Working (its members may be at work while nobody watches); once the ticket is Waiting on you,
+Ready, Done or Cancelled, it is stopped like any idle session.
 
 **Anything other people can see asks you first**, even when the ticket's how far includes it: pushing, opening or merging
 a merge request, publishing a package or a page. platoon refuses those commands in the squad's session until you say so,
@@ -852,8 +871,10 @@ settings, as **System prompt for the Coding squad's leader**, **... planner**, *
 keeps - ask before anything others can see, the last line of each turn, and "report back to the leader, never push" for
 the members - are always sent after your text. The models are fixed for now.
 
-Nothing about the squad is added to your own Claude Code settings: the leader's session alone gets platoon's two squad
-hooks (`platoon hook squad-stop` and `platoon hook squad-gate`), and `platoon setup` is not involved.
+The leader may hand work to its members, read, search and run commands; it never edits a file itself (its members do).
+
+Nothing about the squad is added to your own Claude Code settings: the leader's session alone gets platoon's squad hooks
+(`platoon hook squad-stop`, `squad-gate`, `squad-notify` and `squad-tool`), and `platoon setup` is not involved.
 
 ## Sessions started in platoon keep running
 

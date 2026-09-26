@@ -193,6 +193,47 @@ pub struct Leader {
     pub started: u64,
 }
 
+/// Why a hand-over to a squad didn't happen, written on the ticket (it stays New) so the user sees it there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HandoverKind {
+    /// The commander checked and said the squad doesn't fit. The user may overrule it: the same squad again asks
+    /// "Hand it anyway?".
+    Refused,
+    /// The commander couldn't run (the daily limit, a back-off, the AI features switched off) or its check failed.
+    NoCheck,
+    /// Something after the check went wrong (the worktree, starting the session).
+    NotStarted,
+}
+
+impl HandoverKind {
+    fn id(&self) -> &'static str {
+        match self {
+            HandoverKind::Refused => "refused",
+            HandoverKind::NoCheck => "no-check",
+            HandoverKind::NotStarted => "not-started",
+        }
+    }
+
+    fn from_id(id: &str) -> HandoverKind {
+        match id {
+            "refused" => HandoverKind::Refused,
+            "no-check" => HandoverKind::NoCheck,
+            _ => HandoverKind::NotStarted,
+        }
+    }
+}
+
+/// The last hand-over to a squad that didn't happen: which squad, why not, and what the ticket says about it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Handover {
+    pub squad: String,
+    pub kind: HandoverKind,
+    pub says: String,
+}
+
+/// What the ticket says while its leader is stuck on Claude's permission prompt.
+pub const PERMISSION_REASON: &str = "Waiting for your OK on a command";
+
 /// A git worktree platoon made for a ticket (Coding tickets always get their own).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Worktree {
@@ -226,6 +267,14 @@ pub struct Ticket {
     pub reason: String,
     /// The user let the squad publish (push, merge request, a page): lasts while the ticket is Working or Ready.
     pub go_ahead: bool,
+    /// The last hand-over to a squad that didn't happen, and why (cleared when a leader starts).
+    pub handover: Option<Handover>,
+    /// Waiting on you because the leader is stuck on Claude's permission prompt (not a question: the next tool it
+    /// runs, after the user's answer, makes it Working again).
+    pub permission: bool,
+    /// What the app is doing for it before a leader is written on it (the commander's check, the worktrees): the
+    /// ticket shows Working with these words. Never in the file.
+    pub busy: Option<String>,
 }
 
 impl Ticket {
@@ -357,6 +406,15 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
             .unwrap_or_default(),
         reason: o.get("reason").and_then(Value::as_str).unwrap_or_default().to_string(),
         go_ahead: o.get("go_ahead").and_then(Value::as_bool).unwrap_or(false),
+        handover: o.get("handover").and_then(|h| {
+            Some(Handover {
+                squad: h.get("squad")?.as_str()?.to_string(),
+                kind: HandoverKind::from_id(h.get("kind").and_then(Value::as_str).unwrap_or("")),
+                says: h.get("says").and_then(Value::as_str).unwrap_or_default().to_string(),
+            })
+        }),
+        permission: o.get("permission").and_then(Value::as_bool).unwrap_or(false),
+        busy: None,
     })
 }
 
@@ -394,11 +452,22 @@ pub struct Tickets {
     corrupt: bool,
     /// Bumped whenever what is in memory changed.
     pub generation: u64,
+    /// Tickets the app is busy handing to a squad (see `Ticket::busy`): shown Working, never written.
+    busy: std::collections::BTreeMap<u32, String>,
 }
 
 impl Tickets {
     pub fn open(config: &Path, project: &str) -> Self {
-        let mut t = Self { config: config.to_path_buf(), project: project.to_string(), list: Vec::new(), next: 1, stamp: None, corrupt: false, generation: 0 };
+        let mut t = Self {
+            config: config.to_path_buf(),
+            project: project.to_string(),
+            list: Vec::new(),
+            next: 1,
+            stamp: None,
+            corrupt: false,
+            generation: 0,
+            busy: std::collections::BTreeMap::new(),
+        };
         t.load();
         t
     }
@@ -472,6 +541,29 @@ impl Tickets {
         // Anything in the list that isn't shaped like a ticket is somebody else's: kept on disk, not shown.
         self.list = root.get("tickets").and_then(Value::as_array).into_iter().flatten().filter_map(ticket_from).collect();
         self.next = next_number(&root);
+        self.apply_busy();
+    }
+
+    fn apply_busy(&mut self) {
+        for t in &mut self.list {
+            t.busy = self.busy.get(&t.number).cloned();
+            if t.busy.is_some() {
+                t.state = State::Working;
+            }
+        }
+    }
+
+    /// The app is busy handing ticket `number` to a squad (`Some(what it is doing)`), or no longer is (None). Only
+    /// what this store shows changes: the file doesn't.
+    pub fn set_busy(&mut self, number: u32, what: Option<&str>) {
+        let changed = match what {
+            Some(w) => self.busy.insert(number, w.to_string()).as_deref() != Some(w),
+            None => self.busy.remove(&number).is_some(),
+        };
+        if changed {
+            // From the file again, so a ticket that is no longer busy shows its real state.
+            self.load();
+        }
     }
 
     /// Pick up a change made by `platoon ticket add` or another window. One `stat` when nothing changed.
@@ -600,11 +692,68 @@ impl Tickets {
         self.edit(number, |t, _| {
             t.insert("state".into(), json!(id));
             t.remove("reason");
+            t.remove("handover");
+            t.remove("permission");
             if !keep {
                 t.remove("go_ahead");
             }
             Ok(())
         })
+    }
+
+    /// A hand-over to `squad` didn't happen: the ticket is New, with why not written on it.
+    pub fn handover_failed(&mut self, number: u32, squad: &str, kind: HandoverKind, says: &str) -> io::Result<()> {
+        let h = json!({"squad": squad, "kind": kind.id(), "says": says});
+        self.edit(number, move |t, _| {
+            t.insert("state".into(), json!(State::New.id()));
+            t.insert("handover".into(), h);
+            t.remove("reason");
+            t.remove("permission");
+            t.remove("go_ahead");
+            Ok(())
+        })
+    }
+
+    /// `platoon hook squad-notify`: the leader is stuck on Claude's permission prompt. A Working ticket becomes
+    /// Waiting on you ("Waiting for your OK on a command"); any other state is left alone. True when it changed.
+    pub fn permission_wait(&mut self, number: u32) -> io::Result<bool> {
+        self.edit_when(number, |t| {
+            if t.get("state").and_then(Value::as_str) != Some(State::Working.id()) {
+                return false;
+            }
+            t.insert("state".into(), json!(State::Waiting.id()));
+            t.insert("reason".into(), json!(PERMISSION_REASON));
+            t.insert("permission".into(), json!(true));
+            true
+        })
+    }
+
+    /// `platoon hook squad-tool`: a tool ran after the user answered the permission prompt, so the work goes on.
+    /// Only a ticket Waiting *for a permission* becomes Working again; one waiting on a question or stuck is left
+    /// for the leader's next turn to decide. True when it changed.
+    pub fn permission_answered(&mut self, number: u32) -> io::Result<bool> {
+        self.edit_when(number, |t| {
+            let waiting = t.get("state").and_then(Value::as_str) == Some(State::Waiting.id());
+            if !(waiting && t.get("permission").and_then(Value::as_bool) == Some(true)) {
+                return false;
+            }
+            t.insert("state".into(), json!(State::Working.id()));
+            t.remove("reason");
+            t.remove("permission");
+            true
+        })
+    }
+
+    /// Change one ticket only when `f` says so (it returns false having changed nothing): nothing is written
+    /// otherwise, not even the time. The hooks that run after every tool call use this, so a ticket with nothing to
+    /// change costs one read.
+    fn edit_when(&mut self, number: u32, f: impl FnOnce(&mut Map<String, Value>) -> bool) -> io::Result<bool> {
+        const NOTHING: &str = "\u{0}nothing to change";
+        match self.edit(number, |t, _| if f(t) { Ok(()) } else { Err(NOTHING.to_string()) }) {
+            Ok(()) => Ok(true),
+            Err(e) if e.to_string() == NOTHING => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// A squad's leader was started for the ticket: it is listed on the ticket (last, so it is the one working on it
@@ -623,6 +772,8 @@ impl Tickets {
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
             t.remove("go_ahead");
+            t.remove("handover");
+            t.remove("permission");
             Ok(())
         })
     }
@@ -655,6 +806,7 @@ impl Tickets {
             } else {
                 t.insert("reason".into(), json!(reason));
             }
+            t.remove("permission");
             if !keep {
                 t.remove("go_ahead");
             }
@@ -668,6 +820,7 @@ impl Tickets {
             t.insert("go_ahead".into(), json!(true));
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
+            t.remove("permission");
             Ok(())
         })
     }
@@ -771,6 +924,13 @@ pub fn find_leader(config: &Path, session: &str) -> Option<(String, u32, bool)> 
         }
     }
     None
+}
+
+/// Is `session` the current leader of a ticket that is Working? Such a session is never idle-stopped: its members
+/// may be at work while nobody watches it. Waiting on you, Ready, Done and Cancelled don't hold it.
+pub fn leader_at_work(config: &Path, session: &str) -> bool {
+    let Some((project, number, true)) = find_leader(config, session) else { return false };
+    Tickets::open(config, &project).get(number).is_some_and(|t| t.state == State::Working)
 }
 
 /// Why `ticket` can't be blocked by `blocker`, or Ok.
@@ -1202,7 +1362,7 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false }
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None }
     }
 
     #[test]
@@ -1427,5 +1587,93 @@ mod tests {
         let (code, _, usage) = run(&d, &[], "", true);
         assert_eq!(code, 2);
         assert!(usage.contains("--waits-for <number>") && !usage.contains("blocked"), "{usage}");
+    }
+
+    #[test]
+    fn a_hand_over_that_didnt_happen_is_written_on_the_ticket_and_goes_when_a_leader_starts() {
+        let d = dir("handover");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        t.handover_failed(n, "coding", HandoverKind::Refused, "This is docs work.").unwrap();
+        let back = Tickets::open(&d, "p1");
+        let x = back.get(n).unwrap();
+        assert_eq!(x.state, State::New);
+        assert_eq!(x.handover, Some(Handover { squad: "coding".into(), kind: HandoverKind::Refused, says: "This is docs work.".into() }));
+        t.handover_failed(n, "coding", HandoverKind::NoCheck, "Session limit has been reached").unwrap();
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover.as_ref().map(|h| h.kind.clone()), Some(HandoverKind::NoCheck));
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1 }, &[]).unwrap();
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover, None, "a leader started: nothing to say any more");
+        t.handover_failed(n, "coding", HandoverKind::NotStarted, "x").unwrap();
+        t.set_state(n, &State::Cancelled).unwrap();
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover, None, "the user moved it on");
+    }
+
+    #[test]
+    fn a_permission_wait_is_its_own_kind_of_waiting_and_only_it_ends_with_the_next_tool() {
+        let d = dir("permission");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1 }, &[]).unwrap();
+        let before = fs::read(t.path()).unwrap();
+        assert!(!t.permission_answered(n).unwrap(), "Working: nothing to answer");
+        assert_eq!(fs::read(t.path()).unwrap(), before, "and nothing written, not even the time");
+        assert!(t.permission_wait(n).unwrap());
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!((x.state, x.reason.as_str(), x.permission), (State::Waiting, PERMISSION_REASON, true));
+        assert!(!t.permission_wait(n).unwrap(), "already waiting");
+        assert!(t.permission_answered(n).unwrap());
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!((x.state, x.reason.as_str(), x.permission), (State::Working, "", false));
+        // A question is not a permission: a tool running doesn't end it.
+        t.squad_says(n, &State::Waiting, "Asks: Red or blue?", None).unwrap();
+        assert!(!t.permission_answered(n).unwrap());
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().state, State::Waiting);
+        assert!(!t.permission_wait(n).unwrap(), "only a Working ticket starts waiting for a permission");
+        // Ready and Done are left alone too.
+        t.squad_says(n, &State::Ready, "Wants to publish: x", None).unwrap();
+        assert!(!t.permission_wait(n).unwrap());
+        // A permission wait that the leader's turn ends: the Stop hook's word counts, and the mark goes.
+        t.set_state(n, &State::Working).unwrap();
+        t.permission_wait(n).unwrap();
+        t.squad_says(n, &State::Waiting, "Asks: which?", None).unwrap();
+        assert!(!Tickets::open(&d, "p1").get(n).unwrap().permission);
+        assert!(!t.permission_answered(n).unwrap());
+    }
+
+    #[test]
+    fn a_busy_ticket_shows_working_with_what_is_happening_and_the_file_never_says_so() {
+        let d = dir("busy");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        let before = fs::read(t.path()).unwrap();
+        t.set_busy(n, Some("Commander is checking…"));
+        let x = t.get(n).unwrap();
+        assert_eq!((x.state.clone(), x.busy.as_deref()), (State::Working, Some("Commander is checking…")));
+        assert_eq!(fs::read(t.path()).unwrap(), before);
+        assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().state, State::New, "another reader sees the file");
+        // It lasts across a change made on disk.
+        t.rename(n, "Basket page").unwrap();
+        assert_eq!(t.get(n).unwrap().state, State::Working);
+        t.set_busy(n, None);
+        assert_eq!((t.get(n).unwrap().state.clone(), t.get(n).unwrap().busy.clone()), (State::New, None));
+    }
+
+    #[test]
+    fn only_the_current_leader_of_a_working_ticket_is_at_work() {
+        let d = dir("at-work");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        assert!(!leader_at_work(&d, "lead-1"));
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        assert!(leader_at_work(&d, "lead-1"));
+        assert!(!leader_at_work(&d, "someone"));
+        for s in [State::Waiting, State::Ready, State::Done, State::Cancelled, State::New] {
+            t.set_state(n, &s).unwrap();
+            assert!(!leader_at_work(&d, "lead-1"), "{s:?}");
+        }
+        t.set_state(n, &State::Working).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2 }, &[]).unwrap();
+        assert!(!leader_at_work(&d, "lead-1"), "an earlier leader");
+        assert!(leader_at_work(&d, "lead-2"));
     }
 }

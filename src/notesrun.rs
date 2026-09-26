@@ -258,15 +258,23 @@ pub fn run_hook() -> i32 {
 /// archived session, no notes to keep up to date), and marking is all it does: the helper it starts takes the
 /// same one-per-project lock and waits out the same quiet period. True when the project was marked.
 pub fn mark_joined(config: &Path, cache: &Path, project: &str, session: &str, at_ms: u64) -> bool {
+    if Archive::open(config).contains(session) {
+        return false;
+    }
+    mark_project(config, cache, project, at_ms)
+}
+
+/// Something new for a project's notes that no session's turn brought (a session joined it, a ticket's squad
+/// finished with a result): mark the project due and start the helper, as the `Stop` hook does. Turned away, after
+/// small reads only, when the switch is off, the project is archived or gone, or it has no notes to keep up to date.
+/// True when the project was marked.
+pub fn mark_project(config: &Path, cache: &Path, project: &str, at_ms: u64) -> bool {
     let (settings, corrupt) = crate::settings::load(config);
     if corrupt || !settings.feature_on(FEATURE) {
         return false;
     }
     let projects = Projects::open(config);
     if !projects.get(project).is_some_and(|p| !p.archived) {
-        return false;
-    }
-    if Archive::open(config).contains(session) {
         return false;
     }
     // No notes yet means nothing to keep up to date: the user starts them with `e`.
@@ -400,7 +408,25 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
     sessions.sort_by(|a, b| b.0.cmp(&a.0));
-    (Material { project: name.to_string(), sessions: sessions.into_iter().map(|(_, s)| s).collect() }, seen)
+    (Material { project: name.to_string(), sessions: sessions.into_iter().map(|(_, s)| s).collect(), results: Vec::new() }, seen)
+}
+
+/// The results of the project's Done tickets that no update has been given yet, and what the state records once
+/// they have been read. Only a squad's result (`tickets/<NN>-result.md`) is ever read here: never a leader's
+/// conversation (leaders are never members of the project either).
+pub fn gather_results(config: &Path, id: &str, state: &State) -> (Vec<notesupdate::TicketResult>, BTreeMap<String, String>) {
+    let store = crate::tickets::Tickets::open(config, id);
+    let done: Vec<notesupdate::DoneTicket> = store
+        .all()
+        .iter()
+        .filter(|t| t.state == crate::tickets::State::Done)
+        .filter_map(|t| {
+            let leader = t.leader()?;
+            let squad = crate::squads::find(&leader.squad).map_or_else(|| leader.squad.clone(), |s| s.name.to_string());
+            Some(notesupdate::DoneTicket { number: t.number, squad, result: store.result(t.number)? })
+        })
+        .collect();
+    notesupdate::results_due(state, &done)
 }
 
 // ---- one update -------------------------------------------------------------------------------------------------
@@ -497,7 +523,9 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         return Round::NoNotes;
     }
     let mut state = State::load(&env.config, id);
-    let (material, seen) = gather(&env.config, &env.root, id, &project.name, &state, &settings);
+    let (mut material, seen) = gather(&env.config, &env.root, id, &project.name, &state, &settings);
+    let (results, results_sent) = gather_results(&env.config, id, &state);
+    material.results = results;
     if material.is_empty() {
         return Round::NothingNew;
     }
@@ -541,6 +569,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     // The material was read and paid for, so it is not read again; what platoon wrote is remembered, so the next
     // update can tell its own sentences from the user's.
     state.seen.extend(seen);
+    state.results.extend(results_sent);
     // What platoon now calls its own, heading by heading: a heading that was renamed has moved, one that was
     // folded into another is gone, and a line of the user's that the answer had to repeat is not platoon's.
     state.written = merged.mine.clone();
@@ -1354,5 +1383,53 @@ mod tests {
         s.set_feature(FEATURE, true);
         crate::settings::save(&r.env.config, &s).unwrap();
         assert!(mark_joined(&r.env.config, &r.env.cache, &id, "s1", 7));
+    }
+
+    #[test]
+    fn a_done_tickets_result_reaches_the_notes_once_labelled_and_the_leaders_conversation_never_does() {
+        use crate::tickets::{Leader, NewTicket, Tickets};
+        let r = Rig::new("results");
+        let id = r.project("# Summary\n\nA sock shop.\n");
+        // The leader's own conversation is on disk, as a real one would be; it must never be read.
+        let lines = [json!({"type":"user","cwd":"/home/x/work","timestamp":iso(1_789_000_000_000),"message":{"role":"user","content":"SECRET LEADER WORDS"}}).to_string()];
+        fs::write(r.env.root.join("projects/-work/lead-1.jsonl"), lines.join("\n") + "\n").unwrap();
+        let mut t = Tickets::open(&r.env.config, &id);
+        let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
+        let other = t.add(NewTicket { title: "Socks".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
+        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1 }, &[]).unwrap();
+        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1 }, &[]).unwrap();
+        // Only Done results count: one that is Done, one whose ticket was reopened after its result was written.
+        t.squad_says(n, &crate::tickets::State::Done, "", Some("Added the basket page on ticket/1.")).unwrap();
+        t.squad_says(other, &crate::tickets::State::Done, "", Some("Socks are in.")).unwrap();
+        t.set_state(other, &crate::tickets::State::Working).unwrap();
+        // The squad-stop hook marks the project the way a session's Stop does.
+        assert!(mark_project(&r.env.config, &r.env.cache, &id, 5));
+        assert_eq!(due_at(&r.env.cache, &id), Some(5));
+
+        r.fake.reply_default(r#"{"sections":[{"heading":"Status","body":"The basket page is in."}]}"#);
+        let round = update_once(&r.env, &id);
+        assert!(matches!(round, Round::Written { .. }), "{round:?}");
+        assert_eq!(r.fake.calls(), 1);
+        let sent = r.fake.stdin(1);
+        assert!(sent.contains("Ticket #1 (Coding squad):\n  Added the basket page on ticket/1.\n"), "{sent}");
+        assert!(!sent.contains("Socks are in.") && !sent.contains("#2"), "not Done: not sent: {sent}");
+        assert!(!sent.contains("SECRET LEADER WORDS"), "the leader's conversation is never read: {sent}");
+        // Sent once: the next update has nothing new, and makes no call.
+        assert_eq!(update_once(&r.env, &id), Round::NothingNew);
+        assert_eq!(r.fake.calls(), 1);
+        // A reply that isn't understood doesn't count it as read (it goes again next time), like a session's words.
+        Tickets::open(&r.env.config, &id).set_state(other, &crate::tickets::State::Done).unwrap();
+        r.fake.reply_default("not json at all");
+        assert_eq!(update_once(&r.env, &id), Round::BadReply);
+        r.fake.reply_default(r#"{"sections":[{"heading":"Status","body":"The basket page and the socks are in."}]}"#);
+        assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
+        assert!(r.fake.stdin(3).contains("Ticket #2 (Coding squad):\n  Socks are in.\n") && !r.fake.stdin(3).contains("Ticket #1"), "{}", r.fake.stdin(3));
+        // The switch off: nothing marked.
+        let _ = fs::remove_file(due_path(&r.env.cache, &id));
+        let mut st = crate::settings::load(&r.env.config).0;
+        st.set_feature(FEATURE, false);
+        crate::settings::save(&r.env.config, &st).unwrap();
+        assert!(!mark_project(&r.env.config, &r.env.cache, &id, 9));
+        assert_eq!(due_at(&r.env.cache, &id), None);
     }
 }

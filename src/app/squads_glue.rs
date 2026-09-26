@@ -5,10 +5,49 @@
 //! The squads themselves and everything that can be worked out without the app are in `squads.rs`.
 
 use super::*;
-use crate::squads::{self, Squad};
-use crate::tickets::{Leader, State};
+use crate::ai::Request;
+use crate::instructions;
+use crate::squads::{self, AfterCheck, Check, FolderFact, Squad};
+use crate::tickets::{HandoverKind, Leader, State, Ticket, Tickets, Worktree};
 use std::collections::HashSet;
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::time::SystemTime;
+
+/// How long the commander's check may take before it is given up on (and nothing is handed over).
+const COMMANDER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// What is out while a ticket is being handed to a squad, off the UI thread, in this order: the commander's check,
+/// then the worktrees. Then the leader starts (on the UI thread: it only waits for its host to be ready).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stage {
+    Checking,
+    Worktrees,
+}
+
+impl Stage {
+    /// What the ticket says meanwhile.
+    pub fn words(self) -> &'static str {
+        match self {
+            Stage::Checking => squads::CHECKING,
+            Stage::Worktrees => squads::MAKING_WORKTREES,
+        }
+    }
+}
+
+/// What a stage sends back.
+enum Step {
+    Checked(Check),
+    Worktrees(Result<Vec<Worktree>, String>),
+}
+
+/// A ticket being handed to a squad.
+struct Starting {
+    project: String,
+    number: u32,
+    squad: &'static Squad,
+    stage: Stage,
+    rx: Receiver<Step>,
+}
 
 /// Below this many columns there is no room for a ticket beside its session: the session gets the width and the
 /// ticket one line above it.
@@ -63,11 +102,26 @@ pub struct SquadState {
     leaders: HashSet<String>,
     /// The tickets files `leaders` was read from, as they were then.
     stamps: Vec<(PathBuf, Option<(SystemTime, u64)>)>,
+    /// Tickets being handed to a squad right now.
+    starting: Vec<Starting>,
+    /// In unit tests no session is ever started (the program would be the test binary): the leaders that would
+    /// have been, by ticket number.
+    #[cfg(test)]
+    pub launched: Vec<u32>,
 }
 
 impl SquadState {
     pub fn new() -> Self {
-        Self { pick_ticket: 0, pick_selected: 0, split: None, leaders: HashSet::new(), stamps: Vec::new() }
+        Self {
+            pick_ticket: 0,
+            pick_selected: 0,
+            split: None,
+            leaders: HashSet::new(),
+            stamps: Vec::new(),
+            starting: Vec::new(),
+            #[cfg(test)]
+            launched: Vec::new(),
+        }
     }
 }
 
@@ -116,7 +170,9 @@ impl App {
     /// `a` on a ticket: the squad picker, unless the ticket can't go to a squad now (said in one plain line).
     pub(super) fn ask_hand_to_squad(&mut self, number: u32) {
         let Some(t) = self.ticket(number) else { return };
-        let why = if self.open_project().is_some_and(|p| p.archived) {
+        let why = if let Some(busy) = &t.busy {
+            Some(format!("#{number}: {busy}"))
+        } else if self.open_project().is_some_and(|p| p.archived) {
             Some(crate::tickets::archived_refusal(&self.open_project().map(|p| p.name.clone()).unwrap_or_default()))
         } else if t.state != State::New {
             Some(format!("#{number} is {}. Only a New ticket can be handed to a squad.", t.state.label()))
@@ -160,23 +216,186 @@ impl App {
         self.hand_to_squad(self.sq.pick_ticket, squad);
     }
 
-    /// Make the ticket's worktrees, write its new leader on it (Working), and start that leader in a platoon host with
-    /// the ticket as its first message; then show it beside the ticket. Anything that goes wrong on the way is said
-    /// plainly and leaves the ticket as it was (worktrees already made stay, and are used again next time).
+    /// Hand the ticket to `squad`: the commander checks first. When the commander has already said this very squad
+    /// doesn't fit, the user is asked whether to hand it over anyway (yes skips the check); another squad gets a
+    /// check of its own.
     fn hand_to_squad(&mut self, number: u32, squad: &'static Squad) {
+        let Some(t) = self.ticket(number) else { return };
+        if let Some(h) = t.handover.as_ref().filter(|h| h.squad == squad.id && h.kind == HandoverKind::Refused) {
+            self.mode = Mode::Confirm(Confirm::HandAnyway { number, squad: squad.id, title: t.title.clone(), says: h.says.clone() });
+            return;
+        }
+        self.ask_commander(number, squad);
+    }
+
+    /// Yes to "Hand it anyway?": the worktrees and the leader, without a new check.
+    pub(super) fn hand_anyway(&mut self, number: u32, squad: &str) {
+        self.mode = Mode::List;
+        let (Some(squad), Some(project)) = (squads::find(squad), self.open_project.clone()) else { return };
+        if !self.ticket(number).is_some_and(|t| t.state == State::New && t.busy.is_none()) {
+            return;
+        }
+        self.notify(format!("Handing #{number} to the {} squad, as you said.", squad.name));
+        self.make_worktrees(&project, number, squad);
+    }
+
+    /// The commander's check, off the UI thread (the ticket shows Working, "Commander is checking…"). If the gate
+    /// says no there is no call at all: the ticket stays New, with why.
+    fn ask_commander(&mut self, number: u32, squad: &'static Squad) {
         let Some(project) = self.open_project.clone() else { return };
         let Some(t) = self.ticket(number).cloned() else { return };
-        let worktrees = match squads::prepare_worktrees(&self.git_program, &t.folders, number) {
+        let settings = self.settings.get();
+        // The user asked for this by pressing a key: the plan-usage pause doesn't apply, every other gate does.
+        if let Err(r) = ai::gate_for(&settings, squads::COMMANDER_FEATURE, &self.cache, self.clock(), true) {
+            self.after_commander(&project, number, squad, Check::Refused(r));
+            return;
+        }
+        let body = self.tk.store.as_ref().map(|s| s.body(&t)).unwrap_or_default();
+        let mut req = Request::new(squads::COMMANDER_FEATURE, squads::commander_system(&instructions::guidance(&self.config, instructions::COMMANDER)), String::new());
+        req.user_initiated = true;
+        req.model = Some(squads::COMMANDER_MODEL);
+        req.timeout = COMMANDER_TIMEOUT;
+        req.cancel = self.switchboard.token(squads::COMMANDER_FEATURE);
+        let program = self.ai_program();
+        let runner = self.ai_runner(&program);
+        // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
+        let never = cfg!(test) && program == "claude";
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            // Whether each folder is in git is looked up here too: a stat or two each, but on a network folder even
+            // that can wait.
+            let facts: Vec<FolderFact> = t.folders.iter().map(|f| FolderFact { path: f.clone(), git: squads::in_git(Path::new(f)) }).collect();
+            req.prompt = squads::commander_prompt(squad, &t, &body, &facts);
+            let check = if never { Check::Failed("no stand-in for claude in this test".into()) } else { Check::from_answer(runner.run(&settings, &req)) };
+            let _ = tx.send(Step::Checked(check));
+        });
+        self.begin_stage(&project, number, squad, Stage::Checking, rx);
+    }
+
+    fn begin_stage(&mut self, project: &str, number: u32, squad: &'static Squad, stage: Stage, rx: Receiver<Step>) {
+        self.sq.starting.retain(|s| !(s.project == project && s.number == number));
+        self.sq.starting.push(Starting { project: project.to_string(), number, squad, stage, rx });
+        self.show_starting();
+    }
+
+    /// The open project's tickets that are being handed over show Working, with what is happening.
+    pub(super) fn show_starting(&mut self) {
+        let Some(store) = self.tk.store.as_mut() else { return };
+        let project = store.project().to_string();
+        for st in self.sq.starting.iter().filter(|st| st.project == project) {
+            store.set_busy(st.number, Some(st.stage.words()));
+        }
+    }
+
+    fn done_starting(&mut self, project: &str, number: u32) {
+        if let Some(store) = self.tk.store.as_mut().filter(|s| s.project() == project) {
+            store.set_busy(number, None);
+        }
+    }
+
+    /// True while a ticket is being handed to a squad (so the screen is refreshed quickly).
+    pub fn squads_busy(&self) -> bool {
+        !self.sq.starting.is_empty()
+    }
+
+    /// Take in what the stages sent back. Called on every refresh; cheap when nothing is out.
+    pub(super) fn poll_squad_starts(&mut self) {
+        let mut i = 0;
+        while i < self.sq.starting.len() {
+            let step = match self.sq.starting[i].rx.try_recv() {
+                Ok(step) => step,
+                Err(TryRecvError::Empty) => {
+                    i += 1;
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => match self.sq.starting[i].stage {
+                    Stage::Checking => Step::Checked(Check::Failed("it stopped without an answer".into())),
+                    Stage::Worktrees => Step::Worktrees(Err("it stopped without saying why".into())),
+                },
+            };
+            let st = self.sq.starting.remove(i);
+            self.done_starting(&st.project, st.number);
+            match step {
+                Step::Checked(check) => self.after_commander(&st.project, st.number, st.squad, check),
+                Step::Worktrees(made) => self.after_worktrees(&st.project, st.number, st.squad, made),
+            }
+        }
+    }
+
+    /// A ticket as its file says now (not as the open project's screen shows it).
+    fn ticket_on_disk(&self, project: &str, number: u32) -> Option<Ticket> {
+        Tickets::open(&self.config, project).get(number).cloned()
+    }
+
+    /// Change the tickets of `project`: through the open screen's store when it is that project's, so the screen
+    /// shows the change at once.
+    fn with_tickets<T>(&mut self, project: &str, f: impl FnOnce(&mut Tickets) -> T) -> T {
+        match self.tk.store.as_mut().filter(|s| s.project() == project) {
+            Some(store) => f(store),
+            None => f(&mut Tickets::open(&self.config, project)),
+        }
+    }
+
+    /// Still New, with nobody else having moved it on while a stage was out? Otherwise say so: nothing goes on.
+    fn still_new(&mut self, project: &str, number: u32) -> bool {
+        let ok = self.ticket_on_disk(project, number).is_some_and(|t| t.state == State::New);
+        if !ok {
+            self.notify(format!("#{number} was changed meanwhile, so it wasn't handed over."));
+        }
+        ok
+    }
+
+    /// Nothing is handed over: the ticket stays New with why not on it, and a notice says the same.
+    fn not_handed(&mut self, project: &str, number: u32, squad: &Squad, kind: HandoverKind, says: &str, notice: String) {
+        if let Err(e) = self.with_tickets(project, |s| s.handover_failed(number, squad.id, kind, says)) {
+            self.report_squad_error(e);
+            return;
+        }
+        self.notify(notice);
+    }
+
+    fn after_commander(&mut self, project: &str, number: u32, squad: &'static Squad, check: Check) {
+        match squads::after_check(number, squad, &check) {
+            AfterCheck::Start => {
+                if self.still_new(project, number) {
+                    self.make_worktrees(project, number, squad);
+                }
+            }
+            AfterCheck::BackToNew { says, kind, notice } => self.not_handed(project, number, squad, kind, &says, notice),
+        }
+    }
+
+    /// A worktree for each git folder, off the UI thread (git can be slow on a big repository or a network folder);
+    /// the ticket shows "Making the worktree…" meanwhile.
+    fn make_worktrees(&mut self, project: &str, number: u32, squad: &'static Squad) {
+        let Some(t) = self.ticket_on_disk(project, number) else { return };
+        let git = self.git_program.clone();
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let _ = tx.send(Step::Worktrees(squads::prepare_worktrees(&git, &t.folders, number)));
+        });
+        self.begin_stage(project, number, squad, Stage::Worktrees, rx);
+    }
+
+    /// The worktrees are there: write the new leader on the ticket (Working) and start it in a platoon host with the
+    /// ticket as its first message, beside the ticket when its project's screen is still showing. A failure leaves
+    /// the ticket New with the reason; worktrees already made stay (the next try uses them again), and a leader is
+    /// only ever left written on a ticket when its session started.
+    fn after_worktrees(&mut self, project: &str, number: u32, squad: &'static Squad, made: Result<Vec<Worktree>, String>) {
+        let worktrees = match made {
             Ok(w) => w,
             Err(e) => {
-                self.notify(format!("Couldn't hand #{number} to the {} squad: {e}", squad.name));
+                let notice = format!("Couldn't hand #{number} to the {} squad: {e}", squad.name);
+                self.not_handed(project, number, squad, HandoverKind::NotStarted, &format!("Couldn't make the worktree: {e}"), notice);
                 return;
             }
         };
+        if !self.still_new(project, number) {
+            return;
+        }
         let session = squads::new_session_id();
         let leader = Leader { squad: squad.id.to_string(), session: session.clone(), started: usage::now() };
-        let Some(store) = self.tk.store.as_mut() else { return };
-        if let Err(e) = store.start_leader(number, &leader, &worktrees) {
+        if let Err(e) = self.with_tickets(project, |s| s.start_leader(number, &leader, &worktrees)) {
             self.report_squad_error(e);
             return;
         }
@@ -184,15 +403,21 @@ impl App {
         if self.refresh_leaders() {
             self.built.0 = u64::MAX;
         }
-        let Some(t) = self.ticket(number).cloned() else { return };
-        let body = self.tk.store.as_ref().map(|s| s.body(&t)).unwrap_or_default();
-        let project_name = self.projects.get(&project).map(|p| p.name.clone()).unwrap_or_default();
+        let Some(t) = self.ticket_on_disk(project, number) else { return };
+        let body = Tickets::open(&self.config, project).body(&t);
+        let project_name = self.projects.get(project).map(|p| p.name.clone()).unwrap_or_default();
         let first = squads::first_message(&t, &project_name, &body);
-        if self.launch_leader(number, Some(&first)) {
-            self.notify(format!("#{number} is with the {} squad now. ctrl+space goes back to the project.", squad.name));
-        } else if let Some(store) = self.tk.store.as_mut() {
-            // Only a New ticket is ever handed to a squad: that is what it goes back to.
-            let _ = store.forget_leader(number, &session, &State::New);
+        // Beside the ticket only if the user is still on that project's screen and not in another session.
+        let show = self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
+        match self.launch_leader_in(project, number, Some(&first), show) {
+            Ok(()) if show => self.notify(format!("#{number} is with the {} squad now. ctrl+space goes back to the project.", squad.name)),
+            Ok(()) => self.notify(format!("#{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
+            Err(e) => {
+                // Only a New ticket is ever handed to a squad: that is what it goes back to.
+                let _ = self.with_tickets(project, |s| s.forget_leader(number, &session, &State::New));
+                let notice = format!("Couldn't start the squad: {e}");
+                self.not_handed(project, number, squad, HandoverKind::NotStarted, &notice, notice.clone());
+            }
         }
     }
 
@@ -201,44 +426,68 @@ impl App {
         self.notify(format!("Couldn't save the ticket: {}", why.split(" (os error").next().unwrap_or(&why)));
     }
 
-    /// Start ticket `number`'s current leader in a platoon host and show it in the split view: a new session with
-    /// `first` as its first message, or (None) the same session resumed. The same squad flags either way, and never
-    /// `PLATOON_PROJECT`: a leader belongs to its ticket, not to the project.
+    /// Continue ticket `number`'s current leader (the open project's) in a platoon host, beside the ticket. False,
+    /// said in a notice, when it couldn't start.
     fn launch_leader(&mut self, number: u32, first: Option<&str>) -> bool {
-        let Some(t) = self.ticket(number).cloned() else { return false };
-        let Some(leader) = t.leader().cloned() else { return false };
+        let Some(project) = self.open_project.clone() else { return false };
+        match self.launch_leader_in(&project, number, first, true) {
+            Ok(()) => true,
+            Err(e) => {
+                self.notify(format!("Couldn't start the squad: {e}"));
+                false
+            }
+        }
+    }
+
+    /// Start ticket `number`'s current leader in a platoon host: a new session with `first` as its first message, or
+    /// (None) the same session resumed. The same squad flags either way, and never `PLATOON_PROJECT`: a leader
+    /// belongs to its ticket, not to the project. `show`: in the split view, beside the ticket.
+    fn launch_leader_in(&mut self, project: &str, number: u32, first: Option<&str>, show: bool) -> Result<(), String> {
+        let t = self.ticket_on_disk(project, number).ok_or_else(|| format!("#{number} isn't there any more"))?;
+        let leader = t.leader().cloned().ok_or_else(|| format!("#{number} has no squad"))?;
         let squad = squads::find(&leader.squad).unwrap_or(&squads::CODING);
         let folders = t.work_folders();
-        let Some(dir) = folders.first().cloned() else {
-            self.notify(format!("#{number} has no folder to work in."));
-            return false;
-        };
+        let dir = folders.first().cloned().ok_or_else(|| format!("#{number} has no folder to work in"))?;
         if !Path::new(&dir).is_dir() {
-            self.notify(format!("Can't start the squad: {} doesn't exist any more.", dirs::tilde(&dir, &self.home)));
-            return false;
+            return Err(format!("{} doesn't exist any more", dirs::tilde(&dir, &self.home)));
         }
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
         let args = squads::leader_args(squad, &self.config, &exe, &leader.session, &squads::session_name(&t), &folders[1..], first);
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        self.tk.open = Some(number);
-        self.sq.split = Some(number);
-        let (rows, cols) = self.pty_size();
-        match host::launch(&self.program, &dir, &refs, &[], rows, cols) {
-            Ok((info, child)) => {
-                let pid = info.claude_pid;
-                self.spawned.push(child);
-                self.hosts.push(info);
-                self.attach(pid);
-                if !matches!(self.mode, Mode::Attached(_)) {
-                    self.sq.split = None;
-                }
-                true
+        // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
+        #[cfg(test)]
+        {
+            let _ = (args, show);
+            self.sq.launched.push(number);
+            Ok(())
+        }
+        #[cfg(not(test))]
+        {
+            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+            if show {
+                self.tk.open = Some(number);
+                self.sq.split = Some(number);
             }
-            Err(e) => {
-                self.sq.split = None;
-                self.mode = Mode::List;
-                self.notify(format!("Couldn't start the squad: {e}"));
-                false
+            let (rows, cols) = self.pty_size();
+            match host::launch(&self.program, &dir, &refs, &[], rows, cols) {
+                Ok((info, child)) => {
+                    let pid = info.claude_pid;
+                    self.spawned.push(child);
+                    self.hosts.push(info);
+                    if show {
+                        self.attach(pid);
+                        if !matches!(self.mode, Mode::Attached(_)) {
+                            self.sq.split = None;
+                        }
+                    }
+                    Ok(())
+                }
+                Err(e) => {
+                    if show {
+                        self.sq.split = None;
+                        self.mode = Mode::List;
+                    }
+                    Err(e)
+                }
             }
         }
     }

@@ -21,6 +21,19 @@ use std::{
 };
 
 const FAKE: &str = r#"#!/bin/sh
+if [ "$1" = "-p" ]; then
+  # The squad commander's `claude -p` call: written down, and answered from $FAKE_DIR/verdict (else "it fits").
+  mkdir -p "$FAKE_DIR/calls"
+  k=$(( $(ls "$FAKE_DIR/calls" | grep -c '\.stdin$') + 1 ))
+  for a in "$@"; do printf '%s\n' "$a"; done > "$FAKE_DIR/calls/$k.argv"
+  env > "$FAKE_DIR/calls/$k.env"
+  cat > "$FAKE_DIR/calls/$k.stdin"
+  text='{"fits":true,"reason":"Coding work in a git repository."}'
+  [ -e "$FAKE_DIR/verdict" ] && text=$(cat "$FAKE_DIR/verdict")
+  esc=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g')
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":{"input_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20}}' "$esc"
+  exit 0
+fi
 mkdir -p "$FAKE_DIR/started"
 n=$(( $(ls "$FAKE_DIR/started" | wc -l) + 1 ))
 d="$FAKE_DIR/started/$n"
@@ -90,7 +103,8 @@ impl Lab {
         let script = lab.base.join("fake-claude.sh");
         fs::write(&script, FAKE).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::write(lab.config.join("settings.json"), r#"{"auto_archive_days":0}"#).unwrap();
+        // The smart features on: the squad commander is one of them (and has no switch of its own).
+        fs::write(lab.config.join("settings.json"), r#"{"auto_archive_days":0,"tokens_enabled":true,"tokens_asked":true}"#).unwrap();
         // A temp git repository with one commit: the only repository these tests ever touch.
         fs::write(lab.shop.join("README"), "a shop\n").unwrap();
         git(&lab.shop, &["init", "-q"]);
@@ -117,8 +131,37 @@ impl Lab {
             ("FAKE_DIR", self.fake.to_string_lossy().into()),
             // As if platoon had been started from inside a Claude Code session, in a project.
             ("CLAUDE_CODE_CHILD_SESSION", "1".into()),
+            ("CLAUDECODE", "1".into()),
+            ("CLAUDE_CODE_SESSION_ID", "caller-session".into()),
+            ("CLAUDE_CODE_MESSAGING_SOCKET", "/tmp/caller.sock".into()),
+            ("CLAUDE_CODE_MESSAGING_TOKEN", "caller-token".into()),
+            ("CLAUDE_PID", "4242".into()),
+            ("AI_AGENT", "claude-code_agent".into()),
+            // ... and a setting of the user's own, which must be kept.
+            ("CLAUDE_CODE_USE_BEDROCK", "0".into()),
             ("PLATOON_PROJECT", "pweb".into()),
         ]
+    }
+
+    /// The commander's calls so far.
+    fn checks(&self) -> usize {
+        fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+    }
+
+    fn check_file(&self, k: usize, what: &str) -> String {
+        fs::read_to_string(self.fake.join("calls").join(format!("{k}.{what}"))).unwrap_or_default()
+    }
+
+    /// Today, in the local calendar, as the ledger keys its days.
+    fn today(&self) -> String {
+        let out = Command::new("date").arg("+%F").output().unwrap();
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    }
+
+    /// Put this many tokens on today's count, the way a day of real calls would.
+    fn spend_the_day(&self, tokens: u64) {
+        let day = json!({"usage": {"input": tokens, "cache_creation": 0, "cache_read": 0, "output": 0}, "cost_usd": 0.0, "calls": 1, "failed": 0, "features": {}});
+        fs::write(self.cache.join("ai-usage.json"), json!({"version": 1, "days": {self.today(): day}}).to_string()).unwrap();
     }
 
     /// Ticket #1 "Basket" in the shop (a git repository) and the docs folder (not one), and whatever else is given.
@@ -271,6 +314,8 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let gate = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap();
     assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
     assert!(stop.ends_with(" hook squad-stop") && gate.ends_with(" hook squad-gate"), "{settings}");
+    assert!(settings["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-notify"), "{settings}");
+    assert!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-tool"), "{settings}");
     assert!(stop.starts_with(BIN) || stop.starts_with(&format!("'{BIN}")), "the platoon that is running: {stop}");
     let first = args.last().unwrap();
     assert!(first.starts_with("Ticket #1: Basket\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket page."), "{first}");
@@ -278,7 +323,22 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(!first.contains("Sell socks"), "the notes arrive separately");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let env = lab.rec(1, "env");
-    assert!(!env.contains("CLAUDE_CODE_CHILD_SESSION"), "never passed on: {env}");
+    for marker in ["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE=", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PID", "AI_AGENT"] {
+        assert!(!env.contains(marker), "the calling session's {marker} is never passed on: {env}");
+    }
+    assert!(env.lines().any(|l| l == "CLAUDE_CODE_USE_BEDROCK=0") && env.lines().any(|l| l.starts_with("CLAUDE_CONFIG_DIR=")), "the user's own settings are: {env}");
+    // The leader may hand work on, read and run things; it never edits a file itself.
+    assert_eq!(agents["leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]));
+    // The commander was asked first: one `claude -p` call on Haiku, with the ticket and the squad, and the same
+    // markers taken away.
+    assert_eq!(lab.checks(), 1);
+    let argv = lab.check_file(1, "argv");
+    assert!(argv.contains("\n--model\nhaiku\n"), "{argv}");
+    let asked = lab.check_file(1, "stdin");
+    assert!(asked.starts_with("The squad: Coding\n") && asked.contains("The ticket: #1 Basket") && asked.contains("A basket page."), "{asked}");
+    assert!(asked.contains(&format!("- {} (in a git repository)", lab.shop.display())) && asked.contains(&format!("- {} (not in a git repository)", lab.docs.display())), "{asked}");
+    let check_env = lab.check_file(1, "env");
+    assert!(!check_env.contains("CLAUDE_CODE_SESSION_ID") && !check_env.contains("CLAUDE_CODE_CHILD_SESSION") && check_env.contains("CLAUDE_CODE_USE_BEDROCK=0"), "{check_env}");
     assert!(!env.lines().any(|l| l.starts_with("PLATOON_PROJECT=")), "a leader never joins the project: {env}");
     assert_eq!(fs::read(lab.config.join("projects.json")).unwrap(), projects_before, "projects.json is untouched");
 
@@ -335,6 +395,21 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     // The gate, run as the settings give it: a push is refused until the user says so; the rest runs.
     assert_eq!(lab.run_hook_command(&gate, &bash("git status")), 0);
     assert_eq!(lab.run_hook_command(&gate, &bash("cd /w && git -C x push origin HEAD")), 2);
+    // Stuck on Claude's permission prompt: Waiting on you, said on the ticket beside the session; the next tool that
+    // runs (the user answered) makes it Working again. Run as the settings give them.
+    let notify = settings["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let tool = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let notice = json!({"session_id": sid, "hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash", "cwd": "/tmp", "transcript_path": "/x.jsonl"});
+    assert_eq!(lab.run_hook_command(&notify, &notice), 0);
+    assert_eq!((lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()), (Some("waiting"), Some("Waiting for your OK on a command")));
+    t.wait_for_all(&["Waiting on you", "Waiting for your OK on a command"]);
+    let idle = json!({"session_id": sid, "hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
+    assert_eq!(lab.run_hook_command(&notify, &idle), 0);
+    let ran = json!({"session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test"}, "tool_response": {}});
+    assert_eq!(lab.run_hook_command(&tool, &ran), 0);
+    assert_eq!(lab.ticket_now()["state"], "working");
+    assert!(lab.ticket_now().get("reason").is_none() && lab.ticket_now().get("permission").is_none());
+    t.wait_gone("Waiting for your OK on a command");
     // The leader's turn ends with members still running: Working, and the ticket side shows it live.
     assert_eq!(lab.run_hook_command(&stop, &stop_input("Handed it to the builder.\nSQUAD: done", json!([{"id": "b1"}]))), 0);
     assert_eq!(lab.ticket_now()["state"], "working");
@@ -462,6 +537,97 @@ fn cancelling_a_ticket_whose_squad_runs_asks_and_stops_only_that_session() {
     assert!(alive(bystander.id()), "nothing else is signalled");
     let _ = bystander.kill();
     let _ = bystander.wait();
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn when_the_commander_says_no_the_ticket_stays_new_with_why_and_a_second_a_can_hand_it_anyway() {
+    let lab = Lab::new("sq-no");
+    lab.ticket(json!({}));
+    fs::write(lab.fake.join("verdict"), r#"{"fits":false,"reason":"This is docs work; the Coding squad writes code."}"#).unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    lab.open_tickets(&mut t);
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "enter hand it over"]);
+    t.send(b"\r");
+    t.wait_for_flat("The commander says the Coding squad doesn't fit #1: This is docs work");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["handover"]["says"].as_str(), tk["handover"]["kind"].as_str()), (Some("new"), Some("This is docs work; the Coding squad writes code."), Some("refused")), "{tk}");
+    assert!(tk.get("leaders").is_none(), "{tk}");
+    assert_eq!(lab.started(), 0);
+    assert!(!lab.base.join("shop-worktrees").exists(), "nothing made");
+    // On the ticket's own screen.
+    t.send(b"\r");
+    t.wait_for_all(&["Commander", "This is docs work; the Coding squad writes code."]);
+    // The same squad again: asked, and yes hands it over without a second check.
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "enter hand it over"]);
+    t.send(b"\r");
+    t.wait_for_all(&["The commander said this squad doesn't fit. Hand it anyway?", "y hand it over"]);
+    t.send(b"y");
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+    assert_eq!(lab.checks(), 1, "overruled: not checked again");
+    let tk = lab.ticket_now();
+    assert_eq!(tk["state"], "working");
+    assert!(tk.get("handover").is_none(), "{tk}");
+    assert_eq!(lab.started(), 1);
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn when_the_session_limit_is_reached_nothing_is_handed_over() {
+    let lab = Lab::new("sq-limit");
+    lab.ticket(json!({}));
+    lab.spend_the_day(600_000);
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    lab.open_tickets(&mut t);
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "enter hand it over"]);
+    t.send(b"\r");
+    t.wait_for_flat("Session limit has been reached. #1 wasn't handed over.");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["handover"]["says"].as_str()), (Some("new"), Some("Session limit has been reached")), "{tk}");
+    assert_eq!((lab.checks(), lab.started()), (0, 0), "no call, no session");
+    assert!(!lab.base.join("shop-worktrees").exists(), "no worktree");
+    t.send(b"\r");
+    t.wait_for_all(&["Commander", "Session limit has been reached"]);
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
+    let lab = Lab::new("sq-slowgit");
+    lab.ticket(json!({}));
+    // A git that takes its time to make a worktree (and is the real one otherwise), first on the PATH.
+    let bin = lab.base.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let real = String::from_utf8(Command::new("sh").args(["-c", "command -v git"]).output().unwrap().stdout).unwrap().trim().to_string();
+    fs::write(bin.join("git"), format!("#!/bin/sh\ncase \"$*\" in *'worktree add'*) touch '{}'; sleep 3;; esac\nexec '{real}' \"$@\"\n", lab.fake.join("git-slow").display())).unwrap();
+    fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
+    let mut env = lab.env();
+    env.push(("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())));
+    let mut t = Term::spawn(&[], &env, &lab.work, 40, 130);
+    lab.open_tickets(&mut t);
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "enter hand it over"]);
+    t.send(b"\r");
+    until("the slow git to start", || lab.fake.join("git-slow").exists());
+    // While git sleeps: the ticket says what is happening, and keys are answered at once.
+    t.wait_for("Making the worktree…");
+    t.send(b"s");
+    t.wait_for_flat("#1: Making the worktree… Wait a moment.");
+    assert_eq!(lab.ticket_now()["state"], "new", "nothing written until the leader starts");
+    assert_eq!(lab.started(), 0);
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+    assert!(lab.base.join("shop-worktrees/ticket-1/README").exists());
+    assert_eq!(lab.ticket_now()["state"], "working");
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
     t.send(b"q");
     t.wait_exit();
 }

@@ -265,3 +265,193 @@ fn the_split_puts_the_ticket_on_the_left_and_the_session_on_the_right_or_one_lin
     assert_eq!(n.bar, Rect::new(1, 28, 97, 1));
     assert_eq!(crate::app::SPLIT_MIN_WIDTH, 100);
 }
+
+// ---- the commander, the worktrees and the leader: off the UI thread ------------------------------------------------
+
+/// A project "Web shop" with ticket #1 "Basket" in `folder`, its Tickets pane focused, the smart features on (with
+/// `spent` tokens already used today, of the default 500,000) and calls going to a fake `claude`.
+fn with_commander(name: &str, spent: u64, folder: &std::path::Path) -> (World, App, String, crate::testkit::AiFake) {
+    let w = World::new(name);
+    let mut s = crate::settings::Settings { tokens_enabled: true, tokens_asked: true, ..Default::default() };
+    s.auto_archive_days = 0;
+    crate::settings::save(&w.config, &s).unwrap();
+    if spent > 0 {
+        let used = crate::ledger::Usage { input: spent, ..Default::default() };
+        crate::ledger::Ledger::open(&w.cache).record_call(crate::usage::now(), "names", &used, 0.0, true).unwrap();
+    }
+    w.transcript("user-1", "/tmp", "make a basket page", 10);
+    let mut app = w.app();
+    let fake = crate::testkit::AiFake::new(name);
+    app.set_ai_program_for_test(&fake.script);
+    let id = app.projects.create("Web shop").unwrap();
+    app.projects.assign("user-1", Some(&id)).unwrap();
+    std::fs::create_dir_all(folder).unwrap();
+    Tickets::open(&w.config, &id).add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() }).unwrap();
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Tab);
+    assert_eq!(app.pane, Pane::Tickets);
+    (w, app, id, fake)
+}
+
+fn hand(app: &mut App) {
+    key(app, KeyCode::Char('a'));
+    assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
+    key(app, KeyCode::Enter);
+}
+
+#[test]
+fn the_commander_checks_off_the_ui_thread_and_a_yes_starts_the_leader() {
+    let base = std::env::temp_dir().join(format!("platoon-sq-yes-{}", std::process::id()));
+    let (w, mut app, id, fake) = with_commander("sq-yes", 0, &base.join("docs"));
+    fake.slow(0.6);
+    fake.reply_default(r#"{"fits":true,"reason":"Coding work."}"#);
+    hand(&mut app);
+    // Straight back to the screen: the ticket shows Working, "Commander is checking…", and nothing is on disk yet.
+    assert!(matches!(app.mode, Mode::List));
+    let t = app.ticket(1).unwrap();
+    assert_eq!((t.state.clone(), t.busy.as_deref()), (State::Working, Some("Commander is checking…")));
+    assert_eq!(Tickets::open(&w.config, &id).get(1).unwrap().state, State::New, "the file says New until a leader starts");
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("#1 Basket") && f.contains("Commander is checking…"), "{f}");
+    // On its own screen: Working, and what is happening.
+    key(&mut app, KeyCode::Enter);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("State Working · Commander is checking…"), "{f}");
+    assert!(app.squads_busy());
+    // What would change it waits meanwhile.
+    key(&mut app, KeyCode::Char('s'));
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(app.active_notice(), Some("#1: Commander is checking… Wait a moment."));
+    app.refresh_until_for_test(20, "the leader to start", |a| !a.sq.launched.is_empty());
+    assert_eq!(app.sq.launched, [1]);
+    let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
+    assert_eq!((t.state, t.leaders.len(), t.handover), (State::Working, 1, None));
+    assert!(!app.squads_busy() && app.ticket(1).unwrap().busy.is_none());
+    // One call, on Haiku, as the user asked for it, with the ticket and the squad in it.
+    assert_eq!(fake.calls(), 1);
+    let argv = fake.argv(1);
+    assert_eq!(argv[argv.iter().position(|a| a == "--model").unwrap() + 1], "haiku");
+    assert!(fake.stdin(1).starts_with("The squad: Coding\n") && fake.stdin(1).contains("The ticket: #1 Basket"), "{}", fake.stdin(1));
+    assert!(fake.has_arg(1, &crate::squads::commander_system(crate::squads::COMMANDER_GUIDANCE)));
+    let day = crate::ledger::Ledger::open(app.cache_for_test()).load();
+    let today = day.days.values().next().unwrap();
+    assert_eq!(today.features.get(crate::squads::COMMANDER_FEATURE).map(|f| f.calls), Some(1), "its tokens are counted");
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_no_puts_it_back_to_new_with_the_reason_and_the_same_squad_again_asks_to_hand_it_anyway() {
+    let base = std::env::temp_dir().join(format!("platoon-sq-no-{}", std::process::id()));
+    let (w, mut app, id, fake) = with_commander("sq-no", 0, &base.join("docs"));
+    fake.reply_default(r#"{"fits":false,"reason":"This is docs work; the Coding squad writes code."}"#);
+    hand(&mut app);
+    app.refresh_until_for_test(20, "the commander's answer", |a| !a.squads_busy());
+    let t = app.ticket(1).cloned().unwrap();
+    assert_eq!(t.state, State::New);
+    assert_eq!(t.handover.as_ref().map(|h| h.says.as_str()), Some("This is docs work; the Coding squad writes code."));
+    assert!(app.sq.launched.is_empty() && t.leaders.is_empty());
+    assert!(app.active_notice().unwrap().starts_with("The commander says the Coding squad doesn't fit #1: This is docs work"), "{:?}", app.active_notice());
+    key(&mut app, KeyCode::Enter);
+    let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("State New") && f.contains("Commander This is docs work; the Coding squad writes code."), "{f}");
+    // The same squad again: asked, not checked again.
+    hand(&mut app);
+    assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::HandAnyway { number: 1, .. })));
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("The commander said this squad doesn't fit. Hand it anyway?") && f.contains("y hand it over"), "{f}");
+    key(&mut app, KeyCode::Char('n'));
+    assert!(matches!(app.mode, Mode::List) && app.sq.launched.is_empty());
+    hand(&mut app);
+    key(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.ticket(1).unwrap().busy.as_deref(), Some("Making the worktree…"));
+    app.refresh_until_for_test(20, "the leader to start", |a| !a.sq.launched.is_empty());
+    assert_eq!(fake.calls(), 1, "overruled: no second check");
+    let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
+    assert_eq!((t.state, t.leaders.len(), t.handover), (State::Working, 1, None));
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn when_the_commander_cant_run_nothing_is_handed_over_and_the_ticket_says_why() {
+    let base = std::env::temp_dir().join(format!("platoon-sq-limit-{}", std::process::id()));
+    // A git repository of the test's own: no worktree may be made of it.
+    let repo = base.join("shop");
+    std::fs::create_dir_all(&repo).unwrap();
+    std::fs::write(repo.join("README"), "x\n").unwrap();
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+    };
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "first"]);
+    // Today's tokens are used up: the gate says no before any call.
+    let (w, mut app, id, fake) = with_commander("sq-limit", 600_000, &repo);
+    hand(&mut app);
+    assert!(!app.squads_busy(), "no call was even started");
+    let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
+    assert_eq!(t.state, State::New);
+    assert_eq!(t.handover.as_ref().map(|h| h.says.as_str()), Some("Session limit has been reached"));
+    assert!(app.active_notice().unwrap().starts_with("Session limit has been reached. #1 wasn't handed over."), "{:?}", app.active_notice());
+    assert_eq!(fake.calls(), 0);
+    assert!(app.sq.launched.is_empty() && t.leaders.is_empty());
+    assert!(!base.join("shop-worktrees").exists(), "no worktree");
+    // A refusal isn't overruled with "Hand it anyway?": picking the squad again checks again.
+    hand(&mut app);
+    assert!(matches!(app.mode, Mode::List));
+    // The AI features switched off: said as that.
+    let mut s = crate::settings::load(&w.config).0;
+    s.tokens_enabled = false;
+    crate::settings::save(&w.config, &s).unwrap();
+    app.refresh_for_test();
+    hand(&mut app);
+    assert_eq!(app.ticket(1).unwrap().handover.as_ref().map(|h| h.says.as_str()), Some("AI features are switched off"));
+    // The call fails: said plainly, nothing handed over.
+    s.tokens_enabled = true;
+    s.ai_daily_tokens = 5_000_000;
+    crate::settings::save(&w.config, &s).unwrap();
+    app.refresh_for_test();
+    fake.fail(Some("boom"));
+    hand(&mut app);
+    app.refresh_until_for_test(20, "the failed check", |a| !a.squads_busy());
+    let t = app.ticket(1).cloned().unwrap();
+    assert_eq!(t.state, State::New);
+    assert!(t.handover.as_ref().unwrap().says.starts_with("The commander's check failed ("), "{t:?}");
+    assert!(app.sq.launched.is_empty() && !base.join("shop-worktrees").exists());
+    let _ = std::fs::remove_dir_all(&base);
+}
+
+#[test]
+fn a_worktree_that_cant_be_made_puts_the_ticket_back_to_new_with_the_reason() {
+    let base = std::env::temp_dir().join(format!("platoon-sq-wt-{}", std::process::id()));
+    let (w, mut app, id, fake) = with_commander("sq-wt", 0, &base.join("docs"));
+    fake.reply_default(r#"{"fits":true,"reason":"Coding work."}"#);
+    // A git that says no to everything but finding the repository.
+    let git = base.join("fake-git");
+    std::fs::write(&git, "#!/bin/sh\ncase \"$*\" in *rev-parse\\ --show-toplevel*) echo /nowhere/shop; exit 0;; *worktree\\ list*) exit 0;; esac\necho 'fatal: not today' >&2\nexit 128\n").unwrap();
+    std::fs::set_permissions(&git, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    app.set_git_program_for_test(&git.to_string_lossy());
+    hand(&mut app);
+    app.refresh_until_for_test(20, "the worktree step", |a| !a.squads_busy());
+    let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
+    assert_eq!((t.state.clone(), t.leaders.len()), (State::New, 0), "{t:?}");
+    let h = t.handover.unwrap();
+    assert_eq!(h.kind, crate::tickets::HandoverKind::NotStarted);
+    assert!(h.says.starts_with("Couldn't make the worktree: "), "{}", h.says);
+    assert!(app.active_notice().unwrap().starts_with("Couldn't hand #1 to the Coding squad: "), "{:?}", app.active_notice());
+    assert!(app.sq.launched.is_empty());
+    let _ = std::fs::remove_dir_all(&base);
+}

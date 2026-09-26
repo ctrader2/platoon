@@ -601,6 +601,10 @@ pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_how:
 /// state has no column of its own (a narrow pane), so a row with nothing else to say there says its state, unless
 /// that is plain New.
 fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
+    // Being handed to a squad: what is happening says the most.
+    if let Some(busy) = &t.busy {
+        return (busy.clone(), false);
+    }
     if t.state.closed() {
         return (if with_state { t.state.label().to_string() } else { String::new() }, false);
     }
@@ -733,6 +737,13 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     if !x.reason.is_empty() {
         for (i, l) in wrap(&x.reason, w.saturating_sub(LABEL)).into_iter().enumerate() {
             head.push(Line::from(vec![label(if i == 0 { "Squad says" } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
+        }
+    }
+    // Why the last hand-over to a squad didn't happen: the commander's word, or what went wrong after it.
+    if let Some(h) = x.handover.as_ref().filter(|_| x.busy.is_none()) {
+        let who = if h.kind == tickets::HandoverKind::NotStarted { "Not started" } else { "Commander" };
+        for (i, l) in wrap(&h.says, w.saturating_sub(LABEL)).into_iter().enumerate() {
+            head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
     }
     if let Some(l) = x.leader() {
@@ -2812,6 +2823,12 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 if *sessions == 1 { "" } else { "s" }
             ),
             "delete",
+        ),
+        Confirm::HandAnyway { number, title, says, .. } => (
+            "hand it anyway",
+            "The commander said this squad doesn't fit. Hand it anyway?".to_string(),
+            format!("#{number} {title}. The commander said: {says}"),
+            "hand it over",
         ),
         Confirm::StopSquad { number, title, .. } => (
             "stop the squad",

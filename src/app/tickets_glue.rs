@@ -153,6 +153,8 @@ impl App {
         if self.tk.open.is_some_and(|n| self.ticket(n).is_none()) {
             self.tk.open = None;
         }
+        // Tickets being handed to a squad show Working, with what is happening (a store opened again forgets).
+        self.show_starting();
     }
 
     /// Give a pane of the project's screen the focus. The left column remembers which of its two was used last.
@@ -204,6 +206,13 @@ impl App {
 
     /// The keys that act on one ticket, the same on its screen and on its row.
     fn ticket_key(&mut self, number: u32, key: KeyEvent) {
+        // While it is being handed to a squad, what would change that waits.
+        if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone()) {
+            if matches!(key.code, KeyCode::Char('s' | 'f' | 'a' | 'p')) {
+                self.notify(format!("#{number}: {busy} Wait a moment."));
+                return;
+            }
+        }
         match key.code {
             KeyCode::Char('e') => self.edit_ticket(number),
             KeyCode::Char('r') => self.open_name_box(NamePurpose::TicketTitle(number)),

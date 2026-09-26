@@ -267,6 +267,9 @@ pub struct State {
     pub written: BTreeMap<String, String>,
     /// Per session, how many of its substantive messages an update has already read.
     pub seen: BTreeMap<String, usize>,
+    /// Per ticket number, a hash of the squad's result an update has already been given (so each is sent once;
+    /// a ticket done again with a new result is sent again).
+    pub results: BTreeMap<String, String>,
 }
 
 pub fn state_path(config: &Path, id: &str) -> PathBuf {
@@ -303,7 +306,12 @@ impl State {
             .and_then(Value::as_object)
             .map(|s| s.iter().filter_map(|(k, v)| Some((k.clone(), v.get("seen")?.as_u64()? as usize))).collect())
             .unwrap_or_default();
-        State { last_update_at: o.get("last_update_at").and_then(Value::as_u64).unwrap_or(0), written, seen }
+        let results = o
+            .get("ticket_results")
+            .and_then(Value::as_object)
+            .map(|r| r.iter().filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string()))).collect())
+            .unwrap_or_default();
+        State { last_update_at: o.get("last_update_at").and_then(Value::as_u64).unwrap_or(0), written, seen, results }
     }
 
     /// Save, keeping anything else the file holds (another version's keys).
@@ -318,6 +326,7 @@ impl State {
         root.insert("written".into(), json!(self.written));
         let sessions: Map<String, Value> = self.seen.iter().map(|(k, n)| (k.clone(), json!({"seen": n}))).collect();
         root.insert("sessions".into(), Value::Object(sessions));
+        root.insert("ticket_results".into(), json!(self.results));
         crate::projects::write_atomic(&path, &serde_json::to_string(&Value::Object(root)).unwrap_or_default())
     }
 }
@@ -337,16 +346,63 @@ pub struct SessionMaterial {
     pub first_read: bool,
 }
 
+/// A squad's result for a ticket that went Done: what the squad reported at the end, and nothing else of its
+/// conversation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TicketResult {
+    /// "Ticket #N (<squad> squad)".
+    pub label: String,
+    /// The result, cut to `RESULT_IN_PROMPT`.
+    pub text: String,
+}
+
+/// The most of one ticket's result that is sent, in characters.
+pub const RESULT_IN_PROMPT: usize = 3000;
+
+/// How a ticket's result is called in the request.
+pub fn result_label(number: u32, squad: &str) -> String {
+    format!("Ticket #{number} ({squad} squad)")
+}
+
+/// A Done ticket with a result, as the notes helper finds it: its number, its squad's name, the result.
+pub struct DoneTicket {
+    pub number: u32,
+    pub squad: String,
+    pub result: String,
+}
+
+/// The results not yet given to an update (a result already sent, word for word, is not sent again), and what the
+/// state records once they have been read.
+pub fn results_due(state: &State, done: &[DoneTicket]) -> (Vec<TicketResult>, BTreeMap<String, String>) {
+    let (mut out, mut sent) = (Vec::new(), BTreeMap::new());
+    for d in done {
+        let text = d.result.trim();
+        if text.is_empty() {
+            continue;
+        }
+        let key = d.number.to_string();
+        let h = crate::instructions::hash(text);
+        if state.results.get(&key) == Some(&h) {
+            continue;
+        }
+        out.push(TicketResult { label: result_label(d.number, &d.squad), text: cut(text, RESULT_IN_PROMPT) });
+        sent.insert(key, h);
+    }
+    (out, sent)
+}
+
 /// Everything one update is about.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Material {
     pub project: String,
     pub sessions: Vec<SessionMaterial>,
+    /// Results of tickets that went Done since the last update.
+    pub results: Vec<TicketResult>,
 }
 
 impl Material {
     pub fn is_empty(&self) -> bool {
-        self.sessions.iter().all(|s| s.messages.is_empty() && s.reply.is_none())
+        self.sessions.iter().all(|s| s.messages.is_empty() && s.reply.is_none()) && self.results.is_empty()
     }
 }
 
@@ -454,7 +510,9 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
             t.push('\n');
         }
     }
-    t.push_str("New in this project's conversations since the last update:\n\n");
+    if !m.sessions.is_empty() {
+        t.push_str("New in this project's conversations since the last update:\n\n");
+    }
     for (i, s) in m.sessions.iter().enumerate() {
         t.push_str(&format!("[{}] folder: {}{}\n", i + 1, s.folder, if s.first_read { " (new to the project: read in full this once)" } else { "" }));
         if !s.messages.is_empty() {
@@ -475,6 +533,21 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
             }
         }
         t.push('\n');
+    }
+    if !m.results.is_empty() {
+        t.push_str("Tickets finished since the last update (what the squad that did each one reported at the end):\n\n");
+        for r in &m.results {
+            t.push_str(&format!("{}:\n", r.label));
+            // Set in like a reply, so no line of it can pass for a heading of the notes.
+            for line in r.text.lines() {
+                if line.trim().is_empty() {
+                    t.push('\n');
+                } else {
+                    t.push_str(&format!("  {line}\n"));
+                }
+            }
+            t.push('\n');
+        }
     }
     t
 }
@@ -1418,6 +1491,7 @@ My own notes, in my own words.
                 SessionMaterial { folder: "shop".into(), messages: vec!["Add a basket page".into()], reply: Some("I added it.".into()), first_read: false },
                 SessionMaterial { folder: "api".into(), messages: vec!["Write the orders endpoint".into()], reply: None, first_read: true },
             ],
+            results: vec![],
         };
         let p = prompt(&doc, &state, &m);
         assert!(p.starts_with("Project: Web shop"), "{p}");
@@ -1556,7 +1630,7 @@ My own notes, in my own words.
         let doc = Doc::parse("# Summary\n\nA shop.\n\n# Open questions\n\n- Mine?\n\n# Decisions\n\n");
         // What the request says, with the instructions in front of it: with the built-in guidance they are the same
         // words as before they moved into the system prompt.
-        let p = format!("{}\n\n{}", system(), prompt(&doc, &State::default(), &Material { project: "P".into(), sessions: vec![] }));
+        let p = format!("{}\n\n{}", system(), prompt(&doc, &State::default(), &Material { project: "P".into(), sessions: vec![], results: vec![] }));
         for want in [
             "It is not a to-do list",
             "## subheadings",
@@ -1576,7 +1650,7 @@ My own notes, in my own words.
             assert!(p.contains(want), "{want:?} missing from:\n{p}");
         }
         assert!(!p.contains("in whole sentences"), "the old wall-of-prose rule is gone");
-        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &State::default(), &Material { project: "P".into(), sessions: vec![] });
+        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &State::default(), &Material { project: "P".into(), sessions: vec![], results: vec![] });
         assert!(p.contains("# Open questions (as it reads now)\n(there is none yet"), "{p}");
         assert!(system().contains("\"open_questions\""));
     }
@@ -1587,7 +1661,7 @@ My own notes, in my own words.
         for n in 0..30 {
             big.push_str(&format!("# Section {n}\n\n{}\n\n", "y".repeat(20_000)));
         }
-        let m = Material { project: "P".into(), sessions: vec![SessionMaterial { folder: "f".into(), messages: vec![], reply: None, first_read: false }] };
+        let m = Material { project: "P".into(), sessions: vec![SessionMaterial { folder: "f".into(), messages: vec![], reply: None, first_read: false }], results: vec![] };
         let p = prompt(&Doc::parse(&big), &State::default(), &m);
         assert!(p.len() < 25_000, "the prompt is bounded: {}", p.len());
         assert!(p.contains('…'));
@@ -1670,5 +1744,35 @@ My own notes, in my own words.
         // And the other way round: what platoon may call its own is what is left once the user's lines are out.
         assert_eq!(our_lines(body, &["The user wrote this.".to_string()]), "platoon wrote this.\nplatoon wrote this too.");
         assert_eq!(our_lines("only theirs\n", &["only theirs".to_string()]), "");
+    }
+
+    #[test]
+    fn a_tickets_result_is_one_more_piece_of_material_labelled_and_sent_once() {
+        let done = |n: u32, text: &str| DoneTicket { number: n, squad: "Coding".into(), result: text.into() };
+        let mut state = State::default();
+        let (due, sent) = results_due(&state, &[done(3, "Added the basket page on ticket/3.\nTests pass."), done(4, "  \n")]);
+        assert_eq!(due, [TicketResult { label: "Ticket #3 (Coding squad)".into(), text: "Added the basket page on ticket/3.\nTests pass.".into() }]);
+        assert_eq!(sent.keys().collect::<Vec<_>>(), ["3"], "an empty result is nothing to send");
+        let m = Material { project: "Web".into(), sessions: vec![], results: due.clone() };
+        assert!(!m.is_empty(), "a result alone is worth an update");
+        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &state, &m);
+        assert!(p.contains("Ticket #3 (Coding squad):\n  Added the basket page on ticket/3.\n  Tests pass.\n"), "{p}");
+        assert!(!p.contains("New in this project's conversations"), "no conversations to speak of: {p}");
+        // Once read, it isn't sent again; a new result for the same ticket is.
+        state.results.extend(sent);
+        assert!(results_due(&state, &[done(3, "Added the basket page on ticket/3.\nTests pass.")]).0.is_empty());
+        assert_eq!(results_due(&state, &[done(3, "Reworked: now with a total.")]).0.len(), 1);
+        // A result can't pass for a heading of the notes, and a long one is cut.
+        let (due, _) = results_due(&State::default(), &[done(5, &format!("# Not a heading\n{}", "x".repeat(RESULT_IN_PROMPT + 50)))]);
+        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &State::default(), &Material { project: "Web".into(), sessions: vec![], results: due });
+        assert!(p.contains("\n  # Not a heading\n") && !p.contains("\n# Not a heading"), "{p}");
+        assert!(p.contains('…'));
+        // The state keeps what was sent, and keeps it across a save.
+        let d = std::env::temp_dir().join(format!("platoon-nu-results-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("projects/p1")).unwrap();
+        state.save(&d, "p1").unwrap();
+        assert_eq!(State::load(&d, "p1").results, state.results);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

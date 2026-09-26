@@ -88,7 +88,7 @@ pub const FEATURES: &[Feature] = &[
 /// Work that has no switch of its own, with what `platoon tokens` calls it. It only ever runs because the person
 /// asked for it then and there, so there is nothing to switch off; it obeys every other gate (the master switch,
 /// the daily limit, a back-off) and its spend is in the ledger like everything else.
-pub const SWITCHLESS: &[(&str, &str)] = &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off")];
+pub const SWITCHLESS: &[(&str, &str)] = &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off"), (crate::squads::COMMANDER_FEATURE, "Squad commander")];
 
 /// Is this a feature id with no switch of its own?
 pub fn switchless(id: &str) -> bool {
@@ -366,11 +366,13 @@ pub struct Request {
     pub cancel: Cancel,
     /// The person asked for this by pressing a key (see `gate_for`): the plan-usage pause doesn't apply.
     pub user_initiated: bool,
+    /// A model of its own for this call (the squad commander runs on Haiku); None: the smart features' model.
+    pub model: Option<&'static str>,
 }
 
 impl Request {
     pub fn new(feature: &'static str, system: impl Into<String>, prompt: impl Into<String>) -> Self {
-        Request { feature, system: system.into(), prompt: prompt.into(), timeout: DEFAULT_TIMEOUT, cancel: Cancel::new(), user_initiated: false }
+        Request { feature, system: system.into(), prompt: prompt.into(), timeout: DEFAULT_TIMEOUT, cancel: Cancel::new(), user_initiated: false, model: None }
     }
 }
 
@@ -678,21 +680,25 @@ impl Runner {
         let work = self.work_dir();
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
 
+        let model = req.model.unwrap_or(settings.ai_model.as_str()).to_string();
         let mut cmd = Command::new(&self.program);
-        cmd.args(["-p", "--model", settings.ai_model.as_str(), "--tools", "", "--setting-sources", ""])
+        cmd.args(["-p", "--model", model.as_str(), "--tools", "", "--setting-sources", ""])
             .args(["--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"])
             .args(["--system-prompt", req.system.as_str(), "--effort", "low", "--output-format", "json"])
             .current_dir(&work)
             .env("PLATOON_AI", "1")
             // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
             .env("MAX_THINKING_TOKENS", "0")
-            // Started from inside a Claude Code session, this marker is inherited; it isn't this call's to carry.
-            .env_remove("CLAUDE_CODE_CHILD_SESSION")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Its own process group: what it starts dies with it, and nothing else is ever signalled.
             .process_group(0);
+        // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
+        // to carry (which ones, and why: `claude::SESSION_MARKERS`).
+        for k in crate::claude::inherited_session_markers() {
+            cmd.env_remove(k);
+        }
         let mut child = match spawn_retrying(&mut cmd) {
             Ok(c) => c,
             Err(e) => {
@@ -761,7 +767,7 @@ impl Runner {
                 if req.cancel.is_cancelled() {
                     return Err(AiError::Cancelled); // finished, but the switch was turned off meanwhile: the result is thrown away
                 }
-                Ok(Reply { text, usage: used.unwrap_or_default(), usage_estimated: estimated, cost_usd: outcome.cost_usd, model: settings.ai_model.clone() })
+                Ok(Reply { text, usage: used.unwrap_or_default(), usage_estimated: estimated, cost_usd: outcome.cost_usd, model })
             }
             Err((kind, detail)) => {
                 let _ = ledger.note_failure(now, kind);

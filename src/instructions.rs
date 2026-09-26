@@ -50,13 +50,14 @@ pub const FIND: &str = "describe-it";
 pub const NOTES: &str = "project-notes";
 pub const DESCRIPTION: &str = "project-description";
 pub const HANDOFF: &str = "hand-off";
+pub const COMMANDER: &str = "squad-commander";
 pub const CODING_LEADER: &str = "coding-leader";
 pub const CODING_PLANNER: &str = "coding-planner";
 pub const CODING_BUILDER: &str = "coding-builder";
 pub const CODING_REVIEWER: &str = "coding-reviewer";
 pub const CODING_VERIFIER: &str = "coding-verifier";
 
-pub static ACTIONS: [Action; 10] = [
+pub static ACTIONS: [Action; 11] = [
     Action {
         id: NAMES,
         entry: "System prompt for naming",
@@ -100,6 +101,15 @@ pub static ACTIONS: [Action; 10] = [
         explain: "What platoon asks Claude for when it writes a hand-off to a new session.",
         builtin: crate::handoff::GUIDANCE,
         fixed: || crate::handoff::FIXED.to_string(),
+        squad: false,
+    },
+    Action {
+        id: COMMANDER,
+        entry: "System prompt for the squad commander",
+        what: "the squad commander",
+        explain: "How platoon asks Claude to check that the squad you picked can handle a ticket, before it is handed over.",
+        builtin: crate::squads::COMMANDER_GUIDANCE,
+        fixed: crate::squads::commander_fixed,
         squad: false,
     },
     Action {
@@ -351,7 +361,7 @@ mod tests {
         let ids: Vec<&str> = ACTIONS.iter().map(|a| a.id).collect();
         assert_eq!(
             ids,
-            ["names", "describe-it", "project-notes", "project-description", "hand-off", "coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"]
+            ["names", "describe-it", "project-notes", "project-description", "hand-off", "squad-commander", "coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"]
         );
     }
 
@@ -388,6 +398,7 @@ mod tests {
                 "System prompt for project notes",
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
+                "System prompt for the squad commander",
                 "System prompt for the Coding squad's leader",
                 "System prompt for the Coding squad's planner",
                 "System prompt for the Coding squad's builder",

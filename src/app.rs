@@ -242,6 +242,8 @@ pub enum Confirm {
     ResetInstructions { id: &'static str },
     /// A ticket was made Cancelled while its squad's leader runs: stop that session too? (`pid`: its `claude`.)
     StopSquad { number: u32, title: String, pid: u32 },
+    /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
+    HandAnyway { number: u32, squad: &'static str, title: String, says: String },
 }
 
 #[derive(Clone)]
@@ -1045,6 +1047,7 @@ impl App {
         self.poll_notes_status();
         self.refresh_prompts();
         self.poll_handoff();
+        self.poll_squad_starts();
         self.drive_smart();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
@@ -1226,6 +1229,7 @@ impl App {
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
             (Action::Confirm, Mode::Confirm(Confirm::StopSquad { number, pid, .. })) => self.stop_squad(number, pid),
+            (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, squad),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
