@@ -51,6 +51,10 @@ pub enum State {
     Skipped(String),
     /// There, but not what this platoon would put there (the tickets skill: platoon's own copy has changed).
     OutOfDate,
+    /// The user took it out (`platoon setup --remove`): setup leaves it out. Only the tickets skill.
+    Removed,
+    /// The user changed platoon's copy: setup leaves it alone. Only the tickets skill.
+    Changed,
 }
 
 impl State {
@@ -67,6 +71,10 @@ pub enum Outcome {
     /// Replaced by platoon's newer copy (the tickets skill).
     Updated,
     Skipped(String),
+    /// Left out because the user removed it (the tickets skill).
+    Removed,
+    /// Left alone because the user changed it (the tickets skill).
+    Changed,
 }
 
 pub struct Report {
@@ -172,36 +180,84 @@ fn check_guard(v: &Value) -> State {
     }
 }
 
-/// Where each step stands, in `STEPS` order.
-pub fn check(root: &Path) -> Vec<State> {
+/// Where each step stands, in `STEPS` order. `root` is Claude Code's folder, `config` platoon's own (where setup
+/// remembers what the user chose about the tickets skill).
+pub fn check(root: &Path, config: &Path) -> Vec<State> {
     let v = read_settings(root).unwrap_or(Value::Null);
-    vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v), check_stop_hook(&v), check_skill(root)]
+    vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v), check_stop_hook(&v), check_skill(root, config)]
 }
 
 /// The `/to-tickets` skill in Claude Code's skills folder: a file, not a setting.
-fn check_skill(root: &Path) -> State {
-    match crate::totickets::installed(root) {
-        crate::totickets::Installed::Yes => State::Done,
-        crate::totickets::Installed::No => State::Missing,
-        crate::totickets::Installed::OutOfDate => State::OutOfDate,
+fn check_skill(root: &Path, config: &Path) -> State {
+    skill_state(crate::totickets::installed(root, config))
+}
+
+fn skill_state(i: crate::totickets::Installed) -> State {
+    use crate::totickets::Installed;
+    match i {
+        Installed::Yes => State::Done,
+        Installed::No => State::Missing,
+        Installed::OutOfDate => State::OutOfDate,
+        Installed::Removed => State::Removed,
+        Installed::Changed => State::Changed,
     }
 }
 
-/// The steps `platoon setup --remove <step>` can take out again, by the word it takes.
+/// The steps `platoon setup --remove`, `--add` and `--replace` take, by the word they take.
 pub const REMOVABLE: &[&str] = &[crate::totickets::NAME];
 
-/// `platoon setup --remove <what>`: take one step out again. Says what happened in one line.
-pub fn remove_step(root: &Path, what: &str) -> Result<String, String> {
+/// What the tickets skill's line says when setup left it out or alone.
+const REMOVED_NOTE: &str = "removed by you: `platoon setup --add to-tickets` puts it back";
+const CHANGED_NOTE: &str = "changed by you, so left as it is: `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as SKILL.md.platoon-bak)";
+
+fn unknown_step(verb: &str, other: &str) -> String {
+    format!("platoon setup can't {verb} \"{other}\"; it can {verb}: {}", REMOVABLE.join(", "))
+}
+
+/// `platoon setup --remove <what>`: take one step out again, and remember it. Says what happened in one line.
+pub fn remove_step(root: &Path, config: &Path, what: &str) -> Result<String, String> {
     match what {
         crate::totickets::NAME => {
             let path = crate::totickets::skill_path(root);
-            Ok(if crate::totickets::remove(root)? {
-                format!("Removed the /to-tickets skill ({}). `platoon setup` puts it back.", path.display())
+            Ok(if crate::totickets::remove(root, config)? {
+                format!("Removed the /to-tickets skill ({}). `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.", path.display())
             } else {
-                "The /to-tickets skill wasn't there; nothing to remove.".to_string()
+                "The /to-tickets skill wasn't there. `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.".to_string()
             })
         }
-        other => Err(format!("platoon setup can't remove \"{other}\"; it can remove: {}", REMOVABLE.join(", "))),
+        other => Err(unknown_step("remove", other)),
+    }
+}
+
+/// `platoon setup --add <what>`: undo a removal and set the step up again. One line.
+pub fn add_step(root: &Path, config: &Path, what: &str) -> Result<String, String> {
+    use crate::totickets::Installed;
+    match what {
+        crate::totickets::NAME => {
+            let path = crate::totickets::skill_path(root);
+            Ok(match crate::totickets::add(root, config)? {
+                Installed::No | Installed::Removed => format!("Added the /to-tickets skill ({}).", path.display()),
+                Installed::OutOfDate => format!("Updated the /to-tickets skill ({}) to platoon's newer copy.", path.display()),
+                Installed::Yes => "The /to-tickets skill is already there.".to_string(),
+                Installed::Changed => format!("The /to-tickets skill is there already, {CHANGED_NOTE}."),
+            })
+        }
+        other => Err(unknown_step("add", other)),
+    }
+}
+
+/// `platoon setup --replace <what>`: platoon's copy in place of the user's, theirs kept beside it. One line.
+pub fn replace_step(root: &Path, config: &Path, what: &str) -> Result<String, String> {
+    match what {
+        crate::totickets::NAME => {
+            let path = crate::totickets::skill_path(root);
+            Ok(if crate::totickets::replace(root, config)? {
+                format!("Put platoon's /to-tickets skill in {}; yours is kept as {}.", path.display(), crate::totickets::backup_path(root).display())
+            } else {
+                format!("Wrote platoon's /to-tickets skill to {}.", path.display())
+            })
+        }
+        other => Err(unknown_step("replace", other)),
     }
 }
 
@@ -290,7 +346,7 @@ fn remove_one_hook(root: &Path, event: &str, is_ours: fn(&str) -> bool, check: f
 
 /// Do whatever is still missing or broken. Everything else in settings.json, including other hooks and
 /// someone else's status line, is left exactly as it was.
-pub fn run(root: &Path) -> Result<Report, String> {
+pub fn run(root: &Path, config: &Path) -> Result<Report, String> {
     let path = root.join("settings.json");
     let mut v: Value = match fs::read_to_string(&path) {
         Ok(s) => serde_json::from_str(&s).map_err(|e| format!("{} isn't valid JSON: {e}", path.display()))?,
@@ -308,7 +364,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
     outcomes.push(match check_statusline(&v) {
         State::Done => Outcome::AlreadyDone,
         State::Skipped(why) => Outcome::Skipped(why),
-        s @ (State::Missing | State::Broken(_) | State::OutOfDate) => {
+        s @ (State::Missing | State::Broken(_) | State::OutOfDate | State::Removed | State::Changed) => {
             v["statusLine"] = json!({ "type": "command", "command": format!("{quoted} statusline") });
             changed = true;
             if s == State::Missing { Outcome::Added } else { Outcome::Repaired }
@@ -318,7 +374,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
     let guard = check_guard(&v);
     outcomes.push(match guard {
         State::Done | State::Skipped(_) => Outcome::AlreadyDone,
-        State::Missing | State::Broken(_) | State::OutOfDate => {
+        State::Missing | State::Broken(_) | State::OutOfDate | State::Removed | State::Changed => {
             remove_guard(&mut v);
             let list = v
                 .as_object_mut()
@@ -344,7 +400,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
         let state = check(&v);
         outcomes.push(match state {
             State::Done | State::Skipped(_) => Outcome::AlreadyDone,
-            State::Missing | State::Broken(_) | State::OutOfDate => {
+            State::Missing | State::Broken(_) | State::OutOfDate | State::Removed | State::Changed => {
                 remove_hook(&mut v, event, is_ours);
                 add_hook(&mut v, event, format!("{quoted} {command}"))?;
                 changed = true;
@@ -368,18 +424,21 @@ pub fn run(root: &Path) -> Result<Report, String> {
     }
 
     // The tickets skill: a file of its own in Claude Code's skills folder. It never blocks, so a failure to write
-    // it is said on its line and setup carries on.
+    // it is said on its line and setup carries on. One the user removed or changed is left as it is.
     let mut skill = None;
-    let state = check_skill(root);
-    outcomes.push(match state {
-        State::Done | State::Skipped(_) => Outcome::AlreadyDone,
-        _ => match crate::totickets::install(root) {
-            Ok(()) => {
-                skill = Some(crate::totickets::skill_path(root));
-                if state == State::Missing { Outcome::Added } else { Outcome::Updated }
-            }
-            Err(why) => Outcome::Skipped(why),
-        },
+    outcomes.push(match crate::totickets::setup(root, config) {
+        Ok(crate::totickets::Installed::Yes) => Outcome::AlreadyDone,
+        Ok(crate::totickets::Installed::No) => {
+            skill = Some(crate::totickets::skill_path(root));
+            Outcome::Added
+        }
+        Ok(crate::totickets::Installed::OutOfDate) => {
+            skill = Some(crate::totickets::skill_path(root));
+            Outcome::Updated
+        }
+        Ok(crate::totickets::Installed::Removed) => Outcome::Removed,
+        Ok(crate::totickets::Installed::Changed) => Outcome::Changed,
+        Err(why) => Outcome::Skipped(why),
     });
     Ok(Report { outcomes, saved, skill, notes })
 }
@@ -475,8 +534,10 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
             Outcome::AlreadyDone => row(Some(true), step, "already done", color),
             Outcome::Added => row(Some(true), step, "added", color),
             Outcome::Repaired => row(Some(true), step, "repaired: its command pointed at a platoon that no longer exists", color),
-            Outcome::Updated => row(Some(true), step, "updated: platoon's copy had changed (the old one is kept as SKILL.md.platoon-bak)", color),
+            Outcome::Updated => row(Some(true), step, "updated: platoon's copy had changed", color),
             Outcome::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
+            Outcome::Removed => row(None, step, REMOVED_NOTE, color),
+            Outcome::Changed => row(None, step, CHANGED_NOTE, color),
         });
     }
     out.push(String::new());
@@ -506,6 +567,8 @@ pub fn render_blocked(states: &[State], color: bool) -> String {
             State::Missing if !step.blocking => row(None, step, step.missing_note, color),
             State::Broken(why) if !step.blocking => row(None, step, &format!("broken: {why}"), color),
             State::OutOfDate => row(None, step, "out of date: `platoon setup` puts platoon's newer copy in", color),
+            State::Removed => row(None, step, REMOVED_NOTE, color),
+            State::Changed => row(None, step, CHANGED_NOTE, color),
             State::Missing => row(Some(false), step, "not set up", color),
             State::Broken(why) => row(Some(false), step, &format!("broken: {why}"), color),
         });
@@ -526,6 +589,11 @@ mod tests {
         d
     }
 
+    /// platoon's own config folder for a test's Claude folder.
+    fn pc(root: &Path) -> PathBuf {
+        root.join("platoon-config")
+    }
+
     fn settings(root: &Path) -> Value {
         serde_json::from_str(&fs::read_to_string(root.join("settings.json")).unwrap()).unwrap()
     }
@@ -533,22 +601,22 @@ mod tests {
     #[test]
     fn nothing_is_done_at_first_and_everything_is_after_setup() {
         let root = tmp("fresh");
-        let before = check(&root);
+        let before = check(&root, &pc(&root));
         assert_eq!(before, (0..STEPS.len()).map(|_| State::Missing).collect::<Vec<_>>());
         assert!(!ready(&before));
-        let r = run(&root).unwrap();
+        let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes, (0..STEPS.len()).map(|_| Outcome::Added).collect::<Vec<_>>());
-        assert_eq!(check(&root), (0..STEPS.len()).map(|_| State::Done).collect::<Vec<_>>());
+        assert_eq!(check(&root, &pc(&root)), (0..STEPS.len()).map(|_| State::Done).collect::<Vec<_>>());
         assert!(notes_hook_installed(&root) && stop_hook_installed(&root));
-        assert!(ready(&check(&root)) && statusline_installed(&root) && guard_installed(&root));
+        assert!(ready(&check(&root, &pc(&root))) && statusline_installed(&root) && guard_installed(&root));
     }
 
     #[test]
     fn running_setup_again_marks_everything_done_and_changes_nothing() {
         let root = tmp("again");
-        run(&root).unwrap();
+        run(&root, &pc(&root)).unwrap();
         let text = fs::read_to_string(root.join("settings.json")).unwrap();
-        let r = run(&root).unwrap();
+        let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes, (0..STEPS.len()).map(|_| Outcome::AlreadyDone).collect::<Vec<_>>());
         assert!(r.saved.is_none());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), text);
@@ -562,7 +630,7 @@ mod tests {
         let root = tmp("keep");
         let original = r#"{"theme":"dark","hooks":{"Stop":[{"hooks":[{"type":"command","command":"x"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"mine"}]}]}}"#;
         fs::write(root.join("settings.json"), original).unwrap();
-        run(&root).unwrap();
+        run(&root, &pc(&root)).unwrap();
         let v = settings(&root);
         assert_eq!(v["theme"], "dark");
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "x");
@@ -575,11 +643,11 @@ mod tests {
     fn someone_elses_status_line_is_skipped_not_replaced_and_does_not_block_starting() {
         let root = tmp("foreign");
         fs::write(root.join("settings.json"), r#"{"statusLine":{"type":"command","command":"my-script"}}"#).unwrap();
-        assert!(matches!(check(&root)[0], State::Skipped(_)));
-        let r = run(&root).unwrap();
+        assert!(matches!(check(&root, &pc(&root))[0], State::Skipped(_)));
+        let r = run(&root, &pc(&root)).unwrap();
         assert!(matches!(r.outcomes[0], Outcome::Skipped(_)) && r.outcomes[1] == Outcome::Added);
         assert!(fs::read_to_string(root.join("settings.json")).unwrap().contains("my-script"));
-        assert!(ready(&check(&root)), "a skipped step must not lock the user out");
+        assert!(ready(&check(&root, &pc(&root))), "a skipped step must not lock the user out");
         assert!(render_report(&r, &root, false).contains("[–]"));
     }
 
@@ -592,13 +660,13 @@ mod tests {
                 "hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/gone/platoon hook guard"}]}]}}"#,
         )
         .unwrap();
-        let before = check(&root);
+        let before = check(&root, &pc(&root));
         assert!(matches!(before[0], State::Broken(_)) && matches!(before[1], State::Broken(_)));
         assert!(!ready(&before));
         assert!(render_blocked(&before, false).contains("no longer exists"));
-        let r = run(&root).unwrap();
+        let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes, vec![Outcome::Repaired, Outcome::Repaired, Outcome::Added, Outcome::Added, Outcome::Added]);
-        assert!(ready(&check(&root)));
+        assert!(ready(&check(&root, &pc(&root))));
         // Repaired in place, not duplicated.
         assert_eq!(settings(&root)["hooks"]["UserPromptSubmit"].as_array().unwrap().len(), 1);
     }
@@ -606,7 +674,7 @@ mod tests {
     #[test]
     fn the_blocked_message_lists_every_step_with_its_state() {
         let root = tmp("blocked");
-        let shown = render_blocked(&check(&root), false);
+        let shown = render_blocked(&check(&root, &pc(&root)), false);
         assert_eq!(shown.matches("[✗]").count(), 2, "{shown}");
         assert!(shown.contains("Status line") && shown.contains("Session guard") && shown.contains("platoon setup"), "{shown}");
         assert!(shown.contains("[–] Project notes") && shown.contains("notes don't reach sessions"), "optional, not a cross: {shown}");
@@ -618,7 +686,7 @@ mod tests {
         let root = tmp("notes-hook");
         let original = r#"{"hooks":{"SessionStart":[{"matcher":"startup","hooks":[{"type":"command","command":"my-start"}]}],"Stop":[{"hooks":[{"type":"command","command":"x"}]}]}}"#;
         fs::write(root.join("settings.json"), original).unwrap();
-        run(&root).unwrap();
+        run(&root, &pc(&root)).unwrap();
         let v = settings(&root);
         let starts = v["hooks"]["SessionStart"].as_array().unwrap();
         assert_eq!(starts.len(), 2);
@@ -635,7 +703,7 @@ mod tests {
         assert_eq!(v["hooks"]["SessionStart"].as_array().unwrap().len(), 1);
         assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["command"], "my-start");
         assert!(v["hooks"]["UserPromptSubmit"].as_array().is_some() && v.get("statusLine").is_some());
-        let states = check(&root);
+        let states = check(&root, &pc(&root));
         assert_eq!(states[2], State::Missing);
         assert!(ready(&states), "the notes hook never blocks starting");
         assert!(!remove_notes_hook(&root).unwrap());
@@ -643,17 +711,17 @@ mod tests {
         let mut v = settings(&root);
         v["hooks"]["SessionStart"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","command":"/gone/platoon hook session-start"}]}));
         fs::write(root.join("settings.json"), v.to_string()).unwrap();
-        assert!(matches!(check(&root)[2], State::Broken(_)) && ready(&check(&root)));
-        assert_eq!(run(&root).unwrap().outcomes[2], Outcome::Repaired);
+        assert!(matches!(check(&root, &pc(&root))[2], State::Broken(_)) && ready(&check(&root, &pc(&root))));
+        assert_eq!(run(&root, &pc(&root)).unwrap().outcomes[2], Outcome::Repaired);
         assert_eq!(settings(&root)["hooks"]["SessionStart"].as_array().unwrap().len(), 2);
         // The Stop hook behaves exactly the same way, and is just as optional.
         assert!(remove_stop_hook(&root).unwrap());
-        let states = check(&root);
+        let states = check(&root, &pc(&root));
         assert_eq!(states[3], State::Missing);
         assert!(ready(&states), "the Stop hook never blocks starting either");
         assert!(!remove_stop_hook(&root).unwrap());
         assert_eq!(settings(&root)["hooks"]["Stop"].as_array().unwrap().len(), 1, "only ours went");
-        assert_eq!(run(&root).unwrap().outcomes[3], Outcome::Added);
+        assert_eq!(run(&root, &pc(&root)).unwrap().outcomes[3], Outcome::Added);
         assert!(stop_hook_installed(&root));
     }
 
@@ -661,54 +729,79 @@ mod tests {
     fn the_tickets_skill_is_written_into_the_claude_folder_told_when_out_of_date_and_removed_on_request() {
         let root = tmp("skill");
         let skill = root.join("skills/to-tickets/SKILL.md");
-        assert_eq!(check(&root)[4], State::Missing);
-        assert!(render_blocked(&check(&root), false).contains("[–] Tickets skill"), "never a cross: it doesn't block starting");
-        let r = run(&root).unwrap();
+        assert_eq!(check(&root, &pc(&root))[4], State::Missing);
+        assert!(render_blocked(&check(&root, &pc(&root)), false).contains("[–] Tickets skill"), "never a cross: it doesn't block starting");
+        let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes[4], Outcome::Added);
         assert_eq!(fs::read_to_string(&skill).unwrap(), crate::totickets::SKILL);
         let shown = render_report(&r, &root, false);
         assert!(shown.contains("[✓] Tickets skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
         assert!(shown.contains("platoon setup --remove to-tickets"), "{shown}");
         // Again: already done, nothing written.
-        let r = run(&root).unwrap();
+        let r = run(&root, &pc(&root)).unwrap();
         assert!(r.outcomes[4] == Outcome::AlreadyDone && r.skill.is_none());
         assert!(render_report(&r, &root, false).contains("Nothing to change"));
-        // platoon's own copy changed since (here: the file on disk is an older one): out of date, never blocking, and
-        // setup brings it up to date, keeping the old one.
+        // platoon's own copy changed since (here: the record says platoon last wrote the older one on disk): out of
+        // date, never blocking, and setup brings it up to date quietly.
         fs::write(&skill, "an older copy").unwrap();
-        let states = check(&root);
+        fs::write(pc(&root).join("setup.json"), json!({"to-tickets": {"written": crate::totickets::hash("an older copy")}}).to_string()).unwrap();
+        let states = check(&root, &pc(&root));
         assert_eq!(states[4], State::OutOfDate);
         assert!(ready(&states));
         assert!(render_blocked(&states, false).contains("out of date"), "{}", render_blocked(&states, false));
-        let r = run(&root).unwrap();
+        let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes[4], Outcome::Updated);
-        assert!(render_report(&r, &root, false).contains("updated"), "{}", render_report(&r, &root, false));
+        assert!(render_report(&r, &root, false).contains("updated: platoon's copy had changed"), "{}", render_report(&r, &root, false));
         assert_eq!(fs::read_to_string(&skill).unwrap(), crate::totickets::SKILL);
-        assert_eq!(fs::read_to_string(root.join("skills/to-tickets/SKILL.md.platoon-bak")).unwrap(), "an older copy");
+        assert!(!root.join("skills/to-tickets/SKILL.md.platoon-bak").exists(), "platoon's own copy needs no backup");
         assert!(r.saved.is_none(), "settings.json is not touched for it");
-        // Removed on request, and only that; setup puts it back.
+        // Changed by the user: left alone, said plainly, never blocking, and replaced only on request.
+        fs::write(&skill, "my own copy").unwrap();
+        let states = check(&root, &pc(&root));
+        assert_eq!(states[4], State::Changed);
+        assert!(ready(&states));
+        assert!(render_blocked(&states, false).contains("changed by you"), "{}", render_blocked(&states, false));
+        let r = run(&root, &pc(&root)).unwrap();
+        assert!(r.outcomes[4] == Outcome::Changed && r.skill.is_none());
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains("[–] Tickets skill") && shown.contains("changed by you") && shown.contains("platoon setup --replace to-tickets"), "{shown}");
+        assert_eq!(fs::read_to_string(&skill).unwrap(), "my own copy");
+        assert!(replace_step(&root, &pc(&root), "to-tickets").unwrap().contains("yours is kept as"));
+        assert_eq!(fs::read_to_string(root.join("skills/to-tickets/SKILL.md.platoon-bak")).unwrap(), "my own copy");
+        assert_eq!(fs::read_to_string(&skill).unwrap(), crate::totickets::SKILL);
+        // Removed on request, and only that; setup leaves it out until it is added again.
         let settings_before = fs::read_to_string(root.join("settings.json")).unwrap();
-        assert!(remove_step(&root, "to-tickets").unwrap().starts_with("Removed the /to-tickets skill"));
+        let said = remove_step(&root, &pc(&root), "to-tickets").unwrap();
+        assert!(said.starts_with("Removed the /to-tickets skill") && said.contains("platoon setup --add to-tickets"), "{said}");
         assert!(!root.join("skills/to-tickets").exists());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), settings_before);
-        assert_eq!(check(&root)[4], State::Missing);
-        assert!(remove_step(&root, "to-tickets").unwrap().contains("wasn't there"));
-        assert!(remove_step(&root, "guard").unwrap_err().contains("can remove: to-tickets"));
-        assert_eq!(run(&root).unwrap().outcomes[4], Outcome::Added);
+        assert_eq!(check(&root, &pc(&root))[4], State::Removed);
+        assert!(remove_step(&root, &pc(&root), "to-tickets").unwrap().contains("wasn't there"));
+        assert!(remove_step(&root, &pc(&root), "guard").unwrap_err().contains("can remove: to-tickets"));
+        assert!(add_step(&root, &pc(&root), "guard").unwrap_err().contains("can add: to-tickets"));
+        assert!(replace_step(&root, &pc(&root), "x").unwrap_err().contains("can replace: to-tickets"));
+        let r = run(&root, &pc(&root)).unwrap();
+        assert!(r.outcomes[4] == Outcome::Removed && !skill.exists());
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains("removed by you") && shown.contains("platoon setup --add to-tickets") && shown.contains("Nothing to change"), "{shown}");
+        assert!(render_blocked(&check(&root, &pc(&root)), false).contains("removed by you"));
+        assert!(add_step(&root, &pc(&root), "to-tickets").unwrap().starts_with("Added the /to-tickets skill"));
+        assert_eq!(check(&root, &pc(&root))[4], State::Done);
+        assert!(add_step(&root, &pc(&root), "to-tickets").unwrap().contains("already there"));
         // A skill folder that can't be written is said on its line; the other steps are still done.
         let blocked = tmp("skill-blocked");
         fs::write(blocked.join("skills"), "a file where the folder should be").unwrap();
-        let r = run(&blocked).unwrap();
+        let r = run(&blocked, &pc(&blocked)).unwrap();
         assert!(matches!(&r.outcomes[4], Outcome::Skipped(why) if why.contains("couldn't make")), "{:?}", r.outcomes[4]);
-        assert!(ready(&check(&blocked)));
+        assert!(ready(&check(&blocked, &pc(&blocked))));
     }
 
     #[test]
     fn invalid_settings_are_reported_not_overwritten() {
         let root = tmp("invalid");
         fs::write(root.join("settings.json"), "{ not json").unwrap();
-        assert!(!ready(&check(&root)));
-        assert!(run(&root).is_err());
+        assert!(!ready(&check(&root, &pc(&root))));
+        assert!(run(&root, &pc(&root)).is_err());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), "{ not json");
     }
 

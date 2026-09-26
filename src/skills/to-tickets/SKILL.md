@@ -3,6 +3,9 @@ name: to-tickets
 description: Turn this conversation, or a plan the user points at, into tickets in the user's platoon project. The user approves the list before anything is written. Only when the user types /to-tickets.
 disable-model-invocation: true
 argument-hint: "[what to turn into tickets: a plan file, or a part of the conversation]"
+allowed-tools:
+  - "Bash(platoon ticket:*)"
+  - "Bash(platoon squads:*)"
 ---
 
 Turn the work discussed in this conversation into tickets in platoon, the app the user manages their Claude Code
@@ -100,17 +103,15 @@ Folders: pass every working folder this session has (its main folder and any fol
 own `--folder`. For a ticket that needs no folder at all (pure research, or a summary of something online), use
 `--no-folder` instead.
 
-For each ticket, write its text to a new temporary file and pass that file; then remove it. For example, in one
-command (the line that ends the text must start at the beginning of the line):
+Each ticket is one `platoon ticket add` command, with the ticket's text piped in after it, exactly in this form (the
+text goes between the first line and the closing `PLATOON_TICKET_BODY`, which must stand alone at the start of its
+line; no line of the text itself may be just that word). Nothing else goes in the command: no temporary file, no other program before or after it.
 
 ```sh
-body="$(mktemp)"
-cat > "$body" <<'PLATOON_TICKET_BODY'
+platoon ticket add --from-session "$CLAUDE_CODE_SESSION_ID" --title "Title of the ticket" --folder "/path/to/main/folder" --waits-for "3" <<'PLATOON_TICKET_BODY'
 ## What it should do
 ...
 PLATOON_TICKET_BODY
-platoon ticket add --from-session "$CLAUDE_CODE_SESSION_ID" --title "Title of the ticket" --body-file "$body" --folder "/path/to/main/folder" --waits-for "3"
-status=$?; rm -f "$body"; test "$status" -eq 0
 ```
 
 Keep titles short and plain, without double quotes, `$` or backticks (they would break the quoting). Leave out

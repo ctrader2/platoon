@@ -24,7 +24,7 @@ already done, and a step whose command points at a platoon that no longer exists
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](#projects) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
-| Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). When platoon's copy has changed, the step says "out of date" and `platoon setup` puts the new one in (keeping the old one as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out; the next `platoon setup` adds it again |
+| Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder): when platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly. If you changed the file, setup leaves it alone and says "changed by you"; `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says "removed by you"); `platoon setup --add to-tickets` puts it back |
 
 ## The list
 
@@ -827,9 +827,14 @@ what the conversation has agreed on. It goes like this:
    file paths or code, and which of the new tickets it waits for. Preparation work comes first.
 4. It shows them as a numbered list (title, what it waits for, what it delivers) and asks whether the sizes are right,
    whether the waits are real, and what to merge or split. **Nothing is written until you approve the list.**
-5. It makes them through platoon, the ones others wait for first: `platoon ticket add --from-session ... --body-file ...`
-   with every working folder the session has (or `--no-folder` for a ticket that needs none, such as research). Then it
-   lists the numbers platoon gave them. They are on the project's screen, in the Tickets pane.
+5. It makes them through platoon, the ones others wait for first: one `platoon ticket add --from-session ...` per
+   ticket, with the ticket's text piped in, and every working folder the session has (or `--no-folder` for a ticket
+   that needs none, such as research). Then it lists the numbers platoon gave them. They are on the project's screen,
+   in the Tickets pane.
+
+The skill only runs `platoon ticket` and `platoon squads` commands, and it lists those two in its `allowed-tools`, so
+Claude Code doesn't ask before running them. Claude Code clears that permission when you send your next message, so the
+tickets it writes after you approve the list may still ask.
 
 Each ticket remembers the session it came from: its screen shows **From** with the session's name, and `enter` there (or
 `o`) opens that session. The commands it uses work on their own too:

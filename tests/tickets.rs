@@ -458,3 +458,61 @@ fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_se
     t.send(b"q");
     t.wait_exit();
 }
+
+/// What `/to-tickets` runs to write a ticket, word for word from the skill: one `platoon ticket add` with the body in a
+/// quoted heredoc. Run through `sh` with the real binary as `platoon` on the PATH, as Claude Code's Bash tool would.
+#[test]
+fn the_skills_heredoc_command_makes_a_ticket_with_that_body_and_an_empty_one_gets_the_template() {
+    let lab = Lab::new("tk-heredoc");
+    let path_dir = lab.base.join("path");
+    fs::create_dir_all(&path_dir).unwrap();
+    std::os::unix::fs::symlink(BIN, path_dir.join("platoon")).unwrap();
+    let sh = |script: &str| -> (i32, String, String) {
+        let out = Command::new("sh")
+            .args(["-c", script])
+            .envs(lab.env())
+            .env("PATH", format!("{}:/usr/bin:/bin", path_dir.display()))
+            .env("CLAUDE_CODE_SESSION_ID", "s-1")
+            .env_remove("PLATOON_PROJECT")
+            .current_dir(&lab.work)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into(), String::from_utf8_lossy(&out.stderr).into())
+    };
+    let body_of = |n: u64| -> String {
+        let t = lab.tickets();
+        let file = t["tickets"].as_array().unwrap().iter().find(|t| t["number"] == n).unwrap()["file"].as_str().unwrap().to_string();
+        fs::read_to_string(lab.config.join("projects/pweb/tickets").join(file)).unwrap()
+    };
+    // The skill's own example, with a real title, folder and body.
+    let skill = include_str!("../src/skills/to-tickets/SKILL.md");
+    let step5 = &skill[skill.find("## 5.").unwrap()..];
+    let example = &step5[step5.find("```sh\n").unwrap() + 6..];
+    let example = &example[..example.find("```").unwrap()];
+    let body = "## What it should do\n\nA basket that keeps `$HOME` and $(date) as they are.\n\n## Acceptance\n\n- [ ] it's there\n";
+    let command = |title: &str, waits: &str| {
+        example
+            .replace("Title of the ticket", title)
+            .replace("/path/to/main/folder", lab.work.to_str().unwrap())
+            .replace(" --waits-for \"3\"", waits)
+            .replace("## What it should do\n...\n", body)
+    };
+    let first = command("Basket page", "");
+    assert!(first.starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" --title \"Basket page\"") && first.contains("A basket") && !first.contains("..."), "{first}");
+    assert_eq!(sh(&first), (0, "#1\n".into(), String::new()));
+    assert_eq!(body_of(1), body, "the heredoc's text, nothing expanded");
+    let t = lab.tickets();
+    assert_eq!(t["tickets"][0]["from"], json!({"session": "s-1", "project": "pweb"}));
+    assert_eq!(t["tickets"][0]["folders"], json!([lab.work.to_str().unwrap()]));
+    assert_eq!(sh(&command("Checkout", " --waits-for \"1\"")), (0, "#2\n".into(), String::new()));
+    assert_eq!(lab.tickets()["tickets"][1]["blocked_by"], json!([1]));
+    // A heredoc with nothing in it, and a command with nothing on stdin at all: the template.
+    let empty = "platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" --title \"Empty\" --no-folder <<'PLATOON_TICKET_BODY'\nPLATOON_TICKET_BODY\n";
+    assert_eq!(sh(empty), (0, "#3\n".into(), String::new()));
+    let nothing = "platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" --title \"Nothing piped\" --no-folder";
+    assert_eq!(sh(nothing), (0, "#4\n".into(), String::new()));
+    let template = body_of(3);
+    assert!(template.starts_with("## What it should do\n\nWhat should work when this is finished"), "{template}");
+    assert_eq!(body_of(4), template);
+}

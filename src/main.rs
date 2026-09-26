@@ -201,7 +201,7 @@ fn statusline() -> io::Result<()> {
 /// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
 fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
-        let states = setup::check(&claude::claude_root());
+        let states = setup::check(&claude::claude_root(), &archive::config_dir());
         if !setup::ready(&states) {
             eprintln!("{}", setup::render_blocked(&states, use_color(true)));
             std::process::exit(1);
@@ -224,7 +224,7 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
-    match setup::run(&root) {
+    match setup::run(&root, &archive::config_dir()) {
         Ok(report) => println!("{}", setup::render_report(&report, &root, use_color(false))),
         Err(e) => {
             eprintln!("platoon setup failed: {e}");
@@ -244,22 +244,28 @@ fn setup() -> io::Result<()> {
     Ok(())
 }
 
-/// `platoon setup <args>`: only `--remove <step>` so far.
+/// `platoon setup <args>`: `--remove <step>` (and remember it), `--add <step>` (undo that), `--replace <step>`
+/// (platoon's copy in place of one the user changed).
 fn setup_with(args: &[String]) -> i32 {
-    match args {
-        [flag, what] if flag == "--remove" => match setup::remove_step(&claude::claude_root(), what) {
-            Ok(line) => {
-                println!("{line}");
-                0
-            }
-            Err(why) => {
-                eprintln!("{why}");
-                1
-            }
-        },
+    let (root, config) = (claude::claude_root(), archive::config_dir());
+    let done = match args {
+        [flag, what] if flag == "--remove" => setup::remove_step(&root, &config, what),
+        [flag, what] if flag == "--add" => setup::add_step(&root, &config, what),
+        [flag, what] if flag == "--replace" => setup::replace_step(&root, &config, what),
         _ => {
-            eprintln!("usage: platoon setup [--remove {}]", setup::REMOVABLE.join(" | "));
-            2
+            let steps = setup::REMOVABLE.join(" | ");
+            eprintln!("usage: platoon setup [--remove {steps} | --add {steps} | --replace {steps}]");
+            return 2;
+        }
+    };
+    match done {
+        Ok(line) => {
+            println!("{line}");
+            0
+        }
+        Err(why) => {
+            eprintln!("{why}");
+            1
         }
     }
 }
