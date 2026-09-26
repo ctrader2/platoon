@@ -644,3 +644,148 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     t.send(b"q");
     t.wait_exit();
 }
+
+// ---- squads that need no folder, the work folder, and Docs' worktree when the folder is in git ----
+
+/// Hand ticket #1 to the squad `downs` rows down the picker (Coding, Research, Docs, Summarize, ...) and wait for
+/// the split view.
+fn hand_to(lab: &Lab, t: &mut Term, squad: &str, downs: usize) {
+    lab.open_tickets(t);
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", squad, "enter hand it over"]);
+    t.send(&b"\x1b[B".repeat(downs));
+    t.send(b"\r");
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+}
+
+fn add_dirs(args: &[String]) -> Vec<String> {
+    args.windows(2).filter(|w| w[0] == "--add-dir").map(|w| w[1].clone()).collect()
+}
+
+#[test]
+fn a_ticket_without_a_folder_goes_to_research_which_starts_in_the_tickets_work_folder() {
+    let lab = Lab::new("sq-research");
+    lab.ticket(json!({"folders": []}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    // Coding needs a folder: it says so, and nothing is asked or started.
+    lab.open_tickets(&mut t);
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "Needs a folder, and #1 has none.", "enter hand it over"]);
+    t.send(b"\r");
+    t.wait_for_flat("The Coding squad needs a folder to work in, and #1 has none. Press f to give it one.");
+    assert_eq!((lab.checks(), lab.started()), (0, 0));
+    t.send(b"\x1b");
+    t.wait_gone("enter hand it over");
+    // Research takes it.
+    t.send(b"a");
+    t.wait_for_all(&["hand to a squad", "Research", "enter hand it over"]);
+    t.send(b"\x1b[B\r");
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+    let work = lab.config.join("projects/pweb/tickets/01-work");
+    assert!(work.is_dir(), "the ticket's work folder is made");
+    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&work).unwrap(), "the leader starts in it");
+    let args = lab.args(1);
+    assert!(add_dirs(&args).is_empty(), "the ticket has no folder to add: {args:?}");
+    assert_eq!(value_after(&args, "--agent"), "research-leader");
+    assert_eq!(value_after(&args, "-n"), "Research squad · #1 Basket");
+    assert_eq!(value_after(&args, "--model"), "sonnet");
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    let got: Vec<(String, String, Value)> = agents.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string(), v["tools"].clone())).collect();
+    let web = json!(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]);
+    assert_eq!(
+        got,
+        [
+            ("research-leader".to_string(), "sonnet".to_string(), json!(["Agent", "Read", "Grep", "Glob", "Bash"])),
+            ("research-questioner".into(), "sonnet".into(), json!(["Read", "Grep", "Glob"])),
+            ("research-researcher".into(), "sonnet".into(), web.clone()),
+            ("research-writer".into(), "sonnet".into(), json!(["Read", "Grep", "Glob", "Edit", "Write"])),
+            ("research-checker".into(), "opus".into(), web),
+        ]
+    );
+    let prompt = agents["research-leader"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("You and your members work in the ticket's work folder") && !prompt.contains("worktree"), "{prompt}");
+    let first = args.last().unwrap();
+    assert!(first.contains("the ticket's private work folder; the session starts here") && first.contains("The ticket has no folder of its own."), "{first}");
+    assert!(first.contains("stop once the result is written in your work folder"), "{first}");
+    // The commander was told there is no folder; nothing else was made.
+    assert!(lab.check_file(1, "stdin").starts_with("The squad: Research\n") && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder."));
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["leaders"][0]["squad"].as_str()), (Some("working"), Some("research")), "{tk}");
+    assert_eq!(tk["worktrees"], json!([]));
+    assert!(!lab.base.join("shop-worktrees").exists());
+    // The ticket beside the session says which squad has it and where its work folder is.
+    t.wait_for_all(&["Research squad", "Work folder"]);
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn summarize_reads_the_tickets_folders_from_its_work_folder_and_makes_no_worktree() {
+    let lab = Lab::new("sq-summarize");
+    lab.ticket(json!({}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    hand_to(&lab, &mut t, "Summarize", 3);
+    let work = lab.config.join("projects/pweb/tickets/01-work");
+    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&work).unwrap());
+    let args = lab.args(1);
+    assert_eq!(add_dirs(&args), [lab.shop.to_string_lossy().into_owned(), lab.docs.to_string_lossy().into_owned()], "the folders themselves, to read");
+    assert!(!lab.base.join("shop-worktrees").exists(), "no worktree, though the shop is a git repository");
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["summarize-leader", "summarize-summarizer"]);
+    assert_eq!(agents["summarize-summarizer"]["tools"], json!(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]));
+    assert!(agents["summarize-leader"]["prompt"].as_str().unwrap().contains("The ticket's own folders are for reading only"));
+    let first = args.last().unwrap();
+    assert!(first.contains(&format!("For reading only (change nothing in them unless the ticket asks you to):\n- {}\n- {}\n", lab.shop.display(), lab.docs.display())), "{first}");
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn docs_works_in_a_worktree_of_a_git_folder() {
+    let lab = Lab::new("sq-docs-git");
+    lab.ticket(json!({"folders": [lab.shop.to_string_lossy()]}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    hand_to(&lab, &mut t, "Docs", 2);
+    let wt = lab.base.join("shop-worktrees/ticket-1");
+    assert!(wt.join("README").exists(), "a real worktree of the temp repository");
+    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["worktrees"][0]["path"].as_str(), tk["worktrees"][0]["branch"].as_str()), (Some(wt.to_string_lossy().as_ref()), Some("ticket/1")), "{tk}");
+    let args = lab.args(1);
+    assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()], "only its work folder besides");
+    assert_eq!(value_after(&args, "--agent"), "docs-leader");
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    assert_eq!(agents["docs-writer"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write"]));
+    assert_eq!(agents["docs-editor"]["model"], "opus");
+    assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays in the worktree, uncommitted"));
+    assert!(args.last().unwrap().contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())));
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn docs_works_in_a_folder_outside_git_as_it_is() {
+    let lab = Lab::new("sq-docs-plain");
+    lab.ticket(json!({"folders": [lab.docs.to_string_lossy()]}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    hand_to(&lab, &mut t, "Docs", 2);
+    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&lab.docs).unwrap(), "it starts in the folder itself");
+    assert_eq!(lab.ticket_now()["worktrees"], json!([]));
+    assert!(!lab.base.join("docs-worktrees").exists() && !lab.base.join("shop-worktrees").exists(), "no worktree anywhere");
+    let args = lab.args(1);
+    assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()]);
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    let prompt = agents["docs-leader"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("the change stays in the ticket's folder, uncommitted") && !prompt.contains("worktree"), "{prompt}");
+    assert!(args.last().unwrap().contains(&format!("- {} (used as it is, not a git worktree; the session starts here)", lab.docs.display())));
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(b"q");
+    t.wait_exit();
+}

@@ -316,7 +316,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.send(b"\t");
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "No folder yet", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
+    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "No folder", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
     t.wait_for_flat("e edit r rename s state f folders b waits for");
     let screen = t.stable();
     assert!(!screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"), "no how far, though the file has one:\n{screen}");

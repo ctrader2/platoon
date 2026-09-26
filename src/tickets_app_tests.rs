@@ -265,7 +265,7 @@ fn a_project_with_no_sessions_makes_tickets_with_no_folder_yet() {
     assert_eq!(app.tk.open, Some(1));
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(flat(&shown).contains("Folders No folder yet"), "{shown}");
+    assert!(flat(&shown).contains("Folders No folder"), "{shown}");
 }
 
 #[test]

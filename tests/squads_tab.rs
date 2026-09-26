@@ -64,7 +64,7 @@ read line
 printf '%s\n' "$line" >> "$f"
 "#;
 
-const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.",
+const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.","needs_folder":true,"worktree":"always",
  "leader":{"model":"sonnet","guidance":"Lead calmly and ask when unsure."},
  "members":[
   {"name":"planner","model":"opus","can_change_files":false,"can_run_commands":true,"can_use_web":false,"guidance":"Plan the change."},
@@ -231,7 +231,8 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.wait_for_flat("a hand to a squad");
     t.send(b"a");
     t.wait_for_all(&["hand to a squad", "Coding", "Careful coding", "Makes small, careful changes"]);
-    t.send(b"\x1b[B\r");
+    // Coding, Research, Docs and Summarize come first.
+    t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
     assert!(lab.call(2, "stdin").starts_with("The squad: Careful coding\nWhat it can do: Makes small, careful changes"), "{}", lab.call(2, "stdin"));
     let first = lab.args(1);
@@ -253,10 +254,11 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.wait_gone("ctrl+space back to the project");
     t.send(b"3");
     t.wait_for_all(&["╭ Squads", "Careful coding"]);
-    // To the list (shift+left), on the new squad, then into its details from the top, down to the leader's model.
+    // To the list (shift+left), on the new squad, then into its details from the top, down to the leader's model
+    // (past its name, what it can do, whether it needs a folder and its worktree).
     t.send(b"\x1b[1;2D");
     t.wait_for_all(&["enter details", "╭ Careful coding"]);
-    t.send(b"\rg\x1b[B\x1b[B\r");
+    t.send(b"\rg\x1b[B\x1b[B\x1b[B\x1b[B\r");
     t.wait_for_all(&["Model for the leader:", "Opus"]);
     t.send(b"\x1b[A\r");
     t.wait_for_flat("The leader runs on Opus now.");
@@ -296,7 +298,7 @@ fn a_squads_system_prompt_is_edited_in_the_editor_and_the_squad_says_user_modifi
     t.send(b"3");
     t.wait_for_all(&["╭ Squads", "Built in"]);
     // Into the details, down to the leader's system prompt.
-    t.send(b"\t\x1b[B\x1b[B\x1b[B");
+    t.send(b"\t\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     t.wait_for_all(&["enter edit", "esc back to the list"]);
     t.send(b"\r");
     t.wait_for("nano");

@@ -106,9 +106,10 @@ fn the_tab_lists_the_built_in_squad_with_its_details_in_four_sections() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("3 Squads 1"), "the tab and how many squads: {f}");
+    assert!(f.contains("3 Squads 4"), "the tab and how many squads: {f}");
+    assert!(f.contains("Coding 4 members Built in Research 4 members Built in Docs 3 members Built in Summarize 1 member Built in") || f.contains("Research 4 members"), "{f}");
     assert!(f.contains("▎ Coding 4 members") && f.contains("Built in"), "{f}");
-    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Leader", "Model Sonnet", "System prompt You are given one ticket", "Members", "Can change files No", "Can run commands Yes", "Can use the web No"] {
+    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Needs a folder Yes", "Worktree Always", "Leader", "Model Sonnet", "System prompt You are given one ticket", "Members", "Can change files No", "Can run commands Yes", "Can use the web No"] {
         assert!(f.contains(s), "{s}: {shown}");
     }
     assert!(f.contains("n describe a new squad") && f.contains("c copy") && !f.contains("d delete"), "a built-in as platoon has it: nothing to delete or restore: {f}");
@@ -255,7 +256,7 @@ fn steps_are_added_moved_given_a_member_and_a_send_back() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(steps(&w)[3].does, "Checks the plan was followed.");
     // The leader gets it all, in order, with the send-back.
-    let prompt = crate::squads::leader_prompt(&squadfile::get(&w.config, "coding").unwrap(), AgentNames::SquadRole);
+    let prompt = crate::squads::leader_prompt(&squadfile::get(&w.config, "coding").unwrap(), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
     assert!(prompt.contains("4. coding-planner: Checks the plan was followed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most 3 times;"), "{prompt}");
     assert!(prompt.contains("5. coding-verifier: "), "{prompt}");
     // Moving a step above the one it sends back to drops that send-back, and says so.
@@ -303,7 +304,7 @@ fn a_system_prompt_is_edited_in_the_editor_and_saved_into_the_squad() {
     assert_eq!(app.active_notice(), Some("A system prompt can't be empty, so the leader's is as it was."));
 }
 
-const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.",
+const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.","needs_folder":true,"worktree":"always",
  "leader":{"model":"sonnet","guidance":"Lead briefly."},
  "members":[
   {"name":"reader","model":"haiku","can_change_files":false,"can_run_commands":false,"can_use_web":true,"guidance":"Read the error."},
@@ -360,14 +361,18 @@ fn describe_drafts_a_squad_with_claude_which_is_edited_then_saved() {
     key(&mut app, KeyCode::Enter);
     choose(&mut app, "Sonnet");
     assert!(!squadfile::dir(&w.config).join("sentry-triage.json").exists());
+    // The draft's two settings are the ones Claude gave it.
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Needs a folder Yes") && f.contains("Worktree Always"), "{f}");
     ctrl(&mut app, 's');
     assert_eq!(app.active_notice(), Some("Saved the squad \"Sentry triage\". Tickets can be handed to it now."));
     let v = file(&w, "sentry-triage");
+    assert_eq!((v["needs_folder"].as_bool(), v["worktree"].as_str()), (Some(true), Some("always")));
     assert_eq!((v["members"][1]["model"].as_str(), v["workflow"][2]["back_to"].as_u64()), (Some("sonnet"), Some(2)));
     assert!(v.get("builtin").is_none());
     assert!(app.sqt.draft.is_none());
     assert_eq!(app.sqt.listed().map(|l| (l.id.as_str(), l.kind)), Some(("sentry-triage", Kind::Own)));
-    assert!(flat(&draw(&mut term, &app)).contains("3 Squads 2"));
+    assert!(flat(&draw(&mut term, &app)).contains("3 Squads 5"));
 }
 
 #[test]
@@ -434,8 +439,9 @@ fn copy_delete_and_restore_each_ask_first_and_a_built_in_is_never_deleted() {
     key(&mut app, KeyCode::Char('d'));
     key(&mut app, KeyCode::Char('y'));
     assert!(!squadfile::path(&w.config, "careful-coding").exists() && squadfile::path(&w.config, "careful-coding").with_extension("json.bak").exists());
-    assert_eq!(app.squad_list().len(), 1);
+    assert_eq!(app.squad_list().len(), 4);
     // A changed built-in is restored, after asking.
+    key(&mut app, KeyCode::Char('g'));
     go(&mut app, DRow::MemberWeb(2));
     key(&mut app, KeyCode::Char(' '));
     assert!(squadfile::path(&w.config, "coding").exists());
@@ -454,7 +460,7 @@ fn a_squad_file_that_cant_be_read_is_shown_as_such_and_left_alone() {
     fs::write(squadfile::path(&w.config, "mine"), "{ nope").unwrap();
     let mut app = w.app();
     key(&mut app, KeyCode::Char('3'));
-    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Char('G'));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("mine Can't be read") && f.contains("mine.json can't be read (it isn't valid JSON), so platoon leaves it alone."), "{f}");
@@ -494,12 +500,17 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     key(&mut app, KeyCode::Char('a'));
     assert!(matches!(app.mode, Mode::SquadPick));
     let names: Vec<&str> = app.sq.pick.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["Coding", "Broken", "Careful coding"], "every squad, by name: built-ins first, then the user's own");
+    assert_eq!(names, ["Coding", "Research", "Docs", "Summarize", "Broken", "Careful coding"], "every squad, by name: built-ins first, then the user's own");
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Careful coding") && f.contains("Broken Needs fixing on the Squads tab first."), "{f}");
-    // One that needs fixing says what, and the picker stays.
-    key(&mut app, KeyCode::Down);
+    assert!(f.contains("▎ Coding") && !f.contains("Careful coding"), "six squads don't fit in 30 rows: {f}");
+    // One that needs fixing says what, and the picker stays. The list scrolls to the picked one.
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Down);
+    }
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("▎ Careful coding") && f.contains("Needs fixing on the Squads tab first. Makes a change") && !f.contains("▎ Coding"), "{f}");
+    key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadPick));
     assert_eq!(app.active_notice(), Some("The Broken squad needs fixing on the Squads tab first: Step 1 names a member the squad doesn't have (nobody)."));
@@ -510,7 +521,7 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
     let leader = t.leader().unwrap().clone();
     assert_eq!((leader.squad.as_str(), leader.snapshot.as_deref()), ("careful-coding", Some("01-squad-1.json")));
-    let launch = app.leader_launch(&id, &leader).unwrap();
+    let launch = app.leader_launch(&id, &leader, &t).unwrap();
     assert_eq!((launch.agent.as_str(), launch.model.as_str(), launch.name.as_str()), ("careful-coding-leader", "sonnet", "Careful coding"));
     let agents: Value = serde_json::from_str(&launch.agents).unwrap();
     assert_eq!(agents["careful-coding-verifier"]["model"], "sonnet");
@@ -524,7 +535,7 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
     let mut store = Tickets::open(&w.config, "p1");
     let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
     let coding = squadfile::builtin("coding").unwrap();
-    let at_start = Launch::of(&coding, AgentNames::SquadRole);
+    let at_start = Launch::of(&coding, AgentNames::SquadRole, crate::squads::Place::WORKTREE);
     let snap = store.save_snapshot(n, 1, &at_start.to_json()).unwrap();
     let with = Leader { squad: "coding".into(), session: "s-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(snap) };
     // The squad changes afterwards.
@@ -532,18 +543,56 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
     changed.members[3].model = "sonnet".into();
     changed.members[0].guidance = "Plan in one line.".into();
     squadfile::save(&w.config, &changed).unwrap();
-    let resumed = app.leader_launch("p1", &with).unwrap();
+    let t = store.get(n).cloned().unwrap();
+    let resumed = app.leader_launch("p1", &with, &t).unwrap();
     assert_eq!(resumed, at_start, "the snapshot, not the squad as it is now");
     let agents: Value = serde_json::from_str(&resumed.agents).unwrap();
     assert_eq!(agents["coding-verifier"]["model"], "haiku");
     // A leader from before snapshots (the user's ticket #1) continues as before: the squad as it is now, under the
     // plain names it began with.
     let old = Leader { squad: "coding".into(), session: "s-0".into(), started: 1, names: AgentNames::Plain, snapshot: None };
-    let now = app.leader_launch("p1", &old).unwrap();
+    let now = app.leader_launch("p1", &old, &t).unwrap();
     let agents: Value = serde_json::from_str(&now.agents).unwrap();
     assert_eq!((now.agent.as_str(), agents["verifier"]["model"].as_str()), ("leader", Some("sonnet")));
     // A snapshot that has gone: said, not guessed.
     let gone = Leader { snapshot: Some("01-squad-9.json".into()), ..with.clone() };
-    assert_eq!(app.leader_launch("p1", &gone).unwrap_err(), "what it was started with can't be read any more");
+    assert_eq!(app.leader_launch("p1", &gone, &t).unwrap_err(), "what it was started with can't be read any more");
 }
 
+
+#[test]
+fn needs_a_folder_and_worktree_are_shown_in_about_and_changed_there() {
+    let (w, mut app) = on_the_tab("sqt-settings");
+    // Research: no folder needed, never a worktree.
+    key(&mut app, KeyCode::Down);
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Name Research") && f.contains("Needs a folder No") && f.contains("Worktree Never"), "{f}");
+    // Space switches "Needs a folder"; the file says so, and it is User Modified.
+    go(&mut app, DRow::NeedsFolder);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("space switch"), "{f}");
+    key(&mut app, KeyCode::Char(' '));
+    assert_eq!(app.active_notice(), Some("The Research squad needs a folder now: a ticket without one can't be handed to it."));
+    assert_eq!((file(&w, "research")["needs_folder"].as_bool(), file(&w, "research")["builtin"].as_str()), (Some(true), Some("research")));
+    assert!(squadfile::get(&w.config, "research").unwrap().needs_folder);
+    assert!(flat(&draw(&mut term, &app)).contains("Needs a folder Yes"));
+    // Enter on "Worktree": the three choices.
+    go(&mut app, DRow::Worktree);
+    key(&mut app, KeyCode::Enter);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Always") && f.contains("When the folder is a git repo") && f.contains("Never"), "{f}");
+    choose(&mut app, "When the folder");
+    assert_eq!(file(&w, "research")["worktree"], "when-git");
+    assert!(app.active_notice().unwrap().starts_with("The squad works in a git worktree when the ticket's folder is a git repo now"), "{:?}", app.active_notice());
+    assert!(flat(&draw(&mut term, &app)).contains("Worktree When the folder is a git repo"));
+    assert_eq!(squadfile::get(&w.config, "research").unwrap().worktree, squadfile::WorktreeRule::WhenGit);
+    // Back as platoon has them: no file any more.
+    go(&mut app, DRow::NeedsFolder);
+    key(&mut app, KeyCode::Char(' '));
+    go(&mut app, DRow::Worktree);
+    key(&mut app, KeyCode::Enter);
+    choose(&mut app, "Never");
+    assert!(!squadfile::path(&w.config, "research").exists(), "the built-in as it was needs no file");
+    assert_eq!(app.squad_list()[1].kind, Kind::BuiltIn);
+}

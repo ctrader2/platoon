@@ -757,17 +757,18 @@ otherwise not-New ticket then says its state at the end of its row).
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
 | `s` `e` `r` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
 
-A new ticket starts as **New**, works in the folder of the project's most recently used session (or "No folder yet" when
-the project has no sessions), and its body starts from a short template: a **What it should do** heading (what should
+A new ticket starts as **New**, works in the folder of the project's most recently used session (or has "No folder" when
+the project has no sessions; `f` changes a ticket's folders, and a ticket may have none, for a squad that needs none), and its body starts from a short template: a **What it should do** heading (what should
 work when it is finished, as behaviour, and small enough for one fresh session), with the line **How far: local changes
 only (say if you want a commit, or a push and merge request).** under it, and an **Acceptance** heading with two empty
 checkboxes. **How far to take the work is said in the ticket's text**: write "a local commit", "push it and open a merge
 request" or anything else there. When the text doesn't say, a squad stops at local changes: it changes the files in its
-worktree and commits nothing. (Tickets made by an older platoon may have a separate "how far" in `tickets.json`: it is
+worktree (or the folder) and commits nothing; a squad that works in the ticket's work folder stops once its result is
+written there. (Tickets made by an older platoon may have a separate "how far" in `tickets.json`: it is
 kept there and no longer read.)
 
 **A ticket's own screen** (`enter`) shows its number and title, its state, the squad that has it ("Coding squad"), its
-folders, what it waits for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
+folders, its **work folder** once a squad has had it, what it waits for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
 
 | Key (a ticket's screen) | Does |
 | --- | --- |
@@ -799,7 +800,8 @@ platoon ticket list --json                          # every project, with each b
 
 `add` prints the new ticket's number (`#3`). The project is found by its id or its name (any case). The body comes from
 `--body-file`, else from what is piped in, else the template; with no `--folder` the ticket works in the folder you ran the command in
-(its full path), and each `--folder` you give replaces that. A project that is archived takes no new tickets (restore it
+(its full path), and each `--folder` you give replaces that; `--no-folder` makes a ticket without a folder, for a squad that
+needs none (Research, Summarize). A project that is archived takes no new tickets (restore it
 first; its tickets can still be opened and changed in platoon). A project
 that isn't there (or a name two projects share), a ticket to wait for that isn't there or would make a circle, or a folder
 that doesn't exist is refused with one plain line and nothing is made. There is no `--how-far`: say how far in the body
@@ -808,8 +810,9 @@ that doesn't exist is refused with one plain line and nothing is made. There is 
 ### Handing a ticket to a squad
 
 A **squad** is a small team of Claude agents that works on a ticket for you: a **leader**, which is one Claude session of
-its own, and **members** it hands the pieces to, each with its own job and its own model. platoon comes with one squad,
-**Coding**, and you can change it or make your own on the [Squads tab](#squads). As it comes, the Coding leader (Sonnet) hands the ticket to the **planner** (Opus), which reads the code and writes a short plan;
+its own, and **members** it hands the pieces to, each with its own job and its own model. platoon comes with four squads,
+**Coding**, **Research**, **Docs** and **Summarize** (see [The built-in squads](#the-built-in-squads)), and you can change
+them or make your own on the [Squads tab](#squads). As it comes, the Coding leader (Sonnet) hands the ticket to the **planner** (Opus), which reads the code and writes a short plan;
 then to the **builder** (Sonnet), which makes the change and runs the tests; then to the **reviewer** (Opus), which checks
 the change against the ticket (and that each acceptance check could have failed before it), sending it back to the builder
 at most twice; then to the **verifier** (Haiku), which runs the tests and the build and reports the total of every test
@@ -819,8 +822,10 @@ squad's session they are named after the squad, `coding-leader`, `coding-planner
 and `coding-verifier`, so Claude's own lines and status bar show which of them is at work.
 
 Press `a` on a New ticket (in the Tickets pane or on its screen), pick the squad and press `enter`: every squad is
-listed by name, with what it can do. A ticket that is not New, that still waits for another ticket, or that has no folder
-is refused with one line saying why, and so is a squad that has something to fix on the Squads tab.
+listed by name, with what it can do. A ticket that is not New, or that still waits for another ticket, is refused with
+one line saying why, and so is a squad that has something to fix on the Squads tab. A ticket with no folder can go to a
+squad that doesn't need one (Research, Summarize); a squad that needs a folder (Coding, Docs) says "Needs a folder, and
+#N has none" in the list and refuses it with one line.
 
 - **The commander checks first.** Before anything starts, the **squad commander** (one quick call to Claude, on Haiku,
   counted with your smart features' tokens) reads the ticket and what the squad can do, and says whether the squad can
@@ -833,13 +838,20 @@ is refused with one line saying why, and so is a squad that has something to fix
   nothing over either. Its system prompt is **System prompt for the squad commander**, on the Projects tab of the
   settings.
 
-- **Its own worktree.** For each of the ticket's folders that is in a git repository, platoon makes a git worktree next
-  to the repository, `<repo>-worktrees/ticket-<N>`, on a new branch `ticket/<N>` from where the repository is now, and
+- **Its own worktree, when the squad uses one.** Each squad says whether it works in a git worktree: **always** (Coding),
+  **when the folder is a git repo** (Docs), or **never** (Research, Summarize). For a squad that does, for each of the
+  ticket's folders that is in a git repository, platoon makes a git worktree next to the repository, `<repo>-worktrees/ticket-<N>`, on a new branch `ticket/<N>` from where the repository is now, and
   the squad works there, never in your own checkout. A worktree already made for the ticket is used again; if the
   branch name `ticket/<N>` is taken by something else, platoon says so and stops. Folders outside git are used as they
   are. platoon never removes these worktrees. The worktree is made in the background (the ticket says "Making the
   worktree…"); if it can't be made, the ticket goes back to New with the reason, and one already made stays for the next
   try.
+- **Its own work folder.** Every ticket handed to a squad gets a private work folder, kept with the ticket in
+  `~/.config/platoon/projects/<id>/tickets/<NN>-work/` (platoon never removes it). A squad that never uses a worktree,
+  and any squad given a ticket without a folder, starts there and writes what it makes there (Research's `report.md`,
+  say) unless the ticket says otherwise; the ticket's own folders are given to it for reading only. Any other squad
+  starts in the ticket's first folder (its worktree, when it has one) and gets the work folder too, for notes and
+  drafts.
 - **Its own session.** The leader starts in a platoon session of its own (it keeps running when platoon closes), named
   after its squad (`Coding squad · #N title`), with the ticket as its first message and the project's notes given to it as context. It belongs to the
   ticket only: it is never listed on the Sessions tab, in the project's sessions, in searches or counts, and it never
@@ -875,7 +887,8 @@ is running asks whether to stop that session too; `y` stops that one session onl
 it running.
 
 The squad's models, its members, their system prompts and its workflow are on the [Squads tab](#squads). The rules
-platoon keeps - ask before anything others can see, the last line of each turn, and "report back to the leader, never
+platoon keeps - where the squad works and which folders are for reading only, ask before anything others can see, the
+last line of each turn, and "report back to the leader, never
 push" for the members - are always sent after your text.
 
 The leader may hand work to its members, read, search and run commands; it never edits a file itself (its members do).
@@ -883,13 +896,33 @@ The leader may hand work to its members, read, search and run commands; it never
 Nothing about the squad is added to your own Claude Code settings: the leader's session alone gets platoon's squad hooks
 (`platoon hook squad-stop`, `squad-gate`, `squad-notify` and `squad-tool`), and `platoon setup` is not involved.
 
+### The built-in squads
+
+- **Coding** (needs a folder; always a worktree): makes a change to code, as described above.
+- **Research** (no folder needed; never a worktree): finds things out and writes them up, with sources. The
+  **questioner** (Sonnet) turns the ticket into a short list of questions; the **researcher** (Sonnet, can use the web)
+  answers each one from the ticket's folders and the web, with sources; the **writer** (Sonnet, can change files) writes
+  `report.md` in the work folder: the answers, the sources and what is still unknown; the **checker** (Opus, can use the
+  web) checks each claim against its source, and may send it back to the researcher once.
+- **Docs** (needs a folder; a worktree when the folder is a git repo): writes or updates documentation as Markdown files
+  in the ticket's folder (its worktree, in git). The **outliner** (Sonnet) reads the ticket, the existing docs and the
+  code and proposes what to write where; the **writer** (Sonnet, can change files) writes it; the **editor** (Opus) checks
+  it against the code, the ticket and the project's style, and may send it back to the writer twice. The result lists
+  the files. Docs in Coda, Confluence and the like are for your own squads, using your Claude's connectors.
+- **Summarize** (no folder needed; never a worktree): the **summarizer** (Sonnet, can use the web, so links can be read)
+  reads what the ticket points at and writes a short summary for you; the leader puts it in the ticket's result.
+
+Only Research's researcher and checker and the summarizer can use the web. Every leader runs on Sonnet.
+
 ## Squads
 
 The third tab, `3` **Squads**, lists every squad on the left, and on the right everything about the one you pick, in
 four parts:
 
-- **About**: its name, and **what it can do** in a sentence or two. The commander reads that before a ticket is handed
-  to the squad.
+- **About**: its name, **what it can do** in a sentence or two (the commander reads that before a ticket is handed to
+  the squad), whether it **needs a folder** (`space` switches it) and its **worktree**: Always, When the folder is a
+  git repo, or Never (`enter` picks one). A squad of your own starts with no folder needed and no worktree, unless
+  you copied it or its draft says otherwise.
 - **Leader**: its model (Opus, Sonnet or Haiku) and its system prompt: how it leads, its tone, what its reports say and
   when it asks you.
 - **Members**: each one's name, model and system prompt, and three switches: **can change files**, **can run commands**
@@ -908,12 +941,14 @@ line of text in a small box, a model from a short list, a system prompt in the s
 the cursor is on; a member that still does a step stays, and platoon says which step. On a step, `m` picks who does it,
 `b` whether it may send the work back and where to, and `[` `]` move it up and down. Every change is saved at once.
 
-**The Coding squad is built in.** Everything about it can be changed; the list then says **User Modified**, and `d` puts
-it back as platoon has it, after asking (your version is kept as `coding.json.bak`). It can't be deleted.
+**The four squads platoon comes with are built in.** Everything about them can be changed; the list then says **User
+Modified**, and `d` puts one back as platoon has it, after asking (your version is kept as `<id>.json.bak`). They can't
+be deleted.
 
 **Making your own squad.** Press `n` and describe it in your own words ("a squad that triages Sentry errors: a reader,
 a reproducer, a fixer"). One call to Claude, on Sonnet, counted with your smart features' tokens, drafts the whole squad:
-its name, what it can do, the leader, the members with their models and switches, and the workflow. platoon checks the
+its name, what it can do, whether it needs a folder and works in a worktree, the leader, the members with their models
+and switches, and the workflow. platoon checks the
 draft (member names, models, steps that name a member the squad doesn't have, a step that sends work back to a later
 one) and says plainly what was wrong if it can't be used. A good draft opens on the tab as **Draft, not saved**: change
 what you like, then `ctrl+s` saves it, or `d` throws it away. Or press `c` to copy any squad, built in or your own, under a
@@ -924,7 +959,7 @@ system prompt is **System prompt for drafting a squad**, on the Projects tab of 
 beside the ticket (`tickets/<NN>-squad-<k>.json`). Changing the squad afterwards doesn't change that leader, also when
 it is continued later: it goes on with the squad as it was. The next ticket gets the squad as it is then.
 
-Your squads, and the Coding squad once you change it, are in `~/.config/platoon/squads/<id>.json`, one file each. Keys
+Your squads, and a built-in one once you change it, are in `~/.config/platoon/squads/<id>.json`, one file each. Keys
 platoon doesn't know are kept, and a file that can't be read is shown as such on the tab and never written over. If you
 had changed the Coding squad's system prompts in the settings before this tab existed, your text was carried into the
 Coding squad the first time platoon read the squads (the old files in `prompts/` are left as they were).

@@ -7,7 +7,7 @@
 use super::*;
 use crate::ai::Request;
 use crate::instructions;
-use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, Squad};
+use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, Place, Squad};
 use crate::tickets::{AgentNames, HandoverKind, Leader, State, Ticket, Tickets, Worktree};
 use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
@@ -111,6 +111,9 @@ pub struct SquadState {
     /// have been, by ticket number.
     #[cfg(test)]
     pub launched: Vec<u32>,
+    /// ... and for each, the folder it would have started in and its arguments.
+    #[cfg(test)]
+    pub launched_with: Vec<(String, Vec<String>)>,
 }
 
 impl SquadState {
@@ -125,6 +128,8 @@ impl SquadState {
             starting: Vec::new(),
             #[cfg(test)]
             launched: Vec::new(),
+            #[cfg(test)]
+            launched_with: Vec::new(),
         }
     }
 }
@@ -182,9 +187,8 @@ impl App {
             Some(format!("#{number} is {}. Only a New ticket can be handed to a squad.", t.state.label()))
         } else if let Some(first) = crate::tickets::waiting_for(t, self.tickets()).first() {
             Some(format!("#{number} waits for #{first}, which isn't Done yet."))
-        } else if t.folders.is_empty() {
-            Some(format!("#{number} has no folder yet. Press f to give it one."))
         } else {
+            // No folder at all is fine for a squad that needs none: that is said when a squad is picked.
             t.folders.iter().find(|f| !Path::new(f).is_dir()).map(|f| format!("{} doesn't exist any more. Press f to change #{number}'s folders.", dirs::tilde(f, &self.home)))
         };
         if let Some(why) = why {
@@ -220,12 +224,23 @@ impl App {
         }
     }
 
+    /// Why ticket `number` can't go to `squad` because it has no folder, if that is so.
+    fn needs_a_folder(&self, number: u32, squad: &Squad) -> Option<String> {
+        let t = self.ticket(number)?;
+        (squad.needs_folder && t.folders.is_empty()).then(|| format!("The {} squad needs a folder to work in, and #{number} has none. Press f to give it one.", squad.name))
+    }
+
     /// Enter in the squad picker: the ticket goes to that squad.
     pub(super) fn take_squad_pick(&mut self) {
         let Some(squad) = self.sq.pick.get(self.sq.pick_selected).cloned() else { return };
         if let Some(first) = crate::squadfile::problems(&squad).into_iter().next() {
             // The picker stays open: another squad can be picked.
             self.notify(format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name));
+            return;
+        }
+        if let Some(why) = self.needs_a_folder(self.sq.pick_ticket, &squad) {
+            // Here too: a squad that needs no folder can still be picked.
+            self.notify(why);
             return;
         }
         self.mode = Mode::List;
@@ -250,6 +265,9 @@ impl App {
         let (Some(squad), Some(project)) = (crate::squadfile::get(&self.config, squad), self.open_project.clone()) else { return };
         if !self.ticket(number).is_some_and(|t| t.state == State::New && t.busy.is_none()) {
             return;
+        }
+        if let Some(why) = self.needs_a_folder(number, &squad) {
+            return self.notify(why);
         }
         self.notify(format!("Handing #{number} to the {} squad, as you said.", squad.name));
         self.make_worktrees(&project, number, squad);
@@ -383,9 +401,18 @@ impl App {
     }
 
     /// A worktree for each git folder, off the UI thread (git can be slow on a big repository or a network folder);
-    /// the ticket shows "Making the worktree…" meanwhile.
+    /// the ticket shows "Making the worktree…" meanwhile. A squad that never works in a worktree, or a ticket with no
+    /// folder, goes straight on to its leader.
     fn make_worktrees(&mut self, project: &str, number: u32, squad: Squad) {
         let Some(t) = self.ticket_on_disk(project, number) else { return };
+        if squad.needs_folder && t.folders.is_empty() {
+            // Its folders were taken away while the commander checked.
+            let says = format!("The {} squad needs a folder to work in, and #{number} has none.", squad.name);
+            return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &says, says.clone());
+        }
+        if !squad.worktree.makes_worktrees() || t.folders.is_empty() {
+            return self.after_worktrees(project, number, squad, Ok(Vec::new()));
+        }
         let git = self.git_program.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
@@ -411,9 +438,22 @@ impl App {
             return;
         }
         let session = squads::new_session_id();
+        // Where it works: the worktrees just made, the folders as they are, or the ticket's own work folder.
+        let place = match self.ticket_on_disk(project, number) {
+            Some(mut t) => {
+                t.worktrees = worktrees.clone();
+                Place::of(squad.worktree, &t)
+            }
+            None => return,
+        };
+        let work = crate::tickets::work_dir(&self.config, project, number);
+        if let Err(e) = std::fs::create_dir_all(&work) {
+            let notice = format!("Couldn't start the squad: couldn't make the ticket's work folder ({e})");
+            return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &notice, notice.clone());
+        }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
         // moment, whatever is changed on the Squads tab meanwhile.
-        let launch = Launch::of(&squad, AgentNames::SquadRole);
+        let launch = Launch::of(&squad, AgentNames::SquadRole, place);
         let k = self.ticket_on_disk(project, number).map_or(0, |t| t.leaders.len()) + 1;
         let snapshot = match Tickets::open(&self.config, project).save_snapshot(number, k, &launch.to_json()) {
             Ok(name) => name,
@@ -435,7 +475,7 @@ impl App {
         let Some(t) = self.ticket_on_disk(project, number) else { return };
         let body = Tickets::open(&self.config, project).body(&t);
         let project_name = self.projects.get(project).map(|p| p.name.clone()).unwrap_or_default();
-        let first = squads::first_message(&t, &project_name, &body);
+        let first = squads::first_message(&t, &project_name, &body, place, &work.to_string_lossy());
         // Beside the ticket only if the user is still on that project's screen and not in another session.
         let show = self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
         match self.launch_leader_in(project, number, Some(&first), show) {
@@ -474,19 +514,22 @@ impl App {
     fn launch_leader_in(&mut self, project: &str, number: u32, first: Option<&str>, show: bool) -> Result<(), String> {
         let t = self.ticket_on_disk(project, number).ok_or_else(|| format!("#{number} isn't there any more"))?;
         let leader = t.leader().cloned().ok_or_else(|| format!("#{number} has no squad"))?;
-        let launch = self.leader_launch(project, &leader)?;
-        let folders = t.work_folders();
-        let dir = folders.first().cloned().ok_or_else(|| format!("#{number} has no folder to work in"))?;
+        let launch = self.leader_launch(project, &leader, &t)?;
+        // The work folder is made again if it has gone (a leader continued after it was deleted by hand).
+        let work = crate::tickets::work_dir(&self.config, project, number);
+        std::fs::create_dir_all(&work).map_err(|e| format!("couldn't make the ticket's work folder ({e})"))?;
+        let (dir, add_dirs) = squads::start_dirs(&t, launch.work_folder, &work.to_string_lossy()).ok_or_else(|| format!("#{number} has no folder to work in"))?;
         if !Path::new(&dir).is_dir() {
             return Err(format!("{} doesn't exist any more", dirs::tilde(&dir, &self.home)));
         }
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
-        let args = squads::leader_args(&launch, &exe, &leader.session, &squads::session_name(&launch.name, &t), &folders[1..], first);
+        let args = squads::leader_args(&launch, &exe, &leader.session, &squads::session_name(&launch.name, &t), &add_dirs, first);
         // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
         #[cfg(test)]
         {
-            let _ = (args, show);
+            let _ = show;
             self.sq.launched.push(number);
+            self.sq.launched_with.push((dir, args));
             Ok(())
         }
         #[cfg(not(test))]
@@ -521,10 +564,10 @@ impl App {
         }
     }
 
-    /// What a leader of `project` is started (or continued) with: its snapshot, the squad as it was when it first
-    /// started. A leader from before there were snapshots continues with its squad as it is now, under the names it
-    /// began with.
-    pub fn leader_launch(&self, project: &str, leader: &Leader) -> Result<Launch, String> {
+    /// What a leader of `project` (of ticket `t`) is started (or continued) with: its snapshot, the squad as it was
+    /// when it first started. A leader from before there were snapshots continues with its squad as it is now, under
+    /// the names it began with.
+    pub fn leader_launch(&self, project: &str, leader: &Leader, t: &Ticket) -> Result<Launch, String> {
         let store = Tickets::open(&self.config, project);
         if leader.snapshot.is_some() {
             return store
@@ -533,7 +576,7 @@ impl App {
                 .ok_or_else(|| "what it was started with can't be read any more".to_string());
         }
         let squad = crate::squadfile::get(&self.config, &leader.squad).ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
-        Ok(Launch::of(&squad, leader.names))
+        Ok(Launch::of(&squad, leader.names, Place::of(squad.worktree, t)))
     }
 
     /// Enter on a ticket that has a leader: its session beside it, running or continued.

@@ -8,7 +8,7 @@
 use super::*;
 use crate::ai::{AiError, Reply, Request};
 use crate::instructions;
-use crate::squadfile::{self, Back, Kind, Listed, Squad, Step as WStep};
+use crate::squadfile::{self, Back, Kind, Listed, Squad, Step as WStep, WorktreeRule};
 use std::sync::mpsc::TryRecvError;
 
 /// How long drafting a squad may take before it is given up on.
@@ -26,6 +26,10 @@ pub enum SqFocus {
 pub enum DRow {
     Name,
     CanDo,
+    /// A ticket must have a folder for it (a switch).
+    NeedsFolder,
+    /// Whether it works in a git worktree (always, when the folder is a git repo, never).
+    Worktree,
     LeaderModel,
     LeaderPrompt,
     MemberName(usize),
@@ -43,7 +47,7 @@ impl DRow {
     /// The section it is in: 0 About, 1 Leader, 2 Members, 3 Workflow.
     pub fn section(self) -> usize {
         match self {
-            DRow::Name | DRow::CanDo => 0,
+            DRow::Name | DRow::CanDo | DRow::NeedsFolder | DRow::Worktree => 0,
             DRow::LeaderModel | DRow::LeaderPrompt => 1,
             DRow::Step(_) | DRow::AddStep => 3,
             _ => 2,
@@ -53,7 +57,7 @@ impl DRow {
 
 /// The rows of a squad's details.
 pub fn detail_rows(s: &Squad) -> Vec<DRow> {
-    let mut out = vec![DRow::Name, DRow::CanDo, DRow::LeaderModel, DRow::LeaderPrompt];
+    let mut out = vec![DRow::Name, DRow::CanDo, DRow::NeedsFolder, DRow::Worktree, DRow::LeaderModel, DRow::LeaderPrompt];
     for i in 0..s.members.len() {
         out.extend([DRow::MemberName(i), DRow::MemberModel(i), DRow::MemberFiles(i), DRow::MemberCommands(i), DRow::MemberWeb(i), DRow::MemberPrompt(i)]);
     }
@@ -90,6 +94,8 @@ pub enum TextFor {
 /// What the small list open over the tab is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceFor {
+    /// Whether the squad works in a git worktree.
+    Worktree,
     LeaderModel,
     MemberModel(usize),
     /// Who does step `i`.
@@ -455,6 +461,11 @@ impl App {
         match row {
             DRow::Name => self.open_squad_name(SquadName::Name, &s.name),
             DRow::CanDo => self.open_squad_text(TextFor::CanDo, &s.can_do, squadfile::CAN_DO_MAX),
+            DRow::NeedsFolder => self.squad_toggle(),
+            DRow::Worktree => {
+                let options = WorktreeRule::ALL.iter().map(|r| (r.label().to_string(), r.id().to_string())).collect();
+                self.open_choice(ChoiceFor::Worktree, "Does the squad work in a git worktree of the ticket's folder", options, s.worktree.id());
+            }
             DRow::LeaderModel => self.open_choice(ChoiceFor::LeaderModel, "Model for the leader", model_options(), &s.leader.model),
             DRow::MemberModel(i) => {
                 let (name, model) = (s.members[i].name.clone(), s.members[i].model.clone());
@@ -473,6 +484,19 @@ impl App {
     /// Space (or Enter) on a switch: turn it on or off.
     fn squad_toggle(&mut self) {
         let Some(row) = self.sqt.drow() else { return };
+        if row == DRow::NeedsFolder {
+            let Some(mut s) = self.squad_to_change() else { return };
+            s.needs_folder = !s.needs_folder;
+            let said = if s.needs_folder {
+                format!("The {} squad needs a folder now: a ticket without one can't be handed to it.", s.name)
+            } else {
+                format!("The {} squad takes tickets without a folder now; it works in the ticket's own work folder then.", s.name)
+            };
+            if self.commit_squad(s) {
+                self.notify(said);
+            }
+            return;
+        }
         let (DRow::MemberFiles(i) | DRow::MemberCommands(i) | DRow::MemberWeb(i)) = row else { return };
         let Some(mut s) = self.squad_to_change() else { return };
         let m = &mut s.members[i];
@@ -634,6 +658,18 @@ impl App {
         }
         let Some(mut s) = self.squad_to_change() else { return };
         let said = match purpose {
+            ChoiceFor::Worktree => {
+                let Some(rule) = WorktreeRule::from_id(&value) else { return };
+                if s.worktree == rule {
+                    return;
+                }
+                s.worktree = rule;
+                match rule {
+                    WorktreeRule::Always => "The squad works in a git worktree of each of the ticket's folders in git now; other folders as they are.".to_string(),
+                    WorktreeRule::WhenGit => "The squad works in a git worktree when the ticket's folder is a git repo now, and in the folder itself when it isn't.".to_string(),
+                    WorktreeRule::Never => "The squad never works in a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.".to_string(),
+                }
+            }
             ChoiceFor::LeaderModel => {
                 s.leader.model = value;
                 format!("The leader runs on {label} now.")

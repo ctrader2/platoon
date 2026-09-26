@@ -271,7 +271,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
 
 /// A ticket `a` would hand to a squad now (the hint is only offered then; `a` says why not otherwise).
 fn handable(app: &App, t: &Ticket) -> bool {
-    t.state == State::New && !t.folders.is_empty() && tickets::is_ready(t, app.tickets())
+    t.state == State::New && tickets::is_ready(t, app.tickets())
 }
 
 /// The keys of a ticket's own screen.
@@ -759,11 +759,19 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         head.push(Line::from(vec![label(if i == 0 { "Worktree" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
     }
     if x.folders.is_empty() {
-        head.push(Line::from(vec![label("Folders"), Span::styled("No folder yet", Style::new().fg(t.subtext))]));
+        head.push(Line::from(vec![label("Folders"), Span::styled("No folder", Style::new().fg(t.subtext))]));
     }
     for (i, folder) in x.folders.iter().enumerate() {
         let shown = fit_start(&tilde(folder, &app.home), w.saturating_sub(LABEL));
         head.push(Line::from(vec![label(if i == 0 { "Folders" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
+    }
+    // The private work folder platoon keeps for the ticket, once a squad has had it.
+    if x.leader().is_some() {
+        if let Some(store) = app.tickets_store() {
+            let work = tickets::work_dir(&app.config, store.project(), x.number);
+            let shown = fit_start(&tilde(&work.to_string_lossy(), &app.home), w.saturating_sub(LABEL));
+            head.push(Line::from(vec![label("Work folder"), Span::styled(shown, Style::new().fg(t.text))]));
+        }
     }
     if x.blocked_by.is_empty() {
         head.push(Line::from(vec![label("Waits for"), Span::styled("nothing", Style::new().fg(t.subtext))]));
@@ -2974,7 +2982,13 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         .pick
         .iter()
         .map(|s| {
-            let text = if crate::squadfile::problems(s).is_empty() { s.can_do.clone() } else { format!("Needs fixing on the Squads tab first. {}", s.can_do) };
+            let text = if !crate::squadfile::problems(s).is_empty() {
+                format!("Needs fixing on the Squads tab first. {}", s.can_do)
+            } else if s.needs_folder && x.folders.is_empty() {
+                format!("Needs a folder, and #{} has none. {}", x.number, s.can_do)
+            } else {
+                s.can_do.clone()
+            };
             wrap(&text, inner_w.saturating_sub(2))
         })
         .collect();
@@ -2987,8 +3001,12 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let [head, sep, list, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(fit_end(&format!("#{} {}", x.number, x.title), head.width as usize)).style(Style::new().fg(t.text)), head);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    // Scrolled so the picked squad shows: from the first one that leaves room for it.
+    let picked = app.sq.pick_selected.min(rows.len().saturating_sub(1));
+    let fits = |from: usize| rows.get(from..=picked).map_or(true, |r| r.iter().map(|r| r.len() as u16 + 2).sum::<u16>() <= list.height + 1);
+    let start = (0..=picked).find(|&k| fits(k)).unwrap_or(picked);
     let mut y = list.y;
-    for (i, (s, lines)) in app.sq.pick.iter().zip(&rows).enumerate() {
+    for (i, (s, lines)) in app.sq.pick.iter().zip(&rows).enumerate().skip(start) {
         let h = (lines.len() as u16 + 1).min(list.bottom().saturating_sub(y));
         if h == 0 {
             break;

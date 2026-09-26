@@ -869,6 +869,13 @@ fn is_snapshot_file(name: &str) -> bool {
     name.ends_with(".json") && !name.contains('/') && !name.contains('\\') && !name.starts_with('.')
 }
 
+/// The private work folder platoon keeps for ticket `number`, beside its body (`tickets/<NN>-work/`): a squad that
+/// doesn't work in the ticket's folders works there, and every squad may keep notes and drafts there. Made when a
+/// squad is handed the ticket; platoon never removes it.
+pub fn work_dir(config: &Path, project: &str, number: u32) -> PathBuf {
+    bodies_dir(config, project).join(format!("{number:02}-work"))
+}
+
 /// The name of the file a squad's result for ticket `number` is kept in, beside the bodies.
 pub fn result_file(number: u32) -> String {
     format!("{number:02}-result.md")
@@ -984,10 +991,11 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
 }
 
 const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>]
-                           [--folder <path>]... [--waits-for <number>]...
+                           [--folder <path>... | --no-folder] [--waits-for <number>]...
        platoon ticket list [--project <name or id>] [--json]
   add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
-         in, else the template. Without --folder the ticket works in the current folder. Say in the body how
+         in, else the template. Without --folder the ticket works in the current folder; --no-folder makes one
+         without a folder (for a squad that needs none: research, a summary). Say in the body how
          far to take the work (\"How far: a local commit\", say); a squad stops at local changes when it doesn't say
   list   the tickets, open ones first, then the Done and Cancelled ones";
 
@@ -1033,12 +1041,15 @@ fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, S
 fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path) -> Result<u32, String> {
     let (mut project, mut title, mut body_file) = (None, None, None);
     let (mut folders, mut blocked): (Vec<String>, Vec<u32>) = (Vec::new(), Vec::new());
+    let mut no_folder = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
             "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
             "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
+            // A ticket for a squad that needs no folder (research, a summary).
+            "--no-folder" => no_folder = true,
             // How far to take the work is no field any more: the ticket's own text says it.
             f if f == "--how-far" || f.starts_with("--how-far=") => return Err(HOW_FAR_GONE.into()),
             "--folder" => {
@@ -1082,8 +1093,11 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
     if p.archived {
         return Err(archived_refusal(&p.name));
     }
+    if no_folder && !folders.is_empty() {
+        return Err("--no-folder and --folder don't go together".into());
+    }
     // No --folder: the folder it was run in (where a session asking for the ticket is working).
-    if folders.is_empty() {
+    if folders.is_empty() && !no_folder {
         folders.push(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()).to_string_lossy().into_owned());
     }
     let mut tickets = Tickets::open(config, &p.id);
@@ -1540,6 +1554,15 @@ mod tests {
         let full = |p: &Path| p.canonicalize().unwrap().to_string_lossy().into_owned();
         assert_eq!(t.get(1).unwrap().folders, [full(&here)]);
         assert_eq!(t.get(2).unwrap().folders, [full(&other)], "an explicit --folder replaces the current folder");
+        // --no-folder: a ticket without one, for a squad that needs none; not with --folder.
+        call(&["add", "--project", "Web", "--title", "Research it", "--no-folder"]);
+        assert!(Tickets::open(&d, &id).get(3).unwrap().folders.is_empty());
+        let args: Vec<String> = ["add", "--project", "Web", "--title", "Both", "--no-folder", "--folder", other.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(cli(&args, &d, &mut "".as_bytes(), true, &here, &mut out, &mut err), 1);
+        assert_eq!(String::from_utf8(err).unwrap(), "platoon ticket add: --no-folder and --folder don't go together\n");
+        assert!(Tickets::open(&d, &id).get(4).is_none(), "nothing made");
+        assert!(USAGE.contains("--no-folder"));
     }
 
     #[test]
