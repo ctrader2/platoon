@@ -976,7 +976,7 @@ pub(crate) mod tests {
         /// A stand-in for `claude`: records its arguments (one per line, NUL-free), folder, environment and stdin under
         /// `dir/rec.*`, then runs `body` (a shell snippet).
         pub fn new(name: &str, body: &str) -> Fake {
-            let dir = std::env::temp_dir().join(format!("platoon-ai-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-ai-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             let cache = dir.join("cache");
@@ -1645,7 +1645,7 @@ pub(crate) mod tests {
     #[test]
     #[should_panic(expected = "real `claude`")]
     fn a_unit_test_that_would_reach_the_real_claude_fails_loudly() {
-        let cache = std::env::temp_dir().join(format!("platoon-ai-guard-{}", std::process::id()));
+        let cache = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-ai-guard-{}", std::process::id())));
         let _ = Runner::with_program(&cache, "claude").run(&on(), &req());
     }
 

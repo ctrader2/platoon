@@ -639,7 +639,7 @@ mod tests {
 
     impl World {
         fn new(name: &str) -> Self {
-            let base = std::env::temp_dir().join(format!("platoon-mcp-{name}-{}", std::process::id()));
+            let base = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-mcp-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&base);
             let cwd = base.join("home/code/app/sub");
             fs::create_dir_all(&cwd).unwrap();

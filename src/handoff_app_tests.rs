@@ -158,8 +158,13 @@ fn the_brief_can_be_typed_into_before_it_is_accepted() {
 
     // The cursor starts at the top, where the document starts; Down and End take it to the end.
     assert_eq!(app.handoff.cursor, 0);
-    for _ in 0..before.lines().count() + 5 {
+    // (Down until it stops moving: a long temp path wraps into more rows than the document has lines.)
+    loop {
+        let at = app.handoff.cursor;
         key(&mut app, KeyCode::Down);
+        if app.handoff.cursor == at {
+            break;
+        }
     }
     key(&mut app, KeyCode::End);
     assert_eq!(app.handoff.cursor, before.chars().count());
@@ -233,6 +238,82 @@ fn esc_calls_the_whole_thing_off_and_changes_nothing() {
     assert!(matches!(app.mode, Mode::List));
     app.refresh_until_for_test(10, "the cancelled call to end", |a| !a.handoff_busy());
     assert!(fake.pids().iter().all(|&p| !crate::testkit::alive(p)), "the call's process is gone");
+}
+
+/// Hold the hand-off's worker just before it reads this transcript, until the sender sends (or is dropped).
+fn hold_read(w: &World, id: &str) -> std::sync::mpsc::Sender<()> {
+    let path = w.root.join("projects").join("-some-project").join(format!("{id}.jsonl"));
+    assert!(path.is_file());
+    let (tx, rx) = std::sync::mpsc::channel();
+    App::hold_handoff_read_for_test(path, rx);
+    tx
+}
+
+#[test]
+fn the_transcript_is_read_off_the_screen_s_thread_and_the_screen_keeps_going_meanwhile() {
+    let (w, fake) = world("handoff-slow-read");
+    fake.reply_default(BRIEF);
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    // The read is held for as long as the test likes: `h` must come back at once all the same.
+    let release = hold_read(&w, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    assert!(matches!(app.mode, Mode::Handoff) && app.handoff.state == HandoffState::Asking, "the box opens while the transcript is read");
+    let mut t = term(80, 24);
+    for _ in 0..5 {
+        app.refresh_with(Vec::new(), false);
+        key(&mut app, KeyCode::Down);
+        key(&mut app, KeyCode::Up);
+        let screen = draw(&mut t, &app).join("\n");
+        assert!(screen.contains("Asking Claude what to hand on from"), "the screen says it is working: {screen}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(app.handoff_busy() && app.handoff.state == HandoffState::Asking);
+    assert_eq!(fake.calls(), 0, "nothing is asked before the conversation has been read");
+    // Let the read go: the outcome is what it always was.
+    release.send(()).unwrap();
+    wait_ready(&mut app);
+    assert_eq!(app.handoff.state, HandoffState::Ready);
+    let text = app.handoff.text.clone();
+    assert!(text.contains("- Started: ") && text.contains(" between)\n"), "{text}");
+    assert!(text.contains("- Messages from the user: 1 "), "{text}");
+    assert!(text.contains("- Tokens the previous session used: 50,000 sent to Claude"), "{text}");
+    assert!(text.contains("## Executive summary\n\nThe basket page is in.\n"), "{text}");
+    assert_eq!(fake.calls(), 1);
+    assert!(fake.stdin(1).contains("- Add a basket page to the shop"), "{}", fake.stdin(1));
+
+    // Esc while the read is held: once it is let go, nothing is asked at all.
+    let release = hold_read(&w, "sess-1");
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Char('h'));
+    assert_eq!(app.handoff.state, HandoffState::Asking);
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    release.send(()).unwrap();
+    app.refresh_until_for_test(10, "the called-off hand-off to end", |a| !a.handoff_busy());
+    assert_eq!(fake.calls(), 1, "the call was never made");
+    assert!(matches!(app.mode, Mode::List) && app.active_notice().is_none());
+}
+
+#[test]
+fn a_conversation_with_nothing_in_it_yet_says_so_and_asks_nothing() {
+    let (w, fake) = world("handoff-empty");
+    fake.reply_default(BRIEF);
+    // Only a short "yes" (not counted as a message) and an answer with no words in it: nothing to hand on.
+    let at = crate::testkit::now_ms() - 60_000;
+    let lines = vec![
+        serde_json::json!({"type":"user","cwd":shop(&w),"timestamp":crate::testkit::iso(at - 5000),"message":{"role":"user","content":"yes"}}).to_string(),
+        serde_json::json!({"type":"assistant","cwd":shop(&w),"timestamp":crate::testkit::iso(at),"message":{"model":"claude-sonnet-5","content":[],"usage":{"input_tokens":10}}}).to_string(),
+    ];
+    w.transcript_lines("sess-1", &lines);
+    let mut app = app_of(&w, &fake);
+    select(&mut app, "sess-1");
+    key(&mut app, KeyCode::Char('h'));
+    app.refresh_until_for_test(10, "the hand-off to give up", |a| !a.handoff_busy());
+    assert!(matches!(app.mode, Mode::List), "the box closes again");
+    let said = app.active_notice().unwrap_or_default().to_string();
+    assert!(said.contains("yet to hand on"), "{said}");
+    assert_eq!(fake.calls(), 0, "nothing was asked");
 }
 
 #[test]

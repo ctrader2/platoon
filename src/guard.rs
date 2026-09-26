@@ -303,7 +303,7 @@ mod tests {
 
     impl NotesRig {
         fn new(name: &str) -> NotesRig {
-            let base = std::env::temp_dir().join(format!("platoon-guard-notes-{name}-{}", std::process::id()));
+            let base = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-guard-notes-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&base);
             let r = NotesRig { config: base.join("config"), cache: base.join("cache"), base };
             fs::create_dir_all(&r.config).unwrap();

@@ -14,8 +14,35 @@ use std::{
 pub const BIN: &str = env!("CARGO_BIN_EXE_platoon");
 pub const WAIT: Duration = Duration::from_secs(10);
 
+/// Directories to remove when the test binary exits.
+static AT_EXIT: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+static REGISTER: std::sync::Once = std::sync::Once::new();
+
+/// A test's temp directory, removed when the test binary exits - whether its tests passed or failed. Returns
+/// `path` as it is. (The same as `testkit::removed_at_exit` in the unit tests.)
+pub fn removed_at_exit(path: PathBuf) -> PathBuf {
+    REGISTER.call_once(|| {
+        // SAFETY: registers a plain `extern "C" fn` with the C library, which calls it once as the process exits.
+        unsafe { libc::atexit(remove_at_exit) };
+    });
+    AT_EXIT.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone());
+    path
+}
+
+extern "C" fn remove_at_exit() {
+    // Never wait at exit: a lock still held means a test thread is mid-registration; its dirs are left alone.
+    let dirs = match AT_EXIT.try_lock() {
+        Ok(mut dirs) => std::mem::take(&mut *dirs),
+        Err(std::sync::TryLockError::Poisoned(e)) => std::mem::take(&mut *e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    for d in dirs {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
 pub fn tmp(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id()));
+    let d = removed_at_exit(std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

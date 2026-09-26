@@ -724,7 +724,7 @@ mod tests {
 
     impl Rig {
         fn new(name: &str) -> Rig {
-            let base = std::env::temp_dir().join(format!("platoon-nrun-{name}-{}", std::process::id()));
+            let base = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-nrun-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&base);
             let (config, cache, root) = (base.join("config"), base.join("cache"), base.join("claude"));
             for d in [&config, &cache, &root.join("projects/-work")] {

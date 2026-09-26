@@ -760,7 +760,7 @@ mod tests {
     }
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("platoon-smart-{name}-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-smart-{name}-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

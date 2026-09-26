@@ -10,9 +10,37 @@ use std::{
     path::PathBuf,
     process::{Child, Command},
     sync::atomic::{AtomicUsize, Ordering},
+    sync::{Mutex, Once},
 };
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// Directories to remove when the test binary exits.
+static AT_EXIT: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static REGISTER: Once = Once::new();
+
+/// A test's temp directory, removed when the test binary exits - whether its tests passed or failed, and even when
+/// a thread a test left running wrote into it after the test's own clean-up. Returns `path` as it is.
+pub fn removed_at_exit(path: PathBuf) -> PathBuf {
+    REGISTER.call_once(|| {
+        // SAFETY: registers a plain `extern "C" fn` with the C library, which calls it once as the process exits.
+        unsafe { libc::atexit(remove_at_exit) };
+    });
+    AT_EXIT.lock().unwrap_or_else(|e| e.into_inner()).push(path.clone());
+    path
+}
+
+extern "C" fn remove_at_exit() {
+    // Never wait at exit: a lock still held means a test thread is mid-registration; its dirs are left alone.
+    let dirs = match AT_EXIT.try_lock() {
+        Ok(mut dirs) => std::mem::take(&mut *dirs),
+        Err(std::sync::TryLockError::Poisoned(e)) => std::mem::take(&mut *e.into_inner()),
+        Err(std::sync::TryLockError::WouldBlock) => return,
+    };
+    for d in dirs {
+        let _ = fs::remove_dir_all(d);
+    }
+}
 
 pub struct World {
     pub base: PathBuf,
@@ -45,7 +73,7 @@ pub fn now_ms() -> u64 {
 
 impl World {
     pub fn new(name: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("platoon-ut-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        let base = removed_at_exit(std::env::temp_dir().join(format!("platoon-ut-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
         let _ = fs::remove_dir_all(&base);
         let (root, cache, config) = (base.join("claude"), base.join("cache"), base.join("config"));
         for d in [root.join("sessions"), root.join("projects"), cache.clone()] {
@@ -179,7 +207,7 @@ pub struct AiFake {
 
 impl AiFake {
     pub fn new(name: &str) -> AiFake {
-        let dir = std::env::temp_dir().join(format!("platoon-aifake-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst)));
+        let dir = removed_at_exit(std::env::temp_dir().join(format!("platoon-aifake-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("calls")).unwrap();
         let d = dir.display();

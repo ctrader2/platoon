@@ -852,7 +852,7 @@ mod tests {
 
     #[test]
     fn the_reader_lists_interactive_and_background_processes_oldest_first_from_a_registry_folder() {
-        let dir = std::env::temp_dir().join(format!("platoon-claude-live-{}", std::process::id()));
+        let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-live-{}", std::process::id())));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("sessions")).unwrap();
         let me = std::process::id();
@@ -1003,7 +1003,7 @@ mod hidden_tests {
     use std::os::unix::fs::symlink;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("platoon-hidden-{name}-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-hidden-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d

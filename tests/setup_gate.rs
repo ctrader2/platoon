@@ -1,5 +1,7 @@
 //! `platoon` must not start until `platoon setup` has been run, and setup must be safely repeatable.
 
+mod common;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::{
     fs,
@@ -14,7 +16,7 @@ use std::{
 const BIN: &str = env!("CARGO_BIN_EXE_platoon");
 
 fn dirs(name: &str) -> (PathBuf, PathBuf) {
-    let base = std::env::temp_dir().join(format!("platoon-gate-{name}-{}", std::process::id()));
+    let base = common::removed_at_exit(std::env::temp_dir().join(format!("platoon-gate-{name}-{}", std::process::id())));
     let _ = fs::remove_dir_all(&base);
     let (claude, cache) = (base.join("claude"), base.join("cache"));
     fs::create_dir_all(&claude).unwrap();

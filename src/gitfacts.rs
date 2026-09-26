@@ -275,7 +275,7 @@ mod tests {
 
     impl Repo {
         fn new(name: &str) -> Repo {
-            let dir = std::env::temp_dir().join(format!("platoon-git-{name}-{}", std::process::id()));
+            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-git-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             Repo { dir }

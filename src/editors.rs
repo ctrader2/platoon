@@ -333,7 +333,7 @@ mod tests {
 
     impl Fake {
         fn new(name: &str, programs: &[&str]) -> Self {
-            let dir = std::env::temp_dir().join(format!("platoon-editors-{name}-{}", std::process::id()));
+            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-editors-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             for p in programs {
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn a_terminal_editor_runs_in_platoons_own_window_and_ends_when_it_exits() {
-        let dir = std::env::temp_dir().join(format!("platoon-editors-run-{}", std::process::id()));
+        let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-editors-run-{}", std::process::id())));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let file = dir.join("project.md");

@@ -4,6 +4,8 @@
 //! The same hook also hands a project's notes to the conversation when they have changed, which is checked here
 //! too: what it prints on standard output is the context Claude Code adds to the prompt.
 
+mod common;
+
 use serde_json::Value;
 use std::{
     fs,
@@ -24,7 +26,7 @@ struct Env {
 
 impl Env {
     fn new(name: &str) -> Self {
-        let base = std::env::temp_dir().join(format!("platoon-guard-{name}-{}", std::process::id()));
+        let base = common::removed_at_exit(std::env::temp_dir().join(format!("platoon-guard-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&base);
         let (root, cache, config) = (base.join("claude"), base.join("cache"), base.join("config"));
         fs::create_dir_all(root.join("sessions")).unwrap();

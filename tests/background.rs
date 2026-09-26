@@ -72,7 +72,7 @@ impl World {
             ("PLATOON_CONFIG_DIR", self.config.to_string_lossy().into()),
             ("PLATOON_CLAUDE_BIN", self.fake_claude().to_string_lossy().into()),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
-            ("NO_COLOR", String::new()), // the helper sets it, which makes crossterm draw without any color
+            ("NO_COLOR", String::new()), // the helper sets it, which makes platoon draw without any color
         ]
     }
 

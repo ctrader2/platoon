@@ -588,7 +588,7 @@ mod tests {
 
     impl Rig {
         fn new(name: &str, settings: Settings) -> Self {
-            let dir = std::env::temp_dir().join(format!("platoon-host-{name}-{}", std::process::id()));
+            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-host-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(dir.join("claude/sessions")).unwrap();
             save(&dir.join("config"), &settings).unwrap();

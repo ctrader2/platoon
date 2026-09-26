@@ -1,6 +1,8 @@
 //! Black-box tests of the "sessions outlive platoon" guarantee, using the real binary.
 //! `sh` stands in for claude (via `--program` / PLATOON_CLAUDE_BIN).
 
+mod common;
+
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use std::{
     io::{self, Read, Write},
@@ -16,7 +18,7 @@ const BIN: &str = env!("CARGO_BIN_EXE_platoon");
 const WAIT: Duration = Duration::from_secs(10);
 
 fn cache(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id()));
+    let d = common::removed_at_exit(std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d

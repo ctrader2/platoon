@@ -122,7 +122,7 @@ mod tests {
 
     impl Rig {
         fn new(name: &str) -> Self {
-            let base = std::env::temp_dir().join(format!("platoon-sshook-{name}-{}", std::process::id()));
+            let base = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-sshook-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&base);
             Rig { config: base.join("config"), cache: base.join("cache"), base }
         }

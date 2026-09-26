@@ -480,8 +480,8 @@ fn the_pane_draws_the_markdown_styled_with_hanging_bullets_and_scrolls_in_drawn_
         notes.push_str(&format!("- 2026-09-25: decision number {n}\n"));
     }
     lab.project(Some(&notes));
-    // With NO_COLOR set (as the harness sets it) the terminal library turns every color change into a full reset,
-    // which takes bold and underline with it; empty, it is off, and the cells show what platoon asked for.
+    // With NO_COLOR set (as the harness sets it) platoon draws without color; empty, it is off, and the cells show
+    // the colors too.
     let mut env = lab.env();
     env.push(("NO_COLOR", String::new()));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
@@ -534,6 +534,36 @@ fn the_pane_draws_the_markdown_styled_with_hanging_bullets_and_scrolls_in_drawn_
     lab.open_notes(&mut t);
     t.wait_for_all(&["- Does VAT go in the basket total?", "* only for the EU"]);
     assert!(!t.stable().contains('•'));
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn with_no_color_set_the_colors_go_but_bold_and_underline_stay() {
+    let lab = Lab::new("notes-nocolor");
+    lab.project(Some(FORMATTED));
+    // The harness sets NO_COLOR=1: nothing is added to the environment here.
+    let env = lab.env();
+    assert!(!env.iter().any(|(k, _)| *k == "NO_COLOR"));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
+    t.wait_for("enter open");
+    lab.open_notes(&mut t);
+    t.wait_for_all(&["Summary", "A shop that sells socks online.", "Pricing"]);
+    let screen = t.stable();
+    let (r, c) = t.find("Summary").unwrap();
+    assert_eq!(t.attrs_at(r, c), (true, false, true), "a section heading is bold and underlined\n{screen}");
+    let (r, c) = t.find("Pricing").unwrap();
+    assert_eq!(t.attrs_at(r, c), (true, false, false), "a subheading is bold\n{screen}");
+    let (r, c) = t.find("socks online").unwrap();
+    assert!(t.attrs_at(r, c).0 && !t.attrs_at(r, c - 2).0, "**socks** is bold, the words around it are not\n{screen}");
+    // And no color reached the terminal: every cell is in its default colors.
+    for row in 0..30 {
+        for col in 0..110 {
+            assert_eq!((t.fg_at(row, col), t.bg_at(row, col)), (vt100::Color::Default, vt100::Color::Default), "{row},{col}\n{screen}");
+        }
+    }
+    let raw = String::from_utf8_lossy(&t.raw()).into_owned();
+    assert!(!raw.contains("[38;") && !raw.contains("[48;"), "no color sequence was written");
     t.send(b"q");
     t.wait_exit();
 }

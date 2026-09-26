@@ -185,6 +185,11 @@ fn setup() -> io::Result<()> {
 fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut app = app::App::new();
     let depth = colordepth::Depth::detect();
+    // NO_COLOR: platoon takes the colors out itself (`colordepth::strip`), so bold and underline survive.
+    let no_color = colordepth::no_color();
+    if no_color {
+        ratatui::crossterm::style::force_color_output(true);
+    }
     let start = Instant::now();
     let mut last_refresh = Instant::now();
     while !app.quit {
@@ -202,7 +207,11 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.sync_size(size.width, size.height);
         terminal.draw(|f| {
             ui::draw(f, &app);
-            depth.apply(f.buffer_mut());
+            if no_color {
+                colordepth::strip(f.buffer_mut());
+            } else {
+                depth.apply(f.buffer_mut());
+            }
         })?;
         if event::poll(Duration::from_millis(50))? {
             match event::read()? {

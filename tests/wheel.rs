@@ -20,7 +20,7 @@ fn env(base: &std::path::Path) -> Vec<(&'static str, String)> {
         ("PLATOON_CONFIG_DIR", dir("config")),
         ("PLATOON_CLAUDE_BIN", "sh".into()),
         ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
-        ("NO_COLOR", String::new()), // the helper sets it, which makes crossterm draw without any color
+        ("NO_COLOR", String::new()), // the helper sets it, which makes platoon draw without any color
     ]
 }
 

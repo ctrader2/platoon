@@ -409,7 +409,7 @@ mod tests {
     const NORD: &str = "palette = 0=#3b4252\npalette = 1=#bf616a\npalette = 2=#a3be8c\npalette = 3=#ebcb8b\npalette = 4=#81a1c1\npalette = 5=#b48ead\npalette = 6=#88c0d0\npalette = 7=#e5e9f0\npalette = 8=#596377\npalette = 9=#bf616a\npalette = 10=#a3be8c\npalette = 11=#ebcb8b\npalette = 12=#81a1c1\npalette = 13=#b48ead\npalette = 14=#8fbcbb\npalette = 15=#eceff4\nbackground = #2e3440\nforeground = #d8dee9\ncursor-color = #eceff4\ncursor-text = #282828\nselection-background = #eceff4\nselection-foreground = #4c566a\n";
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("platoon-usertheme-{name}-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-usertheme-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(d.join("themes")).unwrap();
         d
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn a_missing_folder_is_no_themes_and_creates_nothing() {
-        let d = std::env::temp_dir().join(format!("platoon-usertheme-none-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-usertheme-none-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         let mut r = Registry::open(&d);
         assert!(r.user().is_empty() && r.skipped().skipped_count() == 0);

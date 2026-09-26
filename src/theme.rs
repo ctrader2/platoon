@@ -823,7 +823,7 @@ mod tests {
     #[test]
     fn the_theme_list_includes_the_users_themes_marked_and_the_skipped_files_with_reasons() {
         use crate::colordepth::Depth;
-        let dir = std::env::temp_dir().join(format!("platoon-theme-list-{}", std::process::id()));
+        let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-theme-list-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("themes")).unwrap();
         std::fs::write(dir.join("themes/Deep Sea"), "background = #0a1622\nforeground = #dde6ee\n").unwrap();

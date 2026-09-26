@@ -1360,7 +1360,7 @@ My own notes, in my own words.
 
     #[test]
     fn the_state_file_keeps_what_platoon_wrote_by_heading_and_reads_a_file_from_before() {
-        let d = std::env::temp_dir().join(format!("platoon-nstate-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-nstate-{}", std::process::id())));
         let _ = std::fs::remove_dir_all(&d);
         assert_eq!(State::load(&d, "p1"), State::default());
         assert!(State::default().first_read("s1"));

@@ -609,39 +609,83 @@ and escape sequence removed before it is drawn. It is kept beside the project in
 ### Handing work on to a new session
 
 `h` on a conversation that is in a project - on the Sessions tab or in the project's own screen - hands that work on to a fresh
-conversation. platoon asks Claude for a short brief (what was done, what was decided, what is next), shows it in a box:
+conversation. A box opens straight away and says it is asking Claude; meanwhile platoon reads the conversation and, if the
+folder is a git repository, what git says about it (only reading, never changing anything, and giving up after 5 seconds).
+Then it shows a **hand-off document** with a fixed shape:
 
 ```
-╭ hand this work on ───────────────────────────────────────────────────────────────────────────╮
-│ A new session in ~/work/shop · project Web shop                                              │
-│ ──────────────────────────────────────────────────────────────────────────────────────────── │
-│ Carrying on from an earlier session. Here is where it stands.                                │
-│                                                                                              │
-│ What was done:                                                                               │
-│ The basket page is in and the totals add up.                                                 │
-│                                                                                              │
-│ Decisions made:                                                                              │
-│ - Baskets are session based                                                                  │
-│ - Totals include VAT                                                                         │
-│                                                                                              │
-│ What is next:                                                                                │
-│ Take card payments, starting with the checkout form.                                         │
-│                                                                                              │
-│ Read this, then carry on from there.                                                         │
-│ ──────────────────────────────────────────────────────────────────────────────────────────── │
-│ Edit it if you like. The old session is left exactly as it is.                               │
-│ ctrl+s start the new session   enter new line   esc cancel                                   │
-╰──────────────────────────────────────────────────────────────────────────────────────────────╯
+# Session hand-off: Basket page
+
+This is context for this session. The user will prompt you for the next course of action.
+
+- Written: 2026-09-25 14:03
+- Project: Web shop
+- Project notes: ~/.config/platoon/projects/p1/project.md
+- Previous session: Basket page, in ~/shop (not running)
+- Previous session id: 0b5e7c1a-... (`claude --resume 0b5e7c1a-...` opens it)
+- Started: 2026-09-25 11:58, last active 2026-09-25 14:03 (2 h 5 min between)
+- Model: Sonnet 5, context 42% full
+- Messages from the user: 14 (short replies like "yes" not counted)
+- Tokens the previous session used: 45,210 sent to Claude and 12,034 written by Claude
+- Git branch: main
+- Compared with origin/main, as of the last fetch: 2 commits not pushed yet
+- Uncommitted changes: 2 files
+- Last commit: a1b2c3d Add the basket
+- Commits since the session started: 2, newest first:
+  - a1b2c3d Add the basket
+  - 9f8e7d6 Start the totals
+
+## Executive summary
+
+The basket page is built and totals are next.
+
+## Work completed
+
+- Added the basket page
+
+## Files affected
+
+Not committed yet:
+- src/basket.rs (changed)
+Committed since the session started:
+- src/totals.rs
+
+## Current state and known gotchas
+
+- Totals ignore VAT for now
+
+## Next steps
+
+1. Add VAT to the totals
+2. Take card payments
 ```
 
-and waits. **You can type into it** - the arrows, Home, End, Backspace and Delete all work, `enter` starts a new line - and
-`ctrl+s` starts a **new** session in the same folder and the same project, with that text as its **first message**, visible in
-the conversation like anything else you typed. `esc` calls the whole thing off and changes nothing.
+- **The line under the title** tells the new session that the document is background, and that you will say what to do
+  next. You can delete it like any other line.
+- **The facts** (the list at the top) come from platoon itself: the project and where its notes are, the old session's
+  folder, id, whether it is still running, when it started and was last used, its model, how many messages you sent, the
+  tokens it used, and the git branch, uncommitted changes, last commit and the commits made during the session. A fact
+  platoon can't find out is left out, never guessed.
+- **Files affected** comes from git too. When the folder is not a git repository, Claude lists the files instead, and the
+  section says so.
+- **Claude writes only** the executive summary, the work completed, the current state and known gotchas, and the numbered
+  next steps. A section with nothing in it is left out.
 
-The old conversation is left exactly as it is: not archived, not stopped. The project's notes are not repeated in the brief -
-the new session is given those by the hooks, as every session in a project is. If Claude can't be asked (the master
-switch is off, the day's limit is spent, a failure has paused things) or the answer isn't understood, platoon says so plainly and
-nothing is started.
+Claude is sent the project's name, the folder's name, the conversation's name and summary, your first message and your
+last few (each cut short), one line of its last reply and the file names git gave. It is never sent the session id, and
+the project's notes are not repeated: the new session is given those by the hooks, as every session in a project is.
+
+**You can edit the document in the box.** The text wraps at the edge of the box and scrolls: the arrows move the cursor
+(up and down by a row on screen), Home and End go to the start and end of a line, PageUp and PageDown move a page, the
+mouse wheel scrolls, and `enter` starts a new line. The lines above and below the text say how much more there is ("↑ 3
+more lines above", "↓ 12 more lines below"). The document can be up to 20,000 characters.
+
+`ctrl+s` starts a **new** session in the same folder and the same project, with the document as its **first message**,
+visible in the conversation like anything else you typed. `esc` calls the whole thing off and changes nothing.
+
+The old conversation is left exactly as it is: not archived, not stopped. If Claude can't be asked (the master switch is
+off, the day's limit is spent, a failure has paused things), the conversation has nothing in it yet, or the answer isn't
+understood, platoon says so plainly and nothing is started.
 
 
 ## Sessions started in platoon keep running

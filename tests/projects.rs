@@ -158,7 +158,7 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     lab.save("aaaa-0001", "refactor the widget", 5);
     lab.save("bbbb-0002", "write the release notes", 2);
     let mut env = lab.env();
-    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
+    env.push(("NO_COLOR", String::new())); // the helper sets it, which makes platoon draw without any color
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
     t.wait_for("refactor the widget");
     t.wait_for_flat("1 Sessions 2 2 Projects 0");

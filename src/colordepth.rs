@@ -59,6 +59,26 @@ impl Depth {
     }
 }
 
+/// `NO_COLOR` is set to something (<https://no-color.org>; empty counts as unset, as the terminal library has it).
+pub fn no_color() -> bool {
+    no_color_with(&|k| std::env::var(k).ok())
+}
+
+pub fn no_color_with(env: &dyn Fn(&str) -> Option<String>) -> bool {
+    env("NO_COLOR").is_some_and(|v| !v.is_empty())
+}
+
+/// With `NO_COLOR`, platoon takes the colors out of the frame itself, as the last thing before it is flushed, and
+/// tells the terminal library to leave its own color handling alone. Left to the library, every color change
+/// becomes a bare `ESC [ m` - a full reset - which takes bold, underline and reverse video with it.
+pub fn strip(buf: &mut Buffer) {
+    for cell in &mut buf.content {
+        cell.fg = Color::Reset;
+        cell.bg = Color::Reset;
+        cell.underline_color = Color::Reset;
+    }
+}
+
 /// The nearest of the 6x6x6 cube and the 24-step gray ramp (232..=255), by squared distance in RGB. The
 /// sixteen terminal colors are never chosen: their look belongs to the user's terminal theme.
 pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
@@ -82,6 +102,22 @@ pub fn rgb_to_256(r: u8, g: u8, b: u8) -> u8 {
 mod tests {
     use super::*;
     use ratatui::{layout::Rect, style::Style};
+
+    #[test]
+    fn no_color_takes_every_color_out_and_keeps_the_modifiers() {
+        use ratatui::style::Modifier;
+        let env = |v: Option<&'static str>| move |k: &str| (k == "NO_COLOR").then_some(v).flatten().map(String::from);
+        assert!(no_color_with(&env(Some("1"))));
+        assert!(!no_color_with(&env(Some(""))), "empty counts as unset");
+        assert!(!no_color_with(&env(None)));
+        let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
+        buf.set_style(Rect::new(0, 0, 3, 1), Style::new().fg(Color::Rgb(1, 2, 3)).bg(Color::Indexed(9)).underline_color(Color::Red).add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED));
+        strip(&mut buf);
+        for cell in &buf.content {
+            assert_eq!((cell.fg, cell.bg, cell.underline_color), (Color::Reset, Color::Reset, Color::Reset));
+            assert_eq!(cell.modifier, Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED);
+        }
+    }
 
     #[test]
     fn black_and_white_are_the_cube_corners_not_the_ramp_ends() {

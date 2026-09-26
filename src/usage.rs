@@ -132,7 +132,7 @@ mod tests {
     use super::*;
 
     fn tmp(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("platoon-test-{name}-{}", std::process::id()));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-test-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
