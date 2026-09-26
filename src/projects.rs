@@ -483,7 +483,7 @@ impl Projects {
     }
 
     /// Delete a project: its sessions are in no project afterwards, its notes folder goes, and one backup copy
-    /// (the notes and the project's entry) is kept in `<cache>/deleted-projects/<id>/`, replacing an older one.
+    /// (the notes, the tickets and the project's entry) is kept in `<cache>/deleted-projects/<id>/`, replacing an older one.
     /// Conversations are never touched.
     pub fn delete(&mut self, id: &str, cache: &Path) -> io::Result<()> {
         if !safe_id(id) {
@@ -499,6 +499,20 @@ impl Projects {
         let notes = self.notes_path(id);
         if notes.exists() {
             fs::copy(&notes, backup.join("project.md"))?;
+        }
+        // The tickets too: the list and every body, as they are.
+        let tickets = crate::tickets::path_in(&self.config, id);
+        if tickets.exists() {
+            fs::copy(&tickets, backup.join("tickets.json"))?;
+        }
+        let bodies = crate::tickets::bodies_dir(&self.config, id);
+        if bodies.is_dir() {
+            fs::create_dir_all(backup.join("tickets"))?;
+            for e in fs::read_dir(&bodies)?.flatten() {
+                if e.path().is_file() {
+                    fs::copy(e.path(), backup.join("tickets").join(e.file_name()))?;
+                }
+            }
         }
         if let Some(e) = entry {
             let members: Vec<String> = self.members_of(id);
@@ -722,11 +736,16 @@ mod tests {
         let notes = p.notes_path(&a);
         fs::create_dir_all(notes.parent().unwrap()).unwrap();
         fs::write(&notes, "# notes\nkeep me").unwrap();
+        fs::write(crate::tickets::path_in(&d, &a), r#"{"next":2,"tickets":[]}"#).unwrap();
+        fs::create_dir_all(crate::tickets::bodies_dir(&d, &a)).unwrap();
+        fs::write(crate::tickets::bodies_dir(&d, &a).join("01-one.md"), "body").unwrap();
         p.delete(&a, &cache).unwrap();
         assert!(p.get(&a).is_none() && p.of("s1").is_none() && p.project_id_of("s2") == Some(b.as_str()));
         assert!(!d.join("projects").join(&a).exists(), "the notes folder is gone");
         let bak = cache.join("deleted-projects").join(&a);
         assert_eq!(fs::read_to_string(bak.join("project.md")).unwrap(), "# notes\nkeep me");
+        assert_eq!(fs::read_to_string(bak.join("tickets.json")).unwrap(), r#"{"next":2,"tickets":[]}"#);
+        assert_eq!(fs::read_to_string(bak.join("tickets").join("01-one.md")).unwrap(), "body");
         let entry: Value = serde_json::from_str(&fs::read_to_string(bak.join("project.json")).unwrap()).unwrap();
         assert_eq!((entry["project"]["name"].as_str(), entry["sessions"].clone()), (Some("a"), json!(["s1"])));
         assert!(!saved(&d)["sessions"].as_object().unwrap().contains_key("s1"));

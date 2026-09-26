@@ -17,10 +17,11 @@ pub const PTABS: &[(&str, &str)] = &[
     ("Archived", "No archived projects. Press a on a project to archive it."),
 ];
 
-/// The two panes of a project's screen.
+/// The three panes of a project's screen: Sessions over Tickets on the left, Notes on the right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pane {
     Sessions,
+    Tickets,
     Notes,
 }
 
@@ -31,6 +32,12 @@ pub enum NamePurpose {
     /// A new project, with this session put in it (from the project picker).
     NewFor(String),
     Rename(String),
+    /// A new ticket in the open project: its title.
+    NewTicket,
+    /// A new title for this ticket.
+    TicketTitle(u32),
+    /// How far this ticket goes, in the user's own words.
+    OwnWords(u32),
 }
 
 pub struct NameBox {
@@ -177,10 +184,11 @@ impl App {
             self.notify("No project selected");
             return;
         };
-        self.open_project = Some(p);
+        self.open_project = Some(p.clone());
         self.filter.clear();
         self.selected = 0;
         self.pane = Pane::Sessions;
+        self.open_tickets(&p);
         self.notes_top.set(0);
         self.update_view();
         self.poll_notes_status();
@@ -188,6 +196,7 @@ impl App {
 
     pub(super) fn close_project_screen(&mut self) {
         let Some(id) = self.open_project.take() else { return };
+        self.close_tickets();
         self.filter.clear();
         self.selected = 0;
         self.update_view();
@@ -234,13 +243,16 @@ impl App {
         match key.code {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
             KeyCode::Char('q') => return self.act(Action::Quit),
-            KeyCode::Char('/') => return self.act(Action::Search),
-            KeyCode::Char('s') => return self.act(Action::Settings),
+            KeyCode::Char('/') if self.tk.open.is_none() => return self.act(Action::Search),
+            // On a ticket (its screen, or its row in the Tickets pane) `s` is its state.
+            KeyCode::Char('s') if !self.ticket_has_keys() => return self.act(Action::Settings),
             // 1 is the first top-level tab, 2 the second; a number with no tab does nothing.
             KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => return self.switch_top(c as usize - '1' as usize),
             _ => {}
         }
-        if self.open_project.is_some() {
+        if self.open_project.is_some() && self.tk.open.is_some() {
+            self.ticket_screen_key(key);
+        } else if self.open_project.is_some() {
             self.project_screen_key(key);
         } else if self.top == TOP_PROJECTS {
             self.projects_key(key);
@@ -293,15 +305,24 @@ impl App {
         }
     }
 
+    /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is the ticket's state.
+    fn ticket_has_keys(&self) -> bool {
+        self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets)
+    }
+
     fn project_screen_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Left => self.pane = Pane::Sessions,
-            KeyCode::Right => self.pane = Pane::Notes,
+            KeyCode::Left => self.focus_pane(self.left_pane),
+            KeyCode::Right => self.focus_pane(Pane::Notes),
+            KeyCode::Tab => self.cycle_pane(1),
+            KeyCode::BackTab => self.cycle_pane(-1),
             KeyCode::Esc if !self.filter.is_empty() => {
                 self.filter.clear();
                 self.selected = 0;
             }
             KeyCode::Esc => self.act(Action::Leave),
+            // The Tickets pane has keys of its own (`n` there is a new ticket).
+            _ if self.pane == Pane::Tickets => self.tickets_pane_key(key),
             KeyCode::Char('n') => self.act(Action::New),
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown if self.pane == Pane::Notes => {
                 let d: i64 = match key.code {
@@ -338,6 +359,8 @@ impl App {
         let d = if up { -1 } else { 1 };
         if self.projects_list_showing() {
             self.move_project(d);
+        } else if self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets) {
+            self.wheel_ticket(up);
         } else if self.open_project.is_some() && self.pane == Pane::Notes {
             self.notes_top.set((self.notes_top.get() as i32 + d * 3).max(0) as usize);
         } else {
@@ -350,6 +373,7 @@ impl App {
     pub(super) fn open_name_box(&mut self, purpose: NamePurpose) {
         let input = match &purpose {
             NamePurpose::Rename(id) => self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
+            NamePurpose::TicketTitle(n) => self.ticket(*n).map(|t| t.title.clone()).unwrap_or_default(),
             _ => String::new(),
         };
         self.name_box = NameBox { purpose, input };
@@ -364,12 +388,42 @@ impl App {
     }
 
     pub(super) fn type_project_name(&mut self, text: &str) {
-        let room = projects_mod::NAME_MAX.saturating_sub(self.name_box.input.chars().count());
+        let max = match self.name_box.purpose {
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => crate::tickets::TITLE_MAX,
+            NamePurpose::OwnWords(_) => crate::tickets::OWN_WORDS_MAX,
+            _ => projects_mod::NAME_MAX,
+        };
+        let room = max.saturating_sub(self.name_box.input.chars().count());
         self.name_box.input.extend(text.chars().take(room));
     }
 
     /// Enter in the name box.
     pub(super) fn save_name_box(&mut self) {
+        match self.name_box.purpose.clone() {
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {
+                let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
+                if title.is_empty() {
+                    self.notify("A ticket needs a title");
+                    return; // the box stays open
+                }
+                self.mode = Mode::List;
+                match self.name_box.purpose.clone() {
+                    NamePurpose::TicketTitle(n) => self.rename_ticket(n, &title),
+                    _ => self.make_ticket(&title),
+                }
+                return;
+            }
+            NamePurpose::OwnWords(n) => {
+                let words = crate::tickets::clean(&self.name_box.input, crate::tickets::OWN_WORDS_MAX);
+                if words.is_empty() {
+                    self.notify("Say in a few words when this ticket is finished");
+                    return;
+                }
+                self.mode = Mode::List;
+                return self.save_own_words(n, &words);
+            }
+            _ => {}
+        }
         let name = projects_mod::clean(&self.name_box.input, projects_mod::NAME_MAX);
         if name.is_empty() {
             self.notify("A project needs a name");
@@ -382,6 +436,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::OwnWords(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

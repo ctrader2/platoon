@@ -88,7 +88,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 
 | File | What it does |
 | --- | --- |
-| `main.rs` | entry point, subcommands (`setup`, `open`, `host`, `statusline`, `hook guard`, `themes`), event loop; most unit tests live here |
+| `main.rs` | entry point, subcommands (`setup`, `open`, `host`, `statusline`, `hook guard`, `themes`, `ticket`), event loop; most unit tests live here |
 | `app.rs` | app state and all input handling (modes: list, filter, picker, confirm, attached, settings, theme picker) |
 | `ui.rs` | all drawing (header and tabs, rows, footer, popups, attached view); `model.rs` the row types |
 | `claude.rs`, `index.rs` | read Claude Code's undocumented on-disk state; the persistent incremental index of conversations |
@@ -105,6 +105,7 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `projects.rs`, `sessionhook.rs`, `app/projects_glue.rs` | projects: `projects.json` (projects, membership, archived-by-project), notes paths, color slots, sessions started under a project (`<cache>/project-launches`); `platoon hook session-start` (notes as SessionStart context, sent hashes in `<cache>/notes-sent`); the app's tabs, Projects tab, project screen, picker and lifecycle |
 | `notesupdate.rs`, `notesrun.rs` | keeping a project's notes up to date: the fixed parts (Summary, Open questions, Decisions) and the sections between, the prompt, the reply and the merge rules (`notesupdate.rs`, pure, plus `notes-state.json`); the `Stop` hook, the detached helper (`platoon notes-update <id>`), the quiet timer, the per-project lock and the marks in `<cache>/notes-due`, `notes-updating`, `notes-editing`, `notes-helper` |
 | `handoff.rs`, `gitfacts.rs`, `textbox.rs`, `app/handoff_glue.rs` | the hand-off (`h`): the fixed document, the facts platoon fills, the one piece of instructions, reply checking (`handoff.rs`, pure); what git says about a folder, read-only and time-boxed (`gitfacts.rs`); wrapping, cursor and scrolling for a text box (`textbox.rs`, pure); the app side: git and the call off the UI thread, the box, starting the new session |
+| `tickets.rs`, `app/tickets_glue.rs` | tickets: `tickets.json` per project (numbers never reused, unknown keys and states kept, lock + atomic writes, a corrupt file never written), states, how far, blocked by / ready / loop refusal, the body template, `platoon ticket add/list` (`tickets.rs`); the Tickets pane, a ticket's screen, its lists (state, how far, folders, waits for) and making one (`app/tickets_glue.rs`; the body editor goes through `app/notes_glue.rs`) |
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |

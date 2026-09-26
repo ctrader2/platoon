@@ -18,7 +18,9 @@ pub struct NotesEdit {
     pub project: String,
     /// Editing these instructions (`instructions::ACTIONS`) rather than a project's notes: `project` is empty.
     pub instructions: Option<&'static str>,
-    /// The instructions as they were before the editor ran.
+    /// Editing the body of this ticket of `project` rather than its notes.
+    pub ticket: Option<u32>,
+    /// The instructions (or the ticket's body) as they were before the editor ran.
     before: String,
     /// The editor's plain name, for the status line.
     pub name: String,
@@ -32,6 +34,7 @@ pub struct NotesEdit {
 pub struct NotesWindow {
     pub project: String,
     pub instructions: Option<&'static str>,
+    pub ticket: Option<u32>,
     before: String,
     pub name: String,
     stamp: notes::Stamp,
@@ -43,6 +46,8 @@ pub struct EditorPick {
     pub project: String,
     /// Opened from the settings, for these instructions: `project` is empty.
     pub instructions: Option<&'static str>,
+    /// Opened for the body of this ticket of `project`.
+    pub ticket: Option<u32>,
     pub options: Vec<Editor>,
     pub selected: usize,
     /// The id of the editor used last: the one with the star in front of it (empty when none has been used).
@@ -53,6 +58,12 @@ pub struct EditorPick {
 pub struct Changes {
     pub lines: Vec<(notes::Mark, String)>,
     pub top: Cell<usize>,
+}
+
+/// When a file was last changed and how big it is.
+fn file_stamp(path: &Path) -> notes::Stamp {
+    let m = std::fs::metadata(path).ok()?;
+    Some((m.modified().ok()?, m.len()))
 }
 
 fn plain(e: &io::Error) -> String {
@@ -79,10 +90,16 @@ impl App {
     /// The name of the editor platoon has open on the notes of the project whose screen is showing, if any.
     pub fn notes_editor_open(&self) -> Option<&str> {
         let project = self.open_project.as_deref()?;
-        if let Some(e) = self.editing.as_ref().filter(|e| e.project == project) {
+        if let Some(e) = self.editing.as_ref().filter(|e| e.project == project && e.ticket.is_none()) {
             return Some(&e.name);
         }
-        self.notes_window.as_ref().filter(|w| w.project == project).map(|w| w.name.as_str())
+        self.notes_window.as_ref().filter(|w| w.project == project && w.ticket.is_none()).map(|w| w.name.as_str())
+    }
+
+    /// The name of the editor with a window of its own that platoon has open on this ticket of the open project.
+    pub fn ticket_window_open(&self, number: u32) -> Option<&str> {
+        let project = self.open_project.as_deref()?;
+        self.notes_window.as_ref().filter(|w| w.project == project && w.ticket == Some(number)).map(|w| w.name.as_str())
     }
 
     /// An automatic update is running on the open project's notes right now.
@@ -160,6 +177,10 @@ impl App {
             self.notify(format!("The notes are already open in {name}."));
             return;
         }
+        if let Some(name) = self.editing.as_ref().filter(|e| e.ticket.is_some()).map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().filter(|w| w.ticket.is_some()).map(|w| w.name.clone())) {
+            self.notify(format!("{name} is still open on a ticket. Close it first."));
+            return;
+        }
         if self.notes_busy() {
             self.notify("platoon is already editing another project's notes.");
             return;
@@ -167,7 +188,7 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, instructions: None, options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, ticket: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -180,7 +201,21 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project: String::new(), instructions: Some(id), options, selected: 0, starred };
+        self.epick = EditorPick { project: String::new(), instructions: Some(id), ticket: None, options, selected: 0, starred };
+        self.mode = Mode::PickEditor;
+    }
+
+    /// The same list of editors, for the body of ticket `number` of the open project.
+    pub(super) fn pick_ticket_editor(&mut self, number: u32) {
+        let Some(project) = self.open_project.clone() else { return };
+        if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
+            self.notify(format!("{name} is still open on something else. Close it first."));
+            return;
+        }
+        let last = self.settings.get().notes_editor;
+        let options = editors::in_order(&self.editors, &last);
+        let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
+        self.epick = EditorPick { project, instructions: None, ticket: Some(number), options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -204,9 +239,10 @@ impl App {
         let project = self.epick.project.clone();
         self.mode = back;
         self.remember_editor(&e.id);
-        match self.epick.instructions {
-            Some(id) => self.run_instructions_editor(id, &e),
-            None => self.run_editor(&project, &e),
+        match (self.epick.instructions, self.epick.ticket) {
+            (Some(id), _) => self.run_instructions_editor(id, &e),
+            (None, Some(n)) => self.run_ticket_editor(&project, n, &e),
+            (None, None) => self.run_editor(&project, &e),
         }
     }
 
@@ -248,7 +284,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, before: String::new(), name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: None, before: String::new(), name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -261,7 +297,7 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, before: String::new(), name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: None, before: String::new(), name: e.name.clone(), stamp, child });
                 self.notify(format!("The notes opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -286,7 +322,7 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), before, name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), ticket: None, before, name: e.name.clone(), stamp, run });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -299,7 +335,7 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), before, name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), ticket: None, before, name: e.name.clone(), stamp, child });
                 self.notify(format!("The system prompt for {what} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -307,6 +343,59 @@ impl App {
                 self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
             }
         }
+    }
+
+    /// Open the body of ticket `number` in `e`. A body file that has gone is started again from the template.
+    fn run_ticket_editor(&mut self, project: &str, number: u32, e: &Editor) {
+        let Some((path, before)) = self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| (s.body_path(t), s.body(t)))) else {
+            return;
+        };
+        if self.ticket(number).is_some_and(|t| t.file.is_empty()) {
+            self.notify(format!("#{number} has no body file, so there is nothing to open."));
+            return;
+        }
+        if !path.exists() {
+            if let Err(err) = crate::projects::write_atomic(&path, crate::tickets::TEMPLATE) {
+                self.notify(format!("Couldn't start the ticket's body: {}", plain(&err)));
+                return;
+            }
+        }
+        let before = if path.exists() && before.is_empty() { std::fs::read_to_string(&path).unwrap_or_default() } else { before };
+        let stamp = file_stamp(&path);
+        if e.terminal {
+            let (rows, cols) = self.pty_size();
+            match editors::Running::spawn(e, &path, rows, cols) {
+                Ok(run) => {
+                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: Some(number), before, name: e.name.clone(), stamp, run });
+                    self.mode = Mode::EditNotes;
+                    self.clear_selection();
+                }
+                Err(err) => self.notify(format!("Couldn't open #{number} in {}: {}", e.name, plain(&err))),
+            }
+            return;
+        }
+        match editors::launch_window(e, &path) {
+            Ok(child) => {
+                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: Some(number), before, name: e.name.clone(), stamp, child });
+                self.notify(format!("#{number} opened in {}, in a window of its own.", e.name));
+            }
+            Err(err) => self.notify(format!("Couldn't open #{number} in {}: {}", e.name, plain(&err))),
+        }
+    }
+
+    /// What to say once an editor has been and gone from a ticket's body: by its words, not the file's time.
+    fn after_ticket_edit(&mut self, project: &str, number: u32, before: &str, name: &str) {
+        let now = self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| s.body(t)));
+        let Some(now) = now else { return };
+        if now == before {
+            self.notify(format!("#{number} is unchanged ({name} left it as it was)."));
+            return;
+        }
+        if let Some(store) = self.tk.store.as_mut() {
+            let _ = store.touch(number);
+        }
+        self.tk.body_top.set(0);
+        self.notify(format!("Saved the body of #{number}."));
     }
 
     /// What to say once an editor has been and gone from the instructions (see `instructions::after_edit`).
@@ -375,18 +464,23 @@ impl App {
             // Either the editor is done with the file, or it has written it: read the notes again either way.
             Some(w) => {
                 matches!(w.child.try_wait(), Ok(Some(_)))
-                    || match w.instructions {
-                        Some(id) => instructions::stamp(&self.config, id) != w.stamp,
-                        None => notes::changed_on_disk(&self.config, &w.project, w.stamp),
+                    || match (w.instructions, w.ticket) {
+                        (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
+                        (None, Some(n)) => {
+                            let path = self.tk.store.as_ref().filter(|s| s.project() == w.project).and_then(|s| s.get(n).map(|t| s.body_path(t)));
+                            path.is_some_and(|p| file_stamp(&p) != w.stamp)
+                        }
+                        (None, None) => notes::changed_on_disk(&self.config, &w.project, w.stamp),
                     }
             }
             None => false,
         };
         if done {
             if let Some(w) = self.notes_window.take() {
-                match w.instructions {
-                    Some(id) => self.after_instructions_edit(id, &w.before),
-                    None => self.after_edit(&w.project, w.stamp, &w.name),
+                match (w.instructions, w.ticket) {
+                    (Some(id), _) => self.after_instructions_edit(id, &w.before),
+                    (None, Some(n)) => self.after_ticket_edit(&w.project, n, &w.before, &w.name),
+                    (None, None) => self.after_edit(&w.project, w.stamp, &w.name),
                 }
             }
         }
@@ -400,6 +494,9 @@ impl App {
         }
         if let Some(id) = ed.instructions {
             return self.after_instructions_edit(id, &ed.before);
+        }
+        if let Some(n) = ed.ticket {
+            return self.after_ticket_edit(&ed.project, n, &ed.before, &ed.name);
         }
         self.notes_top.set(0);
         self.after_edit(&ed.project, ed.stamp, &ed.name);

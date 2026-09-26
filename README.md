@@ -465,8 +465,9 @@ columns share a wide terminal's spare width the same way.
 | `/` | narrow the list of projects as you type |
 | `←` `→` | Active or Archived projects |
 
-A **project's screen** shows its name and that same description across the top (in full, wrapped when it is long), its sessions on the left (active ones
-first, then an `Archived (N)` group, dimmed) and its notes on the right. The left and right arrows move between the two sides; `↑` `↓` move in the sessions or scroll the notes.
+A **project's screen** shows its name and that same description across the top (in full, wrapped when it is long), its sessions at the top left (active ones
+first, then an `Archived (N)` group, dimmed), its [tickets](#tickets) under them and its notes on the right. `tab` and `shift+tab` go round the three
+panes; `←` goes to the left side (to whichever of Sessions and Tickets you used last) and `→` to the notes; `↑` `↓` move in the sessions or tickets or scroll the notes.
 `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
 sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
@@ -732,6 +733,65 @@ The old conversation is left exactly as it is: not archived, not stopped. If Cla
 off, the day's limit is spent, a failure has paused things), the conversation has nothing in it yet, or the answer isn't
 understood, platoon says so plainly and nothing is started.
 
+
+### Tickets
+
+A **ticket** is one piece of work in a project: a title, a body you write in Markdown, the folder or folders it works in,
+**how far** to take it, the tickets it **waits for**, and where it is (its state). Each ticket has a number in its project
+(`#1`, `#2`, ...), which is never given to another ticket. Squads will work on tickets in a later version; for now they are
+a list you keep, and only you move a ticket along.
+
+The **Tickets** pane sits under Sessions on a project's screen. Open tickets come first; the Done and Cancelled ones are
+kept apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the
+number, the title, the state, how far it goes and, for an open ticket, what it is still waiting for ("blocked by #2, #4")
+or a quiet **ready** when it is New and everything it waits for is Done. On a narrow terminal how far goes first, then the
+state's own column (a Done, Cancelled or otherwise not-New ticket then says its state at the end of its row).
+
+| Key (Tickets pane) | Does |
+| --- | --- |
+| `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes) |
+| `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
+| `s` `e` `r` `h` `f` `b` | as on the ticket's own screen, for the ticket picked |
+
+A new ticket starts as **New**, goes as far as **Local changes only**, works in the folder of the project's most recently
+used session (or "No folder yet" when the project has no sessions), and its body starts from a short template: a
+**What it should do** heading (what should work when it is finished, as behaviour, and small enough for one fresh
+session) and an **Acceptance** heading with two empty checkboxes.
+
+**A ticket's own screen** (`enter`) shows its number and title, its state, how far it goes, its folders, what it waits
+for, and then its body, drawn the way the notes are; `↑` `↓` scroll it.
+
+| Key (a ticket's screen) | Does |
+| --- | --- |
+| `e` | edit the body in your editor |
+| `r` | rename it (its file keeps its name) |
+| `s` | its state: New, Done or Cancelled. A Done or Cancelled ticket made New again comes back up with the open ones |
+| `h` | how far: Local changes only, Local commit, Commit, push and open a merge request, Publish a document or page, or in your own words |
+| `f` | its folders: add one with the folder picker, `d` takes the picked one away |
+| `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
+| `esc` | back to the project, on the same ticket |
+
+The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**; you pick New, Done or Cancelled,
+and the others are for squads.
+
+Tickets live next to the project's notes: the list in `~/.config/platoon/projects/<id>/tickets.json` and each body in
+`tickets/<NN>-<title>.md` in the same folder, yours to edit. Only platoon writes the list. Deleting a project keeps a
+copy of its tickets with the rest of its backup; archiving it leaves them as they are.
+
+From the command line (a later `/ticket` skill will use the same command, so tickets are always made through platoon):
+
+```
+platoon ticket add --project "Web shop" --title "Log in with a link" --how-far "local commit" --folder ~/repos/web
+platoon ticket add --project "Web shop" --title "Basket page" --blocked-by 1 < body.md   # the body piped in
+platoon ticket list --project "Web shop"            # open ones first, then Done and cancelled
+platoon ticket list --json                          # every project, with each body file's full path
+```
+
+`add` prints the new ticket's number (`#3`). The project is found by its id or its name (any case). The body comes from
+`--body-file`, else from what is piped in, else the template; with no `--folder` the ticket has no folder yet. A project
+that isn't there (or a name two projects share), a ticket to wait for that isn't there or would make a circle, or a folder
+that doesn't exist is refused with one plain line and nothing is made. A running platoon shows the new ticket within a
+second.
 
 ## Sessions started in platoon keep running
 

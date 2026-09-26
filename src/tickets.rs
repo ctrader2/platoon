@@ -1,0 +1,1126 @@
+//! Tickets: one piece of work in a project. A ticket has a number (per project, from 1, never used twice), a title,
+//! a body in Markdown (a file of its own the user edits), the folders it works in, how far to take it (the definition
+//! of done), the tickets it waits for (`blocked_by`) and a state. Squads (a later version) work on them; for now only
+//! the user moves a ticket along, and only platoon ever writes a ticket's state.
+//!
+//! A project's tickets live beside its notes:
+//! `<config>/projects/<id>/tickets.json` = `{"next": 4, "tickets": [{"number", "title", "file", "state", "how_far",
+//! "folders", "blocked_by", "created", "updated"}]}` and the bodies in `<config>/projects/<id>/tickets/<NN>-<slug>.md`
+//! (`file` holds that name; a rename of the title keeps the file).
+//!
+//! Like platoon's other files: writes are atomic (temp file + rename) and happen under a lock (`tickets.lock` beside
+//! the file: the app and `platoon ticket add` can both write), keys platoon doesn't know are kept (on the file and on
+//! each ticket; a newer platoon will add some), a state it doesn't know is kept and shown as written, and a file that
+//! can't be understood is never written over: every change is refused until the user has looked at it.
+
+use crate::projects::{lock, write_atomic};
+use serde_json::{json, Map, Value};
+use std::{
+    fs, io,
+    path::{Path, PathBuf},
+    time::SystemTime,
+};
+
+/// The longest title kept, in characters.
+pub const TITLE_MAX: usize = 100;
+/// The longest "in my own words" line kept, in characters.
+pub const OWN_WORDS_MAX: usize = 120;
+
+/// What a new ticket's body starts from: what should work when it is finished, and how to tell.
+pub const TEMPLATE: &str = "\
+## What it should do
+
+What should work when this is finished, as behaviour, not a list of changes. It should fit in one fresh session.
+
+## Acceptance
+
+- [ ] \n- [ ] \n";
+
+// ---- states -------------------------------------------------------------------------------------------------------
+
+/// Where a ticket is. The first six are platoon's (in this order); anything else is a state a newer platoon wrote,
+/// kept as it is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum State {
+    New,
+    Working,
+    Waiting,
+    Ready,
+    Done,
+    Cancelled,
+    Other(String),
+}
+
+/// (what the file holds, what the screen says), in the order the states come in.
+const STATE_NAMES: [(&str, &str); 6] = [
+    ("new", "New"),
+    ("working", "Working"),
+    ("waiting", "Waiting on you"),
+    ("ready", "Ready to push/publish"),
+    ("done", "Done"),
+    ("cancelled", "Cancelled"),
+];
+
+/// The states the user can pick by hand in this version (the others belong to squads).
+pub const USER_STATES: [State; 3] = [State::New, State::Done, State::Cancelled];
+
+impl State {
+    pub fn from_id(id: &str) -> State {
+        match id {
+            "new" => State::New,
+            "working" => State::Working,
+            "waiting" => State::Waiting,
+            "ready" => State::Ready,
+            "done" => State::Done,
+            "cancelled" => State::Cancelled,
+            other => State::Other(other.to_string()),
+        }
+    }
+
+    fn index(&self) -> Option<usize> {
+        match self {
+            State::New => Some(0),
+            State::Working => Some(1),
+            State::Waiting => Some(2),
+            State::Ready => Some(3),
+            State::Done => Some(4),
+            State::Cancelled => Some(5),
+            State::Other(_) => None,
+        }
+    }
+
+    /// What the file holds.
+    pub fn id(&self) -> &str {
+        match self {
+            State::Other(s) => s,
+            s => STATE_NAMES[s.index().unwrap_or(0)].0,
+        }
+    }
+
+    /// What the screen says: platoon's words, or a state it doesn't know as it was written.
+    pub fn label(&self) -> &str {
+        match self {
+            State::Other(s) => s,
+            s => STATE_NAMES[s.index().unwrap_or(0)].1,
+        }
+    }
+
+    /// Done and Cancelled are listed apart from the rest.
+    pub fn closed(&self) -> bool {
+        matches!(self, State::Done | State::Cancelled)
+    }
+}
+
+// ---- how far ------------------------------------------------------------------------------------------------------
+
+/// The ready-made answers to "how far should this go", in the words the screen and the file use, with a short form
+/// for the list.
+pub const HOW_FAR: [(&str, &str); 4] = [
+    ("Local changes only", "local"),
+    ("Local commit", "commit"),
+    ("Commit, push and open a merge request", "push + MR"),
+    ("Publish a document or page", "publish"),
+];
+
+/// The last choice of the how-far list: the user writes their own line.
+pub const OWN_WORDS: &str = "In my own words…";
+
+/// How far to take a ticket: one of `HOW_FAR`, or the user's own words. The file holds the words themselves either
+/// way, so it reads plainly to a person and to a squad.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HowFar {
+    Preset(usize),
+    Own(String),
+}
+
+impl Default for HowFar {
+    fn default() -> Self {
+        HowFar::Preset(0)
+    }
+}
+
+impl HowFar {
+    /// A preset's words (or its short form, or its number from 1), ignoring case; anything else is the user's own.
+    pub fn parse(text: &str) -> HowFar {
+        let one = clean(text, OWN_WORDS_MAX);
+        let low = one.to_lowercase();
+        if let Some(i) = HOW_FAR.iter().position(|(long, short)| long.to_lowercase() == low || short.to_lowercase() == low) {
+            return HowFar::Preset(i);
+        }
+        if let Ok(n) = low.parse::<usize>() {
+            if (1..=HOW_FAR.len()).contains(&n) {
+                return HowFar::Preset(n - 1);
+            }
+        }
+        if one.is_empty() { HowFar::default() } else { HowFar::Own(one) }
+    }
+
+    pub fn text(&self) -> &str {
+        match self {
+            HowFar::Preset(i) => HOW_FAR[(*i).min(HOW_FAR.len() - 1)].0,
+            HowFar::Own(s) => s,
+        }
+    }
+
+    /// For the list, where room is short.
+    pub fn short(&self) -> &str {
+        match self {
+            HowFar::Preset(i) => HOW_FAR[(*i).min(HOW_FAR.len() - 1)].1,
+            HowFar::Own(s) => s,
+        }
+    }
+}
+
+// ---- a ticket -----------------------------------------------------------------------------------------------------
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ticket {
+    pub number: u32,
+    pub title: String,
+    /// The body's file name inside the project's `tickets/` folder.
+    pub file: String,
+    pub state: State,
+    pub how_far: HowFar,
+    /// Absolute paths.
+    pub folders: Vec<String>,
+    /// Numbers of tickets in the same project that must be Done first.
+    pub blocked_by: Vec<u32>,
+    /// Seconds since the epoch.
+    pub created: u64,
+    pub updated: u64,
+}
+
+/// One line, trimmed, at most `max` characters.
+pub fn clean(text: &str, max: usize) -> String {
+    crate::projects::clean(text, max)
+}
+
+/// The part of a body file's name after the number: the title in lower case, words joined with `-`, plain letters
+/// and digits only.
+pub fn slug(title: &str) -> String {
+    let mut out = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') && !out.is_empty() {
+            out.push('-');
+        }
+        if out.len() >= 40 {
+            break;
+        }
+    }
+    let out = out.trim_end_matches('-').to_string();
+    if out.is_empty() { "ticket".into() } else { out }
+}
+
+/// The tickets `t` still waits for: those it is blocked by that exist and are not Done.
+pub fn waiting_for(t: &Ticket, all: &[Ticket]) -> Vec<u32> {
+    t.blocked_by.iter().copied().filter(|n| all.iter().any(|o| o.number == *n && o.state != State::Done)).collect()
+}
+
+/// A ticket is ready to be worked on when it is New and everything it is blocked by is Done.
+pub fn is_ready(t: &Ticket, all: &[Ticket]) -> bool {
+    t.state == State::New && waiting_for(t, all).is_empty()
+}
+
+/// Would "`ticket` is blocked by `blocker`" make a loop (including a ticket blocking itself)? True when `ticket` can
+/// already be reached from `blocker` by following what each ticket is blocked by.
+pub fn would_loop(all: &[Ticket], ticket: u32, blocker: u32) -> bool {
+    let mut seen: Vec<u32> = Vec::new();
+    let mut todo = vec![blocker];
+    while let Some(n) = todo.pop() {
+        if n == ticket {
+            return true;
+        }
+        if seen.contains(&n) {
+            continue;
+        }
+        seen.push(n);
+        if let Some(t) = all.iter().find(|t| t.number == n) {
+            todo.extend(t.blocked_by.iter().copied());
+        }
+    }
+    false
+}
+
+/// Open tickets first (by number), then the Done and Cancelled ones (by number).
+pub fn grouped(all: &[Ticket]) -> (Vec<&Ticket>, Vec<&Ticket>) {
+    let mut open: Vec<&Ticket> = all.iter().filter(|t| !t.state.closed()).collect();
+    let mut closed: Vec<&Ticket> = all.iter().filter(|t| t.state.closed()).collect();
+    open.sort_by_key(|t| t.number);
+    closed.sort_by_key(|t| t.number);
+    (open, closed)
+}
+
+fn now_secs() -> u64 {
+    crate::usage::now()
+}
+
+fn ticket_from(v: &Value) -> Option<Ticket> {
+    let o = v.as_object()?;
+    let number = u32::try_from(o.get("number")?.as_u64()?).ok().filter(|n| *n > 0)?;
+    let strings = |k: &str| -> Vec<String> {
+        o.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
+    };
+    Some(Ticket {
+        number,
+        title: o.get("title").and_then(Value::as_str).map(|t| clean(t, TITLE_MAX)).unwrap_or_default(),
+        file: o.get("file").and_then(Value::as_str).unwrap_or_default().to_string(),
+        state: State::from_id(o.get("state").and_then(Value::as_str).unwrap_or("new")),
+        how_far: HowFar::parse(o.get("how_far").and_then(Value::as_str).unwrap_or("")),
+        folders: strings("folders"),
+        blocked_by: o
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|x| x.as_u64().and_then(|n| u32::try_from(n).ok())).collect())
+            .unwrap_or_default(),
+        created: o.get("created").and_then(Value::as_u64).unwrap_or(0),
+        updated: o.get("updated").and_then(Value::as_u64).unwrap_or(0),
+    })
+}
+
+/// What a new ticket is made of.
+#[derive(Clone, Debug, Default)]
+pub struct NewTicket {
+    pub title: String,
+    /// None: the template.
+    pub body: Option<String>,
+    pub how_far: HowFar,
+    pub folders: Vec<String>,
+    pub blocked_by: Vec<u32>,
+}
+
+/// Where a project's tickets file is.
+pub fn path_in(config: &Path, project: &str) -> PathBuf {
+    config.join("projects").join(project).join("tickets.json")
+}
+
+/// Where a project's ticket bodies are.
+pub fn bodies_dir(config: &Path, project: &str) -> PathBuf {
+    config.join("projects").join(project).join("tickets")
+}
+
+/// What `tickets.json` says the user must look at, in the words the pane shows.
+pub const CORRUPT: &str = "tickets.json can't be read, so platoon leaves it alone. Fix or move the file to go on.";
+
+/// The tickets of one project, as the file says.
+pub struct Tickets {
+    config: PathBuf,
+    project: String,
+    list: Vec<Ticket>,
+    next: u32,
+    stamp: Option<(SystemTime, u64)>,
+    corrupt: bool,
+    /// Bumped whenever what is in memory changed.
+    pub generation: u64,
+}
+
+impl Tickets {
+    pub fn open(config: &Path, project: &str) -> Self {
+        let mut t = Self { config: config.to_path_buf(), project: project.to_string(), list: Vec::new(), next: 1, stamp: None, corrupt: false, generation: 0 };
+        t.load();
+        t
+    }
+
+    pub fn project(&self) -> &str {
+        &self.project
+    }
+
+    pub fn path(&self) -> PathBuf {
+        path_in(&self.config, &self.project)
+    }
+
+    /// The file is there but can't be understood: nothing is shown and nothing is written.
+    pub fn is_corrupt(&self) -> bool {
+        self.corrupt
+    }
+
+    /// Every ticket, in the order of the file.
+    pub fn all(&self) -> &[Ticket] {
+        &self.list
+    }
+
+    pub fn get(&self, number: u32) -> Option<&Ticket> {
+        self.list.iter().find(|t| t.number == number)
+    }
+
+    /// The full path of a ticket's body.
+    pub fn body_path(&self, t: &Ticket) -> PathBuf {
+        bodies_dir(&self.config, &self.project).join(&t.file)
+    }
+
+    /// The body as it is on disk now ("" when there is none).
+    pub fn body(&self, t: &Ticket) -> String {
+        if t.file.is_empty() {
+            return String::new();
+        }
+        fs::read_to_string(self.body_path(t)).unwrap_or_default()
+    }
+
+    fn stamp_now(&self) -> Option<(SystemTime, u64)> {
+        fs::metadata(self.path()).ok().and_then(|m| Some((m.modified().ok()?, m.len())))
+    }
+
+    /// The file's top-level object: None when there is none, Err when there is one that isn't understood.
+    fn read(&self) -> Result<Option<Map<String, Value>>, ()> {
+        let text = match fs::read_to_string(self.path()) {
+            Ok(t) => t,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(()),
+        };
+        match serde_json::from_str::<Value>(&text) {
+            Ok(Value::Object(o)) if o.get("tickets").is_none_or(Value::is_array) && o.get("next").is_none_or(Value::is_u64) => Ok(Some(o)),
+            _ => Err(()),
+        }
+    }
+
+    fn load(&mut self) {
+        self.stamp = self.stamp_now();
+        self.list.clear();
+        self.next = 1;
+        self.corrupt = false;
+        self.generation += 1;
+        let root = match self.read() {
+            Ok(Some(o)) => o,
+            Ok(None) => return,
+            Err(()) => {
+                self.corrupt = true;
+                return;
+            }
+        };
+        // Anything in the list that isn't shaped like a ticket is somebody else's: kept on disk, not shown.
+        self.list = root.get("tickets").and_then(Value::as_array).into_iter().flatten().filter_map(ticket_from).collect();
+        self.next = next_number(&root);
+    }
+
+    /// Pick up a change made by `platoon ticket add` or another window. One `stat` when nothing changed.
+    pub fn reload_if_changed(&mut self) -> bool {
+        if self.stamp_now() == self.stamp {
+            return false;
+        }
+        self.load();
+        true
+    }
+
+    /// Change the file: under the lock, from what is on disk now, keeping everything else in it. `f` returns Err to
+    /// change nothing. A file that can't be understood is never replaced.
+    fn change<T>(&mut self, f: impl FnOnce(&mut Map<String, Value>, &[Ticket]) -> Result<T, String>) -> io::Result<T> {
+        let _lock = lock(&self.path())?;
+        let mut root = match self.read() {
+            Ok(o) => o.unwrap_or_default(),
+            Err(()) => {
+                self.load();
+                return Err(io::Error::other(CORRUPT));
+            }
+        };
+        if !root.get("tickets").is_some_and(Value::is_array) {
+            root.insert("tickets".into(), json!([]));
+        }
+        let now: Vec<Ticket> = root.get("tickets").and_then(Value::as_array).into_iter().flatten().filter_map(ticket_from).collect();
+        let out = match f(&mut root, &now) {
+            Ok(v) => v,
+            Err(e) => {
+                self.load();
+                return Err(io::Error::other(e));
+            }
+        };
+        let text = serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default();
+        let written = write_atomic(&self.path(), &text);
+        self.load();
+        written.map(|()| out)
+    }
+
+    /// A new ticket: the next number, state New, its body file written. Returns the number.
+    pub fn add(&mut self, new: NewTicket) -> io::Result<u32> {
+        let title = clean(&new.title, TITLE_MAX);
+        if title.is_empty() {
+            return Err(io::Error::other("a ticket needs a title"));
+        }
+        let dir = bodies_dir(&self.config, &self.project);
+        let body = new.body.unwrap_or_else(|| TEMPLATE.to_string());
+        let now = now_secs();
+        let written_file: std::cell::RefCell<Option<PathBuf>> = std::cell::RefCell::new(None);
+        let result = self.change(|root, all| {
+            for b in &new.blocked_by {
+                if !all.iter().any(|t| t.number == *b) {
+                    return Err(format!("there is no ticket #{b} in this project"));
+                }
+            }
+            let number = next_number(root).max(all.iter().map(|t| t.number + 1).max().unwrap_or(1));
+            let stem = format!("{number:02}-{}", slug(&title));
+            let mut file = format!("{stem}.md");
+            let mut k = 2;
+            while dir.join(&file).exists() {
+                file = format!("{stem}-{k}.md");
+                k += 1;
+            }
+            fs::create_dir_all(&dir).map_err(|e| format!("couldn't make the tickets folder: {e}"))?;
+            write_atomic(&dir.join(&file), &body).map_err(|e| format!("couldn't write the ticket: {e}"))?;
+            *written_file.borrow_mut() = Some(dir.join(&file));
+            let mut blocked = new.blocked_by.clone();
+            blocked.sort_unstable();
+            blocked.dedup();
+            let t = json!({
+                "number": number,
+                "title": title,
+                "file": file,
+                "state": State::New.id(),
+                "how_far": new.how_far.text(),
+                "folders": new.folders,
+                "blocked_by": blocked,
+                "created": now,
+                "updated": now,
+            });
+            root.get_mut("tickets").and_then(Value::as_array_mut).ok_or("tickets")?.push(t);
+            root.insert("next".into(), json!(number + 1));
+            Ok(number)
+        });
+        // The list didn't take it: the body file it wrote goes too, so nothing is left without a ticket.
+        if result.is_err() {
+            if let Some(p) = written_file.take() {
+                let _ = fs::remove_file(p);
+            }
+        }
+        result
+    }
+
+    /// Change one ticket's own object in the file (its `updated` time too).
+    fn edit(&mut self, number: u32, f: impl FnOnce(&mut Map<String, Value>, &[Ticket]) -> Result<(), String>) -> io::Result<()> {
+        let now = now_secs();
+        self.change(move |root, all| {
+            let t = root
+                .get_mut("tickets")
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number))))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| format!("there is no ticket #{number} any more"))?;
+            f(t, all)?;
+            t.insert("updated".into(), json!(now));
+            Ok(())
+        })
+    }
+
+    pub fn rename(&mut self, number: u32, title: &str) -> io::Result<()> {
+        let title = clean(title, TITLE_MAX);
+        if title.is_empty() {
+            return Err(io::Error::other("a ticket needs a title"));
+        }
+        self.edit(number, |t, _| {
+            t.insert("title".into(), json!(title));
+            Ok(())
+        })
+    }
+
+    pub fn set_state(&mut self, number: u32, state: &State) -> io::Result<()> {
+        let id = state.id().to_string();
+        self.edit(number, |t, _| {
+            t.insert("state".into(), json!(id));
+            Ok(())
+        })
+    }
+
+    pub fn set_how_far(&mut self, number: u32, how_far: &HowFar) -> io::Result<()> {
+        let text = how_far.text().to_string();
+        self.edit(number, |t, _| {
+            t.insert("how_far".into(), json!(text));
+            Ok(())
+        })
+    }
+
+    pub fn set_folders(&mut self, number: u32, folders: &[String]) -> io::Result<()> {
+        let list = folders.to_vec();
+        self.edit(number, |t, _| {
+            t.insert("folders".into(), json!(list));
+            Ok(())
+        })
+    }
+
+    /// Add `blocker` to what `number` is blocked by, or take it away if it is there. A blocker that would make a
+    /// loop (or a ticket that would block itself) is refused, with the reason in plain words. Returns whether it is
+    /// blocked by it now.
+    pub fn toggle_blocker(&mut self, number: u32, blocker: u32) -> io::Result<bool> {
+        let mut now_blocked = false;
+        self.edit(number, |t, all| {
+            let mut list: Vec<u64> = t.get("blocked_by").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+            if let Some(pos) = list.iter().position(|n| *n == u64::from(blocker)) {
+                list.remove(pos);
+            } else {
+                refuse_blocker(all, number, blocker)?;
+                list.push(u64::from(blocker));
+                list.sort_unstable();
+                now_blocked = true;
+            }
+            t.insert("blocked_by".into(), json!(list));
+            Ok(())
+        })?;
+        Ok(now_blocked)
+    }
+
+    /// The body changed in the user's editor: note the time.
+    pub fn touch(&mut self, number: u32) -> io::Result<()> {
+        self.edit(number, |_, _| Ok(()))
+    }
+}
+
+/// Why `ticket` can't be blocked by `blocker`, or Ok.
+pub fn refuse_blocker(all: &[Ticket], ticket: u32, blocker: u32) -> Result<(), String> {
+    if blocker == ticket {
+        return Err(format!("#{ticket} can't wait for itself"));
+    }
+    if !all.iter().any(|t| t.number == blocker) {
+        return Err(format!("there is no ticket #{blocker} in this project"));
+    }
+    if would_loop(all, ticket, blocker) {
+        return Err(format!("#{blocker} already waits for #{ticket}, so #{ticket} can't wait for #{blocker}"));
+    }
+    Ok(())
+}
+
+/// The number the next ticket gets: the file's `next`, and never one a ticket in it already has.
+fn next_number(root: &Map<String, Value>) -> u32 {
+    let next = root.get("next").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(1).max(1);
+    let past = root
+        .get("tickets")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|t| t.get("number").and_then(Value::as_u64))
+        .max()
+        .and_then(|n| u32::try_from(n + 1).ok())
+        .unwrap_or(1);
+    next.max(past)
+}
+
+// ---- the command line ---------------------------------------------------------------------------------------------
+
+/// The project `want` names: its id, else its name ignoring case. A name two projects share is refused rather
+/// than guessed.
+pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> Result<&'a crate::projects::Project, String> {
+    let want = want.trim();
+    if want.is_empty() {
+        return Err("say which project with --project <name>".into());
+    }
+    if let Some(p) = projects.get(want) {
+        return Ok(p);
+    }
+    let low = want.to_lowercase();
+    let named: Vec<&crate::projects::Project> = projects.all().iter().filter(|p| p.name.to_lowercase() == low).collect();
+    match named.as_slice() {
+        [one] => Ok(one),
+        [] => Err(format!("there is no project called \"{want}\"")),
+        _ => Err(format!("more than one project is called \"{want}\"; use its id instead ({})", named.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", "))),
+    }
+}
+
+const USAGE: &str = "usage: platoon ticket add --project <name or id> --title <text> [--body-file <path>] [--how-far <text>]
+                           [--folder <path>]... [--blocked-by <number>]...
+       platoon ticket list [--project <name or id>] [--json]
+  add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
+         in, else the template. --how-far takes \"Local changes only\", \"Local commit\", \"Commit, push and open a
+         merge request\" or \"Publish a document or page\"; anything else is kept as your own words
+  list   the tickets, open ones first, then the Done and Cancelled ones";
+
+/// `platoon ticket ...`. Returns the exit code; what it prints goes to `out`, problems to `err`.
+pub fn cli(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path, out: &mut dyn io::Write, err: &mut dyn io::Write) -> i32 {
+    match args.first().map(String::as_str) {
+        Some("add") => match cli_add(&args[1..], config, stdin, stdin_is_terminal, cwd) {
+            Ok(n) => {
+                let _ = writeln!(out, "#{n}");
+                0
+            }
+            Err(why) => {
+                let _ = writeln!(err, "platoon ticket add: {why}");
+                1
+            }
+        },
+        Some("list") => match cli_list(&args[1..], config) {
+            Ok(text) => {
+                let _ = write!(out, "{text}");
+                0
+            }
+            Err(why) => {
+                let _ = writeln!(err, "platoon ticket list: {why}");
+                1
+            }
+        },
+        _ => {
+            let _ = writeln!(err, "{USAGE}");
+            2
+        }
+    }
+}
+
+/// The value after a flag.
+fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, String> {
+    *i += 1;
+    args.get(*i).map(String::as_str).ok_or_else(|| format!("{flag} needs a value"))
+}
+
+fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path) -> Result<u32, String> {
+    let (mut project, mut title, mut body_file, mut how_far) = (None, None, None, None);
+    let (mut folders, mut blocked): (Vec<String>, Vec<u32>) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
+            "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
+            "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
+            "--how-far" => how_far = Some(value(args, &mut i, "--how-far")?.to_string()),
+            "--folder" => {
+                let f = value(args, &mut i, "--folder")?;
+                let p = if Path::new(f).is_absolute() { PathBuf::from(f) } else { cwd.join(f) };
+                if !p.is_dir() {
+                    return Err(format!("the folder {f} does not exist"));
+                }
+                let p = p.canonicalize().unwrap_or(p).to_string_lossy().into_owned();
+                if !folders.contains(&p) {
+                    folders.push(p);
+                }
+            }
+            "--blocked-by" => {
+                let b = value(args, &mut i, "--blocked-by")?;
+                let n = b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("--blocked-by takes a ticket number, not \"{b}\""))?;
+                blocked.push(n);
+            }
+            other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
+        }
+        i += 1;
+    }
+    let project = project.ok_or("say which project with --project <name>")?;
+    let title = title.filter(|t| !clean(t, TITLE_MAX).is_empty()).ok_or("give the ticket a title with --title <text>")?;
+    let body = match body_file {
+        Some(f) => {
+            let p = if Path::new(&f).is_absolute() { PathBuf::from(&f) } else { cwd.join(&f) };
+            Some(fs::read_to_string(&p).map_err(|e| format!("couldn't read {f}: {}", plain(&e)))?)
+        }
+        None if !stdin_is_terminal => {
+            let mut text = String::new();
+            stdin.read_to_string(&mut text).map_err(|e| format!("couldn't read the body from stdin: {}", plain(&e)))?;
+            Some(text).filter(|t| !t.trim().is_empty())
+        }
+        None => None,
+    };
+    let projects = crate::projects::Projects::open(config);
+    let p = find_project(&projects, &project)?;
+    let mut tickets = Tickets::open(config, &p.id);
+    if tickets.is_corrupt() {
+        return Err(CORRUPT.into());
+    }
+    let new = NewTicket { title, body, how_far: how_far.map(|h| HowFar::parse(&h)).unwrap_or_default(), folders, blocked_by: blocked };
+    tickets.add(new).map_err(|e| plain(&e))
+}
+
+fn plain(e: &io::Error) -> String {
+    let why = e.to_string();
+    why.split(" (os error").next().unwrap_or(&why).to_string()
+}
+
+fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
+    let (mut project, mut as_json) = (None, false);
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
+            "--json" => as_json = true,
+            other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
+        }
+        i += 1;
+    }
+    let projects = crate::projects::Projects::open(config);
+    let chosen: Vec<&crate::projects::Project> = match &project {
+        Some(want) => vec![find_project(&projects, want)?],
+        None => projects.all().iter().collect(),
+    };
+    let mut text = String::new();
+    let mut rows: Vec<Value> = Vec::new();
+    for p in chosen {
+        let tickets = Tickets::open(config, &p.id);
+        if tickets.is_corrupt() {
+            if project.is_some() {
+                return Err(CORRUPT.into());
+            }
+            text.push_str(&format!("{}\n  {CORRUPT}\n\n", p.name));
+            continue;
+        }
+        if tickets.all().is_empty() && project.is_none() {
+            continue;
+        }
+        let all = tickets.all();
+        let (open, closed) = grouped(all);
+        text.push_str(&format!("{}\n", p.name));
+        if all.is_empty() {
+            text.push_str("  No tickets yet.\n");
+        }
+        let line = |t: &Ticket| {
+            let wait = waiting_for(t, all);
+            let tail = if !wait.is_empty() && !t.state.closed() {
+                format!("  blocked by {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+            } else if is_ready(t, all) {
+                "  ready".to_string()
+            } else {
+                String::new()
+            };
+            format!("  #{:<3} {}  ·  {}  ·  {}{tail}\n", t.number, t.title, t.state.label(), t.how_far.text())
+        };
+        for t in &open {
+            text.push_str(&line(t));
+        }
+        if !closed.is_empty() {
+            text.push_str(&format!("  Done and cancelled · {}\n", closed.len()));
+            for t in &closed {
+                text.push_str(&line(t));
+            }
+        }
+        text.push('\n');
+        for t in open.iter().chain(closed.iter()) {
+            rows.push(json!({
+                "project": p.name,
+                "project_id": p.id,
+                "number": t.number,
+                "title": t.title,
+                "state": t.state.label(),
+                "how_far": t.how_far.text(),
+                "folders": t.folders,
+                "blocked_by": t.blocked_by,
+                "ready": is_ready(t, all),
+                "file": tickets.body_path(t).to_string_lossy(),
+            }));
+        }
+    }
+    if as_json {
+        return Ok(serde_json::to_string_pretty(&Value::Array(rows)).unwrap_or_default() + "\n");
+    }
+    if text.is_empty() {
+        text = "No tickets yet.\n".into();
+    }
+    Ok(text)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir(name: &str) -> PathBuf {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-tickets-{name}-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        d
+    }
+
+    fn saved(d: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(path_in(d, "p1")).unwrap()).unwrap()
+    }
+
+    fn add(t: &mut Tickets, title: &str) -> u32 {
+        t.add(NewTicket { title: title.into(), ..Default::default() }).unwrap()
+    }
+
+    #[test]
+    fn numbers_start_at_one_and_are_never_used_twice_even_after_cancelling() {
+        let d = dir("numbers");
+        let mut t = Tickets::open(&d, "p1");
+        assert!(t.all().is_empty() && !d.exists(), "reading makes nothing");
+        assert_eq!(add(&mut t, "First thing"), 1);
+        assert_eq!(add(&mut t, "Second thing"), 2);
+        t.set_state(2, &State::Cancelled).unwrap();
+        assert_eq!(add(&mut t, "Third"), 3, "a cancelled ticket keeps its number");
+        // Even with the last one gone from the list by hand, `next` remembers.
+        let mut v = saved(&d);
+        v.get_mut("tickets").unwrap().as_array_mut().unwrap().retain(|x| x["number"] != 3);
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        assert_eq!(add(&mut Tickets::open(&d, "p1"), "Fourth"), 4);
+        // And a file whose `next` is behind its tickets never hands out a number twice.
+        let mut v = saved(&d);
+        v.as_object_mut().unwrap().insert("next".into(), json!(1));
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        assert_eq!(add(&mut Tickets::open(&d, "p1"), "Fifth"), 5);
+        let t = Tickets::open(&d, "p1");
+        let first = t.get(1).unwrap();
+        assert_eq!((first.title.as_str(), first.file.as_str(), &first.state, &first.how_far), ("First thing", "01-first-thing.md", &State::New, &HowFar::Preset(0)));
+        assert_eq!(t.body(first), TEMPLATE, "the template body");
+        assert!(bodies_dir(&d, "p1").join("05-fifth.md").exists());
+        assert!(add_err(&mut Tickets::open(&d, "p1"), "   ").contains("title"));
+    }
+
+    fn add_err(t: &mut Tickets, title: &str) -> String {
+        t.add(NewTicket { title: title.into(), ..Default::default() }).unwrap_err().to_string()
+    }
+
+    #[test]
+    fn the_template_says_what_it_should_do_and_how_to_check_it_without_file_paths() {
+        assert!(TEMPLATE.starts_with("## What it should do\n"));
+        assert!(TEMPLATE.contains("as behaviour, not a list of changes. It should fit in one fresh session."));
+        assert!(TEMPLATE.contains("## Acceptance\n\n- [ ] \n- [ ] \n"));
+        assert!(!TEMPLATE.contains('/'), "no paths");
+    }
+
+    #[test]
+    fn a_renamed_ticket_keeps_its_file_and_slugs_are_plain() {
+        assert_eq!(slug("Fix the Login page!"), "fix-the-login-page");
+        assert_eq!(slug("  ☃ "), "ticket");
+        assert_eq!(slug("café au lait"), "caf-au-lait");
+        assert!(slug(&"word ".repeat(30)).len() <= 40);
+        let d = dir("rename");
+        let mut t = Tickets::open(&d, "p1");
+        add(&mut t, "Old name");
+        t.rename(1, "New name").unwrap();
+        assert_eq!((t.get(1).unwrap().title.as_str(), t.get(1).unwrap().file.as_str()), ("New name", "01-old-name.md"));
+        assert!(t.rename(1, " ").is_err());
+        // Two tickets with the same title get files of their own.
+        add(&mut t, "Same");
+        fs::write(bodies_dir(&d, "p1").join("03-same.md"), "someone else's").unwrap();
+        add(&mut t, "Same");
+        assert_eq!(t.get(3).unwrap().file, "03-same-2.md");
+        assert_eq!(fs::read_to_string(bodies_dir(&d, "p1").join("03-same.md")).unwrap(), "someone else's", "never written over");
+    }
+
+    #[test]
+    fn keys_and_states_platoon_does_not_know_survive_a_rewrite() {
+        let d = dir("keep");
+        fs::create_dir_all(d.join("projects/p1")).unwrap();
+        fs::write(
+            path_in(&d, "p1"),
+            r#"{"next":3,"squads":["coding"],"tickets":[
+                {"number":1,"title":"One","file":"01-one.md","state":"reviewing","how_far":"Local commit","folders":["/tmp"],"blocked_by":[],"created":1,"updated":1,"squad":"coding","leader":"abc"},
+                {"number":2,"title":"Two","file":"02-two.md","state":"new","how_far":"Ship it on Friday","folders":[],"blocked_by":[1],"created":1,"updated":1},
+                "not a ticket"]}"#,
+        )
+        .unwrap();
+        let mut t = Tickets::open(&d, "p1");
+        assert_eq!(t.all().len(), 2);
+        assert_eq!(t.get(1).unwrap().state, State::Other("reviewing".into()));
+        assert_eq!(t.get(1).unwrap().state.label(), "reviewing", "shown as written");
+        assert!(!t.get(1).unwrap().state.closed(), "listed with the open ones");
+        assert_eq!(t.get(2).unwrap().how_far, HowFar::Own("Ship it on Friday".into()));
+        t.rename(1, "Uno").unwrap();
+        t.set_state(2, &State::Done).unwrap();
+        add(&mut t, "Three");
+        let v = saved(&d);
+        assert_eq!(v["squads"], json!(["coding"]));
+        let one = &v["tickets"][0];
+        assert_eq!((one["squad"].as_str(), one["leader"].as_str(), one["state"].as_str(), one["title"].as_str()), (Some("coding"), Some("abc"), Some("reviewing"), Some("Uno")));
+        assert_eq!(v["tickets"][2], "not a ticket");
+        assert_eq!(v["tickets"][1]["state"], "done");
+        assert_eq!(v["next"], 4);
+    }
+
+    #[test]
+    fn a_corrupt_file_is_never_written_over() {
+        let d = dir("corrupt");
+        fs::create_dir_all(d.join("projects/p1")).unwrap();
+        for bad in ["{ nope", "[]", r#"{"tickets":{}}"#, r#"{"next":"x"}"#] {
+            fs::write(path_in(&d, "p1"), bad).unwrap();
+            let mut t = Tickets::open(&d, "p1");
+            assert!(t.is_corrupt() && t.all().is_empty(), "{bad}");
+            let e = t.add(NewTicket { title: "x".into(), ..Default::default() }).unwrap_err();
+            assert_eq!(e.to_string(), CORRUPT);
+            assert!(t.set_state(1, &State::Done).is_err());
+            assert_eq!(fs::read_to_string(path_in(&d, "p1")).unwrap(), bad, "left exactly as it was");
+            assert!(!bodies_dir(&d, "p1").exists() || fs::read_dir(bodies_dir(&d, "p1")).unwrap().next().is_none(), "no body left behind");
+        }
+    }
+
+    #[test]
+    fn writes_are_atomic_and_leave_no_temp_files() {
+        let d = dir("atomic");
+        let mut t = Tickets::open(&d, "p1");
+        for i in 0..5 {
+            add(&mut t, &format!("T{i}"));
+        }
+        let names: Vec<String> = fs::read_dir(d.join("projects/p1")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
+        assert!(names.contains(&"tickets.lock".to_string()), "the lock sits beside the file: {names:?}");
+        // Whatever is read at any moment is a whole file: a reader in a loop never sees half of one.
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (d2, s2) = (d.clone(), stop.clone());
+        let reader = std::thread::spawn(move || {
+            while !s2.load(std::sync::atomic::Ordering::SeqCst) {
+                let text = fs::read_to_string(path_in(&d2, "p1")).unwrap();
+                assert!(serde_json::from_str::<Value>(&text).is_ok(), "half a file: {text}");
+            }
+        });
+        for i in 0..40 {
+            t.rename(1, &format!("Name {i}")).unwrap();
+        }
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn two_writers_adding_at_once_get_different_numbers() {
+        let d = dir("lock");
+        Tickets::open(&d, "p1");
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let d = d.clone();
+                std::thread::spawn(move || {
+                    let mut t = Tickets::open(&d, "p1");
+                    (0..5).map(|k| add(&mut t, &format!("t{i}-{k}"))).collect::<Vec<u32>>()
+                })
+            })
+            .collect();
+        let mut all: Vec<u32> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
+        all.sort_unstable();
+        assert_eq!(all, (1..=40).collect::<Vec<u32>>());
+        let t = Tickets::open(&d, "p1");
+        assert_eq!(t.all().len(), 40);
+        assert_eq!(fs::read_dir(bodies_dir(&d, "p1")).unwrap().count(), 40, "a body each");
+    }
+
+    #[test]
+    fn a_second_reader_sees_changes() {
+        let d = dir("reload");
+        let (mut a, mut b) = (Tickets::open(&d, "p1"), Tickets::open(&d, "p1"));
+        add(&mut a, "one");
+        assert!(b.reload_if_changed());
+        assert_eq!(b.all().len(), 1);
+        assert!(!b.reload_if_changed());
+    }
+
+    fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
+        Ticket { number, title: format!("t{number}"), file: String::new(), state, how_far: HowFar::default(), folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0 }
+    }
+
+    #[test]
+    fn a_ticket_is_ready_when_it_is_new_and_everything_it_waits_for_is_done() {
+        let all = vec![tk(1, State::Done, &[]), tk(2, State::New, &[]), tk(3, State::New, &[1, 2]), tk(4, State::New, &[1]), tk(5, State::Done, &[2]), tk(6, State::New, &[9]), tk(7, State::New, &[8]), tk(8, State::Cancelled, &[])];
+        assert_eq!(waiting_for(&all[2], &all), [2], "only the unfinished blockers");
+        assert!(!is_ready(&all[2], &all));
+        assert!(is_ready(&all[3], &all) && is_ready(&all[1], &all));
+        assert!(!is_ready(&all[4], &all), "a Done ticket is not ready");
+        assert!(is_ready(&all[5], &all), "a blocker that isn't there doesn't hold it up");
+        assert!(!is_ready(&all[6], &all), "a Cancelled blocker is not Done");
+        let (open, closed) = grouped(&all);
+        assert_eq!(open.iter().map(|t| t.number).collect::<Vec<_>>(), [2, 3, 4, 6, 7]);
+        assert_eq!(closed.iter().map(|t| t.number).collect::<Vec<_>>(), [1, 5, 8]);
+    }
+
+    #[test]
+    fn loops_and_a_ticket_blocking_itself_are_refused() {
+        let d = dir("loops");
+        let mut t = Tickets::open(&d, "p1");
+        for n in ["a", "b", "c", "d"] {
+            add(&mut t, n);
+        }
+        assert!(t.toggle_blocker(2, 1).unwrap());
+        assert!(t.toggle_blocker(3, 2).unwrap());
+        // 1 <- 2 <- 3: 1 waiting for 3 would go round.
+        let e = t.toggle_blocker(1, 3).unwrap_err().to_string();
+        assert_eq!(e, "#3 already waits for #1, so #1 can't wait for #3");
+        assert_eq!(t.toggle_blocker(4, 4).unwrap_err().to_string(), "#4 can't wait for itself");
+        assert!(t.toggle_blocker(4, 9).unwrap_err().to_string().contains("no ticket #9"));
+        assert!(t.get(1).unwrap().blocked_by.is_empty(), "nothing changed");
+        // Toggling again takes it away.
+        assert!(!t.toggle_blocker(3, 2).unwrap());
+        assert!(t.get(3).unwrap().blocked_by.is_empty());
+        assert!(t.toggle_blocker(1, 3).unwrap(), "no loop any more");
+        assert!(would_loop(t.all(), 3, 1) && !would_loop(t.all(), 4, 1));
+        // A new ticket can only wait for tickets that exist.
+        assert!(t.add(NewTicket { title: "e".into(), blocked_by: vec![7], ..Default::default() }).unwrap_err().to_string().contains("no ticket #7"));
+        assert_eq!(t.add(NewTicket { title: "e".into(), blocked_by: vec![2, 1, 2], ..Default::default() }).unwrap(), 5);
+        assert_eq!(t.get(5).unwrap().blocked_by, [1, 2]);
+    }
+
+    #[test]
+    fn how_far_takes_the_preset_words_in_any_case_and_keeps_anything_else_as_written() {
+        assert_eq!(HowFar::parse("local changes only"), HowFar::Preset(0));
+        assert_eq!(HowFar::parse("LOCAL COMMIT"), HowFar::Preset(1));
+        assert_eq!(HowFar::parse("Commit, push and open a merge request"), HowFar::Preset(2));
+        assert_eq!(HowFar::parse(" publish a document or page "), HowFar::Preset(3));
+        assert_eq!(HowFar::parse("commit"), HowFar::Preset(1), "the short form too");
+        assert_eq!(HowFar::parse(""), HowFar::Preset(0), "nothing: the default");
+        assert_eq!(HowFar::parse("Up to a draft PR"), HowFar::Own("Up to a draft PR".into()));
+        assert_eq!(HowFar::Own("x".into()).text(), "x");
+        assert_eq!(HowFar::Preset(2).short(), "push + MR");
+        let d = dir("howfar");
+        let mut t = Tickets::open(&d, "p1");
+        add(&mut t, "a");
+        t.set_how_far(1, &HowFar::Own("Until the tests pass".into())).unwrap();
+        assert_eq!(saved(&d)["tickets"][0]["how_far"], "Until the tests pass");
+        t.set_how_far(1, &HowFar::Preset(1)).unwrap();
+        assert_eq!(saved(&d)["tickets"][0]["how_far"], "Local commit", "the words themselves");
+    }
+
+    #[test]
+    fn states_have_the_words_of_the_screen() {
+        let words: Vec<String> = ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
+        assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to push/publish", "Done", "Cancelled"]);
+        assert_eq!(USER_STATES.iter().map(State::label).collect::<Vec<_>>(), ["New", "Done", "Cancelled"]);
+        assert!(State::Done.closed() && State::Cancelled.closed() && !State::Working.closed());
+    }
+
+    #[test]
+    fn the_command_line_finds_the_project_by_id_then_by_name_and_refuses_what_it_cannot_tell() {
+        let d = dir("find");
+        let mut p = crate::projects::Projects::open(&d);
+        let web = p.create("Web shop").unwrap();
+        let a = p.create("Twins").unwrap();
+        let b = p.create("twins").unwrap();
+        assert_eq!(find_project(&p, &web).unwrap().name, "Web shop");
+        assert_eq!(find_project(&p, "WEB SHOP").unwrap().id, web);
+        assert!(find_project(&p, "Web").unwrap_err().contains("no project called \"Web\""), "no guessing from a prefix");
+        let e = find_project(&p, "twins").unwrap_err();
+        assert!(e.contains("more than one") && e.contains(&a) && e.contains(&b), "{e}");
+        assert_eq!(find_project(&p, &a).unwrap().id, a, "the id still works");
+        assert!(find_project(&p, " ").is_err());
+    }
+
+    fn run(d: &Path, args: &[&str], stdin: &str, terminal: bool) -> (i32, String, String) {
+        let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let code = cli(&args, d, &mut stdin.as_bytes(), terminal, d, &mut out, &mut err);
+        (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn the_command_line_adds_and_lists() {
+        let d = dir("cli");
+        let id = crate::projects::Projects::open(&d).create("Web shop").unwrap();
+        fs::create_dir_all(d.join("work")).unwrap();
+        assert_eq!(run(&d, &["add", "--project", "web shop", "--title", "Login"], "", true), (0, "#1\n".into(), String::new()));
+        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--how-far", "local commit", "--folder", "work", "--blocked-by", "#1"], "## Body\nfrom stdin\n", false);
+        assert_eq!((code, out.as_str()), (0, "#2\n"));
+        let t = Tickets::open(&d, &id);
+        let two = t.get(2).unwrap();
+        assert_eq!((&two.how_far, two.blocked_by.as_slice()), (&HowFar::Preset(1), &[1][..]));
+        assert_eq!(two.folders, [d.join("work").canonicalize().unwrap().to_string_lossy().into_owned()]);
+        assert_eq!(t.body(two), "## Body\nfrom stdin\n");
+        assert_eq!(t.body(t.get(1).unwrap()), TEMPLATE, "nothing piped in: the template");
+        fs::write(d.join("body.md"), "from a file").unwrap();
+        let (code, _, _) = run(&d, &["add", "--project", "Web shop", "--title", "Own", "--body-file", "body.md", "--how-far", "Until it's live"], "ignored", false);
+        assert_eq!(code, 0);
+        let t = Tickets::open(&d, &id);
+        assert_eq!((t.body(t.get(3).unwrap()), t.get(3).unwrap().how_far.clone()), ("from a file".to_string(), HowFar::Own("Until it's live".into())));
+        // Refusals: one plain line each, and nothing made.
+        for (args, says) in [
+            (vec!["add", "--project", "Nope", "--title", "x"], "no project called"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--blocked-by", "9"], "no ticket #9"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--folder", "/no/such/folder"], "does not exist"),
+            (vec!["add", "--project", "Web shop"], "title"),
+            (vec!["add", "--title", "x"], "--project"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--blocked-by", "two"], "ticket number"),
+        ] {
+            let (code, out, err) = run(&d, &args, "", true);
+            assert!(code != 0 && out.is_empty() && err.contains(says) && err.lines().count() == 1, "{args:?}: {err}");
+        }
+        assert_eq!(Tickets::open(&d, &id).all().len(), 3);
+        assert_eq!(run(&d, &["frobnicate"], "", true).0, 2);
+
+        let mut tt = Tickets::open(&d, &id);
+        tt.set_state(1, &State::Done).unwrap();
+        let (code, out, _) = run(&d, &["list", "--project", "Web shop"], "", true);
+        assert_eq!(code, 0);
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines[0], "Web shop");
+        assert!(lines[1].contains("#2") && lines[1].contains("ready"), "{out}");
+        assert!(lines[2].contains("#3") && lines[2].contains("Until it's live"), "{out}");
+        assert_eq!(lines[3], "  Done and cancelled · 1");
+        assert!(lines[4].contains("#1") && lines[4].contains("Done"), "{out}");
+        let (_, out, _) = run(&d, &["list", "--json"], "", true);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let first = &v[0];
+        assert_eq!((first["number"].as_u64(), first["state"].as_str(), first["ready"].as_bool(), first["how_far"].as_str()), (Some(2), Some("New"), Some(true), Some("Local commit")));
+        assert_eq!(first["blocked_by"], json!([1]));
+        assert!(first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute());
+        assert_eq!(v[2]["number"], 1, "the Done one last");
+    }
+}

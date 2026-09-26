@@ -42,10 +42,12 @@ mod handoff_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
+mod tickets_glue;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
+pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 /// Automatic archiving is something the user didn't do, so its notice stays long enough to be read.
@@ -171,6 +173,10 @@ pub enum Hit {
     Top(usize),
     /// A row of the Projects tab.
     ProjectRow(usize),
+    /// A row of the Tickets pane of a project's screen.
+    TicketRow(usize),
+    /// An entry of a list open over a ticket (its state, how far, folders, what it waits for).
+    TicketPickRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the editor list.
@@ -262,6 +268,8 @@ pub enum Mode {
     Changes,
     /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
     Handoff,
+    /// A list open over a ticket: its state, how far it goes, its folders or what it waits for (`tk.pick`).
+    TicketPick,
 }
 
 pub struct Picker {
@@ -272,6 +280,8 @@ pub struct Picker {
     pub selected: usize,
     /// The project a new session started from here goes into.
     pub project: Option<String>,
+    /// Picking a folder to add to this ticket (of the open project), rather than one to start a session in.
+    pub ticket: Option<u32>,
 }
 
 impl Picker {
@@ -449,6 +459,10 @@ pub struct App {
     pub open_project: Option<String>,
     /// Which pane of the project's screen has the focus.
     pub pane: Pane,
+    /// Sessions or Tickets: the one of the left column used last, which `←` goes back to.
+    pub left_pane: Pane,
+    /// The open project's tickets, the Tickets pane and a ticket's own screen.
+    pub tk: TicketsState,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -603,7 +617,7 @@ impl App {
             mode: Mode::List,
             search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None, find: FindData::new() },
             rename: Rename { id: String::new(), input: String::new(), original: String::new() },
-            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None },
+            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None, ticket: None },
             hosts: Vec::new(),
             client: None,
             spawned: Vec::new(),
@@ -623,6 +637,8 @@ impl App {
             pstats: HashMap::new(),
             open_project: None,
             pane: Pane::Sessions,
+            left_pane: Pane::Sessions,
+            tk: TicketsState::new(),
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -634,7 +650,7 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
-            epick: EditorPick { project: String::new(), instructions: None, options: Vec::new(), selected: 0, starred: String::new() },
+            epick: EditorPick { project: String::new(), instructions: None, ticket: None, options: Vec::new(), selected: 0, starred: String::new() },
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
@@ -923,6 +939,8 @@ impl App {
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
         }
+        // A ticket added by `platoon ticket add` shows without a restart.
+        self.refresh_tickets();
 
         // One row per conversation, however many processes run it.
         let mut by_id: HashMap<&str, Vec<&Live>> = HashMap::new();
@@ -1176,7 +1194,9 @@ impl App {
             (Action::Assign, Mode::List) if !self.projects_list_showing() => self.open_assign(),
             (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
             (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
+            (Action::Leave, Mode::List) if self.tk.open.is_some() => self.close_ticket_screen(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
+            (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -1207,6 +1227,13 @@ impl App {
                 self.mode = Mode::List;
                 self.adopt(&pids, &id, &name, cwd, restore);
             }
+            (Action::Confirm, Mode::Picker) if self.picker.ticket.is_some() => {
+                if let (Some(dir), Some(n)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.ticket) {
+                    self.add_ticket_folder(n, dir);
+                }
+            }
+            // Leaving the folder picker of a ticket goes back to its folders.
+            (Action::Cancel, Mode::Picker) if self.picker.ticket.is_some() => self.mode = Mode::TicketPick,
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
                     let project = self.picker.project.clone();
@@ -1381,7 +1408,8 @@ impl App {
             self.tab = tab;
             self.top = TOP_SESSIONS;
         }
-        self.pane = Pane::Sessions;
+        self.focus_pane(Pane::Sessions);
+        self.tk.open = None;
         self.update_view();
         if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
             self.selected = pos;
@@ -1473,7 +1501,7 @@ impl App {
         all.extend(dirs::candidates(self.reader.root(), &self.home));
         let mut seen = std::collections::HashSet::new();
         all.retain(|p| seen.insert(p.clone()));
-        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project };
+        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
     }
@@ -2159,6 +2187,7 @@ impl App {
                 KeyCode::Char(c) if !ctrl && !alt => self.type_project_name(&c.to_string()),
                 _ => {}
             },
+            Mode::TicketPick => self.ticket_pick_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2278,6 +2307,7 @@ impl App {
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
                     Mode::List => self.wheel_list(up),
                     Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
+                    Mode::TicketPick => self.move_ticket_pick(if up { -1 } else { 1 }),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
@@ -2309,7 +2339,10 @@ impl App {
                     Some(Hit::EditorRow(i)) if i == self.epick.selected => self.act(Action::Confirm),
                     Some(Hit::EditorRow(i)) => self.epick.selected = i,
                     Some(Hit::Slot(i)) => self.look.slot = i,
-                    Some(Hit::Pane(p)) => self.pane = p,
+                    Some(Hit::Pane(p)) => self.focus_pane(p),
+                    Some(Hit::TicketRow(i)) => self.click_ticket_row(i),
+                    Some(Hit::TicketPickRow(i)) if i == self.tk.pick.selected => self.act(Action::Confirm),
+                    Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}
@@ -2326,7 +2359,7 @@ impl App {
                     Some(Hit::Row(i)) if i == self.selected && (self.open_project.is_none() || self.pane == Pane::Sessions) => self.act(Action::Jump),
                     Some(Hit::Row(i)) => {
                         self.selected = i;
-                        self.pane = Pane::Sessions;
+                        self.focus_pane(Pane::Sessions);
                     }
                     Some(Hit::PickerRow(i)) if i == self.picker.selected => self.act(Action::Confirm),
                     Some(Hit::PickerRow(i)) => self.picker.selected = i,
