@@ -41,7 +41,7 @@ Run:
 platoon squads --kinds
 ```
 
-It lists each squad with what it can do and whether it needs a folder. Use it only to shape the tickets, for
+It lists each squad with what it can do. Use it only to shape the tickets, for
 example to split a coding part from a documentation part, or to keep research apart from the change it informs.
 Never pick a squad, never name one in a ticket, and never write a ticket so that only one squad could take it: if
 two squads do the same kind of work, either should be able to take the ticket.
