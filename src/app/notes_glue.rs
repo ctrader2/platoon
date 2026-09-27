@@ -484,7 +484,7 @@ impl App {
     /// Keys while a terminal editor has platoon's window: everything goes to the editor, except the chord that
     /// ends it.
     pub(super) fn editor_key(&mut self, key: KeyEvent) {
-        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char(' ') {
+        if self.keys.get().back.matches(&key) {
             return self.stop_editor();
         }
         let Some(ed) = self.editing.as_mut() else { return };
@@ -499,7 +499,7 @@ impl App {
         }
     }
 
-    /// Ctrl+Space in the editor: ask it to leave (it is platoon's own child) and go back to the project.
+    /// The back key in the editor: ask it to leave (it is platoon's own child) and go back to the project.
     fn stop_editor(&mut self) {
         if let Some(ed) = self.editing.as_mut() {
             ed.run.stop();

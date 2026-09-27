@@ -73,7 +73,7 @@ fn line_with(screen: &str, needle: &str) -> String {
 
 /// The footer: the last line with key hints on it.
 fn footer(screen: &str) -> String {
-    screen.lines().rev().find(|l| l.contains("esc back")).unwrap_or_else(|| panic!("no footer:\n{screen}")).to_string()
+    screen.lines().rev().find(|l| l.contains("ctrl+space back")).unwrap_or_else(|| panic!("no footer:\n{screen}")).to_string()
 }
 
 /// The hand-off entry's explanation, and a piece of its first row (it wraps).

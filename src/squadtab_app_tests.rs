@@ -204,7 +204,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     assert!(f.contains("● 3 reviewer Opus commands Reads the change against the ticket"), "{f}");
     assert!(f.contains("↩ back to step 2 (builder), at most twice") && f.contains("↩ back to step 2 (builder), at most once"), "{f}");
     assert!(f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the ticket + Add a step"), "{f}");
-    assert!(f.contains("enter pick the agent") && f.contains("g go to the agent") && f.contains("b send back") && f.contains("esc back to the list"), "{f}");
+    assert!(f.contains("enter pick the agent") && f.contains("g go to the agent") && f.contains("b send back") && f.contains("ctrl+space back to the list"), "{f}");
     // Tab and Shift+arrows move between the panes; on the list, plain ← → switch the list.
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.sqt.focus, SqFocus::List);

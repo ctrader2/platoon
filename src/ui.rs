@@ -213,7 +213,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     }
 }
 
-fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
+fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
     let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
     vec![
         ("enter", "open", Some(Action::Jump)),
@@ -228,11 +228,11 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
-        ("q", "quit", Some(Action::Quit)),
+        (app.quit_label(), "quit", Some(Action::Quit)),
     ]
 }
 
-fn projects_hints(app: &App) -> Vec<Hint<'static>> {
+fn projects_hints(app: &App) -> Vec<Hint<'_>> {
     let archive_verb = if app.selected_project().is_some_and(|p| p.archived) { "restore" } else { "archive" };
     vec![
         ("enter", "open", Some(Action::Jump)),
@@ -246,11 +246,11 @@ fn projects_hints(app: &App) -> Vec<Hint<'static>> {
         ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
-        ("q", "quit", Some(Action::Quit)),
+        (app.quit_label(), "quit", Some(Action::Quit)),
     ]
 }
 
-fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
+fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
     let mut out = vec![("enter", "open", Some(Action::Jump)), ("n", "new session", Some(Action::New))];
     if app.pane == Pane::Sessions {
@@ -285,8 +285,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
     out.extend([
         ("/", "search", Some(Action::Search)),
         ("tab shift+arrows", "panes", None),
-        ("esc", "back", Some(Action::Leave)),
-        ("q", "quit", Some(Action::Quit)),
+        (app.back_label(), "back", Some(Action::Leave)),
     ]);
     out
 }
@@ -297,9 +296,9 @@ fn handable(app: &App, t: &Ticket) -> bool {
 }
 
 /// The keys of a ticket's own screen.
-fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
+fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
     let t = app.ticket(n);
-    let mut out: Vec<Hint<'static>> = Vec::new();
+    let mut out: Vec<Hint> = Vec::new();
     if t.is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
         out.push(("enter", if app.leader_running(n) { "the squad's session" } else { "continue the squad" }, None));
     }
@@ -325,8 +324,7 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
         ("b", "waits for", None),
         ("v", "editor", Some(Action::Editor)),
         ("↑↓", "scroll", None),
-        ("esc", "back", Some(Action::Leave)),
-        ("q", "quit", Some(Action::Quit)),
+        (app.back_label(), "back", Some(Action::Leave)),
     ]);
     out
 }
@@ -1831,18 +1829,18 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         if !app.pl.installed.is_empty() {
             hints.push(("d", "remove", None));
         }
-        hints.push(("esc", "back", Some(Action::Cancel)));
+        hints.push((app.back_label(), "back", Some(Action::Cancel)));
         fit_hints(hints, w, &["move", "tabs"])
     } else if let Some(restorable) = on_instructions {
         let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None), ("enter", "edit", None)];
         if restorable {
             hints.push(("r", "restore", None));
         }
-        hints.push(("esc", "back", Some(Action::Cancel)));
+        hints.push((app.back_label(), "back", Some(Action::Cancel)));
         fit_hints(hints, w, &["move", "tabs"])
     } else {
         fit_hints(
-            vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), ("esc", "back", Some(Action::Cancel))],
+            vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), (app.back_label(), "back", Some(Action::Cancel))],
             w,
             &["move", "next choice"],
         )
@@ -2891,7 +2889,7 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
             Rect::new(body.x, body.y + n as u16, body.width, 1),
         );
     }
-    let hints: [Hint; 3] = [("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    let hints: [Hint; 3] = [(app.back_label(), "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
     draw_footer(f, app, foot, &hints, None);
 }
 
@@ -2999,7 +2997,7 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
             (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
         },
     };
-    let hints: [Hint; 1] = [("ctrl+space", "stop the editor", Some(Action::Back))];
+    let hints: [Hint; 1] = [(app.back_label(), "stop the editor", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }
@@ -3382,7 +3380,7 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
     } else {
         app.ticket(number).map(|x| format!("#{} · {}", x.number, x.state.label())).unwrap_or_default()
     };
-    let hints: [Hint; 1] = [("ctrl+space", "back to the project", Some(Action::Back))];
+    let hints: [Hint; 1] = [(app.back_label(), "back to the project", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, a.bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }
@@ -3476,7 +3474,7 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, extra: &[
         draw_paused_banner(f, app, term);
     }
     let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
-    let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
+    let hints: [Hint; 1] = [(app.back_label(), "back to list", Some(Action::Back))];
     let bar = bar.inner(Margin::new(1, 0));
     let right = if let Some(notice) = app.active_notice() {
         // "Copied 3 lines": what just happened wins over the standing text.
@@ -3509,7 +3507,7 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
         Line::styled("To keep the conversation in sync and nothing overwritten, this copy is paused: what you type is not sent.", Style::new().fg(t.subtext)),
         Line::raw(""),
         Line::from(vec![
-            Span::styled("ctrl+space", Style::new().fg(t.accent)),
+            Span::styled(app.back_label().to_string(), Style::new().fg(t.accent)),
             Span::styled(" go back, then press ", Style::new().fg(t.dim)),
             Span::styled("enter", Style::new().fg(t.accent)),
             Span::styled(" on it to reload", Style::new().fg(t.dim)),

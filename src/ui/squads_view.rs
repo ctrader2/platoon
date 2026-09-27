@@ -8,9 +8,9 @@ use crate::squadfile::{self, Kind};
 use std::collections::HashMap;
 
 /// The keys of the Squads tab, for the list it shows, the pane that has them and the row the cursor is on.
-pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
+pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
     let sqt = &app.sqt;
-    let mut out: Vec<Hint<'static>> = Vec::new();
+    let mut out: Vec<Hint> = Vec::new();
     let agents = sqt.view == SqView::Agents;
     let (draft, kind) = if agents { (sqt.agent_draft_selected(), sqt.agent_listed().map(|l| l.kind)) } else { (sqt.draft_selected(), sqt.listed().map(|l| l.kind)) };
     let remove = if draft {
@@ -31,7 +31,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
                 _ => {}
             }
             out.push(("c", "copy to change", None));
-            out.push(("esc", "back to the list", None));
+            out.push((app.back_label(), "back to the list", None));
         }
         SqFocus::List => {
             if agents && sqt.new_agent_selected() {
@@ -65,7 +65,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
-            out.push(("esc", "back to the list", None));
+            out.push((app.back_label(), "back to the list", None));
         }
         SqFocus::Detail => {
             match sqt.drow() {
@@ -83,10 +83,14 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
-            out.push(("esc", "back to the list", None));
+            out.push((app.back_label(), "back to the list", None));
         }
     }
-    out.extend([("tab shift+arrows", "panes", None), ("1-3", "tabs", None), ("s", "settings", Some(Action::Settings)), ("q", "quit", Some(Action::Quit))]);
+    out.extend([("tab shift+arrows", "panes", None), ("1-3", "tabs", None), ("s", "settings", Some(Action::Settings))]);
+    // In the details the quit key goes back to the list (said above); only the list itself quits.
+    if sqt.focus == SqFocus::List {
+        out.push((app.quit_label(), "quit", Some(Action::Quit)));
+    }
     out
 }
 

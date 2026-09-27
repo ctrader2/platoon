@@ -208,3 +208,25 @@ fn platoon_open_explains_itself_when_it_cannot_find_the_session() {
     assert_eq!(t.wait_exit(), 1);
     assert!(t.text().contains("no session matches"), "{}", t.text());
 }
+
+#[test]
+fn platoon_open_detaches_on_the_back_key_from_keys_json_and_passes_ctrl_space_through() {
+    let w = World::new("open-keys");
+    let config = w.cache.join("config");
+    fs::create_dir_all(&config).unwrap();
+    fs::write(config.join("keys.json"), r#"{ "back": "ctrl+q" }"#).unwrap();
+    let mut t = Term::spawn(&["open"], &w.env("sh"), &w.work, 24, 80);
+    t.send(b"echo first-$((6*7))\r");
+    t.wait_for("first-42");
+    // Ctrl+Space (NUL) goes to the session now; the shell is still there to answer.
+    t.send(&[0]);
+    t.send(b"echo second-$((2+3))\r");
+    t.wait_for("second-5");
+    t.send(&[0x11]); // ctrl+q
+    assert_eq!(t.wait_exit(), 0);
+    assert!(t.text().contains("detached"), "{}", t.text());
+    let (pid, _) = find_host(&w.cache).expect("the session keeps running after detaching");
+    assert!(alive(pid));
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    until("shell to exit", || !alive(pid));
+}

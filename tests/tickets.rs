@@ -212,7 +212,7 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     t.wait_for("pick a directory");
     t.send(b"\x1b");
     t.wait_gone("pick a directory");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -249,7 +249,7 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
     let body = fs::read_to_string(lab.config.join("projects/pweb/tickets/01-log-in-with-a-link.md")).unwrap();
     assert!(body.starts_with("## What it should do") && body.contains("## Acceptance") && body.ends_with("A link by email logs you in.\n"), "{body}");
     assert!(body.contains("How far: local changes only (say if you want a commit, or a push and merge request)."), "{body}");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -303,7 +303,7 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_with_c_after_ask
     let (top, divider) = (screen.find("#3 Top").unwrap(), screen.find("Done and cancelled").unwrap());
     assert!(top > divider, "#3 stays under the divider:\n{screen}");
     assert_eq!(lab.tickets()["tickets"][2]["state"], "cancelled");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -344,7 +344,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.wait_for_flat("enter open n new ticket c cancel");
     t.send(b"\r");
     t.wait_for_all(&["Waits for", "#1 Base · New", "The basket keeps its items."]);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -381,7 +381,7 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     let (_, out, _) = lab.cli(&["list"], "");
     assert!(out.contains("#1   From the command line  ·  New  ready") && !out.contains("Local"), "{out}");
     assert_eq!(v[1]["folders"], json!([lab.work.canonicalize().unwrap().to_str().unwrap()]), "no --folder: the folder it was run in");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -406,7 +406,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let line = screen.lines().nth(row as usize).unwrap();
     let pane = line.split('│').nth(2).unwrap_or("");
     assert!(pane.contains("waits for #1"), "inside its own pane: {line}");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -457,7 +457,7 @@ fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_se
     // Ctrl+Space: back to the ticket.
     t.send(&[0]);
     t.wait_for_all(&["From", "make the shop"]);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -592,6 +592,6 @@ fn a_done_tickets_worktree_with_uncommitted_changes_is_kept_said_on_its_screen_a
     assert_eq!(git(&shop, &["branch", "--list", "ticket/1", "--format=%(refname:short)"]), "ticket/1", "the branch is kept");
     assert!(lab.tickets()["tickets"][0]["worktrees"][0]["removed"].is_u64());
     assert_eq!(lab.tickets()["tickets"][0]["worktrees"][0]["base"], base.as_str());
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

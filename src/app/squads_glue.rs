@@ -652,7 +652,7 @@ impl App {
         let from_line = self.sq.from_line.remove(&(project.to_string(), number));
         let show = !from_line && self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
         match self.launch_leader_in(project, number, Some(&first), show) {
-            Ok(()) if show => self.notify(format!("#{number} is with the {} squad now. ctrl+space goes back to the project.", squad.name)),
+            Ok(()) if show => self.notify(format!("#{number} is with the {} squad now. {} goes back to the project.", squad.name, self.back_label())),
             Ok(()) if from_line => self.notify(format!("A squad is free: #{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Ok(()) => self.notify(format!("#{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Err(e) => {

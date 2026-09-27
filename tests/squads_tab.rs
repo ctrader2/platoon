@@ -296,7 +296,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     assert_eq!(value_after(&again, "--agent"), "careful-coding-leader");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -311,9 +311,9 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     let screen = t.stable();
     assert!(!screen.contains("Needs a folder") && !screen.contains("Use a worktree"), "{screen}");
     t.send(b"\t");
-    t.wait_for("esc back to the list");
+    t.wait_for("ctrl+space back to the list");
     t.send(b"\x1b");
-    t.wait_gone("esc back to the list");
+    t.wait_gone("ctrl+space back to the list");
     // Settings, the Projects tab (before Editors and Plugins, the last): the leaders' model and system prompt, just after
     // the commander's.
     t.send(b"s");
@@ -363,7 +363,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     assert!(prompt.contains("\n\nYou lead the Coding squad.") && prompt.contains("SQUAD: done"), "{prompt}");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -382,7 +382,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     t.send(b"\x1b[C");
     t.wait_for_all(&["[Agents]", "▎ planner"]);
     t.send(b"\r");
-    t.wait_for_all(&["esc back to the list", "Skills", "None: enter picks from what is installed"]);
+    t.wait_for_all(&["ctrl+space back to the list", "Skills", "None: enter picks from what is installed"]);
     // Down to Skills: past its name, model and three switches.
     t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     t.wait_for("enter pick");
@@ -410,7 +410,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     assert_eq!((a["skills"].clone(), a["mcp_servers"].clone(), a["builtin"].as_str()), (json!(["pdf"]), json!(["sentry", "linear"]), Some("planner")));
     // Coding's leader starts with them: preloaded skills, servers by name, and the tools that let the planner use them.
     t.send(b"\x1b");
-    t.wait_gone("esc back to the list");
+    t.wait_gone("ctrl+space back to the list");
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
@@ -430,7 +430,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     assert_eq!(fs::read_to_string(lab.claude.join(".claude.json")).unwrap(), claude_json, "Claude's own file is only read");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -471,7 +471,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     t.send(b"\x1b[D");
     t.wait_for_all(&["[Squads]", "← → agents"]);
     t.send(b"\x1b[H\r");
-    t.wait_for("esc back to the list");
+    t.wait_for("ctrl+space back to the list");
     // Down to step 3's agent: past name, what it can do, and steps 1 and 2 (each its agent, then what it does).
     for _ in 0..6 {
         t.send(b"\x1b[B");
@@ -496,6 +496,6 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     assert!(a["guidance"].as_str().unwrap().ends_with("Be strict."), "{a}");
     assert!(!lab.config.join("squads/coding.json").exists(), "the squad itself is as it was");
     t.wait_for_all(&["User Modified"]);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

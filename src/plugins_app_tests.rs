@@ -270,7 +270,7 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.pl.review.as_ref().and_then(|r| r.reading), Some(2));
     let shown = flat(&draw(&mut term, &app));
-    for want in ["Agent: change-reader · from changelog name", "This is what Claude will follow, with your permissions:", "Its system prompt", "Read the commits and the diff since the last release", "esc back to the list"] {
+    for want in ["Agent: change-reader · from changelog name", "This is what Claude will follow, with your permissions:", "Its system prompt", "Read the commits and the diff since the last release", "ctrl+space back to the list"] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
     assert!(!shown.contains("y install"), "the full view only reads: {shown}");
@@ -491,4 +491,27 @@ fn an_update_that_changes_an_agents_instructions_is_shown_again_with_the_changes
     app.refresh_until_for_test(20, "the update", |a| !a.plugins_busy());
     assert!(app.active_notice().unwrap().contains("changelog name is updated from 1.0.0 to 1.1.0"), "{:?}", app.active_notice());
     assert!(crate::agentfile::get(&w.config, "plugin:changelog/change-reader").unwrap().guidance.contains("not even a tag"));
+}
+
+#[test]
+fn the_back_key_goes_from_a_plugins_file_to_the_list_of_what_it_adds_and_then_closes_it() {
+    let w = World::new("plug-review-back");
+    let repo = instructions_repo(&w.base);
+    let mut app = w.app();
+    app.pl.source = source(&repo);
+    open_tab(&mut app);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::PluginReview));
+    let ctrl_space = |app: &mut App| app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.pl.review.as_ref().and_then(|r| r.reading), Some(0));
+    // (Not the space that pages down in the reader.)
+    ctrl_space(&mut app);
+    assert!(matches!(app.mode, Mode::PluginReview) && app.pl.review.as_ref().unwrap().reading.is_none(), "the file -> the list");
+    ctrl_space(&mut app);
+    assert!(matches!(app.mode, Mode::List) && app.pl.review.is_none(), "the list -> closed, nothing installed");
+    assert!(app.pl.store.installed().is_empty());
+    // q on the Plugins tab (nothing open) quits.
+    ch(&mut app, 'q');
+    assert!(app.quit);
 }

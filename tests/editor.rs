@@ -198,6 +198,8 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     assert_eq!(session["colors"]["mode"], "terminal", "NO_COLOR (the harness): nothing forced");
     // Copies go where platoon's go: PLATOON_CLIPBOARD=osc52 (the harness) means OSC 52 only, no system helper.
     assert_eq!(session["clipboard"], json!({"target": "osc52", "helper": null, "osc52_max": 100000}));
+    // The back key, in Neovim's notation (no keys.json: the default).
+    assert_eq!(session["keys"], json!({"back": "<C-Space>"}));
     // Keys reach the editor, not platoon (a `q` or `2` would quit platoon or switch its tab).
     t.send(b"q2 typed\r");
     assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
@@ -267,7 +269,7 @@ fn v_on_a_tickets_screen_opens_its_worktree_counted_from_where_it_was_made_and_c
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&wt));
     t.send(b"\r");
     // Back on the ticket's own screen.
-    t.wait_for_all(&["Basket", "v editor", "esc back"]);
+    t.wait_for_all(&["Basket", "v editor", "ctrl+space back"]);
     assert!(!t.stable().contains("STAND-IN"));
 }
 
@@ -349,7 +351,9 @@ fn editor_catalog(lab: &Lab) -> (PathBuf, PathBuf) {
         fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
     }
     fs::write(theirs.join("downloads.json"), serde_json::to_string_pretty(&table).unwrap()).unwrap();
-    fs::write(repo.join("plugins/index.json"), json!({"plugins": [{"id": "editor", "version": "1.0.0"}]}).to_string()).unwrap();
+    // The index names the version the plugin's own file has (a catalog whose two disagree is refused).
+    let version = serde_json::from_str::<Value>(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap()["version"].clone();
+    fs::write(repo.join("plugins/index.json"), json!({"plugins": [{"id": "editor", "version": version}]}).to_string()).unwrap();
     git(&repo, &["init", "-q"]);
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-q", "-m", "catalog"]);
@@ -592,7 +596,7 @@ fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() 
     t.send(b"\r");
     t.wait_for("#1");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["Basket", "v editor", "esc back"]);
+    t.wait_for_all(&["Basket", "v editor", "ctrl+space back"]);
     t.send(b"v");
     assert_eq!(wait_file(&lab.out.join("code.argv")).lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&wt)]);
     t.wait_for_flat("Kept: opened in VS Code.");
@@ -638,6 +642,24 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     until("always ask on", || lab.settings()["files_editor_ask"] == true);
     t.send(b"\x1b");
     t.wait_gone("Editing files");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn the_editor_is_given_the_back_key_from_keys_json() {
+    let lab = Lab::new("ed-term-keys");
+    lab.session(&[]);
+    fs::write(lab.config.join("keys.json"), r#"{ "back": "alt+x" }"#).unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
+    t.wait_for_all(&["make the shop", "v editor"]);
+    t.send(b"v");
+    t.wait_for("STAND-IN EDITOR RUNNING");
+    let run = lab.only_run();
+    until("the session file to be copied", || run.join("session.json").is_file());
+    assert_eq!(session_of(&run)["keys"], json!({"back": "<M-x>"}));
+    t.send(b"done\r");
+    t.wait_for_all(&["make the shop", "v editor"]);
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }

@@ -5,8 +5,8 @@ use super::*;
 use crate::app::{PlugRow, PlugState};
 
 /// The keys of the Plugins tab, for the plugin selected.
-pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'static>> {
-    let mut out: Vec<Hint<'static>> = Vec::new();
+pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'_>> {
+    let mut out: Vec<Hint> = Vec::new();
     let row = app.pl.selected_row();
     if row.as_ref().is_some_and(|r| editor_unfinished(app, r)) {
         out.push(("enter", "finish downloads", None));
@@ -22,7 +22,7 @@ pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'static>> {
         Some(s) if s.installed() => out.push(("d", "remove", None)),
         _ => {}
     }
-    out.extend([("f", "check the catalog", None), ("↑↓", "move", None), ("1-4", "tabs", None), ("s", "settings", Some(Action::Settings)), ("q", "quit", Some(Action::Quit))]);
+    out.extend([("f", "check the catalog", None), ("↑↓", "move", None), ("1-4", "tabs", None), ("s", "settings", Some(Action::Settings)), (app.quit_label(), "quit", Some(Action::Quit))]);
     out
 }
 
@@ -392,6 +392,6 @@ fn draw_review_item(f: &mut Frame, app: &App, r: &crate::app::Review, i: usize, 
         f.render_widget(Paragraph::new(l), Rect::new(body.x, body.y + k as u16, body.width, 1));
     }
     let shown = if total <= rows { "all of it shown".to_string() } else { format!("lines {}-{} of {total}", top + 1, (top + rows).min(total)) };
-    let hints: [Hint; 2] = [("↑↓ pgup pgdn", "scroll"), ("esc", "back to the list")].map(|(k, d)| (k, d, None));
+    let hints: [Hint; 2] = [("↑↓ pgup pgdn", "scroll", None), (app.back_label(), "back to the list", None)];
     draw_footer(f, app, Rect::new(inner.x, inner.bottom() - 1, inner.width, 1), &hints, Some((shown, t.dim)));
 }

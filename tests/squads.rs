@@ -389,7 +389,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert_eq!(lab.started(), 1);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -483,7 +483,7 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     t.wait_for_flat("State Working");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -563,7 +563,7 @@ fn a_ticket_whose_squad_isnt_running_continues_it_with_the_same_flags_and_narrow
     t.wait_for("GOT:typed here");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -595,7 +595,7 @@ fn cancelling_a_ticket_whose_squad_runs_asks_and_stops_only_that_session() {
     assert!(alive(bystander.id()), "nothing else is signalled");
     let _ = bystander.kill();
     let _ = bystander.wait();
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -632,7 +632,7 @@ fn when_the_commander_says_no_the_ticket_stays_new_with_why_and_a_second_a_can_h
     assert_eq!(lab.started(), 1);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -653,7 +653,7 @@ fn when_the_session_limit_is_reached_nothing_is_handed_over() {
     assert!(!lab.base.join("shop-worktrees").exists(), "no worktree");
     t.send(b"\r");
     t.wait_for_all(&["Commander", "Session limit has been reached"]);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -686,7 +686,7 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     assert_eq!(lab.ticket_now()["state"], "working");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -760,7 +760,7 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
     t.wait_for_all(&["Research squad", "Work folder"]);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -785,7 +785,7 @@ fn summarize_works_in_a_worktree_of_a_git_folder_with_the_work_folder_beside_it(
     assert!(first.contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())), "{first}");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -810,7 +810,7 @@ fn docs_works_in_a_worktree_of_a_git_folder() {
     assert!(args.last().unwrap().contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())));
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -831,7 +831,7 @@ fn docs_works_in_a_folder_outside_git_as_it_is() {
     assert!(args.last().unwrap().contains(&format!("- {} (used as it is, not a git worktree; the session starts here)", lab.docs.display())));
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -901,7 +901,7 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     assert_eq!(ticket_n(&lab, 3)["queued"]["squad"], "coding", "#3 still waits: #2 holds the place");
 
     // platoon closes with #3 in the line; meanwhile #2 finishes.
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
     let sid2 = two["leaders"][0]["session"].as_str().unwrap().to_string();
     assert_eq!(lab.run_hook_command(&stop, &stop_input(&sid2, "Done.\nSQUAD: done")), 0);
@@ -915,7 +915,7 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     assert_eq!(value_after(&lab.args(3), "-n"), "Coding squad · #3 Part 3");
     assert!(ticket_n(&lab, 3).get("queued").is_none());
     t.wait_for("enter open");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -978,6 +978,6 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     assert!(left[at("[-] coding-reviewer")..].join(" ").contains("Review the basket page (didn't finish)"), "{screen}");
     assert!(!screen.contains("Now:"), "{screen}");
     assert_eq!(lab.started(), 0);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

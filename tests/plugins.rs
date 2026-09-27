@@ -240,7 +240,9 @@ impl Lab {
             fs::create_dir_all(theirs.join(rel).parent().unwrap()).unwrap();
             fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
         }
-        let index = json!({"plugins": [{"id": "editor", "version": "1.0.0"}, {"id": "harbor", "version": "1.0.0"}]});
+        // The index names the version the plugin's own file has (a catalog whose two disagree is refused).
+        let version = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap()["version"].clone();
+        let index = json!({"plugins": [{"id": "editor", "version": version}, {"id": "harbor", "version": "1.0.0"}]});
         fs::write(self.repo.join("plugins/index.json"), index.to_string()).unwrap();
         git(&self.repo, &["add", "-A"]);
         git(&self.repo, &["commit", "-q", "-m", "editor"]);
@@ -303,7 +305,7 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     t.send(b"\x1b[B");
     t.send(b"\x1b[B");
     t.send(b"\r");
-    t.wait_for_all(&["Agent: change-reader · from Changelog kit", "Its system prompt", "Read the commits since the last release", "esc back to the list"]);
+    t.wait_for_all(&["Agent: change-reader · from Changelog kit", "Its system prompt", "Read the commits since the last release", "ctrl+space back to the list"]);
     t.send(b"\x1b");
     t.wait_gone("Its system prompt");
     t.wait_for("y install");

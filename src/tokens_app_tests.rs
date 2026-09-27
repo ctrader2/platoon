@@ -256,7 +256,7 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     for name in [MASTER_LABEL, "Daily token limit", "Model for smart features"] {
         select(&mut app, name);
         let shown = screen(&mut small, &app);
-        assert!(shown.contains(name) && shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("esc back"), "{name}:\n{shown}");
+        assert!(shown.contains(name) && shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("ctrl+space back"), "{name}:\n{shown}");
     }
 }
 

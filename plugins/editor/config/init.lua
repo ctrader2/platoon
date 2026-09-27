@@ -3,7 +3,8 @@
 -- platoon writes this file (from its editor plugin, plugins/editor/config/init.lua) into its editor folder every time it
 -- opens the editor, so changes made here are overwritten. What changes from one opening to the next - the folders, the
 -- commits a ticket's changes are counted from, the colors of platoon's theme, whether the font has icons - is in the
--- session file named by $PLATOON_EDITOR_SESSION (JSON written by platoon).
+-- session file named by $PLATOON_EDITOR_SESSION (JSON written by platoon), and so is the user's back key (`keys.back`, from
+-- platoon's keys.json, in Neovim's notation; Ctrl+Space when the session doesn't say).
 --
 -- Nothing here reads or writes ~/.config/nvim or nvim's usual data folders: platoon starts nvim with its XDG folders
 -- inside its own editor folder, and gives programs started from the editor (the terminal, `:!`) the user's own
@@ -26,7 +27,14 @@ local S = read_json(os.getenv('PLATOON_EDITOR_SESSION')) or {}
 S.roots = S.roots or {}
 S.colors = S.colors or { mode = 'terminal' }
 local icons = S.icons == true
-_G.PlatoonEditor = { session = S }
+-- The back key: back to platoon from anywhere in the editor, as `q` is in normal mode.
+local BACK = type(S.keys) == 'table' and type(S.keys.back) == 'string' and S.keys.back ~= '' and S.keys.back or '<C-Space>'
+_G.PlatoonEditor = { session = S, back_key = BACK }
+
+--- Whether two keys in Neovim's notation are the same key (`<C-space>` and `<C-Space>`).
+local function same_key(a, b)
+  return vim.api.nvim_replace_termcodes(a, true, true, true) == vim.api.nvim_replace_termcodes(b, true, true, true)
+end
 
 vim.opt.packpath:prepend(S.site)
 vim.opt.runtimepath:prepend(S.site)
@@ -225,7 +233,7 @@ local function map(mode, lhs, rhs, desc, opts)
   vim.keymap.set(mode, lhs, rhs, opts)
 end
 
--- ---- back to platoon: `q` ------------------------------------------------------------------------------------------
+-- ---- back to platoon: `q`, and the back key ------------------------------------------------------------------------------------------
 
 --- Terminal buffers whose program is still running.
 local function running_terminals()
@@ -289,8 +297,18 @@ end
 map('n', 'q', PlatoonEditor.back, 'Back to platoon')
 -- Recording a macro, which `q` did, moves to `Q`.
 map('n', 'Q', 'q', 'Record a macro (what q does in Vim)', { remap = false })
+-- The back key, in normal, insert, visual and terminal mode alike. (A key Neovim can't map is left out, quietly:
+-- `q` still works.)
+local back_modes = { 'n', 'i', 'x', 's', 't' }
+pcall(map, back_modes, BACK, PlatoonEditor.back, 'Back to platoon')
+-- Ctrl+Space reaches Neovim as a NUL byte, which some terminals and Neovim versions call Ctrl+@.
+if same_key(BACK, '<C-Space>') then
+  pcall(map, back_modes, '<C-@>', PlatoonEditor.back, 'Back to platoon')
+end
 -- Ctrl+Z would stop the editor with platoon waiting behind it: `q` goes back instead.
-map({ 'n', 'v' }, '<C-z>', '<Nop>', 'Nothing (q goes back to platoon)')
+if not same_key(BACK, '<C-z>') then
+  map({ 'n', 'v' }, '<C-z>', '<Nop>', 'Nothing (q or the back key goes back to platoon)')
+end
 
 -- ---- the roots -----------------------------------------------------------------------------------------------------
 
@@ -517,6 +535,9 @@ try('the file tree', function()
         ['q'] = function()
           PlatoonEditor.back()
         end,
+        [BACK] = function()
+          PlatoonEditor.back()
+        end,
         ['<esc>'] = 'close_window',
         ['<cr>'] = 'open',
         ['o'] = 'open',
@@ -582,6 +603,7 @@ end)
 
 try('diffs', function()
   local close = { 'n', '<esc>', '<cmd>DiffviewClose<cr>', { desc = 'Close the diff' } }
+  local back = { { 'n', 'i', 'x' }, BACK, PlatoonEditor.back, { desc = 'Back to platoon' } }
   local off = function(lhs)
     return { 'n', lhs, false }
   end
@@ -592,9 +614,9 @@ try('diffs', function()
     signs = icons and nil or { fold_closed = '>', fold_open = 'v', done = 'x' },
     enhanced_diff_hl = true,
     keymaps = {
-      view = vim.list_extend({ close }, no_leader),
-      file_panel = vim.list_extend({ close }, no_leader),
-      file_history_panel = vim.list_extend({ close }, no_leader),
+      view = vim.list_extend({ close, back }, no_leader),
+      file_panel = vim.list_extend({ close, back }, no_leader),
+      file_history_panel = vim.list_extend({ close, back }, no_leader),
     },
   })
 end)
@@ -616,8 +638,16 @@ try('search and the terminal', function()
     },
     -- the shell script beside this file (the user's environment back, then their $SHELL), run as it is
     terminal = { enabled = true, shell = S.shell and { S.shell } or nil, win = { style = 'terminal' } },
-    -- In the terminal's normal mode (two quick Esc), q goes back to platoon like everywhere else (not "hide").
-    styles = { terminal = { keys = { q = { 'q', function() PlatoonEditor.back() end, desc = 'Back to platoon' } } } },
+    -- In the terminal's normal mode (two quick Esc), q goes back to platoon like everywhere else (not "hide"); the back
+    -- key does from inside the terminal too.
+    styles = {
+      terminal = {
+        keys = {
+          q = { 'q', function() PlatoonEditor.back() end, desc = 'Back to platoon' },
+          platoon_back = { BACK, function() PlatoonEditor.back() end, mode = { 'n', 't' }, desc = 'Back to platoon' },
+        },
+      },
+    },
   })
 end)
 
@@ -718,6 +748,24 @@ try('the status line', function()
 end)
 
 try('completion', function()
+  -- Ctrl+Space is platoon's back key, so the menu is opened with Ctrl+N (which then moves down it, as in Vim).
+  local keymap = {
+    preset = 'none',
+    ['<C-e>'] = { 'cancel', 'fallback' },
+    ['<CR>'] = { 'accept', 'fallback' },
+    ['<Tab>'] = { 'select_next', 'fallback' },
+    ['<S-Tab>'] = { 'select_prev', 'fallback' },
+    ['<Down>'] = { 'select_next', 'fallback' },
+    ['<Up>'] = { 'select_prev', 'fallback' },
+    ['<C-n>'] = { 'show', 'select_next', 'fallback_to_mappings' },
+    ['<C-p>'] = { 'select_prev', 'fallback_to_mappings' },
+  }
+  -- The back key wins over the menu's keys.
+  for lhs in pairs(vim.deepcopy(keymap)) do
+    if lhs ~= 'preset' and same_key(lhs, BACK) then
+      keymap[lhs] = nil
+    end
+  end
   require('blink.cmp').setup({
     fuzzy = { implementation = 'lua' },
     cmdline = { enabled = false },
@@ -727,18 +775,7 @@ try('completion', function()
       list = { selection = { preselect = false, auto_insert = false } },
       menu = icons and {} or { draw = { columns = { { 'label', 'label_description', gap = 1 }, { 'kind' } } } },
     },
-    keymap = {
-      preset = 'none',
-      ['<C-space>'] = { 'show', 'show_documentation', 'hide_documentation' },
-      ['<C-e>'] = { 'cancel', 'fallback' },
-      ['<CR>'] = { 'accept', 'fallback' },
-      ['<Tab>'] = { 'select_next', 'fallback' },
-      ['<S-Tab>'] = { 'select_prev', 'fallback' },
-      ['<Down>'] = { 'select_next', 'fallback' },
-      ['<Up>'] = { 'select_prev', 'fallback' },
-      ['<C-n>'] = { 'select_next', 'fallback_to_mappings' },
-      ['<C-p>'] = { 'select_prev', 'fallback_to_mappings' },
-    },
+    keymap = keymap,
   })
 end)
 

@@ -79,7 +79,7 @@ Press `v` anywhere in platoon's lists to look at the work in the code editor:
 | a ticket's row or its screen | the ticket's worktrees (every repository the squad works in), its folders that aren't in git as they are, and its work folder when there is something in it |
 | anywhere else (the Squads tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 
-In a session's live view every key goes to Claude: press `ctrl+space` to go back to the list, then `v`. Typed into a box
+In a session's live view every key goes to Claude: press the [back key](#keys-back-and-quit) (`ctrl+space`) to go back to the list, then `v`. Typed into a box
 (search, a name, the folder picker), `v` is just a letter.
 
 The editor opens **in the same window**: platoon's screen goes, the editor takes the whole terminal, and `q` brings you
@@ -131,6 +131,8 @@ a list of them appears.
 | Key | Does |
 | --- | --- |
 | `q` | back to platoon. With changes you haven't saved it asks: save them, discard them, or keep editing. A program still running in the editor's terminal is stopped (it asks first) |
+| `ctrl+space` | back to platoon too, the same way, from anywhere: typing, selecting, the file tree, the differences, the terminal. It is the [back key](#keys-back-and-quit): another one set in `keys.json` is used here instead |
+| `ctrl+n` | while typing: the completion menu (words from your open files, file paths), then the next entry in it; `ctrl+p` the one before, `enter` takes it, `ctrl+e` closes it |
 | `Q` | record a macro (what `q` does in plain Vim) |
 | `space e` | the file tree: every folder of the ticket or session, each at the top level, with git's marks (`+` added, `~` changed, `-` removed, `?` new) |
 | `space c` | the changed files, one group per repository: for a ticket, everything its branch changed since its worktree was made (committed or not); for a session, what isn't committed yet |
@@ -147,7 +149,9 @@ In the file tree and the changed files: `enter` (or `l`, `→`) opens a file or 
 (or `tab`) switch between Files and Changed files, `D` shows the differences of that repository, `a` `d` `r` add, delete and
 rename, `esc` closes the panel, `?` lists its keys. In a list that pops up (finding files, searching), `esc` closes it. In the
 differences: `tab` goes to the next file, `esc` closes them. In the terminal, press `esc` twice to scroll or copy, and `q`
-from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon).
+from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon). An editor
+plugin from before the back key (version 1.0.0) keeps `q` and `space q` as the way back and `ctrl+space` for the completion
+menu; updating it on the Plugins tab brings both changes.
 
 **Copying.** Copying in the editor (`y` on a selection, `yy`, `"+y`) puts the text on the system clipboard, where
 platoon's own copies go (see [Copying text from a session](#copying-text-from-a-session); `PLATOON_CLIPBOARD` applies here too): through platoon itself,
@@ -215,7 +219,8 @@ before.
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
 | `↑` `↓` `g` `G` | move (`g`/`G` jump to the first/last); the mouse works too |
-| `q` | quit (sessions keep running) |
+| `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a ticket's screen, or in a squad's details, `q` goes back one level |
+| `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](#keys-back-and-quit) |
 
 Count badges are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
 WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set `PLATOON_BADGES=rounded` or
@@ -329,7 +334,7 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in seven
+`s` opens the settings as a popup over the list; the [back key](#keys-back-and-quit) (`ctrl+space`), `esc`, `s`, `q`, or a click outside it closes it. The settings are in seven
 tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects**, **Editors** and **Plugins** (on a
 narrow terminal "Smart features" is shortened to "Smart"). `tab` goes to the next tab and
 `shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
@@ -457,6 +462,39 @@ A value that isn't one of the steps (say `90` minutes) is shown as it is and lef
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
 (`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `files_editor` is `platoon` or an editor's id (`code`, `cursor`, `zed`, `subl`, `kate`, `idea`, `idea-community`, `pycharm`, `pycharm-community`, `webstorm`, `goland`, `rustrover`, `clion`, `phpstorm`, `rider`, `android-studio`, `helix`, `nvim`), kept as it is when that editor isn't installed; `files_editor_ask` is `true` or `false`; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+
+### Keys: back and quit
+
+One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
+running), detaches `platoon open`, stops a notes editor running inside platoon, goes back to platoon from the code editor,
+goes from a ticket's screen to its project's screen and from there to the list, leaves a squad's details, a plugin's file,
+the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
+same on platoon's own screens and popups (not in a session or an editor, where it is theirs). On the top-level lists, with
+nothing open, it does what `esc` does there (clears a kept filter) and never quits.
+
+`q` quits, but only from the top-level lists (Sessions, Projects, Squads, Plugins with nothing open). On a project's or a
+ticket's screen, or in a squad's details, it goes back one level instead. In a box you type in, `q` is just a letter.
+
+Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
+platoon never writes this file; there is no entry for it on the settings screen. For example:
+
+```json
+{ "back": "alt+b", "quit": "x" }
+```
+
+A key is written in lower case: `ctrl+`, `alt+` or `shift+`, then the key (`space`, `esc`, `enter`, `tab`, `f1` to `f12`,
+`up`, `pageup`, ... or one character). The hints at the bottom of each screen show the keys in use. The rules:
+
+- **`back`** must be `ctrl` with `space` or a letter, or `alt` with `space`, a letter or a digit. Anything else would be typed
+  into Claude or the editor, or can't be told apart by the terminal: `ctrl+h`, `ctrl+i`, `ctrl+j`, `ctrl+m` and `ctrl+[` are
+  what a terminal sends for backspace, tab, enter and esc. Ctrl and alt together, and shift with either, are refused too.
+  A key Claude Code uses itself (`ctrl+c`, `ctrl+r`, `ctrl+o`, `alt+b`, ...) is accepted with a notice: in a session it then
+  goes back instead of doing what Claude does with it.
+- **`quit`** may be any key other than the back key; it only matters on the top-level lists.
+- A missing file means the defaults. An entry that breaks the rules is left out with one notice at the bottom of the screen,
+  saying which entry and which key is used instead; a file that isn't JSON means the defaults, also said once. Names platoon
+  doesn't know are left alone. An edit applies at once, without restarting (`platoon open` reads the file as it starts).
+- The code editor is given the back key each time it opens.
 
 ### Features that use tokens
 
@@ -650,7 +688,7 @@ that keep `shift`+arrows for themselves. The plain arrows stay inside a pane: `�
 scroll the notes, and `←` `→` do nothing there.
 `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too). `n` starts a new session in the
 project: the folder picker lists the folders the project's other sessions use first. `/` searches only this project's
-sessions, with all three kinds of search. `esc` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
+sessions, with all three kinds of search. The [back key](#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back. With the notes in focus, `e` [edits them](#editing-the-notes),
 `c` shows what changed last and `u` undoes it.
 
 The notes are a file, `project.md`, in `~/.config/platoon/projects/<id>/` (the folder is named by the project's id, so a
@@ -964,7 +1002,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `w` | remove its worktree anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a ticket a squad has: its squad's session, beside the ticket. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
 | `o` | the session the ticket was made from (the **From** line), also when `enter` is the squad's |
-| `esc` | back to the project, on the same ticket |
+| `ctrl+space`, `esc` or `q` | back to the project, on the same ticket (the [back key](#keys-back-and-quit)) |
 
 The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**. You never set one by hand except
 **Cancelled** (`c`): handing a ticket to a squad makes it Working, the squad sets the others, and writing to the squad in
@@ -1228,7 +1266,7 @@ copy on the steps you want. The list groups the agents as built in, **User Modif
 each with its model and how many squads use it; **+ New agent** at the end makes a blank one of your own.
 
 `↑` `↓` move in the list and in the details; `enter` (or `tab`, or `shift+→` / `ctrl+→`) goes into the details, and
-`esc` (or `tab`, `shift+←`, `ctrl+←`) back to the list. In the details, `enter` changes the line you are on: a name or a
+the back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the list. In the details, `enter` changes the line you are on: a name or a
 line of text in a small box, a model or an agent from a short list, a system prompt in the same editors as a project's
 notes. `space` turns a switch on or off. Every change is saved at once.
 
@@ -1294,7 +1332,7 @@ are installed. `enter` on such a plugin lists each **skill**, **squad** and **ag
 words: when Claude uses a skill and what it may run without asking you; an agent's model and whether it can change
 files, run commands, use the web, which skills it starts with and which MCP servers it may use; a squad's steps and whose
 agents do them. `enter` on one reads it in full, on the whole screen (the skill's own text and files, the agent's whole
-system prompt, the squad's workflow; `esc` goes back to the list). `y` installs, `n` doesn't. An update that changes any of
+system prompt, the squad's workflow; the back key or `esc` goes back to the list). `y` installs, `n` doesn't. An update that changes any of
 them is shown again the same way, with what is **new** or **changed** marked. On the command line `platoon plugin show
 <id>` prints all of it, and `platoon plugin add` prints the list and asks `[y/N]`; where there is no terminal to ask in it
 installs nothing unless you add `--yes` (read it with `show` first). MCP servers can't be plugins: a server is a program
@@ -1350,7 +1388,7 @@ somewhere else.
 ## Sessions started in platoon keep running
 
 Each one runs under a small background host, so quitting platoon (or closing its terminal) never ends it.
-`Ctrl+Space` leaves a session without stopping it. A session nobody has looked at for a while does stop
+The [back key](#keys-back-and-quit) (`ctrl+space`) leaves a session without stopping it. A session nobody has looked at for a while does stop
 itself (see [Automatic clean-up](#automatic-clean-up)); `enter` picks the conversation up again.
 
 ## Copying text from a session
@@ -1405,6 +1443,6 @@ platoon open --project shop   # start a new session in this directory, in a proj
 ```
 
 The session is shared, tmux-style: every window shows it live and any of them can type. The session is
-sized to the smallest window attached. `Ctrl+Space` detaches; the session keeps running. A session running
+sized to the smallest window attached. The [back key](#keys-back-and-quit) (`ctrl+space`) detaches; the session keeps running. A session running
 in a plain `claude` platoon doesn't own can't be shared, so opening it asks before ending it and
 reopening the same conversation from its saved history.

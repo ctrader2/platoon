@@ -2,7 +2,8 @@
 //!
 //! The session runs under a platoon host (see host.rs); this is just a window onto it, like tmux
 //! attach. Output bytes go straight to your terminal, so its own scrollback and features keep
-//! working, and the session keeps running when you detach (Ctrl+Space).
+//! working, and the session keeps running when you detach with the back key (Ctrl+Space unless `keys.json` says
+//! otherwise; see keys.rs, read once as this starts).
 
 use crate::claude::{self, claude_root, find_transcript, saved_session_ids, transcript_cwd, Reader};
 use crate::guard;
@@ -171,7 +172,8 @@ enum Ended {
     SessionEnded,
 }
 
-fn attach(sock: &Path, rows: u16, cols: u16) -> io::Result<Ended> {
+/// `back`: the byte forms of the back key (`keys::Chord::raw_forms`).
+fn attach(sock: &Path, rows: u16, cols: u16, back: &[Vec<u8>]) -> io::Result<Ended> {
     let stream = UnixStream::connect(sock)?;
     let writer = Arc::new(Mutex::new(stream.try_clone()?));
     write_frame(&mut *writer.lock().unwrap(), F_RESIZE, &size_payload(rows, cols))?;
@@ -228,8 +230,8 @@ fn attach(sock: &Path, rows: u16, cols: u16) -> io::Result<Ended> {
         if n == 0 {
             break Ended::Detached;
         }
-        // Ctrl+Space arrives as a NUL byte: everything before it is still sent, then we detach.
-        let cut = buf[..n].iter().position(|&b| b == 0);
+        // The back key (Ctrl+Space arrives as a NUL byte): everything before it is still sent, then we detach.
+        let cut = crate::keys::find_back(&buf[..n], back).map(|(at, _)| at);
         let send = &buf[..cut.unwrap_or(n)];
         if !send.is_empty() && write_frame(&mut *writer.lock().unwrap(), F_INPUT, send).is_err() {
             break Ended::SessionEnded;
@@ -253,6 +255,12 @@ pub fn run(args: &[String]) -> i32 {
             return 2;
         }
     };
+    // The back key, from keys.json (a problem with it is said here, before the session takes the screen).
+    let (keys, problems) = crate::keys::Keys::load(&crate::archive::config_dir());
+    for p in &problems {
+        eprintln!("platoon: {p}");
+    }
+    let back = keys.back.raw_forms();
     let Ok((cols, rows)) = terminal::size() else {
         eprintln!("platoon open needs an interactive terminal.");
         return 1;
@@ -268,7 +276,12 @@ pub fn run(args: &[String]) -> i32 {
             return 1;
         }
     };
-    match attach(&info.sock, rows, cols) {
+    let ended = attach(&info.sock, rows, cols, &back);
+    // Said again once the session has given the screen back (it cleared the screen as it started).
+    for p in &problems {
+        eprintln!("\r\nplatoon: {p}");
+    }
+    match ended {
         Ok(Ended::Detached) => {
             eprintln!("\r\nplatoon: detached. The session is still running; run `platoon` to see it.");
             0

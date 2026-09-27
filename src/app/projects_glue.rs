@@ -258,11 +258,17 @@ impl App {
     // ---- keys -------------------------------------------------------------------------------------------------
 
     pub(super) fn list_key(&mut self, key: KeyEvent) {
+        // The quit key quits from the top-level lists only; on a project's or a ticket's screen, or in a squad's
+        // details, it goes back one level, as esc does.
+        let key = match self.keys.get().quit.matches(&key) {
+            true if self.at_top_level() => return self.act(Action::Quit),
+            true => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+            false => key,
+        };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
-            KeyCode::Char('q') => return self.act(Action::Quit),
             KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() && !self.plugins_tab_showing() => return self.act(Action::Search),
             // On a ticket (its screen, or its row in the Tickets pane) `s` does nothing: it was the ticket's state, which
             // the squad sets now (the user only cancels, with `c`), and settings popping up there would surprise.
@@ -286,6 +292,11 @@ impl App {
         } else {
             self.sessions_key(key);
         }
+    }
+
+    /// One of the top-level lists (Sessions, Projects, Squads, Plugins) with nothing open over it: where quit quits.
+    pub fn at_top_level(&self) -> bool {
+        self.open_project.is_none() && !(self.top == TOP_SQUADS && self.sqt.focus == super::SqFocus::Detail)
     }
 
     fn sessions_key(&mut self, key: KeyEvent) {

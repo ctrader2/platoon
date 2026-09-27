@@ -6,7 +6,8 @@
 //!   `editorplugin.rs`; written into `<editor>/config` at every opening),
 //! - a session file (`config/session-<platoon's pid>.json`, named by `PLATOON_EDITOR_SESSION`): the folders, the commits
 //!   a ticket's changes are counted from, platoon's theme turned into the editor's colors, whether there are icons,
-//!   where a copy goes (as platoon copies: `PLATOON_CLIPBOARD`, the helper `platoon clipboard-hold`),
+//!   where a copy goes (as platoon copies: `PLATOON_CLIPBOARD`, the helper `platoon clipboard-hold`), the back key
+//!   (`keys.back`, in Neovim's notation, from keys.json; an older editor plugin ignores it and keeps `q`),
 //! - its XDG folders inside `<editor>/nvim/` (nvim writes its state even with `--clean`, and nvim-treesitter would put
 //!   parsers in `~/.local/share/nvim`), `<editor>/bin` first on PATH, and the user's own values of those variables in
 //!   `PLATOON_KEEP_<name>`, which `config/shell.sh` (the editor's 'shell') puts back for the terminal and `:!`.
@@ -476,6 +477,8 @@ pub struct Look<'a> {
     /// A parser platoon didn't build can be built on first open (tree-sitter and a C compiler are there).
     pub compile_parsers: bool,
     pub copying: Copying,
+    /// The back key in Neovim's notation (`<C-Space>`, `<M-b>`): it goes back to platoon from the editor, as `q` does.
+    pub back: String,
 }
 
 /// Where a yank in the editor goes: where platoon's own copies go (`clipboard::Target`, from `PLATOON_CLIPBOARD`).
@@ -542,6 +545,7 @@ pub fn session_json(req: &Request, look: &Look, dirs: &Dirs) -> Value {
         "roots": roots,
         "colors": colors_json(look.theme, look.mode),
         "clipboard": look.copying.json(),
+        "keys": {"back": look.back},
     })
 }
 
@@ -1155,7 +1159,7 @@ mod tests {
             roots: vec![Root { path: "/r/shop-worktrees/ticket-3".into(), name: "shop · #3".into(), repo: Some("/r/shop-worktrees/ticket-3".into()), repo_name: Some("shop".into()), base: Some("abc123".into()), kind: "worktree" }],
         };
         for icons in [true, false] {
-            let v = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons, compile_parsers: true, copying: Copying::off() }, &dirs);
+            let v = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons, compile_parsers: true, copying: Copying::off(), back: "<C-Space>".into() }, &dirs);
             assert_eq!(v["icons"], icons);
             assert_eq!(v["title"], "#3 Basket");
             assert_eq!(v["roots"][0]["base"], "abc123");
@@ -1163,10 +1167,13 @@ mod tests {
             assert_eq!(v["site"], s(&dirs.site()).as_str());
             assert_eq!(v["shell"], s(&dirs.editor.join("config/shell.sh")).as_str());
             assert_eq!(v["colors"]["mode"], "truecolor");
+            assert_eq!(v["keys"]["back"], "<C-Space>", "the back key, in Neovim's notation");
         }
+        let custom = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<M-b>".into() }, &dirs);
+        assert_eq!(custom["keys"]["back"], "<M-b>");
         // A folder's name with quotes and backslashes stays itself (JSON, never pasted into Lua or a shell).
         let odd = Request { title: "a \"b\" \\ c".into(), roots: vec![] };
-        let v = session_json(&odd, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &dirs);
+        let v = session_json(&odd, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &dirs);
         let back: Value = serde_json::from_str(&v.to_string()).unwrap();
         assert_eq!(back["title"], "a \"b\" \\ c");
     }
@@ -1178,7 +1185,7 @@ mod tests {
         let dirs = testing::dirs(&d, vec![]);
         let t = Theme::default();
         let req = Request { title: "x".into(), roots: vec![] };
-        let clip = |copying: Copying| session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying }, &dirs)["clipboard"].clone();
+        let clip = |copying: Copying| session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying, back: "<C-Space>".into() }, &dirs)["clipboard"].clone();
         // The default (system): this very platoon holds the text on the system clipboard, and OSC 52 too.
         let sys = Copying::like(Target::System);
         let me = std::env::current_exe().unwrap();
@@ -1217,7 +1224,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let req = Request { title: "x".into(), roots: folder_roots(&s(&root), "git") };
         let env = env_of(&[("PLATOON_NVIM_BIN", "/bin/true"), ("HOME", home.to_str().unwrap()), ("PATH", "/usr/bin")]);
-        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7, &config()).unwrap();
+        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &env, 7, &config()).unwrap();
         let cfg = config_dir(&dirs);
         assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), plugin_file("config/init.lua"));
         assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), plugin_file("config/lua/platoon/tree.lua"));
@@ -1241,7 +1248,7 @@ mod tests {
         fs::write(&live, "{}").unwrap();
         // The user's git folder gone: the link goes too.
         fs::remove_dir(home.join(".config/git")).unwrap();
-        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7, &config()).unwrap();
+        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &env, 7, &config()).unwrap();
         assert!(fs::symlink_metadata(xdg_dir(&dirs).join("config/git")).is_err());
         assert!(!stale.exists() && live.exists());
     }

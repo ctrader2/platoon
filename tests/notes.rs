@@ -231,7 +231,7 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     t.wait_for("The notes changed");
     t.wait_for("╭ Notes");
     assert!(t.text().contains("Sell socks online."), "the pane shows it:\n{}", t.text());
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -273,7 +273,7 @@ fn c_shows_what_changed_with_plain_marks_and_u_puts_the_notes_back() {
     t.send(b"u");
     until("the undo to be undone", || lab.notes().contains("socks and hats"));
     t.wait_for("Sell socks and hats.");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -300,7 +300,7 @@ fn an_editor_with_its_own_window_says_so_platoon_carries_on_and_the_notes_come_b
     until("the other window to write", || lab.notes().contains("written in the other window"));
     t.wait_for("written in the other window");
     t.wait_gone("Open in VS Code");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -317,7 +317,7 @@ fn long_notes_are_not_warned_about_however_long_they_get_and_nothing_is_cut() {
     let shown = t.stable().split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(!shown.contains("costs tokens") && !shown.contains("KB"), "no warning about the length:\n{shown}");
     assert_eq!(lab.notes().len(), "# Overview\n".len() + body.len(), "the file is left whole");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -357,7 +357,7 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     t.wait_gone("edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
     until("the second write", || lab.notes().matches("written in the other window").count() == 2);
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 
     // A fresh platoon reads the choice back: still starred, still first.
@@ -370,7 +370,7 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     assert!(shown.lines().find(|l| l.contains("VS Code")).unwrap_or("").contains("★"), "{shown}");
     t.send(b"\x1b");
     t.wait_gone("edit the notes with");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -413,7 +413,7 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     wait_pane_gone(&mut t, "not updating right now");
     t.wait_gone("smart features paused");
     wait_pane(&mut t, "notes are added as context to each session in a project");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -493,7 +493,7 @@ fn the_pane_draws_the_markdown_styled_with_hanging_bullets_and_scrolls_in_drawn_
     assert!(!screen.contains("A shop that sells socks online."), "{screen}");
     t.send(b"\x1b[H"); // home: back to the top
     t.wait_for("A shop that sells socks online.");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 
     // With plain glyphs (the Linux console), bullets are plain too.
@@ -504,7 +504,7 @@ fn the_pane_draws_the_markdown_styled_with_hanging_bullets_and_scrolls_in_drawn_
     lab.open_notes(&mut t);
     t.wait_for_all(&["- Does VAT go in the basket total?", "* only for the EU"]);
     assert!(!t.stable().contains('•'));
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
 
@@ -534,6 +534,6 @@ fn with_no_color_set_the_colors_go_but_bold_and_underline_stay() {
     }
     let raw = String::from_utf8_lossy(&t.raw()).into_owned();
     assert!(!raw.contains("[38;") && !raw.contains("[48;"), "no color sequence was written");
-    t.send(b"q");
+    t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

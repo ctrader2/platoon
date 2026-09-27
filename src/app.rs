@@ -8,6 +8,7 @@ use crate::editors::Editor;
 use crate::guard;
 use crate::host::{self, HostInfo};
 use crate::index::{Entry, Indexer};
+use crate::keys::KeysStore;
 use crate::ledger::Ledger;
 use crate::model::{NameSource, Proc, Session, Status};
 use crate::names::{self, Names};
@@ -589,6 +590,8 @@ pub struct App {
     pub cache: PathBuf,
     /// Where platoon's own settings, archive, projects and notes live (`~/.config/platoon`).
     pub config: PathBuf,
+    /// The keys the user can change (`<config dir>/keys.json`): back and quit.
+    pub keys: KeysStore,
     /// Animation frame counter, ~10 per second.
     pub tick: u64,
     /// The theme the settings name: what the app looks like unless a preview is showing.
@@ -755,6 +758,7 @@ impl App {
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             config: config.clone(),
+            keys: KeysStore::open(&config),
             tick: 0,
             theme: Theme::default(),
             preview: None,
@@ -807,6 +811,7 @@ impl App {
         }
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
+        app.say_keys_problems();
         app
     }
 
@@ -843,6 +848,9 @@ impl App {
     /// Pick up an edit of settings.json and of the theme folder, and with them a changed theme. True when the
     /// settings file was re-read.
     fn refresh_settings(&mut self) -> bool {
+        if self.keys.refresh() {
+            self.say_keys_problems();
+        }
         let changed = self.settings.refresh();
         // The theme list keeps the entries it opened with, so the folder is looked at again once it has closed.
         let themes_changed = !matches!(self.mode, Mode::Themes) && self.themes.refresh();
@@ -872,6 +880,23 @@ impl App {
 
     pub fn themes(&self) -> &Registry {
         &self.themes
+    }
+
+    /// An entry of keys.json that was ignored (or needs saying) is said once, in the footer.
+    fn say_keys_problems(&mut self) {
+        if let Some(n) = self.keys.take_notice() {
+            self.notify(n);
+        }
+    }
+
+    /// The back key as the hints show it (`ctrl+space` unless keys.json says otherwise).
+    pub fn back_label(&self) -> &str {
+        self.keys.get().back_label()
+    }
+
+    /// The quit key as the hints show it (`q` unless keys.json says otherwise).
+    pub fn quit_label(&self) -> &str {
+        self.keys.get().quit_label()
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -2334,14 +2359,23 @@ impl App {
 
     pub fn on_key(&mut self, key: KeyEvent) {
         self.dismiss_long_notice();
+        let back = self.keys.get().back.matches(&key);
+        // On platoon's own screens and popups the back key is a second esc: one level back, or cancel. (In a session
+        // and in the notes editor it is theirs to handle, below: everything else there is typing.)
+        let own_screen = !matches!(self.mode, Mode::Attached(_) | Mode::EditNotes);
+        let key = if back && own_screen { KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE) } else { key };
+        // Ctrl+Space when it isn't the back key is nothing here (not the space that switches or picks things).
+        if own_screen && key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {
+            return;
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match self.mode.clone() {
             Mode::Attached(_) => {
                 // Typing moves the screen on (and the highlight would no longer be over what was selected).
                 self.clear_selection();
-                // The prefix chord: everything else goes to Claude.
-                if ctrl && key.code == KeyCode::Char(' ') {
+                // The back key: everything else goes to Claude.
+                if back {
                     self.detach();
                 } else if self.attached_paused() {
                     // Paused: nothing is forwarded, so this copy can't write to the conversation.
