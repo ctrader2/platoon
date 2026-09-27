@@ -247,6 +247,30 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
 }
 
 #[test]
+fn a_new_tickets_folder_is_the_projects_most_recent_sessions_folder() {
+    let w = World::new("t-recent");
+    let (old, new) = (w.base.join("old-shop"), w.base.join("new-shop"));
+    fs::create_dir_all(&old).unwrap();
+    fs::create_dir_all(&new).unwrap();
+    w.transcript("aaa-1", &old.to_string_lossy(), "an old conversation", 600);
+    w.transcript("bbb-2", &new.to_string_lossy(), "a new conversation", 5);
+    w.transcript("ccc-3", "/tmp", "someone else's conversation", 1);
+    let mut app = w.app();
+    let id = app.projects.create("Web shop").unwrap();
+    app.projects.assign("aaa-1", Some(&id)).unwrap();
+    app.projects.assign("bbb-2", Some(&id)).unwrap();
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    app.set_editors_for_test(Vec::new());
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Char('n'));
+    typed(&mut app, "Basket");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.ticket(1).unwrap().folders, [new.to_string_lossy().into_owned()], "the project's most recent session's, not another project's");
+}
+
+#[test]
 fn a_project_with_no_sessions_makes_tickets_with_no_folder_yet() {
     let w = World::new("t-nofolder");
     let mut app = w.app();
@@ -265,7 +289,7 @@ fn a_project_with_no_sessions_makes_tickets_with_no_folder_yet() {
     assert_eq!(app.tk.open, Some(1));
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(flat(&shown).contains("Folders No folder"), "{shown}");
+    assert!(flat(&shown).contains("Folders None: a squad works in its work folder"), "{shown}");
 }
 
 #[test]

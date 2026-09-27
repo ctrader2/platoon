@@ -152,6 +152,8 @@ pub struct Settings {
     pub ai_find_wide_candidates: u64,
     /// How many squads may be at work at once; a ticket handed over when all are waits for a free one.
     pub squads_at_once: u64,
+    /// The model every squad's leader runs on: one of `squadfile::MODELS` ("opus", "sonnet", "haiku").
+    pub squad_leader_model: String,
 }
 
 impl Default for Settings {
@@ -185,6 +187,7 @@ impl Default for Settings {
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
             squads_at_once: DEFAULT_SQUADS_AT_ONCE,
+            squad_leader_model: crate::squads::LEADER_MODEL.into(),
         }
     }
 }
@@ -212,6 +215,7 @@ impl Settings {
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
             squads_at_once: self.squads_at_once.clamp(MIN_SQUADS_AT_ONCE, MAX_SQUADS_AT_ONCE),
+            squad_leader_model: if crate::squadfile::known_model(&self.squad_leader_model) { self.squad_leader_model } else { crate::squads::LEADER_MODEL.into() },
             ..self
         }
     }
@@ -299,6 +303,7 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
             squads_at_once: number("squads_at_once", d.squads_at_once),
+            squad_leader_model: o.get("squad_leader_model").and_then(Value::as_str).map_or(d.squad_leader_model.clone(), |m| m.trim().to_lowercase()),
         }
         .clamped(),
     )
@@ -369,6 +374,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
     object.insert("squads_at_once".into(), json!(s.squads_at_once));
+    object.insert("squad_leader_model".into(), json!(s.squad_leader_model));
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
     let mut features = match object.get("token_features") {
@@ -857,6 +863,18 @@ fn projects_items() -> Vec<Item> {
         instructions_item(crate::instructions::DESCRIPTION),
         instructions_item(crate::instructions::HANDOFF),
         instructions_item(crate::instructions::COMMANDER),
+        instructions_item(crate::instructions::SQUAD_LEADER),
+        Item {
+            name: "Model for squad leaders",
+            explain: "The model every squad's leader runs on. The leader hands the work to its agents, who each run on their own model; \
+                      Sonnet is plenty for most leading. A squad already at work keeps the model it started with.",
+            kind: Kind::Steps,
+            choices: &[0, 1, 2],
+            get: |s| crate::squadfile::MODELS.iter().position(|(m, _)| *m == s.squad_leader_model).unwrap_or(1) as u64,
+            set: |s, v| s.squad_leader_model = crate::squadfile::MODELS[(v as usize).min(crate::squadfile::MODELS.len() - 1)].0.into(),
+            label: |v| crate::squadfile::MODELS.get(v as usize).map_or("Sonnet", |(_, l)| l).into(),
+            off: None,
+        },
         instructions_item(crate::instructions::SQUAD_DRAFT),
         instructions_item(crate::instructions::AGENT_DRAFT),
     ]
@@ -1083,7 +1101,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "squad_leader_model", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1343,6 +1361,8 @@ mod tests {
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
                 "System prompt for the squad commander",
+                "System prompt for squad leaders",
+                "Model for squad leaders",
                 "System prompt for drafting a squad",
                 "System prompt for drafting an agent"
             ]
@@ -1359,6 +1379,7 @@ mod tests {
                 (4, Kind::Instructions("project-description")),
                 (4, Kind::Instructions("hand-off")),
                 (4, Kind::Instructions("squad-commander")),
+                (4, Kind::Instructions("squad-leader")),
                 (4, Kind::Instructions("squad-draft")),
                 (4, Kind::Instructions("agent-draft"))
             ]
@@ -1593,7 +1614,7 @@ mod tests {
         assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
             token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "3 squads", "", "", "", "", "", "", "50 conversations", "10 results", "200 conversations", ""]
+            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "3 squads", "", "", "", "", "", "Sonnet", "", "", "50 conversations", "10 results", "200 conversations", ""]
         );
         let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");
@@ -1654,5 +1675,30 @@ mod tests {
         assert_eq!(item.step(10, Step::Next), 10, "no further than ten");
         assert_eq!(item.step(1, Step::Prev), 1, "no fewer than one");
         assert_eq!(((item.label)(1), (item.label)(3)), ("1 squad".to_string(), "3 squads".to_string()));
+    }
+
+    #[test]
+    fn the_squad_leaders_model_is_sonnet_by_default_one_of_three_and_saved() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-leader-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        assert_eq!(Settings::default().squad_leader_model, "sonnet");
+        let item = TABS.iter().flat_map(|t| t.items.iter()).find(|i| i.name == "Model for squad leaders").unwrap();
+        assert_eq!(item.choices.iter().map(|&c| (item.label)(c)).collect::<Vec<_>>(), ["Opus", "Sonnet", "Haiku"]);
+        let mut s = Settings::default();
+        assert_eq!((item.label)(item.value(&s)), "Sonnet");
+        item.assign(&mut s, 0);
+        assert_eq!(s.squad_leader_model, "opus");
+        save(&d, &s).unwrap();
+        assert_eq!(load(&d).0.squad_leader_model, "opus");
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!(v["squad_leader_model"], "opus");
+        // Hand-written: the case doesn't matter; one platoon doesn't offer is the default.
+        fs::write(path_in(&d), r#"{"squad_leader_model":" Haiku "}"#).unwrap();
+        assert_eq!(load(&d).0.squad_leader_model, "haiku");
+        fs::write(path_in(&d), r#"{"squad_leader_model":"gpt-5"}"#).unwrap();
+        assert_eq!(load(&d).0.squad_leader_model, "sonnet");
+        fs::write(path_in(&d), r#"{"squad_leader_model":7}"#).unwrap();
+        assert_eq!(load(&d).0.squad_leader_model, "sonnet");
     }
 }

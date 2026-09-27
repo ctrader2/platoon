@@ -14,11 +14,17 @@
 //! the user sends the leader a message. The leader asks before it closes a ticket (`SQUAD: question - Shall I close
 //! this ticket?`); the user never sets a state by hand, except cancelling.
 //!
-//! A squad's definition (its leader, its workflow and the agents the steps name) is a `squadfile::Squad`, and its
+//! A squad's definition (what it can do, its workflow and the agents the steps name) is a `squadfile::Squad`, and its
 //! agents are `agentfile::Agent`s, shared by squads: the built-in ones in code, the user's own and the built-ins they
-//! changed in files. Here a squad with its agents (`squadfile::Crew`) becomes what a leader session is started with
-//! (`Launch`): the `--agents` JSON, with the leader's prompt made of its guidance, the workflow written out by
-//! platoon, and the rules platoon keeps; each agent is a member of the session, named `<squad id>-<agent id>`.
+//! changed in files. Every squad's leader is the same (`LeaderSetup`): one system prompt the user may change in the
+//! settings ("System prompt for squad leaders") and a model set beside it. Here a squad with its agents
+//! (`squadfile::Crew`) becomes what a leader session is started with (`Launch`): the `--agents` JSON, with the
+//! leader's prompt made of that shared part, what the squad can do, the workflow written out by platoon, and the rules
+//! platoon keeps; each agent is a member of the session, named `<squad id>-<agent id>`.
+//!
+//! Every ticket works in a git worktree of each of its folders that is in git (other folders as they are), and has a
+//! private work folder beside its body for what the squad writes for the ticket rather than the project (Research's
+//! report, notes, drafts). A ticket with no folder of its own works in that work folder (`Place`).
 
 use crate::instructions;
 use crate::tickets::{self, AgentNames, State, Ticket, Tickets, Worktree};
@@ -50,19 +56,25 @@ pub fn agent_name(id: &str, role: &str, names: AgentNames) -> String {
 /// never edits a file itself.
 pub const LEADER_TOOLS: &[&str] = &["Agent", "Read", "Grep", "Glob", "Bash"];
 
-/// A member's tools, from its three switches: it can always read and search; changing files adds `Edit` and
-/// `Write`, running commands `Bash`, using the web `WebSearch` and `WebFetch`.
-pub fn tools_for(m: &Agent) -> Vec<&'static str> {
-    let mut t = vec!["Read", "Grep", "Glob"];
+/// A member's tools, from its three switches, its skills and its MCP servers: it can always read and search;
+/// changing files adds `Edit` and `Write`, running commands `Bash`, using the web `WebSearch` and `WebFetch`, having
+/// any skill `Skill`, and each MCP server `mcp__<name>` (checked with a real Claude Code 2.1.283: the tools list is
+/// what lets an agent use a skill beyond its preloaded ones or a server at all; `mcpServers` alone gives nothing).
+pub fn tools_for(m: &Agent) -> Vec<String> {
+    let mut t: Vec<String> = ["Read", "Grep", "Glob"].map(String::from).to_vec();
     if m.files {
-        t.extend(["Edit", "Write"]);
+        t.extend(["Edit", "Write"].map(String::from));
     }
     if m.commands {
-        t.push("Bash");
+        t.push("Bash".into());
     }
     if m.web {
-        t.extend(["WebSearch", "WebFetch"]);
+        t.extend(["WebSearch", "WebFetch"].map(String::from));
     }
+    if !m.skills.is_empty() {
+        t.push("Skill".into());
+    }
+    t.extend(m.mcp.iter().map(|n| format!("mcp__{n}")));
     t
 }
 
@@ -70,54 +82,54 @@ pub fn tools_for(m: &Agent) -> Vec<&'static str> {
 
 pub const CODING_CAN_DO: &str = "Makes a change to code in a git repository: plans it, builds it in a worktree of its own, reviews it and runs the tests, then takes it as far as the ticket says.";
 
-/// The Coding leader's system prompt as the user may change it: how to lead. The steps are the squad's workflow,
-/// which platoon writes into the prompt after this (`workflow_text`).
+/// The part of every squad leader's system prompt the user may change (Settings, "System prompt for squad leaders"):
+/// how to lead. What the squad can do and its workflow are written after it by platoon (`workflow_text`), then the
+/// rules platoon keeps (`leader_fixed`).
 pub const LEADER_GUIDANCE: &str = "\
-You are given one ticket: a piece of coding work in a project. Your members do the work: you decide who does what, \
-hand it to them, read what they report, and decide what happens next. You never edit files yourself, and you leave \
-running the tests and the build to your members.
+You are given one ticket: a piece of work in a project. Your members do the work: you decide who does what, hand it \
+to them, read what they report, and decide what happens next. You don't do their work yourself: you never write or \
+edit files, and you leave running tests and builds to your members.
 
-When you hand work to a member, wait for it to finish and read its report before you decide anything. Don't guess \
-what it will say, and don't start the next step while the last one is still running. If the ticket is unclear or \
-can't be done as written, ask the user instead of guessing.
+When you hand work to a member, give it what it needs to do its step (the ticket, what earlier steps found, the \
+folders to work in), wait for it to finish and read its report before you decide anything. Don't guess what it will \
+say, and don't start the next step while the last one is still running. If the ticket is unclear or can't be done as \
+written, ask the user instead of guessing.
 
-The user reads your reports. Write plainly and briefly: what was done, where it is (the branch, the folder, a link), \
-and what was not checked.";
+The user reads your reports. Write plainly and briefly: what was done or found, where it is (the branch, the folder, \
+the files, a link), and what is still unknown or was not checked.";
 
-/// The Coding leader's built-in text before the workflow became the squad's own steps (it listed them itself).
-/// Kept only to tell a real change in an old `prompts/coding-leader.md` from that text (`squadfile::migrate_prompts`).
-pub const LEGACY_LEADER_GUIDANCE: &str = "\
-You lead the Coding squad. You are given one ticket: a piece of coding work in a project. Your members do the work: you \
-decide who does what, hand it to them, read what they report, and decide what happens next. You never edit files \
-yourself, and you leave running the tests and the build to your members. They are coding-planner, coding-builder, \
-coding-reviewer and coding-verifier.
+/// The model every squad's leader runs on unless the user picks another in the settings.
+pub const LEADER_MODEL: &str = "sonnet";
 
-The workflow:
-1. Plan. Hand the ticket to coding-planner. It reads the ticket and the code and writes a short plan that restates \
-the acceptance checks. If the ticket is unclear or can't be done as written, ask the user instead of guessing.
-2. Build. Hand the plan to coding-builder. It makes the change in the ticket's worktree and runs the tests.
-3. Review. Hand the change to coding-reviewer. It reads the diff against the ticket and checks that each acceptance \
-check could have failed before the change. If it sends the change back, give its reasons to coding-builder and \
-review again. At most two rounds back to coding-builder; after that, stop and tell the user what is still wrong.
-4. Verify. Hand it to coding-verifier, which runs the tests and the build. If they fail, send it back to \
-coding-builder once, then verify again.
-5. Finish: take the work as far as the ticket's text says, and no further.
+/// The leader every squad has: its system prompt's own part and its model, from the settings.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaderSetup {
+    pub guidance: String,
+    pub model: String,
+}
 
-When you hand work to a member, wait for it to finish and read its report before you decide anything. Don't guess \
-what it will say, and don't start the next step while the last one is still running.
+impl LeaderSetup {
+    /// As the user has it now: their "System prompt for squad leaders" (or platoon's), and the model in the settings.
+    pub fn load(config: &Path, settings: &crate::settings::Settings) -> LeaderSetup {
+        LeaderSetup { guidance: instructions::guidance(config, instructions::SQUAD_LEADER), model: settings.squad_leader_model.clone() }
+    }
 
-The user reads your reports. Write plainly and briefly: what was done, where it is (the branch, the folder, a link), \
-and what was not checked.";
+    /// platoon's own.
+    #[cfg(test)]
+    pub fn builtin() -> LeaderSetup {
+        LeaderSetup { guidance: LEADER_GUIDANCE.trim().to_string(), model: LEADER_MODEL.into() }
+    }
+}
 
 /// Where a leader and its members work on one ticket.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place {
     /// In the ticket's folders: a git worktree of each one in git (`worktrees`), and the others as they are
-    /// (`as_is`). The session starts in the first one.
+    /// (`as_is`). The session starts in the first one; the ticket's work folder is given to it too, for what the squad
+    /// writes for the ticket rather than the project.
     Folders { worktrees: bool, as_is: bool },
-    /// In the ticket's private work folder, where the session starts; `reads`: the ticket has folders of its own,
-    /// given to the session for reading.
-    WorkFolder { reads: bool },
+    /// The ticket has no folder of its own: its private work folder is its folder, and the session starts there.
+    WorkFolder,
 }
 
 impl Place {
@@ -125,19 +137,18 @@ impl Place {
     #[cfg(test)]
     pub const WORKTREE: Place = Place::Folders { worktrees: true, as_is: false };
 
-    /// Where a squad works on `t` (with the worktrees made for it on it), given its "Use a worktree for git
-    /// folders" switch: a squad without it, and any squad given a ticket without a folder, works in the ticket's work
-    /// folder.
-    pub fn of(use_worktree: bool, t: &Ticket) -> Place {
-        if !use_worktree || t.folders.is_empty() {
-            return Place::WorkFolder { reads: !t.folders.is_empty() };
+    /// Where a squad works on `t` (with the worktrees made for it on it): whatever the squad, in a worktree of each of
+    /// its git folders and the others as they are, or in its work folder when it has no folder of its own.
+    pub fn of(t: &Ticket) -> Place {
+        if t.folders.is_empty() {
+            return Place::WorkFolder;
         }
         let has = |f: &String| t.worktrees.iter().any(|w| w.folder == *f);
         Place::Folders { worktrees: t.folders.iter().any(has), as_is: t.folders.iter().any(|f| !has(f)) }
     }
 
     pub fn in_work_folder(self) -> bool {
-        matches!(self, Place::WorkFolder { .. })
+        matches!(self, Place::WorkFolder)
     }
 
     /// Where a change stays, in a few words: "the worktree", "the ticket's folder", ...
@@ -155,24 +166,18 @@ fn place_rules(place: Place) -> String {
     match place {
         Place::Folders { .. } => format!(
             "- Take the work as far as the ticket's text says. When it doesn't say how far, stop at local changes: the \
-             change stays {}, uncommitted. No commit, no push.",
+             change stays {}, uncommitted. No commit, no push.\n\
+             - What the squad writes for the ticket rather than for the project (a report, notes, drafts) goes in the \
+             ticket's private work folder, never in the project's folders, unless the ticket says to put it there. Its \
+             path is in your first message: give it to any member that writes such a thing.",
             place.change_stays()
         ),
-        Place::WorkFolder { reads } => {
-            let mut out = "- You and your members work in the ticket's work folder, the folder this session starts in. \
-                           Anything the squad makes (a report, notes, drafts) goes there, unless the ticket says to put it \
-                           somewhere else.\n\
-                           - Take the work as far as the ticket's text says. When it doesn't say how far, stop once the \
-                           result is written: nothing is committed, pushed or sent anywhere."
-                .to_string();
-            if reads {
-                out.push_str(
-                    "\n- The ticket's own folders are for reading only: change nothing in them, unless the ticket's text \
-                     asks for a file to be written there.",
-                );
-            }
-            out
-        }
+        Place::WorkFolder => "- The ticket has no folder of its own: you and your members work in its private work folder, \
+                              the folder this session starts in. Anything the squad makes (a report, notes, drafts) goes there, \
+                              unless the ticket says to put it somewhere else.\n\
+                              - Take the work as far as the ticket's text says. When it doesn't say how far, stop once the \
+                              result is written: nothing is committed, pushed or sent anywhere."
+            .to_string(),
     }
 }
 
@@ -241,17 +246,6 @@ and the passed, failed and ignored counts as the run printed them. Don't fix any
 
 pub const RESEARCH_CAN_DO: &str = "Finds things out and writes them up: answers questions about a technology, a codebase or a decision, with sources, in a report. It reads the ticket's folders and the web; it doesn't change code or documents.";
 
-pub const RESEARCH_LEADER_GUIDANCE: &str = "\
-You are given one ticket: a question or a topic to find out about. Your members do the work: you decide who does what, \
-hand it to them, read what they report, and decide what happens next. You never write the report yourself.
-
-When you hand work to a member, wait for it to finish and read its report before you decide anything. Don't guess \
-what it will say, and don't start the next step while the last one is still running. If the ticket is unclear about \
-what the user wants to know, ask the user instead of guessing.
-
-The user reads your reports. Write plainly and briefly: what was found, where the report is, and what is still \
-unknown or couldn't be checked.";
-
 pub const QUESTIONER_GUIDANCE: &str = "\
 You are the questioner. Read the ticket and turn it into a short list of specific questions that, once answered, give \
 the user what they asked for: usually three to seven, each one something that can be answered, with a word on why it \
@@ -266,8 +260,8 @@ summaries of them, and say how recent a source is when that matters. When source
 answer, say so plainly instead of filling the gap. Don't change any files.";
 
 pub const RESEARCH_WRITER_GUIDANCE: &str = "\
-You are the report writer. Write the report as report.md in the work folder (the folder the session started in), unless the \
-leader says the ticket wants it somewhere else. Start with a short summary that answers the ticket; then each question \
+You are the report writer. Write the report as report.md in the ticket's private work folder (the leader gives you \
+its path), never in the project's folders, unless the leader says the ticket wants it somewhere else. Start with a short summary that answers the ticket; then each question \
 with its answer and its sources; then what is still unknown or uncertain. Use only what the researcher found: add \
 nothing of your own, and keep each claim next to its source. Plain Markdown, short paragraphs. Report the file's path \
 when you are done. Don't change any other files.";
@@ -282,18 +276,6 @@ files.";
 // ---- the built-in Docs squad's words --------------------------------------------------------------------------------
 
 pub const DOCS_CAN_DO: &str = "Writes or updates documentation as Markdown files in a project's folder: guides, READMEs, reference pages, notes. It reads the code the docs describe but doesn't change code, and it doesn't publish pages anywhere else.";
-
-pub const DOCS_LEADER_GUIDANCE: &str = "\
-You are given one ticket: documentation to write or update in a project's folder. Your members do the work: you \
-decide who does what, hand it to them, read what they report, and decide what happens next. You never edit files \
-yourself.
-
-When you hand work to a member, wait for it to finish and read its report before you decide anything. Don't guess \
-what it will say, and don't start the next step while the last one is still running. If the ticket is unclear about \
-what to document or who it is for, ask the user instead of guessing.
-
-The user reads your reports. Write plainly and briefly: which files were written or changed (the path of each), what \
-they cover, and what was not checked.";
 
 pub const OUTLINER_GUIDANCE: &str = "\
 You are the outliner. Read the ticket, the project's existing documentation and the code it describes. Propose what \
@@ -318,13 +300,9 @@ why, or \"send it back\" with the changes the tech writer should make, as a shor
 
 pub const SUMMARIZE_CAN_DO: &str = "Reads what the ticket points at (files, folders, links, notes) and writes a short summary of it for a person. It changes nothing, and it doesn't research beyond what it is pointed at.";
 
-pub const SUMMARIZE_LEADER_GUIDANCE: &str = "\
-You are given one ticket: something to read and summarize for a person. Hand it to your member, wait for it to \
-finish, and read its summary before you decide anything. If the ticket doesn't make clear what to read, ask the user \
-instead of guessing.
-
-Your result is the summary itself: put it just above your last line, as the member wrote it or tightened up, so the \
-user reads it on the ticket. Say what couldn't be read, if anything.";
+/// The Summarize squad's one step, as its leader reads it: what it once told its own leader (the result is the summary
+/// itself) is said here now that every squad shares one leader.
+pub const SUMMARIZE_DOES: &str = "Reads what the ticket points at (files, folders, links, notes) and writes a short summary for a person. The result is that summary itself: put it just above your last line, as written or tightened up, with what couldn't be read.";
 
 pub const SUMMARIZER_GUIDANCE: &str = "\
 You are the summarizer. Read what the ticket points at: files, folders, links and notes (open links with the web \
@@ -350,14 +328,18 @@ fn times(n: u32) -> String {
     }
 }
 
-/// The part of the leader's prompt platoon writes from the squad: who it leads, and the workflow as a numbered list
-/// (who, what, and when a step may send the work back). It goes between the leader's own guidance and platoon's
-/// rules.
+/// The part of the leader's prompt platoon writes from the squad: who it leads, what the squad can do, and the
+/// workflow as a numbered list (who, what, and when a step may send the work back). It goes between the leaders'
+/// shared guidance and platoon's rules.
 pub fn workflow_text(c: &Crew, names: AgentNames) -> String {
     let s = &c.squad;
     let who = |m: &str| agent_name(&s.id, m, names);
     let members: Vec<String> = c.agents.iter().map(|a| who(&a.id)).collect();
-    let mut out = format!("You lead the {} squad. Your members are {}.\n\n", s.name, and_list(&members));
+    let mut out = format!("You lead the {} squad. Your members are {}.\n", s.name, and_list(&members));
+    if !s.can_do.trim().is_empty() {
+        out.push_str(&format!("What the squad can do: {}\n", s.can_do.trim()));
+    }
+    out.push('\n');
     out.push_str("The workflow. Hand each step to the member it names, in this order:\n");
     for (i, st) in s.workflow.iter().enumerate() {
         out.push_str(&format!("{}. {}: {}", i + 1, who(&st.agent), st.does.trim()));
@@ -375,11 +357,12 @@ pub fn workflow_text(c: &Crew, names: AgentNames) -> String {
     out
 }
 
-/// The leader's whole system prompt: its guidance (for a leader resumed with the plain names it began with, calling
-/// the members by those names), the workflow, then the rules platoon keeps (which say where it works).
-pub fn leader_prompt(c: &Crew, names: AgentNames, place: Place) -> String {
+/// The leader's whole system prompt: the leaders' shared guidance (for a leader resumed with the plain names it began
+/// with, calling the members by those names), what the squad can do and its workflow, then the rules platoon keeps
+/// (which say where it works).
+pub fn leader_prompt(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Place) -> String {
     let s = &c.squad;
-    let mut guidance = s.leader.guidance.trim().to_string();
+    let mut guidance = leader.guidance.trim().to_string();
     if names == AgentNames::Plain {
         for role in c.agents.iter().map(|a| a.id.as_str()).chain([LEADER_ROLE]) {
             guidance = guidance.replace(&agent_name(&s.id, role, AgentNames::SquadRole), role);
@@ -404,19 +387,26 @@ pub fn member_description(s: &Squad, id: &str) -> String {
 }
 
 /// The `--agents` JSON for a squad: the leader and every member, named as `names` says (`coding-leader`,
-/// `coding-planner`, ...), each with its description, its system prompt, its model and the tools it may use.
-pub fn agents_json(c: &Crew, names: AgentNames, place: Place) -> String {
+/// `coding-planner`, ...), each with its description, its system prompt, its model and the tools it may use; a member
+/// with skills gets them preloaded (`skills`), one with MCP servers gets them by name (`mcpServers`).
+pub fn agents_json(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Place) -> String {
     let s = &c.squad;
     let mut agents = Map::new();
     agents.insert(
         agent_name(&s.id, LEADER_ROLE, names),
-        json!({"description": format!("Leads the {} squad through one ticket.", s.name), "prompt": leader_prompt(c, names, place), "model": s.leader.model, "tools": LEADER_TOOLS}),
+        json!({"description": format!("Leads the {} squad through one ticket.", s.name), "prompt": leader_prompt(c, leader, names, place), "model": leader.model, "tools": LEADER_TOOLS}),
     );
     for m in &c.agents {
-        agents.insert(
-            agent_name(&s.id, &m.id, names),
-            json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)}),
-        );
+        let mut a = json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)});
+        if let Some(o) = a.as_object_mut() {
+            if !m.skills.is_empty() {
+                o.insert("skills".into(), json!(m.skills));
+            }
+            if !m.mcp.is_empty() {
+                o.insert("mcpServers".into(), json!(m.mcp));
+            }
+        }
+        agents.insert(agent_name(&s.id, &m.id, names), a);
     }
     Value::Object(agents).to_string()
 }
@@ -434,20 +424,21 @@ pub struct Launch {
     pub agent: String,
     /// `--model`: the leader's model.
     pub model: String,
-    /// It starts in the ticket's work folder (the ticket's folders are given to it for reading), not in the ticket's
-    /// first folder or its worktree. A resumed session starts where it began.
+    /// It starts in the ticket's work folder, not in the ticket's first folder or its worktree: a ticket with no
+    /// folder of its own (or, for a leader started before every ticket had one, a squad that worked there and was
+    /// given the ticket's folders to read). A resumed session starts where it began.
     pub work_folder: bool,
 }
 
 impl Launch {
-    pub fn of(c: &Crew, names: AgentNames, place: Place) -> Launch {
+    pub fn of(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Place) -> Launch {
         let s = &c.squad;
         Launch {
             squad: s.id.clone(),
             name: s.name.clone(),
-            agents: agents_json(c, names, place),
+            agents: agents_json(c, leader, names, place),
             agent: agent_name(&s.id, LEADER_ROLE, names),
-            model: s.leader.model.clone(),
+            model: leader.model.clone(),
             work_folder: place.in_work_folder(),
         }
     }
@@ -542,7 +533,7 @@ pub fn commander_prompt(squad: &Squad, t: &Ticket, body: &str, folders: &[Folder
     let mut out = format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do);
     out.push_str(&format!("The ticket: #{} {}\n", t.number, t.title));
     if folders.is_empty() {
-        out.push_str("Where it works: the ticket has no folder.\n");
+        out.push_str("Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n");
     } else {
         out.push_str("Where it works:\n");
         for f in folders {
@@ -671,7 +662,7 @@ pub fn how_far(place: Place) -> String {
             };
             format!("{lead} When it doesn't say, stop at local changes: leave the change {at}, uncommitted. No commit, no push.")
         }
-        Place::WorkFolder { .. } => format!("{lead} When it doesn't say, stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere."),
+        Place::WorkFolder => format!("{lead} When it doesn't say, stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere."),
     }
 }
 
@@ -694,27 +685,21 @@ pub fn first_message(t: &Ticket, project: &str, body: &str, place: Place, work: 
                     None => out.push_str(&format!("- {f} (used as it is, not a git worktree{here})\n")),
                 }
             }
-            out.push_str(&format!("- {work} (the ticket's private work folder, kept by platoon: for notes and drafts that don't belong in the project)\n"));
+            out.push_str(&format!("- {work} (the ticket's private work folder, kept by platoon: for what the squad writes for the ticket rather than the project, such as a report, notes or drafts)\n"));
         }
-        Place::WorkFolder { reads } => {
+        Place::WorkFolder => {
             out.push_str(&format!("- {work} (the ticket's private work folder; the session starts here. Write what the squad makes here, unless the ticket says otherwise)\n"));
-            if reads {
-                out.push_str("\nFor reading only (change nothing in them unless the ticket asks you to):\n");
-                for f in &t.folders {
-                    out.push_str(&format!("- {f}\n"));
-                }
-            } else {
-                out.push_str("\nThe ticket has no folder of its own.\n");
-            }
+            out.push_str("\nThe ticket has no folder of its own.\n");
         }
     }
     out.push_str("\nThe project's notes, if it has any, arrive separately.\n");
     out
 }
 
-/// Where a leader session starts, and the folders it is given with `--add-dir`: in the work folder, with the
-/// ticket's own folders to read (`work_folder`); or in the first of the ticket's folders (its worktree when it has
-/// one), with the others and the work folder. None: a ticket without a folder can't start in one.
+/// Where a leader session starts, and the folders it is given with `--add-dir`: in the work folder (`work_folder`),
+/// with the ticket's own folders if it has any (a leader started before every ticket worked in its folders); or in
+/// the first of the ticket's folders (its worktree when it has one), with the others and the work folder. None: a
+/// ticket without a folder can't start in one.
 pub fn start_dirs(t: &Ticket, work_folder: bool, work: &str) -> Option<(String, Vec<String>)> {
     if work_folder {
         return Some((work.to_string(), t.folders.clone()));
@@ -1530,8 +1515,34 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_with_skills_and_mcp_servers_gets_them_and_the_tools_that_let_it_use_them() {
+        let mut agents = crate::agentfile::builtins();
+        let builder = agents.iter_mut().find(|a| a.id == "builder").unwrap();
+        builder.skills = vec!["pdf".into(), "release-notes".into()];
+        builder.mcp = vec!["sentry".into(), "github".into()];
+        assert_eq!(tools_for(builder), ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry", "mcp__github"]);
+        let v: Value = serde_json::from_str(&agents_json(&Crew::of(&coding(), &agents), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let b = &v["coding-builder"];
+        assert_eq!(b["skills"], json!(["pdf", "release-notes"]), "preloaded");
+        assert_eq!(b["mcpServers"], json!(["sentry", "github"]), "by name");
+        assert_eq!(b["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry", "mcp__github"]));
+        // Only skills, or only a server.
+        let mut m = crate::agentfile::blank(Path::new("/nonexistent"), "reader", &[]);
+        m.skills = vec!["pdf".into()];
+        assert_eq!(tools_for(&m), ["Read", "Grep", "Glob", "Skill"]);
+        m.skills.clear();
+        m.mcp = vec!["docs".into()];
+        assert_eq!(tools_for(&m), ["Read", "Grep", "Glob", "mcp__docs"]);
+        // Without: the agent is exactly as it was, no keys added.
+        let p = &v["coding-planner"];
+        assert!(p.get("skills").is_none() && p.get("mcpServers").is_none(), "{p}");
+        assert_eq!(p.as_object().unwrap().keys().collect::<Vec<_>>(), ["description", "prompt", "model", "tools"]);
+        assert_eq!(v["coding-leader"]["tools"], json!(LEADER_TOOLS), "the leader's tools never change");
+    }
+
+    #[test]
     fn the_agents_json_carries_every_member_with_its_model_its_tools_and_its_prompt() {
-        let v: Value = serde_json::from_str(&agents_json(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         let o = v.as_object().unwrap();
         let names = ["coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"];
         assert_eq!(o.keys().map(String::as_str).collect::<Vec<_>>(), names, "named after the squad, so Claude Code shows whose they are");
@@ -1548,6 +1559,7 @@ mod tests {
         assert_eq!(v["coding-planner"]["description"], coding().workflow[0].does, "what it does in the workflow");
         let leader = v["coding-leader"]["prompt"].as_str().unwrap();
         assert!(leader.starts_with(LEADER_GUIDANCE.trim()) && leader.ends_with(leader_fixed(Place::WORKTREE).as_str()), "{leader}");
+        assert!(leader.contains(&format!("You lead the Coding squad. Your members are coding-planner, coding-builder, coding-reviewer and coding-verifier.\nWhat the squad can do: {CODING_CAN_DO}\n\nThe workflow.")), "{leader}");
         let planner = v["coding-planner"]["prompt"].as_str().unwrap();
         assert_eq!(planner, format!("{}\n\n{}", PLANNER_GUIDANCE.trim(), MEMBER_FIXED.trim()));
     }
@@ -1565,18 +1577,18 @@ mod tests {
         agents.push(extra);
         let c = Crew::of(&s, &agents);
         assert_eq!(c.agents.len(), 4, "only the agents its steps name");
-        let v: Value = serde_json::from_str(&agents_json(&c, AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&c, &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert_eq!(v["coding-builder"]["prompt"], format!("Build it in small commits.\n\n{}", MEMBER_FIXED.trim()));
         assert_eq!(v["coding-verifier"]["model"], "sonnet");
         assert_eq!(v["coding-planner"]["tools"], json!(["Read", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"]));
         assert!(v.get("coding-docs").is_none(), "in no step");
         // An own squad: its own id in every name.
         let own = crate::squadfile::copy_of(Path::new("/nonexistent"), &coding(), "Careful coding", &[]);
-        let v: Value = serde_json::from_str(&agents_json(&crew(&own), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&crew(&own), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("careful-coding-leader"));
         assert!(v.get("careful-coding-verifier").is_some());
         let leader = v["careful-coding-leader"]["prompt"].as_str().unwrap();
-        assert!(leader.contains("You lead the Careful coding squad. Your members are careful-coding-planner, careful-coding-builder, careful-coding-reviewer and careful-coding-verifier."), "{leader}");
+        assert!(leader.contains("You lead the Careful coding squad. Your members are careful-coding-planner, careful-coding-builder, careful-coding-reviewer and careful-coding-verifier.\nWhat the squad can do: "), "{leader}");
         assert!(leader.contains("1. careful-coding-planner: "), "{leader}");
     }
 
@@ -1586,31 +1598,51 @@ mod tests {
         // A workflow that repeats a member and has send-backs: Plan, Build, Review (back to Build twice), Verify
         // (back to Build once), Review again.
         s.workflow.push(crate::squadfile::Step { agent: "reviewer".into(), does: "Reads the whole change once more.".into(), back: None, extra: Map::new() });
-        let p = leader_prompt(&crew(&s), AgentNames::SquadRole, Place::WORKTREE);
+        let p = leader_prompt(&crew(&s), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
         let wf = workflow_text(&crew(&s), AgentNames::SquadRole);
         assert_eq!(p, format!("{}\n\n{wf}\n\n{}", LEADER_GUIDANCE.trim(), leader_fixed(Place::WORKTREE).as_str()), "between the guidance and the rules");
         assert_eq!(
             wf,
-            "You lead the Coding squad. Your members are coding-planner, coding-builder, coding-reviewer and coding-verifier.\n\n\
+            format!("You lead the Coding squad. Your members are coding-planner, coding-builder, coding-reviewer and coding-verifier.\n\
+             What the squad can do: {CODING_CAN_DO}\n\n\
              The workflow. Hand each step to the member it names, in this order:\n\
              1. coding-planner: Reads the ticket and the code it touches and writes a short plan that restates the acceptance checks.\n\
              2. coding-builder: Makes the change the plan describes in the ticket's worktree and runs the tests.\n\
              3. coding-reviewer: Reads the change against the ticket and the plan, and checks that each acceptance check could have failed before the change. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most twice; after that, stop and tell the user what is still wrong.\n\
              4. coding-verifier: Runs the tests and the build and reports plainly what passed and what failed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most once; after that, stop and tell the user what is still wrong.\n\
              5. coding-reviewer: Reads the whole change once more.\n\
-             When the last step is done, take the work as far as the ticket's text says, and no further."
+             When the last step is done, take the work as far as the ticket's text says, and no further.")
         );
         // The reviewer does two steps: its description says both.
         assert!(member_description(&s, "reviewer").starts_with("Step 3: Reads the change") && member_description(&s, "reviewer").contains(" Step 5: Reads the whole change once more."));
-        // The guidance no longer lists the steps: that is the workflow's job.
-        assert!(!LEADER_GUIDANCE.contains("1. Plan") && !LEADER_GUIDANCE.contains("coding-"), "{LEADER_GUIDANCE}");
+        // The guidance no longer lists the steps: that is the workflow's job. It speaks of no squad in particular.
+        assert!(!LEADER_GUIDANCE.contains("1. Plan") && !LEADER_GUIDANCE.contains("coding") && !LEADER_GUIDANCE.contains("Coding"), "{LEADER_GUIDANCE}");
+        // A user's own "System prompt for squad leaders" takes the guidance's place; the rest is the same.
+        let c = dir("leader-own");
+        fs::create_dir_all(c.join("prompts")).unwrap();
+        fs::write(c.join("prompts/squad-leader.md"), "Lead briefly. Ask before anything big.\n").unwrap();
+        let mut settings = crate::settings::Settings::default();
+        assert_eq!(LeaderSetup::load(&dir("leader-default"), &settings), LeaderSetup::builtin(), "platoon's own by default, on Sonnet");
+        settings.squad_leader_model = "opus".into();
+        let own = LeaderSetup::load(&c, &settings);
+        assert_eq!(own, LeaderSetup { guidance: "Lead briefly. Ask before anything big.".into(), model: "opus".into() });
+        let p = leader_prompt(&crew(&s), &own, AgentNames::SquadRole, Place::WORKTREE);
+        assert_eq!(p, format!("Lead briefly. Ask before anything big.\n\n{wf}\n\n{}", leader_fixed(Place::WORKTREE).as_str()));
+        // The model reaches the leader's agent and --model.
+        let launch = Launch::of(&crew(&s), &own, AgentNames::SquadRole, Place::WORKTREE);
+        let v: Value = serde_json::from_str(&launch.agents).unwrap();
+        assert_eq!((v["coding-leader"]["model"].as_str(), launch.model.as_str()), (Some("opus"), "opus"));
+        assert_eq!(v["coding-planner"]["model"], "opus", "an agent keeps its own model");
+        assert_eq!(v["coding-builder"]["model"], "sonnet");
+        let args = leader_args(&launch, "/bin/platoon", "sid", "n", &[], Some("go"));
+        assert_eq!(args[args.iter().position(|a| a == "--model").unwrap() + 1], "opus");
     }
 
     #[test]
     fn a_leader_started_with_the_plain_names_keeps_them_and_its_prompt_calls_the_members_by_them() {
-        let mut s = coding();
-        s.leader.guidance = "Always ask coding-planner first.".into();
-        let v: Value = serde_json::from_str(&agents_json(&crew(&s), AgentNames::Plain, Place::WORKTREE)).unwrap();
+        let s = coding();
+        let lead = LeaderSetup { guidance: "Always ask coding-planner first.".into(), ..LeaderSetup::builtin() };
+        let v: Value = serde_json::from_str(&agents_json(&crew(&s), &lead, AgentNames::Plain, Place::WORKTREE)).unwrap();
         assert_eq!(v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
         let leader = v["leader"]["prompt"].as_str().unwrap();
         assert!(!leader.contains("coding-") && leader.contains("Always ask planner first.") && leader.contains("1. planner: ") && leader.contains("reasons to builder"), "{leader}");
@@ -1630,19 +1662,15 @@ mod tests {
         ("summarize", "role-work", include_str!("testdata/agents-json/summarize-role-work.json")),
     ];
 
-    /// The `SQUAD: done` rule before leaders asked before closing a ticket, and what took its place.
-    const OLD_DONE_RULE: &str = "- End every turn with one last line of its own, exactly one of these:\n  `SQUAD: done` - the ticket is finished as far as it goes. Put a short result just above this line: what was done, where it is (branch, folder, file, merge request link) and what was not checked.\n";
-    const NEW_DONE_RULES: &str = "- Never close a ticket unasked. When the work is finished as far as the ticket goes, put a short result (what was done, where it is: branch, folder, file, merge request link, and what was not checked) above the line `SQUAD: question - Shall I close this ticket?` and end your turn there. Only after the user says yes, end a turn with `SQUAD: done`, repeating that short result just above it.\n- End every turn with one last line of its own, exactly one of these:\n  `SQUAD: done` - only after the user said yes to closing the ticket. Put the short result just above this line.\n";
-
     #[test]
-    fn every_built_in_squad_starts_exactly_as_before_but_for_the_renamed_writers_and_asking_before_closing() {
+    fn every_built_in_squads_agents_start_as_before_and_every_leader_is_the_shared_one() {
         for (id, how, before) in BEFORE {
             let names = if how.starts_with("plain") { AgentNames::Plain } else { AgentNames::SquadRole };
-            let place = if how.ends_with("worktree") { Place::WORKTREE } else { Place::WorkFolder { reads: true } };
-            let now: Value = serde_json::from_str(&agents_json(&crew(&crate::squadfile::builtin(id).unwrap()), names, place)).unwrap();
-            // The only differences: Research's "writer" is the report-writer now and Docs' the tech-writer, and their
-            // prompts (and the editor's) say which writer.
-            let expected = match id {
+            let place = if how.ends_with("worktree") { Place::WORKTREE } else { Place::WorkFolder };
+            let squad = crate::squadfile::builtin(id).unwrap();
+            let now: Value = serde_json::from_str(&agents_json(&crew(&squad), &LeaderSetup::builtin(), names, place)).unwrap();
+            // Since these were captured: Research's "writer" became the report-writer, Docs' the tech-writer.
+            let before = match id {
                 "research" => before.replace("research-writer", "research-report-writer").replace("You are the writer.", "You are the report writer."),
                 "docs" => before
                     .replace("docs-writer", "docs-tech-writer")
@@ -1651,30 +1679,43 @@ mod tests {
                     .replace("changes the writer should make", "changes the tech writer should make"),
                 _ => before.to_string(),
             };
-            if id == "research" || id == "docs" {
-                assert_ne!(expected, before, "{id}: the renames are real");
-            }
-            // And every leader asks before closing its ticket now (the rules platoon keeps, 2026-09-26).
-            let mut expected: Value = serde_json::from_str(&expected).unwrap();
-            let mut asks = 0;
-            for agent in expected.as_object_mut().unwrap().values_mut() {
-                let Some(Value::String(prompt)) = agent.get_mut("prompt") else { continue };
-                if prompt.contains(OLD_DONE_RULE) {
-                    *prompt = prompt.replace(OLD_DONE_RULE, NEW_DONE_RULES);
-                    asks += 1;
-                }
-            }
-            assert_eq!(asks, 1, "{id} {how}: the leader's prompt, only");
-            assert_eq!(now, expected, "{id} {how}");
-            // The same order of agents too (the leader first, then as the steps first name them).
+            let before: Value = serde_json::from_str(&before).unwrap();
             let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
-            assert_eq!(keys(&now), keys(&expected), "{id} {how}");
+            assert_eq!(keys(&now), keys(&before), "{id} {how}: the same agents in the same order, the leader first");
+            let leader = agent_name(id, LEADER_ROLE, names);
+            for k in keys(&now) {
+                let (n, b) = (&now[&k], &before[&k]);
+                if k == leader {
+                    // The leader: its model, tools and description as before; its prompt is the shared one now.
+                    for f in ["model", "tools", "description"] {
+                        assert_eq!(n[f], b[f], "{k} {f}");
+                    }
+                    let p = n["prompt"].as_str().unwrap();
+                    assert!(p.starts_with(LEADER_GUIDANCE.trim()) && p.ends_with(leader_fixed(place).as_str()), "{p}");
+                    assert!(p.contains(&format!("What the squad can do: {}\n", squad.can_do)), "{p}");
+                    continue;
+                }
+                // The agents: exactly as before, but for the lines that say where Research writes its report now and
+                // what Summarize's result is.
+                match k.as_str() {
+                    "research-report-writer" => {
+                        assert_eq!((&n["model"], &n["tools"]), (&b["model"], &b["tools"]), "{k}");
+                        assert!(n["prompt"].as_str().unwrap().contains("report.md in the ticket's private work folder"), "{k}");
+                    }
+                    "summarize-summarizer" => {
+                        assert_eq!((&n["model"], &n["tools"], &n["prompt"]), (&b["model"], &b["tools"], &b["prompt"]), "{k}");
+                        assert_eq!(n["description"], SUMMARIZE_DOES);
+                    }
+                    _ => assert_eq!(n, b, "{id} {how}: {k}"),
+                }
+                assert!(n.get("skills").is_none() && n.get("mcpServers").is_none(), "built-in agents have no skills or MCP servers: {k}");
+            }
         }
     }
 
     #[test]
     fn a_snapshot_reads_back_as_the_same_launch() {
-        let l = Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE);
+        let l = Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
         assert_eq!((l.squad.as_str(), l.name.as_str(), l.agent.as_str(), l.model.as_str()), ("coding", "Coding", "coding-leader", "sonnet"));
         let text = l.to_json();
         assert!(text.contains("\"agents\": {"), "readable, not a string in a string: {text}");
@@ -1697,10 +1738,10 @@ mod tests {
             assert!(!g.contains("SQUAD:"), "the line's shape is platoon's, not the user's to change");
         }
         assert!(REVIEWER_GUIDANCE.contains("could have failed before the change"));
-        assert!(LEADER_GUIDANCE.contains("wait for it to finish") && LEADER_GUIDANCE.contains("never edit files"));
+        assert!(LEADER_GUIDANCE.contains("wait for it to finish") && LEADER_GUIDANCE.contains("never write or edit files"));
         let default = fixed.find("When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.").expect(&fixed);
         let others = fixed.find("Anything other people can see needs the user's go-ahead first").unwrap();
-        assert!(default < others && fixed[default..others].lines().count() <= 2, "side by side");
+        assert!(default < others && fixed[default..others].lines().count() <= 3, "side by side, the work folder's rule between: {fixed}");
         assert!(!fixed.contains("\"how far\"") && fixed.contains("Even when the ticket asks for it, stop"), "{fixed}");
     }
 
@@ -1752,7 +1793,7 @@ mod tests {
     #[test]
     fn the_first_message_says_the_ticket_how_far_goes_by_its_text_and_where_to_work() {
         let t = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
-        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n", Place::of(true, &t), "/c/tickets/07-work");
+        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n", Place::of(&t), "/c/tickets/07-work");
         assert!(m.starts_with("Ticket #7: Add a basket page\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket.\n\nHow far: a local commit.\n\n## How far to take it\n\n"), "{m}");
         assert!(
             m.contains("\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes: leave the change where you made it, uncommitted. No commit, no push.\n\n## Where to work"),
@@ -1762,7 +1803,7 @@ mod tests {
             assert!(!m.contains(preset), "no how-far preset spelled out any more ({preset}): {m}");
         }
         assert!(m.contains("- /w/shop-worktrees/ticket-7 (a git worktree of /w/shop, on the branch ticket/7; the session starts here)\n"), "{m}");
-        assert!(m.contains("- /w/notes (used as it is, not a git worktree)\n- /c/tickets/07-work (the ticket's private work folder, kept by platoon: for notes and drafts that don't belong in the project)\n"), "{m}");
+        assert!(m.contains("- /w/notes (used as it is, not a git worktree)\n- /c/tickets/07-work (the ticket's private work folder, kept by platoon: for what the squad writes for the ticket rather than the project, such as a report, notes or drafts)\n"), "{m}");
         assert!(m.trim_end().ends_with("The project's notes, if it has any, arrive separately."), "{m}");
         assert!(m.len() < 1400, "no more than needed: {}", m.len());
         let empty = first_message(&ticket(&["/w"], &[]), "Web", "  \n", Place::Folders { worktrees: false, as_is: true }, "/c/tickets/07-work");
@@ -1774,24 +1815,28 @@ mod tests {
     }
 
     #[test]
-    fn where_a_squad_works_follows_its_worktree_rule_and_the_tickets_folders() {
+    fn every_squad_works_in_the_tickets_folders_with_worktrees_and_a_folderless_ticket_in_its_work_folder() {
         let git = ticket(&["/w/shop"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
         let plain = ticket(&["/w/notes"], &[]);
         let both = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
         let none = ticket(&[], &[]);
-        assert_eq!(Place::of(true, &git), Place::WORKTREE);
-        assert_eq!(Place::of(true, &plain), Place::Folders { worktrees: false, as_is: true });
-        assert_eq!(Place::of(true, &both), Place::Folders { worktrees: true, as_is: true });
-        assert_eq!(Place::of(false, &git), Place::WorkFolder { reads: true }, "never: the work folder, the folders to read");
-        assert_eq!(Place::of(false, &none), Place::WorkFolder { reads: false });
-        assert_eq!(Place::of(true, &none), Place::WorkFolder { reads: false }, "a ticket with no folder works in its work folder, whatever the squad");
-        // Where the session starts and what it is given with --add-dir.
+        assert_eq!(Place::of(&git), Place::WORKTREE);
+        assert_eq!(Place::of(&plain), Place::Folders { worktrees: false, as_is: true });
+        assert_eq!(Place::of(&both), Place::Folders { worktrees: true, as_is: true });
+        assert_eq!(Place::of(&none), Place::WorkFolder, "a ticket with no folder works in its work folder, whatever the squad");
+        // Where the session starts and what it is given with --add-dir: the work folder always, for output.
         let work = "/c/projects/p/tickets/07-work";
         assert_eq!(start_dirs(&git, false, work), Some(("/w/shop-worktrees/ticket-7".into(), vec![work.to_string()])));
         assert_eq!(start_dirs(&both, false, work), Some(("/w/shop-worktrees/ticket-7".into(), vec!["/w/notes".to_string(), work.to_string()])));
-        assert_eq!(start_dirs(&both, true, work), Some((work.to_string(), vec!["/w/shop".to_string(), "/w/notes".to_string()])), "the folders themselves, to read; never a worktree");
+        assert_eq!(start_dirs(&plain, false, work), Some(("/w/notes".into(), vec![work.to_string()])));
         assert_eq!(start_dirs(&none, true, work), Some((work.to_string(), vec![])));
         assert_eq!(start_dirs(&none, false, work), None);
+        // A leader started before every ticket worked in its folders (its snapshot says it starts in the work folder)
+        // is continued as it began: there, with the folders themselves.
+        assert_eq!(start_dirs(&both, true, work), Some((work.to_string(), vec!["/w/shop".to_string(), "/w/notes".to_string()])));
+        let old = Launch::from_json(&Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder).to_json()).unwrap();
+        assert!(old.work_folder);
+        assert!(!Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::of(&plain)).work_folder, "Research works in the folder now");
     }
 
     #[test]
@@ -1819,45 +1864,36 @@ mod tests {
     fn the_leaders_rules_and_first_message_fit_each_place_it_works() {
         let body = "Find out which crates do X.";
         let work = "/c/tickets/07-work";
-        // In a worktree (Coding, one git folder): as before.
+        // In a worktree (one git folder): as before, and what the squad writes for the ticket goes in the work folder.
         let git = ticket(&["/w/shop"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
         let fixed = leader_fixed(Place::WORKTREE);
-        assert!(fixed.starts_with("Rules platoon keeps, whatever the ticket says:\n- Take the work as far as the ticket's text says. When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.\n- Anything other people can see"), "{fixed}");
-        assert!(!fixed.contains("work folder"), "{fixed}");
+        assert!(fixed.starts_with("Rules platoon keeps, whatever the ticket says:\n- Take the work as far as the ticket's text says. When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.\n- What the squad writes for the ticket rather than for the project (a report, notes, drafts) goes in the ticket's private work folder, never in the project's folders, unless the ticket says to put it there. Its path is in your first message: give it to any member that writes such a thing.\n- Anything other people can see"), "{fixed}");
         let m = first_message(&git, "Web", body, Place::WORKTREE, work);
         assert!(m.contains("leave the change in the worktree, uncommitted") && m.contains("the session starts here)\n- /c/tickets/07-work (the ticket's private work folder"), "{m}");
-        // The folder as it is (Docs on a folder outside git).
+        // The folder as it is (outside git).
         let plain = ticket(&["/w/notes"], &[]);
-        let place = Place::of(true, &plain);
+        let place = Place::of(&plain);
         let fixed = leader_fixed(place);
         assert!(fixed.contains("stop at local changes: the change stays in the ticket's folder, uncommitted. No commit, no push."), "{fixed}");
         assert!(!fixed.contains("worktree"), "no worktree to speak of: {fixed}");
         let m = first_message(&plain, "Web", body, place, work);
         assert!(m.contains("leave the change in the ticket's folder, uncommitted") && m.contains("- /w/notes (used as it is, not a git worktree; the session starts here)\n"), "{m}");
-        assert!(!m.contains("in the worktree"), "{m}");
-        // The work folder, with the ticket's folders to read (Research with a folder).
-        let place = Place::of(false, &plain);
-        let fixed = leader_fixed(place);
-        assert!(fixed.contains("- You and your members work in the ticket's work folder, the folder this session starts in. Anything the squad makes (a report, notes, drafts) goes there, unless the ticket says to put it somewhere else."), "{fixed}");
-        assert!(fixed.contains("stop once the result is written: nothing is committed, pushed or sent anywhere."), "{fixed}");
-        assert!(fixed.contains("- The ticket's own folders are for reading only: change nothing in them, unless the ticket's text asks for a file to be written there."), "{fixed}");
-        assert!(!fixed.contains("worktree") && !fixed.contains("local changes"), "{fixed}");
-        let m = first_message(&plain, "Web", body, place, work);
-        assert!(m.contains("- /c/tickets/07-work (the ticket's private work folder; the session starts here. Write what the squad makes here, unless the ticket says otherwise)\n\nFor reading only (change nothing in them unless the ticket asks you to):\n- /w/notes\n"), "{m}");
-        assert!(m.contains("stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere.") && !m.contains("worktree"), "{m}");
-        // The work folder and no folder at all (a folderless Research or Summarize ticket).
+        assert!(!m.contains("in the worktree") && !m.contains("For reading only"), "{m}");
+        // No folder of its own: the work folder is its folder.
         let none = ticket(&[], &[]);
-        let place = Place::of(false, &none);
+        let place = Place::of(&none);
         let fixed = leader_fixed(place);
-        assert!(fixed.contains("work in the ticket's work folder") && !fixed.contains("for reading only"), "nothing to read: {fixed}");
+        assert!(fixed.contains("- The ticket has no folder of its own: you and your members work in its private work folder, the folder this session starts in."), "{fixed}");
+        assert!(fixed.contains("stop once the result is written: nothing is committed, pushed or sent anywhere."), "{fixed}");
+        assert!(!fixed.contains("worktree") && !fixed.contains("local changes") && !fixed.contains("reading only"), "{fixed}");
         let m = first_message(&none, "Web", body, place, work);
         assert!(m.contains("the session starts here. Write what the squad makes here, unless the ticket says otherwise)\n\nThe ticket has no folder of its own.\n"), "{m}");
-        assert!(!m.contains("For reading only"), "{m}");
+        assert!(m.contains("stop once the result is written in your work folder") && !m.contains("For reading only"), "{m}");
         // Every place keeps the rules for every squad.
-        for place in [Place::WORKTREE, Place::Folders { worktrees: true, as_is: true }, Place::WorkFolder { reads: true }, Place::WorkFolder { reads: false }] {
+        for place in [Place::WORKTREE, Place::Folders { worktrees: true, as_is: true }, Place::Folders { worktrees: false, as_is: true }, Place::WorkFolder] {
             let fixed = leader_fixed(place);
             assert!(fixed.ends_with(LEADER_RULES.trim()) && fixed.contains("SQUAD: ready to publish"), "{fixed}");
-            let prompt = leader_prompt(&builtin("research"), AgentNames::SquadRole, place);
+            let prompt = leader_prompt(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, place);
             assert!(prompt.ends_with(&fixed), "{prompt}");
         }
     }
@@ -1865,7 +1901,7 @@ mod tests {
     #[test]
     fn the_new_squads_give_their_members_the_tools_their_switches_say() {
         let tools = |id: &str| -> Vec<(String, Value)> {
-            let v: Value = serde_json::from_str(&agents_json(&builtin(id), AgentNames::SquadRole, Place::WorkFolder { reads: false })).unwrap();
+            let v: Value = serde_json::from_str(&agents_json(&builtin(id), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder)).unwrap();
             v.as_object().unwrap().iter().map(|(k, a)| (k.clone(), a["tools"].clone())).collect()
         };
         let read = json!(["Read", "Grep", "Glob"]);
@@ -1880,25 +1916,27 @@ mod tests {
         assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-tech-writer", &files), t("docs-editor", &read)]);
         assert_eq!(tools("summarize"), [t("summarize-leader", &leader), t("summarize-summarizer", &web)]);
         // Models, and the workflow written into the leader's prompt.
-        let v: Value = serde_json::from_str(&agents_json(&builtin("research"), AgentNames::SquadRole, Place::WorkFolder { reads: false })).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder)).unwrap();
         assert_eq!(v["research-checker"]["model"], "opus");
         assert_eq!(v["research-leader"]["model"], "sonnet");
         let p = v["research-leader"]["prompt"].as_str().unwrap();
-        assert!(p.starts_with(RESEARCH_LEADER_GUIDANCE.trim()), "{p}");
+        assert!(p.starts_with(LEADER_GUIDANCE.trim()), "the shared leader: {p}");
         assert!(p.contains("1. research-questioner: ") && p.contains("4. research-checker: ") && p.contains("give its reasons to research-researcher and go on again from step 2. At most once"), "{p}");
-        let v: Value = serde_json::from_str(&agents_json(&builtin("docs"), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&builtin("docs"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-tech-writer and go on again from step 2. At most twice"));
         assert_eq!(v["docs-editor"]["model"], "opus");
         // The words: every member reports to its leader under platoon's rules; nobody's guidance speaks the end line.
         for g in [
-            RESEARCH_LEADER_GUIDANCE, QUESTIONER_GUIDANCE, RESEARCHER_GUIDANCE, RESEARCH_WRITER_GUIDANCE, CHECKER_GUIDANCE, DOCS_LEADER_GUIDANCE, OUTLINER_GUIDANCE,
-            DOCS_WRITER_GUIDANCE, EDITOR_GUIDANCE, SUMMARIZE_LEADER_GUIDANCE, SUMMARIZER_GUIDANCE,
+            LEADER_GUIDANCE, QUESTIONER_GUIDANCE, RESEARCHER_GUIDANCE, RESEARCH_WRITER_GUIDANCE, CHECKER_GUIDANCE, OUTLINER_GUIDANCE,
+            DOCS_WRITER_GUIDANCE, EDITOR_GUIDANCE, SUMMARIZER_GUIDANCE,
         ] {
             assert!(!g.contains("SQUAD:") && !g.trim().is_empty(), "{g}");
         }
-        assert!(RESEARCH_WRITER_GUIDANCE.contains("report.md in the work folder"));
+        assert!(RESEARCH_WRITER_GUIDANCE.contains("report.md in the ticket's private work folder") && RESEARCH_WRITER_GUIDANCE.contains("never in the project's folders"));
         assert!(DOCS_WRITER_GUIDANCE.contains("in the ticket's folder") && DOCS_WRITER_GUIDANCE.contains("Markdown"));
-        assert!(SUMMARIZER_GUIDANCE.contains("don't write any files") && SUMMARIZE_LEADER_GUIDANCE.contains("Your result is the summary itself"));
+        assert!(SUMMARIZER_GUIDANCE.contains("don't write any files") && SUMMARIZE_DOES.contains("The result is that summary itself"));
+        let p = agents_json(&builtin("summarize"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder);
+        assert!(p.contains("1. summarize-summarizer: Reads what the ticket points at") && p.contains("The result is that summary itself: put it just above your last line"), "the leader reads Summarize's rule in its workflow: {p}");
     }
 
     #[test]
@@ -1918,7 +1956,7 @@ mod tests {
             for w in words {
                 assert!(squad.can_do.contains(w), "{id}: {w} in {}", squad.can_do);
             }
-            assert!(got.contains("Where it works: the ticket has no folder.\n"), "{got}");
+            assert!(got.contains("Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"), "{got}");
             assert!(squad.can_do.chars().count() <= crate::squadfile::CAN_DO_MAX);
         }
         // No two say the same kind of work.
@@ -2220,7 +2258,7 @@ mod tests {
     fn the_leader_is_started_with_the_squad_flags_and_resumed_with_the_same_ones() {
         let t = ticket(&["/w/a"], &[]);
         assert_eq!(session_name("Coding", &t), "Coding squad · #7 Add a basket page");
-        let launch = Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE);
+        let launch = Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
         let a = leader_args(&launch, "/opt/my tools/platoon", "sid-1", &session_name("Coding", &t), &["/w/b".into(), "/w/c".into()], Some("Ticket #7"));
         let at = |k: &str| a.iter().position(|x| x == k).unwrap();
         assert_eq!(&a[..4], ["--add-dir", "/w/b", "--add-dir", "/w/c"]);
@@ -2248,9 +2286,9 @@ mod tests {
         let rs: Value = serde_json::from_str(&r[r.len() - 1]).unwrap();
         assert_eq!(rs, serde_json::from_str::<Value>(&hook_settings("/bin/platoon")).unwrap());
         assert_eq!(rs["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], "/bin/platoon hook squad-prompt");
-        assert!(!Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE).to_json().contains("hook squad-"), "not in the snapshot");
+        assert!(!Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE).to_json().contains("hook squad-"), "not in the snapshot");
         // A leader started before the agents carried the squad's name is resumed with the names it began with.
-        let old = leader_args(&Launch::of(&crew(&coding()), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
+        let old = leader_args(&Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
         let pos = |k: &str| old.iter().position(|x| x == k).unwrap();
         assert_eq!((old[0].as_str(), old[1].as_str(), old[pos("--agent") + 1].as_str()), ("--resume", "sid-0", "leader"));
         let agents: Value = serde_json::from_str(&old[pos("--agents") + 1]).unwrap();
@@ -2336,7 +2374,7 @@ mod tests {
         assert!(p.ends_with("What the ticket says:\n## What it should do\n\nA basket.\n"), "{p}");
         let long = commander_prompt(&coding(), &t, &"x".repeat(BODY_IN_PROMPT + 100), &[]);
         assert!(long.len() < BODY_IN_PROMPT + 400 && long.contains('…'), "{}", long.len());
-        assert!(long.contains("\nWhere it works: the ticket has no folder.\n"), "a ticket without a folder says so: {long}");
+        assert!(long.contains("\nWhere it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"), "a ticket without a folder says so: {long}");
         assert!(commander_prompt(&coding(), &t, "  ", &[]).contains("(nothing beyond its title)"));
         assert!(in_git(Path::new(env!("CARGO_MANIFEST_DIR"))) || !Path::new(env!("CARGO_MANIFEST_DIR")).join(".git").exists());
         assert!(!in_git(&c), "a temp folder is in no repository");

@@ -825,7 +825,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         head.push(Line::from(vec![label(if i == 0 { "Worktree" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
     }
     if x.folders.is_empty() {
-        head.push(Line::from(vec![label("Folders"), Span::styled("No folder", Style::new().fg(t.subtext))]));
+        head.push(Line::from(vec![label("Folders"), Span::styled("None: a squad works in its work folder", Style::new().fg(t.subtext))]));
     }
     for (i, folder) in x.folders.iter().enumerate() {
         let shown = fit_start(&tilde(folder, &app.home), w.saturating_sub(LABEL));
@@ -2570,6 +2570,8 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
             crate::app::SquadName::AgentName => ("agent name", "What the agent is called. Every squad that uses it keeps it."),
             crate::app::SquadName::AgentCopy => ("copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
             crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next."),
+            crate::app::SquadName::AgentSkill => ("a skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works."),
+            crate::app::SquadName::AgentMcp => ("an MCP server", "Its name, as it is configured where the squad works."),
         },
     };
     let block = modal_block(t, title);
@@ -3160,8 +3162,6 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         .map(|s| {
             let text = if !crate::squadfile::problems(s, &agents).is_empty() {
                 format!("Needs fixing on the Squads tab first. {}", s.can_do)
-            } else if s.needs_folder && x.folders.is_empty() {
-                format!("Needs a folder, and #{} has none. {}", x.number, s.can_do)
             } else {
                 s.can_do.clone()
             };

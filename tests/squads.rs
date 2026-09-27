@@ -708,17 +708,15 @@ fn add_dirs(args: &[String]) -> Vec<String> {
 }
 
 #[test]
-fn a_ticket_without_a_folder_goes_to_research_which_starts_in_the_tickets_work_folder() {
+fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_folder() {
     let lab = Lab::new("sq-research");
     lab.ticket(json!({"folders": []}));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
-    // Coding needs a folder: it says so, and nothing is asked or started.
+    // No squad needs a folder any more: the picker says nothing of it.
     lab.open_tickets(&mut t);
     t.send(b"a");
-    t.wait_for_all(&["hand to a squad", "Needs a folder, and #1 has none.", "enter hand it over"]);
-    t.send(b"\r");
-    t.wait_for_flat("The Coding squad needs a folder to work in, and #1 has none. Press f to give it one.");
-    assert_eq!((lab.checks(), lab.started()), (0, 0));
+    t.wait_for_all(&["hand to a squad", "Coding", "Research", "enter hand it over"]);
+    assert!(!t.stable().contains("Needs a folder"));
     t.send(b"\x1b");
     t.wait_gone("enter hand it over");
     // Research takes it.
@@ -748,12 +746,12 @@ fn a_ticket_without_a_folder_goes_to_research_which_starts_in_the_tickets_work_f
         ]
     );
     let prompt = agents["research-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("You and your members work in the ticket's work folder") && !prompt.contains("worktree"), "{prompt}");
+    assert!(prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder") && !prompt.contains("worktree"), "{prompt}");
     let first = args.last().unwrap();
     assert!(first.contains("the ticket's private work folder; the session starts here") && first.contains("The ticket has no folder of its own."), "{first}");
     assert!(first.contains("stop once the result is written in your work folder"), "{first}");
-    // The commander was told there is no folder; nothing else was made.
-    assert!(lab.check_file(1, "stdin").starts_with("The squad: Research\n") && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder."));
+    // The commander was told there is no folder of its own; nothing else was made.
+    assert!(lab.check_file(1, "stdin").starts_with("The squad: Research\n") && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder of its own;"));
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["leaders"][0]["squad"].as_str()), (Some("working"), Some("research")), "{tk}");
     assert_eq!(tk["worktrees"], json!([]));
@@ -767,22 +765,24 @@ fn a_ticket_without_a_folder_goes_to_research_which_starts_in_the_tickets_work_f
 }
 
 #[test]
-fn summarize_reads_the_tickets_folders_from_its_work_folder_and_makes_no_worktree() {
+fn summarize_works_in_a_worktree_of_a_git_folder_with_the_work_folder_beside_it() {
     let lab = Lab::new("sq-summarize");
     lab.ticket(json!({}));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     hand_to(&lab, &mut t, "Summarize", 3);
     let work = lab.config.join("projects/pweb/tickets/01-work");
-    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&work).unwrap());
+    let wt = lab.base.join("shop-worktrees/ticket-1");
+    assert!(wt.join("README").exists(), "a worktree of the git folder, like every squad");
+    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let args = lab.args(1);
-    assert_eq!(add_dirs(&args), [lab.shop.to_string_lossy().into_owned(), lab.docs.to_string_lossy().into_owned()], "the folders themselves, to read");
-    assert!(!lab.base.join("shop-worktrees").exists(), "no worktree, though the shop is a git repository");
+    assert_eq!(add_dirs(&args), [lab.docs.to_string_lossy().into_owned(), work.to_string_lossy().into_owned()], "the other folder as it is, then the work folder");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["summarize-leader", "summarize-summarizer"]);
     assert_eq!(agents["summarize-summarizer"]["tools"], json!(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]));
-    assert!(agents["summarize-leader"]["prompt"].as_str().unwrap().contains("The ticket's own folders are for reading only"));
+    let prompt = agents["summarize-leader"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("The result is that summary itself: put it just above your last line") && prompt.contains("goes in the ticket's private work folder"), "{prompt}");
     let first = args.last().unwrap();
-    assert!(first.contains(&format!("For reading only (change nothing in them unless the ticket asks you to):\n- {}\n- {}\n", lab.shop.display(), lab.docs.display())), "{first}");
+    assert!(first.contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())), "{first}");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(b"q");

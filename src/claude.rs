@@ -39,6 +39,58 @@ fn claude_json_in(config_dir: Option<std::ffi::OsString>, home: &str) -> PathBuf
     }
 }
 
+/// The skills installed for the user: each `<root>/skills/<folder>/SKILL.md`, called by the `name:` of its front
+/// matter, or by its folder when it has none. Sorted, each once. Plugin skills are not looked for (where a plugin's
+/// skills are, and whether it is switched on, is spread over several files). Nothing here fails: what can't be read
+/// is left out.
+pub fn installed_skills(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(root.join("skills"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let folder = e.file_name().to_str()?.to_string();
+            if folder.starts_with('.') {
+                return None;
+            }
+            let text = fs::read_to_string(e.path().join("SKILL.md")).ok()?;
+            Some(skill_name(&text).unwrap_or(folder))
+        })
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The `name:` in a SKILL.md's front matter (between two `---` lines at its top), quotes taken away.
+fn skill_name(text: &str) -> Option<String> {
+    let mut lines = text.lines();
+    if lines.next()?.trim() != "---" {
+        return None;
+    }
+    for line in lines.take(200) {
+        if line.trim() == "---" {
+            return None;
+        }
+        if let Some(v) = line.strip_prefix("name:") {
+            let v = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+            return (!v.is_empty()).then(|| v.to_string());
+        }
+    }
+    None
+}
+
+/// The names of the MCP servers the user has added for every folder (`mcpServers` at the top of Claude's user config,
+/// `claude_json_path`). Only the names: what each server is (its command, its keys and tokens) is never kept. Sorted;
+/// an unreadable or odd file gives none.
+pub fn mcp_server_names(claude_json: &Path) -> Vec<String> {
+    let Ok(text) = fs::read_to_string(claude_json) else { return Vec::new() };
+    let Ok(v) = serde_json::from_str::<Value>(&text) else { return Vec::new() };
+    let mut out: Vec<String> = v.get("mcpServers").and_then(Value::as_object).map(|o| o.keys().cloned().collect()).unwrap_or_default();
+    out.sort();
+    out
+}
+
 /// A live Claude Code process, from its registry file.
 #[derive(Debug)]
 pub struct Live {
@@ -1076,6 +1128,34 @@ mod tests {
     fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
         assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
         assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
+    }
+
+    #[test]
+    fn installed_skills_and_mcp_server_names_are_read_by_name_only() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-installed-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        let skill = |folder: &str, text: &str| {
+            fs::create_dir_all(d.join("skills").join(folder)).unwrap();
+            fs::write(d.join("skills").join(folder).join("SKILL.md"), text).unwrap();
+        };
+        assert!(installed_skills(&d).is_empty(), "no skills folder: none");
+        skill("pdf-tools", "---\nname: \"pdf\"\ndescription: PDFs\n---\nBody");
+        skill("release", "---\ndescription: no name here\n---\n");
+        skill("plain", "No front matter at all.\nname: not-this");
+        skill("twice", "---\nname: pdf\n---\n");
+        fs::create_dir_all(d.join("skills/empty-folder")).unwrap();
+        fs::create_dir_all(d.join("skills/.hidden")).unwrap();
+        fs::write(d.join("skills/.hidden/SKILL.md"), "---\nname: hidden\n---\n").unwrap();
+        assert_eq!(installed_skills(&d), ["pdf", "plain", "release"], "the front matter's name, else the folder; a folder without SKILL.md is none");
+        // MCP servers: the names at the top only, never what is inside them.
+        let j = d.join(".claude.json");
+        assert!(mcp_server_names(&j).is_empty(), "no file: none");
+        fs::write(&j, r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret"}},"github":{"type":"http"}},"projects":{"/w":{"mcpServers":{"local-only":{}}}}}"#).unwrap();
+        assert_eq!(mcp_server_names(&j), ["github", "sentry"], "project servers are the folder's own, not the user's");
+        for odd in ["{ not json", "[1,2]", r#"{"mcpServers":[1]}"#, r#"{"mcpServers":"x"}"#, ""] {
+            fs::write(&j, odd).unwrap();
+            assert!(mcp_server_names(&j).is_empty(), "{odd}");
+        }
     }
 
     #[test]

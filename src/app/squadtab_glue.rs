@@ -1,10 +1,12 @@
 //! The Squads tab (`3`). Its left pane switches (`←` `→`, or a click on its title) between two lists:
 //! - **Squads**: built in, changed by the user, or the user's own (and an unsaved draft), the selected one on the
-//!   right in four sections (About, Folder, Leader, Workflow). Each step shows what it does and its agent, with the
-//!   agent's model and switches; `enter` on the agent picks another (or makes a new one), `g` goes to it.
+//!   right in two sections: About (name, what it can do) and the Workflow, drawn as a rail (`ui/squads_view.rs`).
+//!   Each step is two rows: its agent, with the agent's model and switches (`enter` picks another or makes a new one,
+//!   `g` goes to it), and what it does. The leader is not here: it is the same for every squad, in the settings.
 //! - **Agents**: every agent, shared by the squads (built in, changed by the user, the user's own, an unsaved draft,
-//!   and "+ New agent"), the selected one on the right: name, model, the three switches, system prompt, and the
-//!   squads it is used in (`enter` goes to one). A change to an agent is a change in every squad that uses it.
+//!   and "+ New agent"), the selected one on the right: name, model, the three switches, its skills and MCP servers
+//!   (picked from what is installed, or typed), system prompt, and the squads it is used in (`enter` goes to one). A
+//!   change to an agent is a change in every squad that uses it.
 //!
 //! Everything is written at once as it is changed (a draft is changed in memory). `n` asks what to describe (a new
 //! squad or a new agent) for Claude to draft (one `claude -p` on Sonnet, off the UI thread), `c` copies, `d` deletes
@@ -23,6 +25,8 @@ const DRAFT_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// The value of the "+ New agent" entry of the agent picker (no agent id can look like it).
 pub const NEW_AGENT: &str = "+new";
+/// The value of the "Type the name of …" entry of the skills and MCP server pickers (no name can look like it).
+pub const TYPE_NAME: &str = "+type";
 
 /// Which of the tab's two panes has the keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,30 +47,15 @@ pub enum SqView {
 pub enum DRow {
     Name,
     CanDo,
-    /// A ticket must have a folder for it (a switch).
-    NeedsFolder,
-    /// "Use a worktree for git folders" (a switch).
-    Worktree,
-    LeaderModel,
-    LeaderPrompt,
-    /// What step `i` does.
-    Step(usize),
-    /// Step `i`'s agent (with its model and switches, which are changed on the Agents list).
+    /// Step `i`'s agent (with its model and switches, which are changed on the Agents list): the step's first line
+    /// on the rail.
     StepAgent(usize),
+    /// What step `i` does: the line under it.
+    Step(usize),
     AddStep,
 }
 
 impl DRow {
-    /// The section it is in: 0 About, 1 Folder, 2 Leader, 3 Workflow.
-    pub fn section(self) -> usize {
-        match self {
-            DRow::Name | DRow::CanDo => 0,
-            DRow::NeedsFolder | DRow::Worktree => 1,
-            DRow::LeaderModel | DRow::LeaderPrompt => 2,
-            DRow::Step(_) | DRow::StepAgent(_) | DRow::AddStep => 3,
-        }
-    }
-
     /// The step it belongs to, if any.
     pub fn step(self) -> Option<usize> {
         match self {
@@ -78,9 +67,9 @@ impl DRow {
 
 /// The rows of a squad's details.
 pub fn detail_rows(s: &Squad) -> Vec<DRow> {
-    let mut out = vec![DRow::Name, DRow::CanDo, DRow::NeedsFolder, DRow::Worktree, DRow::LeaderModel, DRow::LeaderPrompt];
+    let mut out = vec![DRow::Name, DRow::CanDo];
     for i in 0..s.workflow.len() {
-        out.extend([DRow::Step(i), DRow::StepAgent(i)]);
+        out.extend([DRow::StepAgent(i), DRow::Step(i)]);
     }
     out.push(DRow::AddStep);
     out
@@ -94,6 +83,8 @@ pub enum ARow {
     Files,
     Commands,
     Web,
+    Skills,
+    Mcp,
     Prompt,
     /// The `k`th squad it is used in (`App::agent_users`).
     UsedIn(usize),
@@ -101,7 +92,7 @@ pub enum ARow {
 
 /// The rows of an agent's details, when `users` squads use it.
 pub fn agent_rows(users: usize) -> Vec<ARow> {
-    let mut out = vec![ARow::Name, ARow::Model, ARow::Files, ARow::Commands, ARow::Web, ARow::Prompt];
+    let mut out = vec![ARow::Name, ARow::Model, ARow::Files, ARow::Commands, ARow::Web, ARow::Skills, ARow::Mcp, ARow::Prompt];
     out.extend((0..users).map(ARow::UsedIn));
     out
 }
@@ -129,6 +120,10 @@ pub enum SquadName {
     NewAgent(Option<usize>),
     /// A new, blank agent that does a new step, which does this.
     NewAgentStep(String),
+    /// A skill the selected agent has, typed (one not installed here: a skill of a ticket's folder, say).
+    AgentSkill,
+    /// An MCP server the selected agent may use, typed.
+    AgentMcp,
 }
 
 /// What the text box is for.
@@ -148,9 +143,12 @@ pub enum TextFor {
 /// What the small list open over the tab is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChoiceFor {
-    LeaderModel,
     /// The selected agent's model.
     AgentModel,
+    /// The selected agent's skills: each one ticked or not, and typing one (the list stays open).
+    AgentSkills,
+    /// ... its MCP servers.
+    AgentMcp,
     /// Which agent does step `i`.
     StepAgent(usize),
     /// Which agent does a new step.
@@ -279,6 +277,11 @@ pub struct SquadTab {
     /// The last descriptions the user gave, offered again by the next `n`.
     pub last_description: String,
     pub last_agent_description: String,
+    /// Where Claude keeps its skills (its config folder) and its user config file (the MCP servers).
+    pub claude_root: PathBuf,
+    pub claude_json: PathBuf,
+    /// What is installed, as last read (and when): read again when it is older than a few seconds.
+    installed: RefCell<Option<(Instant, agentfile::Installed)>>,
 }
 
 impl SquadTab {
@@ -300,13 +303,34 @@ impl SquadTab {
             agent_row: 0,
             agent_top: Cell::new(0),
             agent_list_top: Cell::new(0),
-            choice: Choice { purpose: ChoiceFor::LeaderModel, title: String::new(), options: Vec::new(), selected: 0 },
+            choice: Choice { purpose: ChoiceFor::Describe, title: String::new(), options: Vec::new(), selected: 0 },
             text: TextArea::new("", 0),
             text_for: TextFor::Describe,
             drafting: None,
             last_description: String::new(),
             last_agent_description: String::new(),
+            claude_root: crate::claude::claude_root(),
+            claude_json: crate::claude::claude_json_path(),
+            installed: RefCell::new(None),
         }
+    }
+
+    /// The skills and MCP servers installed here, read again when the last look is more than a few seconds old (the
+    /// user may install one while platoon is open). Only names are read.
+    pub fn installed(&self) -> agentfile::Installed {
+        let mut cached = self.installed.borrow_mut();
+        if let Some((at, i)) = cached.as_ref().filter(|(at, _)| at.elapsed() < Duration::from_secs(5)) {
+            let _ = at;
+            return i.clone();
+        }
+        let now = agentfile::Installed::read(&self.claude_root, &self.claude_json);
+        *cached = Some((Instant::now(), now.clone()));
+        now
+    }
+
+    /// Forget what was read, so the next look reads it again.
+    pub fn reread_installed(&self) {
+        *self.installed.borrow_mut() = None;
     }
 
     /// How many squads the list has (the draft counts).
@@ -670,7 +694,6 @@ impl App {
                     KeyCode::Char('g') | KeyCode::Home => self.sqt.row = 0,
                     KeyCode::Char('G') | KeyCode::End => self.move_squad_row(i32::MAX / 2),
                     KeyCode::Enter => self.squad_enter(),
-                    KeyCode::Char(' ') => self.squad_toggle(),
                     KeyCode::Char('a') => self.squad_add(),
                     KeyCode::Char('x') => self.squad_remove_row(),
                     KeyCode::Char('m') => self.pick_step_agent(),
@@ -750,40 +773,9 @@ impl App {
         match row {
             DRow::Name => self.open_squad_name(SquadName::Name, &s.name),
             DRow::CanDo => self.open_squad_text(TextFor::CanDo, &s.can_do, squadfile::CAN_DO_MAX),
-            DRow::NeedsFolder | DRow::Worktree => self.squad_toggle(),
-            DRow::LeaderModel => self.open_choice(ChoiceFor::LeaderModel, "Model for the leader", model_options(), &s.leader.model),
-            DRow::LeaderPrompt => self.edit_leader_prompt(),
             DRow::Step(i) => self.open_squad_text(TextFor::StepDoes(i), &s.workflow[i].does, squadfile::DOES_MAX),
             DRow::StepAgent(_) => self.pick_step_agent(),
             DRow::AddStep => self.squad_add(),
-        }
-    }
-
-    /// Space (or Enter) on a switch: turn it on or off.
-    fn squad_toggle(&mut self) {
-        let Some(row) = self.sqt.drow() else { return };
-        if row == DRow::NeedsFolder {
-            let Some(mut s) = self.squad_to_change() else { return };
-            s.needs_folder = !s.needs_folder;
-            let said = if s.needs_folder {
-                format!("The {} squad needs a folder now: a ticket without one can't be handed to it.", s.name)
-            } else {
-                format!("The {} squad takes tickets without a folder now; it works in the ticket's own work folder then.", s.name)
-            };
-            if self.commit_squad(s) {
-                self.notify(said);
-            }
-        } else if row == DRow::Worktree {
-            let Some(mut s) = self.squad_to_change() else { return };
-            s.use_worktree = !s.use_worktree;
-            let said = if s.use_worktree {
-                format!("The {} squad works in a git worktree of each of the ticket's folders in git now; other folders are used as they are.", s.name)
-            } else {
-                format!("The {} squad never uses a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.", s.name)
-            };
-            if self.commit_squad(s) {
-                self.notify(said);
-            }
         }
     }
 
@@ -939,6 +931,8 @@ impl App {
             ARow::Name => self.open_squad_name(SquadName::AgentName, &a.name),
             ARow::Model => self.open_choice(ChoiceFor::AgentModel, &format!("Model for {}", a.name), model_options(), &a.model),
             ARow::Files | ARow::Commands | ARow::Web => self.agent_toggle(),
+            ARow::Skills => self.pick_agent_tools(false, 0),
+            ARow::Mcp => self.pick_agent_tools(true, 0),
             ARow::Prompt => self.edit_agent_prompt(),
             ARow::UsedIn(k) => {
                 let Some(u) = self.agent_users(&a.id).get(k).cloned() else { return };
@@ -983,6 +977,63 @@ impl App {
         }
     }
 
+    /// Enter on an agent's Skills or MCP servers: every one installed here, ticked when the agent has it, the ones it
+    /// has that aren't installed here too ("not found here": they may be a ticket folder's, or another computer's),
+    /// and typing a name. Enter ticks or unticks one and the list stays open at `at`; esc closes it.
+    fn pick_agent_tools(&mut self, mcp: bool, at: usize) {
+        let Some(a) = self.sqt.agent().cloned() else { return };
+        let installed = self.sqt.installed();
+        let (has, there) = if mcp { (&a.mcp, &installed.mcp) } else { (&a.skills, &installed.skills) };
+        let mut names: Vec<String> = there.clone();
+        for n in has {
+            if !names.contains(n) {
+                names.push(n.clone());
+            }
+        }
+        let mut options: Vec<(String, String)> = names
+            .iter()
+            .map(|n| {
+                let tick = if has.contains(n) { "[x]" } else { "[ ]" };
+                let away = if there.contains(n) { "" } else { " · not found here" };
+                (format!("{tick} {n}{away}"), n.clone())
+            })
+            .collect();
+        let what = if mcp { "an MCP server" } else { "a skill" };
+        options.push((format!("Type the name of {what}…"), TYPE_NAME.into()));
+        let (purpose, title) = if mcp {
+            (ChoiceFor::AgentMcp, format!("MCP servers {} may use (enter ticks one; esc closes)", a.name))
+        } else {
+            (ChoiceFor::AgentSkills, format!("Skills {} starts with (enter ticks one; esc closes)", a.name))
+        };
+        self.open_choice(purpose, &title, options, "");
+        self.sqt.choice.selected = at.min(self.sqt.choice.options.len().saturating_sub(1));
+    }
+
+    /// Give the selected agent a skill or an MCP server, or take it away. Said in a notice.
+    fn toggle_agent_tool(&mut self, mcp: bool, name: &str) -> bool {
+        let Some(mut a) = self.agent_to_change() else { return false };
+        let list = if mcp { &mut a.mcp } else { &mut a.skills };
+        let now = if let Some(at) = list.iter().position(|n| n == name) {
+            list.remove(at);
+            false
+        } else {
+            list.push(name.to_string());
+            true
+        };
+        let what = if mcp { "MCP server" } else { "skill" };
+        let said = if now {
+            let away = if (if mcp { self.sqt.installed().mcp } else { self.sqt.installed().skills }).iter().any(|n| n == name) { "" } else { " (not found here: it has to be there where the squad works)" };
+            format!("{} has the {what} {name} now{away}{}.", a.name, self.everywhere(&a.id))
+        } else {
+            format!("{} doesn't have the {what} {name} any more{}.", a.name, self.everywhere(&a.id))
+        };
+        if self.commit_agent(a) {
+            self.notify(said);
+            return true;
+        }
+        false
+    }
+
     // ---- the small list, the name box and the text box ------------------------------------------------------
 
     fn open_choice(&mut self, purpose: ChoiceFor, title: &str, options: Vec<(String, String)>, now: &str) {
@@ -1017,6 +1068,15 @@ impl App {
             ChoiceFor::Describe => return self.describe(value == "agent"),
             ChoiceFor::NewStepAgent => return self.open_squad_text(TextFor::NewStep(value), "", squadfile::DOES_MAX),
             ChoiceFor::StepAgent(i) if value == NEW_AGENT => return self.open_squad_name(SquadName::NewAgent(Some(i)), ""),
+            ChoiceFor::AgentSkills | ChoiceFor::AgentMcp => {
+                let mcp = purpose == ChoiceFor::AgentMcp;
+                if value == TYPE_NAME {
+                    return self.open_squad_name(if mcp { SquadName::AgentMcp } else { SquadName::AgentSkill }, "");
+                }
+                let at = self.sqt.choice.selected;
+                self.toggle_agent_tool(mcp, &value);
+                return self.pick_agent_tools(mcp, at);
+            }
             ChoiceFor::AgentModel => {
                 let Some(mut a) = self.agent_to_change() else { return };
                 a.model = value;
@@ -1045,11 +1105,8 @@ impl App {
             _ => {}
         }
         let Some(mut s) = self.squad_to_change() else { return };
+        let _ = &label;
         let said = match purpose {
-            ChoiceFor::LeaderModel => {
-                s.leader.model = value;
-                format!("The leader runs on {label} now.")
-            }
             ChoiceFor::StepAgent(i) => {
                 if s.workflow[i].agent == value {
                     return;
@@ -1076,8 +1133,11 @@ impl App {
     }
 
     /// The longest the name box takes for this.
-    pub(super) fn squad_name_max(_purpose: &SquadName) -> usize {
-        squadfile::NAME_MAX
+    pub(super) fn squad_name_max(purpose: &SquadName) -> usize {
+        match purpose {
+            SquadName::AgentSkill | SquadName::AgentMcp => agentfile::TOOL_NAME_MAX,
+            _ => squadfile::NAME_MAX,
+        }
     }
 
     /// Enter in the name box, for a squad or an agent. The box stays open while what is typed can't be used.
@@ -1086,8 +1146,13 @@ impl App {
         if typed.is_empty() {
             return self.notify(match purpose {
                 SquadName::Name | SquadName::Copy => "A squad needs a name.",
+                SquadName::AgentSkill => "Type the skill's name, as its SKILL.md calls it.",
+                SquadName::AgentMcp => "Type the MCP server's name, as it is configured.",
                 _ => "An agent needs a name.",
             });
+        }
+        if matches!(purpose, SquadName::AgentSkill | SquadName::AgentMcp) && !agentfile::name_ok(&typed) {
+            return self.notify("That can't be a name: use letters, digits, dashes, dots, colons and underscores, no spaces.");
         }
         self.mode = Mode::List;
         match purpose {
@@ -1134,6 +1199,14 @@ impl App {
                     }
                     Err(e) => self.notify(format!("Couldn't save the copy: {e}")),
                 }
+            }
+            SquadName::AgentSkill | SquadName::AgentMcp => {
+                let mcp = purpose == SquadName::AgentMcp;
+                let has = self.sqt.agent().is_some_and(|a| if mcp { a.mcp.contains(&typed) } else { a.skills.contains(&typed) });
+                if has {
+                    return self.notify(format!("It has {typed} already."));
+                }
+                self.toggle_agent_tool(mcp, &typed);
             }
             SquadName::NewAgent(step) => self.make_new_agent(&typed, step, None),
             SquadName::NewAgentStep(does) => self.make_new_agent(&typed, None, Some(does)),
@@ -1280,13 +1353,6 @@ impl App {
 
     // ---- system prompts, in the editors ----------------------------------------------------------------------
 
-    /// Enter on the leader's system prompt: the list of editors, as for the notes.
-    fn edit_leader_prompt(&mut self) {
-        let Some(s) = self.sqt.squad().cloned() else { return };
-        let target = PromptOf::Leader { squad: s.id.clone(), draft: self.sqt.draft_selected() };
-        self.edit_prompt(target, &format!("{}-{}", s.id, squadfile::LEADER_ROLE), &s.leader.guidance);
-    }
-
     /// Enter on an agent's system prompt.
     fn edit_agent_prompt(&mut self) {
         let Some(a) = self.sqt.agent().cloned() else { return };
@@ -1317,32 +1383,6 @@ impl App {
             return;
         }
         match &edit.target {
-            PromptOf::Leader { squad, draft } => {
-                if text.is_empty() {
-                    return self.notify("A system prompt can't be empty, so the leader's is as it was.");
-                }
-                // The squad as it is now (the draft, or its file), found again by its id.
-                let s = if *draft {
-                    self.sqt.draft.clone().filter(|d| d.id == *squad)
-                } else {
-                    self.sqt.list.iter().find(|l| l.id == *squad).and_then(|l| l.squad.clone())
-                };
-                let Some(mut s) = s else {
-                    return self.notify("The squad isn't there any more, so the system prompt wasn't kept.");
-                };
-                s.leader.guidance = text;
-                if *draft {
-                    self.sqt.draft = Some(s);
-                    return self.notify("Changed the leader's system prompt in the draft.");
-                }
-                match squadfile::save(&self.config, &s) {
-                    Ok(()) => {
-                        self.reload_squads(None);
-                        self.notify("Saved the leader's system prompt. The squad uses it from the next ticket it is handed.");
-                    }
-                    Err(e) => self.notify(format!("Couldn't save the squad: {e}")),
-                }
-            }
             PromptOf::Agent { id, draft } => {
                 let a = if *draft {
                     self.sqt.agent_draft.clone().filter(|d| d.id == *id)
@@ -1416,7 +1456,8 @@ impl App {
         if let Err(r) = ai::gate_for(&settings, squadfile::DRAFT_FEATURE, &self.cache, self.clock(), true) {
             return self.notify(format!("Couldn't draft a squad: {}. {}", crate::squads::refusal_words(&r), r.on_screen()));
         }
-        let prompt = squadfile::draft_prompt(description, &self.agent_library());
+        self.sqt.reread_installed();
+        let prompt = squadfile::draft_prompt(description, &self.agent_library(), &self.sqt.installed());
         let mut req = Request::new(squadfile::DRAFT_FEATURE, squadfile::draft_system(&instructions::guidance(&self.config, instructions::SQUAD_DRAFT)), prompt);
         req.user_initiated = true;
         req.model = Some(squadfile::DRAFT_MODEL);
@@ -1432,7 +1473,10 @@ impl App {
         if let Err(r) = ai::gate_for(&settings, agentfile::DRAFT_FEATURE, &self.cache, self.clock(), true) {
             return self.notify(format!("Couldn't draft an agent: {}. {}", crate::squads::refusal_words(&r), r.on_screen()));
         }
-        let mut req = Request::new(agentfile::DRAFT_FEATURE, agentfile::draft_system(&instructions::guidance(&self.config, instructions::AGENT_DRAFT)), agentfile::draft_prompt(description));
+        let mut req = Request::new(agentfile::DRAFT_FEATURE, agentfile::draft_system(&instructions::guidance(&self.config, instructions::AGENT_DRAFT)), agentfile::draft_prompt(description, &{
+            self.sqt.reread_installed();
+            self.sqt.installed()
+        }));
         req.user_initiated = true;
         req.model = Some(squadfile::DRAFT_MODEL);
         req.timeout = DRAFT_TIMEOUT;
@@ -1457,7 +1501,7 @@ impl App {
         };
         if kind == Drafting::Agent {
             let taken: Vec<String> = self.sqt.draft_agents.iter().map(|a| a.id.clone()).collect();
-            return match agentfile::parse_draft(&reply.text, &self.config, &taken) {
+            return match agentfile::parse_draft(&reply.text, &self.config, &taken, &self.sqt.installed()) {
                 Ok(a) => {
                     let name = a.name.clone();
                     self.sqt.agent_draft = Some(a);
@@ -1477,7 +1521,7 @@ impl App {
             // The draft agent's id is kept for it.
             library.retain(|a| a.id != d.id);
         }
-        match squadfile::parse_draft(&reply.text, &self.config, &taken, &library) {
+        match squadfile::parse_draft(&reply.text, &self.config, &taken, &library, &self.sqt.installed()) {
             Ok(d) => {
                 let name = d.squad.name.clone();
                 let new = d.new_agents.len();
@@ -1697,8 +1741,6 @@ impl App {
 /// Whose system prompt is open in an editor.
 #[derive(Clone, Debug)]
 pub enum PromptOf {
-    /// A squad's leader (`draft`: the unsaved draft).
-    Leader { squad: String, draft: bool },
     /// An agent (`draft`: the unsaved draft agent).
     Agent { id: String, draft: bool },
 }

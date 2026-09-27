@@ -8,7 +8,7 @@ use crate::agentfile;
 use crate::app::{App, ARow, Confirm, DRow, Mode, SqFocus, SqView};
 use crate::editors::Editor;
 use crate::squadfile::{self, Back, Crew, Kind};
-use crate::squads::Launch;
+use crate::squads::{Launch, LeaderSetup};
 use crate::testkit::{AiFake, World};
 use crate::tickets::{AgentNames, Leader, NewTicket, Tickets};
 use crate::ui;
@@ -171,7 +171,7 @@ fn bg(term: &Terminal<TestBackend>, at: (u16, u16)) -> ratatui::style::Color {
 }
 
 #[test]
-fn the_tab_lists_the_built_in_squads_with_their_details_in_four_sections() {
+fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     let (_w, mut app) = on_the_tab("sqt-list");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
@@ -180,8 +180,12 @@ fn the_tab_lists_the_built_in_squads_with_their_details_in_four_sections() {
     assert!(f.contains("[Squads] Agents"), "the switch, in the list's title: {f}");
     let l = left(&shown);
     assert!(l.contains("▎ Coding 4 agents Built in Research 4 agents Built in Docs 3 agents Built in Summarize 1 agent Built in"), "{l}");
-    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Folder", "Needs a folder Yes", "Use a worktree for git folders Yes", "Leader", "Model Sonnet", "System prompt You are given one ticket", "Workflow"] {
-        assert!(f.contains(s), "{s}: {shown}");
+    let r = right(&shown);
+    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.", "Workflow"] {
+        assert!(r.contains(s), "{s}: {shown}");
+    }
+    for gone in ["Needs a folder", "Use a worktree", "Leader Model", "System prompt You are given one ticket"] {
+        assert!(!f.contains(gone), "no {gone} on a squad any more: {f}");
     }
     assert!(!f.contains("Members"), "a squad has no members of its own any more: {f}");
     assert!(f.contains("n describe a new squad or agent") && f.contains("c copy") && !f.contains("d delete") && f.contains("← → agents"), "{f}");
@@ -197,9 +201,9 @@ fn the_tab_lists_the_built_in_squads_with_their_details_in_four_sections() {
     // The workflow: each step, its agent with the agent's model and switches, and where it may send the work back.
     go(&mut app, DRow::StepAgent(3));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("3. reviewer Reads the change against the ticket") && f.contains("Agent reviewer · Opus · runs commands"), "{f}");
-    assert!(f.contains("↩ may send it back to step 2, at most twice") && f.contains("↩ may send it back to step 2, at most once"), "{f}");
-    assert!(f.contains("4. verifier Runs the tests") && f.contains("Agent verifier · Haiku · runs commands"), "{f}");
+    assert!(f.contains("● 3 reviewer Opus commands Reads the change against the ticket"), "{f}");
+    assert!(f.contains("↩ back to step 2 (builder), at most twice") && f.contains("↩ back to step 2 (builder), at most once"), "{f}");
+    assert!(f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the ticket + Add a step"), "{f}");
     assert!(f.contains("enter pick the agent") && f.contains("g go to the agent") && f.contains("b send back") && f.contains("esc back to the list"), "{f}");
     // Tab and Shift+arrows move between the panes; on the list, plain ← → switch the list.
     key(&mut app, KeyCode::Tab);
@@ -225,7 +229,6 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     key(&mut app, KeyCode::Right);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
-    let f = flat(&shown);
     let l = left(&shown);
     assert!(l.starts_with("Squads [Agents] Built in"), "{l}");
     assert!(l.contains("Built in ▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
@@ -296,9 +299,9 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
         assert_eq!(app.sqt.listed().map(|l| l.id.as_str()), Some(id));
         go(&mut app, DRow::StepAgent(1));
         let f = flat(&draw(&mut term, &app));
-        assert!(f.contains("Agent builder · Opus · changes files, runs commands"), "{id}: {f}");
+        assert!(f.contains("● 2 builder Opus files · commands"), "{id}: {f}");
         let crew = Crew::load(&w.config, &squadfile::get(&w.config, id).unwrap());
-        let agents: Value = serde_json::from_str(&Launch::of(&crew, AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents).unwrap();
+        let agents: Value = serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents).unwrap();
         assert_eq!(agents[format!("{id}-builder")]["model"], "opus", "{id}");
     }
     // A switch: the tools follow, everywhere.
@@ -343,7 +346,7 @@ fn used_in_and_g_go_between_a_step_and_its_agent() {
     // Away from a step, g is the top of the details, as before.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Left);
-    go(&mut app, DRow::LeaderModel);
+    go(&mut app, DRow::CanDo);
     key(&mut app, KeyCode::Char('g'));
     assert_eq!((app.sqt.view, app.sqt.drow()), (SqView::Squads, Some(DRow::Name)));
 }
@@ -506,8 +509,7 @@ fn deleting_an_agent_a_squad_uses_is_refused_naming_the_squads() {
     assert!(!app.sqt.agents.iter().any(|l| l.id == "test-runner"));
 }
 
-const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.","needs_folder":true,"use_worktree":true,
- "leader":{"model":"sonnet","guidance":"Lead briefly."},
+const DRAFT: &str = r#"{"name":"Sentry triage","can_do":"Reads a Sentry error, reproduces it and fixes it.",
  "new_agents":[
   {"name":"reader","model":"haiku","can_change_files":false,"can_run_commands":false,"can_use_web":true,"guidance":"Read the error."}],
  "workflow":[
@@ -632,24 +634,22 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     let shown = draw(&mut term, &app);
     let f = right(&shown);
     assert!(left(&shown).contains("Sentry triage 2 agents Draft, not saved") && flat(&shown).contains("ctrl+s save draft"), "{shown}");
-    assert!(f.contains("Agent reader · Haiku · uses the web · new with the draft") && f.contains("Agent builder · Sonnet · changes files, runs commands"), "which are new and which are there already: {f}");
+    assert!(f.contains("○ 1 reader Haiku web · new with the draft") && f.contains("● 2 builder Sonnet files · commands Fixes it"), "which are new and which are there already: {f}");
     assert!(!squadfile::path(&w.config, "sentry-triage").exists() && !agentfile::path(&w.config, "reader").exists(), "not saved yet");
     // g on a new one says where it will be.
     go(&mut app, DRow::StepAgent(0));
     key(&mut app, KeyCode::Char('g'));
     assert_eq!(app.active_notice(), Some("reader comes with the draft: it is saved with it (ctrl+s), and then it is on the Agents list."));
     // Changed before it is saved: in memory only.
-    go(&mut app, DRow::LeaderModel);
+    go(&mut app, DRow::StepAgent(1));
     key(&mut app, KeyCode::Enter);
-    choose(&mut app, "Opus");
+    choose(&mut app, "reviewer ·");
     assert!(!squadfile::dir(&w.config).join("sentry-triage.json").exists());
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Needs a folder Yes") && f.contains("Use a worktree for git folders Yes"), "{f}");
     ctrl(&mut app, 's');
     assert_eq!(app.active_notice(), Some("Saved the squad \"Sentry triage\" and its new agent. Tickets can be handed to it now."));
     let v = file(&w, "sentry-triage");
-    assert_eq!((v["needs_folder"].as_bool(), v["use_worktree"].as_bool(), v.get("members")), (Some(true), Some(true), None));
-    assert_eq!((v["leader"]["model"].as_str(), v["workflow"][0]["agent"].as_str(), v["workflow"][2]["back_to"].as_u64()), (Some("opus"), Some("reader"), Some(2)));
+    assert!(v.get("members").is_none() && v.get("leader").is_none() && v.get("needs_folder").is_none() && v.get("use_worktree").is_none(), "{v}");
+    assert_eq!((v["workflow"][1]["agent"].as_str(), v["workflow"][0]["agent"].as_str(), v["workflow"][2]["back_to"].as_u64()), (Some("reviewer"), Some("reader"), Some(2)));
     assert_eq!(agent_file(&w, "reader")["guidance"], "Read the error.");
     assert!(app.sqt.draft.is_none() && app.sqt.draft_agents.is_empty());
     assert_eq!(app.sqt.listed().map(|l| (l.id.as_str(), l.kind)), Some(("sentry-triage", Kind::Own)));
@@ -744,7 +744,7 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
     assert_eq!(steps(&w)[3].does, "Checks the plan was followed.");
     // The leader gets it all, in order, with the send-back.
     let crew = Crew::load(&w.config, &squadfile::get(&w.config, "coding").unwrap());
-    let prompt = crate::squads::leader_prompt(&crew, AgentNames::SquadRole, crate::squads::Place::WORKTREE);
+    let prompt = crate::squads::leader_prompt(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
     assert!(prompt.contains("4. coding-planner: Checks the plan was followed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most 3 times;"), "{prompt}");
     assert!(prompt.contains("5. coding-verifier: "), "{prompt}");
     // Moving a step above the one it sends back to drops that send-back, and says so.
@@ -762,7 +762,7 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
 }
 
 #[test]
-fn a_system_prompt_is_edited_in_the_editor_and_saved_into_the_agent_or_the_squad() {
+fn an_agents_system_prompt_is_edited_in_the_editor_and_saved_into_the_agent() {
     let (w, mut app) = on_the_tab("sqt-prompt");
     app.set_editors_for_test(vec![fake_editor(&w, "fakeed", "printf 'Build it in small commits.\\n' > \"$1\"")]);
     go_agent(&mut app, "builder");
@@ -777,30 +777,21 @@ fn a_system_prompt_is_edited_in_the_editor_and_saved_into_the_agent_or_the_squad
     assert_eq!(agent_file(&w, "builder")["guidance"], "Build it in small commits.");
     assert!(!w.cache.join("squad-prompts/agent-builder.md").exists(), "the file it was edited in is gone");
     assert!(!squadfile::path(&w.config, "coding").exists());
-    // An editor that leaves the leader's as it was changes nothing and says nothing.
+    // An editor that leaves it as it was changes nothing and says nothing.
     app.notice = None;
     app.set_editors_for_test(vec![fake_editor(&w, "idle", "true")]);
-    key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Left);
-    go(&mut app, DRow::LeaderPrompt);
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Enter);
     wait_for_editor(&mut app);
     assert_eq!(app.active_notice(), None);
-    assert!(!squadfile::path(&w.config, "coding").exists());
-    // Emptied: kept as it was.
-    app.set_editors_for_test(vec![fake_editor(&w, "empty", ": > \"$1\"")]);
+    assert_eq!(agent_file(&w, "builder")["guidance"], "Build it in small commits.");
+    // The squad has no leader's system prompt of its own to edit: its rows are About and the workflow.
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Left);
     key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Enter);
-    wait_for_editor(&mut app);
-    assert_eq!(app.active_notice(), Some("A system prompt can't be empty, so the leader's is as it was."));
-    // Changed: into the squad.
-    app.set_editors_for_test(vec![fake_editor(&w, "lead", "printf 'Lead calmly.\\n' > \"$1\"")]);
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Enter);
-    wait_for_editor(&mut app);
-    assert_eq!(app.active_notice(), Some("Saved the leader's system prompt. The squad uses it from the next ticket it is handed."));
-    assert_eq!(file(&w, "coding")["leader"]["guidance"], "Lead calmly.");
+    let rows = crate::app::detail_rows(app.sqt.squad().unwrap());
+    assert_eq!(&rows[..4], [DRow::Name, DRow::CanDo, DRow::StepAgent(0), DRow::Step(0)]);
+    assert_eq!(rows.last(), Some(&DRow::AddStep));
 }
 
 #[test]
@@ -831,8 +822,9 @@ fn copy_delete_and_restore_each_ask_first_and_a_built_in_is_never_deleted() {
     assert_eq!(app.squad_list().len(), 4);
     // A changed built-in is restored, after asking.
     key(&mut app, KeyCode::Char('g'));
-    go(&mut app, DRow::NeedsFolder);
-    key(&mut app, KeyCode::Char(' '));
+    go(&mut app, DRow::StepAgent(3));
+    key(&mut app, KeyCode::Char('m'));
+    choose(&mut app, "reviewer ·");
     assert!(squadfile::path(&w.config, "coding").exists());
     key(&mut app, KeyCode::Char('d'));
     assert!(matches!(app.mode, Mode::Confirm(Confirm::RestoreSquad { .. })));
@@ -951,7 +943,7 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
     let mut store = Tickets::open(&w.config, "p1");
     let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
     let coding = squadfile::builtin("coding").unwrap();
-    let at_start = Launch::of(&Crew::of(&coding, &agentfile::builtins()), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
+    let at_start = Launch::of(&Crew::of(&coding, &agentfile::builtins()), &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
     let snap = store.save_snapshot(n, 1, &at_start.to_json()).unwrap();
     let with = Leader { squad: "coding".into(), session: "s-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(snap) };
     // Its agents change afterwards.
@@ -979,73 +971,176 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
 }
 
 #[test]
-fn needs_a_folder_and_worktree_are_shown_in_about_and_changed_there() {
-    let (w, mut app) = on_the_tab("sqt-settings");
-    // Research: no folder needed, no worktree.
-    key(&mut app, KeyCode::Down);
+fn the_workflow_rail_draws_codings_send_backs_as_nested_loops_in_muted_colours() {
+    let (_w, mut app) = on_the_tab("sqt-rail");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Name Research") && f.contains("Needs a folder No") && f.contains("Use a worktree for git folders No"), "{f}");
-    // Space switches "Needs a folder"; the file says so, and it is User Modified.
-    go(&mut app, DRow::NeedsFolder);
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("space switch"), "{f}");
-    key(&mut app, KeyCode::Char(' '));
-    assert_eq!(app.active_notice(), Some("The Research squad needs a folder now: a ticket without one can't be handed to it."));
-    assert_eq!((file(&w, "research")["needs_folder"].as_bool(), file(&w, "research")["builtin"].as_str()), (Some(true), Some("research")));
-    assert!(squadfile::get(&w.config, "research").unwrap().needs_folder);
-    assert!(flat(&draw(&mut term, &app)).contains("Needs a folder Yes"));
-    // Space switches "Use a worktree for git folders" too: one switch, no list to choose from.
-    go(&mut app, DRow::Worktree);
-    app.notice = None;
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("space switch"), "{f}");
-    key(&mut app, KeyCode::Char(' '));
-    assert!(matches!(app.mode, Mode::List), "no list opens");
-    assert_eq!(
-        app.active_notice(),
-        Some("The Research squad works in a git worktree of each of the ticket's folders in git now; other folders are used as they are.")
-    );
-    assert_eq!((file(&w, "research")["use_worktree"].as_bool(), file(&w, "research").get("worktree")), (Some(true), None));
-    assert!(flat(&draw(&mut term, &app)).contains("Use a worktree for git folders Yes"));
-    assert!(squadfile::get(&w.config, "research").unwrap().use_worktree);
-    // Enter does the same as space.
+    let shown = draw(&mut term, &app);
+    // Both send-backs go to the build: the verify's (the longer) outside, the review's inside it, each with its words.
+    for piece in ["○  1 planner", "┌─▶ ●  2 builder", "│┌▶ │", "││  ●  3 reviewer", "│└──┤", "│   ●  4 verifier", "└───┤", "◉  Done: the result goes on the ticket", "+  Add a step"] {
+        assert!(shown.contains(piece), "{piece}: {shown}");
+    }
+    let row_of = |text: &str| shown.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}"));
+    assert!(shown.lines().nth(row_of("│└──┤")).unwrap().contains("↩ back to step 2 (builder), at most twice"));
+    assert!(shown.lines().nth(row_of("└───┤")).unwrap().contains("↩ back to step 2 (builder), at most once"));
+    assert!(row_of("○  1 planner") < row_of("┌─▶ ●  2 builder") && row_of("┌─▶ ●  2 builder") < row_of("│└──┤") && row_of("│└──┤") < row_of("└───┤") && row_of("└───┤") < row_of("◉  Done"));
+    // The rail and the loops are muted; nothing on the details has the cursor yet.
+    let t = app.effective_theme().clone();
+    let (x, y) = find(&term, "┌─▶ ●");
+    for dx in 0..3 {
+        assert_eq!(fg(&term, (x + dx, y)), t.dim, "the loop at {dx}");
+    }
+    assert_eq!(fg(&term, (x + 4, y)), t.subtext, "a step's mark");
+    assert_eq!(bg(&term, (x + 4, y)), t.bg);
+    let (x, y) = find(&term, "│└──┤");
+    assert_eq!((fg(&term, (x, y)), fg(&term, (x + 4, y))), (t.dim, t.dim));
+    assert_eq!(fg(&term, find(&term, "↩ back to step 2 (builder), at most twice")), t.subtext);
+    // The cursor on the review's agent: its line on the surface, its mark in the accent; its "does" line not.
+    go(&mut app, DRow::StepAgent(2));
+    draw(&mut term, &app);
+    let (x, y) = find(&term, "3 reviewer");
+    let (mx, _) = find(&term, "││  ●  3 reviewer");
+    assert_eq!((bg(&term, (x, y)), fg(&term, (mx + 4, y)), bg(&term, (mx, y))), (t.surface, t.accent, t.surface));
+    assert_eq!(fg(&term, (mx - 2, y)), t.accent, "the cursor's bar");
+    assert_eq!(fg(&term, (mx, y)), t.dim, "the loop keeps its colour on the surface");
+    assert_eq!(bg(&term, (x, y + 1)), t.bg, "what it does is a row of its own");
+    key(&mut app, KeyCode::Down);
+    draw(&mut term, &app);
+    assert_eq!(app.sqt.drow(), Some(DRow::Step(2)));
+    assert_eq!((bg(&term, (x, y)), bg(&term, (x, y + 1))), (t.bg, t.surface));
+    assert_eq!(fg(&term, (mx + 4, y)), t.accent, "the step's mark stays lit while either of its rows has the cursor");
+    // Enter on what it does edits it; on its agent picks one.
     key(&mut app, KeyCode::Enter);
-    assert_eq!(
-        app.active_notice(),
-        Some("The Research squad never uses a worktree now: it works in the ticket's own work folder and only reads the ticket's folders.")
-    );
-    assert_eq!(file(&w, "research")["use_worktree"].as_bool(), Some(false));
-    // Back as platoon has them: no file any more.
-    go(&mut app, DRow::NeedsFolder);
-    key(&mut app, KeyCode::Char(' '));
-    assert!(!squadfile::path(&w.config, "research").exists(), "the built-in as it was needs no file");
-    assert_eq!(app.squad_list()[1].kind, Kind::BuiltIn);
+    assert!(matches!(app.mode, Mode::SquadText));
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Up);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::SquadChoice));
+    key(&mut app, KeyCode::Esc);
+    // The last row: "+ Add a step", lit when the cursor is there.
+    key(&mut app, KeyCode::End);
+    draw(&mut term, &app);
+    assert_eq!(app.sqt.drow(), Some(DRow::AddStep));
+    let (x, y) = find(&term, "+  Add a step");
+    assert_eq!((fg(&term, (x, y)), bg(&term, (x, y))), (t.accent, t.surface));
+}
+
+/// A squad of twelve steps with five send-backs: some nested, one crossing another.
+fn twelve_steps(w: &World) -> squadfile::Squad {
+    let mut s = squadfile::copy_of(&w.config, &squadfile::builtin("coding").unwrap(), "Long haul", &[]);
+    let agents = ["planner", "builder", "reviewer", "verifier"];
+    s.workflow = (0..12)
+        .map(|i| squadfile::Step { agent: agents[i % 4].into(), does: format!("Does part {} of the long haul, carefully and completely, then reports back.", i + 1), back: None, extra: Default::default() })
+        .collect();
+    for (from, to, times) in [(11, 0, 1), (10, 1, 2), (7, 2, 3), (5, 3, 1), (8, 6, 2)] {
+        s.workflow[from].back = Some(Back { to, times });
+    }
+    s
 }
 
 #[test]
-fn an_older_squad_files_worktree_choice_shows_as_the_switch_and_is_rewritten_when_saved() {
-    let w = World::new("sqt-old-worktree");
-    // Docs, changed before the switch: "when-git" in the old form, and a key platoon doesn't know.
-    let mut v = squadfile::to_value(&squadfile::builtin("docs").unwrap(), Some("docs"));
-    let o = v.as_object_mut().unwrap();
-    o.remove("use_worktree");
-    o.insert("worktree".into(), serde_json::json!("when-git"));
-    o.insert("can_do".into(), serde_json::json!("Writes docs, carefully."));
-    o.insert("colour".into(), serde_json::json!("teal"));
-    std::fs::create_dir_all(squadfile::dir(&w.config)).unwrap();
-    std::fs::write(squadfile::path(&w.config, "docs"), v.to_string()).unwrap();
+fn twelve_steps_with_five_send_backs_scroll_at_80_columns() {
+    let w = World::new("sqt-rail-12");
+    let s = twelve_steps(&w);
+    squadfile::save(&w.config, &s).unwrap();
     let mut app = w.app();
     key(&mut app, KeyCode::Char('3'));
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::End);
+    assert_eq!(app.sqt.listed().map(|l| l.id.as_str()), Some("long-haul"));
+    let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(right(&shown).contains("Workflow"), "{shown}");
+    // Down the rail to its end: it scrolls, and every step shows on the way with its loops beside it.
+    key(&mut app, KeyCode::Enter);
+    let mut seen = String::new();
+    for _ in 0..30 {
+        key(&mut app, KeyCode::Down);
+        seen.push_str(&draw(&mut term, &app));
+    }
+    assert_eq!(app.sqt.drow(), Some(DRow::AddStep));
+    for n in 1..=12 {
+        assert!(seen.contains(&format!(" {n:>2} ")), "step {n}: {seen}");
+    }
+    let last = draw(&mut term, &app);
+    assert!(last.contains("◉  Done") && last.contains("+  Add a step") && seen.contains("▶") && seen.contains("┼"), "the loops drawn, one crossing another: {last}");
+    // The words beside a loop: as much as fits in the width, never cut halfway.
+    assert!(seen.contains("↩ back to step 1, at most once") && seen.contains("↩ back to step 7, twice") && !seen.contains("↩ back to step 1 (planner), a…"), "{seen}");
+    // Nothing runs past the pane: every line of the details stops at its right border.
+    for l in last.lines().skip(3).take(25) {
+        assert!(l.chars().count() <= 80, "{l}");
+        assert!(l.ends_with('│') || l.ends_with('╮') || l.ends_with('╯') || l.trim().is_empty() || !l.contains('╭'), "{l}");
+    }
+}
+
+#[test]
+fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() {
+    let w = World::new("sqt-tools");
+    // What is installed "here": a skill in Claude's config folder, two servers in its user config (a temp folder).
+    fs::create_dir_all(w.root.join("skills/pdf")).unwrap();
+    fs::write(w.root.join("skills/pdf/SKILL.md"), "---\nname: pdf\ndescription: PDFs\n---\n").unwrap();
+    fs::write(w.root.join(".claude.json"), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#).unwrap();
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('3'));
+    go_agent(&mut app, "builder");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Name Docs") && f.contains("Use a worktree for git folders Yes"), "{f}");
-    assert_eq!(file(&w, "docs")["worktree"].as_str(), Some("when-git"), "shown, not rewritten");
-    // Switched off, then saved: the new form only, the unknown key kept.
-    go(&mut app, DRow::Worktree);
-    key(&mut app, KeyCode::Char(' '));
-    let v = file(&w, "docs");
-    assert_eq!((v["use_worktree"].as_bool(), v.get("worktree"), v["colour"].as_str()), (Some(false), None, Some("teal")));
+    let f = right(&draw(&mut term, &app));
+    assert!(f.contains("Skills None: enter picks from what is installed") && f.contains("MCP servers None: enter picks from what is installed"), "{f}");
+    // Skills: the installed ones, and typing one. Enter ticks one and the list stays open.
+    go_arow(&mut app, ARow::Skills);
+    assert!(flat(&draw(&mut term, &app)).contains("enter pick"));
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::SquadChoice));
+    let labels: Vec<&str> = app.sqt.choice.options.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, ["[ ] pdf", "Type the name of a skill…"]);
+    choose(&mut app, "[ ] pdf");
+    assert!(matches!(app.mode, Mode::SquadChoice), "still open");
+    assert_eq!(app.sqt.choice.options[0].0, "[x] pdf");
+    assert_eq!(app.active_notice(), Some("builder has the skill pdf now, in every squad that uses it (Coding)."));
+    key(&mut app, KeyCode::Esc);
+    // MCP servers: one picked, one typed that isn't installed here.
+    go_arow(&mut app, ARow::Mcp);
+    key(&mut app, KeyCode::Enter);
+    let labels: Vec<&str> = app.sqt.choice.options.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, ["[ ] github", "[ ] sentry", "Type the name of an MCP server…"], "names only, sorted");
+    assert!(!flat(&draw(&mut term, &app)).contains("secret-token"), "what a server is, is never shown");
+    choose(&mut app, "[ ] sentry");
+    choose(&mut app, "Type the name");
+    assert!(matches!(app.mode, Mode::ProjectName));
+    assert!(flat(&draw(&mut term, &app)).contains("an MCP server"));
+    typed(&mut app, "my server");
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::ProjectName), "a space can't be in the name");
+    assert!(app.active_notice().unwrap().starts_with("That can't be a name"), "{:?}", app.active_notice());
+    ctrl(&mut app, 'u');
+    typed(&mut app, "linear");
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List));
+    assert!(app.active_notice().unwrap().starts_with("builder has the MCP server linear now (not found here"), "{:?}", app.active_notice());
+    let v = agent_file(&w, "builder");
+    assert_eq!((v["skills"].clone(), v["mcp_servers"].clone()), (serde_json::json!(["pdf"]), serde_json::json!(["sentry", "linear"])));
+    // Shown on the agent's screen; one that isn't installed here says so, in the warning colour.
+    let shown = draw(&mut term, &app);
+    let f = right(&shown);
+    assert!(f.contains("Skills pdf") && f.contains("MCP servers sentry, linear (not found here)"), "{f}");
+    let t = app.effective_theme().clone();
+    assert_eq!(fg(&term, find(&term, "sentry, linear")), t.warn);
+    assert_eq!(fg(&term, find(&term, "Skills")), t.dim);
+    // Not found here is shown in the picker too, ticked, and can be taken away there.
+    key(&mut app, KeyCode::Enter);
+    let labels: Vec<&str> = app.sqt.choice.options.iter().map(|(l, _)| l.as_str()).collect();
+    assert_eq!(labels, ["[ ] github", "[x] sentry", "[x] linear · not found here", "Type the name of an MCP server…"]);
+    choose(&mut app, "[x] linear");
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(agentfile::get(&w.config, "builder").unwrap().mcp, ["sentry"]);
+    // A squad using it starts it with them: preloaded skills, servers by name, the tools that let it use them.
+    let crew = Crew::load(&w.config, &squadfile::builtin("coding").unwrap());
+    let agents: Value = serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents).unwrap();
+    let b = &agents["coding-builder"];
+    assert_eq!((b["skills"].clone(), b["mcpServers"].clone()), (serde_json::json!(["pdf"]), serde_json::json!(["sentry"])));
+    assert_eq!(b["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry"]));
+    // The rail shows it has them.
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Left);
+    assert!(flat(&draw(&mut term, &app)).contains("● 2 builder Sonnet files · commands · skills · MCP"));
+    // Nothing is written to Claude's own files.
+    assert_eq!(fs::read_to_string(w.root.join(".claude.json")).unwrap(), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#);
 }

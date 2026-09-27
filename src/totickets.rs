@@ -5,7 +5,7 @@
 //! platoon's in, keeping theirs), and `platoon setup --remove to-tickets` takes it out and remembers that (`--add`
 //! brings it back). What setup remembers is in `<platoon config>/setup.json`.
 //!
-//! Also `platoon squads --kinds`: each squad's name, what it can do and whether it needs a folder, which the skill
+//! Also `platoon squads --kinds`: each squad's name and what it can do, which the skill
 //! reads to shape the tickets (it never picks a squad).
 
 use serde_json::{json, Map, Value};
@@ -216,7 +216,7 @@ pub fn remove(root: &Path, config: &Path) -> Result<bool, String> {
 // ---- platoon squads --kinds ---------------------------------------------------------------------------------------
 
 const SQUADS_USAGE: &str = "usage: platoon squads --kinds [--json]
-  --kinds   each squad's name, what it can do, and whether it needs a folder to work in
+  --kinds   each squad's name and what it can do
             (the /to-tickets skill reads this to shape tickets; it never picks a squad)";
 
 /// `platoon squads ...`. Returns the exit code.
@@ -240,12 +240,12 @@ pub fn squads_cli(args: &[String], config: &Path, out: &mut dyn io::Write, err: 
     0
 }
 
-/// Every squad the user has now (built-ins first, then their own), with a readable file: name, what it can do and
-/// whether it needs a folder. A squad whose file can't be read is left out.
+/// Every squad the user has now (built-ins first, then their own), with a readable file: its name and what it can do.
+/// A squad whose file can't be read is left out. (Every ticket has a folder now: its own, or its work folder.)
 pub fn kinds_text(config: &Path, as_json: bool) -> String {
     let squads: Vec<crate::squadfile::Squad> = crate::squadfile::load_all(config).into_iter().filter_map(|l| l.squad).collect();
     if as_json {
-        let rows: Vec<Value> = squads.iter().map(|s| json!({"id": s.id, "name": s.name, "can_do": s.can_do, "needs_folder": s.needs_folder})).collect();
+        let rows: Vec<Value> = squads.iter().map(|s| json!({"id": s.id, "name": s.name, "can_do": s.can_do})).collect();
         return serde_json::to_string_pretty(&Value::Array(rows)).unwrap_or_default() + "\n";
     }
     if squads.is_empty() {
@@ -253,8 +253,7 @@ pub fn kinds_text(config: &Path, as_json: bool) -> String {
     }
     let mut text = String::new();
     for s in &squads {
-        let folder = if s.needs_folder { "needs a folder" } else { "no folder needed" };
-        text.push_str(&format!("{} ({folder})\n", s.name));
+        text.push_str(&format!("{}\n", s.name));
         let can_do = s.can_do.split_whitespace().collect::<Vec<_>>().join(" ");
         if !can_do.is_empty() {
             text.push_str(&format!("  {can_do}\n"));
@@ -460,30 +459,30 @@ mod tests {
     }
 
     #[test]
-    fn squads_kinds_lists_what_each_squad_can_do_and_whether_it_needs_a_folder() {
+    fn squads_kinds_lists_what_each_squad_can_do() {
         let config = dir("kinds");
         let (code, out, err) = run(&config, &["--kinds"]);
         assert_eq!((code, err.as_str()), (0, ""));
         let lines: Vec<&str> = out.lines().collect();
-        assert_eq!(lines[0], "Coding (needs a folder)", "{out}");
+        assert_eq!(lines[0], "Coding", "{out}");
         assert_eq!(lines[1], format!("  {}", crate::squads::CODING_CAN_DO));
-        assert!(lines.contains(&"Research (no folder needed)") && lines.contains(&"Docs (needs a folder)") && lines.contains(&"Summarize (no folder needed)"), "{out}");
+        assert!(lines.contains(&"Research") && lines.contains(&"Docs") && lines.contains(&"Summarize"), "{out}");
+        assert!(!out.contains("folder needed") && !out.contains("needs a folder"), "{out}");
         // A squad of the user's own is there too, with its own words.
         let mut own = crate::squadfile::builtin("docs").unwrap();
         own.id = "coda-docs".into();
         own.name = "Coda docs".into();
         own.can_do = "Writes pages in Coda.".into();
-        own.needs_folder = false;
         crate::squadfile::save(&config, &own).unwrap();
         let (_, out, _) = run(&config, &["--kinds"]);
-        assert!(out.ends_with("Coda docs (no folder needed)\n  Writes pages in Coda.\n"), "{out}");
+        assert!(out.ends_with("Coda docs\n  Writes pages in Coda.\n"), "{out}");
         let (code, out, _) = run(&config, &["--kinds", "--json"]);
         assert_eq!(code, 0);
         let v: Value = serde_json::from_str(&out).unwrap();
         let a = v.as_array().unwrap();
         assert_eq!(a.len(), 5);
-        assert_eq!((a[0]["name"].as_str(), a[0]["needs_folder"].as_bool()), (Some("Coding"), Some(true)));
-        assert_eq!(a[4], json!({"id": "coda-docs", "name": "Coda docs", "can_do": "Writes pages in Coda.", "needs_folder": false}));
+        assert_eq!((a[0]["name"].as_str(), a[0].get("needs_folder")), (Some("Coding"), None));
+        assert_eq!(a[4], json!({"id": "coda-docs", "name": "Coda docs", "can_do": "Writes pages in Coda."}));
         // A file that can't be read is left out, not shown as a squad.
         fs::write(crate::squadfile::path(&config, "broken"), "{ nope").unwrap();
         let (_, out, _) = run(&config, &["--kinds", "--json"]);

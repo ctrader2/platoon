@@ -51,7 +51,7 @@ pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
-pub use squadtab_glue::{agent_line, agent_rows, back_words, detail_rows, ARow, ChoiceFor, DRow, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, NEW_AGENT};
+pub use squadtab_glue::{agent_rows, detail_rows, ARow, ChoiceFor, DRow, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, NEW_AGENT};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -748,6 +748,13 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
+        // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
+        // `.claude.json` in that same (temporary) folder, never the user's own.
+        app.sqt.claude_root = app.reader.root().to_path_buf();
+        #[cfg(test)]
+        {
+            app.sqt.claude_json = app.sqt.claude_root.join(".claude.json");
+        }
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app

@@ -2,7 +2,8 @@
 //! or agent's details on the right, the key hints, and the small list and the text box that open over it.
 
 use super::*;
-use crate::app::{agent_line, back_words, detail_rows, ARow, ChoiceFor, DRow, SqFocus, SqView, TextFor};
+use crate::app::{detail_rows, ARow, ChoiceFor, DRow, SqFocus, SqView, TextFor};
+use crate::squadfile::Squad;
 use crate::squadfile::{self, Kind};
 use std::collections::HashMap;
 
@@ -45,6 +46,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
         SqFocus::Detail if agents => {
             match app.arow() {
                 Some(ARow::Files | ARow::Commands | ARow::Web) => out.push(("space", "switch", None)),
+                Some(ARow::Skills | ARow::Mcp) => out.push(("enter", "pick", None)),
                 Some(ARow::Prompt) => out.push(("enter", "edit", None)),
                 Some(ARow::UsedIn(_)) => out.push(("enter", "open the squad", None)),
                 Some(_) => out.push(("enter", "change", None)),
@@ -57,8 +59,6 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
         }
         SqFocus::Detail => {
             match sqt.drow() {
-                Some(DRow::NeedsFolder | DRow::Worktree) => out.push(("space", "switch", None)),
-                Some(DRow::LeaderPrompt) => out.push(("enter", "edit", None)),
                 Some(DRow::AddStep) => out.push(("enter", "add", None)),
                 Some(DRow::StepAgent(_)) => out.push(("enter", "pick the agent", None)),
                 Some(_) => out.push(("enter", "change", None)),
@@ -369,11 +369,7 @@ fn yes_no(b: bool) -> String {
     if b { "Yes".into() } else { "No".into() }
 }
 
-fn first_line(text: &str) -> String {
-    text.lines().find(|l| !l.trim().is_empty()).unwrap_or("").trim().to_string()
-}
-
-/// The selected squad's details, one line per thing that can be changed, under the four section headings.
+/// The selected squad's details: About (its name, what it can do), then its Workflow drawn as a rail.
 fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let sqt = &app.sqt;
@@ -395,76 +391,322 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(t.accent).add_modifier(Modifier::BOLD));
-    let name_of = |id: &str| known.iter().find(|a| a.id == id).map_or_else(|| id.to_string(), |a| a.name.clone());
-    let mut section = usize::MAX;
-    for (ri, row) in detail_rows(s).iter().enumerate() {
-        if row.section() != section {
-            section = row.section();
-            lines.push((None, Line::raw("")));
-            lines.push((None, heading(["About", "Folder", "Leader", "Workflow"][section])));
-        }
-        if let DRow::Step(i) = row {
-            if *i > 0 {
-                lines.push((None, Line::raw("")));
-            }
-        }
-        let mut warn = false;
-        let (label, value): (String, String) = match *row {
-            DRow::Name => ("Name".into(), s.name.clone()),
-            DRow::CanDo => ("What it can do".into(), s.can_do.clone()),
-            DRow::NeedsFolder => ("Needs a folder".into(), yes_no(s.needs_folder)),
-            DRow::Worktree => ("Use a worktree for git folders".into(), yes_no(s.use_worktree)),
-            DRow::LeaderModel => ("Model".into(), squadfile::model_label(&s.leader.model).to_string()),
-            DRow::LeaderPrompt => ("System prompt".into(), first_line(&s.leader.guidance)),
-            DRow::Step(i) => (format!("{}. {}", i + 1, name_of(&s.workflow[i].agent)), s.workflow[i].does.clone()),
-            DRow::StepAgent(i) => {
-                let id = &s.workflow[i].agent;
-                let value = match known.iter().find(|a| a.id == *id) {
-                    None => {
-                        warn = true;
-                        format!("{} isn't there: enter picks an agent", if id.is_empty() { "none" } else { id })
-                    }
-                    Some(a) => {
-                        let mut v = agent_line(a);
-                        if let Some(p) = crate::agentfile::problems(a).first() {
-                            warn = true;
-                            v = format!("{v} · needs fixing: {p}");
-                        } else if sqt.is_draft_agent(id) {
-                            v.push_str(" · new with the draft");
-                        }
-                        v
-                    }
-                };
-                ("Agent".into(), value)
-            }
-            DRow::AddStep => ("+ Add a step".into(), String::new()),
+    let rows = detail_rows(s);
+    let sel_row = focused.then(|| rows.get(sqt.row).copied()).flatten();
+    lines.push((None, Line::raw("")));
+    lines.push((None, heading("About")));
+    for (ri, row) in rows.iter().enumerate() {
+        let (label, value, wraps) = match *row {
+            DRow::Name => ("Name", s.name.clone(), 1),
+            DRow::CanDo => ("What it can do", s.can_do.clone(), 4),
+            _ => continue,
         };
-        let sel = focused && ri == sqt.row;
-        let indent = if matches!(row, DRow::StepAgent(_)) { "  " } else { "" };
-        let value_style = match row {
-            DRow::NeedsFolder | DRow::Worktree if value == "Yes" => Style::new().fg(t.ok),
-            DRow::NeedsFolder | DRow::Worktree => Style::new().fg(t.dim),
-            DRow::LeaderPrompt => Style::new().fg(t.subtext),
-            DRow::StepAgent(_) if warn => Style::new().fg(t.warn),
-            DRow::StepAgent(_) => Style::new().fg(t.subtext),
-            _ => Style::new().fg(t.text),
-        };
-        let label_style = match row {
-            DRow::AddStep => Style::new().fg(t.accent),
-            DRow::Step(_) => Style::new().fg(t.text).add_modifier(Modifier::BOLD),
-            _ => Style::new().fg(t.dim),
-        };
-        let wraps = if matches!(row, DRow::CanDo | DRow::Step(_)) { 4 } else { 1 };
-        detail_line(&mut lines, &t, w, ri, sel, indent, &label, &value, label_style, value_style, wraps);
-        if let DRow::StepAgent(i) = row {
-            if let Some(b) = s.workflow[*i].back {
-                let base = Style::new().bg(if sel { t.surface } else { t.bg });
-                let pad = " ".repeat(2 + LABEL + 1);
-                lines.push((Some(ri), Line::from(vec![Span::styled(pad, base), Span::styled(fit_end(&format!("↩ {}", back_words(&b)), w.saturating_sub(LABEL + 3)), base.fg(t.warn))]).style(base)));
-            }
+        detail_line(&mut lines, &t, w, ri, sel_row == Some(*row), "", label, &value, Style::new().fg(t.dim), Style::new().fg(t.text), wraps);
+    }
+    for l in wrap("Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.", w) {
+        lines.push((None, Line::styled(l, Style::new().fg(t.dim))));
+    }
+    lines.push((None, Line::raw("")));
+    lines.push((None, heading("Workflow")));
+    let rail = Rail { squad: s, known: &known, rows: &rows, sel: sel_row, draft_agent: &|id: &str| sqt.is_draft_agent(id) };
+    lines.extend(rail.lines(&t, w));
+    draw_scrolled(f, app, area, lines, sqt.row, &sqt.detail_top, focused);
+}
+
+/// The narrowest the text beside the rail may get before the send-back loops give way to their words alone.
+pub const RAIL_TEXT_MIN: usize = 30;
+
+/// A squad's workflow as a rail: one mark per step on a line down the left (`○` the first, `●` the others), the step's
+/// agent with its model and switches beside it, what it does under that, the send-back loops drawn on the left from
+/// the step that sends the work back up to the step it goes back to (nested, so they cross only when they must),
+/// each with "↩ back to …", then `◉ Done` and "+ Add a step".
+pub struct Rail<'a> {
+    pub squad: &'a Squad,
+    /// Every agent a step may name.
+    pub known: &'a [crate::agentfile::Agent],
+    /// The squad's detail rows (`detail_rows`), so each line knows the row it belongs to.
+    pub rows: &'a [DRow],
+    /// The row the cursor is on, when the details have the keys.
+    pub sel: Option<DRow>,
+    /// Is this agent one the draft brings?
+    pub draft_agent: &'a dyn Fn(&str) -> bool,
+}
+
+/// One send-back loop, from step `from` back to step `to`.
+#[derive(Clone, Copy, Debug)]
+struct Loop {
+    from: usize,
+    to: usize,
+    /// Its place among the loops going back to the same step: the farthest sender comes first (it is outermost).
+    rank: usize,
+    lane: usize,
+}
+
+impl Loop {
+    /// Where it starts and ends, in the order of the lines: it goes in at the `rank`th line of step `to`, and comes
+    /// out at step `from`'s last line.
+    fn span(&self) -> ((usize, usize), (usize, usize)) {
+        ((self.to, self.rank), (self.from, usize::MAX))
+    }
+}
+
+/// The lanes the loops take, left (outermost) to right: longer loops first; a loop inside another goes to its right;
+/// two that share no line may share a lane. The loops of `s`, with their lanes, and how many lanes there are.
+fn loops_of(s: &Squad) -> (Vec<Loop>, usize) {
+    let mut loops: Vec<Loop> = s
+        .workflow
+        .iter()
+        .enumerate()
+        .filter_map(|(from, st)| st.back.filter(|b| b.to < from).map(|b| Loop { from, to: b.to, rank: 0, lane: 0 }))
+        .collect();
+    for to in 0..s.workflow.len() {
+        let mut into: Vec<usize> = (0..loops.len()).filter(|&k| loops[k].to == to).collect();
+        into.sort_by_key(|&k| std::cmp::Reverse(loops[k].from));
+        for (rank, k) in into.into_iter().enumerate() {
+            loops[k].rank = rank;
         }
     }
-    draw_scrolled(f, app, area, lines, sqt.row, &sqt.detail_top, focused);
+    let mut order: Vec<usize> = (0..loops.len()).collect();
+    order.sort_by_key(|&k| (std::cmp::Reverse(loops[k].from - loops[k].to), loops[k].rank, loops[k].from));
+    let mut done: Vec<usize> = Vec::new();
+    for k in order {
+        let (a0, a1) = loops[k].span();
+        let inside = done.iter().filter(|&&d| {
+            let (b0, b1) = loops[d].span();
+            b0 <= a0 && a1 <= b1
+        });
+        let min = inside.map(|&d| loops[d].lane + 1).max().unwrap_or(0);
+        let lane = (min..)
+            .find(|&l| {
+                !done.iter().any(|&d| {
+                    let (b0, b1) = loops[d].span();
+                    loops[d].lane == l && a0 <= b1 && b0 <= a1
+                })
+            })
+            .unwrap_or(min);
+        loops[k].lane = lane;
+        done.push(k);
+    }
+    let lanes = loops.iter().map(|l| l.lane + 1).max().unwrap_or(0);
+    (loops, lanes)
+}
+
+/// What a line of the rail is.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RailLine {
+    /// Step `i`'s first line: its mark and its agent.
+    Head(usize),
+    /// A line of what step `i` does (`k`th).
+    Does(usize, usize),
+    /// A line with only the rail, so every loop going back to step `i` has a line of its own to go in at.
+    Pad(usize),
+    /// Where step `i`'s loop comes out: "↩ back to …".
+    Back(usize),
+}
+
+/// A short word for each thing an agent may do besides reading: "files · commands", or "reads only".
+fn short_switches(a: &crate::agentfile::Agent) -> String {
+    let mut on: Vec<&str> = [(a.files, "files"), (a.commands, "commands"), (a.web, "web")].into_iter().filter(|(on, _)| *on).map(|(_, w)| w).collect();
+    if !a.skills.is_empty() {
+        on.push("skills");
+    }
+    if !a.mcp.is_empty() {
+        on.push("MCP");
+    }
+    if on.is_empty() { "reads only".into() } else { on.join(" · ") }
+}
+
+/// Spans cut to `width` columns, the last one kept with "…" when they don't fit.
+fn cut_spans(parts: Vec<(String, Style)>, width: usize) -> Vec<Span<'static>> {
+    let mut out = Vec::new();
+    let mut left = width;
+    for (text, style) in parts {
+        if left == 0 {
+            break;
+        }
+        let n = text.chars().count();
+        if n <= left {
+            left -= n;
+            out.push(Span::styled(text, style));
+        } else {
+            out.push(Span::styled(fit_end(&text, left), style));
+            left = 0;
+        }
+    }
+    out
+}
+
+impl Rail<'_> {
+    fn row_of(&self, want: DRow) -> Option<usize> {
+        self.rows.iter().position(|r| *r == want)
+    }
+
+    /// The rail's lines, each with the detail row it belongs to, for a pane `w` columns wide.
+    pub fn lines(&self, t: &Theme, w: usize) -> Vec<(Option<usize>, Line<'static>)> {
+        let s = self.squad;
+        let (loops, lanes) = loops_of(s);
+        // The loops' gutter: one column per lane, the arrow's column and a space. Too wide for the text beside it:
+        // no loops drawn, their words stay.
+        let mut gutter = if lanes > 0 { lanes + 2 } else { 0 };
+        if w < 2 + gutter + 3 + RAIL_TEXT_MIN {
+            gutter = 0;
+        }
+        let drawn = gutter > 0;
+        let text_w = w.saturating_sub(2 + gutter + 3);
+        let num_w = s.workflow.len().max(1).to_string().len();
+        let under = text_w.saturating_sub(num_w + 1).max(1);
+        let agent = |id: &str| self.known.iter().find(|a| a.id == id);
+        let name_w = s.workflow.iter().map(|st| agent(&st.agent).map_or(st.agent.chars().count(), |a| a.name.chars().count())).max().unwrap_or(0).min(16);
+        // The plan: which lines there are, in order.
+        let mut plan: Vec<RailLine> = Vec::new();
+        let mut does_text: Vec<Vec<String>> = Vec::new();
+        for (i, st) in s.workflow.iter().enumerate() {
+            plan.push(RailLine::Head(i));
+            let mut d = wrap(&st.does, under);
+            if d.len() > 3 {
+                d.truncate(3);
+                if let Some(last) = d.last_mut() {
+                    *last = fit_end(&format!("{last} …"), under);
+                }
+            }
+            if d.is_empty() {
+                d.push(String::new());
+            }
+            for k in 0..d.len() {
+                plan.push(RailLine::Does(i, k));
+            }
+            let entries = loops.iter().filter(|l| l.to == i).count();
+            for _ in 0..entries.saturating_sub(1 + d.len()) {
+                plan.push(RailLine::Pad(i));
+            }
+            if st.back.is_some_and(|b| b.to < i) {
+                plan.push(RailLine::Back(i));
+            }
+            does_text.push(d);
+        }
+        // The loops on the gutter: which line each goes in at and comes out at.
+        let mut grid: Vec<Vec<char>> = vec![vec![' '; gutter]; plan.len()];
+        if drawn {
+            let line_of = |want: RailLine| plan.iter().position(|p| *p == want);
+            let mut vert = vec![vec![false; gutter]; plan.len()];
+            let mut horiz = vec![vec![false; gutter]; plan.len()];
+            let mut ends: Vec<(usize, usize, bool)> = Vec::new();
+            for l in &loops {
+                let first = line_of(RailLine::Head(l.to)).unwrap_or(0);
+                let enter = first + l.rank;
+                let Some(out) = line_of(RailLine::Back(l.from)) else { continue };
+                for row in vert.iter_mut().take(out).skip(enter + 1) {
+                    row[l.lane] = true;
+                }
+                for c in l.lane + 1..lanes {
+                    horiz[enter][c] = true;
+                }
+                for c in l.lane + 1..gutter {
+                    horiz[out][c] = true;
+                }
+                ends.push((enter, l.lane, true));
+                ends.push((out, l.lane, false));
+            }
+            for (y, row) in grid.iter_mut().enumerate() {
+                for (x, ch) in row.iter_mut().enumerate() {
+                    *ch = match (vert[y][x], horiz[y][x]) {
+                        (true, true) => '┼',
+                        (true, false) => '│',
+                        (false, true) => '─',
+                        _ => ' ',
+                    };
+                }
+            }
+            for (y, lane, enter) in ends {
+                grid[y][lane] = if enter { '┌' } else { '└' };
+                if enter {
+                    grid[y][lanes] = '▶';
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for (y, p) in plan.iter().enumerate() {
+            let (i, row) = match *p {
+                RailLine::Head(i) => (i, DRow::StepAgent(i)),
+                RailLine::Does(i, _) | RailLine::Pad(i) | RailLine::Back(i) => (i, DRow::Step(i)),
+            };
+            let ri = self.row_of(row);
+            let sel = self.sel == Some(row);
+            let step_sel = matches!(self.sel, Some(DRow::StepAgent(k) | DRow::Step(k)) if k == i);
+            let base = Style::new().bg(if sel { t.surface } else { t.bg });
+            let mut spans = vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent))];
+            spans.push(Span::styled(grid[y].iter().collect::<String>(), base.fg(t.dim)));
+            let st = &s.workflow[i];
+            match *p {
+                RailLine::Head(_) => {
+                    let mark = if i == 0 { "○" } else { "●" };
+                    spans.push(Span::styled(mark, base.fg(if step_sel { t.accent } else { t.subtext })));
+                    spans.push(Span::styled("  ", base));
+                    let mut parts = vec![(format!("{:>num_w$} ", i + 1), base.fg(t.dim))];
+                    match agent(&st.agent) {
+                        None => {
+                            let id = if st.agent.is_empty() { "none" } else { st.agent.as_str() };
+                            parts.push((format!("{id} isn't there: enter picks an agent"), base.fg(t.warn)));
+                        }
+                        Some(a) => {
+                            let pad = name_w.saturating_sub(a.name.chars().count());
+                            parts.push((format!("{}{}", a.name, " ".repeat(pad)), base.fg(t.text).add_modifier(Modifier::BOLD)));
+                            let model = squadfile::model_label(&a.model);
+                            parts.push((format!("  {model:<6} "), base.fg(t.subtext)));
+                            parts.push((short_switches(a), base.fg(t.subtext)));
+                            if let Some(first) = crate::agentfile::problems(a).first() {
+                                parts.push((format!(" · needs fixing: {first}"), base.fg(t.warn)));
+                            } else if (self.draft_agent)(&a.id) {
+                                parts.push((" · new with the draft".into(), base.fg(t.subtext)));
+                            }
+                        }
+                    }
+                    spans.extend(cut_spans(parts, text_w));
+                }
+                RailLine::Does(_, k) => {
+                    spans.push(Span::styled("│", base.fg(t.dim)));
+                    spans.push(Span::styled("  ", base));
+                    spans.push(Span::styled(" ".repeat(num_w + 1), base));
+                    spans.push(Span::styled(does_text[i][k].clone(), base.fg(t.text)));
+                }
+                RailLine::Pad(_) => spans.push(Span::styled("│", base.fg(t.dim))),
+                RailLine::Back(_) => {
+                    spans.push(Span::styled(if drawn { "┤" } else { "│" }, base.fg(t.dim)));
+                    spans.push(Span::styled("  ", base));
+                    spans.push(Span::styled(" ".repeat(num_w + 1), base));
+                    if let Some(b) = st.back {
+                        let to = s.workflow.get(b.to).map(|x| agent(&x.agent).map_or(x.agent.clone(), |a| a.name.clone())).unwrap_or_default();
+                        // As much as fits: which step and its agent, then without the agent, then only how often.
+                        let (n, times) = (b.to + 1, times_words(b.times));
+                        let words = [format!("↩ back to step {n} ({to}), at most {times}"), format!("↩ back to step {n}, at most {times}"), format!("↩ back to step {n}, {times}")]
+                            .into_iter()
+                            .find(|w| w.chars().count() <= under)
+                            .unwrap_or_else(|| fit_end(&format!("↩ step {n}, {times}"), under));
+                        spans.push(Span::styled(words, base.fg(t.subtext)));
+                    }
+                }
+            }
+            out.push((ri, Line::from(spans).style(base)));
+        }
+        let lead = " ".repeat(gutter);
+        out.push((None, Line::from(vec![Span::raw("  "), Span::raw(lead.clone()), Span::styled("◉", Style::new().fg(t.subtext)), Span::styled(fit_end("  Done: the result goes on the ticket", text_w + 2), Style::new().fg(t.dim))])));
+        let add = self.row_of(DRow::AddStep);
+        let sel = self.sel == Some(DRow::AddStep);
+        let base = Style::new().bg(if sel { t.surface } else { t.bg });
+        out.push((
+            add,
+            Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(lead, base), Span::styled("+", base.fg(t.accent)), Span::styled("  Add a step", base.fg(t.accent))]).style(base),
+        ));
+        out
+    }
+}
+
+fn times_words(n: u32) -> String {
+    match n {
+        1 => "once".into(),
+        2 => "twice".into(),
+        n => format!("{n} times"),
+    }
 }
 
 /// The selected agent's details: what it is, its switches and system prompt, and the squads it is used in.
@@ -501,6 +743,15 @@ fn draw_agent_detail(f: &mut Frame, app: &App, area: Rect) {
         lines.push((None, Line::styled(l, Style::new().fg(t.dim))));
     }
     let mut used_heading = false;
+    let installed = sqt.installed();
+    // "a, b (not found here)": a name that isn't installed here is shown, and said so.
+    let names = |has: &[String], there: &[String]| -> (String, bool) {
+        if has.is_empty() {
+            return ("None: enter picks from what is installed".into(), false);
+        }
+        let away = has.iter().any(|n| !there.contains(n));
+        (has.iter().map(|n| if there.contains(n) { n.clone() } else { format!("{n} (not found here)") }).collect::<Vec<_>>().join(", "), away)
+    };
     for (ri, row) in crate::app::agent_rows(users.len()).iter().enumerate() {
         let sel = focused && ri == sqt.agent_row;
         let switch = |on: bool| (yes_no(on), Style::new().fg(if on { t.ok } else { t.dim }));
@@ -518,6 +769,12 @@ fn draw_agent_detail(f: &mut Frame, app: &App, area: Rect) {
             ARow::Web => {
                 let (v, s) = switch(a.web);
                 ("Can use the web".into(), v, s, 1)
+            }
+            ARow::Skills | ARow::Mcp => {
+                let (label, (v, away)) = if *row == ARow::Skills { ("Skills", names(&a.skills, &installed.skills)) } else { ("MCP servers", names(&a.mcp, &installed.mcp)) };
+                let none = if *row == ARow::Skills { a.skills.is_empty() } else { a.mcp.is_empty() };
+                let style = Style::new().fg(if away { t.warn } else if none { t.dim } else { t.text });
+                (label.into(), v, style, 3)
             }
             ARow::Prompt if a.guidance.trim().is_empty() => ("System prompt".into(), "None yet: enter writes one".into(), Style::new().fg(t.warn), 1),
             ARow::Prompt => ("System prompt".into(), a.guidance.split_whitespace().collect::<Vec<_>>().join(" "), Style::new().fg(t.subtext), 6),
@@ -553,7 +810,9 @@ pub(super) fn draw_squad_choice(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 76), h);
     f.render_widget(Clear, r);
     let title = match c.purpose {
-        ChoiceFor::LeaderModel | ChoiceFor::AgentModel => "model",
+        ChoiceFor::AgentModel => "model",
+        ChoiceFor::AgentSkills => "skills",
+        ChoiceFor::AgentMcp => "MCP servers",
         ChoiceFor::StepAgent(_) | ChoiceFor::NewStepAgent => "agent",
         ChoiceFor::BackTo(_) | ChoiceFor::BackTimes(..) => "send back",
         ChoiceFor::Describe => "describe",
@@ -624,4 +883,88 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
     let keep = if describing { "ask Claude to draft it" } else { "save" };
     let hints: [Hint; 2] = [("enter", keep, None), ("esc", "cancel", Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::squadfile::{Back, Step};
+
+    /// Twelve steps, five send-backs: nested ones, and one that crosses another.
+    fn long() -> Squad {
+        let mut s = squadfile::builtin("coding").unwrap();
+        let agents = ["planner", "builder", "reviewer", "verifier"];
+        s.workflow = (0..12).map(|i| Step { agent: agents[i % 4].into(), does: format!("Does part {}.", i + 1), back: None, extra: Default::default() }).collect();
+        for (from, to, times) in [(11, 0, 1), (10, 1, 2), (7, 2, 3), (5, 3, 1), (8, 6, 2)] {
+            s.workflow[from].back = Some(Back { to, times });
+        }
+        s
+    }
+
+    fn text(lines: &[(Option<usize>, Line<'static>)]) -> Vec<String> {
+        lines.iter().map(|(_, l)| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
+    }
+
+    fn rail_of(s: &Squad, w: usize) -> Vec<String> {
+        let known = crate::agentfile::builtins();
+        let rows = detail_rows(s);
+        let rail = Rail { squad: s, known: &known, rows: &rows, sel: None, draft_agent: &|_| false };
+        text(&rail.lines(&Theme::default(), w))
+    }
+
+    #[test]
+    fn five_loops_each_get_a_line_to_go_in_and_come_out_and_never_share_a_cell() {
+        let s = long();
+        let (loops, lanes) = loops_of(&s);
+        assert_eq!((loops.len(), lanes), (5, 4), "{loops:?}");
+        let lines = rail_of(&s, 50);
+        let rail_col = 2 + lanes + 2;
+        assert_eq!(lines.iter().filter(|l| l.contains('▶')).count(), 5, "one way in each");
+        assert_eq!(lines.iter().filter(|l| l.chars().nth(rail_col) == Some('┤')).count(), 5, "one way out each");
+        assert_eq!(lines.iter().filter(|l| l.contains("↩ back to step")).count(), 5);
+        for l in &lines {
+            assert!(l.chars().count() <= 50, "{l}");
+            let rail = l.chars().nth(rail_col).unwrap_or(' ');
+            assert!("○●│┤◉+".contains(rail), "the rail runs down one column: {l:?}");
+            // The gutter only ever holds loop pieces; an arrow always sits just left of the rail.
+            let gutter: String = l.chars().skip(2).take(lanes + 2).collect();
+            assert!(gutter.chars().all(|c| " │─┌└┼▶".contains(c)), "{gutter:?}");
+            if let Some(at) = gutter.chars().position(|c| c == '▶') {
+                assert_eq!(at, lanes, "{l:?}");
+            }
+        }
+        // Each loop's vertical stays in its own lane from its way in to its way out: no two loops share a lane where
+        // they overlap, and a loop inside another is to its right.
+        for a in &loops {
+            for b in &loops {
+                let (a0, a1) = a.span();
+                let (b0, b1) = b.span();
+                if a.from != b.from && a0 <= b1 && b0 <= a1 {
+                    assert_ne!(a.lane, b.lane, "{a:?} {b:?}");
+                }
+                if a.from != b.from && a0 <= b0 && b1 <= a1 {
+                    assert!(a.lane < b.lane, "{a:?} holds {b:?}");
+                }
+            }
+        }
+        assert_eq!(lines.iter().filter(|l| l.contains('┼')).count(), 1, "the one crossing that can't be helped");
+        assert!(lines[lines.len() - 2].contains("◉  Done") && lines[lines.len() - 1].contains("+  Add a step"));
+    }
+
+    #[test]
+    fn too_narrow_for_the_loops_keeps_their_words_only() {
+        let s = long();
+        let lines = rail_of(&s, 40);
+        assert!(lines.iter().all(|l| !l.contains('▶') && !l.contains('┤') && !l.contains('┌')), "{lines:#?}");
+        assert_eq!(lines.iter().filter(|l| l.contains("↩ back to step")).count(), 5, "{lines:#?}");
+        for l in &lines {
+            assert!(l.chars().count() <= 40, "{l}");
+            assert!("○●│◉+".contains(l.chars().nth(2).unwrap()), "the rail at the left edge: {l:?}");
+        }
+        // No send-backs at all: no gutter, the rail right after the cursor's bar.
+        let plain = squadfile::builtin("summarize").unwrap();
+        let lines = rail_of(&plain, 50);
+        assert_eq!(lines[0].chars().nth(2), Some('○'));
+        assert!(lines.iter().all(|l| !l.contains('↩')));
+    }
 }

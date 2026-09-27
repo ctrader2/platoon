@@ -318,7 +318,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.send(b"\t");
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "No folder", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
+    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "None: a squad works in its work folder", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
     t.wait_for_flat("c cancel e edit r rename f folders b waits for");
     let screen = t.stable();
     assert!(!screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"), "no how far, though the file has one:\n{screen}");
@@ -442,7 +442,7 @@ fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_se
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
     assert_eq!(lab.tickets()["tickets"][0]["from"], json!({"session": "s-1", "project": "pweb"}));
     let kinds = Command::new(BIN).args(["squads", "--kinds"]).envs(lab.env()).output().unwrap();
-    assert!(String::from_utf8_lossy(&kinds.stdout).starts_with("Coding (needs a folder)\n"), "{kinds:?}");
+    assert!(String::from_utf8_lossy(&kinds.stdout).starts_with("Coding\n  Makes a change to code"), "{kinds:?}");
 
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
     lab.open_project(&mut t);
