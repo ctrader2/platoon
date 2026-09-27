@@ -1,8 +1,8 @@
 //! Squads end to end, in a real terminal with the real binary: `a` on a ticket hands it to the Coding squad (a git
 //! worktree in a temp repository, the leader started in a platoon host with the squad's flags), the split view (the
 //! ticket beside the live session, typing reaches it, ctrl+space goes back), the leader kept out of the Sessions tab
-//! and the project's list, the two hooks with real-shaped input, `p` typing the go-ahead, Cancelled stopping only
-//! that leader, the narrow layout, and "isn't running. Enter to continue it" resuming with the same flags.
+//! and the project's list, the hooks with real-shaped input, `p` typing the go-ahead, the leader asking before it
+//! closes and a message to it making the ticket Working again, `c` cancelling and stopping only that leader, the narrow layout, and "isn't running. Enter to continue it" resuming with the same flags.
 //!
 //! The "claude" here is a stand-in script: it writes down every argument (one file each), its environment and its
 //! folder, registers itself the way Claude does, prints a line, and then echoes what is typed into it. A real
@@ -324,6 +324,8 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(stop.ends_with(" hook squad-stop") && gate.ends_with(" hook squad-gate"), "{settings}");
     assert!(settings["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-notify"), "{settings}");
     assert!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-tool"), "{settings}");
+    assert!(settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-prompt"), "{settings}");
+    assert!(leader_prompt.contains("`SQUAD: question - Shall I close this ticket?`"), "{leader_prompt}");
     assert!(stop.starts_with(BIN) || stop.starts_with(&format!("'{BIN}")), "the platoon that is running: {stop}");
     let first = args.last().unwrap();
     assert!(first.starts_with("Ticket #1: Basket\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket page."), "{first}");
@@ -437,12 +439,48 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["go_ahead"].as_bool()), (Some("working"), Some(true)), "{tk}");
     assert_eq!(lab.run_hook_command(&gate, &bash("git push -u origin ticket/1")), 0, "now it may");
+    // Its words reach the session as a message from the user: the prompt hook keeps Working and the go-ahead.
+    let prompt = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let said = |text: &str| json!({"session_id": sid, "transcript_path": "/x.jsonl", "cwd": "/tmp", "permission_mode": "acceptEdits", "hook_event_name": "UserPromptSubmit", "prompt": text});
+    assert_eq!(lab.run_hook_command(&prompt, &said("Go ahead and publish.")), 0);
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["go_ahead"].as_bool()), (Some("working"), Some(true)), "{tk}");
+    // Finished: the leader asks before closing, and the ticket shows its question beside the session.
+    assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed ticket/1.\nSQUAD: question - Shall I close this ticket?", json!([]))), 0);
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["reason"].as_str(), tk.get("go_ahead")), (Some("waiting"), Some("Asks: Shall I close this ticket?"), None), "{tk}");
+    assert!(!lab.config.join("projects/pweb/tickets/01-result.md").exists(), "not Done yet");
+    t.send(b"\r");
+    t.wait_for_all(&["Asks: Shall I close this ticket?", "ctrl+space back to the project"]);
+    // The user answers in the session: Working again at once, with nothing added to what was typed.
+    t.send(b"yes\r");
+    t.wait_for("GOT:yes");
+    let mut c = Command::new("sh");
+    c.args(["-c", &prompt]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    for (k, v) in lab.env() {
+        c.env(k, v);
+    }
+    let mut child = c.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(said("yes").to_string().as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!((out.status.code(), out.stdout.as_slice(), out.stderr.as_slice()), (Some(0), &b""[..], &b""[..]), "never blocks, never adds to the prompt");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk.get("reason")), (Some("working"), None), "{tk}");
+    t.wait_gone("Asks: Shall I close this ticket?");
     // Done: the result is kept beside the body, the go-ahead ends, and the gate asks again.
     assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed ticket/1.\nSQUAD: done", json!([]))), 0);
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk.get("go_ahead")), (Some("done"), None), "{tk}");
     assert_eq!(fs::read_to_string(lab.config.join("projects/pweb/tickets/01-result.md")).unwrap(), "Pushed ticket/1.\n");
     assert_eq!(lab.run_hook_command(&gate, &bash("git push")), 2);
+    t.wait_for_flat("State Done");
+    // More work after Done: a message to the same leader opens the ticket again, Working, with that leader.
+    assert_eq!(lab.run_hook_command(&prompt, &said("One more thing: the footer too.")), 0);
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["leaders"].as_array().map(Vec::len)), (Some("working"), Some(1)), "{tk}");
+    t.wait_for_flat("State Working");
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
     t.send(b"q");
     t.wait_exit();
 }
@@ -537,15 +575,20 @@ fn cancelling_a_ticket_whose_squad_runs_asks_and_stops_only_that_session() {
     // A process of the tests' own that must be left alone.
     let mut bystander = Command::new("sleep").arg("30").spawn().unwrap();
     t.send(&[0]);
-    t.wait_for_flat("s state");
-    t.send(b"s");
-    t.wait_for("Working · continue with the squad");
-    // New, Working, Done, Cancelled: it starts on Working.
-    t.send(b"\x1b[B\x1b[B");
-    t.send(b"\r");
-    t.wait_for_all(&["Stop the squad's session too?", "leave it running"]);
-    assert_eq!(lab.ticket_now()["state"], "cancelled");
+    t.wait_for_flat("c cancel");
+    t.send(b"c");
+    t.wait_for_all(&["Cancel ticket #1?", "keep it"]);
+    t.wait_for("will be stopped");
+    // No: nothing changes, the session runs on.
+    t.send(b"n");
+    t.wait_gone("Cancel ticket #1?");
+    assert_eq!(lab.ticket_now()["state"], "working");
+    assert!(alive(leader));
+    t.send(b"c");
+    t.wait_for("Cancel ticket #1?");
     t.send(b"y");
+    t.wait_for_flat("#1 is Cancelled. Stopping its squad's session; its conversation is kept.");
+    assert_eq!(lab.ticket_now()["state"], "cancelled");
     until("the squad's session to stop", || !alive(leader));
     assert!(alive(bystander.id()), "nothing else is signalled");
     let _ = bystander.kill();
@@ -632,7 +675,7 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     until("the slow git to start", || lab.fake.join("git-slow").exists());
     // While git sleeps: the ticket says what is happening, and keys are answered at once.
     t.wait_for("Making the worktree…");
-    t.send(b"s");
+    t.send(b"c");
     t.wait_for_flat("#1: Making the worktree… Wait a moment.");
     assert_eq!(lab.ticket_now()["state"], "new", "nothing written until the leader starts");
     assert_eq!(lab.started(), 0);

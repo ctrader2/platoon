@@ -251,7 +251,7 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
 }
 
 #[test]
-fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_and_back_with_s() {
+fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_with_c_after_asking() {
     let lab = Lab::new("tk-fold");
     lab.write_tickets(&[(1, "Base", "done", &[]), (2, "Middle", "new", &[]), (3, "Top", "new", &[1, 2])]);
     let mut t = Term::spawn(&[], &lab.colored_env(), &lab.work, 30, 120);
@@ -278,29 +278,28 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_and_back_with_s(
     assert_eq!(t.fg_at(dy, dx), OK, "Done in green");
     t.send(b"\r");
     t.wait_gone("#1 Base");
-    // #3 to Cancelled with s: it goes under the divider, whose count goes up.
+    // #3 cancelled with c (after asking): it goes under the divider, whose count goes up.
     t.send(b"g");
     t.send(b"\x1b[B");
     t.wait_bg(r3, c3, SURFACE);
-    t.send(b"s");
-    t.wait_for_all(&["╭ state of #3", "Cancelled"]);
-    t.send(b"\x1b[B\x1b[B\r");
+    t.wait_for_flat("c cancel");
+    assert!(!t.stable().split_whitespace().collect::<Vec<_>>().join(" ").contains("s state"), "no state list any more");
+    t.send(b"c");
+    t.wait_for_all(&["Cancel ticket #3?", "No squad has had it", "keep it"]);
+    t.send(b"y");
     t.wait_for("▸ Done and cancelled · 2");
     t.wait_gone("#3 Top");
     assert_eq!(lab.tickets()["tickets"][2]["state"], "cancelled");
-    // Unfold, pick #3 and make it New again: back up with the open ones.
+    // Unfold and pick #3: c only says it is cancelled already.
     t.send(b"\r");
     t.wait_for("#3 Top");
     t.send(b"G");
-    t.send(b"s");
-    t.wait_for("╭ state of #3");
-    t.send(b"g\r");
-    t.wait_for("is New again");
-    t.wait_for("▾ Done and cancelled · 1");
+    t.send(b"c");
+    t.wait_for_flat("#3 is cancelled already.");
     let screen = t.stable();
     let (top, divider) = (screen.find("#3 Top").unwrap(), screen.find("Done and cancelled").unwrap());
-    assert!(top < divider, "#3 is above the divider again:\n{screen}");
-    assert_eq!(lab.tickets()["tickets"][2]["state"], "new");
+    assert!(top > divider, "#3 stays under the divider:\n{screen}");
+    assert_eq!(lab.tickets()["tickets"][2]["state"], "cancelled");
     t.send(b"q");
     t.wait_exit();
 }
@@ -317,7 +316,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
     t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "No folder", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
-    t.wait_for_flat("e edit r rename s state f folders b waits for");
+    t.wait_for_flat("c cancel e edit r rename f folders b waits for");
     let screen = t.stable();
     assert!(!screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"), "no how far, though the file has one:\n{screen}");
     assert!(!t.text().contains("step 40"));
@@ -339,7 +338,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     // Esc: the project's screen, the same ticket picked.
     t.send(b"\x1b");
     t.wait_for("╭ Tickets");
-    t.wait_for_flat("enter open n new ticket s state");
+    t.wait_for_flat("enter open n new ticket c cancel");
     t.send(b"\r");
     t.wait_for_all(&["Waits for", "#1 Base · New", "The basket keeps its items."]);
     t.send(b"q");

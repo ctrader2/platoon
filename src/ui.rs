@@ -250,7 +250,10 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
             } else if handable(app, t) {
                 out.push(("a", "hand to a squad", None));
             }
-            out.extend([("s", "state", None), ("e", "edit", None)]);
+            if t.state != State::Cancelled {
+                out.push(("c", "cancel", None));
+            }
+            out.push(("e", "edit", None));
         }
     } else {
         out = vec![
@@ -291,10 +294,12 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
     if t.is_some_and(|t| t.state == State::Ready) {
         out.push(("p", "let it publish", None));
     }
+    if t.is_some_and(|t| t.state != State::Cancelled) {
+        out.push(("c", "cancel", None));
+    }
     out.extend([
         ("e", "edit", None),
         ("r", "rename", None),
-        ("s", "state", None),
         ("f", "folders", None),
         ("b", "waits for", None),
         ("↑↓", "scroll", None),
@@ -946,7 +951,7 @@ fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'stati
     }
 }
 
-/// A list over a ticket: its state (New, Done, Cancelled), the tickets it waits for, or its folders.
+/// A list over a ticket: the tickets it waits for, or its folders.
 fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let pick = &app.tk.pick;
@@ -954,7 +959,6 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let opts = app.ticket_pick_options();
     let Some(x) = app.ticket(pick.number) else { return };
     let (title, head, hints): (String, String, Vec<Hint>) = match pick.kind {
-        PickKind::State => (format!("state of #{}", x.number), x.title.clone(), vec![("enter", "choose", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)]),
         PickKind::BlockedBy => (
             format!("#{} waits for", x.number),
             format!("#{} is ready once these are Done:", x.number),
@@ -993,8 +997,6 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
         };
         let room = (rect.width as usize).saturating_sub(2 + check.chars().count());
         let (text, color) = match opt {
-            PickOpt::State(State::Working) if x.leader().is_some() => ("Working · continue with the squad".to_string(), state_color(t, &State::Working)),
-            PickOpt::State(s) => (s.label().to_string(), state_color(t, s)),
             PickOpt::Blocker(n) => match app.ticket(*n) {
                 Some(o) => (format!("#{n} {} · {}", o.title, o.state.label()), t.text),
                 None => (format!("#{n}"), t.text),
@@ -3018,11 +3020,15 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("#{number} {title}. The commander said: {says}"),
             "hand it over",
         ),
-        Confirm::StopSquad { number, title, .. } => (
-            "stop the squad",
-            "Stop the squad's session too?".to_string(),
-            format!("#{number} {title} is Cancelled. Its squad's session is still running. Stopping it keeps its conversation: choosing Working later continues it."),
-            "stop it",
+        Confirm::CancelTicket { number, title, squad, pid } => (
+            "cancel ticket",
+            format!("Cancel ticket #{number}?"),
+            match (pid, squad) {
+                (Some(_), _) => format!("#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."),
+                (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
+                (None, false) => format!("#{number} {title} goes under Done and cancelled. No squad has had it, so it stays cancelled."),
+            },
+            "cancel it",
         ),
         Confirm::ResetInstructions { id } => {
             let a = crate::instructions::action(id);
@@ -3072,7 +3078,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
-    let no = if matches!(c, Confirm::StopSquad { .. }) { "leave it running" } else { "cancel" };
+    let no = if matches!(c, Confirm::CancelTicket { .. }) { "keep it" } else { "cancel" };
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }

@@ -251,8 +251,9 @@ pub enum Confirm {
     DeleteProject { id: String, name: String, sessions: usize },
     /// Restoring platoon's default system prompt of an AI action (`r` in the settings) replaces the user's own.
     ResetInstructions { id: &'static str },
-    /// A ticket was made Cancelled while its squad's leader runs: stop that session too? (`pid`: its `claude`.)
-    StopSquad { number: u32, title: String, pid: u32 },
+    /// `c` on a ticket: cancel it? `squad`: a squad has had it; `pid`: its leader's `claude`, when that is running
+    /// (yes stops that session too).
+    CancelTicket { number: u32, title: String, squad: bool, pid: Option<u32> },
     /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
     HandAnyway { number: u32, squad: String, title: String, says: String },
     /// Delete one of the user's own squads.
@@ -1270,7 +1271,7 @@ impl App {
             (Action::Leave, Mode::List) => self.close_project_screen(),
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
-            (Action::Confirm, Mode::Confirm(Confirm::StopSquad { number, pid, .. })) => self.stop_squad(number, pid),
+            (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
             (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, &squad),
             (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, .. })) => self.remove_squad(&id, false),
             (Action::Confirm, Mode::Confirm(Confirm::RestoreSquad { id, .. })) => self.remove_squad(&id, true),

@@ -7,10 +7,12 @@
 //! the leader's turn can end while they work.
 //!
 //! The leader ends every turn with one last line (`SQUAD: done`, `SQUAD: working`, `SQUAD: question - ...`,
-//! `SQUAD: blocked - ...`, `SQUAD: ready to publish - ...`). platoon gives that session two hooks of its own with
+//! `SQUAD: blocked - ...`, `SQUAD: ready to publish - ...`). platoon gives that session hooks of its own with
 //! `--settings` (nothing in the user's Claude settings changes): `platoon hook squad-stop` reads that line and sets
-//! the ticket's state, and `platoon hook squad-gate` refuses anything other people would see (a push, a merge
-//! request) until the user has said to go ahead.
+//! the ticket's state, `platoon hook squad-gate` refuses anything other people would see (a push, a merge
+//! request) until the user has said to go ahead, and `platoon hook squad-prompt` makes the ticket Working again when
+//! the user sends the leader a message. The leader asks before it closes a ticket (`SQUAD: question - Shall I close
+//! this ticket?`); the user never sets a state by hand, except cancelling.
 //!
 //! A squad's definition (its leader, its workflow and the agents the steps name) is a `squadfile::Squad`, and its
 //! agents are `agentfile::Agent`s, shared by squads: the built-in ones in code, the user's own and the built-ins they
@@ -181,9 +183,12 @@ pub const LEADER_RULES: &str = "\
 merge request or pull request, publishing a package, a document or a page. Even when the ticket asks for it, stop \
 before it and end your turn with `SQUAD: ready to publish - <what you would publish>`. The user will tell you when to \
 go on; until then platoon refuses those commands.
+- Never close a ticket unasked. When the work is finished as far as the ticket goes, put a short result (what was \
+done, where it is: branch, folder, file, merge request link, and what was not checked) above the line \
+`SQUAD: question - Shall I close this ticket?` and end your turn there. Only after the user says yes, end a turn \
+with `SQUAD: done`, repeating that short result just above it.
 - End every turn with one last line of its own, exactly one of these:
-  `SQUAD: done` - the ticket is finished as far as it goes. Put a short result just above this line: what was done, \
-where it is (branch, folder, file, merge request link) and what was not checked.
+  `SQUAD: done` - only after the user said yes to closing the ticket. Put the short result just above this line.
   `SQUAD: working` - members are still running and you are waiting for them.
   `SQUAD: question - <what you need to know>` - you need the user to answer something.
   `SQUAD: blocked - <why>` - you can't go on.
@@ -1271,6 +1276,11 @@ pub fn shell_word(s: &str) -> String {
 ///   prompt.
 /// - `PostToolUse` (any tool): `squad-tool` puts such a ticket back to Working once a tool has run (the user
 ///   answered).
+/// - `UserPromptSubmit`: `squad-prompt` puts the ticket back to Working when the user sends the leader a message
+///   (an answer, more work after Done, the go-ahead), opening a Done or Cancelled ticket again.
+///
+/// Made afresh each time a leader starts or is continued (never kept in its snapshot), so a leader continued from
+/// an older platoon's snapshot gets the hooks of the platoon continuing it.
 pub fn hook_settings(exe: &str) -> String {
     let exe = shell_word(exe);
     json!({
@@ -1279,6 +1289,7 @@ pub fn hook_settings(exe: &str) -> String {
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": format!("{exe} hook squad-gate")}]}],
             "Notification": [{"hooks": [{"type": "command", "command": format!("{exe} hook squad-notify")}]}],
             "PostToolUse": [{"matcher": "*", "hooks": [{"type": "command", "command": format!("{exe} hook squad-tool")}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!("{exe} hook squad-prompt")}]}],
         }
     })
     .to_string()
@@ -1431,6 +1442,29 @@ pub fn squad_tool(input: &str, config: &Path) -> Option<(String, u32)> {
         return None;
     }
     Tickets::open(config, &project).permission_answered(number).ok()?.then_some((project, number))
+}
+
+/// `platoon hook squad-prompt` with its input (the user sent the leader a message): the ticket whose current leader
+/// this is goes back to Working when it was Waiting on you, Ready, Done or Cancelled (`Tickets::user_typed`). The
+/// ticket it changed, or None. The message itself is never read, and nothing is ever said back: the prompt goes on
+/// as it was.
+pub fn squad_prompt(input: &str, config: &Path) -> Option<(String, u32)> {
+    let v: Value = serde_json::from_str(input).ok()?;
+    if v.get("hook_event_name").and_then(Value::as_str).is_some_and(|e| e != "UserPromptSubmit") {
+        return None;
+    }
+    let (project, number) = current_ticket(&v, config)?;
+    // One read, no write, for the usual case: the ticket is Working already.
+    if !Tickets::open(config, &project).get(number).is_some_and(|t| tickets::reopened_by_typing(&t.state) && t.queued.is_none()) {
+        return None;
+    }
+    Tickets::open(config, &project).user_typed(number).ok()?.then_some((project, number))
+}
+
+/// `platoon hook squad-prompt`: always 0, quickly, with nothing on stdout (which Claude would add to the prompt).
+pub fn run_prompt_hook() -> i32 {
+    let _ = std::panic::catch_unwind(|| read_stdin().map(|input| squad_prompt(&input, &crate::archive::config_dir())));
+    0
 }
 
 /// `platoon hook squad-notify`: always 0, quickly.
@@ -1596,8 +1630,12 @@ mod tests {
         ("summarize", "role-work", include_str!("testdata/agents-json/summarize-role-work.json")),
     ];
 
+    /// The `SQUAD: done` rule before leaders asked before closing a ticket, and what took its place.
+    const OLD_DONE_RULE: &str = "- End every turn with one last line of its own, exactly one of these:\n  `SQUAD: done` - the ticket is finished as far as it goes. Put a short result just above this line: what was done, where it is (branch, folder, file, merge request link) and what was not checked.\n";
+    const NEW_DONE_RULES: &str = "- Never close a ticket unasked. When the work is finished as far as the ticket goes, put a short result (what was done, where it is: branch, folder, file, merge request link, and what was not checked) above the line `SQUAD: question - Shall I close this ticket?` and end your turn there. Only after the user says yes, end a turn with `SQUAD: done`, repeating that short result just above it.\n- End every turn with one last line of its own, exactly one of these:\n  `SQUAD: done` - only after the user said yes to closing the ticket. Put the short result just above this line.\n";
+
     #[test]
-    fn every_built_in_squad_starts_exactly_as_before_but_for_the_two_renamed_writers() {
+    fn every_built_in_squad_starts_exactly_as_before_but_for_the_renamed_writers_and_asking_before_closing() {
         for (id, how, before) in BEFORE {
             let names = if how.starts_with("plain") { AgentNames::Plain } else { AgentNames::SquadRole };
             let place = if how.ends_with("worktree") { Place::WORKTREE } else { Place::WorkFolder { reads: true } };
@@ -1616,7 +1654,17 @@ mod tests {
             if id == "research" || id == "docs" {
                 assert_ne!(expected, before, "{id}: the renames are real");
             }
-            let expected: Value = serde_json::from_str(&expected).unwrap();
+            // And every leader asks before closing its ticket now (the rules platoon keeps, 2026-09-26).
+            let mut expected: Value = serde_json::from_str(&expected).unwrap();
+            let mut asks = 0;
+            for agent in expected.as_object_mut().unwrap().values_mut() {
+                let Some(Value::String(prompt)) = agent.get_mut("prompt") else { continue };
+                if prompt.contains(OLD_DONE_RULE) {
+                    *prompt = prompt.replace(OLD_DONE_RULE, NEW_DONE_RULES);
+                    asks += 1;
+                }
+            }
+            assert_eq!(asks, 1, "{id} {how}: the leader's prompt, only");
             assert_eq!(now, expected, "{id} {how}");
             // The same order of agents too (the leader first, then as the steps first name them).
             let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
@@ -1744,6 +1792,27 @@ mod tests {
         assert_eq!(start_dirs(&both, true, work), Some((work.to_string(), vec!["/w/shop".to_string(), "/w/notes".to_string()])), "the folders themselves, to read; never a worktree");
         assert_eq!(start_dirs(&none, true, work), Some((work.to_string(), vec![])));
         assert_eq!(start_dirs(&none, false, work), None);
+    }
+
+    #[test]
+    fn the_leader_asks_before_it_closes_a_ticket() {
+        let rules = LEADER_RULES;
+        assert!(rules.contains("Never close a ticket unasked."), "{rules}");
+        let ask = rules.find("above the line `SQUAD: question - Shall I close this ticket?`").expect(rules);
+        assert!(rules[..ask].contains("put a short result (what was done, where it is: branch, folder, file, merge request link, and what was not checked)"), "{rules}");
+        assert!(rules.contains("Only after the user says yes, end a turn with `SQUAD: done`, repeating that short result just above it."), "{rules}");
+        assert!(rules.contains("`SQUAD: done` - only after the user said yes to closing the ticket."), "{rules}");
+        // The other end lines are as they were.
+        for line in ["`SQUAD: working` - members are still running", "`SQUAD: question - <what you need to know>`", "`SQUAD: blocked - <why>`", "`SQUAD: ready to publish - <what>`"] {
+            assert!(rules.contains(line), "{line}: {rules}");
+        }
+        // Asking shows on the ticket as its question; the yes turn's result is what Done keeps.
+        let asked = decide_stop(false, "Added the basket page on ticket/1. Not checked: Safari.\nSQUAD: question - Shall I close this ticket?");
+        assert_eq!((asked.state, asked.reason.as_str(), asked.result), (State::Waiting, "Asks: Shall I close this ticket?", None));
+        let done = decide_stop(false, "Added the basket page on ticket/1. Not checked: Safari.\nSQUAD: done");
+        assert_eq!((done.state, done.result.as_deref()), (State::Done, Some("Added the basket page on ticket/1. Not checked: Safari.")));
+        // Every leader's prompt ends with them.
+        assert!(leader_fixed(Place::WORKTREE).ends_with(LEADER_RULES.trim()));
     }
 
     #[test]
@@ -2040,6 +2109,91 @@ mod tests {
         assert!(t.get(n).unwrap().state == State::Working && t.get(n).unwrap().queued.is_some());
     }
 
+    fn prompt_input(session: &str) -> String {
+        json!({"session_id": session, "transcript_path": "/x.jsonl", "cwd": "/tmp", "permission_mode": "acceptEdits", "hook_event_name": "UserPromptSubmit", "prompt": "Yes, close it."}).to_string()
+    }
+
+    #[test]
+    fn squad_prompt_puts_the_ticket_back_to_working_when_the_user_writes_to_its_leader() {
+        let c = dir("prompt");
+        let (s, n) = with_leader(&c, State::Working);
+        let now = |c: &Path| Tickets::open(c, "p1").get(n).cloned().unwrap();
+        // Working already: nothing, not even a write.
+        let path = Tickets::open(&c, "p1").path();
+        let before = fs::read_to_string(&path).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), before);
+        // Waiting on you (its question, or stuck, or a permission), Ready, Done, Cancelled: Working, and what it said goes.
+        for (state, reason) in [(State::Waiting, "Asks: Shall I close this ticket?"), (State::Waiting, "Stuck: no database"), (State::Ready, "Wants to publish: push"), (State::Done, ""), (State::Cancelled, "")] {
+            Tickets::open(&c, "p1").squad_says(n, &state, reason, None).unwrap();
+            if state == State::Cancelled {
+                Tickets::open(&c, "p1").set_state(n, &State::Cancelled).unwrap();
+            }
+            assert_eq!(now(&c).state, state);
+            assert_eq!(squad_prompt(&prompt_input(&s), &c), Some(("p1".into(), n)), "{state:?}");
+            let t = now(&c);
+            assert_eq!((&t.state, t.reason.as_str(), t.permission, t.leaders.len()), (&State::Working, "", false, 1), "{state:?}: the same leader");
+        }
+        Tickets::open(&c, "p1").squad_says(n, &State::Working, "", None).unwrap();
+        assert!(Tickets::open(&c, "p1").permission_wait(n).unwrap());
+        assert!(now(&c).permission);
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), Some(("p1".into(), n)));
+        assert!(!now(&c).permission && now(&c).state == State::Working);
+        // The go-ahead `p` just gave (Working) stays when its words arrive; so does one given while Ready.
+        Tickets::open(&c, "p1").squad_says(n, &State::Ready, "Wants to publish: push", None).unwrap();
+        Tickets::open(&c, "p1").give_go_ahead(n).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None, "Working already");
+        assert!(now(&c).go_ahead);
+        Tickets::open(&c, "p1").squad_says(n, &State::Ready, "Wants to publish: the MR too", None).unwrap();
+        assert!(now(&c).go_ahead, "Ready keeps it");
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), Some(("p1".into(), n)));
+        let t = now(&c);
+        assert_eq!((&t.state, t.go_ahead), (&State::Working, true), "Ready -> Working keeps the go-ahead");
+        assert_eq!(squad_gate(&json!({"session_id": s, "tool_name": "Bash", "tool_input": {"command": "git push"}}).to_string(), &c), None);
+        // Someone else, garbage, another event: nothing.
+        Tickets::open(&c, "p1").squad_says(n, &State::Done, "", None).unwrap();
+        assert_eq!(squad_prompt(&prompt_input("someone-else"), &c), None);
+        assert_eq!(squad_prompt("not json", &c), None);
+        assert_eq!(squad_prompt(&json!({"session_id": s, "hook_event_name": "Stop"}).to_string(), &c), None);
+        assert_eq!(squad_prompt(&json!({"hook_event_name": "UserPromptSubmit"}).to_string(), &c), None);
+        assert_eq!(now(&c).state, State::Done);
+        // New (the user's own), and a state a newer platoon wrote: left alone.
+        Tickets::open(&c, "p1").set_state(n, &State::New).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None);
+        assert_eq!(now(&c).state, State::New);
+        Tickets::open(&c, "p1").set_state(n, &State::Other("paused".into())).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None);
+        assert_eq!(now(&c).state, State::Other("paused".into()));
+        // In the line for a free squad: not this leader's any more.
+        Tickets::open(&c, "p1").set_state(n, &State::New).unwrap();
+        Tickets::open(&c, "p1").queue(n, "docs", false).unwrap();
+        let before = fs::read_to_string(&path).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), before, "the line untouched");
+    }
+
+    #[test]
+    fn squad_prompt_moves_only_the_current_leaders_ticket_and_never_writes_a_corrupt_file() {
+        let c = dir("prompt-current");
+        let (s, n) = with_leader(&c, State::Working);
+        // The ticket is handed to another squad after Done: the first leader no longer moves it.
+        let mut store = Tickets::open(&c, "p1");
+        store.squad_says(n, &State::Done, "", None).unwrap();
+        store.start_leader(n, &Leader { squad: "docs".into(), session: "lead-2".into(), started: 9, names: Default::default(), snapshot: None }, &[]).unwrap();
+        store.squad_says(n, &State::Waiting, "Asks: Shall I close this ticket?", None).unwrap();
+        assert_eq!(squad_prompt(&prompt_input(&s), &c), None, "an earlier leader");
+        assert_eq!(Tickets::open(&c, "p1").get(n).unwrap().state, State::Waiting);
+        assert_eq!(squad_prompt(&prompt_input("lead-2"), &c), Some(("p1".into(), n)));
+        assert_eq!(Tickets::open(&c, "p1").get(n).unwrap().state, State::Working);
+        // A file that can't be read: nothing written, nothing said.
+        Tickets::open(&c, "p1").squad_says(n, &State::Waiting, "Asks: x", None).unwrap();
+        let path = Tickets::open(&c, "p1").path();
+        let broken = fs::read_to_string(&path).unwrap().replacen('{', "{{", 1);
+        fs::write(&path, &broken).unwrap();
+        assert_eq!(squad_prompt(&prompt_input("lead-2"), &c), None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    }
+
     #[test]
     fn squad_gate_refuses_publishing_until_the_go_ahead_and_the_go_ahead_ends_with_working() {
         let c = dir("gate");
@@ -2081,6 +2235,8 @@ mod tests {
         assert_eq!(settings["hooks"]["Notification"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-notify");
         assert_eq!(settings["hooks"]["PostToolUse"][0]["matcher"], "*", "after any tool");
         assert_eq!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-tool");
+        assert_eq!(settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-prompt");
+        assert!(settings["hooks"]["UserPromptSubmit"][0].get("matcher").is_none(), "every message");
         assert_eq!(a.last().unwrap(), "Ticket #7", "the first message comes last, after a flag that takes one value");
         assert_eq!(a[a.len() - 3], "--settings");
         let r = leader_args(&launch, "/bin/platoon", "sid-1", "ignored", &[], None);
@@ -2088,6 +2244,11 @@ mod tests {
         assert!(!r.contains(&"--session-id".to_string()) && r[r.len() - 2] == "--settings", "{r:?}");
         assert_eq!(r[r.iter().position(|x| x == "--agents").unwrap() + 1], a[at("--agents") + 1], "the same squad");
         assert!(!r.contains(&"-n".to_string()), "a resumed session keeps its name");
+        // Continued, it gets the hooks of the platoon continuing it (they are never part of the snapshot).
+        let rs: Value = serde_json::from_str(&r[r.len() - 1]).unwrap();
+        assert_eq!(rs, serde_json::from_str::<Value>(&hook_settings("/bin/platoon")).unwrap());
+        assert_eq!(rs["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], "/bin/platoon hook squad-prompt");
+        assert!(!Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE).to_json().contains("hook squad-"), "not in the snapshot");
         // A leader started before the agents carried the squad's name is resumed with the names it began with.
         let old = leader_args(&Launch::of(&crew(&coding()), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
         let pos = |k: &str| old.iter().position(|x| x == k).unwrap();

@@ -213,7 +213,7 @@ impl App {
         } else if self.open_project().is_some_and(|p| p.archived) {
             Some(crate::tickets::archived_refusal(&self.open_project().map(|p| p.name.clone()).unwrap_or_default()))
         } else if t.queued.is_some() {
-            Some(format!("#{number} is waiting for a free squad already. Change its state to take it out of the line."))
+            Some(format!("#{number} is waiting for a free squad already. To take it out of the line, cancel it with c."))
         } else if t.state != State::New {
             Some(format!("#{number} is {}. Only a New ticket can be handed to a squad.", t.state.label()))
         } else if let Some(first) = crate::tickets::waiting_for(t, self.tickets()).first() {
@@ -769,27 +769,19 @@ impl App {
 
     // ---- stopping a cancelled ticket's leader -----------------------------------------------------------------
 
-    /// After the user made a ticket Cancelled: if its leader is running, ask whether to stop it too.
-    pub(super) fn after_cancel(&mut self, number: u32) {
-        let Some(session) = self.ticket(number).and_then(|t| t.leader()).map(|l| l.session.clone()) else { return };
-        let Some(pid) = self.leader_host(&session).map(|h| h.claude_pid) else { return };
-        let title = self.ticket(number).map(|t| t.title.clone()).unwrap_or_default();
-        self.mode = Mode::Confirm(Confirm::StopSquad { number, title, pid });
-    }
-
-    /// Yes: stop only that leader's session (SIGTERM to the `claude` its host runs, on a thread of its own). Its
-    /// conversation is kept, so choosing Working later continues it.
-    pub(super) fn stop_squad(&mut self, number: u32, pid: u32) {
-        self.mode = Mode::List;
+    /// Stop only ticket `number`'s leader session (SIGTERM to the `claude` its host runs, on a thread of its own),
+    /// when `pid` is still that session's `claude`. Its conversation is kept, so a message to it later (enter, then
+    /// typing) continues it and opens the ticket again. True when it is being stopped.
+    pub(super) fn stop_squad(&mut self, number: u32, pid: u32) -> bool {
         // The host of this ticket's leader, and nothing else.
-        let Some(session) = self.ticket(number).and_then(|t| t.leader()).map(|l| l.session.clone()) else { return };
+        let Some(session) = self.ticket(number).and_then(|t| t.leader()).map(|l| l.session.clone()) else { return false };
         if self.leader_host(&session).map(|h| h.claude_pid) != Some(pid) {
-            return;
+            return false;
         }
         thread::spawn(move || {
             let _ = host::end_processes(&[pid]);
         });
-        self.notify(format!("Stopping #{number}'s squad. Its conversation is kept."));
+        true
     }
 }
 

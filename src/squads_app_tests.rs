@@ -3,7 +3,7 @@
 //! squad's session isn't running, and the split view's layout. Every directory is a temp dir (`World`); nothing here
 //! starts a session (the terminal tests in `tests/squads.rs` do, with a stand-in `claude`).
 
-use crate::app::{split_areas, App, Mode, Pane, PickOpt};
+use crate::app::{split_areas, App, Confirm, Mode, Pane};
 use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets};
 use crate::ui;
@@ -98,37 +98,40 @@ fn leader_sessions_are_left_out_of_every_list_counts_and_search() {
 }
 
 #[test]
-fn the_state_list_offers_working_only_on_a_ticket_with_a_squad() {
+fn a_ticket_with_a_squad_is_only_cancelled_by_hand_and_s_does_nothing() {
     let (w, mut app, id) = on_the_project("sq-states");
     let mut t = Tickets::open(&w.config, &id);
-    let plain = t.add(NewTicket { title: "Plain".into(), ..Default::default() }).unwrap();
     let with = t.add(NewTicket { title: "With a squad".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
     t.start_leader(with, &lead("lead-9"), &[]).unwrap();
-    t.set_state(with, &State::Done).unwrap();
+    t.squad_says(with, &State::Waiting, "Asks: Shall I close this ticket?", None).unwrap();
     app.reload_for_test();
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
-    let states = |app: &App| app.ticket_pick_options().into_iter().map(|(o, _)| o).collect::<Vec<_>>();
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("c cancel") && !shown.contains("s state"), "{shown}");
+    // `s`: nothing (no list, no settings, nothing written).
+    let path = Tickets::open(&w.config, &id).path();
+    let before = std::fs::read_to_string(&path).unwrap();
     key(&mut app, KeyCode::Char('s'));
-    assert_eq!(app.tk.pick.number, plain);
-    assert_eq!(states(&app), [PickOpt::State(State::New), PickOpt::State(State::Done), PickOpt::State(State::Cancelled)]);
-    key(&mut app, KeyCode::Esc);
-    // The Done one is under the folded divider: unfold, then pick it.
-    key(&mut app, KeyCode::Down);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+    // On its own screen too: no `s` in the hints, `c` there.
     key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Down);
+    assert_eq!(app.tk.open, Some(with));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("c cancel") && !shown.contains("s state") && shown.contains("enter continue the squad"), "{shown}");
     key(&mut app, KeyCode::Char('s'));
-    assert_eq!(app.tk.pick.number, with);
-    assert_eq!(states(&app), [PickOpt::State(State::New), PickOpt::State(State::Working), PickOpt::State(State::Done), PickOpt::State(State::Cancelled)]);
-    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("Working · continue with the squad"));
-    // Back to Working: the same leader, nothing started by the list itself.
-    assert_eq!(app.tk.pick.selected, 2, "the list starts on what it is now");
-    key(&mut app, KeyCode::Up);
-    key(&mut app, KeyCode::Enter);
-    let t = app.ticket(with).unwrap();
-    assert_eq!((&t.state, t.leaders.len()), (&State::Working, 1));
-    assert!(matches!(app.mode, Mode::List), "its session isn't running, so there is nothing to ask");
+    assert!(matches!(app.mode, Mode::List) && app.tk.open == Some(with));
+    // `c`: its session isn't running, so the question says only that talking to the squad opens it again.
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { squad: true, pid: None, .. })));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Cancel ticket #1?") && shown.contains("Talking to its squad again opens it again."), "{shown}");
+    key(&mut app, KeyCode::Char('y'));
+    let t = Tickets::open(&w.config, &id).get(with).cloned().unwrap();
+    assert_eq!((&t.state, t.leaders.len(), t.reason.as_str()), (&State::Cancelled, 1, ""), "the same leader, what it said gone");
+    assert!(app.sq.launched.is_empty(), "nothing started");
 }
 
 #[test]
@@ -249,7 +252,7 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
 }
 
 #[test]
-fn cancelling_a_ticket_whose_squad_isnt_running_asks_nothing() {
+fn cancelling_a_ticket_whose_squad_isnt_running_asks_and_clears_the_go_ahead() {
     let (w, mut app, id) = on_the_project("sq-cancel");
     let mut t = Tickets::open(&w.config, &id);
     let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
@@ -257,14 +260,49 @@ fn cancelling_a_ticket_whose_squad_isnt_running_asks_nothing() {
     t.give_go_ahead(n).unwrap();
     app.reload_for_test();
     key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Char('s'));
-    let at = app.ticket_pick_options().iter().position(|(o, _)| *o == PickOpt::State(State::Cancelled)).unwrap();
-    app.tk.pick.selected = at;
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 1, pid: None, .. })));
+    // Esc is no, too.
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(app.ticket(n).unwrap().state, State::Working);
+    key(&mut app, KeyCode::Char('c'));
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List));
     let t = app.ticket(n).unwrap();
     assert_eq!(t.state, State::Cancelled);
     assert!(!t.go_ahead, "leaving Working clears the go-ahead");
+}
+
+#[test]
+fn cancelling_a_ticket_whose_squad_runs_says_so_and_yes_stops_only_that_session() {
+    let (w, mut app, id) = on_the_project("sq-cancel-run");
+    let mut t = Tickets::open(&w.config, &id);
+    let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
+    t.start_leader(n, &lead("lead-8"), &[]).unwrap();
+    app.reload_for_test();
+    // Its leader "runs" in a host: a process of this test's own stands in for its claude; another one must be left alone.
+    let mut leader = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    let mut bystander = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    app.hosts.push(crate::host::HostInfo { claude_pid: leader.id(), host_pid: 0, dir: "/tmp".into(), args: vec!["--resume".into(), "lead-8".into()], sock: Default::default() });
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Char('c'));
+    let pid = leader.id();
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 1, pid: Some(p), .. }) if p == pid));
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Cancel ticket #1?") && shown.contains("its squad's session, which is running, will be stopped"), "{shown}");
+    key(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.ticket(n).unwrap().state, State::Cancelled);
+    assert_eq!(app.active_notice(), Some("#1 is Cancelled. Stopping its squad's session; its conversation is kept."));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while leader.try_wait().unwrap().is_none() {
+        assert!(std::time::Instant::now() < deadline, "the leader's stand-in was not stopped");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(bystander.try_wait().unwrap().is_none(), "nothing else is signalled");
+    let _ = bystander.kill();
+    let _ = bystander.wait();
 }
 
 #[test]
@@ -340,7 +378,7 @@ fn the_commander_checks_off_the_ui_thread_and_a_yes_starts_the_leader() {
     assert!(f.contains("State Working · Commander is checking…"), "{f}");
     assert!(app.squads_busy());
     // What would change it waits meanwhile.
-    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.active_notice(), Some("#1: Commander is checking… Wait a moment."));
     app.refresh_until_for_test(20, "the leader to start", |a| !a.sq.launched.is_empty());

@@ -61,11 +61,10 @@ const STATE_NAMES: [(&str, &str); 6] = [
     ("cancelled", "Cancelled"),
 ];
 
-/// The states the user can pick by hand on a ticket no squad has had (the others belong to squads).
-pub const USER_STATES: [State; 3] = [State::New, State::Done, State::Cancelled];
-
-/// The states the user can pick on a ticket that has a squad's leader: Working continues with that squad.
-pub const LEADER_STATES: [State; 4] = [State::New, State::Working, State::Done, State::Cancelled];
+/// The states a message from the user to the ticket's current leader turns into Working (`Tickets::user_typed`).
+pub fn reopened_by_typing(s: &State) -> bool {
+    matches!(s, State::Waiting | State::Ready | State::Done | State::Cancelled)
+}
 
 impl State {
     pub fn from_id(id: &str) -> State {
@@ -764,6 +763,27 @@ impl Tickets {
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
             t.remove("permission");
+            true
+        })
+    }
+
+    /// `platoon hook squad-prompt`: the user sent the ticket's current leader a message, so the squad is at work
+    /// again. A ticket Waiting on you, Ready, Done or Cancelled becomes Working (a Done or Cancelled one is opened
+    /// again, with the same leader); what the squad last said goes. A go-ahead stays (it can only be there on a
+    /// Ready ticket, and Working keeps it). New, Working, a ticket in the line for a free squad and a state platoon
+    /// doesn't know are left alone. True when it changed.
+    pub fn user_typed(&mut self, number: u32) -> io::Result<bool> {
+        self.edit_when(number, |t| {
+            let state = State::from_id(t.get("state").and_then(Value::as_str).unwrap_or("new"));
+            if !reopened_by_typing(&state) || t.contains_key("queued") {
+                return false;
+            }
+            t.insert("state".into(), json!(State::Working.id()));
+            t.remove("reason");
+            t.remove("permission");
+            if !state.keeps_go_ahead() {
+                t.remove("go_ahead");
+            }
             true
         })
     }
@@ -1605,7 +1625,6 @@ mod tests {
     fn states_have_the_words_of_the_screen() {
         let words: Vec<String> = ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
         assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to push/publish", "Done", "Cancelled"]);
-        assert_eq!(USER_STATES.iter().map(State::label).collect::<Vec<_>>(), ["New", "Done", "Cancelled"]);
         assert!(State::Done.closed() && State::Cancelled.closed() && !State::Working.closed());
     }
 

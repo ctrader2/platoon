@@ -279,7 +279,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.send(b"\r");
     t.wait_for("╭ Tickets");
     t.send(b"\t");
-    t.wait_for_flat("s state");
+    t.wait_for_flat("c cancel");
     t.send(b"\r");
     t.wait_for_all(&["The squad's session isn't running. Enter to continue it.", "Careful coding squad"]);
     t.send(b"\r");

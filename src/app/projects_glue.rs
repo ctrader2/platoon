@@ -261,7 +261,8 @@ impl App {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
             KeyCode::Char('q') => return self.act(Action::Quit),
             KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() => return self.act(Action::Search),
-            // On a ticket (its screen, or its row in the Tickets pane) `s` is its state.
+            // On a ticket (its screen, or its row in the Tickets pane) `s` does nothing: it was the ticket's state, which
+            // the squad sets now (the user only cancels, with `c`), and settings popping up there would surprise.
             KeyCode::Char('s') if !ctrl && !self.ticket_has_keys() => return self.act(Action::Settings),
             // 1 is the first top-level tab, 2 the second; a number with no tab does nothing.
             KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => return self.switch_top(c as usize - '1' as usize),
@@ -324,7 +325,7 @@ impl App {
         }
     }
 
-    /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is the ticket's state.
+    /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is not the settings.
     fn ticket_has_keys(&self) -> bool {
         self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets)
     }

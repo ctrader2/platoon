@@ -3,7 +3,7 @@
 //! change a ticket, its own screen, and the pane's columns on a narrow terminal. Every directory is a temp dir
 //! (`World`); the only processes started are the tests' own stand-in editors.
 
-use crate::app::{App, Hit, Mode, Pane, PickKind, TRow};
+use crate::app::{App, Confirm, Hit, Mode, Pane, PickKind, TRow};
 use crate::editors::Editor;
 use crate::testkit::World;
 use crate::tickets::{self, NewTicket, State, Tickets};
@@ -288,32 +288,42 @@ fn done_and_cancelled_are_folded_under_a_divider_and_come_back_up_when_new_again
     assert!(shown.contains("▾ Done and cancelled · 1") && shown.contains("#2 Two Done"), "{shown}");
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.ticket_rows().len(), 3);
-    // `s` on #3: Cancelled. It goes under the (folded) divider, which is then the picked row.
+    // `s` on #3 does nothing now (it was the state list), and it is gone from the hints; `c` cancels, after asking.
     key(&mut app, KeyCode::Char('g'));
     key(&mut app, KeyCode::Down);
     assert_eq!(app.selected_ticket().map(|t| t.number), Some(3));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("c cancel") && !shown.contains("s state") && !shown.contains("s settings"), "{shown}");
     key(&mut app, KeyCode::Char('s'));
-    assert!(matches!(app.mode, Mode::TicketPick) && app.tk.pick.kind == PickKind::State);
-    let shown = draw(&mut term, &app);
-    assert!(shown.contains("state of #3") && shown.contains("✓ New") && shown.contains("  Done") && shown.contains("  Cancelled"), "{shown}");
-    assert!(!shown.contains("Working") && !shown.contains("Waiting on you"), "only the three the user picks: {shown}");
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List), "no list, no settings");
+    assert_eq!(app.ticket(3).unwrap().state, State::New);
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 3, squad: false, pid: None, .. })));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Cancel ticket #3?") && shown.contains("No squad has had it, so it stays cancelled.") && shown.contains("y cancel it") && shown.contains("n keep it"), "{shown}");
+    // No: nothing changes.
+    key(&mut app, KeyCode::Char('n'));
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(Tickets::open(&w.config, &id).get(3).unwrap().state, State::New);
+    // Yes: Cancelled. It goes under the (folded) divider, which is then the picked row.
+    key(&mut app, KeyCode::Char('c'));
+    key(&mut app, KeyCode::Char('y'));
+    assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.ticket(3).unwrap().state, State::Cancelled);
+    assert_eq!(Tickets::open(&w.config, &id).get(3).unwrap().state, State::Cancelled, "saved");
+    assert_eq!(app.active_notice(), Some("#3 is Cancelled now. It is listed under Done and cancelled."));
     assert_eq!(app.ticket_rows(), [TRow::Ticket(1), TRow::Divider(2)]);
     assert!(matches!(app.ticket_rows()[app.ticket_selected()], TRow::Divider(_)));
-    // Unfold, pick #3 and make it New again: back up with the open ones.
+    // Unfold and pick #3: `c` again only says so, and there is no `c` in the hints.
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Char('G'));
     assert_eq!(app.selected_ticket().map(|t| t.number), Some(3));
-    key(&mut app, KeyCode::Char('s'));
-    key(&mut app, KeyCode::Char('g'));
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.ticket(3).unwrap().state, State::New);
-    assert_eq!(app.ticket_rows(), [TRow::Ticket(1), TRow::Ticket(3), TRow::Divider(1), TRow::Ticket(2)]);
-    assert_eq!(app.selected_ticket().map(|t| t.number), Some(3), "still on it");
-    assert_eq!(app.active_notice(), Some("#3 is New again, back with the open tickets."));
+    assert!(!flat(&draw(&mut term, &app)).contains("c cancel"));
+    let before = fs::read_to_string(Tickets::open(&w.config, &id).path()).unwrap();
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(app.active_notice(), Some("#3 is cancelled already."));
+    assert_eq!(fs::read_to_string(Tickets::open(&w.config, &id).path()).unwrap(), before, "nothing written");
 }
 
 #[test]
@@ -431,7 +441,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
     assert!(f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"), "the Markdown drawn: {shown}");
-    assert!(f.contains("e edit") && f.contains("s state") && f.contains("esc back"), "the keys: {shown}");
+    assert!(f.contains("e edit") && f.contains("c cancel") && !f.contains("s state") && f.contains("esc back"), "the keys: {shown}");
     assert!(!f.contains("h how far") && !f.contains("how far"), "no how-far key: {shown}");
     assert!(!f.contains("step 60"));
     // The bold word is bold.
@@ -552,15 +562,14 @@ fn an_archived_project_takes_no_new_ticket_but_its_tickets_can_still_be_changed(
     assert!(matches!(app.mode, Mode::List), "no name box");
     assert_eq!(app.active_notice(), Some("\"Web shop\" is archived; restore it first"));
     assert_eq!(app.tickets().len(), 1, "nothing made");
-    // The ticket it has: opened, and its state changed.
+    // The ticket it has: opened, and cancelled from its screen.
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(1));
-    key(&mut app, KeyCode::Char('s'));
-    assert!(matches!(app.mode, Mode::TicketPick));
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.ticket(1).unwrap().state, State::Done);
-    assert_eq!(Tickets::open(&w.config, &id).get(1).unwrap().state, State::Done, "saved");
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 1, .. })));
+    key(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.ticket(1).unwrap().state, State::Cancelled);
+    assert_eq!(Tickets::open(&w.config, &id).get(1).unwrap().state, State::Cancelled, "saved");
 }
 
 #[test]

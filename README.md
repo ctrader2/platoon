@@ -757,7 +757,7 @@ otherwise not-New ticket then says its state at the end of its row).
 | --- | --- |
 | `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes). An archived project takes no new tickets |
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
-| `s` `e` `r` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
+| `c` `e` `r` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
 
 A new ticket starts as **New**, works in the folder of the project's most recently used session (or has "No folder" when
 the project has no sessions; `f` changes a ticket's folders, and a ticket may have none, for a squad that needs none), and its body starts from a short template: a **What it should do** heading (what should
@@ -777,7 +777,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | --- | --- |
 | `e` | edit the body in your editor |
 | `r` | rename it (its file keeps its name) |
-| `s` | its state: New, Done or Cancelled. A Done or Cancelled ticket made New again comes back up with the open ones |
+| `c` | cancel it, after asking "Cancel ticket #N?" (`y` yes, `n` or `esc` no). When its squad's session is running, the question says it will be stopped too, and yes stops that one session (its conversation is kept). On a ticket that is Cancelled already, `c` only says so |
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
 | `a` | hand it to a squad (see below) |
@@ -786,8 +786,10 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `o` | the session the ticket was made from (the **From** line), also when `enter` is the squad's |
 | `esc` | back to the project, on the same ticket |
 
-The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**; you pick New, Done or Cancelled
-(and Working, on a ticket a squad has had), and the others are set by the squad.
+The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**. You never set one by hand except
+**Cancelled** (`c`): handing a ticket to a squad makes it Working, the squad sets the others, and writing to the squad in
+its session makes the ticket Working again (see below). A ticket no squad has had can only be cancelled, and then it
+stays cancelled.
 
 Tickets live next to the project's notes: the list in `~/.config/platoon/projects/<id>/tickets.json` and each body in
 `tickets/<NN>-<title>.md` in the same folder, yours to edit. Only platoon writes the list. Deleting a project keeps a
@@ -914,7 +916,7 @@ a free squad** and starts by itself when a place frees, the one that has waited 
 screen (a notice says so). Its worktree is made then, not while it waits. The line is written on the ticket, so it
 outlasts platoon: the next platoon you open starts it. Only an open platoon starts tickets from the line; with two
 platoon windows open, the first one opened does it (the other takes over when it closes), and a ticket is never started
-twice. To take a ticket out of the line, change its state (`s`: New, Done or Cancelled). Lowering the number never stops
+twice. To take a ticket out of the line, cancel it (`c`). Lowering the number never stops
 a squad; new ones just wait.
 
 **What the squad has done, and the tokens it used.** A ticket's screen lists the members' runs in the order the leader
@@ -930,7 +932,10 @@ seconds, only for the open project's tickets that have had a squad.
 The ticket's state follows the squad: at the end of each of its turns the leader says in one last line whether it is
 done, still working (members running), has a question, is stuck, or is ready to publish, and platoon sets **Working**,
 **Done**, **Waiting on you** (with its question or why it is stuck; a turn that ends without that line counts as "the
-squad stopped without saying why") or **Ready to push/publish**. When it is Done, the leader's result shows at the top of
+squad stopped without saying why") or **Ready to push/publish**. **The squad never closes a ticket unasked**: when the
+work is finished it writes its short result (what was done, where, what was not checked) and asks "Shall I close this
+ticket?", so the ticket shows Waiting on you with that question; only after you say yes does it end with done and the
+ticket goes Done. When it is Done, the leader's result shows at the top of
 the ticket's screen (it is kept in `tickets/<NN>-result.md`), and that result, and nothing else of the squad's
 conversation, goes to the project's notes at their next update, as "Ticket #N (Coding squad)" (once).
 
@@ -946,10 +951,13 @@ ticket goes back to Working and platoon types "Go ahead and publish." into the s
 the ticket is Working or Ready; once it is Done, Cancelled, New or waiting on you, the next push asks again. Local
 changes and local commits never ask.
 
-`s` on a ticket a squad has had offers **Working** too ("continue with the squad"): a Done or Cancelled ticket made
-Working again continues the same squad session when you open it. Making a ticket **Cancelled** while its squad's session
-is running asks whether to stop that session too; `y` stops that one session only (its conversation is kept), `n` leaves
-it running.
+**Writing to the squad puts the ticket back to Working.** Whatever you send in the squad's session (an answer to its
+question, "yes" to closing, more work after Done, the go-ahead `p` types) makes a ticket that is Waiting on you, Ready to
+push/publish, Done or Cancelled Working again, with the same squad session: that is how a Done or Cancelled ticket is
+opened again (`enter` continues its session when it isn't running, then write to it). A reopened ticket counts toward
+the squads at work at once like any Working one, even when that makes one more than the number allowed for a while;
+tickets in the line just wait longer. A New ticket and one waiting in the line are left alone. `c` cancels a ticket
+after asking; when its squad's session is running, yes stops that one session too (its conversation is kept).
 
 The squad's leader, its workflow and its agents (their models and system prompts) are on the [Squads tab](#squads). The rules
 platoon keeps - where the squad works and which folders are for reading only, ask before anything others can see, the
@@ -959,7 +967,8 @@ push" for the members - are always sent after your text.
 The leader may hand work to its members, read, search and run commands; it never edits a file itself (its members do).
 
 Nothing about the squad is added to your own Claude Code settings: the leader's session alone gets platoon's squad hooks
-(`platoon hook squad-stop`, `squad-gate`, `squad-notify` and `squad-tool`), and `platoon setup` is not involved.
+(`platoon hook squad-stop`, `squad-gate`, `squad-notify`, `squad-tool` and `squad-prompt`), and `platoon setup` is not
+involved.
 
 ### The built-in squads
 

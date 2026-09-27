@@ -120,6 +120,7 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-gate") => std::process::exit(squads::run_gate_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-notify") => std::process::exit(squads::run_notify_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-tool") => std::process::exit(squads::run_tool_hook()),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-prompt") => std::process::exit(squads::run_prompt_hook()),
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -186,7 +187,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   themes          list the color themes, the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
-                  hook squad-notify, hook squad-tool,
+                  hook squad-notify, hook squad-tool, hook squad-prompt,
                   notes-update   internal: run by
                   Claude Code, or by platoon itself";
 

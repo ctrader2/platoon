@@ -1,10 +1,10 @@
 //! Tickets inside the app: the Tickets pane of a project's screen (open tickets, then "Done and cancelled", folded),
-//! a ticket's own screen, the lists that change its state, its folders and what it waits for, and
-//! making a new one. The data itself is in `tickets.rs`; editing a body goes through the notes' editor flow
+//! a ticket's own screen, cancelling one (`c`: the only state the user sets by hand; the squad sets the others), the
+//! lists of its folders and what it waits for, and making a new one. The data itself is in `tickets.rs`; editing a body goes through the notes' editor flow
 //! (`notes_glue.rs`).
 
 use super::*;
-use crate::tickets::{self, State, Ticket, Tickets, LEADER_STATES, USER_STATES};
+use crate::tickets::{self, State, Ticket, Tickets};
 
 /// A row of the Tickets pane.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -17,7 +17,6 @@ pub enum TRow {
 /// Which list is open over a ticket.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PickKind {
-    State,
     BlockedBy,
     Folders,
 }
@@ -25,7 +24,6 @@ pub enum PickKind {
 /// One entry of such a list.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum PickOpt {
-    State(State),
     Blocker(u32),
     Folder(String),
     AddFolder,
@@ -55,7 +53,7 @@ pub struct TicketsState {
 
 impl TicketsState {
     pub fn new() -> Self {
-        Self { store: None, selected: None, unfolded: false, open: None, body_top: Cell::new(0), pick: TicketPick { kind: PickKind::State, number: 0, selected: 0 } }
+        Self { store: None, selected: None, unfolded: false, open: None, body_top: Cell::new(0), pick: TicketPick { kind: PickKind::Folders, number: 0, selected: 0 } }
     }
 }
 
@@ -205,7 +203,7 @@ impl App {
     fn ticket_key(&mut self, number: u32, key: KeyEvent) {
         // While it is being handed to a squad, what would change that waits.
         if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone()) {
-            if matches!(key.code, KeyCode::Char('s' | 'f' | 'a' | 'p')) {
+            if matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p')) {
                 self.notify(format!("#{number}: {busy} Wait a moment."));
                 return;
             }
@@ -213,7 +211,7 @@ impl App {
         match key.code {
             KeyCode::Char('e') => self.edit_ticket(number),
             KeyCode::Char('r') => self.open_name_box(NamePurpose::TicketTitle(number)),
-            KeyCode::Char('s') => self.open_ticket_pick(PickKind::State, number),
+            KeyCode::Char('c') => self.ask_cancel_ticket(number),
             KeyCode::Char('f') => self.open_ticket_pick(PickKind::Folders, number),
             KeyCode::Char('b') => self.open_ticket_pick(PickKind::BlockedBy, number),
             KeyCode::Char('a') => self.ask_hand_to_squad(number),
@@ -371,12 +369,6 @@ impl App {
             return;
         }
         self.tk.pick = TicketPick { kind, number, selected: 0 };
-        // Start on what it is now.
-        let opts = self.ticket_pick_options();
-        self.tk.pick.selected = opts.iter().position(|(_, on)| *on).unwrap_or(0);
-        if kind == PickKind::BlockedBy || kind == PickKind::Folders {
-            self.tk.pick.selected = 0;
-        }
         self.mode = Mode::TicketPick;
     }
 
@@ -385,12 +377,6 @@ impl App {
         let p = &self.tk.pick;
         let Some(t) = self.ticket(p.number) else { return Vec::new() };
         match p.kind {
-            PickKind::State => {
-                // In the line for a free squad: New or Cancelled takes it out (Working is where it is, and an earlier
-                // squad's leader isn't continued from here).
-                let states: &[State] = if t.leader().is_some() && t.queued.is_none() { &LEADER_STATES } else { &USER_STATES };
-                states.iter().map(|s| (PickOpt::State(s.clone()), *s == t.state)).collect()
-            }
             PickKind::BlockedBy => {
                 let mut others: Vec<&Ticket> = self.tickets().iter().filter(|o| o.number != t.number).collect();
                 others.sort_by_key(|o| o.number);
@@ -425,8 +411,8 @@ impl App {
         }
     }
 
-    /// Enter in the list: take that choice. The state list closes; "what it waits for" stays open so
-    /// several can be ticked; the folders list opens the folder picker for "Add a folder…".
+    /// Enter in the list: take that choice. "What it waits for" stays open so several can be ticked; the folders list
+    /// opens the folder picker for "Add a folder…".
     pub(super) fn take_ticket_pick(&mut self) {
         let number = self.tk.pick.number;
         let Some((opt, _)) = self.ticket_pick_options().get(self.tk.pick.selected).cloned() else {
@@ -434,10 +420,6 @@ impl App {
             return;
         };
         match opt {
-            PickOpt::State(s) => {
-                self.mode = Mode::List;
-                self.set_ticket_state(number, &s);
-            }
             PickOpt::Blocker(b) => {
                 let Some(store) = self.tk.store.as_mut() else { return };
                 match store.toggle_blocker(number, b) {
@@ -451,25 +433,35 @@ impl App {
         }
     }
 
-    fn set_ticket_state(&mut self, number: u32, s: &State) {
-        let was_closed = self.ticket(number).is_some_and(|t| t.state.closed());
+    // ---- cancelling ---------------------------------------------------------------------------------------------
+
+    /// `c`: cancel the ticket, after asking. The only state the user sets by hand: the squad sets the others, and a
+    /// message to its leader makes the ticket Working again (`platoon hook squad-prompt`). When its leader is running
+    /// the question says that session will be stopped too.
+    fn ask_cancel_ticket(&mut self, number: u32) {
+        let Some(t) = self.ticket(number) else { return };
+        if t.state == State::Cancelled {
+            self.notify(format!("#{number} is cancelled already."));
+            return;
+        }
+        let (title, squad) = (t.title.clone(), t.leader().is_some());
+        let pid = t.leader().map(|l| l.session.clone()).and_then(|s| self.leader_host(&s)).map(|h| h.claude_pid);
+        self.mode = Mode::Confirm(Confirm::CancelTicket { number, title, squad, pid });
+    }
+
+    /// Yes to "Cancel ticket #N?": Cancelled (out of the line for a free squad too, and the go-ahead goes), listed
+    /// under Done and cancelled; and its leader's session stopped when it was running when asked.
+    pub(super) fn cancel_ticket(&mut self, number: u32, pid: Option<u32>) {
+        self.mode = Mode::List;
         let Some(store) = self.tk.store.as_mut() else { return };
-        match store.set_state(number, s) {
-            Ok(()) => {
-                // Follow it on the pane: back up with the open ones, or down under the divider (the divider is picked
-                // while that is folded).
-                self.tk.selected = Some(TRow::Ticket(number));
-                let msg = match (was_closed, s.closed()) {
-                    (_, true) => format!("#{number} is {} now. It is listed under Done and cancelled.", s.label()),
-                    (true, false) => format!("#{number} is {} again, back with the open tickets.", s.label()),
-                    _ => format!("#{number} is {} now.", s.label()),
-                };
-                self.notify(msg);
-                if *s == State::Cancelled {
-                    self.after_cancel(number);
-                }
-            }
-            Err(e) => self.report_tickets_error(e),
+        if let Err(e) = store.set_state(number, &State::Cancelled) {
+            return self.report_tickets_error(e);
+        }
+        // Follow it on the pane: under the divider (the divider is picked while that is folded).
+        self.tk.selected = Some(TRow::Ticket(number));
+        match pid {
+            Some(pid) if self.stop_squad(number, pid) => self.notify(format!("#{number} is Cancelled. Stopping its squad's session; its conversation is kept.")),
+            _ => self.notify(format!("#{number} is Cancelled now. It is listed under Done and cancelled.")),
         }
     }
 

@@ -4,7 +4,7 @@
 //! starts the line. Also what the ticket screen and the Tickets pane say about a squad's work (tokens, members' runs)
 //! from synthetic transcripts. Every directory is a temp dir; nothing here starts a session.
 
-use crate::app::{App, Mode, Pane, PickOpt};
+use crate::app::{App, Mode, Pane};
 use crate::claude::MemberRun;
 use crate::testkit::World;
 use crate::tickets::{AgentNames, Leader, NewTicket, State, Tickets, QUEUED_WORDS};
@@ -107,7 +107,7 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     assert!(f.contains(&format!("State Working · {QUEUED_WORDS}")), "{f}");
     assert!(!f.contains("enter continue the squad") && !f.contains("a hand to a squad"), "{f}");
     key(&mut app, KeyCode::Char('a'));
-    assert_eq!(app.active_notice(), Some("#2 is waiting for a free squad already. Change its state to take it out of the line."));
+    assert_eq!(app.active_notice(), Some("#2 is waiting for a free squad already. To take it out of the line, cancel it with c."));
     key(&mut app, KeyCode::Esc);
 
     // The first squad stops to ask the user something: its place frees, and the oldest in the line starts, not
@@ -153,19 +153,18 @@ fn the_line_survives_platoon_closing_and_the_next_platoon_starts_it_oldest_first
 }
 
 #[test]
-fn a_new_state_takes_a_ticket_out_of_the_line_and_it_never_starts() {
+fn cancelling_takes_a_ticket_out_of_the_line_and_it_never_starts() {
     let (w, mut app, id, _fake) = world("sqq-out", 2, 1);
     hand(&mut app, 1);
     hand(&mut app, 2);
     assert!(on_disk(&w, &id, 2).queued.is_some());
-    // The state list of a ticket in the line: New, Done, Cancelled.
+    // `c` on a ticket in the line: asked, then Cancelled and out of the line.
     pick(&mut app, 2);
-    key(&mut app, KeyCode::Char('s'));
-    let states: Vec<PickOpt> = app.ticket_pick_options().into_iter().map(|(o, _)| o).collect();
-    assert_eq!(states, [PickOpt::State(State::New), PickOpt::State(State::Done), PickOpt::State(State::Cancelled)]);
-    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::CancelTicket { number: 2, pid: None, .. })));
+    key(&mut app, KeyCode::Char('y'));
     let t = on_disk(&w, &id, 2);
-    assert_eq!((t.state, t.queued), (State::New, None));
+    assert_eq!((t.state, t.queued), (State::Cancelled, None));
     Tickets::open(&w.config, &id).squad_says(1, &State::Done, "", Some("Done.")).unwrap();
     for _ in 0..5 {
         app.refresh_for_test();
