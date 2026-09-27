@@ -297,3 +297,53 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
 }
 
 
+
+/// A conversation in `cwd` with folders added beside it, as Claude Code records them (an environment snapshot).
+fn with_added(w: &World, id: &str, cwd: &str, added: &[&str], prompt: &str, mins_ago: u64) {
+    let at = crate::testkit::now_ms() - mins_ago * 60_000;
+    let (t0, t1) = (crate::testkit::iso(at - 5000), crate::testkit::iso(at));
+    let lines = [
+        serde_json::json!({"type":"mode","mode":"normal"}),
+        serde_json::json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":t0,"message":{"role":"user","content":prompt}}),
+        serde_json::json!({"type":"attachment","isSidechain":false,"cwd":cwd,"timestamp":t0,
+            "attachment":{"type":"environment","snapshot":{"workingDirectory":cwd,"additionalWorkingDirectories":added},"changes":null}}),
+        serde_json::json!({"type":"assistant","cwd":cwd,"gitBranch":"main","timestamp":t1,"message":{"model":"claude-sonnet-5","usage":{"input_tokens":50_000}}}),
+    ];
+    w.transcript_lines(id, &lines.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+}
+
+#[test]
+fn added_folders_follow_the_folder_in_the_dir_column_and_are_counted_when_they_dont_fit() {
+    let w = World::new("l-added");
+    // The paths are only text in the transcripts; the app writes them with `~` for its own home folder.
+    let home = std::env::var("HOME").unwrap_or_default();
+    assert!(home.len() > 1, "the test needs a home folder to write as ~");
+    with_added(&w, "one-added", &format!("{home}/repos/platoon"), &["/"], "talks about apples", 10);
+    // Longer, all told, than DIR's cap: the column stays at the cap and the added folder is counted.
+    let long = format!("{home}/an/added/folder/with/a/rather/long/path/that/goes/on/for/a/while");
+    with_added(&w, "long-added", &format!("{home}/repos/shop"), &[&long], "talks about pears", 20);
+    w.transcript("none-added", &format!("{home}/repos/plain"), "talks about plums", 30);
+    let mut app = w.app();
+    assert_eq!(app.home, home);
+    app.notice = None;
+
+    let row_of = |lines: &[String], word: &str| lines.iter().find(|l| l.contains(word)).cloned().unwrap_or_else(|| panic!("{word}: {lines:#?}"));
+    let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
+    let lines = draw(&mut term, &app);
+    assert!(row_of(&lines, "~/repos/platoon").contains("~/repos/platoon, /  "), "in full where there is room\n{lines:#?}");
+    let shop = row_of(&lines, "~/repos/shop");
+    assert!(shop.contains("~/repos/shop, +1  "), "the main folder and a count\n{shop}");
+    assert!(!shop.contains("~/an/"), "{shop}");
+    assert!(row_of(&lines, "~/repos/plain").contains("~/repos/plain  "), "a conversation without added folders is as before");
+
+    // Narrow: the main folder is cut at the front and the rest counted.
+    let mut term = Terminal::new(TestBackend::new(64, 20)).unwrap();
+    let lines = draw(&mut term, &app);
+    assert!(!lines.iter().any(|l| l.contains("platoon, /")), "no room for the whole list at 64 wide\n{lines:#?}");
+    assert_eq!(lines.iter().filter(|l| l.contains(", +1")).count(), 2, "both rows with added folders count them\n{lines:#?}");
+
+    // The quick filter finds a conversation by an added folder.
+    key(&mut app, KeyCode::Char('/'));
+    type_str(&mut app, "rather/long");
+    assert_eq!(app.visible().iter().map(|&i| app.sessions[i].id.as_str()).collect::<Vec<_>>(), ["long-added"]);
+}

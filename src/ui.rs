@@ -64,7 +64,9 @@ pub fn draw(f: &mut Frame, app: &App) {
             return;
         }
         let dir = app.hosts.iter().find(|h| h.claude_pid == *pid).map(|h| h.dir.as_str()).unwrap_or("");
-        draw_attached(f, app, client, dir, inner);
+        // Folders added to the conversation are shown after the one its host started in.
+        let extra = app.sessions.iter().find(|s| s.procs.iter().any(|p| p.pid == *pid)).map_or(&[][..], |s| &s.extra_dirs[..]);
+        draw_attached(f, app, client, dir, extra, inner);
         return;
     }
     if let (Mode::EditNotes, Some(edit)) = (&app.mode, &app.editing) {
@@ -1058,7 +1060,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
             Span::styled(format!("{marker} "), base.fg(if s.archived { t.dim } else { marker_color })),
             Span::styled(fit(&s.name, name_w), base.fg(text)),
-            Span::styled(fit_tail(&s.dir, dir_w), base.fg(t.dim)),
+            Span::styled(fit_dirs(&s.dir, &s.extra_dirs, dir_w), base.fg(t.dim)),
             Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
@@ -1397,7 +1399,8 @@ fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
         // A name platoon made up carries ` ✦ ` after it, inside the same column.
         let n = s.name.chars().count() + if s.name_source == NameSource::Generated { 3 } else { 0 };
         name = name.max(n);
-        dir = dir.max(s.dir.chars().count());
+        // Added folders count too; DIR_MAX still caps the column, and `fit_dirs` counts what doesn't fit.
+        dir = dir.max(s.dir.chars().count() + s.extra_dirs.iter().map(|d| 2 + d.chars().count()).sum::<usize>());
         if name + COL_GAP >= NAME_MAX && dir + COL_GAP >= DIR_MAX {
             break; // both are already past their cap; nothing further can widen them
         }
@@ -1541,7 +1544,8 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     l1.push(gap(c.pad.name, base));
     // The last parts of a path are what tell folders apart, so a path too long for the column is cut at the
     // front (`…/repos/platoon`) and its end kept. (`s.dir` is already written with `~` for the home folder.)
-    let dir = fit_tail(&s.dir, c.dir);
+    // Folders added to the conversation follow it, or are counted when there's no room (`…/platoon, +1`).
+    let dir = fit_dirs(&s.dir, &s.extra_dirs, c.dir);
     // The project, as a pill in its color (the same pill as the counts beside Active and Archived), then a gap.
     if c.project > 0 {
         match app.projects.of(&s.id) {
@@ -1625,10 +1629,9 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: 
         spans.push(Span::styled(format!(" {d}"), Style::new().fg(label).bg(bg)));
         x += w;
     }
-    let used = x - area.x;
     f.render_widget(Paragraph::new(Line::from(spans)), area);
     if let Some((msg, color)) = right {
-        let avail = area.width.saturating_sub(used + 3) as usize;
+        let avail = footer_room(area.width, hints);
         if avail > 8 {
             let msg = fit_end(&msg, avail);
             let w = msg.chars().count() as u16;
@@ -1636,6 +1639,11 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: 
             f.render_widget(Paragraph::new(Span::styled(msg, Style::new().fg(color))), r);
         }
     }
+}
+
+/// Room for the text on the right of a footer `width` wide holding these hints (they are drawn first).
+fn footer_room(width: u16, hints: &[Hint<'_>]) -> usize {
+    (width as usize).saturating_sub(hints_width(hints) + 3)
 }
 
 /// Break `text` into lines of at most `width` chars at word boundaries (a word longer than a line is split).
@@ -2360,7 +2368,7 @@ fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
         let line = Line::from(vec![
             Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
             Span::styled(fit(&s.name, name_w.saturating_sub(2)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
-            Span::styled(fit(&s.dir, dir_w), Style::new().fg(t.dim).bg(bg)),
+            Span::styled(fit_dirs(&s.dir, &s.extra_dirs, dir_w), Style::new().fg(t.dim).bg(bg)),
             Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), Style::new().fg(t.dim).bg(bg)),
         ]);
         f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
@@ -2492,7 +2500,7 @@ fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
         let l1 = Line::from(vec![
             lead.clone(),
             Span::styled(fit(&r.name, name_w.saturating_sub(2)), base.fg(t.text).add_modifier(Modifier::BOLD)),
-            Span::styled(fit(&r.dir, (area.width as usize).saturating_sub(name_w + LAST_W + 10)), base.fg(t.dim)),
+            Span::styled(fit_dirs(&r.dir, &r.extra_dirs, (area.width as usize).saturating_sub(name_w + LAST_W + 10)), base.fg(t.dim)),
             Span::styled(format!("{tail:>9}"), base.fg(t.warn)),
             Span::styled(format!("{:>w$}", ago(now, r.last_active), w = LAST_W), base.fg(t.dim)),
         ]);
@@ -3193,7 +3201,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, foot, &hints, None);
 }
 
-fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rect) {
+fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, extra: &[String], area: Rect) {
     let t = app.effective_theme();
     let [term, bar] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
     let paused = app.attached_paused();
@@ -3202,17 +3210,19 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, area: Rec
         draw_paused_banner(f, app, term);
     }
     let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
+    let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
+    let bar = bar.inner(Margin::new(1, 0));
     let right = if let Some(notice) = app.active_notice() {
         // "Copied 3 lines": what just happened wins over the standing text.
         notice.to_string()
     } else if scrolled > 0 {
         format!("↑ scrolled {scrolled} lines · type to return")
     } else {
-        tilde(dir, &app.home)
+        // The folders, fitted here so that added ones are counted (`+1`) rather than cut off by the footer.
+        fit_dirs(&tilde(dir, &app.home), extra, footer_room(bar.width, &hints)).trim_end().to_string()
     };
-    let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
-    draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
+    draw_footer(f, app, bar, &hints, Some((right, color)));
 }
 
 /// Covers the session when this copy is no longer safe to write to. Keys aren't forwarded while it shows.
@@ -3370,6 +3380,34 @@ fn fit_tail(s: &str, n: usize) -> String {
     }
 }
 
+/// A conversation's folder and the folders added to it (`/add-dir`), as one text: `~/repos/platoon, /`.
+fn dirs_text(main: &str, extra: &[String]) -> String {
+    std::iter::once(main).chain(extra.iter().map(String::as_str)).collect::<Vec<_>>().join(", ")
+}
+
+/// Least room the main folder keeps before `fit_dirs` gives up counting the others: `…oon, +1` still says something.
+const DIRS_MAIN_MIN: usize = 4;
+
+/// A conversation's folders in exactly `n` chars, padded: all of them where they fit (`~/repos/platoon, /`);
+/// otherwise the main folder, cut at the front like `fit_tail`, and how many others there are
+/// (`…/platoon, +2`); on a column too narrow even for that, the main folder alone.
+fn fit_dirs(main: &str, extra: &[String], n: usize) -> String {
+    if extra.is_empty() {
+        return fit_tail(main, n);
+    }
+    let full = dirs_text(main, extra);
+    if full.chars().count() <= n {
+        return format!("{full:<n$}");
+    }
+    let count = format!(", +{}", extra.len());
+    let room = n.saturating_sub(count.chars().count());
+    if room < DIRS_MAIN_MIN {
+        return fit_tail(main, n);
+    }
+    let shown = format!("{}{count}", fit_start(main, room));
+    format!("{shown:<n$}")
+}
+
 /// Truncate to at most `n` chars (with an ellipsis), no padding.
 fn fit_end(s: &str, n: usize) -> String {
     if s.chars().count() <= n {
@@ -3384,6 +3422,43 @@ fn fit_end(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_conversations_folders_are_all_shown_where_they_fit_and_counted_where_they_dont() {
+        let one = vec!["/".to_string()];
+        let two = vec!["~/notes".to_string(), "/srv/data".to_string()];
+        // No added folders: just `fit_tail`.
+        assert_eq!(fit_dirs("~/repos/platoon", &[], 20), fit_tail("~/repos/platoon", 20));
+        assert_eq!(fit_dirs("~/repos/platoon", &[], 10), "…s/platoon");
+        // All of them, padded, where they fit (exactly, too).
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 20), "~/repos/platoon, /  ");
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 18), "~/repos/platoon, /");
+        assert_eq!(fit_dirs("~/repos/platoon", &two, 40), format!("{:<40}", "~/repos/platoon, ~/notes, /srv/data"));
+        // Otherwise the main folder in full if it fits, then the count.
+        let long = vec!["/some/long/folder".to_string()];
+        assert_eq!(fit_dirs("~/repos/platoon", &long, 20), "~/repos/platoon, +1 ");
+        assert_eq!(fit_dirs("~/repos/platoon", &two, 30), format!("{:<30}", "~/repos/platoon, +2"));
+        // ... or cut at the front like `fit_tail`, keeping its last folder.
+        assert_eq!(fit_dirs("~/repos/platoon", &two, 14), "…s/platoon, +2");
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 17), "…epos/platoon, +1");
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 8), "…oon, +1");
+        // Too narrow even for that: the main folder alone, as before.
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 7), "…latoon");
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 0), "");
+        for n in 0..50 {
+            assert_eq!(fit_dirs("~/repos/platoon", &two, n).chars().count(), n, "always exactly the column's width");
+        }
+        assert_eq!(dirs_text("~/a", &two), "~/a, ~/notes, /srv/data");
+    }
+
+    #[test]
+    fn the_room_beside_the_footer_hints_is_what_they_leave_over() {
+        let hints: [Hint; 1] = [("ctrl+space", "back to list", Some(Action::Back))];
+        assert_eq!(footer_room(80, &hints), 80 - 23 - 3);
+        let two: [Hint; 2] = [("a", "bc", None), ("d", "e", None)];
+        assert_eq!(footer_room(20, &two), 20 - (4 + 3 + 3) - 3);
+        assert_eq!(footer_room(5, &hints), 0);
+    }
     use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 
     /// What a session that printed `bytes` looks like under `theme` (one row per line, 12 columns).

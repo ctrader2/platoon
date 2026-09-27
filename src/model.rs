@@ -43,6 +43,8 @@ pub struct Session {
     pub summary: String,
     /// Home-abbreviated, for display.
     pub dir: String,
+    /// Folders added beside `dir` (`/add-dir`), home-abbreviated like it. Shown after it: `~/repos/platoon, /`.
+    pub extra_dirs: Vec<String>,
     /// Absolute working directory the conversation was run in.
     pub cwd: String,
     pub branch: Option<String>,
@@ -63,18 +65,34 @@ pub struct Session {
     pub archived: bool,
     /// Live processes running this conversation right now, oldest first. Usually none or one.
     pub procs: Vec<Proc>,
-    /// Lowercased name, dir, branch, description and summary, so filtering never allocates per row.
+    /// Lowercased name, dir (and the added ones), branch, description and summary, so filtering never allocates per row.
     pub haystack: String,
 }
 
 impl Session {
     /// What the quick filter looks in: one lower-case text.
-    pub fn make_haystack(name: &str, dir: &str, branch: Option<&str>, description: &str, summary: &str) -> String {
-        [name, dir, branch.unwrap_or(""), description, summary].join("\n").to_lowercase()
+    pub fn make_haystack(name: &str, dir: &str, extra_dirs: &[String], branch: Option<&str>, description: &str, summary: &str) -> String {
+        let dirs = std::iter::once(dir).chain(extra_dirs.iter().map(String::as_str)).collect::<Vec<_>>().join("\n");
+        [name, &dirs, branch.unwrap_or(""), description, summary].join("\n").to_lowercase()
     }
 
     pub fn rehaystack(&mut self) {
-        self.haystack = Self::make_haystack(&self.name, &self.dir, self.branch.as_deref(), &self.description, &self.summary);
+        self.haystack = Self::make_haystack(&self.name, &self.dir, &self.extra_dirs, self.branch.as_deref(), &self.description, &self.summary);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_filter_finds_a_conversation_by_a_folder_added_to_it() {
+        let extra = vec!["~/repos/Project-Docs".to_string(), "/srv/data".to_string()];
+        let h = Session::make_haystack("Parser fix", "~/repos/platoon", &extra, Some("main"), "fix it", "");
+        for q in ["platoon", "project-docs", "/srv/data", "parser"] {
+            assert!(h.contains(q), "{q}");
+        }
+        assert!(!Session::make_haystack("x", "~/a", &[], None, "", "").contains("srv"));
     }
 }
 

@@ -396,6 +396,8 @@ pub struct SearchResult {
     pub id: String,
     pub name: String,
     pub dir: String,
+    /// Folders added beside `dir`, as on the row.
+    pub extra_dirs: Vec<String>,
     pub archived: bool,
     pub last_active: u64,
     /// The text to show under the name: the matching message, or (when only the name matched) the description.
@@ -1204,7 +1206,12 @@ impl App {
         let est = (t.context_tokens * 100 / window).min(100) as u8;
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
-        self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms())
+        let mut s = self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms());
+        if !t.extra_dirs.is_empty() {
+            s.extra_dirs = t.extra_dirs.iter().map(|d| dirs::tilde(d, &self.home)).collect();
+            s.rehaystack();
+        }
+        s
     }
 
     /// A running conversation whose transcript isn't saved yet (nothing sent), described by its registry entry.
@@ -1224,13 +1231,14 @@ impl App {
         };
         let summary = generated.map(|g| g.summary.clone()).unwrap_or_default();
         let dir = dirs::tilde(&cwd, &self.home);
-        let haystack = Session::make_haystack(&name, &dir, branch.as_deref(), &description, &summary);
+        let haystack = Session::make_haystack(&name, &dir, &[], branch.as_deref(), &description, &summary);
         Session {
             id,
             name,
             name_source,
             summary,
             dir,
+            extra_dirs: Vec::new(),
             cwd,
             branch,
             model,
@@ -1449,7 +1457,7 @@ impl App {
                     _ => s.description.clone(),
                 };
                 let marks = prompts::spans(&detail, &words);
-                SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), archived: s.archived, last_active: s.last_active, detail, marks }
+                SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), extra_dirs: s.extra_dirs.clone(), archived: s.archived, last_active: s.last_active, detail, marks }
             })
             .collect();
         (results, total)

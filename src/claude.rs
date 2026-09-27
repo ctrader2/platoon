@@ -401,6 +401,9 @@ pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
 pub struct Transcript {
     /// Working directory the conversation started in (the first `cwd` recorded).
     pub cwd: Option<String>,
+    /// Folders added beside it (`/add-dir`, `--add-dir`), as of the latest environment snapshot read. Empty when
+    /// none were added, or the transcript is older than those snapshots.
+    pub extra_dirs: Vec<String>,
     pub branch: Option<String>,
     /// Raw model id from the latest assistant message.
     pub model: Option<String>,
@@ -417,12 +420,17 @@ pub struct Transcript {
 /// Read a transcript cheaply, whatever its size: the first real prompt and cwd from the head, and the
 /// latest title, usage, model, branch and time from a bounded tail. `prev` is the earlier reading of
 /// the same file: what only the head or a distant title can tell us is kept when it isn't found again.
+///
+/// The added folders come from the newest environment snapshot in the tail, else the one written at the start
+/// (read from the head on a first reading only), else `prev`'s. The limit: in a file longer than the tail, a
+/// change written between the head and the tail, before this file was first read, is missed until the next
+/// change (or until the tail reaches one).
 pub fn read_transcript(path: &Path, prev: Option<&Transcript>) -> Option<Transcript> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let mut t = prev.cloned().unwrap_or_default();
-    if t.first_prompt.is_none() || t.cwd.is_none() {
-        scan_head(&file, &mut t);
+    if prev.is_none() || t.first_prompt.is_none() || t.cwd.is_none() {
+        scan_head(&file, &mut t, prev.is_none());
     }
 
     let start = len.saturating_sub(TAIL_BYTES);
@@ -733,15 +741,30 @@ fn finish_from_notice(text: &str, runs: &mut [MemberRun]) {
     }
 }
 
-fn scan_head(file: &File, t: &mut Transcript) {
+/// `fresh`: nothing was read from this file before, so the added folders are looked for too. The snapshot
+/// written at the start comes just after the first prompt and before the first reply, so the first reply ends
+/// that search (an older transcript has none).
+fn scan_head(file: &File, t: &mut Transcript, fresh: bool) {
     let mut reader = BufReader::new(file.take(HEAD_BYTES));
     let mut line = Vec::new();
+    let mut env_done = !fresh;
     for _ in 0..HEAD_LINES {
+        if t.cwd.is_some() && t.first_prompt.is_some() && env_done {
+            break;
+        }
         line.clear();
         if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
             break;
         }
         let line = String::from_utf8_lossy(&line);
+        if !env_done {
+            if let Some(dirs) = added_dirs(&line) {
+                t.extra_dirs = dirs;
+                env_done = true;
+            } else if line.contains("\"type\":\"assistant\"") {
+                env_done = true;
+            }
+        }
         let want_cwd = t.cwd.is_none() && line.contains("\"cwd\"");
         let want_prompt = t.first_prompt.is_none() && line.contains("\"type\":\"user\"");
         if !want_cwd && !want_prompt {
@@ -757,19 +780,41 @@ fn scan_head(file: &File, t: &mut Transcript) {
         if want_prompt {
             t.first_prompt = real_prompt(&v);
         }
-        if t.cwd.is_some() && t.first_prompt.is_some() {
-            break;
-        }
     }
+}
+
+/// The folders added beside a conversation's own (`/add-dir`, `--add-dir`), when this transcript line is one of
+/// Claude Code's environment snapshots: `{"type":"attachment","attachment":{"type":"environment","snapshot":
+/// {"additionalWorkingDirectories":[...]}}}`. One is written at the start and another whenever the environment
+/// changes, each with the whole list (which can be empty again). A line that isn't one, or is malformed: None.
+fn added_dirs(line: &str) -> Option<Vec<String>> {
+    if !line.contains("\"additionalWorkingDirectories\"") {
+        return None;
+    }
+    let v = serde_json::from_str::<Value>(line).ok()?;
+    let a = &v["attachment"];
+    if v["type"].as_str() != Some("attachment") || a["type"].as_str() != Some("environment") || v["isSidechain"].as_bool() == Some(true) {
+        return None;
+    }
+    let list = a["snapshot"]["additionalWorkingDirectories"].as_array()?;
+    let dirs = list.iter().map(|d| d.as_str().map(String::from)).collect::<Option<Vec<_>>>()?;
+    Some(dirs.into_iter().filter(|d| !d.is_empty()).collect())
 }
 
 /// `lines` run newest first, so the first hit for each fact is the latest one.
 fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
-    let (mut usage, mut branch, mut ts, mut title) = (false, false, false, false);
+    let (mut usage, mut branch, mut ts, mut title, mut env) = (false, false, false, false, false);
     let mut need_prompt = t.first_prompt.is_none();
     for line in lines {
-        if usage && branch && ts && title && !need_prompt {
+        if usage && branch && ts && title && env && !need_prompt {
             break;
+        }
+        if !env {
+            if let Some(dirs) = added_dirs(line) {
+                t.extra_dirs = dirs;
+                env = true;
+                continue;
+            }
         }
         let is_title = line.contains("\"type\":\"ai-title\"");
         let is_turn = line.contains("\"type\":\"assistant\"") || line.contains("\"type\":\"user\"");
@@ -1389,6 +1434,90 @@ mod hidden_tests {
         fs::write(&p, r#"{"type":"user","message":{"content":"no time"}}"#.to_string() + "\n").unwrap();
         assert_eq!(started_ms(&p), None);
         assert_eq!(started_ms(&base.join("missing.jsonl")), None);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// One of Claude Code's environment snapshots, as written in a transcript (trimmed of the keys platoon ignores).
+    fn env(dirs: &str) -> String {
+        format!(
+            r#"{{"parentUuid":"p","isSidechain":false,"attachment":{{"type":"environment","snapshot":{{"workingDirectory":"/work/x","isWorktree":false,"additionalWorkingDirectories":{dirs},"platform":"linux"}},"changes":null}},"type":"attachment","uuid":"u","timestamp":"2026-09-26T12:00:00.000Z","cwd":"/work/x","sessionId":"s"}}"#
+        )
+    }
+
+    fn user_line(text: &str) -> String {
+        format!(r#"{{"type":"user","cwd":"/work/x","timestamp":"2026-09-26T12:00:00.000Z","message":{{"role":"user","content":"{text}"}}}}"#)
+    }
+
+    /// An assistant reply big enough that a few hundred of them push the start of a file out of the tail.
+    fn reply_line() -> String {
+        format!(
+            r#"{{"type":"assistant","cwd":"/work/x","timestamp":"2026-09-26T12:01:00.000Z","message":{{"model":"claude-sonnet-5","content":[{{"type":"text","text":"{}"}}],"usage":{{"input_tokens":10}}}}}}"#,
+            "x".repeat(2000)
+        )
+    }
+
+    fn dirs_of(p: &Path, lines: &[String], prev: Option<&Transcript>) -> Vec<String> {
+        fs::write(p, lines.join("\n") + "\n").unwrap();
+        read_transcript(p, prev).unwrap().extra_dirs
+    }
+
+    #[test]
+    fn the_added_folders_are_the_latest_environment_snapshots_list() {
+        let base = tmp("extra-dirs");
+        let p = base.join("s.jsonl");
+        let start = |dirs: &str| vec![r#"{"type":"mode","mode":"normal"}"#.to_string(), user_line("hello"), env(dirs), reply_line()];
+        // Only the snapshot written at the start: its list (`--add-dir`), or nothing.
+        assert_eq!(dirs_of(&p, &start(r#"["/"]"#), None), ["/"]);
+        assert!(dirs_of(&p, &start("[]"), None).is_empty());
+        // A later change (`/add-dir`) replaces it with the whole new list, and a later empty list clears it.
+        let mut lines = start("[]");
+        lines.extend([user_line("add one"), env(r#"["/home/u/docs","/srv"]"#), reply_line()]);
+        assert_eq!(dirs_of(&p, &lines, None), ["/home/u/docs", "/srv"]);
+        lines.extend([env("[]"), reply_line()]);
+        assert!(dirs_of(&p, &lines, None).is_empty());
+        // A transcript from before these snapshots has none.
+        assert!(dirs_of(&p, &[user_line("old"), reply_line()], None).is_empty());
+        // Malformed snapshots are passed over: the last good one stands.
+        let mut lines = start(r#"["/good"]"#);
+        for bad in [r#"[1,2]"#, r#""/not-a-list""#, "null"] {
+            lines.push(env(bad));
+        }
+        lines.push(r#"{"type":"attachment","attachment":{"type":"environment","snapshot":{"additionalWorkingDirectories":["/cut"#.into());
+        lines.push(env(r#"["/sub"]"#).replace(r#""isSidechain":false"#, r#""isSidechain":true"#));
+        lines.push(env(r#"["/other"]"#).replace(r#"{"type":"environment""#, r#"{"type":"something_else""#));
+        assert_eq!(dirs_of(&p, &lines, None), ["/good"]);
+        // A user message that merely mentions the key is not a snapshot.
+        let mut lines = start(r#"["/good"]"#);
+        lines.push(user_line(r#"see \"additionalWorkingDirectories\":[\"/nope\"]"#));
+        assert_eq!(dirs_of(&p, &lines, None), ["/good"]);
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn in_a_long_transcript_the_head_gives_the_start_list_the_tail_the_latest_and_else_the_earlier_reading_stands() {
+        let base = tmp("extra-dirs-long");
+        let p = base.join("s.jsonl");
+        let filler = || std::iter::repeat_with(reply_line).take((TAIL_BYTES / 2000 + 50) as usize);
+        // The start snapshot is far outside the tail: a first reading finds it in the head.
+        let mut lines = vec![user_line("hello"), env(r#"["/from-start"]"#), reply_line()];
+        lines.extend(filler());
+        assert_eq!(dirs_of(&p, &lines, None), ["/from-start"]);
+        // A later reading (the head is not read again) keeps what the earlier one found when the tail has nothing.
+        let prev = Transcript { cwd: Some("/work/x".into()), first_prompt: Some("hello".into()), extra_dirs: vec!["/earlier".into()], ..Transcript::default() };
+        assert_eq!(dirs_of(&p, &lines, Some(&prev)), ["/earlier"]);
+        // A change in the tail wins over both.
+        lines.extend([env(r#"["/from-tail"]"#), reply_line()]);
+        assert_eq!(dirs_of(&p, &lines, None), ["/from-tail"]);
+        assert_eq!(dirs_of(&p, &lines, Some(&prev)), ["/from-tail"]);
+        // Only in the tail (a conversation that had none at the start).
+        let mut lines = vec![user_line("hello"), env("[]"), reply_line()];
+        lines.extend(filler());
+        lines.push(env(r#"["/added-late"]"#));
+        assert_eq!(dirs_of(&p, &lines, None), ["/added-late"]);
+        // The head's search for the start snapshot ends at the first reply: one after it is not the start list.
+        let mut lines = vec![user_line("hello"), reply_line(), env(r#"["/mid"]"#)];
+        lines.extend(filler());
+        assert!(dirs_of(&p, &lines, None).is_empty());
         let _ = fs::remove_dir_all(&base);
     }
 

@@ -43,7 +43,9 @@ The name shown is, in this order: the one you gave it with `r` (platoon's own), 
 Claude, then, when the [smart features](#features-that-use-tokens) are on, a short name platoon made up (marked with a quiet `✦`
 at the end of the name, or `*` on the Linux console or when `PLATOON_GLYPHS=plain`, so you can tell it from one you chose), and
 otherwise the folder's name. The folder always stays visible in the DIR column: when the path is too long for it, the start is
-cut and the end (the folder itself) kept. With a summary made, the selected row's summary shows in two lines just above the
+cut and the end (the folder itself) kept. Folders you added to a conversation (with `/add-dir` or `--add-dir`) follow its own,
+separated by commas (`~/repos/platoon, /`); where they don't all fit, only its own folder is shown and the rest are counted
+(`~/repos/platoon, +1`). The quick filter finds a conversation by an added folder too. With a summary made, the selected row's summary shows in two lines just above the
 key hints (left out on a terminal too short to spare them).
 
 **How wide the columns are.** NAME and DIR hold as much as the rows on show need and no more, up to 60 columns each. A value

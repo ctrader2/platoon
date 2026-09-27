@@ -591,7 +591,7 @@ impl App {
                     .filter_map(|r| {
                         let s = self.sessions.iter().find(|s| s.id == fl.ids[r.n - 1])?;
                         let detail = if !r.reason.is_empty() { r.reason.clone() } else { s.summary.clone() };
-                        Some(SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), archived: s.archived, last_active: s.last_active, detail, marks: Vec::new() })
+                        Some(SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), extra_dirs: s.extra_dirs.clone(), archived: s.archived, last_active: s.last_active, detail, marks: Vec::new() })
                     })
                     .collect();
                 self.search.total = results.len();

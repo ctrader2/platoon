@@ -24,7 +24,8 @@ use std::{
 };
 
 /// Bump when the parsing changes what an entry holds, so stale indexes are rebuilt instead of trusted.
-const VERSION: u64 = 1;
+/// 2: the added folders (`dirs`), which only a first reading of a file looks for in its head.
+const VERSION: u64 = 2;
 /// Results are sent to the UI in batches of this many files, or this often.
 const BATCH: usize = 64;
 const BATCH_EVERY: Duration = Duration::from_millis(60);
@@ -49,7 +50,7 @@ impl Entry {
         let t = &self.t;
         json!({
             "m": self.mtime, "s": self.size,
-            "cwd": t.cwd, "branch": t.branch, "model": t.model, "tokens": t.context_tokens, "large": t.large_window,
+            "cwd": t.cwd, "dirs": t.extra_dirs, "branch": t.branch, "model": t.model, "tokens": t.context_tokens, "large": t.large_window,
             "title": t.ai_title, "prompt": t.first_prompt, "active": t.last_active_ms,
         })
     }
@@ -63,6 +64,7 @@ impl Entry {
             size: v["s"].as_u64()?,
             t: Transcript {
                 cwd: text("cwd"),
+                extra_dirs: v["dirs"].as_array().into_iter().flatten().filter_map(|d| d.as_str().map(String::from)).collect(),
                 branch: text("branch"),
                 model: text("model"),
                 context_tokens: v["tokens"].as_u64().unwrap_or(0),
@@ -504,6 +506,37 @@ mod tests {
         fs::remove_file(&a).unwrap();
         assert_eq!(scan(&mut s).0, Stats { listed: 1, parsed: 0, removed: 1 });
         assert_eq!(s.entries().len(), 1);
+    }
+
+    #[test]
+    fn the_added_folders_are_kept_in_the_index_and_an_index_from_before_them_is_read_again() {
+        let (root, cache) = (tmp("dirs-c"), tmp("dirs-i"));
+        let env = |dirs: &str| format!(r#"{{"type":"attachment","isSidechain":false,"attachment":{{"type":"environment","snapshot":{{"additionalWorkingDirectories":{dirs}}},"changes":null}}}}"#);
+        write(&root, "-p", "aaa", &[user("first", "2026-09-19T01:00:00.000Z"), env(r#"["/","/srv/data"]"#), assistant(10, "2026-09-19T01:00:01.000Z")]);
+        write(&root, "-p", "bbb", &[user("second", "2026-09-19T01:00:00.000Z")]);
+        let mut s = Scanner::load(&root, &cache);
+        scan(&mut s);
+        s.save();
+        let dirs = |s: &Scanner, id: &str| s.entries().into_iter().find(|e| e.id == id).unwrap().t.extra_dirs.clone();
+        let s = Scanner::load(&root, &cache);
+        assert_eq!((dirs(&s, "aaa"), dirs(&s, "bbb")), (vec!["/".to_string(), "/srv/data".to_string()], vec![]), "a round trip keeps them");
+        for e in s.entries() {
+            let back = Entry::from_json(&e.path, &e.to_json()).unwrap();
+            assert_eq!(&back, e.as_ref(), "every fact survives a round trip");
+        }
+
+        // An index written before the added folders were read (version 1) is not trusted: every file is read again,
+        // so a conversation's start snapshot is found even though its head facts were known.
+        let mut v: Value = serde_json::from_str(&fs::read_to_string(cache.join("index.json")).unwrap()).unwrap();
+        *v.get_mut("version").unwrap() = json!(1);
+        for (_, e) in v.get_mut("files").unwrap().as_object_mut().unwrap() {
+            e.as_object_mut().unwrap().remove("dirs");
+        }
+        fs::write(cache.join("index.json"), v.to_string()).unwrap();
+        let mut s = Scanner::load(&root, &cache);
+        assert!(s.entries().is_empty());
+        assert_eq!(scan(&mut s).0.parsed, 2);
+        assert_eq!(dirs(&s, "aaa"), ["/", "/srv/data"]);
     }
 
     #[test]

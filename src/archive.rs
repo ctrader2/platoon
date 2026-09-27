@@ -336,6 +336,7 @@ mod tests {
             id: id.into(),
             name: id.into(),
             dir: String::new(),
+            extra_dirs: Vec::new(),
             cwd: String::new(),
             branch: None,
             model: None,
