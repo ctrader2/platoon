@@ -76,8 +76,11 @@ pub struct PStat {
     pub archived: usize,
     /// The latest activity of any of its sessions, ms since the epoch (0: none).
     pub last_active: u64,
-    /// When `project.md` was last changed, ms since the epoch.
-    pub notes_at: Option<u64>,
+    /// Its non-archived sessions with a reply the user hasn't seen.
+    pub unread: usize,
+    /// Its tickets that aren't Done or Cancelled, and how many of those are ready to be worked on.
+    pub open_tickets: usize,
+    pub ready_tickets: usize,
 }
 
 impl App {
@@ -115,20 +118,28 @@ impl App {
                 st.archived += 1;
             } else {
                 st.active += 1;
+                st.unread += usize::from(s.unread);
             }
             st.last_active = st.last_active.max(s.last_active);
         }
+        // One small read per project: a missing or corrupt tickets file is simply no tickets, and nothing is written.
         for p in self.projects.all() {
-            let at = fs::metadata(self.projects.notes_path(&p.id))
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64);
+            let store = crate::tickets::Tickets::open(&self.config, &p.id);
+            let all = store.all();
             if let Some(st) = out.get_mut(&p.id) {
-                st.notes_at = at;
+                st.open_tickets = all.iter().filter(|t| !t.state.closed()).count();
+                st.ready_tickets = all.iter().filter(|t| !t.state.closed() && crate::tickets::is_ready(t, all)).count();
             }
         }
         out
+    }
+
+    /// Work the Projects tab's numbers out again from what is in memory, without re-reading Claude's state (which
+    /// would put each session's unread mark back to what its processes say).
+    #[cfg(test)]
+    pub fn restat_for_test(&mut self) {
+        self.rev += 1;
+        self.update_view();
     }
 
     /// The rows of the Projects tab: its Active or Archived projects, narrowed by the filter, the most recently used

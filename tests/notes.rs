@@ -206,7 +206,8 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("enter open");
     lab.open_notes(&mut t);
-    t.wait_for("No notes yet");
+    // A project with no sessions and no notes: one line, and e still starts them.
+    t.wait_for("platoon will keep project notes up to date.");
 
     // No editor used yet, so e offers the ones that were found, with where each of them runs. (All of it lands
     // in one frame, and half a frame can be read, so it is waited for together rather than snapshotted.)

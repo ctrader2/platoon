@@ -270,8 +270,8 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        let (proj_x, sess_x, notes_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "NOTES").unwrap());
-        let share = (notes_x - sess_x) - 24;
+        let (proj_x, sess_x, tickets_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
+        let share = (tickets_x - sess_x) - 24;
         assert!(share > 0, "{width}: {head}");
         let want = 4 + 1 + "Web shop".len() + 2 + share;
         assert!([want, want + 1].contains(&(sess_x - proj_x)), "{width}: {head}");
@@ -288,8 +288,8 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     app.notice = None;
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];
-    let (proj_x, sess_x, notes_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "NOTES").unwrap());
-    let share = (notes_x - sess_x) - 24;
+    let (proj_x, sess_x, tickets_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
+    let share = (tickets_x - sess_x) - 24;
     assert!([60 + share, 61 + share].contains(&(sess_x - proj_x)), "{head}");
     let row = lines.iter().find(|l| l.contains("LLLL")).expect("the long row");
     assert!(row.contains('…'), "the long name is cut: {row}");

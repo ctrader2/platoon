@@ -348,10 +348,35 @@ fn session_counts(st: &PStat) -> String {
     }
 }
 
+/// A Projects row's SESSIONS cell in `room` cells: the counts, then (when any of its sessions has a reply
+/// waiting) `● N unread`, returned apart so it can be drawn in the unread green. When it all doesn't fit, the
+/// archived count goes first so the unread count stays.
+fn session_cell(st: &PStat, room: usize) -> (String, String) {
+    if st.unread == 0 {
+        return (session_counts(st), String::new());
+    }
+    let unread = format!("● {} unread", st.unread);
+    let full = if st.archived > 0 { format!("{} active · {} archived · ", st.active, st.archived) } else { format!("{} active · ", st.active) };
+    if full.chars().count() + unread.chars().count() <= room {
+        (full, unread)
+    } else {
+        (format!("{} active · ", st.active), unread)
+    }
+}
+
+/// A Projects row's TICKETS cell: `4 open · 1 ready`, `4 open` when none is ready, `no tickets` when none is open.
+fn ticket_counts(st: &PStat) -> String {
+    match (st.open_tickets, st.ready_tickets) {
+        (0, _) => "no tickets".into(),
+        (o, 0) => format!("{o} open"),
+        (o, r) => format!("{o} open · {r} ready"),
+    }
+}
+
 struct PCols {
     name: usize,
     sessions: usize,
-    notes: usize,
+    tickets: usize,
     /// The spare width of a wide terminal, shared between these columns (same rule as the Sessions table).
     pad: PPad,
 }
@@ -360,7 +385,7 @@ struct PCols {
 struct PPad {
     name: usize,
     sessions: usize,
-    notes: usize,
+    tickets: usize,
     last: usize,
 }
 
@@ -386,12 +411,12 @@ fn project_name_width(app: &App) -> usize {
 fn project_cols(width: u16, want: usize) -> PCols {
     let w = width as usize;
     let fixed = 3 + LAST_W;
-    let notes = if w >= 70 { 14 } else { 0 };
+    let tickets = if w >= 70 { 18 } else { 0 };
     let sessions = if w >= 50 { 24 } else { 0 };
-    let name = want.min(w.saturating_sub(fixed + notes + sessions));
-    let spare = w.saturating_sub(fixed + notes + sessions + name);
-    let s = spread(spare, [true, sessions > 0, notes > 0, true]);
-    PCols { name, sessions, notes, pad: PPad { name: s[0], sessions: s[1], notes: s[2], last: s[3] } }
+    let name = want.min(w.saturating_sub(fixed + tickets + sessions));
+    let spare = w.saturating_sub(fixed + tickets + sessions + name);
+    let s = spread(spare, [true, sessions > 0, tickets > 0, true]);
+    PCols { name, sessions, tickets, pad: PPad { name: s[0], sessions: s[1], tickets: s[2], last: s[3] } }
 }
 
 fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
@@ -401,7 +426,7 @@ fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
         Span::raw("   "),
         Span::styled(fit("PROJECT", c.name + c.pad.name), s),
         Span::styled(fit(if c.sessions > 0 { "SESSIONS" } else { "" }, c.sessions + c.pad.sessions), s),
-        Span::styled(fit(if c.notes > 0 { "NOTES" } else { "" }, c.notes + c.pad.notes), s),
+        Span::styled(fit(if c.tickets > 0 { "TICKETS" } else { "" }, c.tickets + c.pad.tickets), s),
         Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1 + c.pad.last), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
@@ -467,10 +492,14 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
         let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
         let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
         let bw = badge_width(p) + 1;
-        let notes = match st.notes_at {
-            Some(at) => format!("notes {}", ago(now, at)),
-            None => "no notes".into(),
-        };
+        // SESSIONS: its share of a wide screen's spare width counts too, less the gap before the next column.
+        let sw = c.sessions + c.pad.sessions;
+        let (counts, unread) = session_cell(&st, sw.saturating_sub(COL_GAP));
+        let counts = fit(&counts, sw.min(counts.chars().count()));
+        let unread = fit(&unread, sw.saturating_sub(counts.chars().count()).min(unread.chars().count()));
+        let used = counts.chars().count() + unread.chars().count();
+        let tickets = ticket_counts(&st);
+        let tickets_color = if st.open_tickets == 0 { t.dim } else { t.subtext };
         let l1 = Line::from(vec![
             lead.clone(),
             Span::styled(" ", base),
@@ -478,10 +507,11 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" ", base),
             Span::styled(fit(&p.name, c.name.saturating_sub(bw)), base.fg(text).add_modifier(Modifier::BOLD)),
             gap(c.pad.name, base),
-            Span::styled(fit(&session_counts(&st), c.sessions), base.fg(t.subtext)),
-            gap(c.pad.sessions, base),
-            Span::styled(fit(if c.notes > 0 { &notes } else { "" }, c.notes), base.fg(t.dim)),
-            gap(c.pad.notes, base),
+            Span::styled(counts, base.fg(t.subtext)),
+            Span::styled(unread, base.fg(t.ok)),
+            gap(sw - used, base),
+            Span::styled(fit(if c.tickets > 0 { &tickets } else { "" }, c.tickets), base.fg(tickets_color)),
+            gap(c.pad.tickets, base),
             // A row starts one cell to the left of the titles (the badge carries its own leading space), so
             // LAST gets that cell back here and the times line up under the title, at the row's right edge.
             Span::styled(format!("{:>w$}", ago(now, st.last_active), w = LAST_W + c.pad.last), base.fg(t.dim)),
@@ -987,7 +1017,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
     let visible = app.visible();
     if visible.is_empty() {
         let msg = if app.filter.is_empty() {
-            "No sessions in this project yet. Press n to start one, or m on a session in the Sessions tab."
+            "Press n to start one, or m on a session in the Sessions tab."
         } else {
             "No sessions match the filter"
         };
@@ -1035,6 +1065,14 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
 
 fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
+    let notes = app.open_notes().filter(|n| !n.trim().is_empty());
+    // A project with nothing in it yet (no sessions, no notes): one line on what will happen, and nothing else.
+    let empty = app.open_project().and_then(|p| app.pstats.get(&p.id)).is_none_or(|st| st.active + st.archived == 0);
+    if empty && notes.is_none() && app.notes_editor_open().is_none() {
+        let line = "platoon will keep project notes up to date. Start or add a session to begin.";
+        f.render_widget(Paragraph::new(line).wrap(Wrap { trim: true }).style(Style::new().fg(t.subtext)), area);
+        return;
+    }
     // Above the notes, one quiet line: whether platoon is updating them or when it last did, and where they go.
     let mut top_lines: Vec<Line> = Vec::new();
     let (first, first_color) = if app.notes_updating() {
@@ -1080,7 +1118,7 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     if area.height == 0 {
         return;
     }
-    let Some(text) = app.open_notes().filter(|n| !n.trim().is_empty()) else {
+    let Some(text) = notes else {
         let mut lines = vec![Line::styled("No notes yet", Style::new().fg(t.subtext))];
         lines.push(Line::raw(""));
         lines.push(Line::styled("Press e to start them from a short template.", Style::new().fg(t.text)));
