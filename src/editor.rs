@@ -1038,10 +1038,12 @@ mod tests {
                 cmd.env(k, v);
             }
         }
-        let out = cmd.output().unwrap();
+        // (A script just written can be "text file busy" while another test's thread forks: started with retries.)
+        let run = |cmd: &mut Command| crate::ai::spawn_retrying(cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped())).unwrap().wait_with_output().unwrap();
+        let out = run(&mut cmd);
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "P=/usr/bin:/bin C=/home/u/.config D=unset K=unset E=unset");
         // Run again from inside (a shell started from that shell): nothing more changes.
-        let out = Command::new(&script).env_clear().env("SHELL", "/bin/sh").env("PATH", "/x").args(["-c", "echo $PATH"]).output().unwrap();
+        let out = run(Command::new(&script).env_clear().env("SHELL", "/bin/sh").env("PATH", "/x").args(["-c", "echo $PATH"]));
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "/x");
     }
 

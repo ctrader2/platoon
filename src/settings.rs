@@ -557,7 +557,7 @@ pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
-/// The installed plugins, each with remove; browsing and installing are on the Plugins tab (`4`).
+/// Every plugin, installed or in the catalog, one line each: enter opens the plugin screen on it, `d` removes one.
 pub const TAB_PLUGINS: usize = 6;
 
 /// Every entry on every tab, in screen order.
@@ -1428,7 +1428,7 @@ mod tests {
     fn seven_tabs_hold_every_setting_once_each_where_it_belongs() {
         let titles: Vec<&str> = TABS.iter().map(|t| t.title).collect();
         assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"]);
-        assert!(tab("Plugins").is_empty(), "its rows are the installed plugins, drawn by the app");
+        assert!(tab("Plugins").is_empty(), "its rows are the plugins, drawn by the app");
         assert_eq!(TABS[TAB_PLUGINS].title, "Plugins");
         assert_eq!(tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(), ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));

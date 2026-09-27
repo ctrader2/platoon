@@ -1,9 +1,10 @@
-//! Plugins at the level of the app: the Plugins tab (`4`) fetching the catalog from a local git repository, installing
-//! from it with the confirm and the footer line, the theme it adds in the theme picker with its plugin's name, an
-//! update, removing (a theme in use gives way to the default), and the settings screen's Plugins tab. Every folder is
-//! a temp one (the data folder sits beside the test's config); the catalog is a temp git repository, never the network.
+//! Plugins at the level of the app: the settings' Plugins tab listing every plugin (the catalog fetched from a local git
+//! repository when the settings open) and the plugin screen it opens (installing with the confirm and the footer line,
+//! the theme it adds in the theme picker with its plugin's name, an update, removing: a theme in use gives way to the
+//! default), and back to the settings on the same plugin. Every folder is a temp one (the data folder sits beside the
+//! test's config); the catalog is a temp git repository, never the network.
 
-use crate::app::{App, Confirm, Mode, PlugState, TOP_PLUGINS};
+use crate::app::{App, Confirm, Mode, PlugState};
 use crate::plugins::testing::{catalog_repo, commit_catalog, source, GOOD_THEME};
 use crate::testkit::World;
 use crate::ui;
@@ -42,10 +43,20 @@ fn world(name: &str) -> (World, App, std::path::PathBuf) {
     (w, app, repo)
 }
 
-fn open_tab(app: &mut App) {
-    ch(app, '4');
-    assert!(app.top == TOP_PLUGINS && app.plugins_tab_showing());
+/// `s`, the Plugins tab (the last: shift+tab from the first), the catalog fetched.
+fn open_settings_plugins(app: &mut App) {
+    ch(app, 's');
+    assert!(matches!(app.mode, Mode::Settings));
+    key(app, KeyCode::BackTab);
+    assert_eq!(app.settings_tab, crate::settings::TAB_PLUGINS);
     app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+}
+
+/// The plugin screen, from the settings' Plugins tab, on its first plugin.
+fn open_tab(app: &mut App) {
+    open_settings_plugins(app);
+    key(app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Plugins) && app.plugin_screen_showing(), "{:?}", app.active_notice());
 }
 
 fn install(app: &mut App, id: &str) {
@@ -54,21 +65,21 @@ fn install(app: &mut App, id: &str) {
     key(app, KeyCode::Enter);
     assert!(matches!(&app.mode, Mode::Confirm(Confirm::InstallPlugin { id: i, update: None, .. }) if i == id), "asked first");
     ch(app, 'y');
-    assert!(matches!(app.mode, Mode::List));
+    assert!(matches!(app.mode, Mode::Plugins), "back on the plugin screen");
     app.refresh_until_for_test(20, "the install", |a| !a.plugins_busy());
 }
 
 #[test]
-fn the_plugins_tab_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_is_labelled_in_the_picker() {
+fn the_plugin_screen_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_is_labelled_in_the_picker() {
     let (w, mut app, _) = world("plug-tab");
     let mut term = Terminal::new(TestBackend::new(130, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("3 Squads") && shown.contains("4 Plugins") && !shown.contains("4 Plugins 0"), "a fourth tab, without a count: {shown}");
+    assert!(shown.contains("3 Squads") && !shown.contains("Plugins"), "three tabs: {shown}");
     open_tab(&mut app);
     let rows = app.pl.rows();
     assert_eq!(rows.iter().map(|r| (r.manifest.id.as_str(), r.state.clone())).collect::<Vec<_>>(), [("sea-themes", PlugState::Available), ("dusk", PlugState::Available)]);
     let shown = flat(&draw(&mut term, &app));
-    for want in ["sea-themes name", "dusk name", "Not installed", "What sea-themes is.", "Adds 1 theme: Deep Water", "Catalog: commit", "enter install", "f check the catalog"] {
+    for want in ["Settings · Plugins", "sea-themes name", "dusk name", "Not installed", "What sea-themes is.", "Adds 1 theme: Deep Water", "Catalog: commit", "enter install", "f check the catalog", "ctrl+space back to settings"] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
     // Nothing in the user's real places: the store is beside this test's config.
@@ -80,9 +91,15 @@ fn the_plugins_tab_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_i
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("d remove"), "{shown}");
 
-    // The theme is in the list, after the built-ins, with its plugin's name beside it.
+    // The theme is in the list, after the built-ins, with its plugin's name beside it. (`s` does nothing on the plugin
+    // screen: back to the settings, out of them, and in again on their first tab.)
     ch(&mut app, 's');
-    assert!(matches!(app.mode, Mode::Settings));
+    assert!(matches!(app.mode, Mode::Plugins));
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    ch(&mut app, 's');
+    assert!(matches!(app.mode, Mode::Settings) && app.settings_tab == 0);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Themes));
     let at = app.tpick.list.iter().position(|t| t.id == "plugin:dusk/dusk").expect("the plugin's theme is offered");
@@ -96,7 +113,9 @@ fn the_plugins_tab_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_i
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.theme.id, "plugin:dusk/dusk");
     assert_eq!(app.settings().get().theme, "plugin:dusk/dusk");
-    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::BackTab);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Plugins));
 
     // Removing it: asked, and the theme in use gives way to the default. The setting stays, so installing it again brings it back.
     let at = app.pl.rows().iter().position(|r| r.manifest.id == "dusk").unwrap();
@@ -106,7 +125,7 @@ fn the_plugins_tab_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_i
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Remove dusk name?") && shown.contains("default theme"), "{shown}");
     ch(&mut app, 'y');
-    assert!(matches!(app.mode, Mode::List));
+    assert!(matches!(app.mode, Mode::Plugins));
     assert_eq!(app.theme.id, "catppuccin-mocha");
     assert!(app.active_notice().unwrap().contains("Removed dusk name. Its theme was in use"));
     assert_eq!(app.settings().get().theme, "plugin:dusk/dusk", "the choice is kept, as for a user theme whose file went");
@@ -136,39 +155,74 @@ fn an_update_in_the_catalog_is_offered_and_installed() {
 }
 
 #[test]
-fn a_catalog_that_cannot_be_reached_is_said_plainly_on_the_tab() {
+fn a_catalog_that_cannot_be_reached_is_said_plainly_in_the_settings() {
     let w = World::new("plug-unreachable");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(120, 26)).unwrap();
-    open_tab(&mut app);
+    open_settings_plugins(&mut app);
     assert!(app.pl.fetch_error.as_deref().unwrap().starts_with("platoon couldn't reach its plugin catalog:"));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("platoon couldn't reach its plugin catalog") && shown.contains("f tries again"), "{shown}");
-    // Enter with nothing listed says why, rather than doing nothing.
+    for want in ["No plugins installed, and none from the catalog to show.", "Couldn't reach the catalog, so only installed plugins show. f tries again."] {
+        assert!(shown.contains(want), "{want}: {shown}");
+    }
+    assert!(shown.contains("↑↓ move ctrl+space back") && !shown.contains("d remove"), "nothing to open or remove: {shown}");
+    // Enter with nothing listed says why, rather than doing nothing, and stays in the settings.
     key(&mut app, KeyCode::Enter);
-    assert!(app.active_notice().is_some());
+    assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_some());
+    // f tries again (and fails again, quietly: the line says so).
+    app.notice = None;
+    ch(&mut app, 'f');
+    assert!(app.plugins_busy());
+    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    assert!(matches!(app.mode, Mode::Settings) && app.pl.fetch_error.is_some());
+    // An installed plugin is still listed when the catalog can't be reached.
+    let src = w.base.join("src");
+    let dir = crate::plugins::testing::plugin(&src, "dusk", "0.3.0", &[("Dusk", DUSK)]);
+    app.pl.store.install(&dir, crate::plugins::Origin::Folder { path: "/home/u/dusk".into() }).unwrap();
+    app.plugins_changed_for_test();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove ctrl+space back"), "{shown}");
 }
 
 #[test]
-fn the_settings_plugins_tab_lists_the_installed_plugins_and_removes_one() {
-    let (_w, mut app, _) = world("plug-settings");
+fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_an_installed_one() {
+    let (_w, mut app, repo) = world("plug-settings");
     open_tab(&mut app);
     install(&mut app, "sea-themes");
     install(&mut app, "dusk");
-    ch(&mut app, '1');
+    // A newer sea-themes in the catalog, and a third plugin not installed.
+    commit_catalog(&repo, &[("sea-themes", "1.1.0", &[("Deep Water", &GOOD_THEME.replace("#14181f", "#111820"))]), ("dusk", "0.3.0", &[("Dusk", DUSK)]), ("moss", "2.0.0", &[("Moss", GOOD_THEME)])]);
+    ch(&mut app, 'f');
+    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Settings) && app.settings_tab == crate::settings::TAB_PLUGINS);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    ch(&mut app, 's');
-    app.switch_settings_tab(crate::settings::TAB_PLUGINS);
-    let shown = flat(&draw(&mut term, &app));
-    for want in ["Plugins", "dusk name", "0.3.0 · 1 theme", "sea-themes name", "From the catalog (commit", "press 4 on the main screen", "d remove"] {
-        assert!(shown.contains(want), "{want}: {shown}");
+    let shown = draw(&mut term, &app);
+    // One line each: the name, its version, and where it stands in plain words.
+    let line = |name: &str| shown.lines().find(|l| l.contains(name)).unwrap_or_else(|| panic!("{name}: {shown}")).to_string();
+    for (name, version, state) in [("sea-themes name", "1.1.0", "Update ready"), ("dusk name", "0.3.0", "Installed"), ("moss name", "2.0.0", "Available")] {
+        let l = line(name);
+        assert!(l.contains(&format!("{name}  {version}")) && l.contains(&format!(" {state} ")), "{name}: {l}");
     }
-    // Keys that change a setting elsewhere do nothing here; down and d remove the second one (by name: sea-themes).
+    let flat_shown = flat(&shown);
+    for want in ["Catalog: commit", "Enter opens a plugin: what it adds, and install, update or remove.", "↑↓ move enter open d remove ctrl+space back"] {
+        assert!(flat_shown.contains(want), "{want}: {flat_shown}");
+    }
+    assert!(!flat_shown.contains("press 4"), "{flat_shown}");
+    // Keys that change a setting elsewhere do nothing here; the list stops at its ends.
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::End);
-    assert_eq!(app.setting, 1);
+    assert_eq!(app.setting, 2);
     key(&mut app, KeyCode::Down);
-    assert_eq!(app.setting, 1, "stops at the last");
+    assert_eq!(app.setting, 2, "stops at the last");
+    // d on one that isn't installed says so.
+    ch(&mut app, 'd');
+    assert!(matches!(app.mode, Mode::Settings));
+    assert_eq!(app.active_notice(), Some("moss name isn't installed."));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("↑↓ move enter open ctrl+space back"), "no remove on one not installed: {shown}");
+    // d on an installed one asks, and both answers come back to the settings.
+    key(&mut app, KeyCode::Home);
     ch(&mut app, 'd');
     assert!(matches!(&app.mode, Mode::Confirm(Confirm::RemovePlugin { id, .. }) if id == "sea-themes"));
     ch(&mut app, 'n');
@@ -177,24 +231,115 @@ fn the_settings_plugins_tab_lists_the_installed_plugins_and_removes_one() {
     ch(&mut app, 'y');
     assert!(matches!(app.mode, Mode::Settings), "and so does yes");
     assert_eq!(app.pl.installed.iter().map(|p| p.id()).collect::<Vec<_>>(), ["dusk"]);
+    // It is still in the catalog: listed, available again, still selected.
     assert_eq!(app.setting, 0);
-    ch(&mut app, 'd');
-    ch(&mut app, 'y');
-    let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("No plugins installed."), "{shown}");
-    // With none left, the keys are harmless.
-    for k in [KeyCode::Down, KeyCode::Up, KeyCode::End, KeyCode::Char('d'), KeyCode::Enter] {
-        key(&mut app, k);
-        assert!(matches!(app.mode, Mode::Settings));
-    }
+    let shown = draw(&mut term, &app);
+    let l = shown.lines().find(|l| l.contains("sea-themes name")).unwrap().to_string();
+    assert!(l.contains("▎ sea-themes name") && l.contains(" Available "), "{l}");
     app.on_mouse(ratatui::crossterm::event::MouseEvent {
         kind: ratatui::crossterm::event::MouseEventKind::ScrollDown,
         column: 60,
         row: 20,
         modifiers: KeyModifiers::NONE,
     });
+    assert_eq!(app.setting, 1);
 }
 
+#[test]
+fn four_does_nothing_and_the_header_has_three_tabs_even_when_narrow() {
+    let (_w, mut app, _) = world("plug-four");
+    for width in [60u16, 80, 200] {
+        let mut term = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        let shown = draw(&mut term, &app);
+        let header = shown.lines().nth(1).unwrap().to_string();
+        assert!(header.contains("1 Sessions") && !header.contains("Plugins"), "{width}: {header}");
+        if width >= 80 {
+            assert!(header.contains("3 Squads"), "{width}: {header}");
+        }
+        if width == 200 {
+            assert!(flat(&shown).contains("1-3 tabs"), "{width}: {}", flat(&shown));
+        }
+    }
+    let top = app.top;
+    ch(&mut app, '4');
+    assert!(matches!(app.mode, Mode::List) && app.top == top && !app.plugin_screen_showing());
+    assert!(!app.plugins_busy(), "nothing fetched either");
+}
+
+#[test]
+fn enter_opens_the_plugin_screen_on_that_plugin_and_back_returns_to_the_settings_on_it() {
+    let (_w, mut app, _) = world("plug-screen-back");
+    // From a project's screen too: the plugin screen takes the whole body, and back comes back to it all.
+    open_settings_plugins(&mut app);
+    assert_eq!(app.pl.rows().iter().map(|r| r.manifest.id.as_str()).collect::<Vec<_>>(), ["sea-themes", "dusk"]);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Plugins));
+    assert_eq!(app.pl.selected_row().unwrap().manifest.id, "dusk", "on the plugin that was selected");
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Settings · Plugins") && shown.contains("▎ dusk name") && shown.contains("What dusk is."), "{shown}");
+    // `s` and the tab numbers do nothing here.
+    for c in ['s', '1', '2', '4', 'v', '/'] {
+        ch(&mut app, c);
+        assert!(matches!(app.mode, Mode::Plugins), "{c}");
+    }
+    // The back key: the settings, on their Plugins tab, the same plugin selected.
+    app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    assert!(matches!(app.mode, Mode::Settings) && !app.plugin_screen_showing());
+    assert_eq!((app.settings_tab, app.setting), (crate::settings::TAB_PLUGINS, 1));
+    let shown = draw(&mut term, &app);
+    assert!(shown.lines().any(|l| l.contains("▎ dusk name")), "{shown}");
+    // Moving on the plugin screen moves what comes back selected; esc goes back as well.
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Up);
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Settings));
+    assert_eq!(app.setting, 0);
+    // q is not quit on the plugin screen: it goes back.
+    key(&mut app, KeyCode::Enter);
+    ch(&mut app, 'q');
+    assert!(matches!(app.mode, Mode::Settings) && !app.quit);
+    // A click on the selected plugin opens it, like enter; the mouse wheel moves on the plugin screen.
+    let _ = draw(&mut term, &app);
+    let row = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::Setting(0))).map(|(r, _)| *r).unwrap();
+    let click = |app: &mut App, kind| {
+        app.on_mouse(ratatui::crossterm::event::MouseEvent { kind, column: row.x + 2, row: row.y, modifiers: KeyModifiers::NONE });
+    };
+    click(&mut app, ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left));
+    assert!(matches!(app.mode, Mode::Plugins));
+    click(&mut app, ratatui::crossterm::event::MouseEventKind::ScrollDown);
+    assert_eq!(app.pl.selected, 1);
+    // The footer's back is clickable too.
+    let _ = draw(&mut term, &app);
+    let back = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::Action(crate::app::Action::Cancel))).map(|(r, _)| *r).unwrap();
+    app.on_mouse(ratatui::crossterm::event::MouseEvent { kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), column: back.x, row: back.y, modifiers: KeyModifiers::NONE });
+    assert!(matches!(app.mode, Mode::Settings) && app.setting == 1);
+    // Out of the settings: the list, where q quits.
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    ch(&mut app, 'q');
+    assert!(app.quit);
+}
+
+#[test]
+fn the_plugin_screen_opened_over_a_projects_screen_goes_back_to_it() {
+    let (_w, mut app, _) = world("plug-over-project");
+    app.projects.create("Web shop").unwrap();
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    assert!(app.open_project.is_some());
+    open_tab(&mut app);
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Settings · Plugins") && !shown.contains("Web shop"), "the plugin screen, not the project behind: {shown}");
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List) && app.open_project.is_some(), "back on the project's screen");
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Web shop"), "{shown}");
+}
 
 // ---- plugins with skills, squads and agents ---------------------------------------------------------------------------
 
@@ -285,19 +430,21 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     key(&mut app, KeyCode::Esc);
     // No: nothing is installed.
     key(&mut app, KeyCode::Char('n'));
-    assert!(matches!(app.mode, Mode::List) && app.pl.review.is_none());
+    assert!(matches!(app.mode, Mode::Plugins) && app.pl.review.is_none(), "back on the plugin screen");
     assert!(app.pl.store.installed().is_empty());
     let skill = w.root.join("skills/changelog-entry/SKILL.md");
     assert!(!skill.exists());
     // Yes: installed, its skill in the (test's) Claude folder, its squad and agents on the Squads tab.
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Char('y'));
-    assert!(matches!(app.mode, Mode::List));
+    assert!(matches!(app.mode, Mode::Plugins));
     app.refresh_until_for_test(20, "the install", |a| !a.plugins_busy());
     let notice = app.active_notice().unwrap_or_default().to_string();
     assert!(notice.contains("changelog name is installed: 1 skill, 1 squad, 2 agents added. Its squads are on the Squads tab (3)"), "{notice}");
     assert!(skill.is_file());
 
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('3'));
     assert!(app.squads_tab_showing());
     let at = app.sqt.list.iter().position(|l| l.id == "plugin:changelog/changelog").expect("the plugin's squad is listed");
@@ -320,7 +467,7 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     key(&mut app, KeyCode::Char('x'));
     key(&mut app, KeyCode::Char('d'));
     assert!(matches!(app.mode, Mode::List));
-    assert!(app.active_notice().unwrap().contains("comes with the plugin changelog name: removing the plugin (the Plugins tab, 4) takes it off"), "{:?}", app.active_notice());
+    assert!(app.active_notice().unwrap().contains("comes with the plugin changelog name: removing the plugin (in the settings: s, then Plugins) takes it off"), "{:?}", app.active_notice());
     assert!(!crate::squadfile::dir(&w.config).exists(), "nothing written to the user's squads");
     // c: a copy of the user's own, which can be changed.
     key(&mut app, KeyCode::Esc);
@@ -350,7 +497,7 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
 
     // Removing the plugin: asked, naming the user's squad that uses its agents; afterwards that squad needs fixing.
     key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Char('4'));
+    open_tab(&mut app);
     ch(&mut app, 'd');
     let Mode::Confirm(Confirm::RemovePlugin { extra, .. }) = &app.mode else { panic!("asked first") };
     assert!(extra.contains("Its skills leave Claude Code's skills folder") && extra.contains("Tickets its squads already have keep working") && extra.contains("Your squad changelog squad copy uses its agents"), "{extra}");
@@ -359,6 +506,8 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     ch(&mut app, 'y');
     assert_eq!(app.active_notice(), Some("Removed changelog name."));
     assert!(!skill.exists(), "its untouched skill went with it");
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('3'));
     assert!(app.sqt.list.iter().all(|l| l.kind != crate::squadfile::Kind::Plugin));
     key(&mut app, KeyCode::Left);
@@ -509,9 +658,13 @@ fn the_back_key_goes_from_a_plugins_file_to_the_list_of_what_it_adds_and_then_cl
     ctrl_space(&mut app);
     assert!(matches!(app.mode, Mode::PluginReview) && app.pl.review.as_ref().unwrap().reading.is_none(), "the file -> the list");
     ctrl_space(&mut app);
-    assert!(matches!(app.mode, Mode::List) && app.pl.review.is_none(), "the list -> closed, nothing installed");
+    assert!(matches!(app.mode, Mode::Plugins) && app.pl.review.is_none(), "the list -> closed, nothing installed");
     assert!(app.pl.store.installed().is_empty());
-    // q on the Plugins tab (nothing open) quits.
+    // The plugin screen -> the settings -> the list, where q quits.
+    ctrl_space(&mut app);
+    assert!(matches!(app.mode, Mode::Settings));
+    ctrl_space(&mut app);
+    assert!(matches!(app.mode, Mode::List));
     ch(&mut app, 'q');
     assert!(app.quit);
 }

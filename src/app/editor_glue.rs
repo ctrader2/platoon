@@ -150,7 +150,7 @@ impl App {
 
     /// What `v` opens from where the user is, if anything is selected there.
     pub fn editor_target(&self) -> Option<EdTarget> {
-        if self.squads_tab_showing() || self.projects_list_showing() || self.plugins_tab_showing() {
+        if self.squads_tab_showing() || self.projects_list_showing() {
             return None;
         }
         if let Some(project) = self.open_project.clone() {
@@ -439,11 +439,11 @@ impl App {
 
     /// No to one of the editor's questions.
     pub(super) fn editor_cancel(&mut self, installing: bool) {
-        self.mode = Mode::List;
+        self.mode = self.plugins_base();
         self.ed.flow = None;
         self.ed.note = None;
         if installing {
-            self.notify("No code editor, then. The Plugins tab (4) or `platoon plugin add editor` installs it later.");
+            self.notify("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.");
         }
     }
 
@@ -451,7 +451,7 @@ impl App {
     /// plugin: the catalog is fetched (its last copy when it can't be reached) and the plugin installed from it first;
     /// then whatever its table has that the editor folder doesn't is downloaded.
     pub(super) fn install_editor(&mut self) {
-        self.mode = Mode::List;
+        self.mode = self.plugins_base();
         let (dirs, store, source) = (self.ed.dirs.clone(), self.pl.store.clone(), self.pl.source.clone());
         let (tx, rx) = channel();
         thread::spawn(move || {
@@ -533,7 +533,7 @@ impl App {
             return;
         };
         self.ed.installing = None;
-        // The plugin may be new, and the catalog was fetched: the Plugins tab shows both.
+        // The plugin may be new, and the catalog was fetched: the plugin list shows both.
         if let Some(c) = plugins::cached(&self.pl.store, &self.pl.source) {
             self.pl.catalog = Some(c);
         }

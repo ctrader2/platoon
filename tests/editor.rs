@@ -386,7 +386,7 @@ fn not_installed_v_offers_the_plugin_and_yes_installs_it_and_its_downloads_then_
     // (What it downloads: the catalog's figure once fetched; before that, the one that came with platoon.)
     t.wait_for("It downloads about");
     t.send(b"n");
-    t.wait_for_flat("No code editor, then. The Plugins tab (4) or `platoon plugin add editor` installs it later.");
+    t.wait_for_flat("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.");
     t.wait_gone("Install its plugin now?");
     assert!(!lab.data.join("editor/installed.json").exists() && !lab.data.join("plugins/editor").exists());
     t.send(b"v");

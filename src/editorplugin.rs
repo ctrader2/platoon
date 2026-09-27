@@ -15,7 +15,7 @@
 //! editor's 'shell'). They are text; the table must pass `editor_install::table_problems`.
 //!
 //! Installing the plugin puts its files in `<data>/plugins/editor` (as any plugin); its downloads are a second step,
-//! run by whoever installed it (the Plugins tab, `platoon plugin add editor`, the `v` offer): the engine fetches only
+//! run by whoever installed it (the settings' Plugins tab, `platoon plugin add editor`, the `v` offer): the engine fetches only
 //! what `<data>/editor` doesn't already have with the same checksum. Removing it removes `<data>/editor` and the font.
 //!
 //! An editor installed before it was a plugin (`<data>/editor` complete, no editor plugin) is taken over quietly: the
@@ -224,7 +224,7 @@ pub fn adopt(store: &Store, dirs: &Dirs) -> Option<Result<Installed, String>> {
 
 /// The one line said when an editor from before was taken over.
 pub fn adopted_words(p: &Installed) -> String {
-    format!("Your code editor is now the plugin \"{}\" (nothing was downloaded; the Plugins tab, 4, shows it).", p.manifest.name)
+    format!("Your code editor is now the plugin \"{}\" (nothing was downloaded; the settings show it: s, then Plugins).", p.manifest.name)
 }
 
 /// Fetch what the installed editor plugin's table has that the editor folder doesn't (the engine's own idempotence:

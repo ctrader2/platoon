@@ -1,6 +1,6 @@
 # platoon's plugin catalog
 
-This folder is the catalog platoon offers on its **Plugins** tab (`4`) and with `platoon plugin list`. Each plugin is a
+This folder is the catalog platoon offers in its settings (`s`, then **Plugins**) and with `platoon plugin list`. Each plugin is a
 folder here, named after its id, and `index.json` lists them in the order platoon shows them.
 
 A plugin holds **files, never code**: a `plugin.json` that says what it is and what it adds, and those files. A plugin
@@ -62,7 +62,7 @@ agent may name an MCP server the user has set up themselves (see below).
 ## Skills, squads and agents
 
 These are **instructions Claude follows with the user's permissions**. So before a plugin with any of them is installed,
-platoon shows each one: what it is, what it may do in plain words, and its whole text to read (on the Plugins tab, and
+platoon shows each one: what it is, what it may do in plain words, and its whole text to read (on the plugin screen, from the settings' Plugins tab, and
 `platoon plugin show <id>`). An update that changes one is shown again. Write them to be read by the person installing
 them: plain, short, and doing only what the description says.
 

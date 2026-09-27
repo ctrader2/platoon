@@ -335,7 +335,7 @@ fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_op
     v(&mut app);
     assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
     key(&mut app, KeyCode::Char('n'));
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("The Plugins tab (4) or `platoon plugin add editor`")), "{:?}", app.notice);
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.")), "{:?}", app.notice);
     assert!(app.take_editor_request().is_none());
     assert!(!dirs.editor.join("installed.json").exists() && crate::editorplugin::installed(&app.pl.store).is_none(), "nothing installed on a no");
 
@@ -346,7 +346,7 @@ fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_op
     let p = crate::editorplugin::installed(&app.pl.store).expect("the plugin, from the catalog");
     assert!(matches!(p.origin, crate::plugins::Origin::Catalog { .. }));
     assert!(crate::editorplugin::complete(&app.pl.store, &dirs), "and its downloads");
-    assert!(app.pl.editor_complete && app.pl.installed.iter().any(|p| p.id() == "editor"), "the Plugins tab knows");
+    assert!(app.pl.editor_complete && app.pl.installed.iter().any(|p| p.id() == "editor"), "the plugin list knows");
     assert_eq!(opened(&mut app), vec![s(&root)], "and then opened");
     // The editor's settings are the plugin's.
     assert!(app.editor_config_files().iter().any(|(p, _)| p == "init.lua"));
@@ -415,14 +415,19 @@ fn an_editor_from_before_plugins_opens_at_once_and_is_taken_over() {
     assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("nothing was downloaded")), "{:?}", app.notice);
     assert!(app.pl.installed.iter().any(|p| p.id() == "editor") && app.pl.editor_complete);
     assert_eq!(fs::read(dirs.editor.join("installed.json")).unwrap(), before);
-    // Removing it from the Plugins tab takes the folder and the font off (no catalog here: the tab shows what is
-    // installed).
-    key(&mut app, KeyCode::Char('4'));
+    // Removing it from the settings' Plugins tab takes the folder and the font off.
+    key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::BackTab);
+    assert_eq!(app.settings_tab, crate::settings::TAB_PLUGINS);
     app.refresh_until_for_test(20, "the catalog to be tried", |a| !a.plugins_busy());
-    assert_eq!(app.pl.selected_row().map(|r| r.manifest.id), Some("editor".to_string()));
+    for _ in 0..app.pl.position("editor").expect("listed") {
+        key(&mut app, KeyCode::Down);
+    }
     key(&mut app, KeyCode::Char('d'));
     assert!(matches!(&app.mode, Mode::Confirm(Confirm::RemovePlugin { editor: true, .. })));
     key(&mut app, KeyCode::Char('y'));
+    assert!(matches!(app.mode, Mode::Settings));
+    key(&mut app, KeyCode::Esc);
     assert!(!dirs.editor.exists() && !dirs.fonts.exists());
     assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("and everything it downloaded")), "{:?}", app.notice);
     // Now v offers the plugin again; the machine's own editors are unaffected (next test).

@@ -761,7 +761,7 @@ fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_s
     key(&mut app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, 6, "shift+tab from the first goes to the last");
     let plugins = screen(&mut term, &app);
-    assert!(plugins.contains("No plugins installed.") && plugins.contains("press 4 on the main screen"), "{plugins}");
+    assert!(plugins.contains("No plugins installed") && plugins.contains("Enter opens a plugin"), "{plugins}");
     key(&mut app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, 5);
     let editors = screen(&mut term, &app);

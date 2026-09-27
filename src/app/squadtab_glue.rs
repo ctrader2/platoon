@@ -1705,7 +1705,7 @@ impl App {
             }
             Kind::Plugin => {
                 let plugin = l.plugin.unwrap_or_default();
-                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (the Plugins tab, 4) takes it off. c makes a copy of your own."));
+                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (in the settings: s, then Plugins) takes it off. c makes a copy of your own."));
             }
         };
     }
@@ -1735,7 +1735,7 @@ impl App {
             }
             Kind::Plugin => {
                 let plugin = l.plugin.unwrap_or_default();
-                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (the Plugins tab, 4) takes it off. c makes a copy of your own."));
+                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (in the settings: s, then Plugins) takes it off. c makes a copy of your own."));
             }
         };
     }

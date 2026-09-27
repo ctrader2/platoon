@@ -1,6 +1,6 @@
-//! Plugins end to end with the real binary: the Plugins tab (`4`) drawn from a catalog fetched with git from a temp
-//! repository (`PLATOON_PLUGIN_SOURCE`, never the network), installing one with the footer line, the settings'
-//! Plugins tab removing it, and `platoon plugin list/add/remove/check`; a plugin with a skill, a squad and agents read
+//! Plugins end to end with the real binary: the settings' Plugins tab listing a catalog fetched with git from a temp
+//! repository (`PLATOON_PLUGIN_SOURCE`, never the network), the plugin screen it opens installing one with the footer
+//! line, back to the settings on it, removing it there, and `platoon plugin list/add/remove/check`; a plugin with a skill, a squad and agents read
 //! before it is installed, its squad on the Squads tab, and `platoon plugin show/add --yes/remove`. Every folder is a
 //! temp one (the data folder and Claude's folder too: `PLATOON_DATA_DIR`, `CLAUDE_CONFIG_DIR`).
 
@@ -153,16 +153,53 @@ impl Lab {
 const SURFACE: vt100::Color = Rgb(0x31, 0x32, 0x44);
 const ACCENT: vt100::Color = Rgb(0xb4, 0xbe, 0xfe);
 
+/// `s`, then the settings' last tab (Plugins), with the catalog's plugins listed.
+fn settings_plugins(t: &mut Term, first: &str) {
+    t.send(b"s");
+    t.wait_for("Settings file:");
+    t.send(b"\x1b[Z");
+    t.wait_for_all(&[first, "Enter opens a plugin", "enter open"]);
+}
+
+/// Back from the plugin screen to the settings, then out of them to the list (each gone before the next key: an esc
+/// followed quickly by another key reads as alt+key).
+fn back_to_the_list(t: &mut Term) {
+    t.send(b"\x1b");
+    t.wait_gone("Settings · Plugins");
+    t.wait_for("Settings file:");
+    t.send(b"\x1b");
+    t.wait_gone("Settings file:");
+}
+
 #[test]
-fn the_plugins_tab_shows_the_catalog_installs_with_a_line_in_the_footer_and_the_settings_tab_removes() {
+fn the_settings_list_every_plugin_and_open_the_plugin_screen_which_installs_and_goes_back_to_them() {
     let lab = Lab::new("plug-term");
     let mut env = lab.env();
     env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "4 Plugins"]);
+    t.wait_for_all(&["make the shop", "1 Sessions", "3 Squads"]);
+    let shown = t.stable();
+    assert!(!shown.contains("Plugins") && !shown.contains("1-4"), "three top-level tabs:\n{shown}");
+    // 4 is no tab now.
     t.send(b"4");
-    t.wait_for_all(&["Harbor themes", "Not installed", "A quiet dark theme for testing.", "Adds", "1 theme: Harbor Test", &format!("Catalog: commit {}", &lab.commit[..7])]);
-    t.wait_for_all(&["enter install", "f check the catalog", "1-4 tabs"]);
+    let shown = t.stable();
+    assert!(shown.contains("make the shop") && !shown.contains("Plugins"), "{shown}");
+
+    // The settings' Plugins tab: every plugin of the catalog, one line each, and where each stands.
+    settings_plugins(&mut t, "Harbor themes");
+    t.wait_for_all(&["Changelog kit", &format!("Catalog: commit {}", &lab.commit[..7])]);
+    let shown = t.stable();
+    let line = |name: &str| shown.lines().find(|l| l.contains(name)).unwrap_or_else(|| panic!("{name}:\n{shown}")).to_string();
+    assert!(line("▎ Harbor themes").contains("1.0.0") && line("Harbor themes").contains(" Available "), "{shown}");
+    assert!(line("Changelog kit").contains(" Available "), "{shown}");
+    assert!(!shown.contains("d remove"), "nothing installed to remove:\n{shown}");
+
+    // Enter: the plugin screen, full screen, on that plugin.
+    t.send(b"\r");
+    t.wait_for_all(&["Settings · Plugins", "Not installed", "A quiet dark theme for testing.", "Adds", "1 theme: Harbor Test", &format!("Catalog: commit {}", &lab.commit[..7])]);
+    t.wait_for_all(&["enter install", "f check the catalog", "ctrl+space back to settings"]);
+    let shown = t.stable();
+    assert!(!shown.contains("Settings file:") && !shown.contains("make the shop"), "the plugin screen takes the whole body:\n{shown}");
     // The selected plugin is on the raised color with the accent's marker, like the Squads tab's rows.
     let (row, col) = t.find("▎ Harbor themes").unwrap();
     t.wait_bg(row, col + 2, SURFACE);
@@ -175,24 +212,44 @@ fn the_plugins_tab_shows_the_catalog_installs_with_a_line_in_the_footer_and_the_
     t.wait_for_all(&["Install Harbor themes?", "It adds 1 theme", "y install", "n not now"]);
     t.send(b"y");
     t.wait_for("Harbor themes is installed: 1 theme added");
-    t.wait_for("Installed");
+    t.wait_gone("Install Harbor themes?");
     until("installed.json to list it", || lab.installed()["plugins"]["harbor"]["commit"] == lab.commit.as_str());
     assert!(lab.data.join("plugins/harbor/themes/Harbor Test").is_file());
+    t.wait_for_all(&["Settings · Plugins", "d remove"]);
 
-    // The settings' Plugins tab (the last): the installed plugin, and d removes it after asking.
-    t.send(b"s");
-    t.wait_for("Settings file:");
-    t.send(b"\x1b[Z");
-    t.wait_for_all(&["Harbor themes", "1.0.0 · 1 theme", &format!("From the catalog (commit {})", &lab.commit[..7]), "press 4 on the main screen", "d remove"]);
+    // Moving to the second, then the back key (ctrl+space): the settings' Plugins tab, the same plugin selected.
+    t.send(b"\x1b[B");
+    t.wait_for("▎ Changelog kit");
+    t.send(b"\x00");
+    t.wait_gone("Settings · Plugins");
+    t.wait_for_all(&["Settings file:", "▎ Changelog kit", "Harbor themes"]);
+    let shown = t.stable();
+    let line = |name: &str| shown.lines().find(|l| l.contains(name)).unwrap_or_else(|| panic!("{name}:\n{shown}")).to_string();
+    assert!(line("Harbor themes").contains(" Installed "), "{shown}");
+    assert!(line("▎ Changelog kit").contains(" Available "), "{shown}");
+    // Up to Harbor: d removes it from here, after asking.
+    t.send(b"\x1b[A");
+    t.wait_for_all(&["▎ Harbor themes", "d remove"]);
     t.send(b"d");
     t.wait_for_all(&["Remove Harbor themes?", "y remove", "n keep it"]);
     t.send(b"y");
-    t.wait_for("No plugins installed.");
+    t.wait_gone("Remove Harbor themes?");
     until("installed.json to drop it", || lab.installed()["plugins"].get("harbor").is_none());
     assert!(!lab.data.join("plugins/harbor").exists());
+    t.wait_for("Settings file:");
+    let shown = t.stable();
+    let harbor = shown.lines().find(|l| l.contains("▎ Harbor themes")).unwrap_or_else(|| panic!("{shown}")).to_string();
+    assert!(harbor.contains(" Available "), "still listed, from the catalog:\n{shown}");
+
+    // q on the plugin screen goes back to the settings; it does not quit.
+    t.send(b"\r");
+    t.wait_for("Settings · Plugins");
+    t.send(b"q");
+    t.wait_gone("Settings · Plugins");
+    t.wait_for("Settings file:");
     t.send(b"\x1b");
     t.wait_gone("Settings file:");
-    t.wait_for("Not installed");
+    t.wait_for("make the shop");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }
@@ -249,22 +306,25 @@ impl Lab {
     }
 }
 
-/// The code editor plugin on the Plugins tab and from the command line, like any other, with what it downloads. It is
+/// The code editor plugin on the plugin screen and from the command line, like any other, with what it downloads. It is
 /// never installed here (its real table would need the network); installing it is tested with fake downloads.
 #[test]
 fn the_editor_plugin_shows_on_the_tab_and_in_the_list_with_what_it_downloads() {
     let lab = Lab::new("plug-editor");
     lab.with_editor();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 32, 130);
-    t.wait_for_all(&["make the shop", "4 Plugins"]);
-    t.send(b"4");
-    t.wait_for_all(&["Code editor (Neovim)", "Harbor themes", "Adds", "the code editor (Neovim, its tools and plugins,", "it downloads about"]);
+    t.wait_for_all(&["make the shop", "3 Squads"]);
+    settings_plugins(&mut t, "Code editor (Neovim)");
+    t.send(b"\r");
+    t.wait_for_all(&["Settings · Plugins", "Code editor (Neovim)", "Harbor themes", "Adds", "the code editor (Neovim, its tools and plugins,", "it downloads about"]);
     t.wait_for_all(&["Not installed. Enter installs it and its downloads; then v on a session", "enter install"]);
     t.send(b"\r");
     t.wait_for_all(&["Install Code editor (Neovim)?", "It downloads about", "y install", "n not now"]);
     t.send(b"n");
     t.wait_gone("Install Code editor (Neovim)?");
+    t.wait_for("Settings · Plugins");
     assert!(!lab.data.join("plugins/editor").exists() && !lab.data.join("editor").exists());
+    back_to_the_list(&mut t);
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 
@@ -283,10 +343,12 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     let mut env = lab.env();
     env.push(("NO_COLOR", String::new()));
     let mut t = Term::spawn(&[], &env, &lab.work, 34, 120);
-    t.wait_for_all(&["make the shop", "4 Plugins"]);
-    t.send(b"4");
-    t.wait_for_all(&["Harbor themes", "Changelog kit"]);
+    t.wait_for_all(&["make the shop", "3 Squads"]);
+    settings_plugins(&mut t, "Changelog kit");
     t.send(b"\x1b[B");
+    t.wait_for("▎ Changelog kit");
+    t.send(b"\r");
+    t.wait_for_all(&["Settings · Plugins", "Harbor themes", "Changelog kit"]);
     t.wait_for_all(&["enter read and install", "Enter shows each skill, squad and agent it adds"]);
     // Enter: each thing it adds, with what it may do.
     t.send(b"\r");
@@ -314,6 +376,8 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     until("its skill in Claude's folder", || lab.claude.join("skills/changelog-kit-entry/SKILL.md").is_file());
     assert!(lab.installed()["plugins"]["changelog-kit"]["skills"]["changelog-kit-entry"]["files"]["SKILL.md"].is_string(), "{}", lab.installed());
     // Its squad on the Squads tab, labelled with the plugin's name.
+    t.wait_gone("Install Changelog kit?");
+    back_to_the_list(&mut t);
     t.send(b"3");
     t.wait_for_all(&["Release notes", "From Changelog kit"]);
     t.send(b"q");

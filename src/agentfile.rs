@@ -441,7 +441,7 @@ pub fn save(config: &Path, a: &Agent) -> io::Result<()> {
 /// again, one of the user's own is gone. Whether it may go at all is for `delete`.
 pub fn remove(config: &Path, id: &str) -> io::Result<()> {
     if crate::squadplugin::is_plugin(id) {
-        return Err(io::Error::other("it comes with a plugin: the Plugins tab (4) takes the plugin off"));
+        return Err(io::Error::other("it comes with a plugin: removing the plugin (in the settings: s, then Plugins) takes it off"));
     }
     let p = path(config, id);
     let _lock = lock(&lock_path(config))?;
@@ -474,7 +474,7 @@ pub fn delete(config: &Path, id: &str) -> Result<(), String> {
         return Err(format!("{} is built into platoon, so it can't be deleted.", a.name));
     }
     if crate::squadplugin::is_plugin(id) {
-        return Err(format!("{} comes with a plugin: removing the plugin (the Plugins tab, 4) takes it off.", a.name));
+        return Err(format!("{} comes with a plugin: removing the plugin (in the settings: s, then Plugins) takes it off.", a.name));
     }
     let squads: Vec<crate::squadfile::Squad> = crate::squadfile::load_all(config).into_iter().filter_map(|l| l.squad).collect();
     if let Some(why) = in_use(&a.name, id, &squads) {

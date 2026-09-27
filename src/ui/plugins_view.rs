@@ -1,11 +1,12 @@
-//! Drawing the Plugins tab (`4`): the catalog and the installed plugins on the left, the selected one's details on
-//! the right, and the key hints; and the settings screen's Plugins tab (the installed plugins, each with remove).
+//! Drawing plugins: the settings screen's Plugins tab (every plugin, installed or in the catalog, one line each with
+//! where it stands), and the plugin screen it opens (full screen: the catalog and the installed plugins on the left,
+//! the selected one's details on the right, and the key hints).
 
 use super::*;
 use crate::app::{PlugRow, PlugState};
 
-/// The keys of the Plugins tab, for the plugin selected.
-pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'_>> {
+/// The keys of the plugin screen, for the plugin selected.
+pub(super) fn plugin_screen_hints(app: &App) -> Vec<Hint<'_>> {
     let mut out: Vec<Hint> = Vec::new();
     let row = app.pl.selected_row();
     if row.as_ref().is_some_and(|r| editor_unfinished(app, r)) {
@@ -22,11 +23,11 @@ pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'_>> {
         Some(s) if s.installed() => out.push(("d", "remove", None)),
         _ => {}
     }
-    out.extend([("f", "check the catalog", None), ("↑↓", "move", None), ("1-4", "tabs", None), ("s", "settings", Some(Action::Settings)), (app.quit_label(), "quit", Some(Action::Quit))]);
+    out.extend([("f", "check the catalog", None), ("↑↓", "move", None), (app.back_label(), "back to settings", Some(Action::Cancel))]);
     out
 }
 
-pub(super) fn draw_plugins_tab(f: &mut Frame, app: &App, area: Rect) {
+pub(super) fn draw_plugin_screen(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let left_w = (area.width * 34 / 100).clamp(26, 42).min(area.width.saturating_sub(20));
     let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(area);
@@ -39,7 +40,8 @@ pub(super) fn draw_plugins_tab(f: &mut Frame, app: &App, area: Rect) {
             .style(Style::new().bg(t.bg))
     };
     let rows = app.pl.rows();
-    let lb = block(" Plugins ".into(), true);
+    // Where this is: it was opened from the settings.
+    let lb = block(" Settings · Plugins ".into(), true);
     let li = lb.inner(left).inner(Margin::new(1, 0));
     f.render_widget(lb, left);
     // The last line of the list says where the catalog stands.
@@ -66,15 +68,15 @@ pub(super) fn draw_plugins_tab(f: &mut Frame, app: &App, area: Rect) {
 }
 
 /// "⠋ Checking the catalog…", "Catalog: commit 1a2b3c4", or that it couldn't be reached.
-fn catalog_status(app: &App) -> (String, Color) {
+pub(super) fn catalog_status(app: &App) -> (String, Color) {
     let t = app.effective_theme();
     if app.pl.fetching() {
         let spin = SPINNER[(app.tick % 10) as usize];
         return (format!("{spin} Checking the catalog…"), t.dim);
     }
     if app.pl.fetch_error.is_some() {
-        let old = if app.pl.catalog.is_some() { ": showing the last copy" } else { "" };
-        return (format!("Couldn't reach the catalog{old}"), t.warn);
+        let old = if app.pl.catalog.is_some() { ": showing the last copy" } else { ", so only installed plugins show" };
+        return (format!("Couldn't reach the catalog{old}. f tries again."), t.warn);
     }
     match &app.pl.catalog {
         Some(c) => (format!("Catalog: commit {}", crate::plugins::short(&c.commit)), t.dim),
@@ -217,56 +219,70 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
     }
 }
 
-/// Rows the settings' Plugins tab needs: two per installed plugin, a blank between, or one line saying there are none.
+/// Rows the settings' Plugins tab needs: one per plugin, or one line saying there are none.
 pub(super) fn plugin_settings_height(app: &App) -> usize {
-    let n = app.pl.installed.len();
-    if n == 0 { 1 } else { 3 * n - 1 }
+    app.pl.rows().len().max(1)
 }
 
-/// The settings' Plugins tab: each installed plugin (its name, version and what it adds; under it where it came
-/// from). Returns the row below the last.
+/// How a plugin's state is said on its one line in the settings: "Installed", "Update ready", "Available", ...
+pub(super) fn settings_state_words(app: &App, r: &PlugRow) -> &'static str {
+    if editor_unfinished(app, r) {
+        return "Installed, downloads not finished";
+    }
+    r.state.short_words()
+}
+
+/// The settings' Plugins tab: every plugin, installed or in the catalog, one line each (its name, its version dim,
+/// and where it stands on the right). Returns the row below the last.
 pub(super) fn draw_plugin_settings(f: &mut Frame, app: &App, area: Rect) -> u16 {
     let t = app.effective_theme();
     if area.is_empty() {
         return area.y;
     }
-    let installed = &app.pl.installed;
-    if installed.is_empty() {
-        f.render_widget(Paragraph::new(Span::styled("No plugins installed.", Style::new().fg(t.dim))), Rect::new(area.x, area.y, area.width, 1));
+    let rows = app.pl.rows();
+    if rows.is_empty() {
+        let msg = if app.pl.fetching() { "No plugins installed. Checking the catalog for more…" } else { "No plugins installed, and none from the catalog to show." };
+        f.render_widget(Paragraph::new(Span::styled(fit_end(msg, area.width as usize), Style::new().fg(t.dim))), Rect::new(area.x, area.y, area.width, 1));
         return area.y + 1;
     }
-    let per = 3usize;
-    let room = ((area.height as usize + 1) / per).max(1);
-    let selected = app.setting.min(installed.len() - 1);
+    let room = (area.height as usize).max(1);
+    let selected = app.setting.min(rows.len() - 1);
     let start = selected.saturating_sub(room - 1);
     let mut y = area.y;
-    for (i, p) in installed.iter().enumerate().skip(start) {
-        if y + 2 > area.bottom() {
+    for (i, r) in rows.iter().enumerate().skip(start) {
+        if y >= area.bottom() {
             break;
         }
-        let row = Rect::new(area.x, y, area.width, 2);
+        let row = Rect::new(area.x, y, area.width, 1);
         app.hits.borrow_mut().push((row, Hit::Setting(i)));
         let sel = i == selected;
         let bg = if sel || row.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
         let w = (area.width as usize).saturating_sub(2);
-        let right = format!("{} · {}", p.manifest.version, p.manifest.adds_words());
-        let name_w = w.saturating_sub(right.chars().count() + 1);
-        let name = fit_end(&p.manifest.name, name_w);
-        let gap = w.saturating_sub(name.chars().count() + right.chars().count());
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
-                Span::styled(name, base.fg(t.text).add_modifier(Modifier::BOLD)),
-                Span::styled(" ".repeat(gap), base),
-                Span::styled(right, base.fg(t.accent)),
-            ]),
-            Line::from(vec![Span::styled("  ", base), Span::styled(fit_end(&format!("From {}", p.origin.words(&app.home)), w), base.fg(t.subtext))]),
-        ];
-        f.render_widget(Paragraph::new(lines).style(base), row);
-        y += per as u16;
+        let state = settings_state_words(app, r);
+        let state_color = match r.state {
+            _ if editor_unfinished(app, r) => t.warn,
+            PlugState::Update | PlugState::Unavailable(_) => t.warn,
+            ref s if s.installed() => t.ok,
+            _ => t.dim,
+        };
+        // The name first, then the version when there is room for it, the state always.
+        let name_room = w.saturating_sub(state.chars().count() + 2);
+        let version = format!("  {}", r.manifest.version);
+        let name = fit_end(&r.manifest.name, name_room);
+        let version = if name.chars().count() + version.chars().count() <= name_room { version } else { String::new() };
+        let gap = w.saturating_sub(name.chars().count() + version.chars().count() + state.chars().count());
+        let line = Line::from(vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(name, base.fg(t.text).add_modifier(Modifier::BOLD)),
+            Span::styled(version, base.fg(t.dim)),
+            Span::styled(" ".repeat(gap), base),
+            Span::styled(state, base.fg(state_color)),
+        ]);
+        f.render_widget(Paragraph::new(line).style(base), row);
+        y += 1;
     }
-    y.saturating_sub(1)
+    y
 }
 
 /// What a plugin with instructions adds, before it is installed: each skill, squad and agent with what it may do, and
@@ -294,7 +310,7 @@ pub(super) fn draw_plugin_review(f: &mut Frame, app: &App, area: Rect) {
     let says = if r.update.is_some() {
         "Its instructions changed. Read the ones marked new or changed before you update: enter reads the one selected."
     } else {
-        "It adds instructions Claude follows with your permissions. Read each one before you install it: enter reads the one selected. It holds files only, and d on the Plugins tab takes it off again."
+        "It adds instructions Claude follows with your permissions. Read each one before you install it: enter reads the one selected. It holds files only, and d on it (in the settings: s, then Plugins) takes it off again."
     };
     head.extend(wrap(says, w).into_iter().map(|l| Line::styled(l, Style::new().fg(t.dim))));
     head.push(Line::raw(""));

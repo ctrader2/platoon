@@ -1,6 +1,8 @@
-//! The Plugins tab (`4`) and the Settings screen's Plugins tab: the catalog (fetched with git on a thread when the
-//! tab is first shown, and again with `f`), the installed plugins, installing and updating on a thread with a line in
-//! the footer, removing. The work itself is in `plugins.rs`.
+//! Plugins in the app: the settings screen's Plugins tab (every plugin, installed or in the catalog, one line each;
+//! `d` removes one, enter opens it) and the plugin screen it opens (`Mode::Plugins`, full screen: the list and the
+//! selected one's details, install, update, remove, `f`), which goes back to the settings on the same plugin. The
+//! catalog is fetched with git on a thread the first time the settings open in a run, and again with `f`; installing
+//! and updating run on a thread with a line in the footer. The work itself is in `plugins.rs`.
 //!
 //! A plugin with skills, squads or agents (instructions Claude follows with the user's permissions) is not installed
 //! from a plain yes/no: `Mode::PluginReview` lists each one with what it may do, `enter` reads one in full (Markdown,
@@ -15,9 +17,7 @@ use crate::plugins::{self, Catalog, Installed, Manifest, Origin, Source, Store};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
 
-pub const TOP_PLUGINS: usize = 3;
-
-/// Where a plugin stands, as the Plugins tab shows it.
+/// Where a plugin stands, as the plugin screen shows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PlugState {
     /// In the catalog, not installed.
@@ -45,12 +45,24 @@ impl PlugState {
         }
     }
 
+    /// The same, short, for the one line a plugin has in the settings' list.
+    pub fn short_words(&self) -> &'static str {
+        match self {
+            PlugState::Available => "Available",
+            PlugState::Installed => "Installed",
+            PlugState::Update => "Update ready",
+            PlugState::FromFolder => "Installed from a folder",
+            PlugState::Unavailable(_) => "Can't be installed here",
+            PlugState::NotInCatalog => "Installed, not in the catalog",
+        }
+    }
+
     pub fn installed(&self) -> bool {
         !matches!(self, PlugState::Available | PlugState::Unavailable(_))
     }
 }
 
-/// One row of the Plugins tab: a plugin of the catalog, or one installed that the catalog doesn't have.
+/// One row of the plugin list (the settings' and the plugin screen's): a plugin of the catalog, or one installed that the catalog doesn't have.
 #[derive(Clone, Debug)]
 pub struct PlugRow {
     /// The catalog's, or the installed one's when the catalog doesn't have it.
@@ -96,8 +108,10 @@ pub struct PluginsState {
     fetching: Option<Receiver<Result<Catalog, String>>>,
     /// Why the last fetch failed (the cached copy, if any, is still shown).
     pub fetch_error: Option<String>,
-    /// The catalog has been asked for in this run (it is fetched once when the tab is first shown).
+    /// The catalog has been asked for in this run (it is fetched once, when the settings first open).
     fetch_tried: bool,
+    /// The full-screen plugin screen is open (`Mode::Plugins`, or a question or the review over it).
+    pub screen: bool,
     job: Option<Receiver<JobMsg>>,
     /// What the job is doing, for the footer: "Installing Example themes…".
     pub job_label: String,
@@ -125,6 +139,7 @@ impl PluginsState {
             fetching: None,
             fetch_error: None,
             fetch_tried: false,
+            screen: false,
             job: None,
             job_label: String::new(),
             from_settings: false,
@@ -202,12 +217,68 @@ impl PluginsState {
         let i = self.selected.min(rows.len().saturating_sub(1));
         rows.into_iter().nth(i)
     }
+
+    /// Where the plugin `id` is in `rows()`.
+    pub fn position(&self, id: &str) -> Option<usize> {
+        self.rows().iter().position(|r| r.manifest.id == id)
+    }
+
+    /// The id of the plugin at `i` of `rows()`.
+    fn id_at(&self, i: usize) -> Option<String> {
+        self.rows().into_iter().nth(i).map(|r| r.manifest.id)
+    }
 }
 
 impl App {
-    /// The Plugins tab is showing.
-    pub fn plugins_tab_showing(&self) -> bool {
-        self.top == TOP_PLUGINS && self.open_project.is_none()
+    /// The full-screen plugin screen is showing (on its own, or under a question or the review).
+    pub fn plugin_screen_showing(&self) -> bool {
+        self.pl.screen
+    }
+
+    /// The settings' Plugins tab is showing.
+    pub fn plugin_settings_showing(&self) -> bool {
+        matches!(self.mode, Mode::Settings) && self.settings_tab == crate::settings::TAB_PLUGINS
+    }
+
+    /// Where a question or the review asked from the plugin screen goes back to: the plugin screen, if it is open.
+    pub(super) fn plugins_base(&self) -> Mode {
+        if self.pl.screen { Mode::Plugins } else { Mode::List }
+    }
+
+    /// Enter on a plugin of the settings' Plugins tab: the plugin screen, full screen, on that plugin.
+    pub(super) fn open_plugin_screen(&mut self) {
+        let rows = self.pl.rows();
+        if rows.is_empty() {
+            self.notify(if self.pl.fetching() { "The catalog is still being fetched." } else { "No plugins to show yet." });
+            return;
+        }
+        self.pl.selected = self.setting.min(rows.len() - 1);
+        self.pl.screen = true;
+        self.mode = Mode::Plugins;
+        self.notice = None;
+        self.plugins_shown();
+    }
+
+    /// Back from the plugin screen: the settings, on their Plugins tab, on the plugin that was selected.
+    pub(super) fn close_plugin_screen(&mut self) {
+        self.pl.screen = false;
+        self.pl.review = None;
+        self.refresh_settings();
+        self.settings_tab = crate::settings::TAB_PLUGINS;
+        self.setting = self.pl.selected.min(self.pl.rows().len().saturating_sub(1));
+        self.setting_top.set(0);
+        self.notice = None;
+        self.mode = Mode::Settings;
+    }
+
+    /// The keys of the plugin screen. It is not a top-level list: the quit key goes back, like esc and the back key
+    /// (which arrives here as esc), and `s` and the tab numbers do nothing.
+    pub(super) fn plugin_screen_key(&mut self, key: KeyEvent) {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if self.keys.get().quit.matches(&key) || key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+            return self.close_plugin_screen();
+        }
+        self.plugin_list_key(key);
     }
 
     /// Something of the plugins is running on a thread (the event loop refreshes more often meanwhile).
@@ -215,14 +286,14 @@ impl App {
         self.pl.fetching() || self.pl.working()
     }
 
-    /// Called when the Plugins tab is shown: the catalog is fetched the first time.
+    /// Called when the settings (or the plugin screen) open: the catalog is fetched the first time in a run.
     pub(super) fn plugins_shown(&mut self) {
         if !self.pl.fetch_tried {
             self.fetch_catalog();
         }
     }
 
-    /// Fetch the catalog on a thread (`f`, and the first time the tab shows).
+    /// Fetch the catalog on a thread (`f`, and the first time the settings open).
     pub(super) fn fetch_catalog(&mut self) {
         if self.pl.fetching() {
             return;
@@ -241,12 +312,15 @@ impl App {
         if let Some(rx) = &self.pl.fetching {
             match rx.try_recv() {
                 Ok(Ok(c)) => {
+                    // The rows may come in another order now: the same plugins stay selected.
+                    let (on_screen, in_settings) = (self.pl.id_at(self.pl.selected), self.pl.id_at(self.setting));
                     self.pl.catalog = Some(c);
                     self.pl.fetch_error = None;
                     self.pl.fetching = None;
+                    self.keep_plugin_selection(on_screen, in_settings);
                 }
                 Ok(Err(e)) => {
-                    if self.plugins_tab_showing() {
+                    if self.plugin_screen_showing() {
                         self.notify(e.clone());
                     }
                     self.pl.fetch_error = Some(e);
@@ -299,15 +373,30 @@ impl App {
     /// Read what is installed again, and with it the themes (a theme in use whose plugin went gives way to the
     /// default; one whose plugin came back is used again) and the code editor's state.
     pub(super) fn plugins_changed(&mut self) {
+        let (on_screen, in_settings) = (self.pl.id_at(self.pl.selected), self.pl.id_at(self.setting));
         self.pl.installed = self.pl.store.installed();
         // A plugin's squads and agents come and go with it.
         self.poll_squad_files();
         let dirs = self.ed.dirs.clone();
         self.pl.editor_facts(&dirs);
-        let n = self.pl.rows().len();
-        self.pl.selected = self.pl.selected.min(n.saturating_sub(1));
+        self.keep_plugin_selection(on_screen, in_settings);
         self.themes.refresh();
         self.sync_theme();
+    }
+
+    /// After the rows changed: the plugins that were selected (on the plugin screen, and in the settings' Plugins tab
+    /// when it is the one showing) stay selected where they still are; otherwise the selection stays in range.
+    fn keep_plugin_selection(&mut self, on_screen: Option<String>, in_settings: Option<String>) {
+        let last = self.pl.rows().len().saturating_sub(1);
+        self.pl.selected = on_screen.and_then(|id| self.pl.position(&id)).unwrap_or(self.pl.selected).min(last);
+        if self.settings_tab == crate::settings::TAB_PLUGINS {
+            self.setting = in_settings.and_then(|id| self.pl.position(&id)).unwrap_or(self.setting).min(last);
+        }
+    }
+
+    /// The wheel on the plugin screen: up and down the list.
+    pub(super) fn wheel_plugins(&mut self, up: bool) {
+        self.move_plugin(if up { -1 } else { 1 });
     }
 
     fn move_plugin(&mut self, delta: i32) {
@@ -315,7 +404,7 @@ impl App {
         self.pl.selected = (self.pl.selected as i32 + delta).clamp(0, last) as usize;
     }
 
-    /// A click on a row of the Plugins tab: select it (clicking the selected one again is enter).
+    /// A click on a row of the plugin screen: select it (clicking the selected one again is enter).
     pub(super) fn click_plugin(&mut self, i: usize) {
         if i == self.pl.selected {
             self.plugin_enter();
@@ -324,7 +413,7 @@ impl App {
         }
     }
 
-    pub(super) fn plugins_tab_key(&mut self, key: KeyEvent) {
+    pub(super) fn plugin_list_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Up => self.move_plugin(-1),
             KeyCode::Down => self.move_plugin(1),
@@ -420,19 +509,12 @@ impl App {
         });
     }
 
-    /// `d`: take the selected plugin off (on the Plugins tab), or the selected installed one (in the settings).
+    /// `d`: take the selected plugin off (on the plugin screen, or in the settings' Plugins tab).
     pub(super) fn ask_remove_plugin(&mut self, from_settings: bool) {
-        let target = if from_settings {
-            self.pl.installed.get(self.setting).cloned()
-        } else {
-            self.pl.selected_row().and_then(|r| r.installed)
-        };
-        let Some(p) = target else {
-            if !from_settings {
-                if let Some(row) = self.pl.selected_row() {
-                    self.notify(format!("{} isn't installed.", row.manifest.name));
-                }
-            }
+        let row = if from_settings { self.pl.rows().into_iter().nth(self.setting) } else { self.pl.selected_row() };
+        let Some(row) = row else { return };
+        let Some(p) = row.installed.clone() else {
+            self.notify(format!("{} isn't installed.", row.manifest.name));
             return;
         };
         if self.pl.working() {
@@ -490,7 +572,7 @@ impl App {
     /// `y` on the review: install (or update) it.
     pub(super) fn accept_review(&mut self) {
         let Some(r) = self.pl.review.take() else {
-            self.mode = Mode::List;
+            self.mode = self.plugins_base();
             return;
         };
         self.install_plugin(&r.id);
@@ -499,13 +581,13 @@ impl App {
     /// `n` or esc on the review: nothing is installed.
     pub(super) fn close_review(&mut self) {
         self.pl.review = None;
-        self.mode = Mode::List;
+        self.mode = self.plugins_base();
     }
 
     pub(super) fn review_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let Some(r) = self.pl.review.as_mut() else {
-            self.mode = Mode::List;
+            self.mode = self.plugins_base();
             return;
         };
         if r.reading.is_some() {
@@ -560,7 +642,7 @@ impl App {
 
     /// Yes to installing (or updating) a plugin from the catalog: on a thread, with a line in the footer.
     pub(super) fn install_plugin(&mut self, id: &str) {
-        self.mode = Mode::List;
+        self.mode = self.plugins_base();
         self.pl.review = None;
         let (Some(c), Some(row)) = (self.pl.catalog.clone(), self.pl.rows().into_iter().find(|r| r.manifest.id == id)) else { return };
         let Some(dir) = row.entry.clone() else { return };
@@ -593,7 +675,7 @@ impl App {
                 };
                 match editorplugin::install_downloads(&store, &dirs, &report) {
                     Ok(_) => Ok(format!("{said} v on a session or a ticket opens it.")),
-                    Err(e) => Err(format!("{said} Its downloads didn't finish: {e} Enter on it here tries again.")),
+                    Err(e) => Err(format!("{said} Its downloads didn't finish: {e} Enter on it in the settings' Plugins tab tries again.")),
                 }
             });
             let _ = tx.send(JobMsg::Done(r));
@@ -607,12 +689,11 @@ impl App {
 
     /// Yes to removing a plugin: quick (a few small files; the code editor's folder a moment longer), so done at once.
     pub(super) fn remove_plugin(&mut self, id: &str) {
-        self.mode = if std::mem::take(&mut self.pl.from_settings) { Mode::Settings } else { Mode::List };
+        self.mode = if std::mem::take(&mut self.pl.from_settings) { Mode::Settings } else { self.plugins_base() };
         let was_using = self.theme.id.starts_with(&format!("{}{id}/", plugins::THEME_PREFIX));
         if editorplugin::is_editor(&self.pl.store, id) {
             let r = editorplugin::remove(&self.pl.store, &self.ed.dirs, id);
             self.plugins_changed();
-            self.setting = self.setting.min(self.pl.installed.len().saturating_sub(1));
             match r {
                 Ok((p, removed)) => {
                     let name = p.map_or_else(|| "The code editor".to_string(), |p| p.manifest.name);
@@ -625,7 +706,6 @@ impl App {
         }
         let r = self.pl.store.remove_noting(id);
         self.plugins_changed();
-        self.setting = self.setting.min(self.pl.installed.len().saturating_sub(1));
         let notes = |n: &[String]| if n.is_empty() { String::new() } else { format!(" {}", n.join(" ")) };
         match r {
             Ok((Some(p), n)) if was_using => self.notify(format!("Removed {}. Its theme was in use, so platoon is back to {}.{}", p.manifest.name, self.theme.name, notes(&n))),
@@ -637,22 +717,27 @@ impl App {
 
     /// No to removing: back where it was asked.
     pub(super) fn cancel_remove_plugin(&mut self) {
-        self.mode = if std::mem::take(&mut self.pl.from_settings) { Mode::Settings } else { Mode::List };
+        self.mode = if std::mem::take(&mut self.pl.from_settings) { Mode::Settings } else { self.plugins_base() };
     }
 
-    /// The settings screen's Plugins tab: up and down over the installed plugins, `d` removes one.
+    /// The settings screen's Plugins tab: up and down over every plugin, enter opens the plugin screen on the one
+    /// selected, `d` removes an installed one.
     pub(super) fn plugin_settings_key(&mut self, key: KeyEvent) -> bool {
         if self.settings_tab != crate::settings::TAB_PLUGINS {
             return false;
         }
-        let last = self.pl.installed.len().saturating_sub(1);
+        let last = self.pl.rows().len().saturating_sub(1);
         match key.code {
-            KeyCode::Up => self.setting = self.setting.saturating_sub(1),
+            KeyCode::Up => self.setting = self.setting.saturating_sub(1).min(last),
             KeyCode::Down => self.setting = (self.setting + 1).min(last),
+            KeyCode::PageUp => self.setting = self.setting.saturating_sub(5).min(last),
+            KeyCode::PageDown => self.setting = (self.setting + 5).min(last),
             KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
             KeyCode::End | KeyCode::Char('G') => self.setting = last,
+            KeyCode::Enter => self.open_plugin_screen(),
             KeyCode::Char('d') | KeyCode::Delete => self.ask_remove_plugin(true),
-            KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ' | 'h' | 'l' | '-' | '+' | '=' | 'r') => {}
+            KeyCode::Char('f') => self.fetch_catalog(),
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ' | 'h' | 'l' | '-' | '+' | '=' | 'r') => {}
             _ => return false,
         }
         true

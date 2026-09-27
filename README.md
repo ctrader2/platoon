@@ -30,14 +30,14 @@ already done, and a step whose command points at a platoon that no longer exists
 
 platoon's code editor (Neovim with a file tree, the changed files and their differences, search and a terminal, for
 looking at a ticket's or a session's work with `v`) is optional and is a [plugin](#plugins), **Code editor (Neovim)**,
-installed separately: from the Plugins tab (`4`), with `platoon plugin add editor`, or by saying yes when `v` offers it.
+installed separately: from the settings (`s`, then **Plugins**), with `platoon plugin add editor`, or by saying yes when `v` offers it.
 `platoon setup` doesn't ask about it. `platoon setup --add editor` and `--remove editor` still work: they say the editor
 is a plugin now and do `platoon plugin add editor` / `remove editor`. Without it, `v` still opens
 [the editors your computer has](#opening-the-editor-v).
 
 The plugin holds no programs: it is a download table (what to fetch, from where, and each file's checksum and size) and
 the editor's settings files. Installing it installs those, then downloads what the table lists (about 58 MB on Linux
-x86_64, usually under a minute; the Plugins tab and the question before installing say how much), all pinned to exact
+x86_64, usually under a minute; the plugin's details and the question before installing say how much), all pinned to exact
 versions and checked against their checksums and sizes before anything is used:
 
 - **Neovim** 0.12.5, unless you already have Neovim 0.12 or newer, which is used instead.
@@ -57,7 +57,7 @@ Nothing needs sudo or a package manager: everything is downloaded with `curl` in
 the font into `~/.local/share/fonts/platoon` (macOS: `~/Library/Fonts`; `PLATOON_FONT_DIR` moves it). It never touches
 your own `~/.config/nvim` or Neovim's data. Downloads run side by side and are checked before being moved into place, so an
 install that fails or is interrupted never leaves something that looks finished; running it again carries on from there.
-Removing the plugin (`d` on the Plugins tab, `platoon plugin remove editor`) deletes platoon's folder and the font files
+Removing the plugin (`d` on it in the settings' Plugins tab, `platoon plugin remove editor`) deletes platoon's folder and the font files
 platoon put there, never your own Neovim, ripgrep, fd or fonts. An update of the plugin (a new table) fetches only what
 changed; `platoon plugin update` and `enter` on it also finish downloads that didn't complete.
 
@@ -87,7 +87,7 @@ back to platoon exactly where you were. Sessions and squads keep running meanwhi
 
 - **Not installed yet**: platoon offers its plugin (it says how much it downloads): yes fetches the plugin catalog,
   installs the plugin, then its downloads (the progress shows at the bottom), then opens it. Saying no is fine: the
-  Plugins tab (`4`) or `platoon plugin add editor` installs it later. This works after removing it too: pressing `v` is
+  settings (`s`, then **Plugins**) or `platoon plugin add editor` installs it later. This works after removing it too: pressing `v` is
   asking for it. If the plugin is there but some of its downloads aren't, `v` offers to finish them.
 - **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it. The
   editor reads a file again when the squad changes it on disk, and warns before saving over a file that changed there.
@@ -151,7 +151,7 @@ rename, `esc` closes the panel, `?` lists its keys. In a list that pops up (find
 differences: `tab` goes to the next file, `esc` closes them. In the terminal, press `esc` twice to scroll or copy, and `q`
 from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon). An editor
 plugin from before the back key (version 1.0.0) keeps `q` and `space q` as the way back and `ctrl+space` for the completion
-menu; updating it on the Plugins tab brings both changes.
+menu; updating it (settings, **Plugins**, `enter` on it) brings both changes.
 
 **Copying.** Copying in the editor (`y` on a selection, `yy`, `"+y`) puts the text on the system clipboard, where
 platoon's own copies go (see [Copying text from a session](#copying-text-from-a-session); `PLATOON_CLIPBOARD` applies here too): through platoon itself,
@@ -174,8 +174,8 @@ Where things are: the editor runs `<platoon's data folder>/editor/bin/nvim` with
 
 ## The list
 
-The header has four tabs, **Sessions**, **Projects**, **Squads** and **Plugins** (`1` to `4`, or click them); the first three
-show how many active ones they hold. Under Sessions and Projects, each has **Active** and **Archived**: the left and right arrow
+The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them); each shows how many
+active ones it holds. ([Plugins](#plugins) are in the settings.) Under Sessions and Projects, each has **Active** and **Archived**: the left and right arrow
 keys switch them (or click them).
 
 One row per conversation, built from Claude Code's saved history, so everything you've ever run is there
@@ -213,7 +213,7 @@ before.
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `v` | open the conversation's folders in the [code editor](#opening-the-editor-v) |
-| `1` `2` `3` `4` | switch between the Sessions, Projects, [Squads](#squads) and [Plugins](#plugins) tabs (or click them); the current tab is underlined |
+| `1` `2` `3` | switch between the Sessions, Projects and [Squads](#squads) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
@@ -404,9 +404,13 @@ when naming is held up, why (`Naming is waiting: ...`).
 | Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | platoon's editor (default), and the [editors with a file tree](#opening-the-editor-v) found on this computer |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
 
-**Plugins**: the [plugins](#plugins) you have installed, each with its version, what it adds and where it came from. `↑` `↓`
-choose one and `d` removes it (after asking). Browsing and installing are on the Plugins tab (`4` on the main screen), which the
-line under the list points to.
+**Plugins**: every [plugin](#plugins), the ones you have installed and the ones the catalog has, one line each: its name,
+its version and where it stands (**Installed**, **Update ready**, **Available**; also "Installed from a folder", "Installed, not
+in the catalog", "Can't be installed here"). The first time the settings open in a run platoon fetches the catalog; the line
+under the list says how that went (installed plugins are listed even when it can't be reached; `f` tries again). `↑` `↓`
+choose one, `d` removes an installed one (after asking), and `enter` (or a click on the selected one) opens the
+[plugin screen](#plugins) on it: its details, install, update and remove. The back key or `esc` there comes back here, on
+the same plugin.
 
 #### System prompts for each smart feature
 
@@ -468,12 +472,12 @@ setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minute
 One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
 running), detaches `platoon open`, stops a notes editor running inside platoon, goes back to platoon from the code editor,
 goes from a ticket's screen to its project's screen and from there to the list, leaves a squad's details, a plugin's file,
-the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
+the plugin screen (back to the settings), the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
 same on platoon's own screens and popups (not in a session or an editor, where it is theirs). On the top-level lists, with
 nothing open, it does what `esc` does there (clears a kept filter) and never quits.
 
-`q` quits, but only from the top-level lists (Sessions, Projects, Squads, Plugins with nothing open). On a project's or a
-ticket's screen, or in a squad's details, it goes back one level instead. In a box you type in, `q` is just a letter.
+`q` quits, but only from the top-level lists (Sessions, Projects, Squads with nothing open). On a project's or a
+ticket's screen, in a squad's details, or on the plugin screen, it goes back one level instead. In a box you type in, `q` is just a letter.
 
 Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
 platoon never writes this file; there is no entry for it on the settings screen. For example:
@@ -1346,9 +1350,11 @@ platoon records what it wrote; removing the plugin deletes a skill only if it is
 changed is kept, and platoon says so (an update keeps your changed copy too). **Its squads and agents** are on the
 [Squads tab](#squads), read only.
 
-**The Plugins tab** (`4`) lists what the catalog has and what you have installed. The first time you open it in a run,
-platoon fetches the catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The selected
-plugin's details are on the right: what it is, who made it, its version, what it adds (the themes by name; for the code
+**In the settings** (`s`, then the **Plugins** tab) every plugin is listed, installed or not, with where it stands; `d`
+removes one there. `enter` on one opens **the plugin screen** on it, full screen: the catalog and what you have installed on
+the left, the selected plugin's details on the right. The first time the settings open in a run, platoon fetches the
+catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The back key (`ctrl+space`), `esc`
+or `q` goes back to the settings, on the same plugin. The details are: what it is, who made it, its version, what it adds (the themes by name; for the code
 editor, how much it downloads), its license, where it came from and the oldest platoon it works with.
 
 | Key | Does |
@@ -1358,6 +1364,7 @@ editor, how much it downloads), its license, where it came from and the oldest p
 | `d` | remove the selected plugin (after asking) |
 | `f` | check the catalog again |
 | `↑` `↓` `g` `G` | move |
+| `ctrl+space`, `esc`, `q` | back to the settings' Plugins tab, on the same plugin |
 
 The same from the command line:
 
@@ -1375,7 +1382,7 @@ platoon plugin check <folder>    check a plugin folder before you send it
 **How the catalog is fetched.** With `git`: a shallow copy of just the `plugins/` folder of platoon's repository, at its
 `main` branch. While the repository is private this uses your own git login; once it is public no login is needed. platoon
 never asks for a password: if git has no saved login it says so ("platoon couldn't reach its plugin catalog: …") and the
-Plugins tab shows the copy it fetched last, if there is one. For each installed plugin platoon writes down the commit it came
+plugin list shows the copy it fetched last, if there is one. For each installed plugin platoon writes down the commit it came
 from and a checksum of its files.
 
 **Where they go.** Installed plugins are in platoon's data folder, `~/.local/share/platoon/plugins/<id>/` (macOS:

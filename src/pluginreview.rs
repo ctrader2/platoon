@@ -1,7 +1,7 @@
 //! What a plugin with instructions adds, to be read before it is installed. Skills and agents are instructions Claude
 //! follows with the user's permissions (and a squad is a workflow its leader follows), so platoon shows each one first:
 //! a line of what it is and, in plain words, what it may do (`Item::permissions`), and its whole text to read
-//! (`Item::text`, Markdown: the Plugins tab draws it with `mdview.rs`, `platoon plugin show` prints it).
+//! (`Item::text`, Markdown: the plugin screen draws it with `mdview.rs`, `platoon plugin show` prints it).
 //!
 //! An update compares the catalog's version with the one installed, item by item (`review`): what is new, what
 //! changed, what goes. One that changes any instructions is shown and asked again.

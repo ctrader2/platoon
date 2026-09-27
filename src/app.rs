@@ -54,7 +54,7 @@ pub(crate) mod worktree_glue;
 pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use plugins_glue::{PlugRow, PlugState, PluginsState, Review, TOP_PLUGINS};
+pub use plugins_glue::{PlugRow, PlugState, PluginsState, Review};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
@@ -201,7 +201,7 @@ pub enum Hit {
     SquadDetail(usize),
     /// An entry of the small list open over the Squads tab.
     SquadChoiceRow(usize),
-    /// A plugin on the Plugins tab.
+    /// A plugin on the plugin screen.
     PluginRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
@@ -344,6 +344,9 @@ pub enum Mode {
     /// What a plugin with skills, squads or agents adds, to read before it is installed or updated (`pl.review`):
     /// each one with its permissions, and one of them read in full.
     PluginReview,
+    /// The plugin screen, full screen, opened from the settings' Plugins tab (`pl.screen`): every plugin with the
+    /// selected one's details, install, update, remove. Back goes to the settings, on the same plugin.
+    Plugins,
 }
 
 pub struct Picker {
@@ -1394,6 +1397,8 @@ impl App {
             (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
             (Action::Confirm, Mode::PluginReview) => self.accept_review(),
             (Action::Cancel, Mode::PluginReview) => self.close_review(),
+            (Action::Cancel, Mode::Plugins) => self.close_plugin_screen(),
+            (Action::Cancel, Mode::Confirm(Confirm::InstallPlugin { .. })) => self.mode = self.plugins_base(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -1718,6 +1723,8 @@ impl App {
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
+        // The Plugins tab lists the catalog's plugins too: it is fetched the first time in a run.
+        self.plugins_shown();
     }
 
     /// Open the theme list on the theme in effect. Nothing changes until the highlight moves.
@@ -1815,7 +1822,7 @@ impl App {
     /// Move to another line of the settings screen.
     fn move_setting(&mut self, delta: i32) {
         if self.settings_tab == crate::settings::TAB_PLUGINS {
-            self.setting = (self.setting as i32 + delta).clamp(0, self.pl.installed.len().saturating_sub(1) as i32) as usize;
+            self.setting = (self.setting as i32 + delta).clamp(0, self.pl.rows().len().saturating_sub(1) as i32) as usize;
             return;
         }
         self.setting = (self.setting as i32 + delta).clamp(0, self.items().len() as i32 - 1) as usize;
@@ -2333,6 +2340,11 @@ impl App {
     }
 
     #[cfg(test)]
+    pub fn plugins_changed_for_test(&mut self) {
+        self.plugins_changed();
+    }
+
+    #[cfg(test)]
     pub fn reload_for_test(&mut self) {
         self.reload();
     }
@@ -2498,6 +2510,7 @@ impl App {
             Mode::SquadChoice => self.squad_choice_key(key),
             Mode::SquadText => self.squad_text_key(key),
             Mode::PluginReview => self.review_key(key),
+            Mode::Plugins => self.plugin_screen_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2636,6 +2649,7 @@ impl App {
                     Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
                     Mode::SquadText => {}
                     Mode::PluginReview => self.wheel_review(up),
+                    Mode::Plugins => self.wheel_plugins(up),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
@@ -2660,7 +2674,8 @@ impl App {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) if self.projects_list_showing() => self.switch_ptab(i),
                     Some(Hit::Tab(i)) => self.switch_tab(i),
-                    Some(Hit::Top(i)) => self.switch_top(i),
+                    Some(Hit::Top(i)) if matches!(self.mode, Mode::List) => self.switch_top(i),
+                    Some(Hit::Top(_)) => {}
                     Some(Hit::ProjectRow(i)) if i == self.pselected => self.act(Action::Jump),
                     Some(Hit::ProjectRow(i)) => self.pselected = i,
                     Some(Hit::AssignRow(i)) if i == self.assign.selected => self.act(Action::Confirm),
@@ -2688,6 +2703,8 @@ impl App {
                     // As in the list: clicking the highlighted result again takes it.
                     Some(Hit::SearchRow(i)) if i == self.search_selected() => self.act(Action::Confirm),
                     Some(Hit::SearchRow(i)) => self.select_search_row(i),
+                    // On the Plugins tab, clicking the selected plugin again opens it, like enter.
+                    Some(Hit::Setting(i)) if i == self.setting && self.plugin_settings_showing() => self.open_plugin_screen(),
                     Some(Hit::Setting(i)) => self.setting = i,
                     Some(Hit::SettingsTab(i)) => self.switch_settings_tab(i),
                     Some(Hit::SettingStep(i, step)) => {

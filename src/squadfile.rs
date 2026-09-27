@@ -751,7 +751,7 @@ pub fn save(config: &Path, s: &Squad) -> io::Result<()> {
 /// as `<id>.json.bak` (one copy, replaced by the next), so a mistake can still be undone by hand.
 pub fn remove(config: &Path, id: &str) -> io::Result<()> {
     if crate::squadplugin::is_plugin(id) {
-        return Err(io::Error::other("it comes with a plugin: the Plugins tab (4) takes the plugin off"));
+        return Err(io::Error::other("it comes with a plugin: removing the plugin (in the settings: s, then Plugins) takes it off"));
     }
     let p = path(config, id);
     let _lock = lock(&lock_path(config))?;

@@ -77,7 +77,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
-    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing());
+    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.plugin_screen_showing());
     let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = f.area().width;
     let [header, rule, shelf, titles, list, strip, footer] = Layout::vertical([
@@ -96,7 +96,11 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     let tabs = draw_header(f, app, header);
     draw_tab_rule(f, t, rule, &tabs);
-    let hints: Vec<Hint> = if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+    let hints: Vec<Hint> = if app.plugin_screen_showing() {
+        // Opened from the settings, over whatever screen they were opened on: it takes the whole body.
+        plugins_view::draw_plugin_screen(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
+        plugins_view::plugin_screen_hints(app)
+    } else if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
         // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
         let body = Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y);
         // In the line for a free squad, its squad's place beside it is not there yet (an earlier squad's isn't its).
@@ -112,9 +116,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else if app.squads_tab_showing() {
         squads_view::draw_squads_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
         squads_view::squads_tab_hints(app)
-    } else if app.plugins_tab_showing() {
-        plugins_view::draw_plugins_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
-        plugins_view::plugins_tab_hints(app)
     } else if app.projects_list_showing() {
         let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
         draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
@@ -225,7 +226,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
-        ("1-4", "tabs", None),
+        ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         (app.quit_label(), "quit", Some(Action::Quit)),
@@ -243,7 +244,7 @@ fn projects_hints(app: &App) -> Vec<Hint<'_>> {
         ("d", "delete", Some(Action::Delete)),
         ("/", "search", Some(Action::Search)),
         ("←→", "active/archived", None),
-        ("1-4", "tabs", None),
+        ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         (app.quit_label(), "quit", Some(Action::Quit)),
@@ -1210,9 +1211,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
     let mut spans = Vec::new();
-    // The top-level tabs count what is active: sessions, projects and squads. Plugins has no count: how many are
-    // installed is nothing to act on, and the header is short of room.
-    let top_counts = [Some(app.counts.first().copied().unwrap_or(0)), Some(app.pcounts[0]), Some(app.squad_list().len()), None];
+    // The top-level tabs count what is active: sessions, projects and squads.
+    let top_counts = [Some(app.counts.first().copied().unwrap_or(0)), Some(app.pcounts[0]), Some(app.squad_list().len())];
+    // The plugin screen (from the settings) is none of the tabs: none is current there, and they aren't clicked.
+    let on_tab = !app.plugin_screen_showing();
     for (i, tab) in TOPS.iter().enumerate() {
         if i > 0 {
             left.push(Span::raw(" "));
@@ -1220,7 +1222,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         }
         // A chip: ` 1 Sessions ` with the count in a badge after a little air. Round caps where the terminal has the
         // glyphs, otherwise a padded square. Either way the text reads "1 Sessions 3".
-        let current = i == app.top;
+        let current = on_tab && i == app.top;
         let (key, label) = (format!("{}", i + 1), format!(" {tab} "));
         let count = top_counts.get(i).copied().flatten();
         let w = match count {
@@ -1228,12 +1230,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
             None => (1 + key.chars().count() + label.chars().count()) as u16,
         };
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
-        if !rect.is_empty() {
+        if !rect.is_empty() && on_tab {
             app.hits.borrow_mut().push((rect, Hit::Top(i)));
         }
         spans.push((x, w, current));
         x += w;
-        let hover = !current && rect.contains(app.mouse.into());
+        let hover = on_tab && !current && rect.contains(app.mouse.into());
         let mut chip = tab_chip(t, app.rounded, &key, &label, count.unwrap_or(0), current, hover);
         if count.is_none() {
             // Just the key and the label: the count's pill (the last one or three spans) goes.
@@ -1826,7 +1828,11 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let on_plugins = app.settings_tab == crate::settings::TAB_PLUGINS;
     let hints = if on_plugins {
         let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None)];
-        if !app.pl.installed.is_empty() {
+        let rows = app.pl.rows();
+        if !rows.is_empty() {
+            hints.push(("enter", "open", None));
+        }
+        if rows.get(app.setting).is_some_and(|r| r.installed.is_some()) {
             hints.push(("d", "remove", None));
         }
         hints.push((app.back_label(), "back", Some(Action::Cancel)));
@@ -1912,7 +1918,10 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
         notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
     }
     if tab == crate::settings::TAB_PLUGINS {
-        let msg = "Browse and install plugins on the Plugins tab: press 4 on the main screen.";
+        // Where the catalog stands, on one line (so the popup keeps its size as it changes), then what enter does.
+        let (status, color) = plugins_view::catalog_status(app);
+        notes.push((fit_end(&status, w), color));
+        let msg = "Enter opens a plugin: what it adds, and install, update or remove.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.subtext)));
     }
     if app.settings().is_corrupt() {
@@ -3159,7 +3168,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "code editor",
             "platoon's code editor isn't installed. Install its plugin now?".to_string(),
             format!(
-                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder. It downloads {}, usually in under a minute. Your own Neovim settings are not touched; the Plugins tab (4) takes it off again.",
+                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder. It downloads {}, usually in under a minute. Your own Neovim settings are not touched; the settings (s, then Plugins) take it off again.",
                 crate::editorplugin::size_words(*bytes)
             ),
             "install",
@@ -3228,7 +3237,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             None => (
                 "install plugin",
                 format!("Install {name}?"),
-                format!("It adds {adds}. It holds files only, nothing that runs, and d on the Plugins tab takes it off again."),
+                format!("It adds {adds}. It holds files only, nothing that runs, and d on it (in the settings: s, then Plugins) takes it off again."),
                 "install",
             ),
         },

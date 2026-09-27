@@ -762,7 +762,7 @@ mod tests {
         assert_eq!((app.top, app.tab), (0, 0));
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4 4 Plugins") && shown.contains("Active 2 Archived 1"), "{shown}");
+        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"), "{shown}");
 
         // Left and right: Active and Archived.
         key(&mut app, KeyCode::Right);
@@ -772,16 +772,16 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 to 4: the top-level tabs. A number with no tab does nothing.
+        // 1 to 3: the top-level tabs. A number with no tab does nothing (4 included: plugins are in the settings).
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '3');
         assert!(app.top == 2 && app.squads_tab_showing() && app.selected_session().is_none());
         ch(&mut app, '4');
-        assert!(app.top == 3 && app.plugins_tab_showing() && app.selected_session().is_none());
+        assert!(app.top == 2 && !app.plugin_screen_showing() && matches!(app.mode, Mode::List));
         ch(&mut app, '5');
-        assert_eq!(app.top, 3);
+        assert_eq!(app.top, 2);
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 
@@ -2035,8 +2035,8 @@ mod tests {
         std::fs::create_dir_all(cache.join("status")).unwrap();
         let json = serde_json::json!({"ts": 1_000, "context_pct": 5.0, "five_hour": null, "seven_day": {"pct": 3, "resets_at": 9_000}});
         std::fs::write(cache.join("status/aaaa.json"), json.to_string()).unwrap();
-        // (At 80 columns, beside four tabs, only the 5-hour figure has room.)
-        for (cols, bars, weekly) in [(80u16, false, false), (100, false, true), (140, true, true)] {
+        // (At 80 columns, beside three tabs, both figures fit without their bars.)
+        for (cols, bars, weekly) in [(80u16, false, true), (100, false, true), (140, true, true)] {
             app.usage = crate::usage::Usage::Ready(crate::usage::load(&cache, 1_001).plan.unwrap());
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
