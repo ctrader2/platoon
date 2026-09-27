@@ -131,6 +131,9 @@ impl Lab {
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+        // The project's conversation comes from the background index: wait for its row, or a new ticket made
+        // now has no session to take its folder from.
+        t.wait_for_flat("○ work");
     }
 }
 
