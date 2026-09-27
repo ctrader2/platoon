@@ -557,6 +557,8 @@ pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
+/// The installed plugins, each with remove; browsing and installing are on the Plugins tab (`4`).
+pub const TAB_PLUGINS: usize = 6;
 
 /// Every entry on every tab, in screen order.
 #[cfg(test)]
@@ -578,6 +580,8 @@ fn tabs() -> Vec<Tab> {
         Tab { title: "Sessions", items: sessions_items(), headings: &[] },
         Tab { title: "Projects", items: projects_items(), headings: &[] },
         Tab { title: "Editors", items: editors_items(), headings: &[(0, "Editing platoon's text"), (1, "Editing files")] },
+        // Its entries are the installed plugins, known only at run time: the app draws them and handles its keys.
+        Tab { title: "Plugins", items: Vec::new(), headings: &[] },
     ]
 }
 
@@ -1421,9 +1425,11 @@ mod tests {
     }
 
     #[test]
-    fn six_tabs_hold_every_setting_once_each_where_it_belongs() {
+    fn seven_tabs_hold_every_setting_once_each_where_it_belongs() {
         let titles: Vec<&str> = TABS.iter().map(|t| t.title).collect();
-        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"]);
+        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"]);
+        assert!(tab("Plugins").is_empty(), "its rows are the installed plugins, drawn by the app");
+        assert_eq!(TABS[TAB_PLUGINS].title, "Plugins");
         assert_eq!(tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(), ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();

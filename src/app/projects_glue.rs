@@ -6,8 +6,8 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1`, `2`, `3`.
-pub const TOPS: &[&str] = &["Sessions", "Projects", "Squads"];
+/// The top-level tabs, on `1`, `2`, `3`, `4`.
+pub const TOPS: &[&str] = &["Sessions", "Projects", "Squads", "Plugins"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_PROJECTS: usize = 1;
 pub const TOP_SQUADS: usize = 2;
@@ -180,6 +180,9 @@ impl App {
         self.top = i;
         self.filter.clear();
         self.update_view();
+        if i == super::TOP_PLUGINS {
+            self.plugins_shown();
+        }
     }
 
     /// Left and right on the Projects tab: Active or Archived.
@@ -260,7 +263,7 @@ impl App {
         match key.code {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
             KeyCode::Char('q') => return self.act(Action::Quit),
-            KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() => return self.act(Action::Search),
+            KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() && !self.plugins_tab_showing() => return self.act(Action::Search),
             // On a ticket (its screen, or its row in the Tickets pane) `s` does nothing: it was the ticket's state, which
             // the squad sets now (the user only cancels, with `c`), and settings popping up there would surprise.
             KeyCode::Char('s') if !ctrl && !self.ticket_has_keys() => return self.act(Action::Settings),
@@ -278,6 +281,8 @@ impl App {
             self.projects_key(key);
         } else if self.top == TOP_SQUADS {
             self.squads_tab_key(key);
+        } else if self.top == super::TOP_PLUGINS {
+            self.plugins_tab_key(key);
         } else {
             self.sessions_key(key);
         }
@@ -388,6 +393,8 @@ impl App {
         let d = if up { -1 } else { 1 };
         if self.squads_tab_showing() {
             self.wheel_squads(up);
+        } else if self.plugins_tab_showing() {
+            self.pl.selected = (self.pl.selected as i32 + d).clamp(0, self.pl.rows().len().saturating_sub(1) as i32) as usize;
         } else if self.projects_list_showing() {
             self.move_project(d);
         } else if self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets) {

@@ -127,7 +127,7 @@ fn the_limits_step_through_their_choices_and_are_saved() {
 fn the_header_says_quietly_when_the_features_are_paused_shrinks_to_fit_and_goes_when_it_is_over() {
     let w = World::new("tok-header");
     let mut app = w.app();
-    let mut term = Terminal::new(TestBackend::new(140, 20)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(152, 20)).unwrap(); // (wide enough for four tabs and the whole note)
     // Nothing wrong: nothing in the header.
     assert_eq!(app.ai_header_note(200), None);
     assert!(!screen(&mut term, &app).contains("smart features"), "nothing to say while the features are simply off");

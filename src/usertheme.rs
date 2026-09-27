@@ -204,7 +204,7 @@ fn distinct(picks: [Color; 5], bg: Color, text: Color) -> [Color; 5] {
 
 /// A file name as a theme's display name: control characters dropped (they could act on the terminal that shows
 /// it) and so are the invisible ones that reorder text, runs of space folded, cut at `MAX_NAME` characters.
-fn display_name(file: &OsStr) -> String {
+pub fn display_name(file: &OsStr) -> String {
     let odd = |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
     let name: String = file.to_string_lossy().chars().map(|c| if odd(c) { ' ' } else { c }).collect();
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -280,7 +280,7 @@ fn candidates(dir: &Path) -> Vec<(OsString, PathBuf, u64, Option<SystemTime>)> {
     files
 }
 
-fn read_theme_text(path: &Path, len: u64) -> Result<String, String> {
+pub fn read_theme_text(path: &Path, len: u64) -> Result<String, String> {
     if len > MAX_BYTES {
         return Err(format!("the file is bigger than {} KiB", MAX_BYTES / 1024));
     }
@@ -333,18 +333,32 @@ pub fn scan(dir: &Path) -> Scan {
 
 type Print = Vec<(OsString, u64, Option<SystemTime>)>;
 
-/// The user's themes as of the last look at the folder, and what is needed to see that it changed.
+type PluginPrint = Option<(u64, Option<SystemTime>)>;
+
+/// The user's themes as of the last look at the folder, and what is needed to see that it changed. Also the themes
+/// of installed plugins, when it was opened with a plugins folder.
 #[derive(Default)]
 pub struct Registry {
     dir: PathBuf,
     print: Option<Print>,
     scan: Scan,
+    plugins: Option<crate::plugins::Store>,
+    plugin_print: PluginPrint,
+    plugin_themes: Vec<crate::plugins::PluginTheme>,
 }
 
 impl Registry {
     /// The themes in `<config>/themes`, read now. (`Registry::default()` has none and never looks anywhere.)
+    #[cfg(test)]
     pub fn open(config: &Path) -> Self {
-        let mut r = Self { dir: config.join("themes"), print: None, scan: Scan::default() };
+        let mut r = Self { dir: config.join("themes"), ..Self::default() };
+        r.reload();
+        r
+    }
+
+    /// The user's themes and those of the plugins installed in `plugins` (`<data>/plugins`).
+    pub fn open_with_plugins(config: &Path, plugins: &Path) -> Self {
+        let mut r = Self { dir: config.join("themes"), plugins: Some(crate::plugins::Store::new(plugins.to_path_buf())), ..Self::default() };
         r.reload();
         r
     }
@@ -366,17 +380,32 @@ impl Registry {
     fn reload(&mut self) {
         self.print = self.fingerprint();
         self.scan = scan(&self.dir);
+        self.reload_plugins();
+    }
+
+    fn reload_plugins(&mut self) {
+        let Some(store) = &self.plugins else { return };
+        self.plugin_print = crate::plugins::fingerprint(store);
+        let taken: Vec<String> = Theme::all().into_iter().map(|t| t.name).chain(self.scan.themes.iter().map(|t| t.name.clone())).collect();
+        self.plugin_themes = crate::plugins::themes(store, &taken);
     }
 
     /// Look at the folder again: a listing of names, sizes and times, and the files are only read again if that
-    /// changed. True when they were. Bounded by `MAX_ENTRIES`, so cheap enough for every settings refresh.
+    /// changed. True when they were. Bounded by `MAX_ENTRIES`, so cheap enough for every settings refresh. The
+    /// plugins' themes are read again when what is installed changed.
     pub fn refresh(&mut self) -> bool {
         let now = self.fingerprint();
-        if now == self.print {
-            return false;
+        if now != self.print {
+            self.reload();
+            return true;
         }
-        self.reload();
-        true
+        match &self.plugins {
+            Some(store) if crate::plugins::fingerprint(store) != self.plugin_print => {
+                self.reload_plugins();
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The user's themes, in file-name order.
@@ -388,13 +417,20 @@ impl Registry {
         &self.scan
     }
 
-    /// Built-ins in their order, then the user's.
+    /// Built-ins in their order, then the user's, then the plugins'.
     pub fn all(&self) -> Vec<Theme> {
-        Theme::all().into_iter().chain(self.user().iter().cloned()).collect()
+        Theme::all().into_iter().chain(self.user().iter().cloned()).chain(self.plugin_themes.iter().map(|p| p.theme.clone())).collect()
     }
 
     pub fn by_id(&self, id: &str) -> Option<Theme> {
-        Theme::by_id(id).or_else(|| self.scan.themes.iter().find(|t| t.id == id).cloned())
+        Theme::by_id(id)
+            .or_else(|| self.scan.themes.iter().find(|t| t.id == id).cloned())
+            .or_else(|| self.plugin_themes.iter().find(|p| p.theme.id == id).map(|p| p.theme.clone()))
+    }
+
+    /// The name of the plugin a theme came from (None for a built-in or one of the user's).
+    pub fn plugin_of(&self, id: &str) -> Option<&str> {
+        self.plugin_themes.iter().find(|p| p.theme.id == id).map(|p| p.plugin.as_str())
     }
 }
 

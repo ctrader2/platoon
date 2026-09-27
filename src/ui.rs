@@ -7,6 +7,7 @@ use crate::model::{NameSource, Session, Status};
 use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
 use crate::usage::Usage;
 use crate::theme::{contrast, Theme};
+mod plugins_view;
 mod squads_view;
 
 use ratatui::{
@@ -111,6 +112,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else if app.squads_tab_showing() {
         squads_view::draw_squads_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
         squads_view::squads_tab_hints(app)
+    } else if app.plugins_tab_showing() {
+        plugins_view::draw_plugins_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
+        plugins_view::plugins_tab_hints(app)
     } else if app.projects_list_showing() {
         let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
         draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
@@ -156,7 +160,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"];
+    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member", "check the catalog"];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
     if app.open_project.is_some() && app.tk.open.is_some() {
         droppable.retain(|d| *d != "editor");
@@ -220,7 +224,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
-        ("1-3", "tabs", None),
+        ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("q", "quit", Some(Action::Quit)),
@@ -238,7 +242,7 @@ fn projects_hints(app: &App) -> Vec<Hint<'static>> {
         ("d", "delete", Some(Action::Delete)),
         ("/", "search", Some(Action::Search)),
         ("←→", "active/archived", None),
-        ("1-3", "tabs", None),
+        ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("q", "quit", Some(Action::Quit)),
@@ -1207,8 +1211,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
     let mut spans = Vec::new();
-    // The top-level tabs count what is active: sessions, and projects.
-    let top_counts = [app.counts.first().copied().unwrap_or(0), app.pcounts[0], app.squad_list().len()];
+    // The top-level tabs count what is active: sessions, projects and squads. Plugins has no count: how many are
+    // installed is nothing to act on, and the header is short of room.
+    let top_counts = [Some(app.counts.first().copied().unwrap_or(0)), Some(app.pcounts[0]), Some(app.squad_list().len()), None];
     for (i, tab) in TOPS.iter().enumerate() {
         if i > 0 {
             left.push(Span::raw(" "));
@@ -1218,8 +1223,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         // glyphs, otherwise a padded square. Either way the text reads "1 Sessions 3".
         let current = i == app.top;
         let (key, label) = (format!("{}", i + 1), format!(" {tab} "));
-        let count = top_counts.get(i).copied().unwrap_or(0);
-        let w = chip_width(&key, &label, count);
+        let count = top_counts.get(i).copied().flatten();
+        let w = match count {
+            Some(n) => chip_width(&key, &label, n),
+            None => (1 + key.chars().count() + label.chars().count()) as u16,
+        };
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() {
             app.hits.borrow_mut().push((rect, Hit::Top(i)));
@@ -1227,7 +1235,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         spans.push((x, w, current));
         x += w;
         let hover = !current && rect.contains(app.mouse.into());
-        left.extend(tab_chip(t, app.rounded, &key, &label, count, current, hover));
+        let mut chip = tab_chip(t, app.rounded, &key, &label, count.unwrap_or(0), current, hover);
+        if count.is_none() {
+            // Just the key and the label: the count's pill (the last one or three spans) goes.
+            chip.truncate(3);
+        }
+        left.extend(chip);
     }
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
@@ -1273,18 +1286,23 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     // The tabs matter most. When the usage readout doesn't fit beside them it shrinks to bare percentages, then goes.
     let room = (area.width as usize).saturating_sub(width(&left) + 2);
     if width(&right) > room {
-        right = match &app.usage {
-            Usage::Ready(u) => {
-                let mut compact = Vec::new();
-                for (label, w) in [("5h", u.five_hour), ("7d", u.seven_day)] {
-                    let pct = w.map_or("n/a".to_string(), |w| format!("{}%", w.pct));
-                    compact.push(Span::styled(format!("{}{label} ", if compact.is_empty() { "" } else { "  " }), dim));
-                    compact.push(Span::styled(pct, Style::new().fg(t.subtext)));
-                }
-                compact
+        let compact = |windows: &[(&str, Option<crate::model::Window>)]| {
+            let mut compact = Vec::new();
+            for (label, w) in windows {
+                let pct = w.map_or("n/a".to_string(), |w| format!("{}%", w.pct));
+                compact.push(Span::styled(format!("{}{label} ", if compact.is_empty() { "" } else { "  " }), dim));
+                compact.push(Span::styled(pct, Style::new().fg(t.subtext)));
             }
+            compact
+        };
+        right = match &app.usage {
+            Usage::Ready(u) => compact(&[("5h", u.five_hour), ("7d", u.seven_day)]),
             _ => Vec::new(),
         };
+        // Still too wide: the 5-hour figure alone (the one that runs out first), then nothing.
+        if let (true, Usage::Ready(u)) = (width(&right) > room, &app.usage) {
+            right = compact(&[("5h", u.five_hour)]);
+        }
         if width(&right) > room {
             right.clear();
         }
@@ -1806,7 +1824,15 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         Some(Kind::Instructions(id)) => Some(app.instructions_status(id).restorable()),
         _ => None,
     };
-    let hints = if let Some(restorable) = on_instructions {
+    let on_plugins = app.settings_tab == crate::settings::TAB_PLUGINS;
+    let hints = if on_plugins {
+        let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None)];
+        if !app.pl.installed.is_empty() {
+            hints.push(("d", "remove", None));
+        }
+        hints.push(("esc", "back", Some(Action::Cancel)));
+        fit_hints(hints, w, &["move", "tabs"])
+    } else if let Some(restorable) = on_instructions {
         let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None), ("enter", "edit", None)];
         if restorable {
             hints.push(("r", "restore", None));
@@ -1827,7 +1853,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let top = area.y;
     // The reassurance line is the first thing to go when that lets the selected entry explain itself.
     // A warning or an error is never dropped.
-    if !store.is_corrupt() && app.active_notice().is_none() {
+    if !store.is_corrupt() && app.active_notice().is_none() && !on_plugins {
         let text_w = (area.width as usize).saturating_sub(4);
         let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
         let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top;
@@ -1843,7 +1869,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
 
     // The notes follow the entries directly.
-    let mut y = draw_setting_rows(f, app, &current, rows_area) + 1;
+    let mut y = if on_plugins { plugins_view::draw_plugin_settings(f, app, rows_area) } else { draw_setting_rows(f, app, &current, rows_area) } + 1;
     for (line, color) in &notes {
         if y < path_y {
             f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(*color))), Rect::new(area.x, y, area.width, 1));
@@ -1886,6 +1912,10 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
         };
         notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
     }
+    if tab == crate::settings::TAB_PLUGINS {
+        let msg = "Browse and install plugins on the Plugins tab: press 4 on the main screen.";
+        notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.subtext)));
+    }
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
@@ -1903,7 +1933,10 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
     let need = |tab: usize| {
         let items = &SETTINGS_TABS[tab].items;
-        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1) + SETTINGS_TABS[tab].headings.len();
+        let mut entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1) + SETTINGS_TABS[tab].headings.len();
+        if tab == crate::settings::TAB_PLUGINS {
+            entries = plugins_view::plugin_settings_height(app);
+        }
         entries + 1 + settings_notes(app, tab, w).len()
     };
     let most = (0..SETTINGS_TABS.len()).map(need).max().unwrap_or(0);
@@ -1919,7 +1952,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
 
     // Floating with room around it on ordinary terminals; nearly the full width on a narrow one, where every column counts.
-    let w = if area.width < 70 { area.width.saturating_sub(2) } else { (area.width - 4).min(76) };
+    let w = if area.width < 70 { area.width.saturating_sub(2) } else { (area.width - 4).min(84) };
     // A margin of 2 each side inside the borders; 1 when the terminal is narrow, so entry names aren't clipped.
     let hpad = if w < 64 { 1 } else { 2 };
     let inner_w = w.saturating_sub(2 + 2 * hpad) as usize;
@@ -2180,11 +2213,19 @@ fn draw_theme_list(f: &mut Frame, app: &App, area: Rect) {
         let bg = if selected || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         // marker(2) name space swatch(5) check(2)
         let name_w = w.saturating_sub(10);
-        let tag = if th.is_user() && !th.name.ends_with("(yours)") && name_w >= 14 { " yours" } else { "" };
+        // Where it came from, when that isn't platoon: " yours", or the plugin's name (cut to what fits).
+        let tag = if th.is_user() && !th.name.ends_with("(yours)") && name_w >= 14 {
+            " yours".to_string()
+        } else if let Some(plugin) = app.themes().plugin_of(&th.id).filter(|p| name_w >= 20 && !th.name.ends_with(&format!("({p})"))) {
+            let room = name_w.saturating_sub(th.name.chars().count() + 2).clamp(6, 16);
+            format!(" {}", fit_end(plugin, room))
+        } else {
+            String::new()
+        };
         let name_style = if selected { Style::new().fg(t.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.subtext) };
         let mut spans = vec![
             Span::styled(if selected { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
-            Span::styled(fit(&th.name, name_w - tag.len().min(name_w)), name_style.bg(bg)),
+            Span::styled(fit(&th.name, name_w - tag.chars().count().min(name_w)), name_style.bg(bg)),
             Span::styled(tag, Style::new().fg(t.dim).bg(bg)),
             Span::styled(" ", Style::new().bg(bg)),
         ];
@@ -3160,6 +3201,25 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
         ),
+        Confirm::InstallPlugin { name, adds, update, .. } => match update {
+            Some((from, to)) => ("update plugin", format!("Update {name} from {from} to {to}?"), format!("It adds {adds}. Its files are replaced with the catalog's."), "update"),
+            None => (
+                "install plugin",
+                format!("Install {name}?"),
+                format!("It adds {adds}. It holds files only, nothing that runs, and d on the Plugins tab takes it off again."),
+                "install",
+            ),
+        },
+        Confirm::RemovePlugin { name, adds, in_use, .. } => (
+            "remove plugin",
+            format!("Remove {name}?"),
+            if *in_use {
+                format!("What it adds ({adds}) goes with it. You are using one of its themes: platoon goes back to its default theme. Installing the plugin again brings it back.")
+            } else {
+                format!("What it adds ({adds}) goes with it. Installing it again brings it back.")
+            },
+            "remove",
+        ),
         Confirm::HandAnyway { number, title, says, .. } => (
             "hand it anyway",
             "The commander said this squad doesn't fit. Hand it anyway?".to_string(),
@@ -3248,7 +3308,8 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let no = match c {
         Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. } => "keep it",
-        Confirm::InstallEditor => "not now",
+        Confirm::InstallEditor | Confirm::InstallPlugin { .. } => "not now",
+        Confirm::RemovePlugin { .. } => "keep it",
         _ => "cancel",
     };
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];

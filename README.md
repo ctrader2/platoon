@@ -153,8 +153,9 @@ editor's terminal your own environment back). Neovim's own history, swap and und
 
 ## The list
 
-The header has two tabs, **Sessions** and **Projects** (`1` and `2`, or click them), each with how many active ones
-it holds. Under it, each tab has **Active** and **Archived**: the left and right arrow keys switch them (or click them).
+The header has four tabs, **Sessions**, **Projects**, **Squads** and **Plugins** (`1` to `4`, or click them); the first three
+show how many active ones they hold. Under Sessions and Projects, each has **Active** and **Archived**: the left and right arrow
+keys switch them (or click them).
 
 One row per conversation, built from Claude Code's saved history, so everything you've ever run is there
 whether or not it's running. Each row shows the name, directory, branch, model, a status, how full the
@@ -191,7 +192,7 @@ before.
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `v` | open the conversation's folders in the [code editor](#opening-the-editor-v) |
-| `1` `2` | switch between the Sessions and Projects tabs (or click them); the current tab is underlined and each shows a count badge |
+| `1` `2` `3` `4` | switch between the Sessions, Projects, [Squads](#squads) and [Plugins](#plugins) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
@@ -311,8 +312,9 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in six
-tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects** and **Editors**. `tab` goes to the next tab and
+`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in seven
+tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects**, **Editors** and **Plugins** (on a
+narrow terminal "Smart features" is shortened to "Smart"). `tab` goes to the next tab and
 `shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
 same size on every tab; a tab with more entries than fit scrolls, and on a small terminal only the selected entry is explained. Every setting keeps the name, choices and key in the file it had before the tabs.
 
@@ -379,6 +381,10 @@ when naming is held up, why (`Naming is waiting: ...`).
 | Editing platoon's text | Editor for notes and tickets | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](#editing-the-notes) on this computer |
 | Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | platoon's editor (default), and the [editors with a file tree](#opening-the-editor-v) found on this computer |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
+
+**Plugins**: the [plugins](#plugins) you have installed, each with its version, what it adds and where it came from. `↑` `↓`
+choose one and `d` removes it (after asking). Browsing and installing are on the Plugins tab (`4` on the main screen), which the
+line under the list points to.
 
 #### System prompts for each smart feature
 
@@ -566,6 +572,12 @@ the list after the built-ins, marked `yours`, with the id `user:<file name>` (`u
   brings your theme back.
 - A folder with more than 300 files is read only as far as its first 300 (in name order); subfolders and names starting
   with a dot are ignored.
+
+**Themes from plugins.** More themes come as [plugins](#plugins) from platoon's catalog. Once one is installed its themes are
+in the list after yours, each with the plugin's name beside it, and their ids are `plugin:<plugin>/<theme>`
+(`plugin:example-themes/harbor-night`), so they never clash with a built-in or one of yours. Removing the plugin takes its
+themes away; if you were using one, platoon shows the default theme and keeps the id in `settings.json`, so installing the
+plugin again brings it back.
 
 `terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
 whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the
@@ -1235,6 +1247,51 @@ existed, your text was carried into the built-in agents the first time platoon r
 are left as they were; the old Coding leader's text is not carried anywhere, as every squad's leader now shares one
 system prompt). A squad file from before the leader moved to the settings may still have its own `leader`,
 `needs_folder` and `use_worktree`: they are kept in the file as they are, and mean nothing any more.
+
+## Plugins
+
+Plugins add things to platoon that not everyone wants. In this version a plugin adds **color themes**; later ones will
+bring platoon's code editor, skills, and squads and agents. A plugin is a folder of plain files (a `plugin.json` that says
+what it is and what it adds, and those files): nothing in it runs. Plugins come from platoon's own **catalog**, the
+[`plugins/`](plugins/) folder of platoon's repository, where anyone can send one by pull request (see
+[plugins/README.md](plugins/README.md) for how to make, check and send one).
+
+**The Plugins tab** (`4`) lists what the catalog has and what you have installed. The first time you open it in a run,
+platoon fetches the catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The selected
+plugin's details are on the right: what it is, who made it, its version, what it adds (the themes by name), its license,
+where it came from and the oldest platoon it works with.
+
+| Key | Does |
+| --- | --- |
+| `enter` | install the selected plugin (after asking), or update it when the catalog has a newer one; a line in the footer says when it is done |
+| `u` | update the selected plugin |
+| `d` | remove the selected plugin (after asking) |
+| `f` | check the catalog again |
+| `↑` `↓` `g` `G` | move |
+
+The same from the command line:
+
+```
+platoon plugin list              the catalog and what is installed
+platoon plugin add <id>          install one from the catalog
+platoon plugin add ./my-plugin   install one from a folder on this computer (while you make one)
+platoon plugin remove <id>
+platoon plugin update [id]       bring the installed ones (or one) up to the catalog
+platoon plugin check <folder>    check a plugin folder before you send it
+```
+
+**How the catalog is fetched.** With `git`: a shallow copy of just the `plugins/` folder of platoon's repository, at its
+`main` branch. While the repository is private this uses your own git login; once it is public no login is needed. platoon
+never asks for a password: if git has no saved login it says so ("platoon couldn't reach its plugin catalog: …") and the
+Plugins tab shows the copy it fetched last, if there is one. For each installed plugin platoon writes down the commit it came
+from and a checksum of its files.
+
+**Where they go.** Installed plugins are in platoon's data folder, `~/.local/share/platoon/plugins/<id>/` (macOS:
+`~/Library/Application Support/platoon/plugins/`; `$PLATOON_DATA_DIR/plugins` if you set it), with `installed.json` beside
+them. An install is copied and checked in a staging folder first and only then moved into place and recorded, so one that
+fails or is interrupted never looks installed; two platoons never change plugins at the same time. For tests,
+`PLATOON_PLUGIN_SOURCE` (a repository URL or folder) and `PLATOON_PLUGIN_REF` (a branch or tag) fetch the catalog from
+somewhere else.
 
 ## Sessions started in platoon keep running
 

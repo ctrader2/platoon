@@ -540,7 +540,9 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     t.wait_for("make the shop");
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
-    t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last
+    t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last (Plugins), then Editors before it
+    t.wait_for("No plugins installed.");
+    t.send(b"\x1b[Z");
     t.wait_for_all(&["Editing platoon's text", "Editor for notes and tickets", "Editing files", "Editor for files (v)", "Always ask which editor"]);
     let shown = t.stable();
     let at = |needle: &str| shown.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{shown}"));

@@ -1,0 +1,19 @@
+# Moss Lantern: warm lamplight on dark moss. Original colors, made for platoon (MIT, like the plugin).
+background = #171a14
+foreground = #e4dfcc
+palette = 0=#23281e
+palette = 1=#e0735f
+palette = 2=#9fc46a
+palette = 3=#e3b54f
+palette = 4=#7fb0c9
+palette = 5=#c98fb4
+palette = 6=#7cc4a8
+palette = 7=#bfb9a4
+palette = 8=#5a6150
+palette = 9=#f0866f
+palette = 10=#b2d67c
+palette = 11=#f0c462
+palette = 12=#92c2da
+palette = 13=#d8a3c4
+palette = 14=#8fd6ba
+palette = 15=#f4f0e2

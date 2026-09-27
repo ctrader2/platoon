@@ -41,6 +41,7 @@ use std::{
 mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
+mod plugins_glue;
 mod projects_glue;
 mod smart_glue;
 mod squads_glue;
@@ -52,7 +53,8 @@ pub(crate) mod worktree_glue;
 pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
+pub use plugins_glue::{PlugRow, PlugState, PluginsState, TOP_PLUGINS};
+pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
 pub use squadtab_glue::{agent_rows, detail_rows, ARow, ChoiceFor, DRow, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, NEW_AGENT};
@@ -198,6 +200,8 @@ pub enum Hit {
     SquadDetail(usize),
     /// An entry of the small list open over the Squads tab.
     SquadChoiceRow(usize),
+    /// A plugin on the Plugins tab.
+    PluginRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the editor list.
@@ -284,6 +288,10 @@ pub enum Confirm {
     RestoreAgent { id: String, name: String },
     /// Throw away the drafted agent that was never saved.
     DiscardAgentDraft { name: String },
+    /// Install a plugin from the catalog (`update`: the versions from and to, when it replaces the one installed).
+    InstallPlugin { id: String, name: String, adds: String, update: Option<(String, String)> },
+    /// Take a plugin off (`in_use`: the theme in use is one of its).
+    RemovePlugin { id: String, name: String, adds: String, in_use: bool },
 }
 
 #[derive(Clone)]
@@ -535,6 +543,8 @@ pub struct App {
     pub ed: editor_glue::EdState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
+    /// The plugins: the catalog, what is installed, a fetch or an install running.
+    pub pl: PluginsState,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -677,6 +687,8 @@ impl App {
         let prompts = PromptIndex::spawn(&cache, prompt_cap);
         let _ = threaded;
         let (stops_tx, stops_rx) = channel();
+        let plugins = PluginsState::for_config(&config);
+        let plugin_dir = plugins.store.dir.clone();
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
@@ -716,6 +728,7 @@ impl App {
             wt: worktree_glue::WtState::default(),
             ed: editor_glue::EdState::new(),
             sqt: SquadTab::new(&config),
+            pl: plugins,
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -739,7 +752,7 @@ impl App {
             theme: Theme::default(),
             preview: None,
             tpick: ThemePick { list: Vec::new(), selected: 0, top: Cell::new(0) },
-            themes: Registry::open(&config),
+            themes: Registry::open_with_plugins(&config, &plugin_dir),
             quit: false,
             rounded: false,
             plain_marker: false,
@@ -898,7 +911,7 @@ impl App {
             let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
             self.archived_rows = view.iter().filter(|&&i| self.sessions[i].archived).count();
             self.view = view;
-        } else if self.top == TOP_PROJECTS || self.top == TOP_SQUADS {
+        } else if self.top != TOP_SESSIONS {
             self.tab_view.clear();
             self.view.clear();
         } else {
@@ -1141,6 +1154,7 @@ impl App {
         self.poll_squad_work();
         self.poll_worktrees();
         self.poll_editor_install();
+        self.poll_plugins();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();
@@ -1338,6 +1352,9 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::DeleteAgent { id, .. })) => self.remove_agent(&id, false),
             (Action::Confirm, Mode::Confirm(Confirm::RestoreAgent { id, .. })) => self.remove_agent(&id, true),
             (Action::Confirm, Mode::Confirm(Confirm::DiscardAgentDraft { .. })) => self.discard_agent_draft(),
+            (Action::Confirm, Mode::Confirm(Confirm::InstallPlugin { id, .. })) => self.install_plugin(&id),
+            (Action::Confirm, Mode::Confirm(Confirm::RemovePlugin { id, .. })) => self.remove_plugin(&id),
+            (Action::Cancel, Mode::Confirm(Confirm::RemovePlugin { .. })) => self.cancel_remove_plugin(),
             (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
@@ -1759,6 +1776,10 @@ impl App {
 
     /// Move to another line of the settings screen.
     fn move_setting(&mut self, delta: i32) {
+        if self.settings_tab == crate::settings::TAB_PLUGINS {
+            self.setting = (self.setting as i32 + delta).clamp(0, self.pl.installed.len().saturating_sub(1) as i32) as usize;
+            return;
+        }
         self.setting = (self.setting as i32 + delta).clamp(0, self.items().len() as i32 - 1) as usize;
     }
 
@@ -2335,6 +2356,7 @@ impl App {
                 }
                 _ => {}
             },
+            Mode::Settings if self.plugin_settings_key(key) => {}
             Mode::Settings => match key.code {
                 KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
@@ -2343,7 +2365,7 @@ impl App {
                 KeyCode::Tab => self.step_settings_tab(1),
                 KeyCode::BackTab => self.step_settings_tab(-1),
                 KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
-                KeyCode::End | KeyCode::Char('G') => self.setting = self.items().len() - 1,
+                KeyCode::End | KeyCode::Char('G') => self.setting = self.items().len().saturating_sub(1),
                 KeyCode::Left | KeyCode::Char('h' | '-') => self.change_setting(self.setting, Step::Prev),
                 KeyCode::Right | KeyCode::Char('l' | '+' | '=') => self.change_setting(self.setting, Step::Next),
                 KeyCode::Enter | KeyCode::Char(' ') => self.change_setting(self.setting, Step::Cycle),
@@ -2606,6 +2628,7 @@ impl App {
                     Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
                     Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
                     Some(Hit::SquadEntry(i)) => self.click_squad(i),
+                    Some(Hit::PluginRow(i)) => self.click_plugin(i),
                     Some(Hit::SquadView(agents)) => self.show_squad_view(if agents { SqView::Agents } else { SqView::Squads }),
                     Some(Hit::SquadDetail(i)) => self.click_squad_row(i),
                     Some(Hit::SquadChoiceRow(i)) if i == self.sqt.choice.selected => self.act(Action::Confirm),

@@ -1330,14 +1330,14 @@ impl Sha256 {
     }
 }
 
-#[cfg(test)]
+/// The sha256 of some bytes, as lowercase hex (also used for plugins' files).
 pub fn sha256_hex(data: &[u8]) -> String {
     let mut s = Sha256::new();
     s.update(data);
     s.hex()
 }
 
-fn sha256_file(path: &Path) -> io::Result<String> {
+pub fn sha256_file(path: &Path) -> io::Result<String> {
     use std::io::Read;
     let mut f = fs::File::open(path)?;
     let mut s = Sha256::new();

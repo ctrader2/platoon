@@ -290,11 +290,12 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
     let mut t = Term::spawn(&[], &env, &base, 24, 80);
     t.wait_for("enter open");
     t.send(b"s");
-    t.wait_for_all(&["General", "Smart features", "Sessions   Projects", "Stop idle sessions after", "Settings file:", "esc back"]);
+    // At 80 columns the seven titles only fit with "Smart features" shortened to its first word.
+    t.wait_for_all(&["General", " Smart ", "Sessions   Projects", "Editors   Plugins", "Stop idle sessions after", "Settings file:", "esc back"]);
     let (row, _) = t.find("General").unwrap();
     let screen = t.text();
     let col = |name: &str| col_on(&screen, row, name);
-    let (general, search, smart, projects) = (col("General"), col("Search"), col("Smart features"), col("Projects"));
+    let (general, search, smart, projects) = (col("General"), col("Search"), col(" Smart ") + 1, col("Projects"));
     t.wait_bg(row, general, surface);
     t.wait_fg(row, general, text);
     assert_eq!((t.bg_at(row, search), t.fg_at(row, search)), (bg, dim), "a tab not showing is quiet");

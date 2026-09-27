@@ -795,11 +795,13 @@ pub fn render_list(depth: Option<crate::colordepth::Depth>, user: &Registry) -> 
     let mut out = String::new();
     for t in user.all() {
         let tag = if t.id == DEFAULT_ID {
-            "  (default)"
+            "  (default)".to_string()
         } else if t.is_user() && !t.name.ends_with("(yours)") {
-            "  (yours)"
+            "  (yours)".to_string()
+        } else if let Some(plugin) = user.plugin_of(&t.id).filter(|p| !t.name.ends_with(&format!("({p})"))) {
+            format!("  (plugin: {plugin})")
         } else {
-            ""
+            String::new()
         };
         out.push_str(&format!("{:<22} {}{tag}\n", t.id, t.name));
         match depth {

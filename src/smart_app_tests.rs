@@ -721,16 +721,21 @@ fn click_at(app: &mut App, x: u16, y: u16) {
 }
 
 #[test]
-fn the_settings_have_six_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
+fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
     let w = World::new("sm-tabs");
     let mut app = w.app();
-    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    // Wide enough for every title in full (at 80 columns "Smart features" is shortened to "Smart").
+    let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
     key(&mut app, KeyCode::Char('s'));
     let general = screen(&mut term, &app);
     let tabs_line = general.lines().find(|l| l.contains("General")).unwrap().to_string();
-    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"] {
+    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"] {
         assert!(tabs_line.contains(title), "{title} on the tab line: {tabs_line}");
     }
+    let mut narrow = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let short = screen(&mut narrow, &app);
+    let short = short.lines().find(|l| l.contains("General")).unwrap().to_string();
+    assert!(short.contains(" Smart ") && !short.contains("Smart features") && short.contains("Plugins"), "{short}");
     assert!(general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"), "{general}");
     // The showing tab is lit like the header's (raised background, bold), the others quiet.
     let lit = |term: &Terminal<TestBackend>, title: &str| {
@@ -754,13 +759,18 @@ fn the_settings_have_six_tabs_that_tab_shift_tab_and_a_click_switch_with_the_sho
     assert_eq!(lit(&term, "General"), (t.bg, t.dim, false));
     key(&mut app, KeyCode::BackTab);
     key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.settings_tab, 5, "shift+tab from the first goes to the last");
+    assert_eq!(app.settings_tab, 6, "shift+tab from the first goes to the last");
+    let plugins = screen(&mut term, &app);
+    assert!(plugins.contains("No plugins installed.") && plugins.contains("press 4 on the main screen"), "{plugins}");
+    key(&mut app, KeyCode::BackTab);
+    assert_eq!(app.settings_tab, 5);
     let editors = screen(&mut term, &app);
     assert!(editors.contains("Editing platoon's text") && editors.contains("Editing files") && editors.contains("Always ask which editor"), "{editors}");
     key(&mut app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, 4);
     let projects = screen(&mut term, &app);
     assert!(projects.contains("Update notes after") && !projects.contains("Stop idle sessions after"), "{projects}");
+    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.settings_tab, 0, "tab from the last goes to the first");
@@ -1390,7 +1400,7 @@ fn the_header_says_how_far_the_indexing_has_got_while_there_is_work_and_nothing_
     let fake = AiFake::new("rd-progress");
     fake.slow(0.5);
     let mut app = app_with(&w, &fake);
-    let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(112, 24)).unwrap();
     app.refresh_until_for_test(10, "the first call to start", |_| fake.calls() == 1);
     let shown = screen(&mut term, &app);
     let header = shown.lines().nth(1).unwrap();

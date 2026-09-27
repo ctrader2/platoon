@@ -27,6 +27,8 @@ mod notes;
 mod notesrun;
 mod notesupdate;
 mod open;
+mod plugincli;
+mod plugins;
 mod procs;
 mod projects;
 mod prompts;
@@ -58,6 +60,8 @@ mod layout_app_tests;
 mod notes_app_tests;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod plugins_app_tests;
 #[cfg(test)]
 mod projects_app_tests;
 #[cfg(test)]
@@ -111,6 +115,12 @@ fn main() -> io::Result<()> {
             std::process::exit(totickets::squads_cli(&args, &archive::config_dir(), &mut out, &mut err));
         }
         Some("themes") => return themes(),
+        Some("plugin") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            let (mut out, mut err) = (io::stdout(), io::stderr());
+            let home = std::env::var("HOME").unwrap_or_default();
+            std::process::exit(plugincli::cli(&args, &plugins::Store::from_env(), &plugins::Source::from_env(), &home, &mut out, &mut err));
+        }
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (mut out, mut err) = (io::stdout(), io::stderr());
@@ -177,7 +187,7 @@ fn main() -> io::Result<()> {
 }
 
 const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
-               squads --kinds | themes | tokens]
+               squads --kinds | themes | plugin ... | tokens]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. Ctrl+Space detaches; it keeps running
@@ -198,7 +208,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   ticket list [--project <name>] [--json]   the tickets, open ones first
   ticket where --session <id>   the project a session belongs to (exit 1 when none)
   squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
-  themes          list the color themes, the built-in ones and your own
+  themes          list the color themes: the built-in ones, your own and those of plugins
+  plugin list | add <id or folder> | remove <id> | update [id] | check <folder>
+                  plugins from platoon's catalog: see what there is, install, take off,
+                  update; check a plugin folder you are making
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
@@ -235,7 +248,8 @@ fn use_color(stderr: bool) -> bool {
 /// colors, and the theme files that were skipped, with the reason.
 fn themes() -> io::Result<()> {
     let depth = use_color(false).then(colordepth::Depth::detect);
-    print!("{}", theme::render_list(depth, &usertheme::Registry::open(&archive::config_dir())));
+    let registry = usertheme::Registry::open_with_plugins(&archive::config_dir(), &plugins::Store::from_env().dir);
+    print!("{}", theme::render_list(depth, &registry));
     Ok(())
 }
 
@@ -318,7 +332,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() || app.editor_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() || app.editor_busy() || app.plugins_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
@@ -717,7 +731,7 @@ mod tests {
         assert_eq!((app.top, app.tab), (0, 0));
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4") && shown.contains("Active 2 Archived 1"), "{shown}");
+        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4 4 Plugins") && shown.contains("Active 2 Archived 1"), "{shown}");
 
         // Left and right: Active and Archived.
         key(&mut app, KeyCode::Right);
@@ -727,14 +741,16 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1, 2 and 3: the top-level tabs. A number with no tab does nothing.
+        // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '3');
         assert!(app.top == 2 && app.squads_tab_showing() && app.selected_session().is_none());
         ch(&mut app, '4');
-        assert_eq!(app.top, 2);
+        assert!(app.top == 3 && app.plugins_tab_showing() && app.selected_session().is_none());
+        ch(&mut app, '5');
+        assert_eq!(app.top, 3);
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 
@@ -1988,11 +2004,13 @@ mod tests {
         std::fs::create_dir_all(cache.join("status")).unwrap();
         let json = serde_json::json!({"ts": 1_000, "context_pct": 5.0, "five_hour": null, "seven_day": {"pct": 3, "resets_at": 9_000}});
         std::fs::write(cache.join("status/aaaa.json"), json.to_string()).unwrap();
-        for (cols, bars) in [(80u16, false), (140, true)] {
+        // (At 80 columns, beside four tabs, only the 5-hour figure has room.)
+        for (cols, bars, weekly) in [(80u16, false, false), (100, false, true), (140, true, true)] {
             app.usage = crate::usage::Usage::Ready(crate::usage::load(&cache, 1_001).plan.unwrap());
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
-            assert!(header.contains("5h") && header.contains("0%") && header.contains("7d") && header.contains("3%"), "{cols}: {header}");
+            assert!(header.contains("5h") && header.contains("0%"), "{cols}: {header}");
+            assert_eq!(header.contains("7d") && header.contains("3%"), weekly, "{cols}: {header}");
             assert!(!header.contains("n/a"), "{cols}: {header}");
             assert_eq!(header.contains('━'), bars, "{cols}: {header}");
         }

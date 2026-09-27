@@ -146,7 +146,7 @@ impl App {
 
     /// What `v` opens from where the user is, if anything is selected there.
     pub fn editor_target(&self) -> Option<EdTarget> {
-        if self.squads_tab_showing() || self.projects_list_showing() {
+        if self.squads_tab_showing() || self.projects_list_showing() || self.plugins_tab_showing() {
             return None;
         }
         if let Some(project) = self.open_project.clone() {
