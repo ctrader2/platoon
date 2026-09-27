@@ -1,7 +1,6 @@
 ---
 name: to-tickets
-description: Turn this conversation, or a plan the user points at, into tickets in the user's platoon project. The user approves the list before anything is written. Only when the user types /to-tickets.
-disable-model-invocation: true
+description: "Turn this conversation, or a plan the user points at, into tickets in the user's platoon project; the user approves the list before anything is written. Never start it unasked. Offer it only when this session belongs to a platoon project (its notes were given at session start) and agreed work is being left for later rather than done in this conversation: ask once whether they want tickets for it, and use this skill only after a yes. After a no, say in one line that they can type /to-tickets any time, and do not offer again in this conversation."
 argument-hint: "[what to turn into tickets: a plan file, or a part of the conversation]"
 allowed-tools:
   - "Bash(platoon ticket:*)"

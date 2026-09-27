@@ -275,11 +275,29 @@ mod tests {
     }
 
     #[test]
-    fn the_skill_is_typed_only_and_asks_platoon_about_the_project_before_anything_else() {
+    fn claude_may_offer_the_skill_but_asks_first_and_it_asks_platoon_about_the_project_before_anything_else() {
         let (front, body) = SKILL.strip_prefix("---\n").and_then(|s| s.split_once("\n---\n")).expect("frontmatter");
         assert!(front.lines().any(|l| l == "name: to-tickets"), "{front}");
-        assert!(front.lines().any(|l| l == "disable-model-invocation: true"), "Claude never runs it by itself: {front}");
-        assert!(front.lines().any(|l| l.starts_with("description: ")), "{front}");
+        // Claude can see it (so it can offer it); typing /to-tickets works as before.
+        assert!(!front.contains("disable-model-invocation"), "Claude must be able to offer it: {front}");
+        // The description is one YAML line, double-quoted (it holds ": ", which a plain value can't), with nothing
+        // inside that would end or escape the quotes.
+        let line = front.lines().find(|l| l.starts_with("description: ")).expect("description");
+        let desc = line.strip_prefix("description: \"").and_then(|d| d.strip_suffix('"')).unwrap_or_else(|| panic!("quoted: {line}"));
+        assert!(!desc.contains('"') && !desc.contains('\\'), "{desc}");
+        // Its rules, since the description is all Claude sees before it is used (and all it has after a no).
+        for want in [
+            "the user approves the list before anything is written",
+            "Never start it unasked.",
+            "only when this session belongs to a platoon project (its notes were given at session start)",
+            "agreed work is being left for later rather than done in this conversation",
+            "ask once whether they want tickets for it",
+            "use this skill only after a yes",
+            "After a no, say in one line that they can type /to-tickets any time",
+            "do not offer again in this conversation",
+        ] {
+            assert!(desc.contains(want), "{want:?} in {desc}");
+        }
         // Its own platoon commands need no permission prompt (Claude Code's `allowed-tools`, as a YAML list), and
         // nothing else is pre-allowed.
         assert!(front.ends_with("allowed-tools:\n  - \"Bash(platoon ticket:*)\"\n  - \"Bash(platoon squads:*)\""), "{front}");

@@ -80,7 +80,13 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     let skill = claude.join("skills/to-tickets/SKILL.md");
     assert!(shown.contains("Tickets skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
     let text_on_disk = fs::read_to_string(&skill).unwrap();
-    assert!(text_on_disk.starts_with("---\nname: to-tickets\n") && text_on_disk.contains("disable-model-invocation: true"), "{text_on_disk}");
+    assert!(text_on_disk.starts_with("---\nname: to-tickets\n") && !text_on_disk.contains("disable-model-invocation"), "{text_on_disk}");
+    // Claude may offer it, but only after asking, only in a platoon project, once, and after a no it only says how to
+    // type it.
+    let desc = text_on_disk.lines().find(|l| l.starts_with("description: ")).unwrap();
+    for want in ["Never start it unasked", "only after a yes", "belongs to a platoon project", "ask once", "After a no", "type /to-tickets any time", "do not offer again"] {
+        assert!(desc.contains(want), "{want:?} in {desc}");
+    }
     // Written by the platoon before this one, which kept no record (so there is none): platoon's own, so it is updated
     // quietly.
     fs::remove_file(cache.parent().unwrap().join("config/setup.json")).unwrap();
@@ -89,6 +95,22 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
     assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
     assert!(!claude.join("skills/to-tickets/SKILL.md.platoon-bak").exists());
+    // Written by the platoon before this one (`d8e7d22`, typed only), which did keep a record: the record says so, so
+    // it is updated quietly too.
+    let before = include_str!("fixtures/to-tickets-skill-d8e7d22.md");
+    assert_ne!(before, text_on_disk, "platoon's copy has moved on since");
+    fs::write(&skill, before).unwrap();
+    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string()).unwrap();
+    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
+    assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
+    assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
+    assert!(!claude.join("skills/to-tickets/SKILL.md.platoon-bak").exists());
+    // The same old copy with a line of the user's: theirs, left alone.
+    fs::write(&skill, format!("{before}\nMy line.\n")).unwrap();
+    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string()).unwrap();
+    assert!(text(&platoon(&claude, &cache, &["setup"]).stdout).contains("changed by you"));
+    assert!(fs::read_to_string(&skill).unwrap().ends_with("My line.\n"));
+    fs::write(&skill, &text_on_disk).unwrap();
     // Taken out on request: only it.
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
     let out = platoon(&claude, &cache, &["setup", "--remove", "to-tickets"]);
