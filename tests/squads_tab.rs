@@ -157,7 +157,8 @@ impl Lab {
     }
 
     fn started(&self) -> usize {
-        fs::read_dir(self.fake.join("started")).map(|d| d.count()).unwrap_or(0)
+        // Only starts that have finished recording: the stand-in writes `pid` after `argc`.
+        fs::read_dir(self.fake.join("started")).map(|d| d.flatten().filter(|e| e.path().join("pid").exists()).count()).unwrap_or(0)
     }
 
     fn args(&self, k: usize) -> Vec<String> {

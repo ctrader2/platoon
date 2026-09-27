@@ -184,8 +184,10 @@ impl Lab {
         v["tickets"][0].clone()
     }
 
+    /// How many claudes have started and finished recording how. The stand-in makes its folder first and writes
+    /// `pid` last, so a folder without `pid` is still being written (its `argc` may not be there yet).
     fn started(&self) -> usize {
-        fs::read_dir(self.fake.join("started")).map(|d| d.count()).unwrap_or(0)
+        fs::read_dir(self.fake.join("started")).map(|d| d.flatten().filter(|e| e.path().join("pid").exists()).count()).unwrap_or(0)
     }
 
     /// The arguments the `k`th claude was started with.
