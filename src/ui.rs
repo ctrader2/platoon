@@ -1511,6 +1511,9 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
         // The accent: every theme keeps it apart from the working, done and warning colors (`MIN_DELTA_E`) and
         // readable on the background (`MIN_ROLE`), so a running-in-the-background row can't be mistaken for those.
         (Status::Background, _) => Look { marker: "◆", marker_color: t.accent, status: "Background", status_color: t.accent },
+        // Handed over to a background session that still runs: nothing works on this conversation itself, so the word
+        // is as quiet as idle; the hollow diamond in the accent points at the Background row (`◆`) it moved to.
+        (Status::Moved, _) => Look { marker: "◇", marker_color: t.accent, status: "moved away", status_color: t.dim },
     }
 }
 

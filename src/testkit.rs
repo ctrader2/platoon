@@ -166,6 +166,22 @@ impl World {
         fs::write(self.root.join("sessions").join(format!("{pid}.json")), v.to_string()).unwrap();
     }
 
+    /// Write the registry file of an interactive session that handed its conversation to the background job
+    /// `job_id`, shaped like Claude Code 2.1.283's: `parkedJobId`, and the `busy` status it never sets back.
+    pub fn register_parked(&self, pid: u32, id: &str, cwd: &str, started: u64, job_id: &str) {
+        let v = json!({"pid":pid,"sessionId":id,"cwd":cwd,"kind":"interactive","startedAt":started,"status":"busy","parkedJobId":job_id,"name":"platoon-b4","nameSource":"derived"});
+        fs::write(self.root.join("sessions").join(format!("{pid}.json")), v.to_string()).unwrap();
+    }
+
+    /// Like `live`, for a parked interactive session (see `register_parked`).
+    pub fn live_parked(&mut self, id: &str, cwd: &str, started: u64, job_id: &str) -> u32 {
+        let child = Command::new("sleep").arg("60").spawn().unwrap();
+        let pid = child.id();
+        self.procs.push(child);
+        self.register_parked(pid, id, cwd, started, job_id);
+        pid
+    }
+
     /// Like `live`, for a background session whose attach id is the first 8 characters of `id`.
     pub fn live_bg(&mut self, id: &str, cwd: &str, started: u64) -> u32 {
         let child = Command::new("sleep").arg("60").spawn().unwrap();

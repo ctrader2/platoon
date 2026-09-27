@@ -36,7 +36,7 @@ whether or not it's running. Each row shows the name, directory, branch, model, 
 context is (`~` marks platoon's estimate rather than Claude's own figure), when it was last active, and a
 one-line description. Newest activity first.
 
-Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, or `Background` (see
+Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, `Background`, or `moved away` (see
 [Background sessions](#background-sessions)). Conversations that only ever held slash commands are hidden.
 
 The name shown is, in this order: the one you gave it with `r` (platoon's own), then one you typed with `/rename` inside
@@ -128,6 +128,12 @@ session it is running. Leaving the window or quitting platoon ends only that win
 running. Platoon never stops or archives one: the `a` key says so and does nothing, auto-archive skips it, and idle
 stop never applies to it. To end one yourself use Claude's own `claude stop <id>`. A background session is often a
 copy of another conversation, so you can see two rows with the same title; platoon doesn't try to tell them apart.
+
+When you move a session you were running in a terminal to the background, Claude Code carries on in a new background
+session and leaves the old process waiting (its registry entry gets a `parkedJobId`). Platoon shows the old row as
+`moved away` (a hollow `◇`) instead of `working`, and `enter` (or `platoon open <id>`) opens the background session it
+moved to. Once that background session has ended, the row is an ordinary idle conversation again. The waiting process is
+never counted as a second copy, never offered for "Take over?", and idle stop leaves it alone.
 
 ### Archive
 

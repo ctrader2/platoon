@@ -715,6 +715,25 @@ mod tests {
     }
 
     #[test]
+    fn a_hosted_session_that_moved_to_the_background_is_never_idle_stopped() {
+        // Claude Code 2.1.283 parks the interactive process when it hands the conversation to a background session:
+        // alive, `parkedJobId` set, its status left as it was. Stopping it is not platoon's call, whatever that says.
+        let mut rig = Rig::new("parked", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
+        let file = rig.dir.join("claude/sessions").join(format!("{}.json", rig.child.id()));
+        let t0 = Instant::now();
+        for status in ["busy", "idle"] {
+            let v = json!({"pid": rig.child.id(), "sessionId": "s", "kind": "interactive", "status": status, "parkedJobId": "a70fa3de"});
+            fs::write(&file, v.to_string()).unwrap();
+            assert_eq!(registry_status(&rig.dir.join("claude"), rig.child.id()).as_deref(), Some("parked"));
+            let mut since = t0;
+            assert_eq!(rig.dog.decide(t0 + 10_000 * MIN, 0, &mut since), Decision::Keep(Reason::NotIdle), "status {status:?}");
+        }
+        // Once it is no longer parked, it is an ordinary session again.
+        rig.status("idle");
+        assert!(rig.dog.should_stop(t0 + 10_000 * MIN, 0, &mut { t0 }));
+    }
+
+    #[test]
     fn a_host_knows_which_background_session_it_shows_from_its_arguments() {
         let info = |args: &[&str]| HostInfo { claude_pid: 1, host_pid: 2, dir: String::new(), args: args.iter().map(|a| a.to_string()).collect(), sock: PathBuf::new() };
         assert!(info(&["attach", "dffac639"]).attaches_to("dffac639"));

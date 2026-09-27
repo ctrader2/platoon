@@ -104,12 +104,30 @@ pub struct Live {
     /// Set for a background session: one run by Claude's own service (`claude --bg`, `claude agents`) rather than in
     /// a terminal. It is `claude attach <id>`, never `claude --resume`, that opens it. Holds that id.
     pub background: Option<String>,
+    /// Set for an interactive session that handed its conversation to a background session (Claude Code's
+    /// `parkedJobId`): holds the id of that background session's job (the id `claude attach` takes). Its process
+    /// stays alive but no longer works on the conversation, and Claude never sets its registry status back to idle,
+    /// so a parked entry is never `busy` and never counts as a copy that writes to the conversation.
+    pub parked: Option<String>,
 }
 
 impl Live {
     pub fn is_background(&self) -> bool {
         self.background.is_some()
     }
+
+    pub fn is_parked(&self) -> bool {
+        self.parked.is_some()
+    }
+}
+
+/// The background job an interactive registry entry handed its conversation to (`parkedJobId`, seen in Claude Code
+/// 2.1.283), if it did. The one place that knows the key: `live_from`, `registry_status` and the guard ask here.
+pub fn parked_job(v: &Value) -> Option<String> {
+    if v.get("kind").and_then(Value::as_str) != Some("interactive") {
+        return None;
+    }
+    v.get("parkedJobId").and_then(Value::as_str).map(str::trim).filter(|j| !j.is_empty()).map(String::from)
 }
 
 // ---- what a process started inside a Claude Code session inherits ------------------------------------------------
@@ -273,11 +291,16 @@ impl Reader {
 }
 
 /// What Claude Code's registry says a process is doing (`busy`, `idle`, ...). None if there is no entry or
-/// it can't be read: callers must treat that as "not known to be idle".
+/// it can't be read: callers must treat that as "not known to be idle". `parked` for a process that handed its
+/// conversation to a background session (see `parked_job`): whatever its stale `status` says, it is neither working
+/// nor known to be idle.
 pub fn registry_status(root: &Path, pid: u32) -> Option<String> {
     let v: Value = serde_json::from_str(&fs::read_to_string(root.join("sessions").join(format!("{pid}.json"))).ok()?).ok()?;
     if v["pid"].as_u64().is_some_and(|p| p != pid as u64) {
         return None; // not this process's entry
+    }
+    if parked_job(&v).is_some() {
+        return Some("parked".into());
     }
     v["status"].as_str().map(String::from)
 }
@@ -301,14 +324,17 @@ fn live_from(v: &Value) -> Option<Live> {
     let id = v["sessionId"].as_str()?.to_string();
     // The short form Claude prints and `claude attach` takes is the registry's `jobId` when it has one.
     let background = background.then(|| v["jobId"].as_str().filter(|j| !j.is_empty()).map_or_else(|| short_id(&id), String::from));
+    let parked = parked_job(v);
     Some(Live {
         pid,
         id,
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
         name,
         started_at: v["startedAt"].as_u64().unwrap_or(0),
-        busy: v["status"].as_str() == Some("busy"),
+        // A parked entry keeps the `busy` it had when it handed the conversation over, for good.
+        busy: v["status"].as_str() == Some("busy") && parked.is_none(),
         background,
+        parked,
     })
 }
 
@@ -1271,6 +1297,42 @@ mod tests {
         assert!(live_from(&entry("bg", me, serde_json::json!({"spare":false}))).is_some());
         assert!(live_from(&entry("daemon", me, serde_json::json!({}))).is_none());
         assert!(live_from(&serde_json::json!({"pid":me,"kind":"bg"})).is_none(), "no session id");
+    }
+
+    #[test]
+    fn an_interactive_entry_that_handed_its_conversation_to_a_background_job_is_parked_and_never_busy() {
+        let me = std::process::id();
+        // The shape seen in Claude Code 2.1.283: the status stays "busy" from before the hand-over, for good.
+        let parked = live_from(&entry("interactive", me, serde_json::json!({"parkedJobId":"a70fa3de","statusUpdatedAt":1}))).unwrap();
+        assert_eq!(parked.parked.as_deref(), Some("a70fa3de"));
+        assert!(parked.is_parked() && !parked.busy && !parked.is_background());
+        assert_eq!((parked.pid, parked.id.as_str(), parked.cwd.as_str()), (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work"));
+
+        // Without the key, or with an empty or odd one, nothing changes.
+        for extra in [serde_json::json!({}), serde_json::json!({"parkedJobId":""}), serde_json::json!({"parkedJobId":"  "}), serde_json::json!({"parkedJobId":null}), serde_json::json!({"parkedJobId":7})] {
+            let l = live_from(&entry("interactive", me, extra.clone())).unwrap();
+            assert!(l.parked.is_none() && !l.is_parked() && l.busy, "{extra}");
+        }
+        // Only an interactive entry can be parked; a background session is the one it was handed to.
+        let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"a70fa3de","parkedJobId":"zzz"}))).unwrap();
+        assert!(bg.parked.is_none() && bg.busy && bg.is_background());
+        // A parked entry whose process has gone is gone like any other.
+        assert!(live_from(&entry("interactive", dead_pid(), serde_json::json!({"parkedJobId":"a70fa3de"}))).is_none());
+    }
+
+    #[test]
+    fn the_registry_status_of_a_parked_process_is_parked_never_busy() {
+        let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-parked-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sessions")).unwrap();
+        let put = |pid: u32, v: Value| fs::write(dir.join("sessions").join(format!("{pid}.json")), v.to_string()).unwrap();
+        put(11, entry("interactive", 11, serde_json::json!({"parkedJobId":"a70fa3de"})));
+        put(12, entry("interactive", 12, serde_json::json!({"parkedJobId":""})));
+        put(13, entry("interactive", 13, serde_json::json!({"status":"idle"})));
+        assert_eq!(registry_status(&dir, 11).as_deref(), Some("parked"));
+        assert_eq!(registry_status(&dir, 12).as_deref(), Some("busy"));
+        assert_eq!(registry_status(&dir, 13).as_deref(), Some("idle"));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

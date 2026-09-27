@@ -1384,6 +1384,143 @@ mod tests {
         }
     }
 
+    // --- a session parked when it moved to the background (Claude Code's `parkedJobId`) ------------------
+
+    const PARKED_ID: &str = "5036bf6c-a34c-4727-b2a1-3b35ef10c9c1";
+    const JOB_ID: &str = "a70fa3de-47d5-404e-8578-aab19d24f8a9";
+
+    /// A conversation whose interactive process handed it to a background session (a fork with its own id, job
+    /// `a70fa3de`) and stays alive, parked, its registry status stuck at "busy"; an ordinary idle one beside it.
+    /// With `job_runs`, the background session is still running. Returns the parked process's pid.
+    fn parked_world(name: &str, job_runs: bool) -> (World, u32) {
+        let mut w = World::new(name);
+        w.transcript(PARKED_ID, "/tmp", "plan the release", 30);
+        w.transcript("plain-1", "/srv/beta", "write the docs", 40);
+        if job_runs {
+            w.transcript(JOB_ID, "/tmp", "plan the release", 20);
+            w.live_bg(JOB_ID, "/tmp", 2);
+        }
+        let pid = w.live_parked(PARKED_ID, "/tmp", 1, "a70fa3de");
+        (w, pid)
+    }
+
+    #[test]
+    fn a_parked_session_is_not_working_and_says_it_moved_away() {
+        let (w, pid) = parked_world("parked-listed", true);
+        let app = w.app();
+        let s = session(&app, PARKED_ID);
+        assert_eq!(s.status, Status::Moved, "never Busy, whatever its registry status says");
+        assert_eq!(
+            s.procs.iter().map(|p| (p.pid, p.parked, p.moved_to.as_deref(), p.background.as_deref(), p.stale)).collect::<Vec<_>>(),
+            [(pid, true, Some("a70fa3de"), None, false)]
+        );
+        assert!(!s.unread && !s.archived);
+        assert_eq!(session(&app, JOB_ID).status, Status::Background, "the background session it moved to has its own row");
+        assert_eq!(session(&app, "plain-1").status, Status::Idle);
+        assert!(alive(pid));
+    }
+
+    #[test]
+    fn opening_a_parked_session_opens_the_background_session_it_moved_to() {
+        let (w, pid) = parked_world("parked-plan", true);
+        let mut app = w.app();
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("a70fa3de".into())), "no take-over, no resume");
+        // A platoon host already showing that background session is joined.
+        let host = crate::host::HostInfo { args: vec!["attach".into(), "a70fa3de".into()], ..hosted(4_000_000) };
+        app.refresh_with(vec![host], false);
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(4_000_000)));
+        // Even when platoon hosts the parked process itself (the case seen for real), the row goes where the work went.
+        app.refresh_with(vec![hosted(pid)], false);
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(session(&app, PARKED_ID).status, Status::Moved);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::AttachBackground("a70fa3de".into())));
+        assert!(alive(pid));
+    }
+
+    #[test]
+    fn once_the_background_session_has_gone_a_parked_session_is_an_idle_conversation() {
+        let (w, pid) = parked_world("parked-gone", false);
+        let mut app = w.app();
+        app.selected = row_of(&app, PARKED_ID);
+        let s = session(&app, PARKED_ID);
+        assert_eq!((s.status, s.unread), (Status::Idle, false));
+        assert_eq!(s.procs.iter().map(|p| (p.parked, p.moved_to.clone())).collect::<Vec<_>>(), [(true, None)]);
+        // Outside platoon: reopened from the saved history, never "Take over?" (it no longer writes to it).
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Resume));
+        // Under a platoon host: joined, like any idle session platoon hosts.
+        app.refresh_with(vec![hosted(pid)], false);
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(pid)));
+        assert!(alive(pid));
+    }
+
+    #[test]
+    fn a_parked_process_beside_a_copy_opened_again_is_not_a_second_copy_and_marks_nothing_stale() {
+        let (mut w, parked) = parked_world("parked-shared", true);
+        let copy = w.live(PARKED_ID, "/tmp", 5, "idle");
+        let mut app = w.app();
+        app.refresh_with(vec![hosted(copy)], false); // no guard installed: two writing copies WOULD be marked
+        let s = session(&app, PARKED_ID);
+        assert_eq!(s.procs.len(), 2);
+        assert!(s.procs.iter().all(|p| !p.stale), "{:?}", s.procs);
+        assert!(!w.cache.join("stale").join(copy.to_string()).exists() && !w.cache.join("stale").join(parked.to_string()).exists());
+        assert_eq!(s.status, Status::Idle, "the copy opened again is what the row is about");
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(copy)));
+
+        // A terminal copy outside platoon: taking it over names only that copy, never the parked process.
+        app.refresh_with(vec![], false);
+        app.selected = row_of(&app, PARKED_ID);
+        assert_eq!(app.jump_plan(), Some(JumpPlan::Adopt { pids: vec![copy], kind: AdoptKind::TakeOver, busy: false }));
+        // And if that copy is working, the row says so.
+        w.register(copy, PARKED_ID, "/tmp", 5, "busy");
+        app.refresh_with(vec![], false);
+        assert_eq!(session(&app, PARKED_ID).status, Status::Busy);
+        assert!(alive(parked) && alive(copy));
+    }
+
+    #[test]
+    fn a_parked_row_is_drawn_quietly_not_in_the_working_color_or_with_the_spinner() {
+        let (w, _pid) = parked_world("parked-colors", true);
+        let mut w = w;
+        w.transcript("working", "/srv/gamma", "busy one", 3);
+        let _busy = w.live("working", "/srv/gamma", 3, "busy");
+        for t in Theme::all() {
+            choose_theme(&w, &t.id);
+            let app = w.app();
+            let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+            let shown = draw(&mut term, &app);
+            let row = shown.lines().find(|l| l.contains("moved away")).unwrap_or_else(|| panic!("{}: {shown}", t.id));
+            assert!(!SPIN.iter().any(|g| row.contains(g)), "{}: {row}", t.id);
+            assert!(row.contains('◇'), "{}: {row}", t.id);
+            for c in find_text(&term, "moved away") {
+                assert_eq!(c.fg, t.dim, "{}: {:?}", t.id, c.symbol());
+                assert_ne!(c.fg, t.busy, "{}", t.id);
+            }
+            assert_eq!(find_text(&term, "◇")[0].fg, t.accent, "{}", t.id);
+            // Exactly one working row: the real working one.
+            assert_eq!(shown.lines().filter(|l| l.contains("working")).count(), 1, "{}: {shown}", t.id);
+        }
+    }
+
+    #[test]
+    fn the_words_moved_away_fit_whole_on_narrow_terminals_and_the_header_still_lines_up() {
+        let (w, _pid) = parked_world("parked-narrow", true);
+        let app = w.app();
+        for (cols, rows) in [(110, 24), (80, 24), (60, 16)] {
+            let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
+            let shown = draw(&mut term, &app);
+            let header = shown.lines().find(|l| l.contains("STATUS")).unwrap();
+            let row = shown.lines().find(|l| l.contains("moved away")).unwrap_or_else(|| panic!("{cols}x{rows}\n{shown}"));
+            let col = |l: &str, needle: &str| l[..l.find(needle).unwrap()].chars().count();
+            assert_eq!(col(header, "STATUS"), col(row, "moved away"), "{cols}x{rows}: the words sit under their heading");
+        }
+    }
+
+    const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
     // --- the settings screen ------------------------------------------------------------------------
 
     use crate::settings::{self, Settings};

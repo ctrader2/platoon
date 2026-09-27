@@ -64,25 +64,37 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     };
 
     let live = guard::live_entries(&root);
+    let all = Reader::with_root(root.clone()).live();
     // Sessions Claude's own service runs in the background: opened with `claude attach`, never `--resume`.
-    let background: Vec<claude::Live> = Reader::with_root(root.clone()).live().into_iter().filter(|l| l.is_background()).collect();
+    let background: Vec<&claude::Live> = all.iter().filter(|l| l.is_background()).collect();
     let mut known: Vec<String> = saved_session_ids(&root);
     known.extend(live.iter().map(|e| e.id.clone()));
     known.extend(background.iter().map(|l| l.id.clone()));
     let id = resolve_id(arg, known)?;
 
-    if let Some(attach_id) = background.iter().find(|l| l.id == id).and_then(|l| l.background.clone()) {
+    // Copies that write to the conversation; a parked one handed it over to a background session (as in the list).
+    let copies: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id && !e.parked).collect();
+    let parked: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id && e.parked).collect();
+    let own = background.iter().find(|l| l.id == id).copied();
+    // Nothing else runs a parked conversation: open the background session it moved to, while that runs.
+    let moved_to = || {
+        let job = all.iter().find(|l| l.id == id && l.is_parked()).and_then(|l| l.parked.as_deref())?;
+        background.iter().find(|b| b.background.as_deref() == Some(job)).copied()
+    };
+    if let Some(bg) = own.or_else(|| if copies.is_empty() { moved_to() } else { None }) {
+        let attach_id = bg.background.clone().unwrap_or_default();
         if let Some(h) = hosts.iter().find(|h| h.attaches_to(&attach_id)) {
             return Ok(h.clone()); // already shown under platoon: just join it
         }
-        let cwd = background.iter().find(|l| l.id == id).map(|l| l.cwd.clone()).filter(|c| Path::new(c).is_dir());
+        let cwd = Some(bg.cwd.clone()).filter(|c| Path::new(c).is_dir());
         let cwd = cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
         let args = claude::attach_args(&attach_id);
         return host::launch(&program(), &cwd, &[args[0].as_str(), args[1].as_str()], &[], rows, cols).map(|(h, _)| h);
     }
 
-    let copies: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id).collect();
-    if let Some(h) = hosts.iter().find(|h| copies.iter().any(|e| e.pid == h.claude_pid)) {
+    // A parked process platoon hosts is joined like an idle one; one outside platoon is left alone (never ended).
+    let joinable = if copies.is_empty() { &parked } else { &copies };
+    if let Some(h) = hosts.iter().find(|h| joinable.iter().any(|e| e.pid == h.claude_pid)) {
         return Ok(h.clone()); // already running under platoon: just join it
     }
     let cwd = find_transcript(&root, &id)

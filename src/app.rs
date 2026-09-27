@@ -26,7 +26,7 @@ use ratatui::layout::Rect;
 use std::{
     cell::{Cell, RefCell},
     cmp::Reverse,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io,
     ops::Range,
     path::{Path, PathBuf},
@@ -1019,6 +1019,8 @@ impl App {
         // A ticket added by `platoon ticket add` shows without a restart.
         self.refresh_tickets();
 
+        // The background sessions running now, by the job id a parked session names (`Proc::moved_to`).
+        let jobs: HashSet<&str> = live.iter().filter_map(|l| l.background.as_deref()).collect();
         // One row per conversation, however many processes run it.
         let mut by_id: HashMap<&str, Vec<&Live>> = HashMap::new();
         for l in &live {
@@ -1048,22 +1050,29 @@ impl App {
                 continue;
             };
             // Only interactive copies can fall out of sync with each other. A background session is run by
-            // Claude's own service: it is never marked stale and never counts toward "several copies".
-            let shared = ls.iter().filter(|l| !l.is_background()).count() > 1;
+            // Claude's own service: it is never marked stale and never counts toward "several copies". Nor does a
+            // parked one: it handed the conversation over and no longer writes to it.
+            let shared = ls.iter().filter(|l| !l.is_background() && !l.is_parked()).count() > 1;
             for l in ls {
                 if let Some(attach_id) = &l.background {
                     // `hosted`: a platoon host is showing it right now (its process is a `claude attach`, which has no
                     // registry entry of its own, so it never appears among `live`).
                     let hosted = self.hosts.iter().any(|h| h.attaches_to(attach_id));
-                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: Some(attach_id.clone()), stale: false });
+                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: Some(attach_id.clone()), stale: false, parked: false, moved_to: None });
                     continue;
                 }
                 let hosted = self.hosts.iter().any(|h| h.claude_pid == l.pid);
+                if let Some(job) = &l.parked {
+                    // Where it went, while that background session still runs.
+                    let moved_to = jobs.contains(job.as_str()).then(|| job.clone());
+                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale: false, parked: true, moved_to });
+                    continue;
+                }
                 if shared && hosted && !guard_on {
                     guard::mark_stale(&self.cache, l.pid, l.started_at);
                 }
                 let stale = guard::is_stale(&self.cache, l.pid, l.started_at);
-                s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale });
+                s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale, parked: false, moved_to: None });
             }
             // The name the user gave it in platoon wins over the one Claude was told.
             if let (Some(n), None) = (ls.iter().find_map(|l| l.name.as_ref()), self.names.get(&s.id)) {
@@ -1071,10 +1080,14 @@ impl App {
                 s.name_source = NameSource::Claude;
                 s.rehaystack();
             }
+            // (A parked entry is never `busy`.) Moved only while nothing else runs the conversation: a copy opened
+            // again since is what the row is about then.
             s.status = if ls.iter().any(|l| l.busy && !l.is_background()) {
                 Status::Busy
             } else if ls.iter().any(|l| l.is_background()) {
                 Status::Background
+            } else if s.procs.iter().all(|p| p.parked) && s.procs.iter().any(|p| p.moved_to.is_some()) {
+                Status::Moved
             } else {
                 Status::Idle
             };
@@ -1817,11 +1830,28 @@ impl App {
                 None => JumpPlan::AttachBackground(attach_id.clone()),
             });
         }
-        if let Some(p) = s.procs.iter().find(|p| p.hosted && !p.stale) {
+        // Only copies that still write to the conversation count below. A parked process handed it over to a
+        // background session: that session is where it went on, so opening the row opens it (joining a host already
+        // showing it). With that session gone, the row is an idle conversation: its own platoon host if it has one,
+        // else reopened from the saved history. A parked process is never ended or taken over.
+        let writers: Vec<&Proc> = s.procs.iter().filter(|p| !p.parked).collect();
+        if writers.is_empty() {
+            if let Some(job) = s.procs.iter().find_map(|p| p.moved_to.as_ref()) {
+                return Some(match self.hosts.iter().find(|h| h.attaches_to(job)) {
+                    Some(h) => JumpPlan::Attach(h.claude_pid),
+                    None => JumpPlan::AttachBackground(job.clone()),
+                });
+            }
+            return Some(match s.procs.iter().find(|p| p.hosted) {
+                Some(p) => JumpPlan::Attach(p.pid),
+                None => JumpPlan::Resume,
+            });
+        }
+        if let Some(p) = writers.iter().find(|p| p.hosted && !p.stale) {
             return Some(JumpPlan::Attach(p.pid));
         }
-        let kind = if s.procs.len() == 1 && !s.procs[0].hosted { AdoptKind::TakeOver } else { AdoptKind::Reload };
-        Some(JumpPlan::Adopt { pids: s.procs.iter().map(|p| p.pid).collect(), kind, busy: s.status == Status::Busy })
+        let kind = if writers.len() == 1 && !writers[0].hosted { AdoptKind::TakeOver } else { AdoptKind::Reload };
+        Some(JumpPlan::Adopt { pids: writers.iter().map(|p| p.pid).collect(), kind, busy: s.status == Status::Busy })
     }
 
     fn jump(&mut self) {

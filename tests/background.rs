@@ -220,3 +220,80 @@ fn platoon_open_on_a_background_session_runs_attach_by_prefix_and_joins_it_the_s
     assert!(w.service_alive());
     w.cleanup();
 }
+
+// ---- a session parked when it moved to the background (Claude Code's `parkedJobId`) ----------------------------
+
+const PARKED_ID: &str = "5036bf6c-a34c-4727-b2a1-3b35ef10c9c1";
+
+/// An interactive process (a `sleep` standing in) that handed its conversation to the background session above
+/// (job `dffac639`) and stays alive, its registry status stuck at "busy", as Claude Code 2.1.283 leaves it.
+/// Killed on drop, also when a test fails half way.
+struct Parked(Child);
+
+impl Parked {
+    fn new(w: &World) -> Self {
+        let child = Command::new("sleep").arg("120").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().unwrap();
+        let registry = format!(
+            r#"{{"pid":{},"sessionId":"{PARKED_ID}","cwd":"{}","kind":"interactive","startedAt":0,"status":"busy","parkedJobId":"dffac639","name":"work-1","nameSource":"derived"}}"#,
+            child.id(),
+            w.work.display()
+        );
+        fs::write(w.claude.join("sessions").join(format!("{}.json", child.id())), registry).unwrap();
+        w.save(PARKED_ID, "plan the parked release", 0);
+        Parked(child)
+    }
+
+    fn alive(&mut self) -> bool {
+        matches!(self.0.try_wait(), Ok(None))
+    }
+}
+
+impl Drop for Parked {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+#[test]
+fn a_parked_session_says_it_moved_away_and_enter_opens_the_background_session_it_moved_to() {
+    let mut w = World::new("parked-list");
+    let mut parked = Parked::new(&w);
+    let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
+    t.wait_for_all(&["plan the parked release", "moved away", "Background", "an ordinary idle conversation"]);
+    let text = t.stable();
+    assert!(!text.contains("working"), "a parked session is not working:\n{text}");
+    // A row is two lines: the name and status, then the first prompt under it.
+    let lines: Vec<&str> = text.lines().collect();
+    let at = lines.iter().position(|l| l.contains("moved away")).unwrap();
+    assert!(lines[at].contains('◇') && lines[at + 1].contains("plan the parked release"), "{text}");
+
+    // Enter on it (the newest, so selected first): the background session it moved to, never a take-over.
+    t.send(b"\r");
+    t.wait_for_all(&["fake-claude args:attach dffac639", &format!("cwd:{}", w.work.display())]);
+    let text = t.stable();
+    assert!(!text.contains("--resume") && !text.contains("Take over") && !text.contains("Reload"), "{text}");
+    assert_eq!(w.launches(), ["attach dffac639"]);
+    t.send(&[0]);
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
+    assert!(parked.alive(), "the parked process is never signalled");
+    assert!(w.service_alive());
+    w.cleanup();
+}
+
+#[test]
+fn platoon_open_on_a_parked_session_opens_the_background_session_it_moved_to() {
+    let mut w = World::new("parked-open");
+    let mut parked = Parked::new(&w);
+    let mut t = Term::spawn(&["open", "5036bf6c"], &w.env(), &w.work, 24, 100);
+    t.wait_for("fake-claude args:attach dffac639");
+    let text = t.stable();
+    assert!(!text.contains("--resume") && !text.contains("End it"), "{text}");
+    t.send(&[0]);
+    assert_eq!(t.wait_exit(), 0);
+    assert_eq!(w.launches(), ["attach dffac639"]);
+    assert!(parked.alive(), "the parked process is never signalled");
+    w.cleanup();
+}

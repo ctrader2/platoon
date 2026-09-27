@@ -18,7 +18,7 @@
 //! every step is a small read that swallows its own errors, and a prompt is never refused or delayed because of
 //! them.
 
-use crate::claude::{claude_root, pid_alive};
+use crate::claude::{claude_root, parked_job, pid_alive};
 use crate::host;
 use crate::procs::ppid;
 use crate::sessionhook;
@@ -31,6 +31,9 @@ pub struct Entry {
     pub pid: u32,
     pub id: String,
     pub started_at: u64,
+    /// It handed the conversation to a background session (`claude::parked_job`): alive, but no longer a copy that
+    /// writes to it, so it never owns the conversation and is never refused either.
+    pub parked: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -52,10 +55,15 @@ pub fn live_entries(root: &Path) -> Vec<Entry> {
         }
         let (Some(pid), Some(id)) = (v["pid"].as_u64(), v["sessionId"].as_str()) else { continue };
         if pid_alive(pid as u32) {
-            out.push(Entry { pid: pid as u32, id: id.to_string(), started_at: v["startedAt"].as_u64().unwrap_or(0) });
+            out.push(Entry { pid: pid as u32, id: id.to_string(), started_at: v["startedAt"].as_u64().unwrap_or(0), parked: parked_job(&v).is_some() });
         }
     }
     out
+}
+
+/// The live processes that write to the conversation `sid`: its entries, less the parked ones.
+pub fn writers(entries: Vec<Entry>, sid: &str) -> Vec<Entry> {
+    entries.into_iter().filter(|e| e.id == sid && !e.parked).collect()
 }
 
 /// `entries` are the live processes on one session. The earliest owns it; ties go to a platoon-hosted
@@ -206,8 +214,9 @@ fn guard_inner() -> i32 {
     let Some(v) = serde_json::from_str::<Value>(&input).ok() else { return 0 };
     let Some(sid) = v["session_id"].as_str().map(String::from) else { return 0 };
     let cache = cache_dir();
-    // The guard's own answer first, exactly as before: nothing below may change it.
-    let same: Vec<Entry> = live_entries(&claude_root()).into_iter().filter(|e| e.id == sid).collect();
+    // The guard's own answer first, exactly as before: nothing below may change it. A parked process is not a copy
+    // that writes (see `Entry::parked`).
+    let same: Vec<Entry> = writers(live_entries(&claude_root()), &sid);
     // Which registered process is the one running this hook? It's an ancestor of the hook.
     let chain = ancestors(std::process::id());
     let me = same.iter().find(|e| chain.contains(&e.pid));
@@ -241,7 +250,7 @@ mod tests {
     use super::*;
 
     fn e(pid: u32, started_at: u64) -> Entry {
-        Entry { pid, id: "s".into(), started_at }
+        Entry { pid, id: "s".into(), started_at, parked: false }
     }
 
     #[test]
@@ -297,6 +306,25 @@ mod tests {
         w.register_bg(child.id(), "sess", "/tmp", 1, "sess", false);
         let entries = live_entries(&w.root);
         assert_eq!(entries.iter().map(|e| e.pid).collect::<Vec<_>>(), [me]);
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn a_parked_process_never_owns_the_conversation_so_a_copy_opened_later_may_write() {
+        // Claude Code 2.1.283 leaves a parked entry alive and "busy" for good once it hands the conversation to a
+        // background session. Counting it would refuse every copy opened after it.
+        let w = crate::testkit::World::new("guard-parked");
+        let me = std::process::id();
+        w.register(me, "sess", "/tmp", 5, "idle");
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        w.register_parked(child.id(), "sess", "/tmp", 1, "a70fa3de");
+        let all = live_entries(&w.root);
+        assert_eq!(all.len(), 2, "both are alive");
+        assert!(all.iter().any(|e| e.pid == child.id() && e.parked) && all.iter().any(|e| e.pid == me && !e.parked));
+        let same = writers(all, "sess");
+        assert_eq!(same.iter().map(|e| e.pid).collect::<Vec<_>>(), [me]);
+        assert_eq!(decide(&same, me, &|_| false, false), Verdict::Allow, "the parked one is older, and still doesn't own it");
         let _ = child.kill();
         let _ = child.wait();
     }

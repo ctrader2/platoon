@@ -5,6 +5,9 @@ pub enum Status {
     /// Claude's own service runs it (`claude --bg`): platoon shows it and can open it, but never stops, archives or
     /// otherwise touches it.
     Background,
+    /// The process that ran it handed the conversation over to a background session that still runs (Claude Code
+    /// "parks" it). Nothing works on this conversation now; opening it opens that background session.
+    Moved,
 }
 
 /// A live Claude Code process running a conversation. Several can share one conversation (the guard
@@ -22,6 +25,12 @@ pub struct Proc {
     pub background: Option<String>,
     /// This process must not write to the conversation any more: its memory can't be trusted to match it.
     pub stale: bool,
+    /// An interactive process that handed the conversation to a background session (`claude::Live::parked`). It is
+    /// never working, never a copy that writes to the conversation, and platoon never offers to take it over.
+    pub parked: bool,
+    /// For a parked process whose background session is still running: that session's job id (what
+    /// `claude attach` takes). Opening the row opens it.
+    pub moved_to: Option<String>,
 }
 
 /// Where a row's name came from, in the order that wins: the user's own platoon name, a name typed with `/rename`
