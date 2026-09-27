@@ -123,7 +123,7 @@ pub fn clean_path(p: &str) -> String {
 }
 
 /// Run one git command in `dir`, read-only, by `deadline`. Its output when it succeeded, else None.
-fn run(program: &str, dir: &Path, args: &[&str], deadline: Instant) -> Option<String> {
+pub(crate) fn run(program: &str, dir: &Path, args: &[&str], deadline: Instant) -> Option<String> {
     if Instant::now() >= deadline {
         return None;
     }

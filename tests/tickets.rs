@@ -518,3 +518,80 @@ fn the_skills_heredoc_command_makes_a_ticket_with_that_body_and_an_empty_one_get
     assert!(template.starts_with("## What it should do\n\nWhat should work when this is finished"), "{template}");
     assert_eq!(body_of(4), template);
 }
+
+/// A Done ticket whose worktree (a real one, in a temp repository) has a file not yet committed: platoon keeps it,
+/// the ticket's screen says so with `w` to remove it anyway, and after a yes it is removed and its branch kept.
+#[test]
+fn a_done_tickets_worktree_with_uncommitted_changes_is_kept_said_on_its_screen_and_removed_after_a_yes() {
+    let lab = Lab::new("tk-wt-kept");
+    let shop = lab.base.join("shop");
+    let wt = lab.base.join("shop-worktrees/ticket-1");
+    fs::create_dir_all(&shop).unwrap();
+    fs::write(shop.join("README"), "hi\n").unwrap();
+    let git = |dir: &std::path::Path, args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&shop, &["init", "-q"]);
+    git(&shop, &["add", "."]);
+    git(&shop, &["commit", "-q", "-m", "first"]);
+    let base = git(&shop, &["rev-parse", "HEAD"]);
+    git(&shop, &["worktree", "add", "-q", wt.to_str().unwrap(), "-b", "ticket/1"]);
+    fs::write(wt.join("draft.txt"), "not committed yet\n").unwrap();
+    let (shop_s, wt_s) = (shop.to_string_lossy().into_owned(), wt.to_string_lossy().into_owned());
+    let v = json!({"next": 2, "tickets": [{"number": 1, "title": "Basket", "file": "01-t.md", "state": "done", "folders": [shop_s], "blocked_by": [], "created": 1, "updated": 1,
+        "leaders": [{"squad": "coding", "session": "lead-1", "started": 1}],
+        "worktrees": [{"folder": shop_s, "path": wt_s, "branch": "ticket/1", "base": base}]}]});
+    fs::create_dir_all(lab.tickets_path().parent().unwrap()).unwrap();
+    fs::write(lab.tickets_path(), v.to_string()).unwrap();
+
+    let mut t = Term::spawn(&[], &lab.colored_env(), &lab.work, 32, 130);
+    lab.open_project(&mut t);
+    t.send(b"\t");
+    t.wait_for("▸ Done and cancelled · 1");
+    t.send(b"\r");
+    t.wait_for("#1 Basket");
+    t.send(b"G\r");
+    // Wrapped in the ticket's column.
+    t.wait_for_all(&["Kept because it has changes not yet", "committed.", "w removes it anyway", "Worktree"]);
+    t.wait_for_flat("w remove worktree");
+    assert!(wt.join("draft.txt").exists());
+    assert_eq!(lab.tickets()["tickets"][0]["worktrees"][0]["kept_uncommitted"], true);
+    // The words in the warning colour; the key in the accent and its words dimmed, like the footer's.
+    let (ky, kx) = find(&mut t, "Kept because");
+    t.wait_fg(ky, kx, WARN);
+    let (wy, wx) = find(&mut t, "w removes it anyway");
+    t.wait_fg(wy, wx, ACCENT);
+    assert_eq!(t.fg_at(wy, wx + 2), vt100::Color::Rgb(0x6c, 0x70, 0x86), "the words in the dim colour");
+    let (fy, fx) = find(&mut t, "w remove worktree");
+    assert_eq!(t.fg_at(fy, fx), ACCENT);
+    // `w` asks first; `n` keeps it.
+    t.send(b"w");
+    t.wait_for_all(&["Remove #1's worktree anyway?", "they will be lost", "y remove it", "n keep it"]);
+    t.send(b"n");
+    t.wait_gone("Remove #1's worktree anyway?");
+    assert!(wt.join("draft.txt").exists());
+    t.send(b"w");
+    t.wait_for("Remove #1's worktree anyway?");
+    t.send(b"y");
+    t.wait_gone("Remove #1's worktree anyway?");
+    t.wait_for_all(&["Removed; its branch ticket/1 is", "#1's worktree is removed."]);
+    let screen = t.stable();
+    assert!(!screen.contains("Kept because") && !screen.contains("w remove"), "{screen}");
+    assert!(!wt.exists());
+    assert_eq!(git(&shop, &["branch", "--list", "ticket/1", "--format=%(refname:short)"]), "ticket/1", "the branch is kept");
+    assert!(lab.tickets()["tickets"][0]["worktrees"][0]["removed"].is_u64());
+    assert_eq!(lab.tickets()["tickets"][0]["worktrees"][0]["base"], base.as_str());
+    t.send(b"q");
+    t.wait_exit();
+}

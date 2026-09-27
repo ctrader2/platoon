@@ -299,6 +299,9 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
     if t.is_some_and(|t| t.state != State::Cancelled) {
         out.push(("c", "cancel", None));
     }
+    if app.can_remove_worktree(n) {
+        out.push(("w", "remove worktree", None));
+    }
     out.extend([
         ("e", "edit", None),
         ("r", "rename", None),
@@ -820,9 +823,28 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         }
         head.push(Line::from(spans));
     }
+    let removable = app.can_remove_worktree(number);
     for (i, wt) in x.worktrees.iter().enumerate() {
+        let lead = label(if i == 0 { "Worktree" } else { "" });
+        // Removed after the work: said, with the branch that keeps its commits.
+        if wt.removed.is_some() {
+            let shown = fit_start(&tilde(&wt.path, &app.home), w.saturating_sub(LABEL));
+            head.push(Line::from(vec![lead, Span::styled(shown, Style::new().fg(t.subtext))]));
+            for l in wrap(&format!("Removed; its branch {} is kept.", wt.branch), w.saturating_sub(LABEL)) {
+                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.subtext))]));
+            }
+            continue;
+        }
         let shown = fit_start(&format!("{} ({})", tilde(&wt.path, &app.home), wt.branch), w.saturating_sub(LABEL));
-        head.push(Line::from(vec![label(if i == 0 { "Worktree" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
+        head.push(Line::from(vec![lead, Span::styled(shown, Style::new().fg(t.text))]));
+        if wt.kept_uncommitted {
+            for l in wrap("Kept because it has changes not yet committed.", w.saturating_sub(LABEL)) {
+                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
+            }
+            if removable {
+                head.push(Line::from(vec![label(""), Span::styled("w", Style::new().fg(t.accent)), Span::styled(" removes it anyway", Style::new().fg(t.dim))]));
+            }
+        }
     }
     if x.folders.is_empty() {
         head.push(Line::from(vec![label("Folders"), Span::styled("None: a squad works in its work folder", Style::new().fg(t.subtext))]));
@@ -3033,15 +3055,27 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("#{number} {title}. The commander said: {says}"),
             "hand it over",
         ),
-        Confirm::CancelTicket { number, title, squad, pid } => (
+        Confirm::CancelTicket { number, title, squad, pid, uncommitted } => (
             "cancel ticket",
             format!("Cancel ticket #{number}?"),
-            match (pid, squad) {
-                (Some(_), _) => format!("#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."),
-                (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
-                (None, false) => format!("#{number} {title} goes under Done and cancelled. No squad has had it, so it stays cancelled."),
+            {
+                let mut says = match (pid, squad) {
+                    (Some(_), _) => format!("#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."),
+                    (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
+                    (None, false) => format!("#{number} {title} goes under Done and cancelled. No squad has had it, so it stays cancelled."),
+                };
+                if *uncommitted {
+                    says.push_str(" Its worktree has changes not yet committed, so platoon keeps it: w on the ticket removes it anyway.");
+                }
+                says
             },
             "cancel it",
+        ),
+        Confirm::RemoveWorktree { number, branch } => (
+            "remove worktree",
+            format!("Remove #{number}'s worktree anyway?"),
+            format!("It has changes not yet committed, and they will be lost. Its branch {branch} and everything committed on it are kept."),
+            "remove it",
         ),
         Confirm::ResetInstructions { id } => {
             let a = crate::instructions::action(id);
@@ -3091,7 +3125,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
-    let no = if matches!(c, Confirm::CancelTicket { .. }) { "keep it" } else { "cancel" };
+    let no = if matches!(c, Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. }) { "keep it" } else { "cancel" };
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }

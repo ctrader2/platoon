@@ -224,14 +224,71 @@ pub struct Queued {
     pub anyway: bool,
 }
 
-/// A git worktree platoon made for a ticket (Coding tickets always get their own).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A git worktree platoon made for a ticket (every ticket's git folders get one).
+///
+/// In the file: `{"folder", "path", "branch"}`, then only when there is something to say `"base"`, `"removed"` and
+/// `"kept_uncommitted"` (so a ticket from before them reads and writes as it was). Keys platoon doesn't know are kept.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Worktree {
     /// The ticket's folder it stands in for.
     pub folder: String,
     /// Where the squad works instead: the same place inside the worktree.
     pub path: String,
     pub branch: String,
+    /// The commit it was made from (the repository's HEAD just before): what "what did this ticket change" compares
+    /// the branch with (`worktrees::diff_base`). None for one made before platoon wrote it down.
+    pub base: Option<String>,
+    /// When platoon removed its folder (seconds since the epoch): the ticket was Done or Cancelled and its squad's
+    /// session had stopped. Its branch is kept, and continuing the squad makes it again from there.
+    pub removed: Option<u64>,
+    /// platoon left it in place because it had changes not yet committed: the user removes it anyway (`w` on the
+    /// ticket), or it goes once they are committed.
+    pub kept_uncommitted: bool,
+}
+
+impl Worktree {
+    /// Its folder is gone (platoon removed it, or it isn't there any more).
+    pub fn is_gone(&self) -> bool {
+        self.removed.is_some() || !Path::new(&self.path).exists()
+    }
+}
+
+/// What platoon writes down about one of a ticket's worktrees after the work (`Tickets::mark_worktree`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WtMark {
+    /// Its folder was removed (the branch kept).
+    Removed,
+    /// Left in place: it has changes not yet committed.
+    KeptUncommitted,
+    /// It is there again (made again from its branch, to continue the squad): neither of the above.
+    Present,
+}
+
+/// A worktree as the file holds it: `old` is the entry it replaces, whose other keys are kept.
+fn worktree_value(w: &Worktree, old: Option<&Map<String, Value>>) -> Value {
+    let mut o = old.cloned().unwrap_or_default();
+    o.insert("folder".into(), json!(w.folder));
+    o.insert("path".into(), json!(w.path));
+    o.insert("branch".into(), json!(w.branch));
+    // A base once written stays: the worktree was made from it, whatever happens after.
+    if let Some(b) = &w.base {
+        o.insert("base".into(), json!(b));
+    }
+    match w.removed {
+        Some(at) => o.insert("removed".into(), json!(at)),
+        None => o.remove("removed"),
+    };
+    if w.kept_uncommitted {
+        o.insert("kept_uncommitted".into(), json!(true));
+    } else {
+        o.remove("kept_uncommitted");
+    }
+    Value::Object(o)
+}
+
+/// A commit id as git writes it (what `base` may hold): 4 to 64 hex digits.
+fn is_commit_id(s: &str) -> bool {
+    (4..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -400,7 +457,14 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                 a.iter()
                     .filter_map(|w| {
                         let s = |k: &str| w.get(k).and_then(Value::as_str).map(String::from);
-                        Some(Worktree { folder: s("folder")?, path: s("path")?, branch: s("branch").unwrap_or_default() })
+                        Some(Worktree {
+                            folder: s("folder")?,
+                            path: s("path")?,
+                            branch: s("branch").unwrap_or_default(),
+                            base: s("base").filter(|b| is_commit_id(b)),
+                            removed: w.get("removed").and_then(Value::as_u64),
+                            kept_uncommitted: w.get("kept_uncommitted").and_then(Value::as_bool).unwrap_or(false),
+                        })
                     })
                     .collect()
             })
@@ -810,8 +874,17 @@ impl Tickets {
         if let (Some(f), Some(o)) = (&leader.snapshot, l.as_object_mut()) {
             o.insert("snapshot".into(), json!(f));
         }
-        let w: Vec<Value> = worktrees.iter().map(|w| json!({"folder": w.folder, "path": w.path, "branch": w.branch})).collect();
+        let worktrees = worktrees.to_vec();
         self.edit(number, move |t, _| {
+            // The same worktree as before (a squad continued in it) keeps what else its entry says.
+            let old: Vec<Map<String, Value>> = t.get("worktrees").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_object().cloned()).collect();
+            let w: Vec<Value> = worktrees
+                .iter()
+                .map(|w| {
+                    let same = old.iter().find(|o| o.get("folder").and_then(Value::as_str) == Some(w.folder.as_str()) && o.get("path").and_then(Value::as_str) == Some(w.path.as_str()));
+                    worktree_value(w, same)
+                })
+                .collect();
             match t.get_mut("leaders").and_then(Value::as_array_mut) {
                 Some(a) => a.push(l),
                 None => {
@@ -827,6 +900,50 @@ impl Tickets {
             t.remove("permission");
             Ok(())
         })
+    }
+
+    /// Write down what became of ticket `number`'s worktree at `path` (only that entry changes; its other keys, and
+    /// the ticket's `updated`, stay as they are). True when it changed; nothing is written when it says so already,
+    /// or the ticket has no worktree there.
+    pub fn mark_worktree(&mut self, number: u32, path: &str, mark: WtMark) -> io::Result<bool> {
+        const NOTHING: &str = "\u{0}nothing to change";
+        let now = now_secs();
+        let r = self.change(|root, _| {
+            let t = root
+                .get_mut("tickets")
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number))))
+                .and_then(Value::as_object_mut)
+                .ok_or(NOTHING)?;
+            let w = t
+                .get_mut("worktrees")
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|w| w.get("path").and_then(Value::as_str) == Some(path)))
+                .and_then(Value::as_object_mut)
+                .ok_or(NOTHING)?;
+            let (removed, kept) = (w.contains_key("removed"), w.get("kept_uncommitted").and_then(Value::as_bool) == Some(true));
+            match mark {
+                WtMark::Removed if !removed => {
+                    w.insert("removed".into(), json!(now));
+                    w.remove("kept_uncommitted");
+                }
+                WtMark::KeptUncommitted if !kept || removed => {
+                    w.insert("kept_uncommitted".into(), json!(true));
+                    w.remove("removed");
+                }
+                WtMark::Present if removed || kept => {
+                    w.remove("removed");
+                    w.remove("kept_uncommitted");
+                }
+                _ => return Err(NOTHING.to_string()),
+            }
+            Ok(())
+        });
+        match r {
+            Ok(()) => Ok(true),
+            Err(e) if e.to_string() == NOTHING => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// The leader couldn't be started after all: take it off the ticket again, and put the ticket back as it was.

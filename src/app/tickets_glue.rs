@@ -203,7 +203,7 @@ impl App {
     fn ticket_key(&mut self, number: u32, key: KeyEvent) {
         // While it is being handed to a squad, what would change that waits.
         if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone()) {
-            if matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p')) {
+            if matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p' | 'w')) {
                 self.notify(format!("#{number}: {busy} Wait a moment."));
                 return;
             }
@@ -216,6 +216,7 @@ impl App {
             KeyCode::Char('b') => self.open_ticket_pick(PickKind::BlockedBy, number),
             KeyCode::Char('a') => self.ask_hand_to_squad(number),
             KeyCode::Char('p') => self.let_it_publish(number),
+            KeyCode::Char('w') => self.ask_remove_worktree(number),
             _ => {}
         }
     }
@@ -446,7 +447,8 @@ impl App {
         }
         let (title, squad) = (t.title.clone(), t.leader().is_some());
         let pid = t.leader().map(|l| l.session.clone()).and_then(|s| self.leader_host(&s)).map(|h| h.claude_pid);
-        self.mode = Mode::Confirm(Confirm::CancelTicket { number, title, squad, pid });
+        let uncommitted = self.has_uncommitted_worktree(number);
+        self.mode = Mode::Confirm(Confirm::CancelTicket { number, title, squad, pid, uncommitted });
     }
 
     /// Yes to "Cancel ticket #N?": Cancelled (out of the line for a free squad too, and the go-ahead goes), listed

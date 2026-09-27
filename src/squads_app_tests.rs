@@ -211,7 +211,7 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
     let (w, mut app, id) = on_the_project("sq-screen");
     let mut t = Tickets::open(&w.config, &id);
     let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-    let wt = crate::tickets::Worktree { folder: "/tmp".into(), path: "/w/shop-worktrees/ticket-1".into(), branch: "ticket/1".into() };
+    let wt = crate::tickets::Worktree { folder: "/tmp".into(), path: "/w/shop-worktrees/ticket-1".into(), branch: "ticket/1".into(), ..Default::default() };
     t.start_leader(n, &lead("lead-6"), &[wt]).unwrap();
     t.squad_says(n, &State::Waiting, "Asks: Red or blue?", None).unwrap();
     app.reload_for_test();

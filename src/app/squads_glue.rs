@@ -198,6 +198,17 @@ impl App {
         taken + starting
     }
 
+    /// Every ticket of every project, as the files said when they were last read.
+    pub(super) fn every_ticket(&self) -> &[(String, Ticket)] {
+        &self.sq.all_tickets
+    }
+
+    /// Read every project's tickets again if a file changed.
+    pub(super) fn reread_all_tickets(&mut self) {
+        self.reread_tickets();
+        self.refresh_tickets();
+    }
+
     /// Ticket `number`'s current leader is running under platoon.
     pub fn leader_running(&self, number: u32) -> bool {
         self.ticket(number).and_then(|t| t.leader()).is_some_and(|l| self.leader_host(&l.session).is_some())
@@ -519,7 +530,7 @@ impl App {
         let git = self.git_program.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(Step::Worktrees(squads::prepare_worktrees(&git, &t.folders, number)));
+            let _ = tx.send(Step::Worktrees(squads::prepare_worktrees(&git, &t.folders, number, &t.worktrees)));
         });
         self.begin_stage(project, number, squad, Stage::Worktrees, rx);
     }
@@ -624,7 +635,7 @@ impl App {
     /// Start ticket `number`'s current leader in a platoon host: a new session with `first` as its first message, or
     /// (None) the same session resumed. The same squad flags either way, and never `PLATOON_PROJECT`: a leader
     /// belongs to its ticket, not to the project. `show`: in the split view, beside the ticket.
-    fn launch_leader_in(&mut self, project: &str, number: u32, first: Option<&str>, show: bool) -> Result<(), String> {
+    pub(super) fn launch_leader_in(&mut self, project: &str, number: u32, first: Option<&str>, show: bool) -> Result<(), String> {
         let t = self.ticket_on_disk(project, number).ok_or_else(|| format!("#{number} isn't there any more"))?;
         let leader = t.leader().cloned().ok_or_else(|| format!("#{number} has no squad"))?;
         let launch = self.leader_launch(project, &leader, &t)?;
@@ -713,6 +724,10 @@ impl App {
                 // Running somewhere platoon doesn't host (someone resumed it by hand): a second copy would fight it.
                 if let Some(l) = self.reader.live().into_iter().find(|l| l.id == session) {
                     self.notify(format!("#{number}'s squad is running in another terminal (pid {}). Close it there first.", l.pid));
+                    return;
+                }
+                // Its worktree was removed after the work: made again from its branch first, then continued.
+                if self.bring_worktrees_back(number) {
                     return;
                 }
                 self.launch_leader(number, None);

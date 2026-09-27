@@ -44,6 +44,7 @@ mod theme;
 mod totickets;
 mod ui;
 mod usertheme;
+mod worktrees;
 #[cfg(test)]
 mod handoff_app_tests;
 #[cfg(test)]
@@ -77,6 +78,8 @@ mod tokens_app_tests;
 mod usage;
 #[cfg(test)]
 mod wheel_app_tests;
+#[cfg(test)]
+mod worktree_app_tests;
 
 use ratatui::crossterm::{
     event::{

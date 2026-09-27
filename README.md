@@ -769,7 +769,7 @@ otherwise not-New ticket then says its state at the end of its row).
 | --- | --- |
 | `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes). An archived project takes no new tickets |
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
-| `c` `e` `r` `f` `b` `a` `p` | as on the ticket's own screen, for the ticket picked |
+| `c` `e` `r` `f` `b` `a` `p` `w` | as on the ticket's own screen, for the ticket picked |
 
 A new ticket starts as **New**, works in the folder of the project's most recently used session (one made with
 `platoon ticket add`: the folder it was run in, which for `/to-tickets` is the session's own), and its body starts from a short template. When the
@@ -797,6 +797,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
 | `a` | hand it to a squad (see below) |
 | `p` | let its squad publish, when it is Ready to push/publish |
+| `w` | remove its worktree anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a ticket a squad has: its squad's session, beside the ticket. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
 | `o` | the session the ticket was made from (the **From** line), also when `enter` is the squad's |
 | `esc` | back to the project, on the same ticket |
@@ -904,9 +905,18 @@ folder of its own: it works in the ticket's work folder.
   a git worktree next to the repository, `<repo>-worktrees/ticket-<N>`, on a new branch `ticket/<N>` from where the repository is now, and
   the squad works there, never in your own checkout. A worktree already made for the ticket is used again; if the
   branch name `ticket/<N>` is taken by something else, platoon says so and stops. Folders outside git are used as they
-  are. platoon never removes these worktrees. The worktree is made in the background (the ticket says "Making the
-  worktree…"); if it can't be made, the ticket goes back to New with the reason, and one already made stays for the next
-  try.
+  are. platoon writes down on the ticket the commit each worktree was made from, so what the ticket changed can be shown
+  later. The worktree is made in the background (the ticket says "Making the worktree…"); if it can't be made, the
+  ticket goes back to New with the reason, and one already made stays for the next try.
+- **Worktrees go when the ticket is finished; branches stay.** Once a ticket is Done or Cancelled and its squad's
+  session has stopped (never while it, or any session, is working in the worktree), platoon removes the worktree folder
+  with `git worktree remove` and **keeps the branch** `ticket/<N>` with every commit on it (deleting the branch is up to
+  you). A worktree with changes not yet committed (changed files, or new files git doesn't ignore) is kept: the
+  ticket's screen says "Kept because it has changes not yet committed.", and `w` removes it anyway after asking (those
+  changes are lost; the branch stays). Cancelling a ticket with such a worktree says so in its question. A removed
+  worktree shows as "Removed; its branch ticket/<N> is kept." Continuing the squad later (enter on the ticket, or writing
+  to its session) makes the worktree again from its branch, at the same place, before the squad goes on. platoon only
+  ever removes the folder it made for that ticket, when git lists it as that repository's worktree on the ticket's branch.
 - **Its own work folder.** Every ticket handed to a squad gets a private work folder, kept with the ticket in
   `~/.config/platoon/projects/<id>/tickets/<NN>-work/` (platoon never removes it). The squad starts in the ticket's
   first folder (its worktree, when it has one), with its other folders and the work folder beside it, and writes what

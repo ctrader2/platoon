@@ -46,6 +46,7 @@ mod squads_glue;
 mod squadwork_glue;
 mod squadtab_glue;
 mod tickets_glue;
+mod worktree_glue;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
@@ -253,7 +254,11 @@ pub enum Confirm {
     ResetInstructions { id: &'static str },
     /// `c` on a ticket: cancel it? `squad`: a squad has had it; `pid`: its leader's `claude`, when that is running
     /// (yes stops that session too).
-    CancelTicket { number: u32, title: String, squad: bool, pid: Option<u32> },
+    /// `uncommitted`: its worktree has changes not yet committed, so platoon will keep it.
+    CancelTicket { number: u32, title: String, squad: bool, pid: Option<u32>, uncommitted: bool },
+    /// `w` on a Done or Cancelled ticket whose worktree was kept because it has changes not yet committed: remove it
+    /// anyway (the changes are lost, the branch is kept).
+    RemoveWorktree { number: u32, branch: String },
     /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
     HandAnyway { number: u32, squad: String, title: String, says: String },
     /// Delete one of the user's own squads.
@@ -509,6 +514,8 @@ pub struct App {
     pub sq: SquadState,
     /// What the open project's squads have done (tokens, members' runs), read off the UI thread.
     pub sw: squadwork_glue::WorkState,
+    /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
+    pub wt: worktree_glue::WtState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
     /// The first line of the notes in view.
@@ -689,6 +696,7 @@ impl App {
             tk: TicketsState::new(),
             sq: SquadState::new(),
             sw: squadwork_glue::WorkState::default(),
+            wt: worktree_glue::WtState::default(),
             sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
             notes_seen: None,
@@ -1004,6 +1012,8 @@ impl App {
         let all_live = self.reader.live();
         // Which leaders run, for the squads at work at once; then they are left out like everywhere else.
         self.note_running_leaders(&all_live);
+        // Where sessions are working now: no worktree is removed from under one.
+        self.note_busy_dirs(&all_live);
         let live: Vec<Live> = all_live.into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
@@ -1111,6 +1121,7 @@ impl App {
         self.poll_squad_starts();
         self.start_from_line();
         self.poll_squad_work();
+        self.poll_worktrees();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();
@@ -1300,6 +1311,7 @@ impl App {
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
             (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
+            (Action::Confirm, Mode::Confirm(Confirm::RemoveWorktree { number, .. })) => self.remove_worktree_anyway(number),
             (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, &squad),
             (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, .. })) => self.remove_squad(&id, false),
             (Action::Confirm, Mode::Confirm(Confirm::RestoreSquad { id, .. })) => self.remove_squad(&id, true),
