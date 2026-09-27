@@ -1,6 +1,7 @@
 //! Tickets' worktrees inside the app, after the work. A ticket that is Done or Cancelled, whose squad's session is no
 //! longer running, has its worktrees removed (its branch kept); one with changes not yet committed is kept, and its
-//! screen says so, with `w` to remove it anyway after a yes. Continuing such a ticket's squad (enter on its screen)
+//! screen says so, with `w` to remove it anyway after a yes. One opened in an editor with a window of its own (`v`) is
+//! kept too, since platoon can't tell when that window closes: "Kept: opened in VS Code", until `w`. Continuing such a ticket's squad (enter on its screen)
 //! makes the worktree again from its branch first. The git side, and every check on what may be touched, is in
 //! `worktrees.rs`.
 //!
@@ -136,7 +137,8 @@ impl App {
             let todo: Vec<Worktree> = t
                 .worktrees
                 .iter()
-                .filter(|w| w.removed.is_none() && !self.someone_in(w, t.number))
+                // (One opened in a windowed editor is the user's to remove: platoon can't tell when that closes.)
+                .filter(|w| w.removed.is_none() && w.opened_in.is_none() && !self.someone_in(w, t.number))
                 .filter(|w| !self.wt.tried.contains(&(project.clone(), t.number, w.path.clone(), t.updated)))
                 .cloned()
                 .collect();
@@ -306,9 +308,12 @@ impl App {
 
     // ---- the user's say ---------------------------------------------------------------------------------------
 
-    /// The worktrees of ticket `number` that were kept because they have changes not yet committed.
+    /// The worktrees of ticket `number` that were kept after the work: they have changes not yet committed, or they
+    /// were opened in an editor with a window of its own.
     pub fn kept_worktrees(&self, number: u32) -> Vec<Worktree> {
-        self.ticket(number).map(|t| t.worktrees.iter().filter(|w| w.kept_uncommitted && w.removed.is_none()).cloned().collect()).unwrap_or_default()
+        self.ticket(number)
+            .map(|t| t.worktrees.iter().filter(|w| (w.kept_uncommitted || w.opened_in.is_some()) && w.removed.is_none()).cloned().collect())
+            .unwrap_or_default()
     }
 
     /// `w` would remove ticket `number`'s kept worktree now: it is Done or Cancelled, one was kept, and no squad of
@@ -331,7 +336,7 @@ impl App {
             let why = if t.worktrees.iter().any(|w| w.removed.is_none()) && !t.state.closed() {
                 format!("#{number}'s worktree goes by itself once the ticket is Done or cancelled.")
             } else {
-                format!("#{number} has no worktree kept for changes not yet committed.")
+                format!("#{number} has no worktree kept after the work.")
             };
             self.notify(why);
             return;
@@ -344,7 +349,10 @@ impl App {
             self.notify(format!("#{number} is {}: its worktree is in use.", t.state.label()));
             return;
         }
-        self.mode = Mode::Confirm(Confirm::RemoveWorktree { number, branch: crate::squads::branch_name(number) });
+        let kept = self.kept_worktrees(number);
+        let opened_in = kept.iter().find_map(|w| w.opened_in.clone());
+        let uncommitted = kept.iter().any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET));
+        self.mode = Mode::Confirm(Confirm::RemoveWorktree { number, branch: crate::squads::branch_name(number), uncommitted, opened_in });
     }
 
     /// Yes to "Remove #N's worktree anyway?": removed with its changes (the branch kept), off the UI thread.

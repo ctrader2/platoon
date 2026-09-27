@@ -614,8 +614,8 @@ pub struct Launch {
     pub args: Vec<String>,
     pub env: Vec<(String, Option<String>)>,
     pub cwd: PathBuf,
-    /// Removed when the editor has closed.
-    pub session: PathBuf,
+    /// Removed when the editor has closed (platoon's editor only: none for an editor of the user's own).
+    pub session: Option<PathBuf>,
 }
 
 fn write_if_changed(path: &Path, text: &str) -> io::Result<()> {
@@ -688,7 +688,7 @@ pub fn prepare(dirs: &Dirs, req: &Request, look: &Look, env: &dyn Fn(&str) -> Op
         args: vec!["-u".into(), cfg.join("init.lua").to_string_lossy().into_owned()],
         env: nvim_env(dirs, &session, env),
         cwd,
-        session,
+        session: Some(session),
     })
 }
 
@@ -773,7 +773,9 @@ pub fn run(l: &Launch) -> io::Result<ExitStatus> {
 
 /// Done with one opening: its session file goes.
 pub fn finish(l: &Launch) {
-    let _ = fs::remove_file(&l.session);
+    if let Some(s) = &l.session {
+        let _ = fs::remove_file(s);
+    }
 }
 
 // ---- which folders an editor has open ---------------------------------------------------------------------------
@@ -1202,8 +1204,8 @@ mod tests {
         assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), INIT_LUA);
         assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), TREE_LUA);
         assert!(fs::metadata(cfg.join("shell")).unwrap().permissions().mode() & 0o111 != 0);
-        assert_eq!(l.session, cfg.join("session-7.json"));
-        let v: Value = serde_json::from_str(&fs::read_to_string(&l.session).unwrap()).unwrap();
+        assert_eq!(l.session, Some(cfg.join("session-7.json")));
+        let v: Value = serde_json::from_str(&fs::read_to_string(l.session.as_ref().unwrap()).unwrap()).unwrap();
         assert_eq!(v["roots"][0]["path"], s(&root).as_str());
         assert_eq!(l.args, vec!["-u".to_string(), s(&cfg.join("init.lua"))]);
         assert_eq!(l.cwd, root);
@@ -1213,7 +1215,7 @@ mod tests {
             assert!(xdg_dir(&dirs).join(sub).is_dir());
         }
         finish(&l);
-        assert!(!l.session.exists());
+        assert!(!l.session.as_ref().unwrap().exists());
         // One left behind by a platoon that is gone is tidied away at the next opening; a live one's stays.
         let stale = cfg.join("session-1073741800.json");
         let live = cfg.join(format!("session-{}.json", std::process::id()));

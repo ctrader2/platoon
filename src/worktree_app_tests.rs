@@ -208,7 +208,7 @@ fn w_is_refused_while_the_squad_runs_or_when_nothing_was_kept() {
     l.app.refresh_for_test();
     key(&mut l.app, KeyCode::Char('w'));
     assert!(matches!(l.app.mode, Mode::List));
-    assert_eq!(l.app.active_notice(), Some("#1 has no worktree kept for changes not yet committed."));
+    assert_eq!(l.app.active_notice(), Some("#1 has no worktree kept after the work."));
     // Kept, but the squad's session is running in it.
     fs::write(l.wt.join("draft.txt"), "x\n").unwrap();
     Tickets::open(&l.w.config, &l.project).mark_worktree(1, &l.made.path, crate::tickets::WtMark::KeptUncommitted).unwrap();

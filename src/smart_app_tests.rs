@@ -721,14 +721,14 @@ fn click_at(app: &mut App, x: u16, y: u16) {
 }
 
 #[test]
-fn the_settings_have_five_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
+fn the_settings_have_six_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
     let w = World::new("sm-tabs");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
     key(&mut app, KeyCode::Char('s'));
     let general = screen(&mut term, &app);
     let tabs_line = general.lines().find(|l| l.contains("General")).unwrap().to_string();
-    for title in ["General", "Search", "Smart features", "Sessions", "Projects"] {
+    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"] {
         assert!(tabs_line.contains(title), "{title} on the tab line: {tabs_line}");
     }
     assert!(general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"), "{general}");
@@ -754,9 +754,14 @@ fn the_settings_have_five_tabs_that_tab_shift_tab_and_a_click_switch_with_the_sh
     assert_eq!(lit(&term, "General"), (t.bg, t.dim, false));
     key(&mut app, KeyCode::BackTab);
     key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.settings_tab, 4, "shift+tab from the first goes to the last");
+    assert_eq!(app.settings_tab, 5, "shift+tab from the first goes to the last");
+    let editors = screen(&mut term, &app);
+    assert!(editors.contains("Editing platoon's text") && editors.contains("Editing files") && editors.contains("Always ask which editor"), "{editors}");
+    key(&mut app, KeyCode::BackTab);
+    assert_eq!(app.settings_tab, 4);
     let projects = screen(&mut term, &app);
     assert!(projects.contains("Update notes after") && !projects.contains("Stop idle sessions after"), "{projects}");
+    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.settings_tab, 0, "tab from the last goes to the first");
     // A click on a title shows that tab, starting on its first entry.

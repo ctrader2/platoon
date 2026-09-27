@@ -82,6 +82,31 @@ back to platoon exactly where you were. Sessions and squads keep running meanwhi
 - **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as when
   you continue the squad. While the editor is open, platoon never removes a worktree it has open.
 
+**Your own editors.** `v` can also open the work in an editor this computer already has, one that shows a whole folder
+with a file tree. platoon only offers the ones it finds installed: on your `PATH`, or where they install themselves
+(JetBrains Toolbox's scripts in `~/.local/share/JetBrains/Toolbox/scripts`, snaps in `/snap/bin`, `/opt/<app>/bin`,
+`~/.local/bin`; on macOS the apps in `/Applications` and `~/Applications`):
+
+| Editor | How it opens | Several folders |
+| --- | --- | --- |
+| platoon's editor (always offered; installed the first time you choose it) | here, in platoon's terminal | all of them |
+| VS Code, Cursor, Zed, Sublime Text, Kate | a new window of its own, beside platoon | all of them in that one window |
+| IntelliJ IDEA (and Community), PyCharm (and Community), WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio | a window of its own | each in a window of its own, at most three (it says so when there were more) |
+| Helix, and **your own Neovim setup** (only when you have `~/.config/nvim`) | here, in platoon's terminal, with your own settings and environment, exactly like platoon's editor: closing it brings platoon back | the first one (it says which it left out) |
+
+Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offered here; they stay in the notes' list (`e`).
+
+Which one opens: your **favourite**, platoon's editor until you choose another (Settings, Editors: "Editor for files (v)").
+With "Always ask which editor" on, `v` shows the list every time, the favourite starred and picked (enter opens it);
+choosing another there makes it the favourite. A favourite that is no longer installed opens platoon's editor instead, and
+platoon says so once. The questions above (the squad still working, bringing a worktree back, the folder picker) are the
+same for every editor.
+
+An editor with a window of its own starts beside platoon and is left alone: platoon stays on screen, and closing platoon
+doesn't close it. platoon can't tell when that window closes, so **a ticket's worktree opened in one is kept** after the
+ticket is Done or cancelled: its screen says "Kept: opened in VS Code", and `w` removes it (after asking). An editor in
+platoon's terminal needs none of this: platoon waits for it to close.
+
 **Inside the editor.** It is Neovim with platoon's own settings (your own `~/.config/nvim` is never read or changed); Vim's
 keys work as usual, with these changes and additions. `space` is the key for platoon's own actions: press it and wait, and
 a list of them appears.
@@ -286,8 +311,8 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in five
-tabs along the top: **General**, **Search**, **Smart features**, **Sessions** and **Projects**. `tab` goes to the next tab and
+`s` opens the settings as a popup over the list; `esc`, `s`, `q`, or a click outside it closes it. The settings are in six
+tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects** and **Editors**. `tab` goes to the next tab and
 `shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
 same size on every tab; a tab with more entries than fit scrolls, and on a small terminal only the selected entry is explained. Every setting keeps the name, choices and key in the file it had before the tabs.
 
@@ -347,6 +372,14 @@ when naming is held up, why (`Naming is waiting: ...`).
 | System prompt for the squad commander, for squad leaders, for drafting a squad, for drafting an agent | How the commander checks a squad fits a ticket, how every squad's leader leads its agents (platoon adds what the squad can do, its workflow and the rules it keeps), and how a squad or an agent is drafted from your description. | Enter to change, User Modified |
 | Model for squad leaders | The model every squad's leader runs on; its agents each run on their own. A squad already at work keeps the model it started with. | Opus, Sonnet (default), Haiku |
 
+**Editors**, in two groups:
+
+| Group | Setting | What it does | Choices |
+| --- | --- | --- | --- |
+| Editing platoon's text | Editor for notes and tickets | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](#editing-the-notes) on this computer |
+| Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | platoon's editor (default), and the [editors with a file tree](#opening-the-editor-v) found on this computer |
+| Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
+
 #### System prompts for each smart feature
 
 Each thing platoon asks Claude for - names and summaries, Describe it, a project's notes, a project's description, the
@@ -393,14 +426,14 @@ by hand too:
  "tokens_enabled": false, "token_features": {"names": false, "find": false}, "ai_daily_tokens": 500000, "ai_pause_percent": 80,
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
- "ai_find_wide_candidates": 200, "notes_editor": "ask", "notes_quiet_minutes": 3,
+ "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "platoon", "files_editor_ask": false, "notes_quiet_minutes": 3,
  "notes_reply_chars": 1500}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `files_editor` is `platoon` or an editor's id (`code`, `cursor`, `zed`, `subl`, `kate`, `idea`, `idea-community`, `pycharm`, `pycharm-community`, `webstorm`, `goland`, `rustrover`, `clion`, `phpstorm`, `rider`, `android-studio`, `helix`, `nvim`), kept as it is when that editor isn't installed; `files_editor_ask` is `true` or `false`; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Features that use tokens
 
@@ -638,7 +671,7 @@ Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of the
 it finds are offered, by their plain names. An editor that lives in the terminal **runs inside platoon's window**, like a
 session (`ctrl+space` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
 notes and reads them again as soon as you are done or the file changes. There is nothing to set up: whichever one you use is
-remembered (as `notes_editor` in `settings.json`) and offered first, with a star, the next time. If platoon finds nothing at
+remembered (as `notes_editor` in `settings.json`, also chosen in Settings, Editors) and offered first, with a star, the next time. If platoon finds nothing at
 all it offers `nano` and `vi`.
 
 **A new file starts from a template**: one line saying what platoon keeps up to date, then the two headings that are

@@ -226,8 +226,9 @@ pub struct Queued {
 
 /// A git worktree platoon made for a ticket (every ticket's git folders get one).
 ///
-/// In the file: `{"folder", "path", "branch"}`, then only when there is something to say `"base"`, `"removed"` and
-/// `"kept_uncommitted"` (so a ticket from before them reads and writes as it was). Keys platoon doesn't know are kept.
+/// In the file: `{"folder", "path", "branch"}`, then only when there is something to say `"base"`, `"removed"`,
+/// `"kept_uncommitted"` and `"opened_in"` (so a ticket from before them reads and writes as it was). Keys platoon
+/// doesn't know are kept.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Worktree {
     /// The ticket's folder it stands in for.
@@ -244,6 +245,9 @@ pub struct Worktree {
     /// platoon left it in place because it had changes not yet committed: the user removes it anyway (`w` on the
     /// ticket), or it goes once they are committed.
     pub kept_uncommitted: bool,
+    /// It was opened in an editor with a window of its own (its name: "VS Code"), which platoon cannot tell has
+    /// closed: kept after the work until the user removes it (`w` on the ticket).
+    pub opened_in: Option<String>,
 }
 
 impl Worktree {
@@ -283,6 +287,10 @@ fn worktree_value(w: &Worktree, old: Option<&Map<String, Value>>) -> Value {
     } else {
         o.remove("kept_uncommitted");
     }
+    match &w.opened_in {
+        Some(name) => o.insert("opened_in".into(), json!(name)),
+        None => o.remove("opened_in"),
+    };
     Value::Object(o)
 }
 
@@ -464,6 +472,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                             base: s("base").filter(|b| is_commit_id(b)),
                             removed: w.get("removed").and_then(Value::as_u64),
                             kept_uncommitted: w.get("kept_uncommitted").and_then(Value::as_bool).unwrap_or(false),
+                            opened_in: s("opened_in").filter(|n| !n.is_empty()),
                         })
                     })
                     .collect()
@@ -926,6 +935,8 @@ impl Tickets {
                 WtMark::Removed if !removed => {
                     w.insert("removed".into(), json!(now));
                     w.remove("kept_uncommitted");
+                    // (Gone: whichever editor had it open has nothing left to keep.)
+                    w.remove("opened_in");
                 }
                 WtMark::KeptUncommitted if !kept || removed => {
                     w.insert("kept_uncommitted".into(), json!(true));
@@ -937,6 +948,34 @@ impl Tickets {
                 }
                 _ => return Err(NOTHING.to_string()),
             }
+            Ok(())
+        });
+        match r {
+            Ok(()) => Ok(true),
+            Err(e) if e.to_string() == NOTHING => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Write down that ticket `number`'s worktree at `path` was opened in `editor`, a windowed editor platoon cannot
+    /// tell has closed: it is kept after the work until the user removes it. True when that changed anything.
+    pub fn mark_opened_in(&mut self, number: u32, path: &str, editor: &str) -> io::Result<bool> {
+        const NOTHING: &str = "\u{0}nothing to change";
+        let editor = editor.to_string();
+        let r = self.change(|root, _| {
+            let w = root
+                .get_mut("tickets")
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number))))
+                .and_then(|t| t.get_mut("worktrees"))
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|w| w.get("path").and_then(Value::as_str) == Some(path)))
+                .and_then(Value::as_object_mut)
+                .ok_or(NOTHING)?;
+            if w.contains_key("removed") || w.get("opened_in").and_then(Value::as_str) == Some(editor.as_str()) {
+                return Err(NOTHING.to_string());
+            }
+            w.insert("opened_in".into(), json!(editor));
             Ok(())
         });
         match r {

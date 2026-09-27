@@ -11,6 +11,7 @@ mod dirs;
 mod editor;
 mod editor_install;
 mod editors;
+mod fileeditors;
 mod guard;
 mod gitfacts;
 mod handoff;
@@ -309,6 +310,9 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         if let Some(req) = app.take_editor_request() {
             open_editor(terminal, &mut app, &req, depth, no_color);
         }
+        if let Some((e, dirs)) = app.take_own_editor_request() {
+            open_own_editor(terminal, &mut app, &e, &dirs);
+        }
         app.poll_stops();
         app.poll_editors();
         app.tick = (start.elapsed().as_millis() / 100) as u64;
@@ -361,11 +365,31 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req:
         Ok(l) => l,
         Err(e) => return app.editor_closed(Err(e)),
     };
+    let result = hand_over(terminal, app, &launch, &req.dirs());
+    app.editor_closed(result);
+}
+
+/// Hand the terminal to an editor of the user's own that draws in the terminal (Helix, their Neovim setup), on the
+/// first folder, exactly as platoon's editor is handed it.
+fn open_own_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, e: &fileeditors::FileEditor, dirs: &[String]) {
+    let env = |k: &str| std::env::var(k).ok();
+    let Some(first) = dirs.first() else { return };
+    let launch = match fileeditors::terminal_launch(e, first, &env) {
+        Ok(l) => l,
+        Err(err) => return app.editor_closed(Err(err.to_string())),
+    };
+    let result = hand_over(terminal, app, &launch, std::slice::from_ref(first));
+    app.editor_closed(result);
+}
+
+/// Leave platoon's screen, run the editor in the foreground until it closes, and take the screen back, drawn in full.
+/// Meanwhile `dirs` are marked as open, so no platoon window removes a worktree from under it.
+fn hand_over(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, launch: &editor::Launch, dirs: &[String]) -> Result<(), String> {
     // Other platoon windows must not remove a worktree the editor has open (`worktree_glue`).
-    let mark = editor::mark_open(&app.cache, std::process::id(), &req.dirs()).ok();
+    let mark = editor::mark_open(&app.cache, std::process::id(), dirs).ok();
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
-    let ran = editor::run(&launch);
+    let ran = editor::run(launch);
     let _ = enable_raw_mode();
     let _ = execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), EnableMouseCapture, EnableBracketedPaste);
     // Everything is drawn again: an empty frame first makes ratatui's idea of the screen blank (as it now is), so the
@@ -373,11 +397,11 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req:
     // that doesn't answer holds everything up.) The cursor is hidden again too.
     let _ = terminal.draw(|_| {});
     let _ = terminal.hide_cursor();
-    editor::finish(&launch);
+    editor::finish(launch);
     if let Some(m) = mark {
         editor::unmark(&m);
     }
-    let result = match ran {
+    match ran {
         Ok(st) if st.success() => Ok(()),
         // Closed by a signal or with an error of its own: said, and platoon carries on.
         Ok(st) => Err(match st.code() {
@@ -385,8 +409,7 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req:
             None => "it was stopped".to_string(),
         }),
         Err(e) => Err(e.to_string()),
-    };
-    app.editor_closed(result);
+    }
 }
 
 #[cfg(test)]

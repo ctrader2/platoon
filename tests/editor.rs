@@ -378,3 +378,185 @@ fn the_clipboard_helper_gives_up_at_once_without_text_or_a_display() {
         assert_eq!(status.code(), Some(1), "{text:?}");
     }
 }
+
+// ---- the machine's own editors ------------------------------------------------------------------------------------
+
+/// Stands in for an editor with a window of its own: writes down how it was started into `$STANDIN_OUT/<its name>-*`
+/// and ends at once, as a launcher handing over to a running copy does.
+const WINDOW_STAND_IN: &str = r#"#!/bin/sh
+n=$(basename "$0")
+printf '%s\n' "$@" > "$STANDIN_OUT/$n.argv.tmp"
+pwd > "$STANDIN_OUT/$n.cwd"
+if [ -t 0 ]; then echo yes > "$STANDIN_OUT/$n.tty"; fi
+mv "$STANDIN_OUT/$n.argv.tmp" "$STANDIN_OUT/$n.argv"
+"#;
+
+/// Stands in for Helix: writes down how it was started, shows a line, waits for a line typed on its terminal.
+const HX_STAND_IN: &str = r#"#!/bin/sh
+d="$STANDIN_OUT/hx-$$"
+mkdir -p "$d"
+printf '%s\n' "$@" > "$d/argv"
+pwd > "$d/cwd"
+env > "$d/env"
+if [ -t 0 ]; then echo yes > "$d/stdin-is-a-terminal"; fi
+printf 'STAND-IN HELIX RUNNING\n'
+IFS= read -r line
+printf '%s\n' "$line" > "$d/typed"
+"#;
+
+impl Lab {
+    /// A folder of stand-in editors (`code`, `hx`) that `PLATOON_EDITOR_PATH` makes the only place looked in, and
+    /// the settings `extra` merged into the settings file.
+    fn own_editors(&self, extra: Value) -> Vec<(&'static str, String)> {
+        let bin = self.base.join("editors");
+        fs::create_dir_all(&bin).unwrap();
+        for (name, text) in [("code", WINDOW_STAND_IN), ("hx", HX_STAND_IN)] {
+            fs::write(bin.join(name), text).unwrap();
+            fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let mut settings: Value = serde_json::from_str(&fs::read_to_string(self.config.join("settings.json")).unwrap()).unwrap();
+        for (k, v) in extra.as_object().unwrap() {
+            settings.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        }
+        fs::write(self.config.join("settings.json"), settings.to_string()).unwrap();
+        let mut env = self.env();
+        env.push(("PLATOON_EDITOR_PATH", s(&bin)));
+        env
+    }
+
+    fn settings(&self) -> Value {
+        serde_json::from_str(&fs::read_to_string(self.config.join("settings.json")).unwrap()).unwrap()
+    }
+}
+
+#[test]
+fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_starts_beside_platoon() {
+    let lab = Lab::new("ed-term-list");
+    let docs = lab.base.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    lab.session(&[s(&docs)]);
+    let mut env = lab.own_editors(json!({"files_editor_ask": true, "files_editor": "code"}));
+    // Colours as a terminal without NO_COLOR has them.
+    env.push(("NO_COLOR", String::new()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
+    t.wait_for_all(&["make the shop", "v editor"]);
+    t.send(b"v");
+    t.wait_for_all(&["╭ open with", "platoon's editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
+    let shown = t.stable();
+    let rows: Vec<&str> = shown.lines().filter(|l| l.contains("platoon's editor") || l.contains("VS Code") || l.contains("Helix")).collect();
+    assert_eq!(rows.len(), 3, "{shown}");
+    assert!(rows[0].contains("platoon's editor") && rows[1].contains("VS Code") && rows[2].contains("Helix"), "platoon's own first:\n{shown}");
+    assert!(rows[1].contains("★") && !rows[0].contains("★") && !rows[2].contains("★"), "only the favourite is starred:\n{shown}");
+    assert!(rows[1].contains("▎") && rows[1].contains("in its own window") && rows[2].contains("here in platoon's terminal"), "and picked:\n{shown}");
+    // The star is drawn in the theme's accent (Catppuccin Mocha lavender).
+    let (row, col) = t.find("★ VS Code").unwrap();
+    assert_eq!(t.fg_at(row, col), vt100::Color::Rgb(0xb4, 0xbe, 0xfe));
+    // Enter: VS Code (a stand-in) starts beside platoon with both folders in one window; platoon stays on screen.
+    t.send(b"\r");
+    t.wait_gone("╭ open with");
+    let argv = wait_file(&lab.out.join("code.argv"));
+    assert_eq!(argv.lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&lab.work), s(&docs)]);
+    assert_eq!(fs::read_to_string(lab.out.join("code.cwd")).unwrap().trim(), s(&lab.work));
+    assert!(!lab.out.join("code.tty").exists(), "it doesn't get platoon's terminal");
+    t.wait_for_all(&["make the shop", "Opened in VS Code, in a window of its own."]);
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn a_terminal_editor_of_yours_is_handed_the_terminal_on_the_first_folder_and_platoon_comes_back() {
+    let lab = Lab::new("ed-term-hx");
+    let docs = lab.base.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    lab.session(&[s(&docs)]);
+    let env = lab.own_editors(json!({"files_editor": "helix"}));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
+    t.wait_for_all(&["make the shop", "v editor"]);
+    t.send(b"v");
+    t.wait_for("STAND-IN HELIX RUNNING");
+    let screen = t.stable();
+    assert!(!screen.contains("make the shop") && !screen.contains("v editor"), "platoon's screen is gone:\n{screen}");
+    let run = fs::read_dir(&lab.out).unwrap().flatten().map(|e| e.path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("hx-")).unwrap();
+    assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&lab.work)]);
+    assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&lab.work));
+    assert!(run.join("stdin-is-a-terminal").is_file());
+    // The user's own environment, not platoon's editor's world.
+    let env = env_of(&run);
+    assert_eq!(env["XDG_CONFIG_HOME"], s(&lab.base.join("user-config")));
+    assert!(!env.contains_key("PLATOON_EDITOR_SESSION") && !env.contains_key("PLATOON_EDITOR_ENV"));
+    assert!(lab.cache.join("editor-open").read_dir().unwrap().flatten().count() == 1, "its folder is marked open meanwhile");
+    // Keys reach it; then platoon is back, drawn in full, and says what Helix didn't open.
+    t.send(b"q2 typed\r");
+    assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
+    t.wait_for_all(&["make the shop", "Sessions"]);
+    t.wait_for_flat("only: it opens one folder at a time. Not opened:");
+    assert!(!t.stable().contains("STAND-IN HELIX"));
+    assert!(lab.cache.join("editor-open").read_dir().unwrap().next().is_none(), "the mark is gone");
+    assert!(lab.runs().iter().all(|r| !r.file_name().unwrap().to_string_lossy().starts_with("run-")), "platoon's own editor never started");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() {
+    let (lab, wt, _) = ticket_lab("ed-term-kept", "done");
+    let env = lab.own_editors(json!({"files_editor": "code"}));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 130);
+    t.wait_for("enter open");
+    t.send(b"2");
+    t.wait_for_flat("WB Web");
+    t.send(b"\r");
+    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    // A Done ticket is under the folded "Done and cancelled" group: into the Tickets pane, open the group, on #1.
+    t.send(b"\x1b[1;2B");
+    t.wait_for_flat("n new ticket");
+    t.send(b"\r");
+    t.wait_for("#1");
+    t.send(b"\x1b[B\r");
+    t.wait_for_all(&["Basket", "v editor", "esc back"]);
+    t.send(b"v");
+    assert_eq!(wait_file(&lab.out.join("code.argv")).lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&wt)]);
+    t.wait_for_flat("Kept: opened in VS Code.");
+    t.wait_for_flat("w removes it");
+    // Longer than the clean-up's interval: still there.
+    std::thread::sleep(Duration::from_millis(3000));
+    assert!(wt.is_dir());
+    t.send(b"w");
+    t.wait_for_flat("Remove #1's worktree anyway?");
+    t.wait_for_flat("It was opened in VS Code: close it there first.");
+    t.send(b"y");
+    t.wait_for_flat("#1's worktree is removed. Its branch ticket/1 is kept.");
+    assert!(!wt.exists());
+    let tickets: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tickets.json")).unwrap()).unwrap();
+    assert!(tickets["tickets"][0]["worktrees"][0].get("opened_in").is_none());
+}
+
+#[test]
+fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found() {
+    let lab = Lab::new("ed-term-settings");
+    lab.session(&[]);
+    let env = lab.own_editors(json!({}));
+    let mut t = Term::spawn(&[], &env, &lab.work, 40, 110);
+    t.wait_for("make the shop");
+    t.send(b"s");
+    t.wait_for("Stop idle sessions after");
+    t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last
+    t.wait_for_all(&["Editing platoon's text", "Editor for notes and tickets", "Editing files", "Editor for files (v)", "Always ask which editor"]);
+    let shown = t.stable();
+    let at = |needle: &str| shown.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{shown}"));
+    assert!(at("Editing platoon's text") < at("Editor for notes and tickets"));
+    assert!(at("Editor for notes and tickets") < at("Editing files") && at("Editing files") < at("Editor for files (v)"));
+    assert!(at("Editor for files (v)") < at("Always ask which editor"));
+    let files_row = shown.lines().nth(at("Editor for files (v)")).unwrap();
+    assert!(files_row.contains("platoon's editor"), "the default: {files_row}");
+    // Down to the files editor, right: the next editor found here, saved at once.
+    t.send(b"\x1b[B\x1b[C");
+    t.wait_for_all(&["Editor for files (v)", "VS Code"]);
+    until("the choice to reach the settings file", || lab.settings()["files_editor"] == "code");
+    t.send(b"\x1b[B\r");
+    until("always ask on", || lab.settings()["files_editor_ask"] == true);
+    t.send(b"\x1b");
+    t.wait_gone("Editing files");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}

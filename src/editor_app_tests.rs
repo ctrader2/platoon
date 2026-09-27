@@ -365,3 +365,270 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("didn't finish installing")), "{:?}", app.notice);
     assert!(app.take_editor_request().is_none());
 }
+
+// ---- the machine's own editors (`fileeditors.rs`) -------------------------------------------------------------------
+
+use crate::fileeditors::{FileEditor, Runs, Several};
+use crate::settings::{self, Settings};
+
+/// A stand-in for an editor with a window of its own: every start appends its arguments, one line per start, to
+/// `<dir>/<id>.calls`. Never a real editor.
+fn window_stand_in(dir: &Path, id: &str, name: &str, args: &[&str], several: Several) -> FileEditor {
+    fs::create_dir_all(dir).unwrap();
+    let script = dir.join(id);
+    let calls = dir.join(format!("{id}.calls"));
+    fs::write(&script, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", s(&calls))).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    FileEditor { id: id.into(), name: name.into(), program: s(&script), args: args.iter().map(|a| a.to_string()).collect(), runs: Runs::Window, several }
+}
+
+fn helix(dir: &Path) -> FileEditor {
+    FileEditor { id: "helix".into(), name: "Helix".into(), program: s(&dir.join("hx")), args: vec![], runs: Runs::Terminal, several: Several::First }
+}
+
+/// What the stand-in `id` was started with, once it has been (it runs beside the app).
+fn calls(dir: &Path, id: &str, n: usize) -> Vec<String> {
+    let f = dir.join(format!("{id}.calls"));
+    let start = Instant::now();
+    loop {
+        let got: Vec<String> = fs::read_to_string(&f).unwrap_or_default().lines().map(String::from).collect();
+        if got.len() >= n {
+            return got;
+        }
+        assert!(start.elapsed() < Duration::from_secs(10), "{id} was started {} times, not {n}", got.len());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn with_settings(w: &World, f: impl FnOnce(&mut Settings)) {
+    let mut s = settings::load(&w.config).0;
+    f(&mut s);
+    settings::save(&w.config, &s).unwrap();
+}
+
+fn notice(app: &App) -> String {
+    app.notice.as_ref().map(|(n, ..)| n.clone()).unwrap_or_default()
+}
+
+#[test]
+fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
+    let w = World::new("fe-straight");
+    let main = w.base.join("repos/app");
+    repo(&main);
+    let docs = w.base.join("docs");
+    fs::create_dir_all(&docs).unwrap();
+    with_added(&w, "s-1", &s(&main), &[s(&docs)]);
+    let bin = w.base.join("bin");
+    let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
+
+    // The default: platoon's own, no list.
+    let mut app = w.app();
+    app.ed.stand_in = true;
+    app.set_file_editors_for_test(vec![FileEditor::platoon(), code.clone(), helix(&bin)]);
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(opened(&mut app), vec![s(&main), s(&docs)]);
+
+    // VS Code the favourite: started beside platoon with both folders in one window, and platoon stays as it was.
+    with_settings(&w, |s| s.files_editor = "code".into());
+    app.reload_for_test();
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::List), "no list, no question");
+    assert!(app.take_editor_request().is_none() && app.take_own_editor_request().is_none(), "nothing takes the terminal");
+    assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {} {}", s(&main), s(&docs))]);
+    assert_eq!(notice(&app), "Opened in VS Code, in a window of its own.");
+
+    // Helix the favourite: handed the terminal (by the event loop) on the first folder; it says what it left out
+    // once it has closed.
+    with_settings(&w, |s| s.files_editor = "helix".into());
+    app.reload_for_test();
+    v(&mut app);
+    let (e, dirs) = app.take_own_editor_request().expect("a terminal editor of the user's");
+    assert_eq!((e.id.as_str(), dirs), ("helix", vec![s(&main), s(&docs)]));
+    assert!(app.take_editor_request().is_none());
+    app.editor_closed(Ok(()));
+    assert!(notice(&app).starts_with("Helix opened ") && notice(&app).contains("only: it opens one folder at a time. Not opened:"), "{}", notice(&app));
+}
+
+#[test]
+fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_choice_becomes_the_favourite() {
+    let w = World::new("fe-ask");
+    let main = w.base.join("repos/app");
+    repo(&main);
+    w.transcript("s-1", &s(&main), "hello", 5);
+    let bin = w.base.join("bin");
+    let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
+    with_settings(&w, |s| s.files_editor_ask = true);
+    let mut app = w.app();
+    app.ed.stand_in = true;
+    app.set_file_editors_for_test(vec![FileEditor::platoon(), code, helix(&bin)]);
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::PickFileEditor));
+    let ids: Vec<&str> = app.file_pick().options.iter().map(|e| e.id.as_str()).collect();
+    assert_eq!(ids, ["platoon", "code", "helix"], "platoon's own first, then the computer's");
+    assert_eq!((app.file_pick().starred.as_str(), app.file_pick().selected), ("platoon", 0));
+    // Esc: nothing opens.
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List) && app.editor_flow_for_test().is_none());
+    assert!(app.take_editor_request().is_none());
+
+    // Down to VS Code, enter: it opens, and is the favourite from now on.
+    v(&mut app);
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {}", s(&main))]);
+    assert_eq!(settings::load(&w.config).0.files_editor, "code");
+    v(&mut app);
+    assert_eq!((app.file_pick().starred.as_str(), app.file_pick().selected), ("code", 1), "starred and picked: enter opens it again");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(calls(&bin, "code", 2).len(), 2);
+
+    // Platoon's own, chosen from the list, still asks to install it first when it isn't there.
+    app.ed.stand_in = false;
+    v(&mut app);
+    assert!(app.file_pick().platoon_missing);
+    key(&mut app, KeyCode::Char('g'));
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor)));
+    key(&mut app, KeyCode::Char('n'));
+    assert_eq!(settings::load(&w.config).0.files_editor, "platoon");
+}
+
+#[test]
+fn a_favourite_no_longer_installed_opens_platoons_editor_and_says_so_once() {
+    let w = World::new("fe-gone");
+    let main = w.base.join("repos/app");
+    repo(&main);
+    w.transcript("s-1", &s(&main), "hello", 5);
+    with_settings(&w, |s| s.files_editor = "rustrover".into());
+    let mut app = w.app();
+    app.ed.stand_in = true;
+    v(&mut app);
+    assert_eq!(opened(&mut app), vec![s(&main)]);
+    assert_eq!(notice(&app), "RustRover isn't on this computer any more, so platoon's editor opens instead (Settings, Editors).");
+    app.editor_closed(Ok(()));
+    assert!(notice(&app).starts_with("RustRover isn't"), "said again once the editor has closed (it had the screen)");
+    app.notice = None;
+    v(&mut app);
+    assert_eq!(opened(&mut app), vec![s(&main)]);
+    app.editor_closed(Ok(()));
+    assert_eq!(notice(&app), "", "once is enough");
+    assert_eq!(settings::load(&w.config).0.files_editor, "rustrover", "the setting stays, in case it comes back");
+}
+
+#[test]
+fn jetbrains_opens_each_folder_in_a_window_of_its_own_at_most_three() {
+    let w = World::new("fe-jb");
+    let main = w.base.join("repos/app");
+    repo(&main);
+    let added: Vec<String> = (1..=4).map(|i| w.base.join(format!("more-{i}"))).inspect(|d| fs::create_dir_all(d).unwrap()).map(|d| s(&d)).collect();
+    with_added(&w, "s-1", &s(&main), &added);
+    let bin = w.base.join("bin");
+    let idea = window_stand_in(&bin, "idea", "IntelliJ IDEA", &[], Several::EachWindow);
+    with_settings(&w, |s| s.files_editor = "idea".into());
+    let mut app = w.app();
+    app.set_file_editors_for_test(vec![FileEditor::platoon(), idea]);
+    v(&mut app);
+    let mut got = calls(&bin, "idea", 3);
+    got.sort();
+    let mut want = vec![s(&main), added[0].clone(), added[1].clone()];
+    want.sort();
+    assert_eq!(got, want, "one start per folder, the first three");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(calls(&bin, "idea", 3).len(), 3, "no fourth window");
+    assert_eq!(notice(&app), "Opened 3 of the 5 folders in IntelliJ IDEA, a window each (it opens at most 3).");
+}
+
+#[test]
+fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
+    let mut l = lab("fe-kept", State::Waiting);
+    let bin = l.w.base.join("bin");
+    let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
+    with_settings(&l.w, |s| s.files_editor = "code".into());
+    l.app.reload_for_test();
+    l.app.set_file_editors_for_test(vec![FileEditor::platoon(), code]);
+    v(&mut l.app);
+    assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {}", s(&l.wt))]);
+    assert_eq!(l.ticket().worktrees[0].opened_in.as_deref(), Some("VS Code"), "written on the ticket: it survives a restart");
+    assert!(notice(&l.app).contains("#1's worktree stays after the work until w on the ticket removes it"), "{}", notice(&l.app));
+
+    // Done, its squad not running: the clean-up leaves it (platoon can't tell when VS Code closes).
+    Tickets::open(&l.w.config, &l.project).squad_says(1, &State::Done, "", None).unwrap();
+    l.app.reload_for_test();
+    l.refresh_for(2.5);
+    assert!(l.wt.is_dir(), "kept");
+    assert!(l.ticket().worktrees[0].removed.is_none());
+    assert!(l.app.can_remove_worktree(1));
+
+    // `w` asks, naming the editor; yes removes it and keeps the branch.
+    l.open_ticket_screen();
+    key(&mut l.app, KeyCode::Char('w'));
+    match &l.app.mode {
+        Mode::Confirm(Confirm::RemoveWorktree { number: 1, opened_in, uncommitted, .. }) => {
+            assert_eq!(opened_in.as_deref(), Some("VS Code"));
+            assert!(!uncommitted, "everything was committed");
+        }
+        _ => panic!("not asked"),
+    }
+    key(&mut l.app, KeyCode::Char('y'));
+    l.app.refresh_until_for_test(10, "the removal", |a| a.worktrees_idle());
+    assert!(!l.wt.exists());
+    let wt = &l.ticket().worktrees[0];
+    assert!(wt.removed.is_some() && wt.opened_in.is_none(), "{wt:?}");
+    assert!(git(&l.shop, &["branch", "--list", "ticket/1"]).contains("ticket/1"), "the branch is kept");
+}
+
+#[test]
+fn a_terminal_editor_keeps_nothing_after_the_work() {
+    let mut l = lab("fe-term", State::Waiting);
+    let bin = l.w.base.join("bin");
+    with_settings(&l.w, |s| s.files_editor = "helix".into());
+    l.app.reload_for_test();
+    l.app.set_file_editors_for_test(vec![FileEditor::platoon(), helix(&bin)]);
+    v(&mut l.app);
+    let (_, dirs) = l.app.take_own_editor_request().expect("handed the terminal");
+    assert_eq!(dirs, vec![s(&l.wt)]);
+    l.app.editor_closed(Ok(()));
+    assert_eq!(l.ticket().worktrees[0].opened_in, None, "platoon waits for a terminal editor: its open marks cover it");
+}
+
+#[test]
+fn the_settings_step_through_the_editors_this_computer_has() {
+    use crate::settings::EditorFor;
+    let w = World::new("fe-settings");
+    let bin = w.base.join("bin");
+    let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
+    let mut app = w.app();
+    app.set_file_editors_for_test(vec![FileEditor::platoon(), code]);
+    let nano = crate::editors::Editor { id: "nano".into(), name: "nano".into(), program: "/x/nano".into(), args: vec![], terminal: true };
+    let kate = crate::editors::Editor { id: "kate".into(), name: "Kate".into(), program: "/x/kate".into(), args: vec![], terminal: false };
+    app.set_editors_for_test(vec![nano, kate]);
+    assert_eq!(app.editor_setting(EditorFor::Files).0, "platoon's editor");
+    assert_eq!(app.editor_setting(EditorFor::Text).0, "None chosen yet");
+    key(&mut app, KeyCode::Char('s'));
+    assert!(matches!(app.mode, Mode::Settings));
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Tab);
+    }
+    assert_eq!(app.items()[0].name, "Editor for notes and tickets");
+    key(&mut app, KeyCode::Right);
+    assert_eq!(settings::load(&w.config).0.notes_editor, "nano");
+    key(&mut app, KeyCode::Right);
+    assert_eq!(settings::load(&w.config).0.notes_editor, "kate");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(settings::load(&w.config).0.files_editor, "code");
+    let (label, _, at_start, at_end) = app.editor_setting(EditorFor::Files);
+    assert_eq!((label.as_str(), at_start, at_end), ("VS Code", false, true));
+    key(&mut app, KeyCode::Enter); // round to the first
+    assert_eq!(settings::load(&w.config).0.files_editor, "platoon");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert!(settings::load(&w.config).0.files_editor_ask);
+    // One that isn't here any more reads as such.
+    with_settings(&w, |s| s.files_editor = "zed".into());
+    app.reload_for_test();
+    assert_eq!(app.editor_setting(EditorFor::Files).0, "Zed (not found)");
+}

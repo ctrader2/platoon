@@ -14,7 +14,7 @@ use crate::names::{self, Names};
 use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
 use crate::select::{click_count, extract, Click, Point, Selection, Unit};
-use crate::settings::{Item, Kind, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
+use crate::settings::{EditorFor, Item, Kind, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
@@ -202,6 +202,8 @@ pub enum Hit {
     AssignRow(usize),
     /// An entry of the editor list.
     EditorRow(usize),
+    /// A row of `v`'s list of editors.
+    FileEditorRow(usize),
     /// A color of the color and badge box.
     Slot(usize),
     /// One of the two panes of a project's screen: gives it the focus.
@@ -261,9 +263,9 @@ pub enum Confirm {
     /// (yes stops that session too).
     /// `uncommitted`: its worktree has changes not yet committed, so platoon will keep it.
     CancelTicket { number: u32, title: String, squad: bool, pid: Option<u32>, uncommitted: bool },
-    /// `w` on a Done or Cancelled ticket whose worktree was kept because it has changes not yet committed: remove it
-    /// anyway (the changes are lost, the branch is kept).
-    RemoveWorktree { number: u32, branch: String },
+    /// `w` on a Done or Cancelled ticket whose worktree was kept (it has changes not yet committed, or it was opened in
+    /// an editor with a window of its own): remove it anyway (changes are lost, the branch is kept).
+    RemoveWorktree { number: u32, branch: String, uncommitted: bool, opened_in: Option<String> },
     /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
     HandAnyway { number: u32, squad: String, title: String, says: String },
     /// `v` on a ticket whose squad is still working in its files: open the editor anyway?
@@ -310,6 +312,8 @@ pub enum Mode {
     EditNotes,
     /// The list of editors to open the notes with (`epick`).
     PickEditor,
+    /// The list of editors `v` opens a ticket's or a session's files with (`ed.fpick`), when "Always ask" is on.
+    PickFileEditor,
     /// The before/after view of the last change to the notes (`changes`).
     Changes,
     /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
@@ -1347,6 +1351,8 @@ impl App {
             (Action::Confirm, Mode::Handoff) => self.take_handoff(),
             (Action::Cancel, Mode::Handoff) => self.cancel_handoff(),
             (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),
+            (Action::Confirm, Mode::PickFileEditor) => self.take_file_editor_pick(),
+            (Action::Cancel, Mode::PickFileEditor) => self.cancel_file_editor_pick(),
             (Action::Confirm, Mode::ProjectName) => self.save_name_box(),
             (Action::Confirm, Mode::Assign) => self.take_assign(),
             (Action::Confirm, Mode::Look) => self.save_look(),
@@ -1770,6 +1776,10 @@ impl App {
         }
         // Start from the file as it is now, in case it was edited since the screen last looked.
         self.refresh_settings();
+        if let Kind::Editor(which) = item.kind {
+            self.step_editor_setting(which, step);
+            return;
+        }
         if item.kind == Kind::Theme {
             match step {
                 Step::Cycle => self.open_theme_list(),
@@ -1794,6 +1804,57 @@ impl App {
         // The next refresh acts on it (auto-archive, the only thing platoon itself does with these, once the
         // value has settled); sessions pick it up from the file on their own.
         self.apply_after = Some(Instant::now() + SETTLE);
+    }
+
+    /// The editors an editor setting chooses among, as (id, name), and the id it holds now.
+    fn editor_setting_options(&self, which: EditorFor) -> (Vec<(String, String)>, String) {
+        let s = self.settings.get();
+        match which {
+            EditorFor::Text => (self.editors.iter().map(|e| (e.id.clone(), e.name.clone())).collect(), s.notes_editor),
+            EditorFor::Files => (self.file_editors().iter().map(|e| (e.id.clone(), e.name.clone())).collect(), s.files_editor),
+        }
+    }
+
+    /// How an editor setting reads on the settings screen: its value, the widest value it can take, and whether it
+    /// can go no further back or on.
+    pub fn editor_setting(&self, which: EditorFor) -> (String, usize, bool, bool) {
+        let (options, id) = self.editor_setting_options(which);
+        let at = options.iter().position(|(o, _)| *o == id);
+        let label = match at {
+            Some(i) => options[i].1.clone(),
+            None if which == EditorFor::Text && id == crate::editors::ASK => "None chosen yet".to_string(),
+            None if which == EditorFor::Text => format!("{id} (not found)"),
+            None => format!("{} (not found)", crate::fileeditors::name_of(&id)),
+        };
+        let widest = options.iter().map(|(_, n)| n.chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+        let n = options.len();
+        (label, widest, at == Some(0), at.is_some_and(|i| i + 1 >= n) || n == 0)
+    }
+
+    /// Step an editor setting through the editors this computer has, and save it at once.
+    fn step_editor_setting(&mut self, which: EditorFor, step: Step) {
+        let (options, id) = self.editor_setting_options(which);
+        if options.is_empty() {
+            return;
+        }
+        let last = options.len() - 1;
+        let next = match (options.iter().position(|(o, _)| *o == id), step) {
+            (None, _) => 0,
+            (Some(i), Step::Prev) => i.saturating_sub(1),
+            (Some(i), Step::Next) => (i + 1).min(last),
+            (Some(i), Step::Cycle) => if i >= last { 0 } else { i + 1 },
+        };
+        let chosen = options[next].0.clone();
+        if chosen == id {
+            return;
+        }
+        let mut s = self.settings.get();
+        match which {
+            EditorFor::Text => s.notes_editor = chosen,
+            EditorFor::Files => s.files_editor = chosen,
+        }
+        let saved = self.settings.update(&s);
+        self.report_save(saved);
     }
 
     /// A change is waiting to take effect, so the next refresh should come soon rather than in a second.
@@ -2386,6 +2447,16 @@ impl App {
                 KeyCode::Char('G') | KeyCode::End => self.epick.selected = self.epick.options.len().saturating_sub(1),
                 _ => {}
             },
+            Mode::PickFileEditor => match key.code {
+                KeyCode::Esc => self.act(Action::Cancel),
+                KeyCode::Enter => self.act(Action::Confirm),
+                KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
+                KeyCode::Up => self.move_file_editor_pick(-1),
+                KeyCode::Down => self.move_file_editor_pick(1),
+                KeyCode::Char('g') | KeyCode::Home => self.move_file_editor_pick(-1000),
+                KeyCode::Char('G') | KeyCode::End => self.move_file_editor_pick(1000),
+                _ => {}
+            },
             Mode::Changes => match key.code {
                 KeyCode::Esc | KeyCode::Char('q' | 'c') => self.act(Action::Cancel),
                 KeyCode::Down => self.scroll_changes(1),
@@ -2495,6 +2566,7 @@ impl App {
                     Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
                     Mode::SquadText => {}
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
+                    Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
                     Mode::EditNotes => {}
                     Mode::Handoff => self.handoff_wheel(up),
@@ -2524,6 +2596,8 @@ impl App {
                     Some(Hit::AssignRow(i)) => self.assign.selected = i,
                     Some(Hit::EditorRow(i)) if i == self.epick.selected => self.act(Action::Confirm),
                     Some(Hit::EditorRow(i)) => self.epick.selected = i,
+                    Some(Hit::FileEditorRow(i)) if i == self.file_pick().selected => self.act(Action::Confirm),
+                    Some(Hit::FileEditorRow(i)) => self.move_file_editor_pick(i as i32 - self.file_pick().selected as i32),
                     Some(Hit::Slot(i)) => self.look.slot = i,
                     Some(Hit::Pane(p)) => self.focus_pane(p),
                     Some(Hit::TicketRow(i)) => self.click_ticket_row(i),

@@ -10,10 +10,20 @@
 //!
 //! In the attached view every key is Claude's: ctrl+space back to the list first, then `v`. Typed into a box, `v` is
 //! a letter (those modes never reach here).
+//!
+//! Which editor: platoon's own, or one of this computer's (`fileeditors.rs`). `v` opens the favourite
+//! (`files_editor` in the settings; platoon's editor until the user picks another, and instead of one no longer
+//! installed, said once), or, with "Always ask which editor" on, the list with the favourite starred and picked
+//! (picking another makes it the favourite). Everything else is the same for every editor: the squad-still-working
+//! question, bringing a removed worktree back, the folder picker. Only platoon's own is ever installed. A terminal
+//! editor of the user's own (Helix, their Neovim) is handed the terminal as platoon's is (`main.rs`); one with a
+//! window of its own starts beside platoon, and a ticket's worktree opened in one is kept after the work until `w`
+//! (platoon cannot tell when that window closes).
 
 use super::*;
 use crate::editor::{self, Request};
 use crate::editor_install::{self, Dirs, Part, Progress, Report};
+use crate::fileeditors::{self, FileEditor, Runs};
 use crate::tickets::{State, Ticket, Tickets};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
@@ -35,6 +45,19 @@ struct Flow {
     target: EdTarget,
     /// The user said to open it although the squad is still working.
     warned: bool,
+    /// The editor it opens in; None while the list of editors is showing.
+    editor: Option<FileEditor>,
+}
+
+/// The list of editors `v` shows with "Always ask which editor" on.
+#[derive(Clone, Debug, Default)]
+pub struct FilePick {
+    pub options: Vec<FileEditor>,
+    pub selected: usize,
+    /// The favourite's id: the one with the star.
+    pub starred: String,
+    /// platoon's own editor isn't installed yet (choosing it offers the install).
+    pub platoon_missing: bool,
 }
 
 enum InstallMsg {
@@ -55,6 +78,17 @@ pub struct EdState {
     pub manifest: Option<editor_install::Manifest>,
     /// Run this instead of the editor (tests), as `PLATOON_NVIM_BIN` does.
     pub stand_in: bool,
+    /// The editors `v` can offer: platoon's own, then this computer's (`fileeditors::detect`, when platoon started).
+    pub files: Vec<FileEditor>,
+    /// The list showing (`Mode::PickFileEditor`).
+    pub fpick: FilePick,
+    /// A terminal editor of the user's own, ready to open on these folders: the event loop takes it
+    /// (`take_own_editor_request`).
+    own: Option<(FileEditor, Vec<String>)>,
+    /// The favourite that isn't installed, once it has been said (said once per run).
+    said_missing: Option<String>,
+    /// Said once the editor that has the terminal closes (what it left out).
+    note: Option<String>,
 }
 
 impl EdState {
@@ -81,7 +115,23 @@ impl EdState {
             #[cfg(test)]
             manifest: None,
             stand_in: editor::stand_in(&env),
+            files: Self::files(),
+            fpick: FilePick::default(),
+            own: None,
+            said_missing: None,
+            note: None,
         }
+    }
+
+    #[cfg(not(test))]
+    fn files() -> Vec<FileEditor> {
+        fileeditors::detect()
+    }
+
+    /// A unit test's app never looks at this computer's editors: platoon's own only, until a test gives its own.
+    #[cfg(test)]
+    fn files() -> Vec<FileEditor> {
+        vec![FileEditor::platoon()]
     }
 }
 
@@ -128,9 +178,83 @@ impl App {
     }
 
     pub(super) fn start_editor(&mut self, target: EdTarget) {
-        self.ed.flow = Some(Flow { target, warned: false });
+        let favourite = self.files_favourite();
+        if self.settings.get().files_editor_ask {
+            let selected = self.ed.files.iter().position(|e| e.id == favourite.id).unwrap_or(0);
+            let platoon_missing = !self.editor_installed();
+            self.ed.fpick = FilePick { options: self.ed.files.clone(), selected, starred: favourite.id, platoon_missing };
+            self.ed.flow = Some(Flow { target, warned: false, editor: None });
+            self.mode = Mode::PickFileEditor;
+            return;
+        }
+        self.ed.flow = Some(Flow { target, warned: false, editor: Some(favourite) });
         self.editor_continue();
     }
+
+    /// The favourite editor for `v`, if this computer has it; else platoon's own, said once (the setting stays, in
+    /// case it comes back).
+    fn files_favourite(&mut self) -> FileEditor {
+        let id = self.settings.get().files_editor;
+        if let Some(e) = fileeditors::by_id(&self.ed.files, &id) {
+            return e.clone();
+        }
+        if self.ed.said_missing.as_deref() != Some(id.as_str()) {
+            let line = format!("{} isn't on this computer any more, so platoon's editor opens instead (Settings, Editors).", fileeditors::name_of(&id));
+            self.notify(line.clone());
+            self.ed.note = Some(line);
+            self.ed.said_missing = Some(id);
+        }
+        FileEditor::platoon()
+    }
+
+    /// Enter in `v`'s list: that editor, which becomes the favourite.
+    pub(super) fn take_file_editor_pick(&mut self) {
+        self.mode = Mode::List;
+        let Some(e) = self.ed.fpick.options.get(self.ed.fpick.selected).cloned() else {
+            self.ed.flow = None;
+            return;
+        };
+        if self.settings.get().files_editor != e.id {
+            let mut next = self.settings.get();
+            next.files_editor = e.id.clone();
+            let saved = self.settings.update(&next);
+            if saved.is_err() {
+                self.report_save(saved);
+            }
+        }
+        match self.ed.flow.as_mut() {
+            Some(f) => f.editor = Some(e),
+            None => return,
+        }
+        self.editor_continue();
+    }
+
+    /// Esc in `v`'s list.
+    pub(super) fn cancel_file_editor_pick(&mut self) {
+        self.mode = Mode::List;
+        self.ed.flow = None;
+        self.ed.note = None;
+    }
+
+    pub(super) fn move_file_editor_pick(&mut self, delta: i32) {
+        let last = self.ed.fpick.options.len().saturating_sub(1) as i32;
+        self.ed.fpick.selected = (self.ed.fpick.selected as i32 + delta).clamp(0, last) as usize;
+    }
+
+    pub fn file_pick(&self) -> &FilePick {
+        &self.ed.fpick
+    }
+
+    /// The editors `v` can offer (the settings screen steps through them).
+    pub fn file_editors(&self) -> &[FileEditor] {
+        &self.ed.files
+    }
+
+    #[cfg(test)]
+    pub fn set_file_editors_for_test(&mut self, list: Vec<FileEditor>) {
+        self.ed.files = list;
+    }
+
 
     /// The ticket a flow is about, as it is now.
     fn flow_ticket(&self, project: &str, number: u32) -> Option<Ticket> {
@@ -143,6 +267,7 @@ impl App {
     /// Take the flow one step further: each question or wait returns here once it is answered or done.
     pub(super) fn editor_continue(&mut self) {
         let Some(flow) = self.ed.flow.clone() else { return };
+        let chosen = flow.editor.clone().unwrap_or_else(FileEditor::platoon);
         if let EdTarget::Ticket { project, number } = &flow.target {
             let (project, number) = (project.clone(), *number);
             // platoon may have just started removing this ticket's worktree (it was Done, its squad stopped): let that
@@ -157,7 +282,7 @@ impl App {
                 return;
             }
         }
-        if !self.editor_installed() {
+        if chosen.is_platoon() && !self.editor_installed() {
             if self.ed.installing.is_some() {
                 self.notify("The code editor is being installed. It opens when that is done.");
             } else {
@@ -181,7 +306,68 @@ impl App {
             self.notify("There is nothing to open: its folders aren't there any more.");
             return;
         }
-        self.ed.request = Some(req);
+        match chosen.runs {
+            Runs::Platoon => self.ed.request = Some(req),
+            Runs::Terminal => {
+                let dirs = req.dirs();
+                if dirs.len() > 1 {
+                    let others: Vec<String> = dirs[1..].iter().map(|d| dirs::tilde(d, &self.home)).collect();
+                    let first = dirs::tilde(&dirs[0], &self.home);
+                    self.ed.note = Some(format!("{} opened {first} only: it opens one folder at a time. Not opened: {}.", chosen.name, others.join(", ")));
+                }
+                self.ed.own = Some((chosen, dirs));
+            }
+            Runs::Window => self.open_in_window(&flow.target, &chosen, &req),
+        }
+    }
+
+    /// Start an editor with a window of its own on `req`'s folders, beside platoon. A ticket's worktree opened in it
+    /// is written down as kept (platoon can't tell when that window closes), until `w` on the ticket.
+    fn open_in_window(&mut self, target: &EdTarget, e: &FileEditor, req: &Request) {
+        let dirs = req.dirs();
+        let (commands, left) = fileeditors::commands(e, &dirs);
+        let env = |k: &str| std::env::var(k).ok();
+        let mut opened = 0;
+        for (program, args) in &commands {
+            // In the folder it opens (the first of them when it opens several).
+            let cwd = args.iter().find(|a| dirs.contains(a)).map(PathBuf::from).unwrap_or_else(|| PathBuf::from(&dirs[0]));
+            if let Err(err) = fileeditors::launch_window(program, args, &cwd, &env) {
+                let why = err.to_string();
+                let why = why.split(" (os error").next().unwrap_or(&why).to_string();
+                let prior = self.ed.note.take().map(|n| format!("{n} ")).unwrap_or_default();
+                self.notify(format!("{prior}Couldn't open it in {}: {why}", e.name));
+                if opened == 0 {
+                    return;
+                }
+                break;
+            }
+            opened += 1;
+        }
+        let shown = if e.several == fileeditors::Several::EachWindow { opened } else { dirs.len() };
+        let mut line = match (e.several, dirs.len()) {
+            (fileeditors::Several::EachWindow, n) if n > 1 && left > 0 => {
+                format!("Opened {opened} of the {n} folders in {}, a window each (it opens at most {}).", e.name, fileeditors::JETBRAINS_MOST)
+            }
+            (fileeditors::Several::EachWindow, n) if n > 1 => format!("Opened the {n} folders in {}, a window each.", e.name),
+            _ => format!("Opened in {}, in a window of its own.", e.name),
+        };
+        if let EdTarget::Ticket { project, number } = target {
+            let mut store = Tickets::open(&self.config, project);
+            let mut kept = 0;
+            for r in req.roots.iter().take(shown).filter(|r| r.kind == "worktree") {
+                if store.mark_opened_in(*number, &r.path, &e.name).is_ok() {
+                    kept += 1;
+                }
+            }
+            if kept > 0 {
+                self.reread_all_tickets();
+                line.push_str(&format!(" #{number}'s worktree stays after the work until w on the ticket removes it."));
+            }
+        }
+        if let Some(n) = self.ed.note.take() {
+            line = format!("{n} {line}");
+        }
+        self.notify(line);
     }
 
     /// The folders and the title for a target.
@@ -226,6 +412,7 @@ impl App {
     pub(super) fn editor_cancel(&mut self, installing: bool) {
         self.mode = Mode::List;
         self.ed.flow = None;
+        self.ed.note = None;
         if installing {
             self.notify("No code editor, then. `platoon setup --add editor` installs it later.");
         }
@@ -327,6 +514,12 @@ impl App {
         self.ed.request.take()
     }
 
+    /// A terminal editor of the user's own is ready to open on these folders (it opens the first): the event loop
+    /// hands it the terminal as it does platoon's.
+    pub fn take_own_editor_request(&mut self) -> Option<(FileEditor, Vec<String>)> {
+        self.ed.own.take()
+    }
+
     pub fn editor_dirs(&self) -> &Dirs {
         &self.ed.dirs
     }
@@ -334,8 +527,11 @@ impl App {
     /// The editor has closed (or couldn't start): say what went wrong, if anything, and look at everything again
     /// (sessions may have moved on, a ticket may be done).
     pub fn editor_closed(&mut self, result: Result<(), String>) {
-        if let Err(e) = result {
-            self.notify(format!("The code editor didn't open: {e}"));
+        let note = self.ed.note.take();
+        match (result, note) {
+            (Err(e), _) => self.notify(format!("The code editor didn't open: {e}")),
+            (Ok(()), Some(n)) => self.notify(n),
+            (Ok(()), None) => {}
         }
         self.refresh();
     }

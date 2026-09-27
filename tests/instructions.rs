@@ -104,10 +104,12 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     let lab = Lab::new("instructions-edit");
     let mut t = Term::spawn(&[], &lab.env(), &lab.base, 30, 100);
     t.wait_for("enter open");
-    // The Projects tab (the fifth), then to the hand-off's system prompt: the last entry, less the squad commander's,
-    // the squad leaders' and their model, drafting a squad's and drafting an agent's.
+    // The Projects tab (the fifth, before Editors), then to the hand-off's system prompt: the last entry, less the squad
+    // commander's, the squad leaders' and their model, drafting a squad's and drafting an agent's.
     t.send(b"s");
     t.wait_for("Settings file:");
+    t.send(b"\x1b[Z");
+    t.wait_for("Editing files");
     t.send(b"\x1b[Z");
     t.wait_for_all(&["Update notes after", "System prompt for project notes", "System prompt for the hand-off"]);
     t.send(b"G");

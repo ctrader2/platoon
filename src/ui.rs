@@ -195,6 +195,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             }
             draw_editor_pick(f, app, inner)
         }
+        Mode::PickFileEditor => draw_file_editor_pick(f, app, inner),
         Mode::Changes => draw_changes(f, app, inner),
         Mode::Handoff => draw_handoff(f, app, inner),
         Mode::TicketPick => draw_ticket_pick(f, app, inner),
@@ -852,9 +853,17 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             for l in wrap("Kept because it has changes not yet committed.", w.saturating_sub(LABEL)) {
                 head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
             }
-            if removable {
-                head.push(Line::from(vec![label(""), Span::styled("w", Style::new().fg(t.accent)), Span::styled(" removes it anyway", Style::new().fg(t.dim))]));
+        }
+        // Opened in an editor with a window of its own, which platoon can't tell has closed: the user's to remove.
+        if let Some(name) = &wt.opened_in {
+            let says = if x.state.closed() { format!("Kept: opened in {name}.") } else { format!("Opened in {name}: kept after the work until w removes it.") };
+            for l in wrap(&says, w.saturating_sub(LABEL)) {
+                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
             }
+        }
+        if removable && (wt.kept_uncommitted || wt.opened_in.is_some()) {
+            let what = if wt.kept_uncommitted { " removes it anyway" } else { " removes it" };
+            head.push(Line::from(vec![label(""), Span::styled("w", Style::new().fg(t.accent)), Span::styled(what, Style::new().fg(t.dim))]));
         }
     }
     if x.folders.is_empty() {
@@ -1824,7 +1833,8 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top;
         // (On the smart features tab the first note is the day's token count: that one stays.)
         let keep = usize::from(app.settings_tab == crate::settings::TAB_SMART);
-        if explain_level(&explained, app.setting, room(notes.len()) as usize) == 2 && explain_level(&explained, app.setting, room(keep) as usize) < 2 {
+        let heads = settings_tab(app).headings.len();
+        if explain_level(&explained, app.setting, room(notes.len()) as usize, heads) == 2 && explain_level(&explained, app.setting, room(keep) as usize, heads) < 2 {
             notes.truncate(keep);
         }
     }
@@ -1893,7 +1903,7 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
     let need = |tab: usize| {
         let items = &SETTINGS_TABS[tab].items;
-        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1);
+        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1) + SETTINGS_TABS[tab].headings.len();
         entries + 1 + settings_notes(app, tab, w).len()
     };
     let most = (0..SETTINGS_TABS.len()).map(need).max().unwrap_or(0);
@@ -1936,17 +1946,23 @@ const SETTINGS_MIN_WINDOW: usize = 6;
 
 /// As much explanation as fits in `height` rows: every entry explained with air between them (0), else the selected
 /// one only (1) - with the list scrolling if it is too long to be shown whole beside it - else none (2).
-fn explain_level(explained: &[Vec<String>], selected: usize, height: usize) -> usize {
+/// `headings`: the rows the group headings of the tab take.
+fn explain_level(explained: &[Vec<String>], selected: usize, height: usize, headings: usize) -> usize {
     let whole = (0..2).find(|&level| {
         let gap = usize::from(level == 0);
         let total: usize = (0..explained.len()).map(|i| 1 + if level == 0 || i == selected { explained[i].len() } else { 0 }).sum();
-        total + gap * (explained.len() - 1) <= height
+        total + headings + gap * (explained.len() - 1) <= height
     });
     match whole {
         Some(level) => level,
-        None if explained.get(selected).is_some_and(|e| e.len() + SETTINGS_MIN_WINDOW.min(explained.len()) <= height) => 1,
+        None if explained.get(selected).is_some_and(|e| e.len() + headings + SETTINGS_MIN_WINDOW.min(explained.len()) <= height) => 1,
         None => 2,
     }
+}
+
+/// The settings tab showing.
+fn settings_tab(app: &App) -> &'static crate::settings::Tab {
+    &SETTINGS_TABS[app.settings_tab.min(SETTINGS_TABS.len() - 1)]
 }
 
 /// Draws the entries and returns the row below the last one.
@@ -1957,11 +1973,14 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     }
     let text_w = (area.width as usize).saturating_sub(4);
     let items = app.items();
+    let tab = settings_tab(app);
     let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
 
-    let level = explain_level(&explained, app.setting, area.height as usize);
+    let level = explain_level(&explained, app.setting, area.height as usize, tab.headings.len());
     let show = |i: usize| level == 0 || (level == 1 && i == app.setting);
-    let height = |i: usize| 1 + if show(i) { explained[i].len() } else { 0 };
+    // A group's heading sits on its own line above its first entry.
+    let head = |i: usize| usize::from(tab.heading(i).is_some());
+    let height = |i: usize| head(i) + 1 + if show(i) { explained[i].len() } else { 0 };
     let gap = u16::from(level == 0);
 
     // Scroll only if even that doesn't fit, and only as far as it takes to keep the selected entry (with its
@@ -1978,6 +1997,12 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         if y + h > area.bottom() {
             break;
         }
+        if let Some(heading) = tab.heading(i) {
+            let style = Style::new().fg(t.accent).add_modifier(Modifier::BOLD);
+            f.render_widget(Paragraph::new(Span::styled(fit_end(heading, area.width as usize), style)), Rect::new(area.x, y, area.width, 1));
+            y += 1;
+        }
+        let h = h - head(i) as u16;
         let row = Rect::new(area.x, y, area.width, h);
         let selected = i == app.setting;
         let hover = row.contains(app.mouse.into());
@@ -2002,6 +2027,11 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let label = status.label().to_string();
                 let vw = label.chars().count();
                 (label, vw, true, true, status == crate::instructions::Status::BuiltIn)
+            }
+            Kind::Editor(which) => {
+                let (label, widest, at_start, at_end) = app.editor_setting(which);
+                let vw = widest.min(26);
+                (fit_end(&label, vw), vw, at_start, at_end, false)
             }
             Kind::Theme => {
                 let all = app.themes().all();
@@ -2730,6 +2760,58 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     draw_footer(f, app, foot, &hints, None);
 }
 
+/// `v`'s list of editors ("Always ask which editor" on): platoon's own first, then the ones this computer has that open
+/// a folder. The favourite is starred and picked, so enter opens it; another becomes the favourite.
+fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
+    use crate::fileeditors::{Runs, Several};
+    let t = app.effective_theme();
+    let pick = app.file_pick();
+    app.hits.borrow_mut().clear();
+    let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
+    let r = centered(area, area.width.saturating_sub(8).clamp(30, 66), h);
+    f.render_widget(Clear, r);
+    let block = modal_block(t, "open with");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [head, sep, list, note, foot] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    f.render_widget(Paragraph::new(fit_end("Editors that open a folder:", head.width as usize)).style(Style::new().fg(t.text)), head);
+    f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
+    let rows = list.height as usize;
+    let start = pick.selected.saturating_sub(rows.saturating_sub(1));
+    for (i, e) in pick.options.iter().enumerate().skip(start).take(rows) {
+        let rect = Rect::new(list.x, list.y + (i - start) as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::FileEditorRow(i)));
+        let sel = i == pick.selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let where_it_runs = match (e.runs, e.several) {
+            (Runs::Platoon, _) if pick.platoon_missing => "installs first",
+            (Runs::Platoon, _) | (Runs::Terminal, _) => "here in platoon's terminal",
+            (Runs::Window, Several::EachWindow) => "a window per folder",
+            (Runs::Window, _) => "in its own window",
+        };
+        let star = if e.id == pick.starred { app.star() } else { " " };
+        let spans = vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(format!("{star} "), base.fg(t.accent)),
+            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(31)), base.fg(t.text)),
+            Span::styled(where_it_runs, base.fg(t.dim)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+    let foot_note = format!("{} your favourite. Choosing another makes it the favourite.", app.star());
+    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(t.dim)), note);
+    let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    draw_footer(f, app, foot, &hints, None);
+}
+
 /// The last change to the notes, line by line: `-` for what went, `+` for what came. The marks carry the meaning,
 /// so it reads on a screen with no colors at all.
 fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
@@ -3100,10 +3182,20 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             },
             "cancel it",
         ),
-        Confirm::RemoveWorktree { number, branch } => (
+        Confirm::RemoveWorktree { number, branch, uncommitted, opened_in } => (
             "remove worktree",
-            format!("Remove #{number}'s worktree anyway?"),
-            format!("It has changes not yet committed, and they will be lost. Its branch {branch} and everything committed on it are kept."),
+            if *uncommitted { format!("Remove #{number}'s worktree anyway?") } else { format!("Remove #{number}'s worktree?") },
+            {
+                let mut says = String::new();
+                if let Some(name) = opened_in {
+                    says.push_str(&format!("It was opened in {name}: close it there first. "));
+                }
+                if *uncommitted {
+                    says.push_str("It has changes not yet committed, and they will be lost. ");
+                }
+                says.push_str(&format!("Its branch {branch} and everything committed on it are kept."));
+                says
+            },
             "remove it",
         ),
         Confirm::ResetInstructions { id } => {

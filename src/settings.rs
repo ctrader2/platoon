@@ -142,6 +142,12 @@ pub struct Settings {
     /// been used yet. platoon remembers the last choice here; an id this computer no longer has is simply not
     /// starred and stays in the file until another editor is used.
     pub notes_editor: String,
+    /// The favourite editor of `v` (a ticket's or a session's files): `fileeditors::PLATOON` (platoon's own, the
+    /// default) or the id of an editor of this computer's (`fileeditors.rs`). One that is no longer installed is kept
+    /// here, and `v` opens platoon's editor instead (saying so).
+    pub files_editor: String,
+    /// `v` shows the list of editors every time (the favourite starred and picked) instead of opening the favourite.
+    pub files_editor_ask: bool,
     /// How long a project must be quiet before platoon brings its notes up to date, in minutes.
     pub notes_quiet_minutes: u64,
     /// How much of Claude's last reply in each session a notes update reads, in characters.
@@ -181,6 +187,8 @@ impl Default for Settings {
             ai_archived: false,
             ai_archived_share: DEFAULT_ARCHIVED_SHARE,
             notes_editor: crate::editors::ASK.into(),
+            files_editor: crate::fileeditors::PLATOON.into(),
+            files_editor_ask: false,
             notes_quiet_minutes: DEFAULT_NOTES_QUIET_MINUTES,
             notes_reply_chars: DEFAULT_NOTES_REPLY_CHARS,
             ai_find_candidates: DEFAULT_FIND_CANDIDATES,
@@ -297,6 +305,8 @@ fn parse(text: &str) -> Option<Settings> {
             },
             ai_archived_share: number("ai_archived_share", d.ai_archived_share),
             notes_editor: o.get("notes_editor").and_then(Value::as_str).map_or(d.notes_editor.clone(), str::to_string),
+            files_editor: o.get("files_editor").and_then(Value::as_str).filter(|v| !v.trim().is_empty()).map_or(d.files_editor.clone(), str::to_string),
+            files_editor_ask: o.get("files_editor_ask").and_then(Value::as_bool).unwrap_or(d.files_editor_ask),
             notes_quiet_minutes: number("notes_quiet_minutes", d.notes_quiet_minutes),
             notes_reply_chars: number("notes_reply_chars", d.notes_reply_chars),
             ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
@@ -368,6 +378,8 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_archived".into(), json!(if s.ai_archived { "background" } else { "off" }));
     object.insert("ai_archived_share".into(), json!(s.ai_archived_share));
     object.insert("notes_editor".into(), json!(s.notes_editor));
+    object.insert("files_editor".into(), json!(s.files_editor));
+    object.insert("files_editor_ask".into(), json!(s.files_editor_ask));
     object.insert("notes_quiet_minutes".into(), json!(s.notes_quiet_minutes));
     object.insert("notes_reply_chars".into(), json!(s.notes_reply_chars));
     object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
@@ -412,9 +424,21 @@ pub enum Kind {
     /// The system prompt of one AI action (`instructions::ACTIONS`), by id. It has no steps: enter (or a click on
     /// the value) opens the user's own text in an editor, and the value says "Enter to change" or "User Modified".
     Instructions(&'static str),
+    /// Which editor opens something, chosen among the editors this computer has (known only at run time, like the
+    /// themes): the app steps through them, and `choices`, `get`, `set` and `label` are unused.
+    Editor(EditorFor),
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
+}
+
+/// What an editor setting chooses the editor for.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EditorFor {
+    /// platoon's own text: a project's notes, a ticket's body, a system prompt (`e`); `Settings::notes_editor`.
+    Text,
+    /// A ticket's or a session's files (`v`); `Settings::files_editor`.
+    Files,
 }
 
 /// One line of the settings screen. The screen is built from `TABS` alone, so a new setting is a new entry
@@ -517,11 +541,22 @@ pub static TABS: LazyLock<Vec<Tab>> = LazyLock::new(tabs);
 pub struct Tab {
     pub title: &'static str,
     pub items: Vec<Item>,
+    /// A heading drawn above the entry at that position, grouping it with the ones after it.
+    pub headings: &'static [(usize, &'static str)],
+}
+
+impl Tab {
+    /// The heading above entry `i`, if one starts a group there.
+    pub fn heading(&self, i: usize) -> Option<&'static str> {
+        self.headings.iter().find(|(at, _)| *at == i).map(|(_, h)| *h)
+    }
 }
 
 /// The tabs by position, for the code that treats one of them specially (see `tabs`).
 pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
+#[cfg(test)]
+pub const TAB_EDITORS: usize = 5;
 
 /// Every entry on every tab, in screen order.
 #[cfg(test)]
@@ -537,11 +572,42 @@ pub fn find_item(name: &str) -> Option<(usize, usize)> {
 
 fn tabs() -> Vec<Tab> {
     vec![
-        Tab { title: "General", items: general_items() },
-        Tab { title: "Search", items: search_items() },
-        Tab { title: "Smart features", items: smart_items() },
-        Tab { title: "Sessions", items: sessions_items() },
-        Tab { title: "Projects", items: projects_items() },
+        Tab { title: "General", items: general_items(), headings: &[] },
+        Tab { title: "Search", items: search_items(), headings: &[] },
+        Tab { title: "Smart features", items: smart_items(), headings: &[] },
+        Tab { title: "Sessions", items: sessions_items(), headings: &[] },
+        Tab { title: "Projects", items: projects_items(), headings: &[] },
+        Tab { title: "Editors", items: editors_items(), headings: &[(0, "Editing platoon's text"), (1, "Editing files")] },
+    ]
+}
+
+/// Which editors open what: platoon's own text (notes, ticket bodies, system prompts), and a ticket's or a session's
+/// files (`v`).
+fn editors_items() -> Vec<Item> {
+    let editor = |name, explain, which| Item { name, explain, kind: Kind::Editor(which), choices: &[], get: |_| 0, set: |_, _| {}, label: |_| String::new(), off: None };
+    vec![
+        editor(
+            "Editor for notes and tickets",
+            "Opens a project's notes, a ticket's text and the system prompts (e). It is the one starred in that list, and \
+             choosing another there changes it too.",
+            EditorFor::Text,
+        ),
+        editor(
+            "Editor for files (v)",
+            "Opens a ticket's or a session's folders (v): platoon's editor, or one of the editors this computer has that \
+             show a file tree. Choosing another from v's list changes it too.",
+            EditorFor::Files,
+        ),
+        Item {
+            name: "Always ask which editor",
+            explain: "Off: v opens the editor above at once. On: v shows the list every time, with that one starred and picked.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.files_editor_ask),
+            set: |s, v| s.files_editor_ask = v != 0,
+            label: on_off,
+            off: Some(0),
+        },
     ]
 }
 
@@ -1090,6 +1156,46 @@ mod tests {
     }
 
     #[test]
+    fn the_editor_settings_default_to_platoons_editor_without_asking_and_read_back_what_was_saved() {
+        let d = dir("editors");
+        let s = load(&d).0;
+        assert_eq!((s.notes_editor.as_str(), s.files_editor.as_str(), s.files_editor_ask), (crate::editors::ASK, "platoon", false));
+        save(&d, &Settings { notes_editor: "nano".into(), files_editor: "code".into(), files_editor_ask: true, ..Settings::default() }).unwrap();
+        let back = load(&d).0;
+        assert_eq!((back.notes_editor.as_str(), back.files_editor.as_str(), back.files_editor_ask), ("nano", "code", true));
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!((v["files_editor"].as_str(), v["files_editor_ask"].as_bool()), (Some("code"), Some(true)));
+        // An editor this version doesn't know (or one uninstalled since) is kept as the file says; nonsense is the default.
+        write(&d, r#"{"files_editor":"some-new-ide","files_editor_ask":"yes","mine":1}"#);
+        let odd = load(&d).0;
+        assert_eq!((odd.files_editor.as_str(), odd.files_editor_ask), ("some-new-ide", false));
+        write(&d, r#"{"files_editor":"  ","mine":1}"#);
+        assert_eq!(load(&d).0.files_editor, "platoon");
+        save(&d, &Settings { files_editor_ask: true, ..Settings::default() }).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!(v["mine"], 1, "keys it doesn't know are kept");
+    }
+
+    #[test]
+    fn the_editors_tab_has_its_two_groups() {
+        let tab = &TABS[TAB_EDITORS];
+        assert_eq!(tab.title, "Editors");
+        let names: Vec<&str> = tab.items.iter().map(|i| i.name).collect();
+        assert_eq!(names, ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
+        assert_eq!(tab.heading(0), Some("Editing platoon's text"));
+        assert_eq!(tab.heading(1), Some("Editing files"));
+        assert_eq!(tab.heading(2), None, "the switch belongs with the files editor");
+        assert_eq!(tab.items[0].kind, Kind::Editor(EditorFor::Text));
+        assert_eq!(tab.items[1].kind, Kind::Editor(EditorFor::Files));
+        let ask = &tab.items[2];
+        let mut s = Settings::default();
+        assert_eq!((ask.label)(ask.value(&s)), "Off");
+        ask.assign(&mut s, 1);
+        assert!(s.files_editor_ask);
+        assert!(TABS.iter().enumerate().all(|(i, t)| i == TAB_EDITORS || t.headings.is_empty()), "only this tab has groups");
+    }
+
+    #[test]
     fn save_keeps_every_key_it_does_not_know_including_nested_values_and_their_order() {
         let d = dir("keep-keys");
         write(&d, r#"{"note":"mine","idle_stop_minutes":5,"nested":{"a":[1,{"b":null}],"c":"d"},"version":7}"#);
@@ -1101,7 +1207,7 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "squad_leader_model", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "files_editor", "files_editor_ask", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "squad_leader_model", "token_features", "theme"], "the file keeps its shape");
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1307,17 +1413,18 @@ mod tests {
         assert_eq!(items[0].name, "Theme");
         assert_eq!(items[0].kind, Kind::Theme);
         assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
-        assert!(!all_items().any(|i| i.name == "Edit notes with"), "the editor is remembered from the last one used, not chosen here");
-        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_))), "the theme is the only one of its kind");
+        assert!(!all_items().any(|i| i.name == "Edit notes with"), "the old name of the notes editor's setting is gone");
+        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_))), "the theme is the only one of its kind");
         assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
         assert_eq!((items[0].step(0, Step::Next), items[0].step(0, Step::Prev), items[0].step(0, Step::Cycle)), (0, 0, 0));
     }
 
     #[test]
-    fn five_tabs_hold_every_setting_once_each_where_it_belongs() {
+    fn six_tabs_hold_every_setting_once_each_where_it_belongs() {
         let titles: Vec<&str> = TABS.iter().map(|t| t.title).collect();
-        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects"]);
+        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"]);
+        assert_eq!(tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(), ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive conversations after", "Idle stop and MCP servers"]);
@@ -1593,8 +1700,9 @@ mod tests {
 
     #[test]
     fn the_token_entries_read_plainly_and_every_step_is_within_the_limits() {
-        // Everything that spends tokens or decides what is sent: the last three tabs, and the description search.
-        let token_items = || TABS[TAB_SMART..].iter().flat_map(|t| t.items.iter()).chain(tab("Search")[4..].iter());
+        // Everything that spends tokens or decides what is sent: the smart features, sessions and projects tabs, and the
+        // description search.
+        let token_items = || TABS[TAB_SMART..TAB_EDITORS].iter().flat_map(|t| t.items.iter()).chain(tab("Search")[4..].iter());
         for item in token_items() {
             let lower = item.explain.to_lowercase();
             for jargon in ["index", "json", "cache", "byte", "thread", "api", "cli", "stdin", "process"] {
