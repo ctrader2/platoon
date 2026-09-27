@@ -8,8 +8,8 @@
 //! their own, shared by squads) and one line of what it does, some allowed to send the work back to an earlier step a
 //! number of times. A squad's agents are the different agents its steps name. Its leader is the same for every squad:
 //! its system prompt and model are in the settings (`squads::LeaderSetup`). A file from before that still has its
-//! own `leader`, `needs_folder` and `use_worktree` (or `worktree`): those are kept as keys platoon doesn't know, and
-//! ignored. Every ticket has a folder (its own, or its private work folder) and works in a worktree of each git folder.
+//! own `leader`, `needs_folder` and `use_worktree` (or `worktree`): those are read as keys platoon doesn't know and
+//! ignored, and dropped whenever platoon writes the file (`RETIRED_KEYS`). Every ticket has a folder (its own, or its private work folder) and works in a worktree of each git folder.
 //!
 //! The file of a changed built-in holds the whole definition and says which built-in it came from; restoring the
 //! built-in puts the file aside (`<id>.json.bak`). Keys platoon doesn't know are kept. A file that can't be read is
@@ -397,9 +397,18 @@ pub(crate) fn rest(o: &Map<String, Value>, known: &[&str]) -> Map<String, Value>
 }
 
 /// `"members"` is how a squad file held its agents before they were their own (`convert_old`): never written back.
-/// An older file's `"leader"`, `"needs_folder"`, `"use_worktree"` and `"worktree"` are not among them: they are kept
-/// as they are, and mean nothing now.
+/// An older file's `"leader"`, `"needs_folder"`, `"use_worktree"` and `"worktree"` are not among them: see `RETIRED_KEYS`.
 const TOP_KEYS: &[&str] = &["version", "id", "builtin", "name", "can_do", "members", "workflow"];
+/// Top-level keys a squad file had before every squad shared one leader and always worked in worktrees. They mean
+/// nothing now: reading keeps them as keys platoon doesn't know (and never writes), and every write drops them, so a
+/// changed built-in that differs only by them goes back to being the built-in on its next save.
+pub const RETIRED_KEYS: &[&str] = &["leader", "needs_folder", "use_worktree", "worktree"];
+
+/// `extra` without the retired keys: what a write keeps of the keys platoon doesn't know.
+fn without_retired(extra: &Map<String, Value>) -> Map<String, Value> {
+    rest(extra, RETIRED_KEYS)
+}
+
 /// A step's `"member"` is its agent in a file from before agents were their own.
 const STEP_KEYS: &[&str] = &["agent", "member", "does", "back_to", "times"];
 
@@ -443,7 +452,7 @@ pub fn from_value(v: &Value, id: &str) -> Result<Squad, String> {
     })
 }
 
-/// A squad as its file holds it. `builtin`: the built-in it is a changed copy of.
+/// A squad as its file holds it. `builtin`: the built-in it is a changed copy of. The retired keys are left out.
 pub fn to_value(s: &Squad, builtin: Option<&str>) -> Value {
     let mut o = Map::new();
     o.insert("version".into(), json!(1));
@@ -469,7 +478,7 @@ pub fn to_value(s: &Squad, builtin: Option<&str>) -> Value {
         })
         .collect();
     o.insert("workflow".into(), Value::Array(steps));
-    o.extend(s.extra.clone());
+    o.extend(without_retired(&s.extra));
     Value::Object(o)
 }
 
@@ -542,7 +551,9 @@ fn convert_old(config: &Path, id: &str, text: &str, v: &Value) -> Result<Squad, 
             st.insert("agent".into(), json!(agent));
         }
     }
-    let squad = from_value(&Value::Object(nv), id)?;
+    let mut squad = from_value(&Value::Object(nv), id)?;
+    // Written without the retired keys, and returned as it is written.
+    squad.extra = without_retired(&squad.extra);
     let fail = |e: io::Error| format!("it is in the old form (members inside it) and couldn't be converted: {e}");
     write_atomic(&old_form_backup(config, id), text).map_err(fail)?;
     for a in &new_agents {
@@ -660,28 +671,30 @@ pub fn name_of(config: &Path, id: &str) -> String {
     get(config, id).map_or_else(|| id.to_string(), |s| s.name)
 }
 
-/// Write a squad: under the lock, atomically, keeping the keys of the file platoon doesn't know. A file that can't be
-/// read is never written over. A built-in saved exactly as platoon has it needs no file: the file goes.
+/// Write a squad: under the lock, atomically, keeping the keys of the file platoon doesn't know but for the retired
+/// ones (`RETIRED_KEYS`, dropped). A file that can't be read is never written over. A built-in saved exactly as
+/// platoon has it needs no file: the file is put aside as `<id>.json.bak`, as restoring it does.
 pub fn save(config: &Path, s: &Squad) -> io::Result<()> {
     let p = path(config, &s.id);
     let _lock = lock(&lock_path(config))?;
     let mut keep = Map::new();
     match fs::read_to_string(&p) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(o)) => keep = rest(&o, TOP_KEYS),
+            Ok(Value::Object(o)) => keep = without_retired(&rest(&o, TOP_KEYS)),
             _ => return Err(io::Error::other(format!("{} can't be read, so platoon leaves it alone. Fix or move the file to go on.", p.display()))),
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
     }
+    let mut s = s.clone();
+    s.extra = without_retired(&s.extra);
     let builtin = builtin(&s.id);
-    if builtin.as_ref().is_some_and(|b| b.same_as(s) && keep.is_empty() && s.extra.is_empty()) {
-        return match fs::remove_file(&p) {
+    if builtin.as_ref().is_some_and(|b| b.same_as(&s) && keep.is_empty() && s.extra.is_empty()) {
+        return match fs::rename(&p, p.with_extension("json.bak")) {
             Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
             _ => Ok(()),
         };
     }
-    let mut s = s.clone();
     for (k, v) in keep {
         s.extra.entry(k).or_insert(v);
     }
@@ -1262,9 +1275,10 @@ mod tests {
         assert_eq!(listed[0].kind, Kind::Modified);
         let s = listed[0].squad.clone().unwrap();
         assert_eq!(s.agent_ids(), ["planner", "coding-builder", "reviewer", "verifier"]);
-        assert_eq!(s.extra["leader"]["model"], "opus", "an old file's own leader is kept as it was, and means nothing now");
+        assert!(s.extra.get("leader").is_none(), "an old file's own leader means nothing now, and the conversion drops it");
         let file: Value = serde_json::from_str(&fs::read_to_string(path(&c, "coding")).unwrap()).unwrap();
         assert_eq!((file["builtin"].as_str(), file.get("members")), (Some("coding"), None));
+        assert!(file.get("leader").is_none(), "the converted file is written without the retired keys: {file}");
         assert!(old_form_backup(&c, "coding").exists());
         assert_eq!(agentfile::get(&c, "coding-builder").unwrap().guidance, "Build it in small commits.");
         assert_eq!(agentfile::load_all(&c).iter().filter(|l| l.kind != Kind::BuiltIn).map(|l| l.id.as_str()).collect::<Vec<_>>(), ["coding-builder"]);
@@ -1274,6 +1288,8 @@ mod tests {
         let mut v = to_value(&coding(), Some("coding"));
         let o = v.as_object_mut().unwrap();
         o.insert("members".into(), json!(["planner", "builder", "reviewer", "verifier"].map(|id| member(&agentfile::builtin(id).unwrap()))));
+        o.insert("leader".into(), json!({"model": "sonnet", "guidance": "Lead."}));
+        o.insert("use_worktree".into(), json!(true));
         fs::write(path(&c2, "coding"), v.to_string()).unwrap();
         let l = load_all(&c2);
         assert_eq!(l[0].kind, Kind::BuiltIn, "{:?}", l[0]);
@@ -1428,19 +1444,93 @@ mod tests {
         let coding_now = get(&c, "coding").unwrap();
         assert!(coding_now.same_as(&coding()), "ignored: the rest is the built-in");
         assert_eq!(listed[0].kind, Kind::Modified, "the file is there, so it says so");
-        // Saved again: the old keys are still there, exactly as they were; nothing platoon writes stands for them.
+        // Saved again: the old keys are dropped (see `a_save_drops_the_retired_keys...`).
         let mut s = s;
         s.can_do = "Runs scripts.".into();
         save(&c, &s).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(path(&c, "scripts")).unwrap()).unwrap();
-        assert_eq!(v["leader"], json!({"model": "opus", "guidance": "Lead the scripts squad.", "effort": "high"}));
-        assert_eq!((v["needs_folder"].as_bool(), v["use_worktree"].as_bool(), v["worktree"].as_str()), (Some(true), Some(false), Some("never")));
+        for k in RETIRED_KEYS {
+            assert!(v.get(k).is_none(), "{k} is dropped on save: {v}");
+        }
         assert_eq!(v["can_do"], "Runs scripts.");
         // The leader a session starts with comes from the settings, whatever the file says.
         let crew = Crew::of(&s, &agents());
         let launch = crate::squads::Launch::of(&crew, &crate::squads::LeaderSetup::builtin(), crate::tickets::AgentNames::SquadRole, crate::squads::Place::WORKTREE);
         assert_eq!(launch.model, "sonnet");
         assert!(!launch.agents.contains("Lead the scripts squad."));
+    }
+
+    /// The file as it is on disk, and its mtime: for "reading never writes".
+    fn on_disk(p: &Path) -> (String, std::time::SystemTime) {
+        (fs::read_to_string(p).unwrap(), fs::metadata(p).unwrap().modified().unwrap())
+    }
+
+    #[test]
+    fn a_save_drops_the_retired_keys_and_keeps_the_other_unknown_ones() {
+        let c = dir("retired");
+        fs::create_dir_all(super::dir(&c)).unwrap();
+        let with_retired = |mut v: Value| {
+            let o = v.as_object_mut().unwrap();
+            o.insert("leader".into(), json!({"model": "opus", "guidance": "Lead."}));
+            o.insert("needs_folder".into(), json!(true));
+            o.insert("use_worktree".into(), json!(false));
+            o.insert("worktree".into(), json!("never"));
+            v
+        };
+        // An own squad with the retired keys and one of its own.
+        let mut own = with_retired(to_value(&copy_of(&c, &coding(), "Scripts", &[]), None));
+        own.as_object_mut().unwrap().insert("colour".into(), json!("teal"));
+        fs::write(path(&c, "scripts"), own.to_string()).unwrap();
+        // A changed built-in whose only differences are the retired keys, and one with a real change as well.
+        fs::write(path(&c, "coding"), with_retired(to_value(&coding(), Some("coding"))).to_string()).unwrap();
+        let mut renamed = builtin("research").unwrap();
+        renamed.name = "Research Agent".into();
+        fs::write(path(&c, "research"), with_retired(to_value(&renamed, Some("research"))).to_string()).unwrap();
+
+        // Reading never writes: not a load, not the list, not a get.
+        let before: Vec<_> = ["scripts", "coding", "research"].iter().map(|id| on_disk(&path(&c, id))).collect();
+        let listed = load_all(&c);
+        for id in ["scripts", "coding", "research"] {
+            assert!(get(&c, id).is_some() && load(&c, id).unwrap().is_some());
+        }
+        let after: Vec<_> = ["scripts", "coding", "research"].iter().map(|id| on_disk(&path(&c, id))).collect();
+        assert_eq!(before, after, "reading never rewrites a file");
+        assert_eq!(listed[0].kind, Kind::Modified, "until it is saved, the file is there and says so");
+        assert!(!super::dir(&c).join("coding.json.bak").exists());
+
+        // The own squad: saved as it is (the way every edit, copy or draft reaches the file).
+        save(&c, &get(&c, "scripts").unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(path(&c, "scripts")).unwrap()).unwrap();
+        for k in RETIRED_KEYS {
+            assert!(v.get(k).is_none(), "{k} is dropped: {v}");
+        }
+        assert_eq!(v["colour"], "teal", "another key platoon doesn't know is kept");
+        // A squad whose own `extra` still holds them (a copy of one read from an old file) doesn't bring them back.
+        let copy = copy_of(&c, &load(&c, "research").unwrap().unwrap(), "Research copy", &[]);
+        assert!(copy.extra.contains_key("leader"));
+        save(&c, &copy).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(path(&c, &copy.id)).unwrap()).unwrap();
+        assert!(RETIRED_KEYS.iter().all(|k| v.get(k).is_none()), "{v}");
+
+        // The changed built-in that differed only by them: back to "Built in", its file put aside.
+        let s = get(&c, "coding").unwrap();
+        assert!(s.extra.contains_key("leader"), "read with them");
+        save(&c, &s).unwrap();
+        assert!(!path(&c, "coding").exists(), "no file is needed any more");
+        let bak: Value = serde_json::from_str(&fs::read_to_string(path(&c, "coding").with_extension("json.bak")).unwrap()).unwrap();
+        assert_eq!(bak["leader"]["model"], "opus", "the .bak is the file as it was");
+        let listed = load_all(&c);
+        assert_eq!((listed[0].id.as_str(), listed[0].kind), ("coding", Kind::BuiltIn));
+        assert!(get(&c, "coding").unwrap().same_as(&coding()));
+
+        // The one with a real change keeps its file, without them.
+        save(&c, &get(&c, "research").unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(path(&c, "research")).unwrap()).unwrap();
+        assert!(RETIRED_KEYS.iter().all(|k| v.get(k).is_none()), "{v}");
+        assert_eq!((v["name"].as_str(), v["builtin"].as_str()), (Some("Research Agent"), Some("research")));
+        assert!(!path(&c, "research").with_extension("json.bak").exists());
+        let research = load_all(&c).into_iter().find(|l| l.id == "research").unwrap();
+        assert_eq!((research.kind, research.name()), (Kind::Modified, "Research Agent"));
     }
 
     #[test]
