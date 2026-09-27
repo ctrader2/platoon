@@ -1220,11 +1220,12 @@ the servers you added for every folder (`claude mcp add`, kept in `~/.claude.jso
 platoon reads only their names, never what is in them). A name that isn't installed here says "not found here" but is
 kept: it may be there where the squad works. When a squad starts, an agent's skills are loaded into it from the start
 and it may use other skills too (`Skill` is added to its tools), and it may use each of its MCP servers (`mcp__<name>`
-is added to its tools: without that, naming a server gives the agent nothing). Plugin skills aren't listed (type their
-name, `plugin:skill`), and neither are servers from claude.ai connectors or a project's `.mcp.json`. `enter` on a squad there opens it. **A change to an agent is a
+is added to its tools: without that, naming a server gives the agent nothing). The skills of Claude Code's own plugins
+aren't listed (type their name, `plugin:skill`), and neither are servers from claude.ai connectors or a project's
+`.mcp.json`; the skills of [platoon's plugins](#plugins) are, as they are in the skills folder. `enter` on a squad there opens it. **A change to an agent is a
 change in every squad that uses it**, so the tab says where it is used; for a variant, copy the agent (`c`) and put the
-copy on the steps you want. The list groups the agents as built in, **User Modified** and your own, each with its model
-and how many squads use it; **+ New agent** at the end makes a blank one of your own.
+copy on the steps you want. The list groups the agents as built in, **User Modified**, your own and those of each plugin,
+each with its model and how many squads use it; **+ New agent** at the end makes a blank one of your own.
 
 `↑` `↓` move in the list and in the details; `enter` (or `tab`, or `shift+→` / `ctrl+→`) goes into the details, and
 `esc` (or `tab`, `shift+←`, `ctrl+←`) back to the list. In the details, `enter` changes the line you are on: a name or a
@@ -1253,6 +1254,18 @@ deleted, and platoon names the squads. The drafting calls' system prompts are **
 beside the ticket (`tickets/<NN>-squad-<k>.json`). Changing the squad or its agents afterwards doesn't change that
 leader, also when it is continued later: it goes on with the squad as it was. The next ticket gets them as they are then.
 
+**Squads and agents from plugins.** A [plugin](#plugins) can bring squads and agents. They are listed after your own,
+labelled with the plugin's name (**From Changelog**), and can be handed tickets (`a`) like any squad. They are **read
+only**: the plugin's version is what you read before you installed it, and an update of the plugin replaces it. `c`
+makes a copy of your own to change (a copied squad still uses the plugin's agents; copy those too for a squad that is
+all yours). A plugin's squad uses platoon's built-in agents and the plugin's own, never yours. Your own squads may use a
+plugin's agents: removing that plugin names those squads first, and afterwards their steps show the agent as missing
+("needs fixing") until you pick another. A ticket whose squad has started keeps its snapshot, so it keeps working after
+its plugin is removed; one waiting in the line for a plugin's squad keeps a copy of that squad beside it
+(`tickets/<NN>-queued-crew.json`) and starts with it. Inside a squad's session a plugin's squad and its own agents go by
+their short names (`changelog-leader`, `changelog-change-reader`); a plugin's agent in one of your squads goes by the
+plugin and its name (`changelog--change-reader`), which no other agent's name can be.
+
 Your squads and agents, and the built-in ones once you change them, are in `~/.config/platoon/squads/<id>.json` and
 `~/.config/platoon/agents/<id>.json`, one file each; a squad's steps name its agents by their id, which is made from the
 name once and never changes. Keys platoon doesn't know are kept, and a file that can't be read is shown as such on the tab
@@ -1267,14 +1280,33 @@ system prompt). A squad file from before the leader moved to the settings may st
 
 ## Plugins
 
-Plugins add things to platoon that not everyone wants. In this version a plugin adds **color themes** or **platoon's
-[code editor](#the-code-editor)** (the **Code editor (Neovim)** plugin); later ones will bring skills, and squads and
-agents. A plugin is a folder of plain files (a `plugin.json` that says what it is and what it adds, and those files):
+Plugins add things to platoon that not everyone wants. A plugin adds **color themes**, **platoon's
+[code editor](#the-code-editor)** (the **Code editor (Neovim)** plugin), **Claude Code skills**, or **squads and
+agents**. A plugin is a folder of plain files (a `plugin.json` that says what it is and what it adds, and those files):
 platoon never runs anything in it. The code editor plugin is the one kind that leads to programs: its download table
 names Neovim and its tools, each pinned by checksum and size, and its settings files run inside that Neovim; so its
 details and the question before installing say how much it downloads. Plugins come from platoon's own **catalog**, the
 [`plugins/`](plugins/) folder of platoon's repository, where anyone can send one by pull request (see
 [plugins/README.md](plugins/README.md) for how to make, check and send one).
+
+**Skills, squads and agents are instructions Claude follows with your permissions**, so platoon shows them before they
+are installed. `enter` on such a plugin lists each **skill**, **squad** and **agent** it adds, with what it may do in plain
+words: when Claude uses a skill and what it may run without asking you; an agent's model and whether it can change
+files, run commands, use the web, which skills it starts with and which MCP servers it may use; a squad's steps and whose
+agents do them. `enter` on one reads it in full, on the whole screen (the skill's own text and files, the agent's whole
+system prompt, the squad's workflow; `esc` goes back to the list). `y` installs, `n` doesn't. An update that changes any of
+them is shown again the same way, with what is **new** or **changed** marked. On the command line `platoon plugin show
+<id>` prints all of it, and `platoon plugin add` prints the list and asks `[y/N]`; where there is no terminal to ask in it
+installs nothing unless you add `--yes` (read it with `show` first). MCP servers can't be plugins: a server is a program
+that runs on your computer, and a plugin holds no code.
+
+**A plugin's skills** go into Claude Code's own skills folder (`~/.claude/skills/<name>/`, or `CLAUDE_CONFIG_DIR`'s),
+where Claude finds them like the ones you made; type `/<name>` in a new Claude session. A plugin's skills are named after
+it (the plugin `changelog` brings `changelog-entry`), so two plugins never clash, and platoon writes one only where that
+name is free: a skill folder platoon didn't put there is never written over (the install is refused and names it).
+platoon records what it wrote; removing the plugin deletes a skill only if it is exactly as platoon wrote it. One you
+changed is kept, and platoon says so (an update keeps your changed copy too). **Its squads and agents** are on the
+[Squads tab](#squads), read only.
 
 **The Plugins tab** (`4`) lists what the catalog has and what you have installed. The first time you open it in a run,
 platoon fetches the catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The selected
@@ -1283,7 +1315,7 @@ editor, how much it downloads), its license, where it came from and the oldest p
 
 | Key | Does |
 | --- | --- |
-| `enter` | install the selected plugin (after asking), or update it when the catalog has a newer one; a line in the footer says when it is done (for the code editor, with its download progress). On the code editor when some of its downloads are missing: finish them |
+| `enter` | install the selected plugin (after asking; for one with skills, squads or agents, after showing each to read), or update it when the catalog has a newer one; a line in the footer says when it is done (for the code editor, with its download progress). On the code editor when some of its downloads are missing: finish them |
 | `u` | update the selected plugin |
 | `d` | remove the selected plugin (after asking) |
 | `f` | check the catalog again |
@@ -1295,8 +1327,10 @@ The same from the command line:
 platoon plugin list              the catalog and what is installed
 platoon plugin add <id>          install one from the catalog (`add editor`: the code editor and its downloads)
 platoon plugin add ./my-plugin   install one from a folder on this computer (while you make one)
+platoon plugin add <id> --yes    install one with skills, squads or agents without being asked (read it first)
+platoon plugin show <id>         everything a plugin's skills, squads and agents tell Claude, in full
 platoon plugin remove <id>       (`remove editor`: with everything it downloaded, and its font)
-platoon plugin update [id]       bring the installed ones (or one) up to the catalog
+platoon plugin update [id]       bring the installed ones (or one) up to the catalog (changed instructions: asked again)
 platoon plugin check <folder>    check a plugin folder before you send it
 ```
 

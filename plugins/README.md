@@ -3,9 +3,12 @@
 This folder is the catalog platoon offers on its **Plugins** tab (`4`) and with `platoon plugin list`. Each plugin is a
 folder here, named after its id, and `index.json` lists them in the order platoon shows them.
 
-A plugin holds **files, never code**: a `plugin.json` that says what it is and what it adds, and those files. In this
-version a plugin can add **color themes**, or **platoon's code editor** (one plugin, `editor`; see "The code editor
-kind" below). (Later: skills, and squads and agents.)
+A plugin holds **files, never code**: a `plugin.json` that says what it is and what it adds, and those files. A plugin
+can add **color themes**, **platoon's code editor** (one plugin, `editor`; see "The code editor kind" below), **Claude
+Code skills**, and **squads and agents** (see "Skills, squads and agents" below). One plugin can add several kinds.
+
+**MCP servers can't be plugins**: a server is a program that runs on the user's computer, and a plugin holds no code. An
+agent may name an MCP server the user has set up themselves (see below).
 
 ## Making a theme plugin
 
@@ -56,6 +59,87 @@ kind" below). (Later: skills, and squads and agents.)
 
    Keys platoon doesn't know are left alone, so a plugin made for a newer platoon doesn't break an older one.
 
+## Skills, squads and agents
+
+These are **instructions Claude follows with the user's permissions**. So before a plugin with any of them is installed,
+platoon shows each one: what it is, what it may do in plain words, and its whole text to read (on the Plugins tab, and
+`platoon plugin show <id>`). An update that changes one is shown again. Write them to be read by the person installing
+them: plain, short, and doing only what the description says.
+
+`changelog` here is a small working example of all three: a skill, a squad and two agents of its own.
+
+### A skill
+
+A folder under `skills/`, named after the skill, holding its `SKILL.md` and any text files beside it (a template, a
+reference). Name it `plugin.json`'s way:
+
+```json
+"skills": ["skills/changelog-entry"]
+```
+
+- **Its name is namespaced by the plugin**: the plugin's id, or the id, a dash and more (the plugin `changelog` brings
+  `changelog-entry`). So two plugins never clash, and the user can tell where a skill in Claude Code came from. Lowercase
+  letters, digits and dashes, at most 64 characters; never `to-tickets` (platoon's own).
+- `SKILL.md` starts with front matter: `name` (the folder's name) and `description` (at most 1024 characters: Claude reads
+  it to decide when the skill fits, so say when to use it, and when not). The usual optional keys are fine and are shown
+  to the user: `allowed-tools` (what it may run **without asking** while it runs: keep it as narrow as you can, like
+  `Bash(git log:*)`), `disable-model-invocation: true` (only when the user types `/name`), `model`, and so on.
+- **No `hooks`**: a skill's hooks run commands, and a plugin holds no code. Everything in the folder is **text**, so it can
+  all be read before it is installed; nothing is ever made runnable. Prefer instructions over scripts.
+- Caps: `SKILL.md` at most 64 KiB; a skill's folder at most 20 files and 256 KiB.
+
+Installing writes it into Claude Code's skills folder (`~/.claude/skills/<name>/`), only where that name is free: a skill
+folder platoon didn't put there is never written over, and the install is refused, naming it. Removing the plugin deletes
+the skill only if it is exactly as platoon wrote it; a copy the user changed is kept.
+
+### Squads and agents
+
+In the same formats as the user's own `squads/<id>.json` and `agents/<id>.json` (see "Squads" in platoon's README), the
+file's name being its id:
+
+```json
+"squads": ["squads/changelog.json"],
+"agents": ["agents/change-reader.json", "agents/changelog-writer.json"]
+```
+
+An agent:
+
+```json
+{
+  "name": "change-reader",
+  "model": "sonnet",
+  "can_change_files": false,
+  "can_run_commands": true,
+  "can_use_web": false,
+  "guidance": "You are the change-reader. ..."
+}
+```
+
+`skills` (names) and `mcp_servers` (names of servers the user has set up) are optional. A squad names its steps' agents by
+id: **platoon's built-in agents** (`planner`, `builder`, `reviewer`, `verifier`, `questioner`, `researcher`,
+`report-writer`, `checker`, `outliner`, `tech-writer`, `editor`, `summarizer`) **and the plugin's own**, nothing else.
+
+- Ids are lowercase letters, digits and dashes, at most 24 characters; no id or name of a built-in squad or agent; an
+  agent is never called `leader`. On the user's computer they are namespaced (`plugin:changelog/change-reader`), so they
+  never clash with the user's own or another plugin's.
+- Every rule the user's own squads and agents follow: a name, a model (`opus`, `sonnet`, `haiku`), a system prompt, 1 to
+  12 steps, at most 8 different agents, a step sends the work back only to an earlier step, 1 to 5 times.
+- A squad or an agent file at most 64 KiB.
+- They are read only on the Squads tab (the user can copy one to change it), and the leader is the one every squad has:
+  don't write one. A ticket already started keeps its squad when the plugin is removed.
+
+### What reviewers look for in instructions and permissions
+
+- **It does what it says, and only that.** The description, the name and the text agree. Nothing hidden: no instructions
+  to fetch and follow other text, to read files it has no need of, to send anything anywhere, to push or publish, to
+  change settings or permissions, or to ignore the user.
+- **The fewest permissions its job needs.** An agent changes files only if it writes them, runs commands only if it must
+  run something, uses the web only if it looks something up. A skill's `allowed-tools` is as narrow as it can be, or
+  absent. Say in the pull request why each one is needed.
+- **Plain, readable text.** The person installing it reads it before saying yes: short, plain words, no walls of
+  instructions, nothing obfuscated or encoded, no files that aren't text.
+- **Nothing personal**: no paths, emails, machine names or accounts beyond the author's name.
+
 ## Checking it
 
 ```
@@ -67,6 +151,7 @@ says what is wrong, in plain words, or "Looks good". It checks that:
 - `plugin.json` is there, readable, and has every field above;
 - every file it names is in the folder (paths inside it only: no `/` at the start, no `..`);
 - the folder holds plain files only (no links), at most 200 of them and 1 MiB in all; a theme file is at most 64 KiB;
+- every skill, squad and agent follows the rules in "Skills, squads and agents" above;
 - every theme is a **dark** theme that reads well **as it is**: the text at 7:1 against the background, the five colors
   platoon uses for meaning (accent, working, good news, warnings, errors) at 4.5:1, and those five clearly different from
   each other. (Your own themes folder lifts colors until they read; a plugin's themes have to read without help, like
@@ -125,7 +210,7 @@ own build (for taking over an editor installed before the editor was a plugin), 
 
 - It passes `platoon plugin check`, and the index matches.
 - It is files only and adds only what it says. For the code editor: every download pinned, from its project's own
-  releases or commits.
+  releases or commits. For skills, squads and agents: see "What reviewers look for in instructions and permissions".
 - **Where the colors come from.** Your own, or a theme whose license allows it: say which, and keep its license and credit
   in the plugin (a `LICENSE` or a line in the theme file). Commercial themes can't be accepted.
 - The name and description are plain and honest, and nothing in it is personal (no paths, emails or machine names beyond
@@ -133,4 +218,6 @@ own build (for taking over an editor installed before the editor was a plugin), 
 - A new version of a plugin raises `version`.
 
 The `example-themes` plugin here is a small working example: two themes, Harbor Night and Moss Lantern, with colors made
-for platoon (MIT).
+for platoon (MIT). `changelog` is one of a skill (`changelog-entry`), a squad (Changelog) and its two agents
+(`change-reader`, which only reads and runs git commands; `changelog-writer`, which only changes `CHANGELOG.md`), with the
+built-in `editor` checking the result (MIT).

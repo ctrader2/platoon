@@ -299,7 +299,11 @@ pub(crate) fn slug_problem(s: &str) -> Option<&'static str> {
 /// that use it unable to start too, and says so once.
 pub fn problems(s: &Squad, agents: &[Agent]) -> Vec<String> {
     let mut out = Vec::new();
-    if let Some(why) = slug_problem(&s.id) {
+    if crate::squadplugin::is_plugin(&s.id) {
+        if let Some(why) = crate::squadplugin::id_problem(&s.id) {
+            out.push(format!("\"{}\" can't be a squad's id: {why}.", s.id));
+        }
+    } else if let Some(why) = slug_problem(&s.id) {
         out.push(format!("\"{}\" can't be a squad's id: {why}.", s.id));
     }
     if s.name.trim().is_empty() {
@@ -584,6 +588,8 @@ pub enum Kind {
     Modified,
     /// Made by the user.
     Own,
+    /// From an installed plugin: read only (copying it makes one of the user's own).
+    Plugin,
 }
 
 impl Kind {
@@ -593,8 +599,22 @@ impl Kind {
             Kind::BuiltIn => "Built in",
             Kind::Modified => "User Modified",
             Kind::Own => "Your own",
+            Kind::Plugin => "From a plugin",
         }
     }
+}
+
+/// "From Changelog", or the kind's label: how the Squads tab labels a squad or an agent.
+pub fn label_of(kind: Kind, plugin: Option<&str>) -> String {
+    match (kind, plugin) {
+        (Kind::Plugin, Some(name)) => format!("From {name}"),
+        _ => kind.label().to_string(),
+    }
+}
+
+/// Why a plugin's squad or agent can't be changed here, in plain words.
+pub fn read_only_words(what: &str, name: &str, plugin: &str) -> String {
+    format!("{name} comes with the plugin {plugin}, so it can't be changed here. c makes a copy of your own to change; the {what} stays as the plugin has it.")
 }
 
 /// One squad of the list: the definition, or why its file can't be read.
@@ -606,11 +626,18 @@ pub struct Listed {
     pub squad: Option<Squad>,
     /// Why its file can't be read.
     pub corrupt: Option<String>,
+    /// The name of the plugin it comes with.
+    pub plugin: Option<String>,
 }
 
 impl Listed {
     pub fn name(&self) -> &str {
         self.squad.as_ref().map_or(&self.id, |s| s.name.as_str())
+    }
+
+    /// "Built in", "Your own", "From Changelog", ...
+    pub fn label(&self) -> String {
+        label_of(self.kind, self.plugin.as_deref())
     }
 }
 
@@ -637,28 +664,43 @@ pub fn load_all(config: &Path) -> Vec<Listed> {
     let mut out = Vec::new();
     for b in builtins() {
         out.push(match load(config, &b.id) {
-            Ok(None) => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(b), corrupt: None },
+            Ok(None) => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(b), corrupt: None, plugin: None },
             // An old file converted into exactly the built-in has gone.
-            Ok(Some(s)) if !path(config, &b.id).exists() => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(s), corrupt: None },
-            Ok(Some(s)) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: Some(s), corrupt: None },
-            Err(why) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: None, corrupt: Some(why) },
+            Ok(Some(s)) if !path(config, &b.id).exists() => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(s), corrupt: None, plugin: None },
+            Ok(Some(s)) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: Some(s), corrupt: None, plugin: None },
+            Err(why) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: None, corrupt: Some(why), plugin: None },
         });
     }
     let mut own: Vec<Listed> = own_ids(config)
         .into_iter()
         .map(|id| match load(config, &id) {
-            Ok(s) => Listed { id, kind: Kind::Own, squad: s, corrupt: None },
-            Err(why) => Listed { id, kind: Kind::Own, squad: None, corrupt: Some(why) },
+            Ok(s) => Listed { id, kind: Kind::Own, squad: s, corrupt: None, plugin: None },
+            Err(why) => Listed { id, kind: Kind::Own, squad: None, corrupt: Some(why), plugin: None },
         })
         .filter(|l| l.squad.is_some() || l.corrupt.is_some())
         .collect();
     own.sort_by(|a, b| a.name().to_lowercase().cmp(&b.name().to_lowercase()).then(a.id.cmp(&b.id)));
     out.extend(own);
+    // Then the plugins' squads, by plugin name, each plugin's by name.
+    for p in crate::squadplugin::installed(&crate::plugins::store_for(config)) {
+        let mut theirs: Vec<Squad> = p.squads;
+        theirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
+        out.extend(theirs.into_iter().map(|s| Listed { id: s.id.clone(), kind: Kind::Plugin, squad: Some(s), corrupt: None, plugin: Some(p.name.clone()) }));
+    }
     out
+}
+
+/// A plugin's squad by its id (`plugin:<plugin>/<id>`), when that plugin is installed.
+fn from_plugin(config: &Path, id: &str) -> Option<Squad> {
+    let (plugin, _) = crate::squadplugin::split(id)?;
+    crate::squadplugin::installed(&crate::plugins::store_for(config)).into_iter().find(|p| p.plugin == plugin)?.squads.into_iter().find(|s| s.id == id)
 }
 
 /// The squad with this id as the user has it now, if it is there and readable.
 pub fn get(config: &Path, id: &str) -> Option<Squad> {
+    if crate::squadplugin::is_plugin(id) {
+        return from_plugin(config, id);
+    }
     match load(config, id) {
         Ok(Some(s)) => Some(s),
         Ok(None) => builtin(id),
@@ -675,6 +717,9 @@ pub fn name_of(config: &Path, id: &str) -> String {
 /// ones (`RETIRED_KEYS`, dropped). A file that can't be read is never written over. A built-in saved exactly as
 /// platoon has it needs no file: the file is put aside as `<id>.json.bak`, as restoring it does.
 pub fn save(config: &Path, s: &Squad) -> io::Result<()> {
+    if crate::squadplugin::is_plugin(&s.id) {
+        return Err(io::Error::other(format!("{} comes with a plugin, so it can't be changed here; copy it to change it", s.name)));
+    }
     let p = path(config, &s.id);
     let _lock = lock(&lock_path(config))?;
     let mut keep = Map::new();
@@ -705,6 +750,9 @@ pub fn save(config: &Path, s: &Squad) -> io::Result<()> {
 /// Delete one of the user's own squads, or put a built-in back as platoon has it: either way the file is put aside
 /// as `<id>.json.bak` (one copy, replaced by the next), so a mistake can still be undone by hand.
 pub fn remove(config: &Path, id: &str) -> io::Result<()> {
+    if crate::squadplugin::is_plugin(id) {
+        return Err(io::Error::other("it comes with a plugin: the Plugins tab (4) takes the plugin off"));
+    }
     let p = path(config, id);
     let _lock = lock(&lock_path(config))?;
     match fs::rename(&p, p.with_extension("json.bak")) {
@@ -742,9 +790,17 @@ pub fn new_id(config: &Path, name: &str, taken: &[String]) -> String {
     (2..).map(|n| format!("{base}-{n}")).find(|id| !used(id)).unwrap_or(base)
 }
 
-/// Things that change what the list shows: the squads folder's files, as they are now.
+/// Things that change what the list shows: the squads folder's files, as they are now, and the installed plugins.
 pub fn stamp(config: &Path) -> Vec<(String, Option<(std::time::SystemTime, u64)>)> {
-    stamp_of(&dir(config))
+    let mut out = stamp_of(&dir(config));
+    out.push(plugins_stamp(config));
+    out
+}
+
+/// The installed plugins, as a line of a stamp: when installing or removing one changes what the lists show.
+pub(crate) fn plugins_stamp(config: &Path) -> (String, Option<(std::time::SystemTime, u64)>) {
+    let f = crate::plugins::fingerprint(&crate::plugins::store_for(config));
+    ("<plugins>".into(), f.and_then(|(len, at)| Some((at?, len))))
 }
 
 /// The `.json` files of a folder, with when each was changed and its size.

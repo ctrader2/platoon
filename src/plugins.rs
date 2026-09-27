@@ -3,10 +3,13 @@
 //! it, its version, the oldest platoon it works with, and what it adds) and the files it names.
 //!
 //! What a plugin can add is a list of kinds (`KINDS`), each a key of `plugin.json` naming files: `"themes":
-//! ["themes/Harbor Night"]`, and platoon's code editor, `"editor": {"downloads": "downloads.json", "config": [...]}`
-//! (its download table and the editor's settings files; `editorplugin.rs`). Later kinds (skills, squads and agents)
-//! are new rows of `KINDS` and a loader of their own, and `plugin.json` keys this platoon doesn't know are left alone
-//! (a plugin made for a newer platoon says so with `platoon`).
+//! ["themes/Harbor Night"]`; platoon's code editor, `"editor": {"downloads": "downloads.json", "config": [...]}`
+//! (its download table and the editor's settings files; `editorplugin.rs`); Claude Code skills, `"skills":
+//! ["skills/<name>"]` (written into Claude Code's skills folder on install; `skillplugin.rs`); and squads and agents,
+//! `"squads": ["squads/<id>.json"]`, `"agents": ["agents/<id>.json"]` (shown on the Squads tab; `squadplugin.rs`).
+//! Skills and agents are instructions Claude follows with the user's permissions: installing a plugin that has any
+//! shows them to be read first (`pluginreview.rs`). `plugin.json` keys this platoon doesn't know are left alone (a
+//! plugin made for a newer platoon says so with `platoon`).
 //!
 //! On this computer:
 //!
@@ -82,10 +85,13 @@ pub struct KindInfo {
     pub list: bool,
 }
 
-/// What plugins can add in this version. Skills, squads and agents come later, as rows here.
+/// What plugins can add in this version.
 pub const KINDS: &[KindInfo] = &[
     KindInfo { key: "themes", one: "theme", many: "themes", list: true },
     KindInfo { key: crate::editorplugin::KIND, one: "the code editor", many: "the code editor", list: false },
+    KindInfo { key: crate::skillplugin::KIND, one: "skill", many: "skills", list: true },
+    KindInfo { key: crate::squadplugin::SQUADS, one: "squad", many: "squads", list: true },
+    KindInfo { key: crate::squadplugin::AGENTS, one: "agent", many: "agents", list: true },
 ];
 
 /// The keys of `plugin.json` that aren't kinds.
@@ -143,6 +149,12 @@ impl Manifest {
             })
             .collect();
         if parts.is_empty() { "nothing".into() } else { parts.join(", ") }
+    }
+
+    /// It adds instructions Claude follows with the user's permissions (skills, squads or agents): installing it, or
+    /// an update that changes them, shows them to be read first.
+    pub fn has_instructions(&self) -> bool {
+        [crate::skillplugin::KIND, crate::squadplugin::SQUADS, crate::squadplugin::AGENTS].iter().any(|k| !self.files(k).is_empty())
     }
 
     /// Why this platoon can't use it, if it can't: it needs a newer one.
@@ -360,6 +372,10 @@ pub struct CheckReport {
     pub themes: Vec<String>,
     /// What installing the code editor it adds downloads on this computer, in bytes.
     pub download_bytes: Option<u64>,
+    /// Its skills, squads and agents that passed (squads and agents by the short ids of their files).
+    pub skills: Vec<crate::skillplugin::Skill>,
+    pub squads: Vec<crate::squadfile::Squad>,
+    pub agents: Vec<crate::agentfile::Agent>,
     pub files: usize,
     pub bytes: u64,
 }
@@ -400,14 +416,21 @@ pub fn check(dir: &Path) -> CheckReport {
         r.problems.push(format!("{} can't be used here: {why}", m.name));
     }
     if m.adds.is_empty() {
-        r.problems.push("it adds nothing: list its theme files under \"themes\" in plugin.json (or the editor's files under \"editor\")".into());
+        r.problems.push("it adds nothing: list what it adds in plugin.json (\"themes\", \"skills\", \"squads\", \"agents\", or the editor's files under \"editor\")".into());
     }
+    let rel: Vec<(String, PathBuf, u64)> = files.iter().map(|f| (f.rel.clone(), f.path.clone(), f.len)).collect();
     if let Some(spec) = &m.editor {
-        let rel: Vec<(String, PathBuf, u64)> = files.iter().map(|f| (f.rel.clone(), f.path.clone(), f.len)).collect();
         let (problems, bytes) = crate::editorplugin::check_spec(spec, &rel, safe_rel);
         r.problems.extend(problems);
         r.download_bytes = bytes;
     }
+    let (problems, skills) = crate::skillplugin::check(&m.id, m.files(crate::skillplugin::KIND), &rel, safe_rel);
+    r.problems.extend(problems);
+    r.skills = skills;
+    let (problems, squads, agents) = crate::squadplugin::check(m.files(crate::squadplugin::SQUADS), m.files(crate::squadplugin::AGENTS), &rel, safe_rel);
+    r.problems.extend(problems);
+    r.squads = squads;
+    r.agents = agents;
     for key in &m.unknown {
         r.notes.push(format!("\"{key}\" in plugin.json isn't something this platoon knows; it is left alone"));
     }
@@ -528,6 +551,8 @@ pub struct Installed {
     pub sha256: String,
     /// Seconds since the epoch.
     pub installed_at: u64,
+    /// The skills platoon wrote into Claude Code's skills folder for it (and the changed copies it kept).
+    pub skills: Vec<crate::skillplugin::Placed>,
 }
 
 impl Installed {
@@ -559,6 +584,9 @@ impl Outcome {
 #[derive(Clone, Debug)]
 pub struct Store {
     pub dir: PathBuf,
+    /// Claude Code's config folder, where a plugin's skills are written (`<it>/skills/<name>`). None: a plugin with
+    /// skills can't be installed (a test's store that isn't given one never reaches the user's).
+    pub claude: Option<PathBuf>,
     /// Make the record fail to write after the files are in place (tests of a failed install).
     #[cfg(test)]
     pub fail_record: bool,
@@ -591,14 +619,21 @@ impl Store {
     pub fn new(dir: PathBuf) -> Store {
         Store {
             dir,
+            claude: None,
             #[cfg(test)]
             fail_record: false,
         }
     }
 
-    /// `<data>/plugins`: `PLATOON_DATA_DIR`, else the platform's data folder (as the code editor).
+    /// The same, writing skills into Claude Code's config folder `claude`.
+    pub fn with_claude(dir: PathBuf, claude: PathBuf) -> Store {
+        Store { claude: Some(claude), ..Store::new(dir) }
+    }
+
+    /// `<data>/plugins`: `PLATOON_DATA_DIR`, else the platform's data folder (as the code editor), with Claude Code's
+    /// config folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`) for skills.
     pub fn from_env() -> Store {
-        Store::new(crate::editor_install::data_dir().join("plugins"))
+        Store::with_claude(crate::editor_install::data_dir().join("plugins"), crate::claude::claude_root())
     }
 
     pub fn record_path(&self) -> PathBuf {
@@ -677,7 +712,12 @@ impl Store {
                     Some("bundled") => Origin::Bundled { version: s("platoon") },
                     _ => Origin::Catalog { source: s("source"), rf: s("ref"), commit: s("commit") },
                 };
-                Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0) })
+                let skills = v
+                    .get("skills")
+                    .and_then(Value::as_object)
+                    .map(|o| o.iter().filter_map(|(name, p)| crate::skillplugin::Placed::from_json(name, p)).collect())
+                    .unwrap_or_default();
+                Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0), skills })
             })
             .collect();
         out.sort_by(|a, b| a.manifest.name.to_lowercase().cmp(&b.manifest.name.to_lowercase()).then(a.id().cmp(b.id())));
@@ -692,6 +732,15 @@ impl Store {
     /// copied into `.tmp`, the copy checked against the original, moved into place, and only then recorded. Any
     /// failure puts back what was there before and leaves nothing that looks installed.
     pub fn install(&self, src: &Path, origin: Origin) -> Result<Outcome, String> {
+        self.install_noting(src, origin).map(|(o, _)| o)
+    }
+
+    /// `install`, and what is worth saying besides (a skill the user changed that was kept as it is).
+    ///
+    /// A plugin's skills are written into Claude Code's skills folder once its files are in place, before it is
+    /// recorded; a skill's name taken by something platoon didn't write for this plugin refuses the whole install
+    /// before anything is touched (`skillplugin::plan`).
+    pub fn install_noting(&self, src: &Path, origin: Origin) -> Result<(Outcome, Vec<String>), String> {
         let report = check(src);
         let Some(m) = report.manifest.clone().filter(|_| report.problems.is_empty()) else {
             let what = report.manifest.as_ref().map_or_else(|| src.display().to_string(), |m| m.name.clone());
@@ -710,9 +759,21 @@ impl Store {
         let before = self.get(&m.id);
         if let Some(b) = &before {
             if b.sha256 == hash && b.origin == origin {
-                return Ok(Outcome::Same(b.clone()));
+                return Ok((Outcome::Same(b.clone()), Vec::new()));
             }
         }
+        // Where its skills go, worked out before anything is touched.
+        let old_skills = before.as_ref().map(|b| b.skills.clone()).unwrap_or_default();
+        let others: Vec<(String, Vec<crate::skillplugin::Placed>)> = self.installed().into_iter().filter(|p| p.id() != m.id).map(|p| (p.manifest.name.clone(), p.skills)).collect();
+        let skills_plan = if report.skills.is_empty() && old_skills.is_empty() {
+            None
+        } else {
+            let Some(claude) = self.claude.clone() else {
+                return Err(format!("{} can't be installed: it has skills, and platoon doesn't know where Claude Code's folder is", m.name));
+            };
+            let plan = crate::skillplugin::plan(&claude, &report.skills, &old_skills, &others).map_err(|e| format!("{} can't be installed: {e}", m.name))?;
+            Some((claude, plan))
+        };
         // Whatever an interrupted install left half done goes; nothing in it was ever recorded.
         let _ = fs::remove_dir_all(self.tmp());
         fs::create_dir_all(self.tmp()).map_err(|e| format!("couldn't make {}: {e}", self.tmp().display()))?;
@@ -758,6 +819,20 @@ impl Store {
             put_back();
             return fail(format!("couldn't move {} into place: {e}", m.name));
         }
+        let mut notes = Vec::new();
+        let (placed, txn) = match &skills_plan {
+            None => (Vec::new(), None),
+            Some((claude, plan)) => match crate::skillplugin::apply(claude, plan, &dest) {
+                Ok((placed, txn)) => {
+                    notes.extend(plan.notes.clone());
+                    (placed, Some(txn))
+                }
+                Err(e) => {
+                    put_back();
+                    return fail(format!("{} couldn't be installed: {e}", m.name));
+                }
+            },
+        };
         let entry = match &origin {
             Origin::Catalog { source, rf, commit } => json!({"origin": "catalog", "source": source, "ref": rf, "commit": commit}),
             Origin::Folder { path } => json!({"origin": "folder", "path": path}),
@@ -768,34 +843,51 @@ impl Store {
         entry.insert("sha256".into(), json!(hash));
         entry.insert("files".into(), json!(files.len()));
         entry.insert("installed_at".into(), json!(now()));
+        if !placed.is_empty() {
+            let skills: Map<String, Value> = placed.iter().map(|p| (p.name.clone(), p.to_json())).collect();
+            entry.insert("skills".into(), Value::Object(skills));
+        }
         if !rec.get("plugins").is_some_and(Value::is_object) {
             rec.insert("plugins".into(), json!({}));
         }
         if let Some(plugins) = rec.get_mut("plugins").and_then(Value::as_object_mut) {
             // Keys a later platoon added to this plugin's record are kept.
             let mut merged = plugins.get(&m.id).and_then(Value::as_object).cloned().unwrap_or_default();
-            for key in ["origin", "source", "ref", "commit", "path", "platoon"] {
+            for key in ["origin", "source", "ref", "commit", "path", "platoon", "skills"] {
                 merged.remove(key);
             }
             merged.extend(entry);
             plugins.insert(m.id.clone(), Value::Object(merged));
         }
         if let Err(e) = self.write_record(&rec) {
+            if let Some(t) = txn {
+                t.rollback();
+            }
             put_back();
             return fail(e);
         }
+        if let Some(t) = txn {
+            t.commit();
+        }
         let _ = fs::remove_dir_all(self.tmp());
         let now = self.get(&m.id).ok_or_else(|| format!("{} was installed but can't be read back", m.name))?;
-        Ok(match before {
+        let outcome = match before {
             Some(b) => Outcome::Replaced { now, was: b.manifest.version },
             None => Outcome::New(now),
-        })
+        };
+        Ok((outcome, notes))
     }
 
     /// Take a plugin off: un-recorded first, then its folder goes. `None` when it wasn't installed.
     pub fn remove(&self, id: &str) -> Result<Option<Installed>, String> {
+        self.remove_noting(id).map(|(p, _)| p)
+    }
+
+    /// `remove`, and what is worth saying besides: its skills leave Claude Code's skills folder too, but one the user
+    /// changed is kept, and said.
+    pub fn remove_noting(&self, id: &str) -> Result<(Option<Installed>, Vec<String>), String> {
         if !valid_id(id) {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         let _lock = self.lock()?;
         let was = self.get(id);
@@ -803,7 +895,7 @@ impl Store {
         let listed = rec.get("plugins").and_then(Value::as_object).is_some_and(|p| p.contains_key(id));
         let dest = self.plugin_dir(id);
         if !listed && fs::symlink_metadata(&dest).is_err() {
-            return Ok(None);
+            return Ok((None, Vec::new()));
         }
         if listed {
             if let Some(plugins) = rec.get_mut("plugins").and_then(Value::as_object_mut) {
@@ -822,7 +914,8 @@ impl Store {
                 }
             }
         }
-        Ok(was)
+        let notes = was.as_ref().map(|p| crate::skillplugin::take_away(&p.skills)).unwrap_or_default();
+        Ok((was, notes))
     }
 }
 
@@ -1049,8 +1142,9 @@ pub fn read_catalog(dir: &Path) -> (Vec<Entry>, Vec<String>) {
 /// What `update` did for one plugin.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Updated {
-    /// Replaced with the catalog's: from this version to that.
-    Done { name: String, from: String, to: String },
+    /// Replaced with the catalog's: from this version to that (and what is worth saying besides: a skill the user
+    /// changed, kept as it is).
+    Done { name: String, from: String, to: String, notes: Vec<String> },
     UpToDate { name: String },
     /// Installed from a folder: add it again to update it.
     FromFolder { name: String },
@@ -1078,8 +1172,8 @@ pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updat
             continue;
         }
         let origin = Origin::Catalog { source: catalog.source.clone(), rf: catalog.rf.clone(), commit: catalog.commit.clone() };
-        match store.install(&e.dir, origin) {
-            Ok(o) => out.push(Updated::Done { name, from: p.manifest.version.clone(), to: o.plugin().manifest.version.clone() }),
+        match store.install_noting(&e.dir, origin) {
+            Ok((o, notes)) => out.push(Updated::Done { name, from: p.manifest.version.clone(), to: o.plugin().manifest.version.clone(), notes }),
             Err(why) => out.push(Updated::Failed { name, why }),
         }
     }
@@ -1131,6 +1225,42 @@ pub fn themes(store: &Store, taken: &[String]) -> Vec<PluginTheme> {
         }
     }
     out
+}
+
+/// What to do with a plugin once it is installed, in a sentence or two (its themes, squads and agents, skills).
+pub fn next_words(m: &Manifest) -> String {
+    let mut out: Vec<String> = Vec::new();
+    if !m.themes().is_empty() {
+        out.push("Pick a theme in the settings (s, then Theme).".into());
+    }
+    if !m.files(crate::squadplugin::SQUADS).is_empty() {
+        out.push("Its squads are on the Squads tab (3), and a ticket can be handed to them (a).".into());
+    } else if !m.files(crate::squadplugin::AGENTS).is_empty() {
+        out.push("Its agents are on the Squads tab (3), for your squads' steps.".into());
+    }
+    let skills: Vec<String> = m.files(crate::skillplugin::KIND).iter().map(|f| format!("/{}", f.trim_end_matches('/').rsplit('/').next().unwrap_or(f))).collect();
+    match skills.as_slice() {
+        [] => {}
+        [one] => out.push(format!("Its skill is in Claude Code's skills folder: type {one} in a new Claude session.")),
+        _ => out.push(format!("Its skills are in Claude Code's skills folder: {} in a new Claude session.", skills.join(", "))),
+    }
+    out.join(" ")
+}
+
+/// Where platoon keeps plugins, seen from its config folder: the store (as `Store::from_env`). In a unit test, beside
+/// the test's config folder (`<its parent>/data/plugins`), never the user's.
+pub fn store_for(config: &Path) -> Store {
+    #[cfg(test)]
+    {
+        // A test's config folder straight in the temp folder: its own folder, never a `data` shared by every test.
+        let base = config.parent().filter(|p| *p != std::env::temp_dir()).unwrap_or(config);
+        Store::with_claude(base.join("data/plugins"), base.join("claude"))
+    }
+    #[cfg(not(test))]
+    {
+        let _ = config;
+        Store::from_env()
+    }
 }
 
 /// What is needed to see that the installed plugins changed: `installed.json`'s size and time.
@@ -1226,11 +1356,11 @@ mod tests {
 
     #[test]
     fn a_manifest_parses_and_keeps_what_it_does_not_know_aside() {
-        let m = parse_manifest(&manifest_json(r#", "license": "MIT", "skills": ["skills/x"], "homepage": "somewhere""#)).unwrap();
+        let m = parse_manifest(&manifest_json(r#", "license": "MIT", "widgets": ["widgets/x"], "homepage": "somewhere""#)).unwrap();
         assert_eq!((m.id.as_str(), m.name.as_str(), m.version.as_str(), m.platoon.as_str()), ("sea-themes", "Sea themes", "1.2.0", "0.1.0"));
         assert_eq!(m.license.as_deref(), Some("MIT"));
         assert_eq!(m.themes(), ["themes/Deep"]);
-        assert_eq!(m.unknown, ["skills", "homepage"], "later kinds and other keys are left alone, not refused");
+        assert_eq!(m.unknown, ["widgets", "homepage"], "later kinds and other keys are left alone, not refused");
         assert_eq!(m.adds_words(), "1 theme");
         let m = parse_manifest(&manifest_json("")).unwrap();
         assert_eq!(m.license, None, "the license is optional");
@@ -1455,7 +1585,7 @@ mod tests {
         let cat2 = fetch(&s, &src).unwrap();
         assert_eq!(cat2.commit, newer);
         assert!(update_available(&s.get("dusk").unwrap(), &cat2));
-        assert_eq!(update(&s, &cat2, Some("dusk")), [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into() }]);
+        assert_eq!(update(&s, &cat2, Some("dusk")), [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into(), notes: Vec::new() }]);
         assert!(matches!(s.get("dusk").unwrap().origin, Origin::Catalog { commit: c, .. } if c == newer));
         commit_catalog(&repo, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)])]);
         let cat3 = fetch(&s, &src).unwrap();
@@ -1528,6 +1658,67 @@ mod tests {
         );
         s.remove("more").unwrap();
         assert_eq!(themes(&s, &taken).len(), 2);
+    }
+
+    #[test]
+    fn a_plugins_skills_go_into_claudes_folder_a_clash_is_refused_and_only_platoons_own_copies_are_taken_away() {
+        use crate::squadplugin::testing::plugin as full;
+        let base = tmp("skills-store");
+        let claude = base.join("claude");
+        let src = full(&base.join("src"), "changelog", "1.0.0");
+        let skill = claude.join("skills/changelog-entry");
+        // A store that doesn't know Claude's folder writes no skill anywhere.
+        assert!(store(&base).install(&src, folder(&src)).unwrap_err().contains("platoon doesn't know where Claude Code's folder is"));
+        let s = Store::with_claude(base.join("data/plugins"), claude.clone());
+        // The user's own skill of that name: refused, nothing installed, theirs untouched.
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(skill.join("SKILL.md"), "the user's own").unwrap();
+        let e = s.install(&src, folder(&src)).unwrap_err();
+        assert!(e.starts_with("changelog name can't be installed: Claude Code already has a skill called changelog-entry"), "{e}");
+        assert!(s.installed().is_empty() && !s.plugin_dir("changelog").exists());
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), "the user's own");
+        fs::remove_dir_all(&skill).unwrap();
+        // Free: written and recorded.
+        let (o, notes) = s.install_noting(&src, folder(&src)).unwrap();
+        assert!(matches!(o, Outcome::New(_)) && notes.is_empty());
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), fs::read_to_string(src.join("skills/changelog-entry/SKILL.md")).unwrap());
+        let p = s.get("changelog").unwrap();
+        assert_eq!(p.skills.len(), 1);
+        assert_eq!((p.skills[0].name.as_str(), p.skills[0].dir.as_path()), ("changelog-entry", skill.as_path()));
+        // A record that can't be written after the skill is in place: the skill goes again, the old version stays.
+        let text = fs::read_to_string(src.join(MANIFEST)).unwrap().replace("1.0.0", "1.1.0");
+        fs::write(src.join(MANIFEST), text).unwrap();
+        fs::write(src.join("skills/changelog-entry/SKILL.md"), crate::skillplugin::testing::skill_md("changelog-entry", "Write it better.")).unwrap();
+        let mut failing = s.clone();
+        failing.fail_record = true;
+        assert!(failing.install(&src, folder(&src)).is_err());
+        assert_eq!(s.get("changelog").unwrap().manifest.version, "1.0.0");
+        assert!(!fs::read_to_string(skill.join("SKILL.md")).unwrap().contains("better"), "the old copy is back");
+        // An update replaces the untouched copy.
+        let (o, _) = s.install_noting(&src, folder(&src)).unwrap();
+        assert!(matches!(o, Outcome::Replaced { .. }));
+        assert!(fs::read_to_string(skill.join("SKILL.md")).unwrap().contains("better"));
+        // The user changes it: the next update keeps theirs and says so; removing keeps it and says so.
+        fs::write(skill.join("SKILL.md"), "changed by the user").unwrap();
+        let text = fs::read_to_string(src.join(MANIFEST)).unwrap().replace("1.1.0", "1.2.0");
+        fs::write(src.join(MANIFEST), text).unwrap();
+        let (_, notes) = s.install_noting(&src, folder(&src)).unwrap();
+        assert!(notes.iter().any(|n| n.contains("Your changed copy of the skill changelog-entry is kept")), "{notes:?}");
+        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), "changed by the user");
+        let (was, notes) = s.remove_noting("changelog").unwrap();
+        assert!(was.is_some() && notes[0].contains("was changed after it was installed, so it is kept"), "{notes:?}");
+        assert!(skill.join("SKILL.md").exists());
+        // Untouched: removing the plugin takes it away, and nothing else of Claude's folder.
+        fs::remove_dir_all(&skill).unwrap();
+        fs::create_dir_all(claude.join("skills/someone-elses")).unwrap();
+        fs::write(claude.join("skills/someone-elses/SKILL.md"), "x").unwrap();
+        s.install(&src, folder(&src)).unwrap();
+        assert!(skill.exists());
+        let (_, notes) = s.remove_noting("changelog").unwrap();
+        assert!(notes.is_empty() && !skill.exists(), "{notes:?}");
+        assert!(claude.join("skills/someone-elses/SKILL.md").exists());
+        let left: Vec<String> = fs::read_dir(claude.join("skills")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(left, ["someone-elses"], "no staging or old copies left behind");
     }
 
     #[test]

@@ -1081,6 +1081,17 @@ impl Tickets {
         Ok(name)
     }
 
+    /// Keep a copy of the squad a ticket waits in the line for, with its agents, beside the ticket (`queued_crew_file`):
+    /// used only if the squad or one of its agents comes with a plugin that is removed before the ticket starts.
+    pub fn save_queued_crew(&self, number: u32, text: &str) -> io::Result<()> {
+        write_atomic(&bodies_dir(&self.config, &self.project).join(queued_crew_file(number)), text)
+    }
+
+    /// That copy's text, if there is one.
+    pub fn queued_crew(&self, number: u32) -> Option<String> {
+        fs::read_to_string(bodies_dir(&self.config, &self.project).join(queued_crew_file(number))).ok()
+    }
+
     /// The text of a leader's snapshot, if it has one and it can be read.
     pub fn snapshot(&self, leader: &Leader) -> Option<String> {
         let name = leader.snapshot.as_deref()?;
@@ -1146,6 +1157,11 @@ pub fn work_dir(config: &Path, project: &str, number: u32) -> PathBuf {
 }
 
 /// The name of the file a squad's result for ticket `number` is kept in, beside the bodies.
+/// The copy of the squad a ticket waits in the line for: `NN-queued-crew.json`.
+pub fn queued_crew_file(number: u32) -> String {
+    format!("{number:02}-queued-crew.json")
+}
+
 pub fn result_file(number: u32) -> String {
     format!("{number:02}-result.md")
 }

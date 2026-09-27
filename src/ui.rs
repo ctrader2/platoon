@@ -206,6 +206,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::SquadPick => draw_squad_pick(f, app, inner),
         Mode::SquadChoice => squads_view::draw_squad_choice(f, app, inner),
         Mode::SquadText => squads_view::draw_squad_text(f, app, inner),
+        Mode::PluginReview => plugins_view::draw_plugin_review(f, app, inner),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, inner),
         _ => {}
@@ -3239,13 +3240,21 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "Everything it downloaded goes with it: platoon's editor folder (Neovim, its tools and plugins) and the font platoon installed. Your own Neovim and its settings are not touched. v still opens your other editors; installing the plugin again brings it back.".to_string(),
             "remove",
         ),
-        Confirm::RemovePlugin { name, adds, in_use, .. } => (
+        Confirm::RemovePlugin { name, adds, in_use, extra, .. } => (
             "remove plugin",
             format!("Remove {name}?"),
-            if *in_use {
-                format!("What it adds ({adds}) goes with it. You are using one of its themes: platoon goes back to its default theme. Installing the plugin again brings it back.")
-            } else {
-                format!("What it adds ({adds}) goes with it. Installing it again brings it back.")
+            {
+                let mut says = if *in_use {
+                    format!("What it adds ({adds}) goes with it. You are using one of its themes: platoon goes back to its default theme.")
+                } else {
+                    format!("What it adds ({adds}) goes with it.")
+                };
+                if !extra.is_empty() {
+                    says.push(' ');
+                    says.push_str(extra);
+                }
+                says.push_str(" Installing it again brings it back.");
+                says
             },
             "remove",
         ),
@@ -3416,6 +3425,11 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
                 format!("Needs fixing on the Squads tab first. {}", s.can_do)
             } else {
                 s.can_do.clone()
+            };
+            // A plugin's squad says which plugin it comes with.
+            let text = match app.squad_list().iter().find(|l| l.id == s.id).and_then(|l| l.plugin.as_ref()) {
+                Some(p) => format!("From {p}. {text}"),
+                None => text,
             };
             wrap(&text, inner_w.saturating_sub(2))
         })

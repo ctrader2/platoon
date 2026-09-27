@@ -1,7 +1,8 @@
 //! Plugins end to end with the real binary: the Plugins tab (`4`) drawn from a catalog fetched with git from a temp
 //! repository (`PLATOON_PLUGIN_SOURCE`, never the network), installing one with the footer line, the settings'
-//! Plugins tab removing it, and `platoon plugin list/add/remove/check`. Every folder is a temp one (the data folder
-//! too: `PLATOON_DATA_DIR`).
+//! Plugins tab removing it, and `platoon plugin list/add/remove/check`; a plugin with a skill, a squad and agents read
+//! before it is installed, its squad on the Squads tab, and `platoon plugin show/add --yes/remove`. Every folder is a
+//! temp one (the data folder and Claude's folder too: `PLATOON_DATA_DIR`, `CLAUDE_CONFIG_DIR`).
 
 mod common;
 use common::*;
@@ -44,6 +45,36 @@ fn plugin(at: &Path, id: &str, name: &str) -> PathBuf {
     dir
 }
 
+const READER: &str = "You are the change-reader. Read the commits since the last release and list what a user would notice. Change nothing.";
+
+/// A plugin folder `<at>/changelog-kit`: the skill changelog-kit-entry, the squad Release notes (its two agents, then
+/// the built-in editor) and the agents change-reader and changelog-writer.
+fn instructions_plugin(at: &Path) -> PathBuf {
+    let dir = at.join("changelog-kit");
+    for d in ["skills/changelog-kit-entry", "squads", "agents"] {
+        fs::create_dir_all(dir.join(d)).unwrap();
+    }
+    fs::write(
+        dir.join("skills/changelog-kit-entry/SKILL.md"),
+        "---\nname: changelog-kit-entry\ndescription: Write a changelog entry for the changes on this branch.\n---\n\n# Changelog entry\n\nRead the commits, then write one plain line per change a user would notice.\n",
+    )
+    .unwrap();
+    let reader = json!({"name": "change-reader", "model": "sonnet", "can_change_files": false, "can_run_commands": true, "can_use_web": false, "guidance": READER});
+    let writer = json!({"name": "changelog-writer", "model": "sonnet", "can_change_files": true, "can_run_commands": false, "can_use_web": false, "skills": ["changelog-kit-entry"], "guidance": "You are the changelog-writer. Write the entry at the top of CHANGELOG.md."});
+    fs::write(dir.join("agents/change-reader.json"), reader.to_string()).unwrap();
+    fs::write(dir.join("agents/changelog-writer.json"), writer.to_string()).unwrap();
+    let squad = json!({"name": "Release notes", "can_do": "Writes the changelog entry for a release.", "workflow": [
+        {"agent": "change-reader", "does": "Lists what changed."},
+        {"agent": "changelog-writer", "does": "Writes the entry."},
+        {"agent": "editor", "does": "Checks the entry.", "back_to": 2, "times": 1}
+    ]});
+    fs::write(dir.join("squads/release-notes.json"), squad.to_string()).unwrap();
+    let m = json!({"id": "changelog-kit", "name": "Changelog kit", "description": "A squad and a skill for changelogs.", "version": "1.0.0", "author": "Someone", "license": "MIT", "platoon": "0.1.0",
+        "skills": ["skills/changelog-kit-entry"], "squads": ["squads/release-notes.json"], "agents": ["agents/change-reader.json", "agents/changelog-writer.json"]});
+    fs::write(dir.join("plugin.json"), serde_json::to_string_pretty(&m).unwrap()).unwrap();
+    dir
+}
+
 struct Lab {
     base: PathBuf,
     claude: PathBuf,
@@ -62,7 +93,8 @@ impl Lab {
         fs::create_dir_all(repo.join("plugins")).unwrap();
         fs::write(repo.join("README.md"), "code lives here\n").unwrap();
         plugin(&repo.join("plugins"), "harbor", "Harbor themes");
-        fs::write(repo.join("plugins/index.json"), json!({"plugins": [{"id": "harbor", "version": "1.0.0"}]}).to_string()).unwrap();
+        instructions_plugin(&repo.join("plugins"));
+        fs::write(repo.join("plugins/index.json"), json!({"plugins": [{"id": "harbor", "version": "1.0.0"}, {"id": "changelog-kit", "version": "1.0.0"}]}).to_string()).unwrap();
         git(&repo, &["init", "-q"]);
         git(&repo, &["add", "-A"]);
         git(&repo, &["commit", "-q", "-m", "catalog"]);
@@ -170,7 +202,8 @@ fn the_command_line_lists_adds_removes_and_checks_plugins() {
     let lab = Lab::new("plug-cli");
     let (code, out, err) = lab.cli(&["plugin", "list"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains(&format!("In the catalog (commit {}):", &lab.commit[..7])) && out.contains("harbor  1.0.0    Harbor themes (1 theme)"), "{out}");
+    assert!(out.contains(&format!("In the catalog (commit {}):", &lab.commit[..7])) && out.contains("harbor         1.0.0    Harbor themes (1 theme)"), "{out}");
+    assert!(out.contains("changelog-kit  1.0.0    Changelog kit (1 skill, 1 squad, 2 agents)"), "{out}");
     assert!(out.contains("Installed:\n  none"), "{out}");
     let (code, out, err) = lab.cli(&["plugin", "add", "harbor"]);
     assert_eq!(code, 0, "{err}");
@@ -240,4 +273,78 @@ fn the_editor_plugin_shows_on_the_tab_and_in_the_list_with_what_it_downloads() {
     let (code, out, _) = lab.cli(&["plugin", "check", &s(&Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor"))]);
     assert!(code == 0 && out.contains("adds: the code editor") && out.contains("Looks good"), "{out}");
     assert!(!lab.base.join("fonts").exists());
+}
+
+#[test]
+fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_its_squad_is_on_the_squads_tab() {
+    let lab = Lab::new("plug-review-term");
+    let mut env = lab.env();
+    env.push(("NO_COLOR", String::new()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 34, 120);
+    t.wait_for_all(&["make the shop", "4 Plugins"]);
+    t.send(b"4");
+    t.wait_for_all(&["Harbor themes", "Changelog kit"]);
+    t.send(b"\x1b[B");
+    t.wait_for_all(&["enter read and install", "Enter shows each skill, squad and agent it adds"]);
+    // Enter: each thing it adds, with what it may do.
+    t.send(b"\r");
+    t.wait_for_all(&["Install Changelog kit?", "Read each one before you install it", "changelog-kit-entry", "Release notes", "change-reader", "Can run commands on this computer", "Can change files: edit and write them"]);
+    t.wait_for_all(&["enter read it", "y install", "n not now"]);
+    // The keys of its hints in the accent colour, like every other hint.
+    let (row, col) = t.find("y install").unwrap();
+    assert_eq!(t.fg_at(row, col), ACCENT, "the key of a hint is in the accent color");
+    let (row, col) = t.find("enter read it").unwrap();
+    assert_eq!(t.fg_at(row, col), ACCENT);
+    // The selected one is on the raised color with the accent's marker.
+    let (row, col) = t.find("▎ Skill").unwrap();
+    assert_eq!(t.fg_at(row, col), ACCENT, "the marker of the selected item");
+    t.wait_bg(row, col + 2, SURFACE);
+    // Reading the reader in full, on the whole screen.
+    t.send(b"\x1b[B");
+    t.send(b"\x1b[B");
+    t.send(b"\r");
+    t.wait_for_all(&["Agent: change-reader · from Changelog kit", "Its system prompt", "Read the commits since the last release", "esc back to the list"]);
+    t.send(b"\x1b");
+    t.wait_gone("Its system prompt");
+    t.wait_for("y install");
+    t.send(b"y");
+    t.wait_for("Changelog kit is installed: 1 skill, 1 squad, 2 agents added.");
+    until("its skill in Claude's folder", || lab.claude.join("skills/changelog-kit-entry/SKILL.md").is_file());
+    assert!(lab.installed()["plugins"]["changelog-kit"]["skills"]["changelog-kit-entry"]["files"]["SKILL.md"].is_string(), "{}", lab.installed());
+    // Its squad on the Squads tab, labelled with the plugin's name.
+    t.send(b"3");
+    t.wait_for_all(&["Release notes", "From Changelog kit"]);
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+    assert!(!lab.config.join("squads").exists() && !lab.config.join("agents").exists(), "nothing of it written to the user's squads or agents");
+}
+
+#[test]
+fn the_command_line_shows_a_plugin_with_instructions_refuses_it_without_a_terminal_and_adds_it_with_yes() {
+    let lab = Lab::new("plug-cli-instructions");
+    let (code, out, err) = lab.cli(&["plugin", "show", "changelog-kit"]);
+    assert_eq!(code, 0, "{err}");
+    for want in ["Changelog kit 1.0.0 by Someone, license MIT", "==== Skill: changelog-kit-entry ====", "Read the commits, then write one plain line", "==== Squad: Release notes ====", "==== Agent: change-reader ====", READER, "- Can run commands on this computer"] {
+        assert!(out.contains(want), "{want}: {out}");
+    }
+    // No terminal (stdin is not one): refused, nothing installed.
+    let (code, out, err) = lab.cli(&["plugin", "add", "changelog-kit"]);
+    assert_eq!(code, 1);
+    assert!(out.contains("Changelog kit 1.0.0 adds instructions Claude follows with your permissions:") && out.contains("  Agent change-reader: Read the commits since the last release"), "{out}");
+    assert!(err.contains("there is no terminal here to ask in") && err.contains("platoon plugin add changelog-kit --yes"), "{err}");
+    assert!(lab.installed()["plugins"].get("changelog-kit").is_none());
+    assert!(!lab.claude.join("skills/changelog-kit-entry").exists());
+    // --yes: installed, the skill written.
+    let (code, out, err) = lab.cli(&["plugin", "add", "changelog-kit", "--yes"]);
+    assert_eq!(code, 0, "{err}");
+    assert!(out.contains("Installed Changelog kit 1.0.0 (1 skill, 1 squad, 2 agents).") && out.contains("type /changelog-kit-entry in a new Claude session"), "{out}");
+    assert!(lab.claude.join("skills/changelog-kit-entry/SKILL.md").is_file());
+    // Its squad is listed for the /to-tickets skill with the others.
+    let (code, out, _) = lab.cli(&["squads", "--kinds"]);
+    assert!(code == 0 && out.contains("Release notes"), "{out}");
+    // Removing it takes its untouched skill away.
+    let (code, out, _) = lab.cli(&["plugin", "remove", "changelog-kit"]);
+    assert!(code == 0 && out.starts_with("Removed Changelog kit (1 skill, 1 squad, 2 agents no longer offered)."), "{out}");
+    assert!(!lab.claude.join("skills/changelog-kit-entry").exists());
+    assert!(lab.claude.join("skills").read_dir().unwrap().next().is_none(), "nothing left in Claude's skills folder");
 }

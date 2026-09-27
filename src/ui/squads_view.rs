@@ -22,7 +22,17 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
             _ => "",
         }
     };
+    let plugin = kind == Some(Kind::Plugin) && !draft;
     match sqt.focus {
+        SqFocus::Detail if plugin => {
+            match (agents, app.arow(), sqt.drow()) {
+                (true, Some(ARow::UsedIn(_)), _) => out.push(("enter", "open the squad", None)),
+                (false, _, Some(DRow::Step(_) | DRow::StepAgent(_))) => out.push(("g", "go to the agent", None)),
+                _ => {}
+            }
+            out.push(("c", "copy to change", None));
+            out.push(("esc", "back to the list", None));
+        }
         SqFocus::List => {
             if agents && sqt.new_agent_selected() {
                 out.push(("enter", "new agent", None));
@@ -80,6 +90,11 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'static>> {
     out
 }
 
+/// A squad's label over its details: a plugin's says it is read only, and how to change one.
+fn read_only_label(l: &squadfile::Listed) -> String {
+    if l.kind == Kind::Plugin { format!("{} · read only: c makes a copy of your own to change", l.label()) } else { l.label() }
+}
+
 fn count_words(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
@@ -96,7 +111,7 @@ fn entry_note(app: &App, i: usize, library: &[crate::agentfile::Agent]) -> (Stri
         None => (String::new(), "Can't be read".to_string(), true),
         Some(s) => {
             let broken = !squadfile::problems(s, library).is_empty();
-            let note = if broken { format!("{} · needs fixing", l.kind.label()) } else { l.kind.label().to_string() };
+            let note = if broken { format!("{} · needs fixing", l.label()) } else { l.label() };
             (count_words(s.agent_ids().len(), "agent"), note, broken)
         }
     }
@@ -241,14 +256,14 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
         ])
         .style(base)
     };
-    let mut group = None;
+    let mut group: Option<String> = None;
     for (i, l) in sqt.agents.iter().enumerate() {
-        if group != Some(l.kind) {
+        if group.as_deref() != Some(l.label().as_str()) {
             if group.is_some() {
                 lines.push((None, Line::raw("")));
             }
-            group = Some(l.kind);
-            lines.push((None, heading(l.kind.label())));
+            group = Some(l.label());
+            lines.push((None, heading(&l.label())));
         }
         let (right, warn) = match &l.agent {
             None => ("can't be read".to_string(), true),
@@ -383,7 +398,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     let known = sqt.known_agents();
     let focused = sqt.focus == SqFocus::Detail;
     let mut lines: Vec<(Option<usize>, Line<'static>)> = Vec::new();
-    let kind = if sqt.draft_selected() { "Draft, not saved: ctrl+s saves it, d discards it".to_string() } else { sqt.listed().map_or(String::new(), |l| l.kind.label().to_string()) };
+    let kind = if sqt.draft_selected() { "Draft, not saved: ctrl+s saves it, d discards it".to_string() } else { sqt.listed().map_or(String::new(), read_only_label) };
     lines.push((None, Line::styled(fit_end(&kind, w), Style::new().fg(if sqt.draft_selected() { t.warn } else { t.dim }))));
     if let Some(first) = squadfile::problems(s, &known).first() {
         for l in wrap(&format!("Can't be handed a ticket until this is fixed: {first}"), w) {
@@ -690,13 +705,15 @@ impl Rail<'_> {
         }
         let lead = " ".repeat(gutter);
         out.push((None, Line::from(vec![Span::raw("  "), Span::raw(lead.clone()), Span::styled("◉", Style::new().fg(t.subtext)), Span::styled(fit_end("  Done: the result goes on the ticket", text_w + 2), Style::new().fg(t.dim))])));
-        let add = self.row_of(DRow::AddStep);
-        let sel = self.sel == Some(DRow::AddStep);
-        let base = Style::new().bg(if sel { t.surface } else { t.bg });
-        out.push((
-            add,
-            Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(lead, base), Span::styled("+", base.fg(t.accent)), Span::styled("  Add a step", base.fg(t.accent))]).style(base),
-        ));
+        // A plugin's squad is read only: no "+ Add a step" (its rows don't have it).
+        if let Some(add) = self.row_of(DRow::AddStep) {
+            let sel = self.sel == Some(DRow::AddStep);
+            let base = Style::new().bg(if sel { t.surface } else { t.bg });
+            out.push((
+                Some(add),
+                Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(lead, base), Span::styled("+", base.fg(t.accent)), Span::styled("  Add a step", base.fg(t.accent))]).style(base),
+            ));
+        }
         out
     }
 }
@@ -729,7 +746,11 @@ fn draw_agent_detail(f: &mut Frame, app: &App, area: Rect) {
     let users = app.agent_users(&a.id);
     let mut lines: Vec<(Option<usize>, Line<'static>)> = Vec::new();
     let draft = sqt.agent_draft_selected();
-    let kind = if draft { "Draft, not saved: ctrl+s saves it, d discards it".to_string() } else { sqt.agent_listed().map_or(String::new(), |l| l.kind.label().to_string()) };
+    let kind = if draft {
+        "Draft, not saved: ctrl+s saves it, d discards it".to_string()
+    } else {
+        sqt.agent_listed().map_or(String::new(), |l| if l.kind == Kind::Plugin { format!("{} · read only: c makes a copy of your own to change", l.label()) } else { l.label() })
+    };
     lines.push((None, Line::styled(fit_end(&kind, w), Style::new().fg(if draft { t.warn } else { t.dim }))));
     if let Some(first) = crate::agentfile::problems(a).first() {
         for l in wrap(&format!("Squads can't use it until this is fixed: {first}"), w) {

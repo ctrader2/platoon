@@ -65,13 +65,15 @@ impl DRow {
     }
 }
 
-/// The rows of a squad's details.
+/// The rows of a squad's details (a plugin's squad, read only, has no "+ Add a step").
 pub fn detail_rows(s: &Squad) -> Vec<DRow> {
     let mut out = vec![DRow::Name, DRow::CanDo];
     for i in 0..s.workflow.len() {
         out.extend([DRow::StepAgent(i), DRow::Step(i)]);
     }
-    out.push(DRow::AddStep);
+    if !crate::squadplugin::is_plugin(&s.id) {
+        out.push(DRow::AddStep);
+    }
     out
 }
 
@@ -727,8 +729,29 @@ impl App {
 
     // ---- changing a squad -----------------------------------------------------------------------------------
 
-    /// The selected squad, to change: a copy of it, or None (said why) when its file can't be read.
+    /// The selected squad or agent (of the list showing) comes with a plugin, so it can't be changed here: said, and
+    /// true. Copying it (`c`) makes one of the user's own.
+    fn plugin_locked(&mut self) -> bool {
+        let (what, label) = if self.sqt.view == SqView::Agents {
+            ("agent", self.sqt.agent_listed().filter(|l| l.kind == Kind::Plugin).map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())))
+        } else {
+            ("squad", self.sqt.listed().filter(|l| l.kind == Kind::Plugin).map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())))
+        };
+        match label {
+            Some((name, plugin)) => {
+                self.notify(squadfile::read_only_words(what, &name, &plugin));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// The selected squad, to change: a copy of it, or None (said why) when its file can't be read or it comes with a
+    /// plugin.
     fn squad_to_change(&mut self) -> Option<Squad> {
+        if self.sqt.view == SqView::Squads && self.plugin_locked() {
+            return None;
+        }
         match self.sqt.squad() {
             Some(s) => Some(s.clone()),
             None => {
@@ -768,6 +791,9 @@ impl App {
         if self.sqt.view == SqView::Agents {
             return self.agent_enter();
         }
+        if self.plugin_locked() {
+            return;
+        }
         let Some(s) = self.sqt.squad().cloned() else { return };
         let Some(row) = self.sqt.drow() else { return };
         match row {
@@ -786,7 +812,11 @@ impl App {
             .known_agents()
             .iter()
             .map(|a| {
-                let new = if self.sqt.is_draft_agent(&a.id) { " · new, saved with the draft" } else { "" };
+                let new = if self.sqt.is_draft_agent(&a.id) {
+                    " · new, saved with the draft".to_string()
+                } else {
+                    self.sqt.agents.iter().find(|l| l.id == a.id).and_then(|l| l.plugin.as_ref()).map_or(String::new(), |p| format!(" · from {p}"))
+                };
                 (format!("{}{new}", agent_line(a)), a.id.clone())
             })
             .collect();
@@ -843,6 +873,9 @@ impl App {
     /// `m` on a step, or enter on its agent: which agent does it (or a new one).
     fn pick_step_agent(&mut self) {
         let Some(i) = self.sqt.drow().and_then(DRow::step) else { return };
+        if self.plugin_locked() {
+            return;
+        }
         let Some(s) = self.sqt.squad().cloned() else { return };
         let options = self.agent_options(true);
         self.open_choice(ChoiceFor::StepAgent(i), &format!("Which agent does step {}", i + 1), options, &s.workflow[i].agent);
@@ -873,6 +906,9 @@ impl App {
     /// `b` on a step: may it send the work back, and to which earlier step.
     fn pick_send_back(&mut self) {
         let Some(i) = self.sqt.drow().and_then(DRow::step) else { return };
+        if self.plugin_locked() {
+            return;
+        }
         let Some(s) = self.sqt.squad().cloned() else { return };
         if i == 0 {
             return self.notify("The first step has no step before it to send the work back to.");
@@ -887,8 +923,12 @@ impl App {
 
     // ---- changing an agent ----------------------------------------------------------------------------------
 
-    /// The selected agent, to change: a copy of it, or None (said why) when its file can't be read.
+    /// The selected agent, to change: a copy of it, or None (said why) when its file can't be read or it comes with a
+    /// plugin.
     fn agent_to_change(&mut self) -> Option<Agent> {
+        if self.sqt.view == SqView::Agents && self.plugin_locked() {
+            return None;
+        }
         match self.sqt.agent() {
             Some(a) => Some(a.clone()),
             None => {
@@ -927,6 +967,9 @@ impl App {
     fn agent_enter(&mut self) {
         let Some(a) = self.sqt.agent().cloned() else { return };
         let Some(row) = self.arow() else { return };
+        if !matches!(row, ARow::UsedIn(_)) && self.plugin_locked() {
+            return;
+        }
         match row {
             ARow::Name => self.open_squad_name(SquadName::AgentName, &a.name),
             ARow::Model => self.open_choice(ChoiceFor::AgentModel, &format!("Model for {}", a.name), model_options(), &a.model),
@@ -982,6 +1025,9 @@ impl App {
     /// and typing a name. Enter ticks or unticks one and the list stays open at `at`; esc closes it.
     fn pick_agent_tools(&mut self, mcp: bool, at: usize) {
         let Some(a) = self.sqt.agent().cloned() else { return };
+        if self.plugin_locked() {
+            return;
+        }
         let installed = self.sqt.installed();
         let (has, there) = if mcp { (&a.mcp, &installed.mcp) } else { (&a.skills, &installed.skills) };
         let mut names: Vec<String> = there.clone();
@@ -1356,6 +1402,9 @@ impl App {
     /// Enter on an agent's system prompt.
     fn edit_agent_prompt(&mut self) {
         let Some(a) = self.sqt.agent().cloned() else { return };
+        if self.plugin_locked() {
+            return;
+        }
         let draft = self.sqt.agent_draft_selected();
         let target = PromptOf::Agent { id: a.id.clone(), draft };
         self.edit_prompt(target, &format!("agent-{}{}", if draft { "draft-" } else { "" }, a.id), &a.guidance);
@@ -1618,13 +1667,20 @@ impl App {
             if self.sqt.new_agent_selected() {
                 return;
             }
-            let Some(a) = self.agent_to_change() else { return };
+            // A plugin's agent can be copied: the copy is the user's own, to change.
+            let Some(a) = self.sqt.agent().cloned() else {
+                let _ = self.agent_to_change();
+                return;
+            };
             return self.open_squad_name(SquadName::AgentCopy, &format!("{} copy", a.name));
         }
         if self.sqt.draft_selected() {
             return self.notify("Save the draft first (ctrl+s), then copy it.");
         }
-        let Some(s) = self.squad_to_change() else { return };
+        let Some(s) = self.sqt.squad().cloned() else {
+            let _ = self.squad_to_change();
+            return;
+        };
         self.open_squad_name(SquadName::Copy, &format!("{} copy", s.name));
     }
 
@@ -1646,6 +1702,10 @@ impl App {
             Kind::Modified => Mode::Confirm(Confirm::RestoreSquad { id: l.id, name }),
             Kind::BuiltIn => {
                 return self.notify(format!("{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."));
+            }
+            Kind::Plugin => {
+                let plugin = l.plugin.unwrap_or_default();
+                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (the Plugins tab, 4) takes it off. c makes a copy of your own."));
             }
         };
     }
@@ -1672,6 +1732,10 @@ impl App {
             Kind::Modified => Mode::Confirm(Confirm::RestoreAgent { id: l.id, name }),
             Kind::BuiltIn => {
                 return self.notify(format!("{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."));
+            }
+            Kind::Plugin => {
+                let plugin = l.plugin.unwrap_or_default();
+                return self.notify(format!("{name} comes with the plugin {plugin}: removing the plugin (the Plugins tab, 4) takes it off. c makes a copy of your own."));
             }
         };
     }

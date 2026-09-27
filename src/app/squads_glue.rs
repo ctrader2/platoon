@@ -9,7 +9,7 @@ use crate::ai::Request;
 use crate::instructions;
 use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, LeaderSetup, Place, Squad};
 use crate::tickets::{AgentNames, HandoverKind, Leader, State, Ticket, Tickets, Worktree};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::time::SystemTime;
 
@@ -116,6 +116,9 @@ pub struct SquadState {
     line_lock: Option<std::fs::File>,
     /// Tickets taken from the line and being started: they start without taking the screen (nobody asked just now).
     from_line: HashSet<(String, u32)>,
+    /// For a ticket taken from the line: the agents of plugins removed since it joined it, from the copy kept beside
+    /// it (`Tickets::queued_crew`), so it starts with the squad it waited for.
+    kept_agents: HashMap<(String, u32), Vec<crate::agentfile::Agent>>,
     /// In unit tests no session is ever started (the program would be the test binary): the leaders that would
     /// have been, by ticket number.
     #[cfg(test)]
@@ -139,6 +142,7 @@ impl SquadState {
             running: HashSet::new(),
             line_lock: None,
             from_line: HashSet::new(),
+            kept_agents: HashMap::new(),
             #[cfg(test)]
             launched: Vec::new(),
             #[cfg(test)]
@@ -449,11 +453,39 @@ impl App {
         }
         match self.with_tickets(project, |s| s.queue(number, &squad.id, anyway)) {
             Ok(()) => {
+                self.keep_queued_crew(project, number, &squad);
                 self.reread_tickets();
                 self.notify(crate::squadqueue::queued_notice(number, &squad.name, limit));
             }
             Err(e) => self.report_squad_error(e),
         }
+    }
+
+    /// A ticket joined the line for `squad`: when the squad or one of its agents comes with a plugin, a copy of them is
+    /// kept beside the ticket, so it still starts as it was handed over if the plugin is removed meanwhile (a leader
+    /// that has started keeps its snapshot anyway).
+    fn keep_queued_crew(&mut self, project: &str, number: u32, squad: &Squad) {
+        let crew = crate::squadfile::Crew::of(squad, &self.agent_library());
+        if !crate::squadplugin::is_plugin(&squad.id) && !crew.agents.iter().any(|a| crate::squadplugin::is_plugin(&a.id)) {
+            return;
+        }
+        let agents: Vec<serde_json::Value> = crew.agents.iter().map(|a| crate::agentfile::to_value(a, None)).collect();
+        let v = serde_json::json!({"version": 1, "squad": crate::squadfile::to_value(squad, None), "agents": agents});
+        let _ = Tickets::open(&self.config, project).save_queued_crew(number, &serde_json::to_string_pretty(&v).unwrap_or_default());
+    }
+
+    /// The copy of the squad (and its agents) ticket `number` waited in the line for, when it is of squad `id`.
+    fn queued_crew(&self, project: &str, number: u32, id: &str) -> Option<(Squad, Vec<crate::agentfile::Agent>)> {
+        let v: serde_json::Value = serde_json::from_str(&Tickets::open(&self.config, project).queued_crew(number)?).ok()?;
+        let sv = v.get("squad")?;
+        let squad = crate::squadfile::from_value(sv, sv.get("id")?.as_str()?).ok().filter(|s| s.id == id)?;
+        let agents = v
+            .get("agents")?
+            .as_array()?
+            .iter()
+            .filter_map(|a| crate::agentfile::from_value(a, a.get("id")?.as_str()?).ok())
+            .collect();
+        Some((squad, agents))
     }
 
     /// Take this window's turn at starting the tickets in the line: only the platoon that holds the line's lock does
@@ -497,12 +529,24 @@ impl App {
                 }
             };
             free -= 1;
-            let squad = crate::squadfile::get(&self.config, &q.squad);
-            let agents = crate::agentfile::all(&self.config);
+            // A plugin removed since it joined the line: its squad and agents as they were then, from the copy kept.
+            let kept = self.queued_crew(&project, number, &q.squad);
+            let squad = crate::squadfile::get(&self.config, &q.squad).or_else(|| kept.as_ref().filter(|_| crate::squadplugin::is_plugin(&q.squad)).map(|k| k.0.clone()));
+            let mut agents = crate::agentfile::all(&self.config);
+            let gone: Vec<crate::agentfile::Agent> = kept
+                .map(|k| k.1)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|a| crate::squadplugin::is_plugin(&a.id) && !agents.iter().any(|x| x.id == a.id))
+                .collect();
+            agents.extend(gone.iter().cloned());
             let broken = squad.as_ref().and_then(|s| crate::squadfile::problems(s, &agents).into_iter().next());
             match (squad, broken) {
                 (Some(squad), None) => {
                     self.sq.from_line.insert((project.clone(), number));
+                    if !gone.is_empty() {
+                        self.sq.kept_agents.insert((project.clone(), number), gone);
+                    }
                     self.make_worktrees(&project, number, squad);
                 }
                 (Some(squad), Some(first)) => {
@@ -566,8 +610,14 @@ impl App {
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &notice, notice.clone());
         }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
-        // moment, whatever is changed on the Squads tab meanwhile.
-        let agents = crate::agentfile::all(&self.config);
+        // moment, whatever is changed on the Squads tab meanwhile. (A ticket from the line whose plugin went while it
+        // waited: that plugin's agents as they were when it joined.)
+        let mut agents = crate::agentfile::all(&self.config);
+        for a in self.sq.kept_agents.remove(&(project.to_string(), number)).unwrap_or_default() {
+            if !agents.iter().any(|x| x.id == a.id) {
+                agents.push(a);
+            }
+        }
         if let Some(first) = crate::squadfile::problems(&squad, &agents).into_iter().next() {
             // Changed on the Squads tab while it was being handed over.
             let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);

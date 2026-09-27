@@ -53,7 +53,7 @@ pub(crate) mod worktree_glue;
 pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use plugins_glue::{PlugRow, PlugState, PluginsState, TOP_PLUGINS};
+pub use plugins_glue::{PlugRow, PlugState, PluginsState, Review, TOP_PLUGINS};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_SESSIONS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
@@ -293,8 +293,9 @@ pub enum Confirm {
     /// `download`: what installing it downloads besides (the code editor's parts), in bytes.
     InstallPlugin { id: String, name: String, adds: String, update: Option<(String, String)>, download: Option<u64> },
     /// Take a plugin off (`in_use`: the theme in use is one of its; `editor`: it is the code editor, whose downloads
-    /// go with it).
-    RemovePlugin { id: String, name: String, adds: String, in_use: bool, editor: bool },
+    /// go with it; `extra`: what else is worth knowing first: its skills, the tickets its squads have, the user's own
+    /// squads that use its agents).
+    RemovePlugin { id: String, name: String, adds: String, in_use: bool, editor: bool, extra: String },
 }
 
 #[derive(Clone)]
@@ -339,6 +340,9 @@ pub enum Mode {
     /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
     /// (`sqt.text`).
     SquadText,
+    /// What a plugin with skills, squads or agents adds, to read before it is installed or updated (`pl.review`):
+    /// each one with its permissions, and one of them read in full.
+    PluginReview,
 }
 
 pub struct Picker {
@@ -1363,6 +1367,8 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::RemovePlugin { id, .. })) => self.remove_plugin(&id),
             (Action::Cancel, Mode::Confirm(Confirm::RemovePlugin { .. })) => self.cancel_remove_plugin(),
             (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
+            (Action::Confirm, Mode::PluginReview) => self.accept_review(),
+            (Action::Cancel, Mode::PluginReview) => self.close_review(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -2457,6 +2463,7 @@ impl App {
             Mode::SquadPick => self.squad_pick_key(key),
             Mode::SquadChoice => self.squad_choice_key(key),
             Mode::SquadText => self.squad_text_key(key),
+            Mode::PluginReview => self.review_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2594,6 +2601,7 @@ impl App {
                     Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
                     Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
                     Mode::SquadText => {}
+                    Mode::PluginReview => self.wheel_review(up),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),

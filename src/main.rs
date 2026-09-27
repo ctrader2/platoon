@@ -29,6 +29,7 @@ mod notesrun;
 mod notesupdate;
 mod open;
 mod plugincli;
+mod pluginreview;
 mod plugins;
 mod procs;
 mod projects;
@@ -38,9 +39,11 @@ mod sessionhook;
 mod setup;
 mod scan;
 mod settings;
+mod skillplugin;
 mod smart;
 mod squads;
 mod squadfile;
+mod squadplugin;
 mod squadqueue;
 mod squadwork;
 mod summaries;
@@ -208,9 +211,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   ticket where --session <id>   the project a session belongs to (exit 1 when none)
   squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
   themes          list the color themes: the built-in ones, your own and those of plugins
-  plugin list | add <id or folder> | remove <id> | update [id] | check <folder>
+  plugin list | add <id or folder> [--yes] | remove <id> | update [id] [--yes] | show <id> | check <folder>
                   plugins from platoon's catalog: see what there is, install, take off,
-                  update; check a plugin folder you are making. `plugin add editor` installs
+                  update; read what a plugin's skills, squads and agents tell Claude (show);
+                  check a plugin folder you are making. `plugin add editor` installs
                   platoon's code editor (Neovim, its plugins, a font with icons)
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
@@ -283,7 +287,19 @@ fn plugin_cli(f: impl FnOnce(&plugincli::Ctx, &mut dyn io::Write, &mut dyn io::W
     let home = std::env::var("HOME").unwrap_or_default();
     let (store, source, dirs) = (plugins::Store::from_env(), plugins::Source::from_env(), editor_install::Dirs::from_env());
     let printer = editor_install::Printer::new(io::stdout().is_terminal());
-    let c = plugincli::Ctx { store: &store, source: &source, dirs: &dirs, home: &home, printer: &printer };
+    let config = archive::config_dir();
+    // A yes/no question in the terminal; none where there is no terminal to ask in.
+    let ask = |question: &str| -> Option<bool> {
+        if !io::stdin().is_terminal() {
+            return None;
+        }
+        print!("{question}");
+        let _ = io::Write::flush(&mut io::stdout());
+        let mut line = String::new();
+        io::stdin().read_line(&mut line).ok()?;
+        Some(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
+    };
+    let c = plugincli::Ctx { store: &store, source: &source, dirs: &dirs, home: &home, printer: &printer, config: &config, ask: &ask };
     f(&c, &mut out, &mut err)
 }
 
