@@ -12,10 +12,11 @@
 //! the ticket's state, and `platoon hook squad-gate` refuses anything other people would see (a push, a merge
 //! request) until the user has said to go ahead.
 //!
-//! A squad's definition (its members, models, switches, workflow and system prompts) is a `squadfile::Squad`: the
-//! built-in ones in code, the user's own and the built-ins they changed in files (`squadfile.rs`). Here a definition
-//! becomes what a leader session is started with (`Launch`): the `--agents` JSON, with the leader's prompt made of its
-//! guidance, the workflow written out by platoon, and the rules platoon keeps.
+//! A squad's definition (its leader, its workflow and the agents the steps name) is a `squadfile::Squad`, and its
+//! agents are `agentfile::Agent`s, shared by squads: the built-in ones in code, the user's own and the built-ins they
+//! changed in files. Here a squad with its agents (`squadfile::Crew`) becomes what a leader session is started with
+//! (`Launch`): the `--agents` JSON, with the leader's prompt made of its guidance, the workflow written out by
+//! platoon, and the rules platoon keeps; each agent is a member of the session, named `<squad id>-<agent id>`.
 
 use crate::instructions;
 use crate::tickets::{self, AgentNames, State, Ticket, Tickets, Worktree};
@@ -29,7 +30,8 @@ use std::{
 
 // ---- names and tools ----------------------------------------------------------------------------------------------
 
-pub use crate::squadfile::{Squad, LEADER_ROLE};
+pub use crate::squadfile::{Crew, Squad, LEADER_ROLE};
+use crate::agentfile::Agent;
 
 /// The name an agent of squad `id` has in the session (`--agents`, `--agent`, and what Claude Code shows in its lines
 /// and status bar): `coding-leader`, `coding-planner`, ... A leader started before the names carried the squad
@@ -48,7 +50,7 @@ pub const LEADER_TOOLS: &[&str] = &["Agent", "Read", "Grep", "Glob", "Bash"];
 
 /// A member's tools, from its three switches: it can always read and search; changing files adds `Edit` and
 /// `Write`, running commands `Bash`, using the web `WebSearch` and `WebFetch`.
-pub fn tools_for(m: &crate::squadfile::Member) -> Vec<&'static str> {
+pub fn tools_for(m: &Agent) -> Vec<&'static str> {
     let mut t = vec!["Read", "Grep", "Glob"];
     if m.files {
         t.extend(["Edit", "Write"]);
@@ -259,7 +261,7 @@ summaries of them, and say how recent a source is when that matters. When source
 answer, say so plainly instead of filling the gap. Don't change any files.";
 
 pub const RESEARCH_WRITER_GUIDANCE: &str = "\
-You are the writer. Write the report as report.md in the work folder (the folder the session started in), unless the \
+You are the report writer. Write the report as report.md in the work folder (the folder the session started in), unless the \
 leader says the ticket wants it somewhere else. Start with a short summary that answers the ticket; then each question \
 with its answer and its sources; then what is still unknown or uncertain. Use only what the researcher found: add \
 nothing of your own, and keep each claim next to its source. Plain Markdown, short paragraphs. Report the file's path \
@@ -295,17 +297,17 @@ covers. Follow the project's own layout and style for documentation. If the tick
 or for whom, say so instead of guessing. Don't change any files.";
 
 pub const DOCS_WRITER_GUIDANCE: &str = "\
-You are the writer. Write or update the Markdown files the outline names, in the ticket's folder (its worktree, when \
+You are the docs writer. Write or update the Markdown files the outline names, in the ticket's folder (its worktree, when \
 it has one) and nowhere else. Describe what the code actually does: read it rather than guess, and never invent \
 options, commands or behaviour. Keep to the outline and the project's style; if the outline turns out to be wrong, \
 stop and say why. Report the path of each file you wrote or changed. Don't change code, and don't commit unless the \
 leader asks you to.";
 
 pub const EDITOR_GUIDANCE: &str = "\
-You are the editor. Read the files the writer wrote or changed, against the ticket, the outline and the code they \
+You are the editor. Read the files the docs writer wrote or changed, against the ticket, the outline and the code they \
 describe. Check that every statement about the code is accurate (read the code to check it), that the text is clear \
 for the reader it is for, and that it follows the project's style. Answer either \"looks right\" with a sentence on \
-why, or \"send it back\" with the changes the writer should make, as a short list. Don't change any files.";
+why, or \"send it back\" with the changes the docs writer should make, as a short list. Don't change any files.";
 
 // ---- the built-in Summarize squad's words ---------------------------------------------------------------------------
 
@@ -346,15 +348,16 @@ fn times(n: u32) -> String {
 /// The part of the leader's prompt platoon writes from the squad: who it leads, and the workflow as a numbered list
 /// (who, what, and when a step may send the work back). It goes between the leader's own guidance and platoon's
 /// rules.
-pub fn workflow_text(s: &Squad, names: AgentNames) -> String {
+pub fn workflow_text(c: &Crew, names: AgentNames) -> String {
+    let s = &c.squad;
     let who = |m: &str| agent_name(&s.id, m, names);
-    let members: Vec<String> = s.members.iter().map(|m| who(&m.name)).collect();
+    let members: Vec<String> = c.agents.iter().map(|a| who(&a.id)).collect();
     let mut out = format!("You lead the {} squad. Your members are {}.\n\n", s.name, and_list(&members));
     out.push_str("The workflow. Hand each step to the member it names, in this order:\n");
     for (i, st) in s.workflow.iter().enumerate() {
-        out.push_str(&format!("{}. {}: {}", i + 1, who(&st.member), st.does.trim()));
+        out.push_str(&format!("{}. {}: {}", i + 1, who(&st.agent), st.does.trim()));
         if let Some(b) = st.back {
-            let to = s.workflow.get(b.to).map(|t| who(&t.member)).unwrap_or_default();
+            let to = s.workflow.get(b.to).map(|t| who(&t.agent)).unwrap_or_default();
             out.push_str(&format!(
                 " It may send the work back: then give its reasons to {to} and go on again from step {}. At most {}; after that, stop and tell the user what is still wrong.",
                 b.to + 1,
@@ -369,24 +372,25 @@ pub fn workflow_text(s: &Squad, names: AgentNames) -> String {
 
 /// The leader's whole system prompt: its guidance (for a leader resumed with the plain names it began with, calling
 /// the members by those names), the workflow, then the rules platoon keeps (which say where it works).
-pub fn leader_prompt(s: &Squad, names: AgentNames, place: Place) -> String {
+pub fn leader_prompt(c: &Crew, names: AgentNames, place: Place) -> String {
+    let s = &c.squad;
     let mut guidance = s.leader.guidance.trim().to_string();
     if names == AgentNames::Plain {
-        for role in s.members.iter().map(|m| m.name.as_str()).chain([LEADER_ROLE]) {
+        for role in c.agents.iter().map(|a| a.id.as_str()).chain([LEADER_ROLE]) {
             guidance = guidance.replace(&agent_name(&s.id, role, AgentNames::SquadRole), role);
         }
     }
-    format!("{guidance}\n\n{}\n\n{}", workflow_text(s, names), leader_fixed(place))
+    format!("{guidance}\n\n{}\n\n{}", workflow_text(c, names), leader_fixed(place))
 }
 
 /// A member's system prompt: its guidance, then the rules platoon keeps for members.
-pub fn member_prompt(m: &crate::squadfile::Member) -> String {
+pub fn member_prompt(m: &Agent) -> String {
     instructions::compose(&m.guidance, MEMBER_FIXED)
 }
 
-/// What the leader reads to pick a member: what it does in the workflow.
-pub fn member_description(s: &Squad, name: &str) -> String {
-    let steps: Vec<(usize, &str)> = s.workflow.iter().enumerate().filter(|(_, st)| st.member == name).map(|(i, st)| (i + 1, st.does.trim())).collect();
+/// What the leader reads to pick a member: what the agent does in this squad's workflow.
+pub fn member_description(s: &Squad, id: &str) -> String {
+    let steps: Vec<(usize, &str)> = s.workflow.iter().enumerate().filter(|(_, st)| st.agent == id).map(|(i, st)| (i + 1, st.does.trim())).collect();
     match steps.as_slice() {
         [] => format!("A member of the {} squad.", s.name),
         [(_, does)] => does.to_string(),
@@ -396,16 +400,17 @@ pub fn member_description(s: &Squad, name: &str) -> String {
 
 /// The `--agents` JSON for a squad: the leader and every member, named as `names` says (`coding-leader`,
 /// `coding-planner`, ...), each with its description, its system prompt, its model and the tools it may use.
-pub fn agents_json(s: &Squad, names: AgentNames, place: Place) -> String {
+pub fn agents_json(c: &Crew, names: AgentNames, place: Place) -> String {
+    let s = &c.squad;
     let mut agents = Map::new();
     agents.insert(
         agent_name(&s.id, LEADER_ROLE, names),
-        json!({"description": format!("Leads the {} squad through one ticket.", s.name), "prompt": leader_prompt(s, names, place), "model": s.leader.model, "tools": LEADER_TOOLS}),
+        json!({"description": format!("Leads the {} squad through one ticket.", s.name), "prompt": leader_prompt(c, names, place), "model": s.leader.model, "tools": LEADER_TOOLS}),
     );
-    for m in &s.members {
+    for m in &c.agents {
         agents.insert(
-            agent_name(&s.id, &m.name, names),
-            json!({"description": member_description(s, &m.name), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)}),
+            agent_name(&s.id, &m.id, names),
+            json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)}),
         );
     }
     Value::Object(agents).to_string()
@@ -430,11 +435,12 @@ pub struct Launch {
 }
 
 impl Launch {
-    pub fn of(s: &Squad, names: AgentNames, place: Place) -> Launch {
+    pub fn of(c: &Crew, names: AgentNames, place: Place) -> Launch {
+        let s = &c.squad;
         Launch {
             squad: s.id.clone(),
             name: s.name.clone(),
-            agents: agents_json(s, names, place),
+            agents: agents_json(c, names, place),
             agent: agent_name(&s.id, LEADER_ROLE, names),
             model: s.leader.model.clone(),
             work_folder: place.in_work_folder(),
@@ -1469,9 +1475,14 @@ mod tests {
         crate::squadfile::builtin("coding").unwrap()
     }
 
+    /// A squad with the built-in agents.
+    fn crew(s: &Squad) -> Crew {
+        Crew::of(s, &crate::agentfile::builtins())
+    }
+
     #[test]
     fn the_switches_give_the_tools() {
-        let mut m = crate::squadfile::new_member("reader");
+        let mut m = crate::agentfile::blank(Path::new("/nonexistent"), "reader", &[]);
         assert_eq!(tools_for(&m), ["Read", "Grep", "Glob"], "reading and searching, always");
         m.files = true;
         assert_eq!(tools_for(&m), ["Read", "Grep", "Glob", "Edit", "Write"]);
@@ -1486,7 +1497,7 @@ mod tests {
 
     #[test]
     fn the_agents_json_carries_every_member_with_its_model_its_tools_and_its_prompt() {
-        let v: Value = serde_json::from_str(&agents_json(&coding(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         let o = v.as_object().unwrap();
         let names = ["coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"];
         assert_eq!(o.keys().map(String::as_str).collect::<Vec<_>>(), names, "named after the squad, so Claude Code shows whose they are");
@@ -1509,19 +1520,25 @@ mod tests {
 
     #[test]
     fn a_changed_built_in_and_an_own_squad_give_their_own_agents() {
-        let mut s = coding();
-        s.members[1].guidance = "Build it in small commits.".into();
-        s.members[3].model = "sonnet".into();
-        s.members[0].web = true;
-        s.members.push(crate::squadfile::new_member("docs"));
-        let v: Value = serde_json::from_str(&agents_json(&s, AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let s = coding();
+        let mut agents = crate::agentfile::builtins();
+        let mut change = |id: &str, f: &dyn Fn(&mut Agent)| f(agents.iter_mut().find(|a| a.id == id).unwrap());
+        change("builder", &|a| a.guidance = "Build it in small commits.".into());
+        change("verifier", &|a| a.model = "sonnet".into());
+        change("planner", &|a| a.web = true);
+        let mut extra = crate::agentfile::blank(Path::new("/nonexistent"), "docs", &[]);
+        extra.guidance = "Docs.".into();
+        agents.push(extra);
+        let c = Crew::of(&s, &agents);
+        assert_eq!(c.agents.len(), 4, "only the agents its steps name");
+        let v: Value = serde_json::from_str(&agents_json(&c, AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert_eq!(v["coding-builder"]["prompt"], format!("Build it in small commits.\n\n{}", MEMBER_FIXED.trim()));
         assert_eq!(v["coding-verifier"]["model"], "sonnet");
         assert_eq!(v["coding-planner"]["tools"], json!(["Read", "Grep", "Glob", "Bash", "WebSearch", "WebFetch"]));
-        assert_eq!(v["coding-docs"]["description"], "A member of the Coding squad.", "in no step yet");
+        assert!(v.get("coding-docs").is_none(), "in no step");
         // An own squad: its own id in every name.
         let own = crate::squadfile::copy_of(Path::new("/nonexistent"), &coding(), "Careful coding", &[]);
-        let v: Value = serde_json::from_str(&agents_json(&own, AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&crew(&own), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("careful-coding-leader"));
         assert!(v.get("careful-coding-verifier").is_some());
         let leader = v["careful-coding-leader"]["prompt"].as_str().unwrap();
@@ -1534,9 +1551,9 @@ mod tests {
         let mut s = coding();
         // A workflow that repeats a member and has send-backs: Plan, Build, Review (back to Build twice), Verify
         // (back to Build once), Review again.
-        s.workflow.push(crate::squadfile::Step { member: "reviewer".into(), does: "Reads the whole change once more.".into(), back: None, extra: Map::new() });
-        let p = leader_prompt(&s, AgentNames::SquadRole, Place::WORKTREE);
-        let wf = workflow_text(&s, AgentNames::SquadRole);
+        s.workflow.push(crate::squadfile::Step { agent: "reviewer".into(), does: "Reads the whole change once more.".into(), back: None, extra: Map::new() });
+        let p = leader_prompt(&crew(&s), AgentNames::SquadRole, Place::WORKTREE);
+        let wf = workflow_text(&crew(&s), AgentNames::SquadRole);
         assert_eq!(p, format!("{}\n\n{wf}\n\n{}", LEADER_GUIDANCE.trim(), leader_fixed(Place::WORKTREE).as_str()), "between the guidance and the rules");
         assert_eq!(
             wf,
@@ -1559,7 +1576,7 @@ mod tests {
     fn a_leader_started_with_the_plain_names_keeps_them_and_its_prompt_calls_the_members_by_them() {
         let mut s = coding();
         s.leader.guidance = "Always ask coding-planner first.".into();
-        let v: Value = serde_json::from_str(&agents_json(&s, AgentNames::Plain, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(&crew(&s), AgentNames::Plain, Place::WORKTREE)).unwrap();
         assert_eq!(v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
         let leader = v["leader"]["prompt"].as_str().unwrap();
         assert!(!leader.contains("coding-") && leader.contains("Always ask planner first.") && leader.contains("1. planner: ") && leader.contains("reasons to builder"), "{leader}");
@@ -1569,9 +1586,47 @@ mod tests {
         assert_eq!(agent_name("coding", "verifier", AgentNames::Plain), "verifier");
     }
 
+    /// Captured from platoon just before agents became their own (`d8e7d22`): what each built-in squad's leader was
+    /// started with.
+    const BEFORE: [(&str, &str, &str); 5] = [
+        ("coding", "role-worktree", include_str!("testdata/agents-json/coding-role-worktree.json")),
+        ("coding", "plain-worktree", include_str!("testdata/agents-json/coding-plain-worktree.json")),
+        ("research", "role-work", include_str!("testdata/agents-json/research-role-work.json")),
+        ("docs", "role-worktree", include_str!("testdata/agents-json/docs-role-worktree.json")),
+        ("summarize", "role-work", include_str!("testdata/agents-json/summarize-role-work.json")),
+    ];
+
+    #[test]
+    fn every_built_in_squad_starts_exactly_as_before_but_for_the_two_renamed_writers() {
+        for (id, how, before) in BEFORE {
+            let names = if how.starts_with("plain") { AgentNames::Plain } else { AgentNames::SquadRole };
+            let place = if how.ends_with("worktree") { Place::WORKTREE } else { Place::WorkFolder { reads: true } };
+            let now: Value = serde_json::from_str(&agents_json(&crew(&crate::squadfile::builtin(id).unwrap()), names, place)).unwrap();
+            // The only differences: Research's "writer" is the report-writer now and Docs' the docs-writer, and their
+            // prompts (and the editor's) say which writer.
+            let expected = match id {
+                "research" => before.replace("research-writer", "research-report-writer").replace("You are the writer.", "You are the report writer."),
+                "docs" => before
+                    .replace("docs-writer", "docs-docs-writer")
+                    .replace("You are the writer.", "You are the docs writer.")
+                    .replace("the files the writer wrote", "the files the docs writer wrote")
+                    .replace("changes the writer should make", "changes the docs writer should make"),
+                _ => before.to_string(),
+            };
+            if id == "research" || id == "docs" {
+                assert_ne!(expected, before, "{id}: the renames are real");
+            }
+            let expected: Value = serde_json::from_str(&expected).unwrap();
+            assert_eq!(now, expected, "{id} {how}");
+            // The same order of agents too (the leader first, then as the steps first name them).
+            let keys = |v: &Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+            assert_eq!(keys(&now), keys(&expected), "{id} {how}");
+        }
+    }
+
     #[test]
     fn a_snapshot_reads_back_as_the_same_launch() {
-        let l = Launch::of(&coding(), AgentNames::SquadRole, Place::WORKTREE);
+        let l = Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE);
         assert_eq!((l.squad.as_str(), l.name.as_str(), l.agent.as_str(), l.model.as_str()), ("coding", "Coding", "coding-leader", "sonnet"));
         let text = l.to_json();
         assert!(text.contains("\"agents\": {"), "readable, not a string in a string: {text}");
@@ -1666,8 +1721,8 @@ mod tests {
         assert!(empty.contains("(The ticket has no description beyond its title.)"));
     }
 
-    fn builtin(id: &str) -> Squad {
-        crate::squadfile::builtin(id).unwrap()
+    fn builtin(id: &str) -> Crew {
+        crew(&crate::squadfile::builtin(id).unwrap())
     }
 
     #[test]
@@ -1751,9 +1806,9 @@ mod tests {
         let t = |k: &str, v: &Value| (k.to_string(), v.clone());
         assert_eq!(
             tools("research"),
-            [t("research-leader", &leader), t("research-questioner", &read), t("research-researcher", &web), t("research-writer", &files), t("research-checker", &web)]
+            [t("research-leader", &leader), t("research-questioner", &read), t("research-researcher", &web), t("research-report-writer", &files), t("research-checker", &web)]
         );
-        assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-writer", &files), t("docs-editor", &read)]);
+        assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-docs-writer", &files), t("docs-editor", &read)]);
         assert_eq!(tools("summarize"), [t("summarize-leader", &leader), t("summarize-summarizer", &web)]);
         // Models, and the workflow written into the leader's prompt.
         let v: Value = serde_json::from_str(&agents_json(&builtin("research"), AgentNames::SquadRole, Place::WorkFolder { reads: false })).unwrap();
@@ -1763,7 +1818,7 @@ mod tests {
         assert!(p.starts_with(RESEARCH_LEADER_GUIDANCE.trim()), "{p}");
         assert!(p.contains("1. research-questioner: ") && p.contains("4. research-checker: ") && p.contains("give its reasons to research-researcher and go on again from step 2. At most once"), "{p}");
         let v: Value = serde_json::from_str(&agents_json(&builtin("docs"), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
-        assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-writer and go on again from step 2. At most twice"));
+        assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-docs-writer and go on again from step 2. At most twice"));
         assert_eq!(v["docs-editor"]["model"], "opus");
         // The words: every member reports to its leader under platoon's rules; nobody's guidance speaks the end line.
         for g in [
@@ -1780,7 +1835,7 @@ mod tests {
     #[test]
     fn the_commander_reads_what_each_squad_can_do_so_it_can_tell_the_kinds_of_work_apart() {
         let t = ticket(&[], &[]);
-        let p = |id: &str| commander_prompt(&builtin(id), &t, "Summarize the release notes at https://example.com/notes.", &[]);
+        let p = |id: &str| commander_prompt(&builtin(id).squad, &t, "Summarize the release notes at https://example.com/notes.", &[]);
         // Each squad's own words reach the commander, and the kinds of work are named plainly.
         for (id, words) in [
             ("coding", ["Makes a change to code", "git repository"]),
@@ -1789,7 +1844,7 @@ mod tests {
             ("summarize", ["writes a short summary", "changes nothing"]),
         ] {
             let got = p(id);
-            let squad = builtin(id);
+            let squad = builtin(id).squad;
             assert!(got.starts_with(&format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do)), "{got}");
             for w in words {
                 assert!(squad.can_do.contains(w), "{id}: {w} in {}", squad.can_do);
@@ -2011,7 +2066,7 @@ mod tests {
     fn the_leader_is_started_with_the_squad_flags_and_resumed_with_the_same_ones() {
         let t = ticket(&["/w/a"], &[]);
         assert_eq!(session_name("Coding", &t), "Coding squad · #7 Add a basket page");
-        let launch = Launch::of(&coding(), AgentNames::SquadRole, Place::WORKTREE);
+        let launch = Launch::of(&crew(&coding()), AgentNames::SquadRole, Place::WORKTREE);
         let a = leader_args(&launch, "/opt/my tools/platoon", "sid-1", &session_name("Coding", &t), &["/w/b".into(), "/w/c".into()], Some("Ticket #7"));
         let at = |k: &str| a.iter().position(|x| x == k).unwrap();
         assert_eq!(&a[..4], ["--add-dir", "/w/b", "--add-dir", "/w/c"]);
@@ -2034,7 +2089,7 @@ mod tests {
         assert_eq!(r[r.iter().position(|x| x == "--agents").unwrap() + 1], a[at("--agents") + 1], "the same squad");
         assert!(!r.contains(&"-n".to_string()), "a resumed session keeps its name");
         // A leader started before the agents carried the squad's name is resumed with the names it began with.
-        let old = leader_args(&Launch::of(&coding(), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
+        let old = leader_args(&Launch::of(&crew(&coding()), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
         let pos = |k: &str| old.iter().position(|x| x == k).unwrap();
         assert_eq!((old[0].as_str(), old[1].as_str(), old[pos("--agent") + 1].as_str()), ("--resume", "sid-0", "leader"));
         let agents: Value = serde_json::from_str(&old[pos("--agents") + 1]).unwrap();

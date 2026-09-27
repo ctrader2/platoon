@@ -631,7 +631,7 @@ fn docs_makes_a_worktree_only_of_a_git_folder_and_uses_a_plain_one_as_it_is() {
     assert_eq!(dir, wt.to_string_lossy());
     assert_eq!(add_dirs(&args), [p.clone(), crate::tickets::work_dir(&w.config, &id, 1).to_string_lossy().into_owned()], "the plain folder, then the work folder");
     let agents: serde_json::Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
-    assert_eq!(agents["docs-writer"]["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write"]));
+    assert_eq!(agents["docs-docs-writer"]["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write"]));
     assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays where it was made (the worktree, or the folder used as it is)"));
     // Only a plain folder: no worktree at all; it starts in the folder itself.
     hand_to(&mut app, 2, "Docs");

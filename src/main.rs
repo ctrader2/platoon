@@ -1,3 +1,4 @@
+mod agentfile;
 mod ai;
 mod app;
 mod archive;

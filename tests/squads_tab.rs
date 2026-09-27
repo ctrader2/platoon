@@ -64,15 +64,15 @@ read line
 printf '%s\n' "$line" >> "$f"
 "#;
 
+/// A drafted squad that uses the built-in planner and brings a builder of its own.
 const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.","needs_folder":true,"use_worktree":true,
  "leader":{"model":"sonnet","guidance":"Lead calmly and ask when unsure."},
- "members":[
-  {"name":"planner","model":"opus","can_change_files":false,"can_run_commands":true,"can_use_web":false,"guidance":"Plan the change."},
-  {"name":"builder","model":"haiku","can_change_files":true,"can_run_commands":true,"can_use_web":false,"guidance":"Make the change."}],
+ "new_agents":[
+  {"name":"quick-builder","model":"haiku","can_change_files":true,"can_run_commands":true,"can_use_web":false,"guidance":"Make the change."}],
  "workflow":[
-  {"member":"planner","does":"Writes a short plan.","back_to":null,"times":0},
-  {"member":"builder","does":"Makes the change and runs the tests.","back_to":null,"times":0},
-  {"member":"planner","does":"Checks the change against the plan.","back_to":2,"times":2}]}"#;
+  {"agent":"planner","does":"Writes a short plan.","back_to":null,"times":0},
+  {"agent":"quick-builder","does":"Makes the change and runs the tests.","back_to":null,"times":0},
+  {"agent":"planner","does":"Checks the change against the plan.","back_to":2,"times":2}]}"#;
 
 struct Lab {
     base: PathBuf,
@@ -207,19 +207,24 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"3");
-    t.wait_for_all(&["╭ Squads", "╭ Coding", "n describe a new squad"]);
+    t.wait_for_all(&["╭ [Squads]", "╭ Coding", "n describe a new squad"]);
     t.send(b"n");
+    t.wait_for_all(&["What to describe for Claude to draft:", "A new squad", "A new agent"]);
+    t.send(b"\r");
     t.wait_for_all(&["describe a new squad", "enter ask Claude to draft it"]);
     t.send(b"a squad that codes carefully: a planner and a builder\r");
     t.wait_for_all(&["Draft, not saved", "Careful coding", "Lead calmly and ask when unsure."]);
     let asked = lab.call(1, "stdin");
     assert!(asked.contains("a squad that codes carefully: a planner and a builder"), "{asked}");
+    assert!(asked.contains("- planner (Opus; runs commands): "), "told the agents there are: {asked}");
     assert!(lab.call(1, "argv").contains("\n--model\nsonnet\n"), "drafted on Sonnet: {}", lab.call(1, "argv"));
     assert!(!lab.config.join("squads/careful-coding.json").exists(), "not saved until the user says so");
     t.send(b"\x13");
-    t.wait_for_flat("Saved the squad \"Careful coding\".");
+    t.wait_for_flat("Saved the squad \"Careful coding\" and its new agent.");
     let v = lab.squad_file("careful-coding");
-    assert_eq!((v["name"].as_str(), v["members"][1]["model"].as_str()), (Some("Careful coding"), Some("haiku")));
+    assert_eq!((v["name"].as_str(), v["workflow"][1]["agent"].as_str()), (Some("Careful coding"), Some("quick-builder")));
+    let a: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("agents/quick-builder.json")).unwrap()).unwrap();
+    assert_eq!(a["model"], "haiku");
     t.wait_for_all(&["Your own"]);
 
     // Hand the ticket to it: the picker lists every squad by name.
@@ -240,20 +245,21 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     assert_eq!(value_after(&first, "--model"), "sonnet");
     assert_eq!(value_after(&first, "-n"), "Careful coding squad · #1 Basket");
     let agents: Value = serde_json::from_str(value_after(&first, "--agents")).unwrap();
-    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["careful-coding-leader", "careful-coding-planner", "careful-coding-builder"]);
-    assert_eq!(agents["careful-coding-builder"]["model"], "haiku");
-    assert_eq!(agents["careful-coding-builder"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash"]));
+    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["careful-coding-leader", "careful-coding-planner", "careful-coding-quick-builder"]);
+    assert_eq!(agents["careful-coding-quick-builder"]["model"], "haiku");
+    assert_eq!(agents["careful-coding-quick-builder"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash"]));
+    assert_eq!(agents["careful-coding-planner"]["model"], "opus", "the built-in planner");
     assert_eq!(agents["careful-coding-planner"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
     let prompt = agents["careful-coding-leader"]["prompt"].as_str().unwrap();
     assert!(prompt.starts_with("Lead calmly and ask when unsure.\n\nYou lead the Careful coding squad."), "{prompt}");
-    assert!(prompt.contains("3. careful-coding-planner: Checks the change against the plan. It may send the work back: then give its reasons to careful-coding-builder and go on again from step 2. At most twice;"), "{prompt}");
+    assert!(prompt.contains("3. careful-coding-planner: Checks the change against the plan. It may send the work back: then give its reasons to careful-coding-quick-builder and go on again from step 2. At most twice;"), "{prompt}");
     assert_eq!(lab.ticket_now()["leaders"][0]["squad"], "careful-coding");
 
     // The squad changes on the tab: its leader now runs on Opus.
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(b"3");
-    t.wait_for_all(&["╭ Squads", "Careful coding"]);
+    t.wait_for_all(&["╭ [Squads]", "Careful coding"]);
     // To the list (shift+left), on the new squad, then into its details from the top, down to the leader's model
     // (past its name, what it can do, whether it needs a folder and its worktree).
     t.send(b"\x1b[1;2D");
@@ -296,7 +302,7 @@ fn a_squads_system_prompt_is_edited_in_the_editor_and_the_squad_says_user_modifi
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"3");
-    t.wait_for_all(&["╭ Squads", "Built in"]);
+    t.wait_for_all(&["╭ [Squads]", "Built in"]);
     // Into the details, down to the leader's system prompt.
     t.send(b"\t\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     t.wait_for_all(&["enter edit", "esc back to the list"]);
@@ -315,11 +321,77 @@ fn a_squads_system_prompt_is_edited_in_the_editor_and_the_squad_says_user_modifi
     t.send(b"s");
     t.wait_for("Settings file:");
     t.send(b"\x1b[Z");
-    t.wait_for_all(&["System prompt for the squad commander", "System prompt for drafting a squad"]);
+    t.wait_for_all(&["System prompt for the squad commander", "System prompt for drafting a squad", "System prompt for drafting an agent"]);
     let screen = t.stable();
     assert!(!screen.contains("Coding squad's"), "{screen}");
     t.send(b"\x1b");
     t.wait_gone("Settings file:");
+    t.send(b"q");
+    t.wait_exit();
+}
+
+#[test]
+fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_there_reaches_every_squad() {
+    let lab = Lab::new("sqtab-agents");
+    // A copy of Coding of the user's own: it shares Coding's agents.
+    fs::create_dir_all(lab.config.join("squads")).unwrap();
+    // Colours as a terminal without NO_COLOR has them (with it set, crossterm drops the colour of bold text).
+    let mut env = lab.env();
+    env.push(("NO_COLOR", String::new()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 40, 130);
+    t.wait_for("enter open");
+    t.send(b"3");
+    t.wait_for_all(&["[Squads]", "╭ Coding", "← → agents"]);
+    t.send(b"c");
+    t.wait_for("copy squad");
+    t.send(b"\x15Careful coding\r");
+    t.wait_for_flat("it uses the same agents");
+    // The switch: the label of the list it shows in brackets and in another colour than the other.
+    t.send(b"\x1b[C");
+    t.wait_for_all(&["[Agents]", "+ New agent", "← → squads"]);
+    let (r, c) = t.find("[Agents]").unwrap();
+    let (r2, c2) = t.find("Squads  [").unwrap();
+    // The theme's accent (Catppuccin Mocha lavender) and its dim text.
+    let accent = vt100::Color::Rgb(0xb4, 0xbe, 0xfe);
+    for i in 0..8 {
+        assert_eq!(t.fg_at(r, c + i), accent, "cell {i} of [Agents]");
+    }
+    assert!(t.attrs_at(r, c + 1).0, "bold");
+    assert_ne!(t.fg_at(r2, c2), accent, "the other label is dim");
+    let (pr, pc) = t.find("▎ planner").unwrap();
+    let (br, bc) = t.find("  builder").unwrap();
+    assert_eq!(t.fg_at(pr, pc), accent, "the selection's mark");
+    assert_ne!(t.bg_at(pr, pc + 3), t.bg_at(br, bc + 3), "the selected agent has its own background");
+    t.wait_for_all(&["Used in", "Coding", "Careful coding", "step 1"]);
+    // Back to the squads, into Coding's workflow, and g on the reviewer's step.
+    t.send(b"\x1b[D");
+    t.wait_for_all(&["[Squads]", "← → agents"]);
+    t.send(b"\x1b[H\r");
+    t.wait_for("esc back to the list");
+    // Down to step 3's agent: past name, what it can do, the two switches, the leader's two, steps 1 and 2 and
+    // their agents, and step 3.
+    for _ in 0..11 {
+        t.send(b"\x1b[B");
+    }
+    t.wait_for("enter pick the agent");
+    t.send(b"g");
+    t.wait_for_all(&["[Agents]", "Name                reviewer"]);
+    // Its system prompt, in the (stand-in) editor: every squad that uses it has it.
+    for _ in 0..5 {
+        t.send(b"\x1b[B");
+    }
+    t.wait_for("enter edit");
+    t.send(b"\r");
+    t.wait_for("nano");
+    t.send(b"\r");
+    t.wait_for("FAKE NANO EDITING");
+    t.send(b"Be strict.\r");
+    t.wait_for_flat("Saved reviewer's system prompt, in every squad that uses it (Coding and Careful coding)");
+    let a: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("agents/reviewer.json")).unwrap()).unwrap();
+    assert_eq!(a["builtin"], "reviewer");
+    assert!(a["guidance"].as_str().unwrap().ends_with("Be strict."), "{a}");
+    assert!(!lab.config.join("squads/coding.json").exists(), "the squad itself is as it was");
+    t.wait_for_all(&["User Modified"]);
     t.send(b"q");
     t.wait_exit();
 }

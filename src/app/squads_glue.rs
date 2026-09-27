@@ -264,7 +264,7 @@ impl App {
     /// Enter in the squad picker: the ticket goes to that squad.
     pub(super) fn take_squad_pick(&mut self) {
         let Some(squad) = self.sq.pick.get(self.sq.pick_selected).cloned() else { return };
-        if let Some(first) = crate::squadfile::problems(&squad).into_iter().next() {
+        if let Some(first) = crate::squadfile::problems(&squad, &self.agent_library()).into_iter().next() {
             // The picker stays open: another squad can be picked.
             self.notify(format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name));
             return;
@@ -501,7 +501,8 @@ impl App {
             };
             free -= 1;
             let squad = crate::squadfile::get(&self.config, &q.squad);
-            let broken = squad.as_ref().and_then(|s| crate::squadfile::problems(s).into_iter().next());
+            let agents = crate::agentfile::all(&self.config);
+            let broken = squad.as_ref().and_then(|s| crate::squadfile::problems(s, &agents).into_iter().next());
             match (squad, broken) {
                 (Some(squad), None) => {
                     self.sq.from_line.insert((project.clone(), number));
@@ -574,7 +575,13 @@ impl App {
         }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
         // moment, whatever is changed on the Squads tab meanwhile.
-        let launch = Launch::of(&squad, AgentNames::SquadRole, place);
+        let agents = crate::agentfile::all(&self.config);
+        if let Some(first) = crate::squadfile::problems(&squad, &agents).into_iter().next() {
+            // Changed on the Squads tab while it was being handed over.
+            let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);
+            return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &says, format!("#{number} didn't start: {says}"));
+        }
+        let launch = Launch::of(&crate::squadfile::Crew::of(&squad, &agents), AgentNames::SquadRole, place);
         let k = self.ticket_on_disk(project, number).map_or(0, |t| t.leaders.len()) + 1;
         let snapshot = match Tickets::open(&self.config, project).save_snapshot(number, k, &launch.to_json()) {
             Ok(name) => name,
@@ -700,7 +707,7 @@ impl App {
                 .ok_or_else(|| "what it was started with can't be read any more".to_string());
         }
         let squad = crate::squadfile::get(&self.config, &leader.squad).ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
-        Ok(Launch::of(&squad, leader.names, Place::of(squad.use_worktree, t)))
+        Ok(Launch::of(&crate::squadfile::Crew::load(&self.config, &squad), leader.names, Place::of(squad.use_worktree, t)))
     }
 
     /// Enter on a ticket that has a leader: its session beside it, running or continued.

@@ -698,7 +698,7 @@ fn a_ticket_without_a_folder_goes_to_research_which_starts_in_the_tickets_work_f
             ("research-leader".to_string(), "sonnet".to_string(), json!(["Agent", "Read", "Grep", "Glob", "Bash"])),
             ("research-questioner".into(), "sonnet".into(), json!(["Read", "Grep", "Glob"])),
             ("research-researcher".into(), "sonnet".into(), web.clone()),
-            ("research-writer".into(), "sonnet".into(), json!(["Read", "Grep", "Glob", "Edit", "Write"])),
+            ("research-report-writer".into(), "sonnet".into(), json!(["Read", "Grep", "Glob", "Edit", "Write"])),
             ("research-checker".into(), "opus".into(), web),
         ]
     );
@@ -759,7 +759,7 @@ fn docs_works_in_a_worktree_of_a_git_folder() {
     assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()], "only its work folder besides");
     assert_eq!(value_after(&args, "--agent"), "docs-leader");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
-    assert_eq!(agents["docs-writer"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write"]));
+    assert_eq!(agents["docs-docs-writer"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write"]));
     assert_eq!(agents["docs-editor"]["model"], "opus");
     assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays in the worktree, uncommitted"));
     assert!(args.last().unwrap().contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())));

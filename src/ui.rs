@@ -2519,8 +2519,9 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
         NamePurpose::Squad(ref p) => match p {
             crate::app::SquadName::Name => ("squad name", "What the squad is called. Its agents keep their names."),
             crate::app::SquadName::Copy => ("copy squad", "The copy is yours to change; the squad you copied stays as it is."),
-            crate::app::SquadName::Member(_) => ("member name", "Lowercase letters, digits and dashes. The steps it does follow the new name."),
-            crate::app::SquadName::NewMember => ("new member", "Its name: lowercase letters, digits and dashes (say, reviewer)."),
+            crate::app::SquadName::AgentName => ("agent name", "What the agent is called. Every squad that uses it keeps it."),
+            crate::app::SquadName::AgentCopy => ("copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
+            crate::app::SquadName::NewAgent(_) => ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next."),
         },
     };
     let block = modal_block(t, title);
@@ -2955,6 +2956,24 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
         ),
+        Confirm::DeleteAgent { id, name } => (
+            "delete agent",
+            format!("Delete the agent \"{name}\"?"),
+            format!("No squad uses it. Tickets already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."),
+            "delete",
+        ),
+        Confirm::RestoreAgent { id, name } => (
+            "restore agent",
+            format!("Put {name} back as platoon has it?"),
+            format!("Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tickets already started keep what they started with."),
+            "restore",
+        ),
+        Confirm::DiscardAgentDraft { name } => (
+            "discard draft",
+            format!("Throw away the draft agent \"{name}\"?"),
+            "It was never saved, so nothing of it is kept.".to_string(),
+            "discard",
+        ),
         Confirm::HandAnyway { number, title, says, .. } => (
             "hand it anyway",
             "The commander said this squad doesn't fit. Hand it anyway?".to_string(),
@@ -3081,12 +3100,13 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let Some(x) = app.ticket(app.sq.pick_ticket) else { return };
     let w = area.width.saturating_sub(8).clamp(30, 76);
     let inner_w = w.saturating_sub(6) as usize;
+    let agents = app.agent_library();
     let rows: Vec<Vec<String>> = app
         .sq
         .pick
         .iter()
         .map(|s| {
-            let text = if !crate::squadfile::problems(s).is_empty() {
+            let text = if !crate::squadfile::problems(s, &agents).is_empty() {
                 format!("Needs fixing on the Squads tab first. {}", s.can_do)
             } else if s.needs_folder && x.folders.is_empty() {
                 format!("Needs a folder, and #{} has none. {}", x.number, s.can_do)

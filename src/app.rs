@@ -51,7 +51,7 @@ pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
 pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
 pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
-pub use squadtab_glue::{back_words, detail_rows, ChoiceFor, DRow, SqFocus, SquadName, SquadTab, TextFor};
+pub use squadtab_glue::{agent_line, agent_rows, back_words, detail_rows, ARow, ChoiceFor, DRow, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, NEW_AGENT};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -184,8 +184,10 @@ pub enum Hit {
     TicketPickRow(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
-    /// An entry of the Squads tab's list.
+    /// An entry of the Squads tab's list (of squads or of agents, whichever it shows).
     SquadEntry(usize),
+    /// The Squads tab's list title: Squads (false) or Agents (true).
+    SquadView(bool),
     /// A row of the selected squad's details.
     SquadDetail(usize),
     /// An entry of the small list open over the Squads tab.
@@ -259,6 +261,12 @@ pub enum Confirm {
     RestoreSquad { id: String, name: String },
     /// Throw away the drafted squad that was never saved.
     DiscardDraft { name: String },
+    /// Delete one of the user's own agents (no squad uses it).
+    DeleteAgent { id: String, name: String },
+    /// Put a built-in agent the user changed back as platoon has it.
+    RestoreAgent { id: String, name: String },
+    /// Throw away the drafted agent that was never saved.
+    DiscardAgentDraft { name: String },
 }
 
 #[derive(Clone)]
@@ -295,7 +303,8 @@ pub enum Mode {
     TicketPick,
     /// The squads a ticket can be handed to (`sq`).
     SquadPick,
-    /// A small list over the Squads tab: a model, a member, where a step sends the work back (`sqt.choice`).
+    /// A small list over the Squads tab: a model, an agent, where a step sends the work back, what to describe
+    /// (`sqt.choice`).
     SquadChoice,
     /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
     /// (`sqt.text`).
@@ -1266,6 +1275,9 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, .. })) => self.remove_squad(&id, false),
             (Action::Confirm, Mode::Confirm(Confirm::RestoreSquad { id, .. })) => self.remove_squad(&id, true),
             (Action::Confirm, Mode::Confirm(Confirm::DiscardDraft { .. })) => self.discard_draft(),
+            (Action::Confirm, Mode::Confirm(Confirm::DeleteAgent { id, .. })) => self.remove_agent(&id, false),
+            (Action::Confirm, Mode::Confirm(Confirm::RestoreAgent { id, .. })) => self.remove_agent(&id, true),
+            (Action::Confirm, Mode::Confirm(Confirm::DiscardAgentDraft { .. })) => self.discard_agent_draft(),
             (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
@@ -2441,6 +2453,7 @@ impl App {
                     Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
                     Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
                     Some(Hit::SquadEntry(i)) => self.click_squad(i),
+                    Some(Hit::SquadView(agents)) => self.show_squad_view(if agents { SqView::Agents } else { SqView::Squads }),
                     Some(Hit::SquadDetail(i)) => self.click_squad_row(i),
                     Some(Hit::SquadChoiceRow(i)) if i == self.sqt.choice.selected => self.act(Action::Confirm),
                     Some(Hit::SquadChoiceRow(i)) => self.sqt.choice.selected = i,

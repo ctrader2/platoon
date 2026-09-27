@@ -48,11 +48,12 @@ pub const DESCRIPTION: &str = "project-description";
 pub const HANDOFF: &str = "hand-off";
 pub const COMMANDER: &str = "squad-commander";
 pub const SQUAD_DRAFT: &str = "squad-draft";
+pub const AGENT_DRAFT: &str = "agent-draft";
 
-// A squad's own system prompts (its leader's and its members') are part of the squad, on the Squads tab
-// (`squadfile.rs`), not entries here.
+// A squad's leader's system prompt and each agent's are part of the squad and the agent, on the Squads tab
+// (`squadfile.rs`, `agentfile.rs`), not entries here.
 
-pub static ACTIONS: [Action; 7] = [
+pub static ACTIONS: [Action; 8] = [
     Action {
         id: NAMES,
         entry: "System prompt for naming",
@@ -108,6 +109,14 @@ pub static ACTIONS: [Action; 7] = [
         explain: "How platoon asks Claude to draft a whole squad from your description, on the Squads tab.",
         builtin: crate::squadfile::DRAFT_GUIDANCE,
         fixed: crate::squadfile::draft_fixed,
+    },
+    Action {
+        id: AGENT_DRAFT,
+        entry: "System prompt for drafting an agent",
+        what: "drafting an agent",
+        explain: "How platoon asks Claude to draft one agent from your description, on the Squads tab.",
+        builtin: crate::agentfile::DRAFT_GUIDANCE,
+        fixed: crate::agentfile::draft_fixed,
     },
 ];
 
@@ -313,7 +322,7 @@ mod tests {
         let ids: Vec<&str> = ACTIONS.iter().map(|a| a.id).collect();
         assert_eq!(
             ids,
-            ["names", "describe-it", "project-notes", "project-description", "hand-off", "squad-commander", "squad-draft"]
+            ["names", "describe-it", "project-notes", "project-description", "hand-off", "squad-commander", "squad-draft", "agent-draft"]
         );
     }
 
@@ -345,7 +354,8 @@ mod tests {
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
                 "System prompt for the squad commander",
-                "System prompt for drafting a squad"
+                "System prompt for drafting a squad",
+                "System prompt for drafting an agent"
             ]
         );
     }
