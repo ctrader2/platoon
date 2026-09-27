@@ -88,7 +88,7 @@ pub fn setup_alias(flag: &str, c: &Ctx, out: &mut dyn Write, err: &mut dyn Write
 }
 
 /// Before a plugin with instructions is installed (or updated with changed ones): the summary, then y/N in a
-/// terminal, or `--yes`. Ok: go on. Err: the exit code (nothing was changed).
+/// terminal, or `--yes`. Ok: go on. Err: the exit code, nothing changed (0 when the person answered no, 1 otherwise).
 fn confirmed(c: &Ctx, dir: &Path, installed: Option<PathBuf>, update: Option<(&str, &str)>, yes: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<(), i32> {
     let (m, review) = match pluginreview::review(dir, installed.as_deref()) {
         Ok(x) => x,
@@ -110,8 +110,9 @@ fn confirmed(c: &Ctx, dir: &Path, installed: Option<PathBuf>, update: Option<(&s
     match (c.ask)(&format!("{verb} it? [y/N] ")) {
         Some(true) => Ok(()),
         Some(false) => {
+            // The person said no: that is an answer, not a failure, so the exit code is 0.
             let _ = writeln!(out, "Not {}: nothing was changed.", if update.is_some() { "updated" } else { "installed" });
-            Err(1)
+            Err(0)
         }
         None => {
             let cmd = if update.is_some() { format!("platoon plugin update {} --yes", m.id) } else { format!("platoon plugin add {} --yes", m.id) };
@@ -654,7 +655,7 @@ mod tests {
         assert!(store.installed().is_empty() && !skill.exists());
         // Asked, and no.
         let (code, out, _) = run_asking(&["add", "changelog"], &store, &src, Some(false));
-        assert!(code == 1 && out.contains("Not installed: nothing was changed."), "{out}");
+        assert!(code == 0 && out.contains("Not installed: nothing was changed."), "{out}");
         assert!(store.installed().is_empty());
         // Asked, and yes.
         let (code, out, err) = run_asking(&["add", "changelog"], &store, &src, Some(true));
