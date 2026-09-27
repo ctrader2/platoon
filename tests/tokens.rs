@@ -290,6 +290,7 @@ fn setup_asks_in_a_terminal_and_yes_saves_the_master_switch_the_features_and_the
     }
     assert!(screen.contains("[✓]") || screen.contains("already done") || screen.contains("added"), "the checklist came first:\n{screen}");
     t.send(b"y\r");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0);
     assert!(t.flat().contains("Smart features are on"), "{}", t.flat());
     let s = saved(&lab);
@@ -309,6 +310,7 @@ fn setup_defaults_to_no_and_remembers_that_it_asked() {
     let mut t = Term::spawn(&["setup"], &setup_env(&lab), &lab.base, 50, 110);
     t.wait_for_flat("Turn these features on? [y/N]");
     t.send(b"\r");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0);
     let s = saved(&lab);
     assert_eq!((s["tokens_enabled"].clone(), s["tokens_asked"].clone()), (json!(false), json!(true)));

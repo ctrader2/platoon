@@ -230,6 +230,7 @@ fn setup_names_the_active_conversations_after_yes_and_offers_archived_ones_with_
     t.wait_for_flat("Naming conversations: 2 of 2");
     assert!(t.flat().contains("(an estimate, made on this computer)"));
     t.wait_for_flat("Used about 450 tokens.");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0, "{}", t.text());
     assert_eq!(fake.calls(), 1);
     assert_eq!(lab.summaries()["entries"].as_object().map(|m| m.len()), Some(2));
@@ -251,6 +252,7 @@ fn setup_asks_about_archived_conversations_and_background_is_remembered() {
     t.wait_for_flat("[S]kip / [b]ackground:");
     t.send(b"b\r");
     t.wait_for_flat("Archived conversations will be named slowly in the background.");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0);
     let s: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.dir("config/settings.json")).unwrap()).unwrap();
     assert_eq!(s["ai_archived"], "background");
@@ -263,6 +265,7 @@ fn setup_after_no_asks_nothing_more_and_never_calls_claude() {
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
     t.wait_for("Turn these features on?");
     t.send(b"\r");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0);
     assert!(!t.text().contains("Smart names:"));
     assert_eq!(fake.calls(), 0);
@@ -279,6 +282,7 @@ fn ctrl_c_during_the_setup_scan_skips_it_kills_the_call_and_setup_still_succeeds
     until("the fake to start", || fake.pids().len() == 2);
     t.send(b"\x03");
     t.wait_for_flat("Skipped. platoon will name the rest in the background while it is open.");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0, "{}", t.text());
     until("the fake to be gone", || !fake.any_alive());
     let s: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.dir("config/settings.json")).unwrap()).unwrap();
@@ -308,6 +312,7 @@ fn setup_again_after_a_yes_with_nothing_named_yet_runs_the_scan_and_then_stays_q
     lab.on(); // said yes earlier, nothing named
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
     t.wait_for_flat("Smart names: 2 active conversations to name");
+    t.decline_editor();
     assert_eq!(t.wait_exit(), 0);
     assert_eq!(fake.calls(), 1);
     // ...and a third run has nothing to say about it.

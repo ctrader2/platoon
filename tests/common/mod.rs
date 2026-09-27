@@ -97,6 +97,13 @@ impl Term {
         cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         cmd.env("PLATOON_FORBID_REAL_CLAUDE", "1"); // ...nor the real `claude`, if a test forgets to name a stand-in
         cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
+        // ...nor the real editor folder or fonts, nor the network for an install (an empty mirror); a test that needs
+        // them gives its own.
+        let spare = std::env::temp_dir().join(format!("platoon-term-no-data-{}", std::process::id()));
+        cmd.env("PLATOON_DATA_DIR", spare.join("data"));
+        cmd.env("PLATOON_FONT_DIR", spare.join("fonts"));
+        cmd.env("PLATOON_EDITOR_MIRROR", spare.join("mirror"));
+        cmd.env("PLATOON_SKIP_FC_CACHE", "1");
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -214,6 +221,15 @@ impl Term {
     /// The screen with runs of spaces collapsed, for text whose spacing is styling ("1 Active  3").
     pub fn flat(&mut self) -> String {
         self.text().split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// `platoon setup`'s last question in a terminal, asked once: whether to install the optional code editor.
+    /// Answered with Enter (no), and waits until the answer has been taken.
+    #[allow(dead_code)]
+    pub fn decline_editor(&mut self) {
+        self.wait_for_flat("Install the code editor platoon can open on a ticket's work?");
+        self.send(b"\r");
+        self.wait_for_flat("No code editor, then.");
     }
 
     pub fn wait_for_flat(&mut self, text: &str) {

@@ -31,6 +31,11 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         .env("PLATOON_CACHE_DIR", cache)
         // Never the real one: `platoon themes` reads the user's theme files from here.
         .env("PLATOON_CONFIG_DIR", cache.parent().unwrap().join("config"))
+        // Nor the real editor folder or fonts, and never the network: downloads come from an empty mirror.
+        .env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"))
+        .env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"))
+        .env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"))
+        .env("PLATOON_SKIP_FC_CACHE", "1")
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .output()
@@ -214,6 +219,9 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     cmd.env("CLAUDE_CONFIG_DIR", claude);
     cmd.env("PLATOON_CACHE_DIR", cache);
     cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
+    cmd.env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"));
+    cmd.env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"));
+    cmd.env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
@@ -373,4 +381,52 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     // Nothing is written anywhere, and the folder the user made is untouched.
     assert!(fs::read_dir(&claude).unwrap().next().is_none() && fs::read_dir(&cache).unwrap().next().is_none());
     assert_eq!(fs::read_dir(&themes).unwrap().count(), 6);
+}
+
+/// The optional code editor through the real binary: a line in the checklist that never blocks, `--remove` remembered,
+/// and `--add` with nothing to download from (an empty mirror, so never the network) fails plainly and leaves nothing
+/// that looks installed.
+#[test]
+fn the_code_editor_is_optional_its_line_says_how_to_install_it_and_remove_is_remembered() {
+    let (claude, cache) = dirs("editor");
+    let base = cache.parent().unwrap().to_path_buf();
+    let editor_line = |shown: &str| -> String {
+        let at = shown.find("Code editor").unwrap_or_else(|| panic!("{shown}"));
+        shown[at..].lines().take(2).collect::<Vec<_>>().join("\n")
+    };
+    let out = platoon(&claude, &cache, &["setup"]);
+    assert!(out.status.success());
+    let shown = text(&out.stdout);
+    assert!(editor_line(&shown).contains("not installed: `platoon setup --add editor` installs it"), "{shown}");
+    assert!(shown.contains("[–] Code editor"), "never a cross: {shown}");
+    assert!(!shown.contains("Install the code editor"), "no question without a terminal: {shown}");
+    assert!(!base.join("data").exists() && !base.join("fonts").exists(), "nothing installed");
+    // Blocked start: the line is there too, still not a cross.
+    fs::write(claude.join("settings.json"), "{}").unwrap();
+    let err = text(&platoon(&claude, &cache, &[]).stderr);
+    assert!(err.contains("[–] Code editor") && err.matches("[✗]").count() == 2, "{err}");
+    assert!(platoon(&claude, &cache, &["setup"]).status.success());
+
+    // Removed before it was ever installed: said, and remembered.
+    let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(text(&out.stdout).starts_with("The code editor wasn't installed. `platoon setup` won't ask about it again"), "{out:?}");
+    let choices = || -> serde_json::Value { serde_json::from_str(&fs::read_to_string(base.join("config/setup.json")).unwrap()).unwrap() };
+    assert_eq!(choices()["editor"], serde_json::json!({"asked": true, "wanted": false, "removed": true}));
+    assert!(editor_line(&text(&platoon(&claude, &cache, &["setup"]).stdout)).contains("removed by you: `platoon setup --add editor` puts it back"));
+
+    // Added, with nothing to download: it fails plainly, and nothing looks installed.
+    let out = platoon(&claude, &cache, &["setup", "--add", "editor"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    let err = text(&out.stderr);
+    assert!(err.contains("didn't finish installing") && err.contains("isn't in the mirror folder") && err.contains("tries again"), "{err}");
+    assert!(!base.join("fonts").exists(), "no font");
+    assert!(!base.join("data/editor/site").exists() && !base.join("data/editor/tools").exists() && !base.join("data/editor/tmp").exists());
+    assert_eq!(choices()["editor"], serde_json::json!({"asked": true, "wanted": true}));
+    let line = editor_line(&text(&platoon(&claude, &cache, &["setup"]).stdout));
+    assert!(line.contains("`platoon setup --add editor`") && !line.contains("[✓]"), "{line}");
+    // `--replace` is only for the skill.
+    let out = platoon(&claude, &cache, &["setup", "--replace", "editor"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(text(&out.stderr).contains("can replace: to-tickets"), "{out:?}");
 }

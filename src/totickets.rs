@@ -62,7 +62,13 @@ fn load_choices(config: &Path) -> Option<Map<String, Value>> {
 }
 
 fn record(config: &Path) -> Map<String, Value> {
-    load_choices(config).and_then(|mut o| o.remove(NAME)).and_then(|v| match v {
+    choice(config, NAME)
+}
+
+/// One step's record in `setup.json` (empty when there is none, or the file can't be read). Shared with the editor
+/// step (`setup::ask_about_editor`), which keeps its own key.
+pub fn choice(config: &Path, key: &str) -> Map<String, Value> {
+    load_choices(config).and_then(|mut o| o.remove(key)).and_then(|v| match v {
         Value::Object(o) => Some(o),
         _ => None,
     }).unwrap_or_default()
@@ -70,9 +76,15 @@ fn record(config: &Path) -> Map<String, Value> {
 
 /// Change this skill's record (`None` removes a key). Nothing is written when nothing changes.
 fn change_record(config: &Path, changes: &[(&str, Option<Value>)]) -> Result<(), String> {
+    change_choice(config, NAME, changes)
+}
+
+/// Change one step's record in `setup.json`, keeping everything else in the file. Nothing is written when nothing
+/// changes; a file that can't be read is left alone and said.
+pub fn change_choice(config: &Path, key: &str, changes: &[(&str, Option<Value>)]) -> Result<(), String> {
     let path = choices_path(config);
     let mut all = load_choices(config).ok_or_else(|| format!("{} can't be read, so platoon left it alone", path.display()))?;
-    let entry = all.entry(NAME.to_string()).or_insert_with(|| Value::Object(Map::new()));
+    let entry = all.entry(key.to_string()).or_insert_with(|| Value::Object(Map::new()));
     if !entry.is_object() {
         *entry = Value::Object(Map::new());
     }
@@ -92,7 +104,7 @@ fn change_record(config: &Path, changes: &[(&str, Option<Value>)]) -> Result<(),
         return Ok(());
     }
     if rec.is_empty() {
-        all.remove(NAME);
+        all.remove(key);
     }
     let text = serde_json::to_string_pretty(&Value::Object(all)).unwrap_or_default() + "\n";
     crate::projects::write_atomic(&path, &text).map_err(|e| format!("couldn't write {}: {e}", path.display()))

@@ -8,6 +8,7 @@ mod clipboard;
 mod colordepth;
 mod describe;
 mod dirs;
+mod editor_install;
 mod editors;
 mod guard;
 mod gitfacts;
@@ -178,7 +179,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   stops two copies of one session from overwriting each other, two hooks
                   that hand a project's notes to its sessions and keep them up to date, and
                   the /to-tickets skill that turns a conversation into tickets
+                  and asks once whether to install the optional code editor
   setup --remove to-tickets   take the /to-tickets skill out again
+  setup --add editor          install the code editor (Neovim, its plugins, a font with icons)
+  setup --remove editor       take the code editor and its font off again
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...
                   make a ticket in that project and print its number (#N); with no --folder it
@@ -208,7 +212,8 @@ fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
         let states = setup::check(&claude::claude_root(), &archive::config_dir());
         if !setup::ready(&states) {
-            eprintln!("{}", setup::render_blocked(&states, use_color(true)));
+            let editor = setup::editor_line(&archive::config_dir(), &editor_install::Dirs::from_env());
+            eprintln!("{}", setup::render_blocked_with(&states, Some(&editor), use_color(true)));
             std::process::exit(1);
         }
     }
@@ -229,8 +234,12 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
+    let editor_dirs = editor_install::Dirs::from_env();
     match setup::run(&root, &archive::config_dir()) {
-        Ok(report) => println!("{}", setup::render_report(&report, &root, use_color(false))),
+        Ok(mut report) => {
+            report.editor = Some(setup::editor_line(&archive::config_dir(), &editor_dirs));
+            println!("{}", setup::render_report(&report, &root, use_color(false)));
+        }
         Err(e) => {
             eprintln!("platoon setup failed: {e}");
             std::process::exit(1);
@@ -246,6 +255,9 @@ fn setup() -> io::Result<()> {
         let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), interactive };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
+    // The optional code editor: asked once; once wanted, kept up to date. Never changes the exit code.
+    let printer = editor_install::Printer::new(interactive);
+    setup::ask_about_editor(&archive::config_dir(), &editor_dirs, &editor_install::pinned(), interactive, &mut io::stdin().lock(), &mut io::stdout(), &printer);
     Ok(())
 }
 
@@ -259,7 +271,8 @@ fn setup_with(args: &[String]) -> i32 {
         [flag, what] if flag == "--replace" => setup::replace_step(&root, &config, what),
         _ => {
             let steps = setup::REMOVABLE.join(" | ");
-            eprintln!("usage: platoon setup [--remove {steps} | --add {steps} | --replace {steps}]");
+            let replace = setup::REPLACEABLE.join(" | ");
+            eprintln!("usage: platoon setup [--remove {steps} | --add {steps} | --replace {replace}]");
             return 2;
         }
     };

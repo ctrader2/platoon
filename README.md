@@ -25,6 +25,38 @@ already done, and a step whose command points at a platoon that no longer exists
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 | Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder): when platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly. If you changed the file, setup leaves it alone and says "changed by you"; `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says "removed by you"); `platoon setup --add to-tickets` puts it back |
+| Code editor | Optional, and not a setting at all: Neovim with a file tree, the changed files and their differences, search and a terminal, for looking at a ticket's work (the editor itself comes in a later version). See [The code editor](#the-code-editor) |
+
+### The code editor
+
+`platoon setup` asks once, in a terminal, whether to install it ("About 150 MB, under a minute", default no) and remembers
+the answer in `setup.json`. `platoon setup --add editor` installs it any time; `platoon setup --remove editor` takes it off
+again and remembers that, so setup doesn't ask again. Once installed, a later `platoon setup` brings it up to date by
+itself (only what changed is fetched). Its checklist line never stops platoon from starting.
+
+What it installs, all pinned to exact versions and checked against their checksums before anything is used:
+
+- **Neovim** 0.12.5, unless you already have Neovim 0.12 or newer, which is used instead.
+- **ripgrep** and **fd** (for searching), unless you have them (`fd` is `fdfind` on Debian and Ubuntu), and **tree-sitter**
+  0.27 (what builds syntax highlighting for more languages later), unless you have 0.26.1 or newer.
+- **Plugins**, as plain Neovim packages (no plugin manager): neo-tree (with plenary and nui), diffview, gitsigns, snacks,
+  nvim-treesitter, which-key, lualine, blink.cmp (with its built-in matcher, so nothing else is downloaded) and mini.nvim.
+- **Syntax highlighting** for 19 common languages (Lua, Vim script and help, Markdown, Rust, Python, JavaScript, TypeScript,
+  JSON, YAML, TOML, shell, HTML, CSS, Go, C and a few more), built with your C compiler. Without one the install still
+  finishes, and colors in code are limited to the few languages Neovim comes with.
+- **A font with icons**: JetBrainsMono Nerd Font (regular, bold, italic, bold italic). platoon doesn't change any terminal's
+  settings; afterwards it says how to pick the font (Xfce Terminal: Edit > Preferences > Appearance > Font; Ghostty:
+  `font-family = "JetBrainsMono Nerd Font"` in its config; macOS Terminal and iTerm2: their profile's font setting).
+
+Nothing needs sudo or a package manager: everything is downloaded with `curl` into platoon's own folder,
+`~/.local/share/platoon/editor` (macOS: `~/Library/Application Support/platoon/editor`; `PLATOON_DATA_DIR` moves it), and
+the font into `~/.local/share/fonts/platoon` (macOS: `~/Library/Fonts`; `PLATOON_FONT_DIR` moves it). It never touches
+your own `~/.config/nvim` or Neovim's data. Downloads run side by side and are checked before being moved into place, so an
+install that fails or is interrupted never leaves something that looks finished; running it again carries on from there.
+Removing deletes platoon's folder and the font files platoon put there, never your own Neovim, ripgrep, fd or fonts.
+
+For tests: `PLATOON_EDITOR_MIRROR=<folder>` reads every download from that folder (by the last part of its address)
+instead of the network, and `PLATOON_SKIP_FC_CACHE=1` skips refreshing the font list.
 
 ## The list
 
