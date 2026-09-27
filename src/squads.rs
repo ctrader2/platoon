@@ -297,17 +297,17 @@ covers. Follow the project's own layout and style for documentation. If the tick
 or for whom, say so instead of guessing. Don't change any files.";
 
 pub const DOCS_WRITER_GUIDANCE: &str = "\
-You are the docs writer. Write or update the Markdown files the outline names, in the ticket's folder (its worktree, when \
+You are the tech writer. Write or update the Markdown files the outline names, in the ticket's folder (its worktree, when \
 it has one) and nowhere else. Describe what the code actually does: read it rather than guess, and never invent \
 options, commands or behaviour. Keep to the outline and the project's style; if the outline turns out to be wrong, \
 stop and say why. Report the path of each file you wrote or changed. Don't change code, and don't commit unless the \
 leader asks you to.";
 
 pub const EDITOR_GUIDANCE: &str = "\
-You are the editor. Read the files the docs writer wrote or changed, against the ticket, the outline and the code they \
+You are the editor. Read the files the tech writer wrote or changed, against the ticket, the outline and the code they \
 describe. Check that every statement about the code is accurate (read the code to check it), that the text is clear \
 for the reader it is for, and that it follows the project's style. Answer either \"looks right\" with a sentence on \
-why, or \"send it back\" with the changes the docs writer should make, as a short list. Don't change any files.";
+why, or \"send it back\" with the changes the tech writer should make, as a short list. Don't change any files.";
 
 // ---- the built-in Summarize squad's words ---------------------------------------------------------------------------
 
@@ -1602,15 +1602,15 @@ mod tests {
             let names = if how.starts_with("plain") { AgentNames::Plain } else { AgentNames::SquadRole };
             let place = if how.ends_with("worktree") { Place::WORKTREE } else { Place::WorkFolder { reads: true } };
             let now: Value = serde_json::from_str(&agents_json(&crew(&crate::squadfile::builtin(id).unwrap()), names, place)).unwrap();
-            // The only differences: Research's "writer" is the report-writer now and Docs' the docs-writer, and their
+            // The only differences: Research's "writer" is the report-writer now and Docs' the tech-writer, and their
             // prompts (and the editor's) say which writer.
             let expected = match id {
                 "research" => before.replace("research-writer", "research-report-writer").replace("You are the writer.", "You are the report writer."),
                 "docs" => before
-                    .replace("docs-writer", "docs-docs-writer")
-                    .replace("You are the writer.", "You are the docs writer.")
-                    .replace("the files the writer wrote", "the files the docs writer wrote")
-                    .replace("changes the writer should make", "changes the docs writer should make"),
+                    .replace("docs-writer", "docs-tech-writer")
+                    .replace("You are the writer.", "You are the tech writer.")
+                    .replace("the files the writer wrote", "the files the tech writer wrote")
+                    .replace("changes the writer should make", "changes the tech writer should make"),
                 _ => before.to_string(),
             };
             if id == "research" || id == "docs" {
@@ -1808,7 +1808,7 @@ mod tests {
             tools("research"),
             [t("research-leader", &leader), t("research-questioner", &read), t("research-researcher", &web), t("research-report-writer", &files), t("research-checker", &web)]
         );
-        assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-docs-writer", &files), t("docs-editor", &read)]);
+        assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-tech-writer", &files), t("docs-editor", &read)]);
         assert_eq!(tools("summarize"), [t("summarize-leader", &leader), t("summarize-summarizer", &web)]);
         // Models, and the workflow written into the leader's prompt.
         let v: Value = serde_json::from_str(&agents_json(&builtin("research"), AgentNames::SquadRole, Place::WorkFolder { reads: false })).unwrap();
@@ -1818,7 +1818,7 @@ mod tests {
         assert!(p.starts_with(RESEARCH_LEADER_GUIDANCE.trim()), "{p}");
         assert!(p.contains("1. research-questioner: ") && p.contains("4. research-checker: ") && p.contains("give its reasons to research-researcher and go on again from step 2. At most once"), "{p}");
         let v: Value = serde_json::from_str(&agents_json(&builtin("docs"), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
-        assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-docs-writer and go on again from step 2. At most twice"));
+        assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-tech-writer and go on again from step 2. At most twice"));
         assert_eq!(v["docs-editor"]["model"], "opus");
         // The words: every member reports to its leader under platoon's rules; nobody's guidance speaks the end line.
         for g in [

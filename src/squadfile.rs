@@ -281,7 +281,7 @@ fn builtin_docs() -> Squad {
         leader: Leader { model: "sonnet".into(), guidance: DOCS_LEADER_GUIDANCE.into() },
         workflow: vec![
             s("outliner", "Reads the ticket, the existing docs and the code they describe, and proposes what to write where.", None),
-            s("docs-writer", "Writes or updates the Markdown files the outline names, in the ticket's folder.", None),
+            s("tech-writer", "Writes or updates the Markdown files the outline names, in the ticket's folder.", None),
             s("editor", "Checks the files for accuracy against the code and the ticket, clarity, and the project's style.", Some(Back { to: 1, times: 2 })),
         ],
         extra: Map::new(),
@@ -1476,8 +1476,8 @@ mod tests {
         );
         let d = builtin("docs").unwrap();
         assert_eq!((d.name.as_str(), d.needs_folder, d.use_worktree), ("Docs", true, true));
-        assert_eq!(switches("docs"), [m("outliner", "sonnet", false, false, false), m("docs-writer", "sonnet", true, false, false), m("editor", "opus", false, false, false)]);
-        assert_eq!(steps(&d), [("outliner".to_string(), None), ("docs-writer".into(), None), ("editor".into(), Some(Back { to: 1, times: 2 }))], "the editor, back to the writer twice");
+        assert_eq!(switches("docs"), [m("outliner", "sonnet", false, false, false), m("tech-writer", "sonnet", true, false, false), m("editor", "opus", false, false, false)]);
+        assert_eq!(steps(&d), [("outliner".to_string(), None), ("tech-writer".into(), None), ("editor".into(), Some(Back { to: 1, times: 2 }))], "the editor, back to the writer twice");
         let z = builtin("summarize").unwrap();
         assert_eq!((z.name.as_str(), z.needs_folder, z.use_worktree), ("Summarize", false, false));
         assert_eq!(switches("summarize"), [m("summarizer", "sonnet", false, false, true)]);

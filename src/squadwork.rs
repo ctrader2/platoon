@@ -176,10 +176,10 @@ mod tests {
         };
         // A second leader of the same squad (handed over again after Done), and one that doesn't say its name.
         let second = LeaderLog { leader_agent: Some("coding-leader".into()), leader: spent(1, 2, 3), members: vec![("coding-builder".into(), spent(5, 5, 5))], runs: vec![] };
-        let third = LeaderLog { leader_agent: None, leader: spent(7, 0, 0), members: vec![("docs-writer".into(), spent(1, 1, 1))], runs: vec![] };
+        let third = LeaderLog { leader_agent: None, leader: spent(7, 0, 0), members: vec![("docs-tech-writer".into(), spent(1, 1, 1))], runs: vec![] };
         let t = ticket_tokens(&[("coding-leader".into(), Some(&first)), ("coding-leader".into(), Some(&second)), ("docs-leader".into(), Some(&third))]).unwrap();
         let agents: Vec<(&str, u64)> = t.agents.iter().map(|(n, s)| (n.as_str(), s.total())).collect();
-        assert_eq!(agents, [("coding-leader", 330 + 6), ("coding-planner", 1105), ("coding-builder", 100 + 15), ("docs-leader", 7), ("docs-writer", 3)]);
+        assert_eq!(agents, [("coding-leader", 330 + 6), ("coding-planner", 1105), ("coding-builder", 100 + 15), ("docs-leader", 7), ("docs-tech-writer", 3)]);
         assert_eq!(t.total.total(), 336 + 1105 + 115 + 7 + 3);
         assert_eq!((t.total.input, t.total.output, t.total.cache_read), (10 + 100 + 50 + 1 + 5 + 7 + 1, 20 + 5 + 50 + 2 + 5 + 1, 300 + 1000 + 3 + 5 + 1));
         // A leader whose transcript isn't there (yet) adds nothing; none read at all: nothing to say.

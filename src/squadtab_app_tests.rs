@@ -230,7 +230,7 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     assert!(l.starts_with("Squads [Agents] Built in"), "{l}");
     assert!(l.contains("Built in ▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
     // A long name keeps its model beside it when the count doesn't fit.
-    for s in ["report-writer Sonnet checker", "docs-writer Sonnet editor", "summarizer Sonnet · 1 squad"] {
+    for s in ["report-writer Sonnet checker", "tech-writer Sonnet editor", "summarizer Sonnet · 1 squad"] {
         assert!(l.contains(s), "{s}: {l}");
     }
     key(&mut app, KeyCode::End);
@@ -333,13 +333,13 @@ fn used_in_and_g_go_between_a_step_and_its_agent() {
     key(&mut app, KeyCode::Enter);
     assert_eq!((app.sqt.view, app.sqt.focus, app.sqt.listed().map(|l| l.id.as_str())), (SqView::Squads, SqFocus::Detail, Some("coding")));
     assert_eq!(app.sqt.drow(), Some(DRow::StepAgent(2)));
-    // The same from Docs' second step: the docs-writer.
+    // The same from Docs' second step: the tech-writer.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Down);
     go(&mut app, DRow::StepAgent(1));
     key(&mut app, KeyCode::Char('g'));
-    assert_eq!(app.sqt.agent().map(|a| a.id.as_str()), Some("docs-writer"));
+    assert_eq!(app.sqt.agent().map(|a| a.id.as_str()), Some("tech-writer"));
     // Away from a step, g is the top of the details, as before.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Left);
@@ -410,6 +410,52 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     assert!(agentfile::path(&w.config, "linter").exists());
     assert!(app.active_notice().unwrap().starts_with("Made the agent \"Linter\". It needs a system prompt"), "{:?}", app.active_notice());
     assert!(flat(&draw(&mut term, &app)).contains("No squad uses it yet."));
+}
+
+#[test]
+fn a_new_step_can_be_given_a_new_agent_made_there() {
+    let (w, mut app) = on_the_tab("sqt-new-step-agent");
+    go(&mut app, DRow::AddStep);
+    key(&mut app, KeyCode::Char('a'));
+    choose(&mut app, "+ New agent");
+    assert!(matches!(app.mode, Mode::SquadText));
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("a new step for a new agent") && f.contains("You name the new agent next."), "{f}");
+    typed(&mut app, "Writes the release notes.");
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::ProjectName), "its name next");
+    assert!(flat(&draw(&mut term, &app)).contains("new agent"));
+    assert_eq!(squadfile::get(&w.config, "coding").unwrap().workflow.len(), 4, "nothing made before it has a name");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.active_notice(), Some("An agent needs a name."));
+    typed(&mut app, "Release writer");
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::List));
+    let s = squadfile::get(&w.config, "coding").unwrap();
+    assert_eq!((s.workflow.len(), s.workflow[4].agent.as_str(), s.workflow[4].does.as_str()), (5, "release-writer", "Writes the release notes."));
+    let v = agent_file(&w, "release-writer");
+    assert_eq!((v["name"].as_str(), v["guidance"].as_str()), (Some("Release writer"), Some("")));
+    assert_eq!((app.sqt.view, app.sqt.focus, app.sqt.agent().map(|a| a.id.as_str()), app.arow()), (SqView::Agents, SqFocus::Detail, Some("release-writer"), Some(ARow::Prompt)));
+    assert_eq!(
+        app.active_notice(),
+        Some("Made the agent \"Release writer\" and added step 5, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.")
+    );
+    let f = right(&draw(&mut term, &app));
+    assert!(f.contains("Used in Coding step 5") && f.contains("System prompt None yet: enter writes one"), "{f}");
+    // Back on the squad, the cursor is on the new step's agent.
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.sqt.drow(), Some(DRow::StepAgent(4)));
+    // Cancelling the name makes nothing.
+    go(&mut app, DRow::AddStep);
+    key(&mut app, KeyCode::Char('a'));
+    choose(&mut app, "+ New agent");
+    typed(&mut app, "Something.");
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Esc);
+    assert_eq!(squadfile::get(&w.config, "coding").unwrap().workflow.len(), 5);
+    assert_eq!(agentfile::all(&w.config).len(), 13);
 }
 
 #[test]
@@ -660,7 +706,7 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
     let (w, mut app) = on_the_tab("sqt-steps");
     go(&mut app, DRow::AddStep);
     key(&mut app, KeyCode::Enter);
-    assert!(!app.sqt.choice.options.iter().any(|(l, _)| l == "+ New agent"));
+    assert_eq!(app.sqt.choice.options.last().map(|(l, _)| l.as_str()), Some("+ New agent"), "a new step can have a new agent too");
     choose(&mut app, "reviewer ·");
     assert!(matches!(app.mode, Mode::SquadText));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();

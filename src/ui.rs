@@ -2521,7 +2521,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
             crate::app::SquadName::Copy => ("copy squad", "The copy is yours to change; the squad you copied stays as it is."),
             crate::app::SquadName::AgentName => ("agent name", "What the agent is called. Every squad that uses it keeps it."),
             crate::app::SquadName::AgentCopy => ("copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
-            crate::app::SquadName::NewAgent(_) => ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next."),
+            crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next."),
         },
     };
     let block = modal_block(t, title);

@@ -593,6 +593,7 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
         TextFor::DescribeAgent => ("describe a new agent".to_string(), "The one job it does. Claude drafts it on Sonnet; you change what you like before it is saved."),
         TextFor::CanDo => ("what it can do".to_string(), "The commander reads this before a ticket is handed to the squad."),
         TextFor::StepDoes(i) => (format!("step {}", i + 1), "One line: what this step does. The leader reads it."),
+        TextFor::NewStep(m) if m == crate::app::NEW_AGENT => ("a new step for a new agent".to_string(), "One line: what this step does. The leader reads it. You name the new agent next."),
         TextFor::NewStep(m) => (format!("a new step for {m}"), "One line: what this step does. The leader reads it."),
     };
     let describing = matches!(app.sqt.text_for, TextFor::Describe | TextFor::DescribeAgent);

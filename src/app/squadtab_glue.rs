@@ -127,6 +127,8 @@ pub enum SquadName {
     AgentCopy,
     /// A new, blank agent: from "+ New agent" (None), or put on step `i` of the selected squad.
     NewAgent(Option<usize>),
+    /// A new, blank agent that does a new step, which does this.
+    NewAgentStep(String),
 }
 
 /// What the text box is for.
@@ -139,7 +141,7 @@ pub enum TextFor {
     CanDo,
     /// What step `i` does.
     StepDoes(usize),
-    /// What a new step, done by this agent, does.
+    /// What a new step, done by this agent (`NEW_AGENT`: one made next), does.
     NewStep(String),
 }
 
@@ -808,7 +810,7 @@ impl App {
         if s.workflow.len() >= squadfile::MAX_STEPS {
             return self.notify(format!("A workflow has at most {} steps.", squadfile::MAX_STEPS));
         }
-        let options = self.agent_options(false);
+        let options = self.agent_options(true);
         self.open_choice(ChoiceFor::NewStepAgent, "Which agent does the new step", options, "");
     }
 
@@ -1133,13 +1135,14 @@ impl App {
                     Err(e) => self.notify(format!("Couldn't save the copy: {e}")),
                 }
             }
-            SquadName::NewAgent(step) => self.make_new_agent(&typed, step),
+            SquadName::NewAgent(step) => self.make_new_agent(&typed, step, None),
+            SquadName::NewAgentStep(does) => self.make_new_agent(&typed, None, Some(does)),
         }
     }
 
     /// A new, blank agent of the user's own, saved at once and shown on the Agents list to be filled in; with `step`,
-    /// put on that step of the selected squad first.
-    fn make_new_agent(&mut self, name: &str, step: Option<usize>) {
+    /// put on that step of the selected squad first; with `new_step`, doing a new step (which does that) added to it.
+    fn make_new_agent(&mut self, name: &str, step: Option<usize>, new_step: Option<String>) {
         let taken: Vec<String> = self.sqt.draft_agents.iter().map(|a| a.id.clone()).collect();
         let a = agentfile::blank(&self.config, name, &taken);
         if let Err(e) = agentfile::save(&self.config, &a) {
@@ -1152,6 +1155,16 @@ impl App {
                 s.workflow[i].agent = a.id.clone();
                 if self.commit_squad(s) {
                     said = format!("Made the agent \"{}\" and put it on step {}. It needs a system prompt before the squad can start: enter on System prompt writes one.", a.name, i + 1);
+                }
+            }
+        }
+        if let Some(does) = new_step {
+            if let Some(mut s) = self.squad_to_change() {
+                s.workflow.push(WStep { agent: a.id.clone(), does, back: None, extra: Default::default() });
+                let n = s.workflow.len();
+                if self.commit_squad(s) {
+                    self.select_step(n - 1, true);
+                    said = format!("Made the agent \"{}\" and added step {n}, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.", a.name);
                 }
             }
         }
@@ -1243,6 +1256,10 @@ impl App {
                 }
                 s.workflow[i].does = typed;
                 format!("Saved what step {} does.", i + 1)
+            }
+            TextFor::NewStep(agent) if agent == NEW_AGENT => {
+                // Its name next; the agent and the step are made together.
+                return self.open_squad_name(SquadName::NewAgentStep(typed), "");
             }
             TextFor::NewStep(agent) => {
                 s.workflow.push(WStep { agent: agent.clone(), does: typed, back: None, extra: Default::default() });

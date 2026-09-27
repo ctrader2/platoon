@@ -105,7 +105,7 @@ pub fn builtins() -> Vec<Agent> {
         agent("checker", "opus", CHECKER_GUIDANCE, false, false, true),
         // Docs.
         agent("outliner", "sonnet", OUTLINER_GUIDANCE, false, false, false),
-        agent("docs-writer", "sonnet", DOCS_WRITER_GUIDANCE, true, false, false),
+        agent("tech-writer", "sonnet", DOCS_WRITER_GUIDANCE, true, false, false),
         agent("editor", "opus", EDITOR_GUIDANCE, false, false, false),
         // Summarize.
         agent("summarizer", "sonnet", SUMMARIZER_GUIDANCE, false, false, true),
@@ -466,7 +466,7 @@ mod tests {
         let ids: Vec<String> = builtins().iter().map(|a| a.id.clone()).collect();
         assert_eq!(
             ids,
-            ["planner", "builder", "reviewer", "verifier", "questioner", "researcher", "report-writer", "checker", "outliner", "docs-writer", "editor", "summarizer"]
+            ["planner", "builder", "reviewer", "verifier", "questioner", "researcher", "report-writer", "checker", "outliner", "tech-writer", "editor", "summarizer"]
         );
         for a in builtins() {
             assert!(problems(&a).is_empty(), "{}: {:?}", a.id, problems(&a));
@@ -474,8 +474,8 @@ mod tests {
         }
         // The two writers were both "writer" once; their prompts say which they are now.
         assert!(builtin("report-writer").unwrap().guidance.starts_with("You are the report writer."));
-        assert!(builtin("docs-writer").unwrap().guidance.starts_with("You are the docs writer."));
-        assert!(builtin("editor").unwrap().guidance.contains("the docs writer"));
+        assert!(builtin("tech-writer").unwrap().guidance.starts_with("You are the tech writer."));
+        assert!(builtin("editor").unwrap().guidance.contains("the tech writer"));
         // Every agent the built-in squads name is one of them.
         for s in squadfile::builtins() {
             for id in s.agent_ids() {
@@ -641,7 +641,7 @@ mod tests {
     fn used_in_says_which_squads_and_steps() {
         let s: Vec<Squad> = squadfile::builtins();
         assert_eq!(squadfile::users_of(&s, "planner"), [("coding".to_string(), "Coding".to_string(), vec![1])]);
-        assert_eq!(squadfile::users_of(&s, "docs-writer"), [("docs".to_string(), "Docs".to_string(), vec![2])]);
+        assert_eq!(squadfile::users_of(&s, "tech-writer"), [("docs".to_string(), "Docs".to_string(), vec![2])]);
         assert!(squadfile::users_of(&s, "nobody").is_empty());
     }
 }

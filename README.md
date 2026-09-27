@@ -971,8 +971,8 @@ Nothing about the squad is added to your own Claude Code settings: the leader's 
   web) checks each claim against its source, and may send it back to the researcher once.
 - **Docs** (needs a folder; a worktree when the folder is a git repo): writes or updates documentation as Markdown files
   in the ticket's folder (its worktree, in git). The **outliner** (Sonnet) reads the ticket, the existing docs and the
-  code and proposes what to write where; the **docs-writer** (Sonnet, can change files) writes it; the **editor** (Opus) checks
-  it against the code, the ticket and the project's style, and may send it back to the docs-writer twice. The result lists
+  code and proposes what to write where; the **tech-writer** (Sonnet, can change files) writes it; the **editor** (Opus) checks
+  it against the code, the ticket and the project's style, and may send it back to the tech-writer twice. The result lists
   the files. Docs in Coda, Confluence and the like are for your own squads, using your Claude's connectors.
 - **Summarize** (no folder needed; never a worktree): the **summarizer** (Sonnet, can use the web, so links can be read)
   reads what the ticket points at and writes a short summary for you; the leader puts it in the ticket's result.
@@ -1019,7 +1019,7 @@ line of text in a small box, a model or an agent from a short list, a system pro
 notes. `space` turns a switch on or off. Every change is saved at once.
 
 **What platoon comes with is built in**: the four squads and their twelve agents (Coding's planner, builder, reviewer
-and verifier; Research's questioner, researcher, report-writer and checker; Docs' outliner, docs-writer and editor; and
+and verifier; Research's questioner, researcher, report-writer and checker; Docs' outliner, tech-writer and editor; and
 the summarizer). Everything about them can be changed; the list then says **User Modified**, and `d` puts one back as
 platoon has it, after asking (your version is kept as `<id>.json.bak`). They can't be deleted.
 
