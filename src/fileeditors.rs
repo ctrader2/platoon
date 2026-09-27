@@ -99,6 +99,11 @@ const fn window(id: &'static str, name: &'static str, commands: &'static [&'stat
     Known { id, name, commands, args, runs: Runs::Window, several: Several::OneWindow, mac }
 }
 
+/// A JetBrains IDE: `<launcher> <folder>`, one call per folder. Its command line has no documented way to force a new
+/// window (JetBrains' help, "Command-line interface" and "Open files from the command line", lists only `nosplash`,
+/// `dontReopenProjects`, `disableNonBundledPlugins`, `--wait` and the diff/merge/format/inspect/installPlugins
+/// commands), so a running IDE opens the folder as its own "Open project in" setting says (new window, this window, or
+/// ask); platoon never changes that setting.
 const fn jetbrains(id: &'static str, name: &'static str, commands: &'static [&'static str], mac: &'static [(&'static str, &'static str)]) -> Known {
     Known { id, name, commands, args: &[], runs: Runs::Window, several: Several::EachWindow, mac }
 }

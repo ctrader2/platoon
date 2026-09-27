@@ -232,7 +232,7 @@ const HOLD_FOR: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
 /// `platoon clipboard-hold`: put the text on its input on the system clipboard (and the primary selection), then, on
 /// X11 and Wayland, stay in the background holding it until something else is copied (at most `HOLD_FOR`), because
 /// there the program that copied is the one that hands the text over when it is pasted (what `xclip` does). Started
-/// by the code editor (`src/editor/init.lua`) only when `PLATOON_CLIPBOARD` is `system`; it prints nothing, and its
+/// by the code editor (`plugins/editor/config/init.lua`) only when `PLATOON_CLIPBOARD` is `system`; it prints nothing, and its
 /// exit code is all it says (0 copied, 1 not).
 pub fn run_hold() -> i32 {
     use std::io::Read;

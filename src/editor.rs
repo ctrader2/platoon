@@ -2,13 +2,14 @@
 //! to it and back. The app decides when (`app/editor_glue.rs`); what is installed where is `editor_install.rs`.
 //!
 //! How it is started: `<editor>/bin/nvim -u <editor>/config/init.lua`, in the first folder, with
-//! - `init.lua` and `lua/platoon/tree.lua` (compiled into platoon from `src/editor/`, rewritten at every opening),
+//! - the editor's settings files (`init.lua`, `lua/platoon/tree.lua`, `shell.sh`: the editor plugin's, see
+//!   `editorplugin.rs`; written into `<editor>/config` at every opening),
 //! - a session file (`config/session-<platoon's pid>.json`, named by `PLATOON_EDITOR_SESSION`): the folders, the commits
 //!   a ticket's changes are counted from, platoon's theme turned into the editor's colors, whether there are icons,
 //!   where a copy goes (as platoon copies: `PLATOON_CLIPBOARD`, the helper `platoon clipboard-hold`),
 //! - its XDG folders inside `<editor>/nvim/` (nvim writes its state even with `--clean`, and nvim-treesitter would put
 //!   parsers in `~/.local/share/nvim`), `<editor>/bin` first on PATH, and the user's own values of those variables in
-//!   `PLATOON_KEEP_<name>`, which `config/shell` (the editor's 'shell') puts back for the terminal and `:!`.
+//!   `PLATOON_KEEP_<name>`, which `config/shell.sh` (the editor's 'shell') puts back for the terminal and `:!`.
 //!
 //! The handoff: platoon leaves its screen (raw mode off, the alternate screen left), runs nvim in the foreground on
 //! the same terminal and waits; nothing of platoon reads the keyboard or draws meanwhile (its loop is waiting here, and
@@ -31,12 +32,8 @@ use std::{
     process::{Command, ExitStatus},
 };
 
-pub const INIT_LUA: &str = include_str!("editor/init.lua");
-pub const TREE_LUA: &str = include_str!("editor/tree.lua");
-pub const SHELL_SH: &str = include_str!("editor/shell.sh");
-
-/// The variables the editor's own world changes, whose user values the terminal gets back (`shell.sh` has the
-/// same list).
+/// The variables the editor's own world changes, whose user values the terminal gets back (the editor plugin's
+/// `shell.sh` has the same list; a test keeps them in step).
 pub const KEPT: &[&str] = &[
     "PATH",
     "XDG_CONFIG_HOME",
@@ -539,7 +536,7 @@ pub fn session_json(req: &Request, look: &Look, dirs: &Dirs) -> Value {
         "title": req.title,
         "site": dirs.site(),
         "config_dir": config_dir(dirs),
-        "shell": config_dir(dirs).join("shell"),
+        "shell": config_dir(dirs).join("shell.sh"),
         "icons": look.icons,
         "compile_parsers": look.compile_parsers,
         "roots": roots,
@@ -587,7 +584,8 @@ pub fn program(dirs: &Dirs, env: &dyn Fn(&str) -> Option<String>) -> Result<Path
     if let Some(p) = env("PLATOON_NVIM_BIN").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(p));
     }
-    if env("PLATOON_FORBID_REAL_EDITOR").is_some() {
+    // (Set but empty: a test that installed a stand-in as the editor's own nvim lets it run.)
+    if env("PLATOON_FORBID_REAL_EDITOR").is_some_and(|v| !v.is_empty()) {
         return Err("PLATOON_FORBID_REAL_EDITOR is set: refusing to start the real editor".into());
     }
     dirs.nvim().ok_or_else(|| "the code editor isn't installed".into())
@@ -663,16 +661,27 @@ fn forget_old_sessions(cfg: &Path) {
     }
 }
 
-/// Write the editor's config and this opening's session file, make its folders, and say how to run it.
-pub fn prepare(dirs: &Dirs, req: &Request, look: &Look, env: &dyn Fn(&str) -> Option<String>, id: u32) -> Result<Launch, String> {
+/// Write the editor's settings files (`config`: path under the config folder, text; the editor plugin's), this
+/// opening's session file, make its folders, and say how to run it. A `.sh` file is made runnable (the editor runs
+/// it as its 'shell').
+pub fn prepare(dirs: &Dirs, req: &Request, look: &Look, env: &dyn Fn(&str) -> Option<String>, id: u32, config: &[(String, String)]) -> Result<Launch, String> {
     let program = program(dirs, env)?;
     let cfg = config_dir(dirs);
     let err = |what: &str, e: io::Error| format!("couldn't write the editor's {what}: {e}");
-    write_if_changed(&cfg.join("init.lua"), INIT_LUA).map_err(|e| err("settings", e))?;
-    write_if_changed(&cfg.join("lua/platoon/tree.lua"), TREE_LUA).map_err(|e| err("settings", e))?;
-    let shell = cfg.join("shell");
-    write_if_changed(&shell, SHELL_SH).map_err(|e| err("shell script", e))?;
-    fs::set_permissions(&shell, fs::Permissions::from_mode(0o755)).map_err(|e| err("shell script", e))?;
+    if !config.iter().any(|(rel, _)| rel == "init.lua") {
+        return Err("the editor's settings (init.lua) are missing from its plugin".into());
+    }
+    for (rel, text) in config {
+        // Checked when the plugin was installed; never a path out of the config folder all the same.
+        if rel.split('/').any(|p| p.is_empty() || p == ".." || p.starts_with('.')) || rel.starts_with('/') {
+            continue;
+        }
+        let path = cfg.join(rel);
+        write_if_changed(&path, text).map_err(|e| err("settings", e))?;
+        if rel.ends_with(".sh") {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).map_err(|e| err("shell script", e))?;
+        }
+    }
     // (with nvim's own folder in each: plugins write their logs there without making it first)
     for d in ["config/nvim", "data/nvim", "state/nvim", "cache/nvim", "none"] {
         fs::create_dir_all(xdg_dir(dirs).join(d)).map_err(|e| err("folders", e))?;
@@ -820,6 +829,15 @@ pub fn open_now(cache: &Path) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use crate::editor_install::testing;
+
+    /// The editor plugin's files, as the catalog has them (`plugins/editor`).
+    fn plugin_file(rel: &str) -> &'static str {
+        crate::editorplugin::BUNDLED.iter().find(|(p, _)| *p == rel).unwrap().1
+    }
+
+    fn config() -> Vec<(String, String)> {
+        crate::editorplugin::BUNDLED.iter().filter_map(|(p, t)| p.strip_prefix("config/").map(|r| (r.to_string(), t.to_string()))).collect()
+    }
     use crate::tickets::Worktree;
     use std::collections::HashMap;
     use std::process::Stdio;
@@ -995,7 +1013,7 @@ mod tests {
         assert_eq!(got["PLATOON_EDITOR_SESSION"].as_deref(), Some(s(&session).as_str()));
         assert_eq!(got["PLATOON_EDITOR_ENV"].as_deref(), Some("1"));
         for k in KEPT {
-            assert!(SHELL_SH.contains(k), "the shell script puts {k} back");
+            assert!(plugin_file("config/shell.sh").contains(k), "the shell script puts {k} back");
             assert!(got.contains_key(&format!("PLATOON_KEEP_{k}")));
         }
     }
@@ -1005,7 +1023,7 @@ mod tests {
     fn the_editors_shell_puts_the_users_environment_back() {
         let d = tmp("shell");
         let script = d.join("shell");
-        fs::write(&script, SHELL_SH).unwrap();
+        fs::write(&script, plugin_file("config/shell.sh")).unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         let dirs = testing::dirs(&d, vec![]);
         let env = env_of(&[("PATH", "/usr/bin:/bin"), ("XDG_CONFIG_HOME", "/home/u/.config")]);
@@ -1143,7 +1161,7 @@ mod tests {
             assert_eq!(v["roots"][0]["base"], "abc123");
             assert_eq!(v["roots"][0]["repo_name"], "shop");
             assert_eq!(v["site"], s(&dirs.site()).as_str());
-            assert_eq!(v["shell"], s(&dirs.editor.join("config/shell")).as_str());
+            assert_eq!(v["shell"], s(&dirs.editor.join("config/shell.sh")).as_str());
             assert_eq!(v["colors"]["mode"], "truecolor");
         }
         // A folder's name with quotes and backslashes stays itself (JSON, never pasted into Lua or a shell).
@@ -1177,15 +1195,15 @@ mod tests {
     fn the_editors_settings_send_a_yank_out_and_paste_from_its_own_registers() {
         // `y` into the unnamed register goes out (TextYankPost); deletes don't; 'clipboard' stays empty, so `p`
         // never asks the provider, and the provider's paste is the editor's own last copy (never the terminal).
-        assert!(INIT_LUA.contains("o.clipboard = ''"));
-        assert!(INIT_LUA.contains("vim.api.nvim_create_autocmd('TextYankPost'"));
-        assert!(INIT_LUA.contains("ev.operator == 'y' and (ev.regname == nil or ev.regname == '')"));
-        assert!(INIT_LUA.contains("vim.g.clipboard = {\n  name = 'platoon',"));
-        assert!(INIT_LUA.contains("require('vim.ui.clipboard.osc52').copy('+')(out)"), "OSC 52 by Neovim's own provider");
-        assert!(!INIT_LUA.contains("osc52').paste"), "never OSC 52 paste: many terminals don't answer it");
-        assert!(INIT_LUA.contains("return { last.lines, last.regtype }"));
-        assert!(INIT_LUA.contains("pcall(vim.system, CB.helper, { stdin = text, detach = true"));
-        assert!(INIT_LUA.contains("CB.target == 'system' and type(CB.helper) == 'table'"), "the helper only for the system clipboard");
+        assert!(plugin_file("config/init.lua").contains("o.clipboard = ''"));
+        assert!(plugin_file("config/init.lua").contains("vim.api.nvim_create_autocmd('TextYankPost'"));
+        assert!(plugin_file("config/init.lua").contains("ev.operator == 'y' and (ev.regname == nil or ev.regname == '')"));
+        assert!(plugin_file("config/init.lua").contains("vim.g.clipboard = {\n  name = 'platoon',"));
+        assert!(plugin_file("config/init.lua").contains("require('vim.ui.clipboard.osc52').copy('+')(out)"), "OSC 52 by Neovim's own provider");
+        assert!(!plugin_file("config/init.lua").contains("osc52').paste"), "never OSC 52 paste: many terminals don't answer it");
+        assert!(plugin_file("config/init.lua").contains("return { last.lines, last.regtype }"));
+        assert!(plugin_file("config/init.lua").contains("pcall(vim.system, CB.helper, { stdin = text, detach = true"));
+        assert!(plugin_file("config/init.lua").contains("CB.target == 'system' and type(CB.helper) == 'table'"), "the helper only for the system clipboard");
     }
 
     #[test]
@@ -1199,11 +1217,11 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let req = Request { title: "x".into(), roots: folder_roots(&s(&root), "git") };
         let env = env_of(&[("PLATOON_NVIM_BIN", "/bin/true"), ("HOME", home.to_str().unwrap()), ("PATH", "/usr/bin")]);
-        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7).unwrap();
+        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7, &config()).unwrap();
         let cfg = config_dir(&dirs);
-        assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), INIT_LUA);
-        assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), TREE_LUA);
-        assert!(fs::metadata(cfg.join("shell")).unwrap().permissions().mode() & 0o111 != 0);
+        assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), plugin_file("config/init.lua"));
+        assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), plugin_file("config/lua/platoon/tree.lua"));
+        assert!(fs::metadata(cfg.join("shell.sh")).unwrap().permissions().mode() & 0o111 != 0);
         assert_eq!(l.session, Some(cfg.join("session-7.json")));
         let v: Value = serde_json::from_str(&fs::read_to_string(l.session.as_ref().unwrap()).unwrap()).unwrap();
         assert_eq!(v["roots"][0]["path"], s(&root).as_str());
@@ -1223,7 +1241,7 @@ mod tests {
         fs::write(&live, "{}").unwrap();
         // The user's git folder gone: the link goes too.
         fs::remove_dir(home.join(".config/git")).unwrap();
-        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7).unwrap();
+        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7, &config()).unwrap();
         assert!(fs::symlink_metadata(xdg_dir(&dirs).join("config/git")).is_err());
         assert!(!stale.exists() && live.exists());
     }

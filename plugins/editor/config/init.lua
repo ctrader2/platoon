@@ -1,13 +1,13 @@
 -- platoon's code editor: Neovim with platoon's own settings, opened with `v` on a ticket, a session or a folder.
 --
--- platoon writes this file (compiled into it from src/editor/init.lua) into its editor folder every time it opens
--- the editor, so changes made here are overwritten. What changes from one opening to the next - the folders, the
+-- platoon writes this file (from its editor plugin, plugins/editor/config/init.lua) into its editor folder every time it
+-- opens the editor, so changes made here are overwritten. What changes from one opening to the next - the folders, the
 -- commits a ticket's changes are counted from, the colors of platoon's theme, whether the font has icons - is in the
 -- session file named by $PLATOON_EDITOR_SESSION (JSON written by platoon).
 --
 -- Nothing here reads or writes ~/.config/nvim or nvim's usual data folders: platoon starts nvim with its XDG folders
 -- inside its own editor folder, and gives programs started from the editor (the terminal, `:!`) the user's own
--- environment back through the `shell` script beside this file.
+-- environment back through the `shell.sh` script beside this file.
 
 -- ---- the session ---------------------------------------------------------------------------------------------------
 

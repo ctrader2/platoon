@@ -2833,7 +2833,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
         let where_it_runs = match (e.runs, e.several) {
-            (Runs::Platoon, _) if pick.platoon_missing => "installs first",
+            (Runs::Platoon, _) if pick.platoon_missing => "installs its plugin first",
             (Runs::Platoon, _) | (Runs::Terminal, _) => "here in platoon's terminal",
             (Runs::Window, Several::EachWindow) => "a window per folder",
             (Runs::Window, _) => "in its own window",
@@ -2842,7 +2842,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let spans = vec![
             Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
             Span::styled(format!("{star} "), base.fg(t.accent)),
-            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(31)), base.fg(t.text)),
+            Span::styled(fit(&if e.is_platoon() && pick.platoon_missing { format!("{} (not installed)", e.name) } else { e.name.clone() }, (rect.width as usize).saturating_sub(31)), base.fg(t.text)),
             Span::styled(where_it_runs, base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
@@ -3156,13 +3156,19 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 .to_string(),
             "open anyway",
         ),
-        Confirm::InstallEditor => (
+        Confirm::InstallEditor { bytes, plugin: false } => (
             "code editor",
-            "The code editor isn't installed. Install it now?".to_string(),
+            "platoon's code editor isn't installed. Install its plugin now?".to_string(),
             format!(
-                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder: about {} MB, a few seconds. Your own Neovim settings are not touched; `platoon setup --remove editor` takes it off again.",
-                crate::editor_install::APPROX_MB
+                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder. It downloads {}, usually in under a minute. Your own Neovim settings are not touched; the Plugins tab (4) takes it off again.",
+                crate::editorplugin::size_words(*bytes)
             ),
+            "install",
+        ),
+        Confirm::InstallEditor { bytes, plugin: true } => (
+            "code editor",
+            "The code editor's downloads aren't complete. Finish them now?".to_string(),
+            format!("Only what is missing or changed is fetched (of {} in all); what is there already is kept.", crate::editorplugin::size_words(*bytes)),
             "install",
         ),
         Confirm::DeleteSquad { id, name } => (
@@ -3201,6 +3207,23 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
         ),
+        Confirm::InstallPlugin { name, update, download: Some(bytes), .. } => match update {
+            Some((from, to)) => (
+                "update plugin",
+                format!("Update {name} from {from} to {to}?"),
+                format!("Its files are replaced with the catalog's, then whatever changed in what it downloads is fetched (of {} in all).", crate::editorplugin::size_words(*bytes)),
+                "update",
+            ),
+            None => (
+                "install plugin",
+                format!("Install {name}?"),
+                format!(
+                    "Neovim with a file tree, the changed files, diffs, search and a terminal, opened with v. It downloads {} (Neovim, its tools and plugins, a font with icons), each checked against the checksum the plugin pins, into platoon's own folder; usually under a minute. d here takes it off again, with everything it downloaded.",
+                    crate::editorplugin::size_words(*bytes)
+                ),
+                "install",
+            ),
+        },
         Confirm::InstallPlugin { name, adds, update, .. } => match update {
             Some((from, to)) => ("update plugin", format!("Update {name} from {from} to {to}?"), format!("It adds {adds}. Its files are replaced with the catalog's."), "update"),
             None => (
@@ -3210,6 +3233,12 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 "install",
             ),
         },
+        Confirm::RemovePlugin { name, editor: true, .. } => (
+            "remove plugin",
+            format!("Remove {name}?"),
+            "Everything it downloaded goes with it: platoon's editor folder (Neovim, its tools and plugins) and the font platoon installed. Your own Neovim and its settings are not touched. v still opens your other editors; installing the plugin again brings it back.".to_string(),
+            "remove",
+        ),
         Confirm::RemovePlugin { name, adds, in_use, .. } => (
             "remove plugin",
             format!("Remove {name}?"),
@@ -3308,7 +3337,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let no = match c {
         Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. } => "keep it",
-        Confirm::InstallEditor | Confirm::InstallPlugin { .. } => "not now",
+        Confirm::InstallEditor { .. } | Confirm::InstallPlugin { .. } => "not now",
         Confirm::RemovePlugin { .. } => "keep it",
         _ => "cancel",
     };

@@ -1,5 +1,6 @@
 -- platoon's two views in the editor's side panel (neo-tree sources), written next to init.lua by platoon each time it
--- opens the editor (compiled into platoon from src/editor/tree.lua; changes here are overwritten).
+-- opens the editor (from platoon's editor plugin, plugins/editor/config/lua/platoon/tree.lua; changes here are
+-- overwritten).
 --
 --   Files          every folder of the ticket or session as a top-level entry, each with git's marks
 --   Changed files  what each repository changed: for a ticket since its worktree was made (committed and not yet

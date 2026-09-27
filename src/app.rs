@@ -274,8 +274,9 @@ pub enum Confirm {
     HandAnyway { number: u32, squad: String, title: String, says: String },
     /// `v` on a ticket whose squad is still working in its files: open the editor anyway?
     EditorWhileWorking { number: u32, title: String },
-    /// `v` while the code editor isn't installed: install it now?
-    InstallEditor,
+    /// `v` while the code editor isn't installed: install it now? (`bytes`: what it downloads; `plugin`: the plugin
+    /// is there already, only its downloads aren't.)
+    InstallEditor { bytes: u64, plugin: bool },
     /// Delete one of the user's own squads.
     DeleteSquad { id: String, name: String },
     /// Put a built-in squad the user changed back as platoon has it.
@@ -289,9 +290,11 @@ pub enum Confirm {
     /// Throw away the drafted agent that was never saved.
     DiscardAgentDraft { name: String },
     /// Install a plugin from the catalog (`update`: the versions from and to, when it replaces the one installed).
-    InstallPlugin { id: String, name: String, adds: String, update: Option<(String, String)> },
-    /// Take a plugin off (`in_use`: the theme in use is one of its).
-    RemovePlugin { id: String, name: String, adds: String, in_use: bool },
+    /// `download`: what installing it downloads besides (the code editor's parts), in bytes.
+    InstallPlugin { id: String, name: String, adds: String, update: Option<(String, String)>, download: Option<u64> },
+    /// Take a plugin off (`in_use`: the theme in use is one of its; `editor`: it is the code editor, whose downloads
+    /// go with it).
+    RemovePlugin { id: String, name: String, adds: String, in_use: bool, editor: bool },
 }
 
 #[derive(Clone)]
@@ -787,6 +790,10 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
+        // An editor installed before it was a plugin becomes the editor plugin (quietly, from the copy that came with
+        // platoon: no network, nothing downloaded).
+        app.take_over_editor();
+        app.pl.editor_facts(&app.ed.dirs);
         // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
         // `.claude.json` in that same (temporary) folder, never the user's own.
         app.sqt.claude_root = app.reader.root().to_path_buf();
@@ -1363,8 +1370,8 @@ impl App {
             (Action::Editor, Mode::List) => self.code_editor_key(),
             (Action::Confirm, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_anyway(),
             (Action::Cancel, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_cancel(false),
-            (Action::Confirm, Mode::Confirm(Confirm::InstallEditor)) => self.install_editor(),
-            (Action::Cancel, Mode::Confirm(Confirm::InstallEditor)) => self.editor_cancel(true),
+            (Action::Confirm, Mode::Confirm(Confirm::InstallEditor { .. })) => self.install_editor(),
+            (Action::Cancel, Mode::Confirm(Confirm::InstallEditor { .. })) => self.editor_cancel(true),
             (Action::Confirm, Mode::Handoff) => self.take_handoff(),
             (Action::Cancel, Mode::Handoff) => self.cancel_handoff(),
             (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),

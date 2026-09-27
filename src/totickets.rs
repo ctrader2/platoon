@@ -65,8 +65,7 @@ fn record(config: &Path) -> Map<String, Value> {
     choice(config, NAME)
 }
 
-/// One step's record in `setup.json` (empty when there is none, or the file can't be read). Shared with the editor
-/// step (`setup::ask_about_editor`), which keeps its own key.
+/// One step's record in `setup.json` (empty when there is none, or the file can't be read), by its key.
 pub fn choice(config: &Path, key: &str) -> Map<String, Value> {
     load_choices(config).and_then(|mut o| o.remove(key)).and_then(|v| match v {
         Value::Object(o) => Some(o),

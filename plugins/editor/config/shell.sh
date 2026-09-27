@@ -2,7 +2,7 @@
 # platoon's code editor runs Neovim with its own XDG folders and its own programs first on PATH, so that nothing of
 # the user's own Neovim is read or written. This is the editor's 'shell': before starting the user's shell ($SHELL)
 # for the terminal, `:!` and `:terminal`, it gives back the user's own environment, as it was when platoon opened the
-# editor. platoon writes this file (compiled into it from src/editor/shell.sh) each time it opens the editor.
+# editor. platoon writes this file (from its editor plugin, plugins/editor/config/shell.sh) each time it opens the editor.
 #
 # For each variable below, PLATOON_KEEP_<name> holds the user's value when they had one; without it the variable was
 # not set, and it is taken away again. PLATOON_EDITOR_ENV says there is something to give back (a shell started from

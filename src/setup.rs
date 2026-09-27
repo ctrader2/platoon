@@ -4,7 +4,7 @@
 //! files as they are now: `platoon` refuses to start until every step is done, running `setup` again
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists.
 
-use crate::{ai, editor_install, settings};
+use crate::{ai, settings};
 use serde_json::{json, Value};
 use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}};
 
@@ -84,8 +84,6 @@ pub struct Report {
     /// Set when the tickets skill was written.
     pub skill: Option<PathBuf>,
     pub notes: Vec<String>,
-    /// The optional code editor's line, when the caller looked (`run` never does: it reads only Claude Code's files).
-    pub editor: Option<EditorLine>,
 }
 
 fn read_settings(root: &Path) -> Option<Value> {
@@ -230,7 +228,7 @@ pub fn remove_step(root: &Path, config: &Path, what: &str) -> Result<String, Str
                 "The /to-tickets skill wasn't there. `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.".to_string()
             })
         }
-        EDITOR => remove_editor(config, &editor_install::Dirs::from_env()),
+        EDITOR => Err(EDITOR_IS_A_PLUGIN.replace("{verb}", "remove")),
         other => Err(unknown_step("remove", other)),
     }
 }
@@ -248,13 +246,7 @@ pub fn add_step(root: &Path, config: &Path, what: &str) -> Result<String, String
                 Installed::Changed => format!("The /to-tickets skill is there already, {CHANGED_NOTE}."),
             })
         }
-        EDITOR => {
-            use std::io::IsTerminal;
-            let printer = editor_install::Printer::new(std::io::stdout().is_terminal());
-            let done = add_editor(config, &editor_install::Dirs::from_env(), &editor_install::pinned(), &printer);
-            printer.finish();
-            done
-        }
+        EDITOR => Err(EDITOR_IS_A_PLUGIN.replace("{verb}", "add")),
         other => Err(unknown_step("add", other)),
     }
 }
@@ -453,7 +445,7 @@ pub fn run(root: &Path, config: &Path) -> Result<Report, String> {
         Ok(crate::totickets::Installed::Changed) => Outcome::Changed,
         Err(why) => Outcome::Skipped(why),
     });
-    Ok(Report { outcomes, saved, skill, notes, editor: None })
+    Ok(Report { outcomes, saved, skill, notes })
 }
 
 /// What became of the question about the features that use tokens.
@@ -553,9 +545,6 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
             Outcome::Changed => row(None, step, CHANGED_NOTE, color),
         });
     }
-    if let Some(e) = &r.editor {
-        out.push(editor_row(e, color));
-    }
     out.push(String::new());
     if r.saved.is_some() {
         out.push(format!("Saved {} (backup: settings.json.platoon-bak).", root.join("settings.json").display()));
@@ -573,13 +562,7 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
 }
 
 /// What `platoon` prints instead of starting when setup isn't complete.
-#[cfg(test)]
 pub fn render_blocked(states: &[State], color: bool) -> String {
-    render_blocked_with(states, None, color)
-}
-
-/// The same, with the code editor's line (it never blocks starting).
-pub fn render_blocked_with(states: &[State], editor: Option<&EditorLine>, color: bool) -> String {
     let mut out = vec!["platoon needs a one-time setup before it can run.".to_string(), String::new()];
     for (step, s) in STEPS.iter().zip(states) {
         out.push(match s {
@@ -595,194 +578,20 @@ pub fn render_blocked_with(states: &[State], editor: Option<&EditorLine>, color:
             State::Broken(why) => row(Some(false), step, &format!("broken: {why}"), color),
         });
     }
-    if let Some(e) = editor {
-        out.push(editor_row(e, color));
-    }
     out.push(String::new());
     out.push("Run `platoon setup` to finish. It backs up settings.json first and never touches your other settings.".into());
     out.join("\n")
 }
 
-// ---- the code editor: optional, never blocks starting ---------------------------------------------------------------
+// ---- the code editor: a plugin now -----------------------------------------------------------------------------------
 
-/// Its word for `--add` / `--remove`, and its key in `setup.json` (`{"editor": {"asked": true, "wanted": false}}`,
-/// `"removed": true` after `--remove`).
+/// `platoon setup --add editor` / `--remove editor` still work: `main.rs` says the code editor is a plugin now and
+/// does `platoon plugin add/remove editor` (`plugincli::setup_alias`). `setup.json`'s old `"editor"` record (`asked`,
+/// `wanted`, `removed`, from when setup asked about it) is left as it is and no longer read.
 pub const EDITOR: &str = "editor";
 
-const EDITOR_STEP: Step = Step {
-    name: "Code editor",
-    what: "Neovim with platoon's plugins, to look at a ticket's work (optional)",
-    blocking: false,
-    missing_note: "",
-};
-
-/// Where the code editor stands, for its line in the checklist.
-#[derive(Debug, PartialEq, Eq)]
-pub enum EditorLine {
-    Installed { limited: bool },
-    NotInstalled,
-    Removed,
-    NeedsUpdate,
-    Unsupported,
-}
-
-fn editor_choice(config: &Path) -> (bool, bool, bool) {
-    let rec = crate::totickets::choice(config, EDITOR);
-    let flag = |k: &str| rec.get(k).and_then(Value::as_bool) == Some(true);
-    (flag("asked"), flag("wanted"), flag("removed"))
-}
-
-pub fn editor_line(config: &Path, dirs: &editor_install::Dirs) -> EditorLine {
-    editor_line_with(config, &editor_install::status(dirs))
-}
-
-fn editor_line_with(config: &Path, st: &editor_install::Status) -> EditorLine {
-    let (_, _, removed) = editor_choice(config);
-    if st.unsupported {
-        EditorLine::Unsupported
-    } else if st.complete() {
-        EditorLine::Installed { limited: st.no_compiler }
-    } else if removed && st.nothing() {
-        EditorLine::Removed
-    } else if st.nothing() {
-        EditorLine::NotInstalled
-    } else {
-        EditorLine::NeedsUpdate
-    }
-}
-
-fn editor_row(e: &EditorLine, color: bool) -> String {
-    let (ok, detail) = match e {
-        EditorLine::Installed { limited: false } => (Some(true), "installed".to_string()),
-        EditorLine::Installed { limited: true } => (Some(true), "installed; syntax highlighting is limited because there is no C compiler".to_string()),
-        EditorLine::NotInstalled => (None, format!("not installed: `platoon setup --add editor` installs it (about {} MB, under a minute)", editor_install::APPROX_MB)),
-        EditorLine::Removed => (None, "removed by you: `platoon setup --add editor` puts it back".to_string()),
-        EditorLine::NeedsUpdate => (None, "not complete or out of date: `platoon setup --add editor` brings it up to date".to_string()),
-        EditorLine::Unsupported => (None, "not available for this computer".to_string()),
-    };
-    row(ok, &EDITOR_STEP, &detail, color)
-}
-
-/// What became of the code editor during `platoon setup`.
-#[derive(Debug, PartialEq, Eq)]
-pub enum EditorQuestion {
-    /// Answered before (or removed, or nothing to offer on this computer): nothing is printed.
-    AlreadyAsked,
-    /// Already installed and up to date: nothing is printed.
-    Installed,
-    /// Not in a terminal: nothing asked, nothing saved (the checklist line says how to install it).
-    NotInteractive,
-    Answered(bool),
-    NoAnswer,
-    NotSaved,
-    /// Wanted before and now complete again (platoon's pins moved on, or something was missing).
-    Updated,
-    /// The install (now, or an update) didn't finish; said, with how to try again.
-    Failed,
-}
-
-/// The question `platoon setup` asks about the code editor, once: default no, only in a terminal. A yes installs it
-/// right away. Once wanted (a yes, or `--add editor`), later runs of setup bring it up to date quietly.
-pub fn ask_about_editor(
-    config: &Path,
-    dirs: &editor_install::Dirs,
-    manifest: &editor_install::Manifest,
-    interactive: bool,
-    input: &mut dyn BufRead,
-    out: &mut dyn Write,
-    printer: &editor_install::Printer,
-) -> EditorQuestion {
-    let (asked, wanted, removed) = editor_choice(config);
-    let st = editor_install::status_with(dirs, manifest);
-    if st.unsupported || removed {
-        return EditorQuestion::AlreadyAsked;
-    }
-    if st.complete() {
-        if !wanted {
-            let _ = crate::totickets::change_choice(config, EDITOR, &[("asked", Some(Value::Bool(true))), ("wanted", Some(Value::Bool(true)))]);
-        }
-        return EditorQuestion::Installed;
-    }
-    if wanted {
-        let _ = writeln!(out, "\nBringing the code editor up to date ({}).", st.needs().join(", "));
-        return match run_install(dirs, manifest, out, printer) {
-            true => EditorQuestion::Updated,
-            false => EditorQuestion::Failed,
-        };
-    }
-    if asked {
-        return EditorQuestion::AlreadyAsked;
-    }
-    if !interactive {
-        return EditorQuestion::NotInteractive;
-    }
-    let _ = write!(
-        out,
-        "\nplatoon can install a code editor to look at a ticket's work: Neovim with a file tree, the changed files and \
-         their differences, search and a terminal, plus a font with icons. It goes in {} and never touches your own \
-         Neovim settings; `platoon setup --remove editor` takes it off again.\n\
-         Install the code editor platoon can open on a ticket's work? About {} MB, under a minute. [y/N] ",
-        dirs.editor.display(),
-        editor_install::APPROX_MB
-    );
-    let _ = out.flush();
-    let mut line = String::new();
-    if input.read_line(&mut line).unwrap_or(0) == 0 {
-        let _ = writeln!(out, "\nNo answer, so nothing was installed. `platoon setup` will ask again.");
-        return EditorQuestion::NoAnswer;
-    }
-    let yes = matches!(line.trim().to_lowercase().as_str(), "y" | "yes");
-    if let Err(e) = crate::totickets::change_choice(config, EDITOR, &[("asked", Some(Value::Bool(true))), ("wanted", Some(Value::Bool(yes)))]) {
-        let _ = writeln!(out, "Couldn't save your answer ({e}), so nothing was installed. `platoon setup` will ask again.");
-        return EditorQuestion::NotSaved;
-    }
-    if !yes {
-        let _ = writeln!(out, "No code editor, then. `platoon setup --add editor` installs it any time.");
-        return EditorQuestion::Answered(false);
-    }
-    if run_install(dirs, manifest, out, printer) { EditorQuestion::Answered(true) } else { EditorQuestion::Failed }
-}
-
-/// Install and say how it went. True when it finished.
-fn run_install(dirs: &editor_install::Dirs, manifest: &editor_install::Manifest, out: &mut dyn Write, printer: &editor_install::Printer) -> bool {
-    let done = editor_install::install_with(dirs, manifest, &|p| printer.update(p));
-    printer.finish();
-    match done {
-        Ok(r) => {
-            let _ = writeln!(out, "{}", editor_install::render_report(&r, dirs));
-            true
-        }
-        Err(e) => {
-            let _ = writeln!(out, "The code editor didn't finish installing.\n{e}\n`platoon setup --add editor` tries again.");
-            false
-        }
-    }
-}
-
-/// `platoon setup --add editor`: install it (or bring it up to date), and remember it is wanted.
-pub fn add_editor(config: &Path, dirs: &editor_install::Dirs, manifest: &editor_install::Manifest, printer: &editor_install::Printer) -> Result<String, String> {
-    crate::totickets::change_choice(config, EDITOR, &[("asked", Some(Value::Bool(true))), ("wanted", Some(Value::Bool(true))), ("removed", None)])?;
-    if editor_install::status_with(dirs, manifest).complete() {
-        return Ok("The code editor is already installed and up to date.".into());
-    }
-    let done = editor_install::install_with(dirs, manifest, &|p| printer.update(p));
-    printer.finish();
-    done.map(|r| editor_install::render_report(&r, dirs)).map_err(|e| format!("The code editor didn't finish installing.\n{e}\n`platoon setup --add editor` tries again."))
-}
-
-/// `platoon setup --remove editor`: delete platoon's editor folder and the font it installed (never the user's own
-/// programs or fonts), and remember it, so setup doesn't ask again.
-pub fn remove_editor(config: &Path, dirs: &editor_install::Dirs) -> Result<String, String> {
-    let r = editor_install::remove(dirs)?;
-    crate::totickets::change_choice(config, EDITOR, &[("asked", Some(Value::Bool(true))), ("wanted", Some(Value::Bool(false))), ("removed", Some(Value::Bool(true)))])?;
-    let after = "`platoon setup` won't ask about it again; `platoon setup --add editor` puts it back.";
-    Ok(if r.editor {
-        let font = if r.font_files > 0 { " and the font platoon installed" } else { "" };
-        format!("Removed the code editor ({}, {}){font}. {after}", dirs.editor.display(), editor_install::megabytes(r.bytes))
-    } else {
-        format!("The code editor wasn't installed. {after}")
-    })
-}
+/// What `--add`/`--remove editor` say if they reach setup itself (only `main.rs`'s alias should call them).
+const EDITOR_IS_A_PLUGIN: &str = "The code editor is a plugin now: `platoon plugin {verb} editor`.";
 
 #[cfg(test)]
 mod tests {
@@ -1013,139 +822,28 @@ mod tests {
 
     // ---- the code editor ----
 
-    struct Ed {
-        config: PathBuf,
-        dirs: editor_install::Dirs,
-        m: editor_install::Manifest,
-        base: PathBuf,
-    }
-
-    fn ed(name: &str) -> Ed {
-        use editor_install::testing::*;
-        let base = tmp(&format!("setup-{name}"));
-        let m = fake(&base.join("mirror"));
-        let dirs = dirs(&base, vec![fake_cc(&base)]);
-        Ed { config: base.join("config"), dirs, m, base }
-    }
-
-    fn ask_ed(e: &Ed, interactive: bool, typed: &str) -> (EditorQuestion, String) {
-        let mut out = Vec::new();
-        let q = ask_about_editor(&e.config, &e.dirs, &e.m, interactive, &mut std::io::Cursor::new(typed.as_bytes().to_vec()), &mut out, &editor_install::Printer::quiet());
-        (q, String::from_utf8(out).unwrap())
-    }
-
-    fn line(e: &Ed) -> EditorLine {
-        editor_line_with(&e.config, &editor_install::status_with(&e.dirs, &e.m))
-    }
-
-    fn choice(e: &Ed) -> Value {
-        Value::Object(crate::totickets::choice(&e.config, EDITOR))
-    }
-
+    /// setup no longer asks about the code editor or shows a line for it, and an old `setup.json` that remembers the
+    /// old question reads as before and is kept as it is.
     #[test]
-    fn the_editor_question_defaults_to_no_is_asked_once_and_says_what_it_is() {
-        let e = ed("ask-no");
-        assert_eq!(line(&e), EditorLine::NotInstalled);
-        for typed in ["\n", "n\n", "maybe\n"] {
-            let e = ed("ask-no-each");
-            let (q, shown) = ask_ed(&e, true, typed);
-            assert_eq!(q, EditorQuestion::Answered(false), "{typed:?}");
-            assert!(shown.contains("Install the code editor platoon can open on a ticket's work? About") && shown.contains("MB, under a minute. [y/N]"), "{shown}");
-            assert!(shown.contains("platoon setup --remove editor") && shown.contains("never touches your own"), "{shown}");
-            assert!(shown.contains("`platoon setup --add editor` installs it any time"), "{shown}");
-            assert!(!e.dirs.editor.join("installed.json").exists(), "nothing installed");
-            assert_eq!(choice(&e), json!({"asked": true, "wanted": false}));
-            // Asked once: the second time nothing is printed and nothing read.
-            assert_eq!(ask_ed(&e, true, "y\n"), (EditorQuestion::AlreadyAsked, String::new()));
-            assert_eq!(line(&e), EditorLine::NotInstalled);
-        }
-        let _ = e.base;
-    }
-
-    #[test]
-    fn a_yes_installs_it_at_once_and_later_setups_keep_it_up_to_date() {
-        let e = ed("ask-yes");
-        let (q, shown) = ask_ed(&e, true, "y\n");
-        assert_eq!(q, EditorQuestion::Answered(true), "{shown}");
-        assert!(shown.contains("The code editor is ready:") && shown.contains("JetBrainsMono Nerd Font"), "{shown}");
-        assert_eq!(choice(&e), json!({"asked": true, "wanted": true}));
-        assert_eq!(line(&e), EditorLine::Installed { limited: false });
-        assert!(render_report(&Report { outcomes: vec![], saved: None, skill: None, notes: vec![], editor: Some(line(&e)) }, &e.base, false).contains("[✓] Code editor"));
-        // Next setup: nothing to say.
-        assert_eq!(ask_ed(&e, true, ""), (EditorQuestion::Installed, String::new()));
-        // Something went missing (or platoon's pins moved on): setup brings it back without asking, even with no
-        // terminal.
-        fs::remove_dir_all(e.dirs.plugins().join("alpha.nvim")).unwrap();
-        assert_eq!(line(&e), EditorLine::NeedsUpdate);
-        let (q, shown) = ask_ed(&e, false, "");
-        assert_eq!(q, EditorQuestion::Updated, "{shown}");
-        assert!(shown.contains("Bringing the code editor up to date (alpha.nvim)"), "{shown}");
-        assert_eq!(line(&e), EditorLine::Installed { limited: false });
-        // A failed install says so and how to try again.
-        fs::remove_dir_all(e.dirs.plugins().join("alpha.nvim")).unwrap();
-        fs::remove_dir_all(e.base.join("mirror")).unwrap();
-        let (q, shown) = ask_ed(&e, false, "");
-        assert_eq!(q, EditorQuestion::Failed);
-        assert!(shown.contains("didn't finish installing") && shown.contains("`platoon setup --add editor` tries again"), "{shown}");
-    }
-
-    #[test]
-    fn without_a_terminal_the_editor_question_is_not_asked_and_nothing_is_remembered() {
-        let e = ed("ask-noterm");
-        assert_eq!(ask_ed(&e, false, "y\n"), (EditorQuestion::NotInteractive, String::new()));
-        assert!(!e.config.join("setup.json").exists());
-        let (q, shown) = ask_ed(&e, true, "");
-        assert_eq!(q, EditorQuestion::NoAnswer);
-        assert!(shown.contains("will ask again") && !e.config.join("setup.json").exists(), "{shown}");
-    }
-
-    #[test]
-    fn add_and_remove_editor_say_what_they_did_and_removal_is_remembered() {
-        let e = ed("add-remove");
-        let said = add_editor(&e.config, &e.dirs, &e.m, &editor_install::Printer::quiet()).unwrap();
-        assert!(said.starts_with("The code editor is ready:"), "{said}");
-        assert_eq!(add_editor(&e.config, &e.dirs, &e.m, &editor_install::Printer::quiet()).unwrap(), "The code editor is already installed and up to date.");
-        // The question isn't asked after --add.
-        assert_eq!(ask_ed(&e, true, "n\n").0, EditorQuestion::Installed);
-        let said = remove_editor(&e.config, &e.dirs).unwrap();
-        assert!(said.starts_with(&format!("Removed the code editor ({}, ", e.dirs.editor.display())), "{said}");
-        assert!(said.contains("and the font platoon installed") && said.contains("won't ask about it again") && said.contains("`platoon setup --add editor` puts it back"), "{said}");
-        assert!(!e.dirs.editor.exists() && !e.dirs.fonts.exists());
-        assert_eq!(choice(&e), json!({"asked": true, "wanted": false, "removed": true}));
-        assert_eq!(line(&e), EditorLine::Removed);
-        // Setup doesn't ask, and doesn't put it back.
-        assert_eq!(ask_ed(&e, true, "y\n"), (EditorQuestion::AlreadyAsked, String::new()));
-        assert!(!e.dirs.editor.exists());
-        assert!(remove_editor(&e.config, &e.dirs).unwrap().starts_with("The code editor wasn't installed."));
-        // --add undoes the removal.
-        add_editor(&e.config, &e.dirs, &e.m, &editor_install::Printer::quiet()).unwrap();
-        assert_eq!(choice(&e), json!({"asked": true, "wanted": true}));
-        assert_eq!(line(&e), EditorLine::Installed { limited: false });
-        // A failed --add is an error with how to retry, and it is still wanted.
-        let bad = ed("add-fail");
-        fs::remove_dir_all(bad.base.join("mirror")).unwrap();
-        let err = add_editor(&bad.config, &bad.dirs, &bad.m, &editor_install::Printer::quiet()).unwrap_err();
-        assert!(err.contains("didn't finish installing") && err.contains("tries again"), "{err}");
-        // The words for the step: `--remove`/`--add` know "editor"; `--replace` doesn't.
-        assert!(remove_step(&e.base, &e.config, "x").unwrap_err().contains("can remove: to-tickets, editor"));
-        assert!(replace_step(&e.base, &e.config, "editor").unwrap_err().contains("can replace: to-tickets"));
-    }
-
-    #[test]
-    fn the_editor_line_never_blocks_starting_and_says_how_to_install_it() {
-        let root = tmp("editor-line");
-        let states = check(&root, &pc(&root));
-        let shown = render_blocked_with(&states, Some(&EditorLine::NotInstalled), false);
-        assert!(shown.contains("[–] Code editor") && shown.contains("not installed: `platoon setup --add editor` installs it"), "{shown}");
-        assert_eq!(shown.matches("[✗]").count(), 2, "not a cross: {shown}");
-        let r = run(&root, &pc(&root)).unwrap();
-        assert!(r.editor.is_none(), "setup's own run never looks at the editor folder");
-        let with = |e: EditorLine| render_report(&Report { editor: Some(e), ..run(&root, &pc(&root)).unwrap() }, &root, false);
-        assert!(with(EditorLine::Removed).contains("[–] Code editor") && with(EditorLine::Removed).contains("removed by you: `platoon setup --add editor` puts it back"));
-        assert!(with(EditorLine::Installed { limited: true }).contains("limited because there is no C compiler"));
-        assert!(with(EditorLine::NeedsUpdate).contains("`platoon setup --add editor` brings it up to date"));
-        assert!(with(EditorLine::Unsupported).contains("not available for this computer"));
-        assert!(ready(&check(&root, &pc(&root))), "ready to start with no editor installed");
+    fn setup_no_longer_knows_the_editor_and_an_old_setup_json_still_reads() {
+        let root = tmp("old-editor-choice");
+        let config = pc(&root);
+        fs::create_dir_all(&config).unwrap();
+        let old = "{\n  \"to-tickets\": {\n    \"written\": \"925710a6a1025c4c\"\n  },\n  \"editor\": {\n    \"asked\": true,\n    \"wanted\": true\n  }\n}\n";
+        fs::write(config.join("setup.json"), old).unwrap();
+        let r = run(&root, &config).unwrap();
+        let shown = render_report(&r, &root, false);
+        assert!(!shown.contains("Code editor"), "{shown}");
+        assert!(ready(&check(&root, &config)));
+        let kept: Value = serde_json::from_str(&fs::read_to_string(config.join("setup.json")).unwrap()).unwrap();
+        assert_eq!(kept["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is kept");
+        assert!(crate::totickets::choice(&config, EDITOR).get("wanted").is_some());
+        assert!(!render_blocked(&check(&root, &config), false).contains("Code editor"));
+        // Reached directly (main.rs answers first), they point at the plugin.
+        assert_eq!(add_step(&root, &config, "editor").unwrap_err(), "The code editor is a plugin now: `platoon plugin add editor`.");
+        assert!(remove_step(&root, &config, "editor").unwrap_err().contains("`platoon plugin remove editor`"));
+        assert!(remove_step(&root, &config, "x").unwrap_err().contains("can remove: to-tickets, editor"));
+        assert!(replace_step(&root, &config, "editor").unwrap_err().contains("can replace: to-tickets"));
     }
 
     fn ask(config: &Path, interactive: bool, typed: &str) -> (TokenQuestion, String) {

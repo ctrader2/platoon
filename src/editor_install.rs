@@ -1,5 +1,9 @@
-//! The optional code editor: getting Neovim, its tools, platoon's pinned plugins, syntax highlighting and a Nerd Font
-//! onto the machine, and taking them off again. Nothing here runs the editor (that is the app's `v`).
+//! The optional code editor's install engine: getting Neovim, its tools, its plugins, syntax highlighting and a Nerd
+//! Font onto the machine, and taking them off again. Nothing here runs the editor (that is the app's `v`).
+//!
+//! What to fetch is not platoon's: it is the download table (`downloads.json`) of the editor plugin (`plugins/editor`
+//! in the catalog; `editorplugin.rs` finds it), read with `parse_table` and refused unless `table_problems` is empty:
+//! every download https, with its sha256 and its exact size. This file is the engine that installs from a table.
 //!
 //! Everything platoon installs lives in one folder of its own, `<data>/editor` (`data_dir`), laid out so an nvim
 //! started with platoon's own config finds it all without touching the user's `~/.config/nvim` or nvim data:
@@ -20,7 +24,7 @@
 //! `site/` is exactly nvim-treesitter's `install_dir`, so its own `install()` (phase 3, for languages not built up
 //! front) and `:checkhealth` see the parsers built here as installed and up to date.
 //!
-//! Every download is pinned by sha256 and checked before anything is moved into place, so a failed or interrupted
+//! Every download is pinned by sha256 and size and checked before anything is moved into place, so a failed or interrupted
 //! install never leaves a part that looks complete; `installed.json` only lists what was checked and moved. A second
 //! run only fetches what is missing or has a different pin. Downloads use `curl`, archives `tar` (and `gzip` for the
 //! one single-file download); nothing needs sudo or a package manager.
@@ -71,14 +75,17 @@ impl Platform {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Download {
     pub url: String,
     pub sha256: String,
+    /// Its exact size in bytes: a download of another size is refused, and the sizes add up to what the install
+    /// fetches.
+    pub size: u64,
 }
 
 /// A program the editor needs: the user's own copy when it is on PATH (and new enough), else a pinned release.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ToolPin {
     /// Its name under `bin/` and its key in `installed.json`.
     pub id: String,
@@ -95,18 +102,20 @@ pub struct ToolPin {
 }
 
 /// A plugin: a GitHub repository at a pinned commit, installed as a native package.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PluginPin {
     /// Its folder under `pack/platoon/start/`.
     pub name: String,
     pub repo: String,
     pub rev: String,
-    /// Of the commit's tarball (`codeload.github.com/<repo>/tar.gz/<rev>`).
+    /// The commit's tarball (`https://codeload.github.com/<repo>/tar.gz/<rev>`).
+    pub url: String,
     pub sha256: String,
+    pub size: u64,
 }
 
 /// A syntax-highlighting parser, as the pinned nvim-treesitter's `parsers.lua` describes it.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ParserPin {
     pub lang: String,
     pub repo: String,
@@ -115,20 +124,25 @@ pub struct ParserPin {
     pub rev: String,
     /// The grammar's folder inside the repository ("" for the top).
     pub location: String,
+    /// The commit's tarball.
+    pub url: String,
     pub sha256: String,
+    pub size: u64,
     /// Languages with queries only (no parser) this one's queries build on (`ecma`, `jsx`, `html_tags`).
     pub requires: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FontPin {
+    /// The family name a terminal lists it under ("JetBrainsMono Nerd Font").
+    pub family: String,
     pub version: String,
     pub download: Download,
     /// The files taken from the archive: one family's four styles, and its licence.
     pub files: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
     pub tools: Vec<ToolPin>,
     pub plugins: Vec<PluginPin>,
@@ -136,119 +150,287 @@ pub struct Manifest {
     pub font: FontPin,
 }
 
-/// Roughly how much the install puts on disk, for the question in `platoon setup` (measured on Linux x86_64).
-pub const APPROX_MB: u64 = 150;
+// ---- the download table (a plugin's `downloads.json`) --------------------------------------------------------------
+//
+// Everything above is what platoon's editor plugin carries as data: which programs, plugins, parsers and font to fetch,
+// each with where from (https only), its sha256 and its exact size. platoon itself pins nothing; it installs what
+// the installed editor plugin's table says (`editorplugin.rs`), and refuses a table that isn't pinned all the way.
 
-/// The family name a terminal lists the font under.
-pub const FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
+/// A table's whole download, on its biggest computer, is at most this (the real one is under 100 MB).
+pub const MAX_TABLE_BYTES: u64 = 600_000_000;
+/// One download at most.
+const MAX_DOWNLOAD_BYTES: u64 = 300_000_000;
+/// Entries of each kind at most.
+const MAX_ENTRIES: usize = 200;
 
-const NVIM: &str = "0.12.5";
-const RIPGREP: &str = "15.2.0";
-const FD: &str = "10.5.0";
-const TREE_SITTER: &str = "0.27.0";
-const NERD_FONTS: &str = "3.5.1";
+impl Platform {
+    /// Its key in a download table.
+    pub fn key(self) -> &'static str {
+        match self {
+            Platform::LinuxX64 => "linux-x64",
+            Platform::LinuxArm64 => "linux-arm64",
+            Platform::MacArm64 => "macos-arm64",
+            Platform::MacX64 => "macos-x64",
+        }
+    }
 
-fn gh_release(repo: &str, tag: &str, file: &str) -> String {
-    format!("https://github.com/{repo}/releases/download/{tag}/{file}")
+    fn from_key(k: &str) -> Option<Platform> {
+        [Platform::LinuxX64, Platform::LinuxArm64, Platform::MacArm64, Platform::MacX64].into_iter().find(|p| p.key() == k)
+    }
 }
 
-/// One place for every pin. Hashes of release assets are GitHub's own (`digest` in the releases API), checked again
-/// against the real downloads; hashes of commit tarballs were computed from two separate downloads that matched.
-/// To move a plugin or parser: change its `rev` and `sha256` here (parsers: take `revision` from the pinned
-/// nvim-treesitter's `lua/nvim-treesitter/parsers.lua`, so parsers and its queries stay in step).
-#[rustfmt::skip]
-pub fn pinned() -> Manifest {
-    use Platform::*;
-    let asset = |p: Platform, repo: &str, tag: &str, file: String, sha: &str| (p, Download { url: gh_release(repo, tag, &file), sha256: sha.into() });
-    let nv = |p, arch: &str, sha: &str| asset(p, "neovim/neovim", &format!("v{NVIM}"), format!("nvim-{arch}.tar.gz"), sha);
-    let rg = |p, triple: &str, sha: &str| asset(p, "BurntSushi/ripgrep", RIPGREP, format!("ripgrep-{RIPGREP}-{triple}.tar.gz"), sha);
-    let fd = |p, triple: &str, sha: &str| asset(p, "sharkdp/fd", &format!("v{FD}"), format!("fd-v{FD}-{triple}.tar.gz"), sha);
-    let ts = |p, arch: &str, sha: &str| asset(p, "tree-sitter/tree-sitter", &format!("v{TREE_SITTER}"), format!("tree-sitter-{arch}.gz"), sha);
-    let tool = |id: &str, version: &str, min: Option<[u32; 3]>, names: &[&str], exe: &str, single_gz: bool, assets: Vec<(Platform, Download)>| ToolPin {
-        id: id.into(), version: version.into(), min_yours: min, names: names.iter().map(|s| s.to_string()).collect(), exe: exe.into(), single_gz, assets,
-    };
-    let tools = vec![
-        // 0.12: the pinned nvim-treesitter (`main`) needs it; its `master` branch says "Neovim 0.12 is not supported".
-        tool("nvim", NVIM, Some([0, 12, 0]), &["nvim"], "bin/nvim", false, vec![
-            nv(LinuxX64, "linux-x86_64", "bce0f56eda1f1b1db6eee8f4133d7a38813ea07933837dd1777411ca384c6875"),
-            nv(LinuxArm64, "linux-arm64", "1aa5ca085249580ae0f91eb14f27ec0919773ff2d99a163d03f3d6c21ac29725"),
-            nv(MacArm64, "macos-arm64", "65fb000099e47ca1b762584c484cc833f40e30851a0ec450d4174e16317c1f9b"),
-            nv(MacX64, "macos-x86_64", "81f4518622cb059b450ee2e498c6a1082a222f6bd89589de5bbcf0c6a68aa3fd"),
-        ]),
-        tool("rg", RIPGREP, None, &["rg"], "rg", false, vec![
-            rg(LinuxX64, "x86_64-unknown-linux-musl", "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c"),
-            rg(LinuxArm64, "aarch64-unknown-linux-musl", "800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915"),
-            rg(MacArm64, "aarch64-apple-darwin", "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4"),
-            rg(MacX64, "x86_64-apple-darwin", "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1"),
-        ]),
-        tool("fd", FD, None, &["fd", "fdfind"], "fd", false, vec![
-            fd(LinuxX64, "x86_64-unknown-linux-musl", "761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7"),
-            fd(LinuxArm64, "aarch64-unknown-linux-musl", "d76c4317f7d5dba69f8a2a15856c90c777e7f0dd4e85f0de8c76de6992c374d4"),
-            fd(MacArm64, "aarch64-apple-darwin", "b67e1836c468e42e411984b56e52fa7abec08c2bd22c867398e7cc134aac5e12"),
-            fd(MacX64, "x86_64-apple-darwin", "7e31028c62c6955877735d0406807aa484c2a5e6f86235a59e26c29c301da590"),
-        ]),
-        // What nvim-treesitter `main` runs to build a parser platoon didn't build up front (it needs 0.26.1 or later).
-        tool("tree-sitter", TREE_SITTER, Some([0, 26, 1]), &["tree-sitter"], "tree-sitter", true, vec![
-            ts(LinuxX64, "linux-x64", "20a1f39ec1c45f2211492dcb8881c802b643b554bb196869a29ac3778277fa77"),
-            ts(LinuxArm64, "linux-arm64", "3a35a2dd961ad842384e982c75daf792c01d1a67e442fc3914d4de37bd8a59cb"),
-            ts(MacArm64, "macos-arm64", "70f7573b2b2e5371a5b58cc5227d2ad981fd5374596b9874e770af486060774e"),
-            ts(MacX64, "macos-x64", "767528eaab3cca9d929fb96b4cb11cc9f03e09e293675151875c0fe5f79c06f0"),
-        ]),
-    ];
-    let plugin = |name: &str, repo: &str, rev: &str, sha: &str| PluginPin { name: name.into(), repo: repo.into(), rev: rev.into(), sha256: sha.into() };
-    let plugins = vec![
-        plugin("neo-tree.nvim", "nvim-neo-tree/neo-tree.nvim", "f3f3bf73414e400cf9fc13fda50f00404a8f8ab1", "4c920b1b73b41ae2414709aeecfbf7bcf225f2dc9675e1f5962474e0a6abccbd"), // 3.42.0
-        plugin("plenary.nvim", "nvim-lua/plenary.nvim", "74b06c6c75e4eeb3108ec01852001636d85a932b", "d9e7562417b49f4c9c0bf6f7edeb1d798665d967dbfaad428b893c28f36478ba"), // master, 2026-04-10
-        plugin("nui.nvim", "MunifTanjim/nui.nvim", "10fc361835c856ba4233ef5ea135b919bf3dce97", "06c5fef8af450928e62f93f8fecb015b14084e0c6d9b83b52352b09a9611f018"), // main, 2026-08-20
-        plugin("diffview.nvim", "sindrets/diffview.nvim", "4516612fe98ff56ae0415a259ff6361a89419b0a", "b8270b24ac931a582105ad15d0f0151d27f235896ad18b9e9a7ec165d4ba0a12"), // main, 2024-06-13 (its latest)
-        plugin("gitsigns.nvim", "lewis6991/gitsigns.nvim", "070a5d7b985546cc57e1fc61e5bc507fecac6045", "65d18c2068eff166e441d59985cb34c6b8296cc390282809d167dcb0da505411"), // main, 2026-09-22
-        plugin("snacks.nvim", "folke/snacks.nvim", "e6fd58c82f2f3fcddd3fe81703d47d6d48fc7b9f", "171fa47c5751d07d1e5b2fbde24327e9a94bf84e2ca400601f8ec39699de6cd5"), // v2.31.0
-        plugin("nvim-treesitter", "nvim-treesitter/nvim-treesitter", "25a9b06a09ea4e10712bec37e7b7d9f423262b91", "f4fab149b2c494b715cb80f1436fcd2a6dfd3c736aa7d0b7cd9174c9687e2e91"), // main, 2026-09-26
-        plugin("which-key.nvim", "folke/which-key.nvim", "fcbf4eea17cb299c02557d576f0d568878e354a4", "6059cef541dd8d13abb19d6465a76bf447ca23b9b5f17dbbf5a4c251852b9941"), // v3.17.0
-        plugin("lualine.nvim", "nvim-lualine/lualine.nvim", "221ce6b2d999187044529f49da6554a92f740a96", "0bb7ae9af7c16ce56292f0fb38f57dfbdd48a071a5f08e0bff8bed6b9b02006b"), // master, 2026-05-31
-        // Its fuzzy matcher: `fuzzy = { implementation = 'lua' }` in phase 3's config (at v1.10.2 that also turns off
-        // the download of its prebuilt binary), so nothing more is fetched.
-        plugin("blink.cmp", "saghen/blink.cmp", "78336bc89ee5365633bcf754d93df01678b5c08f", "74a12c86fd74ea28b37cccad0cf41ec2afff6a0ee07747ad38cc6eee869cce38"), // v1.10.2
-        plugin("mini.nvim", "nvim-mini/mini.nvim", "1345d191bb3da9c7b0e977f4387c5761f9bff68d", "dcb93619fa2909baf5b259b9a9738ede10d90f2e09edd242fc05bc2bf1ac8584"), // v0.18.0 (mini.base16, mini.icons)
-    ];
-    let parser = |lang: &str, repo: &str, rev: &str, location: &str, sha: &str, requires: &[&str]| ParserPin {
-        lang: lang.into(), repo: repo.into(), rev: rev.into(), location: location.into(), sha256: sha.into(), requires: requires.iter().map(|s| s.to_string()).collect(),
-    };
-    let parsers = vec![
-        parser("lua", "tree-sitter-grammars/tree-sitter-lua", "10fe0054734eec83049514ea2e718b2a56acd0c9", "", "82c3ca5808de02addd9c7fb5275d89260c6557019aa6e40ca52c0595bf1d33cd", &[]),
-        parser("vim", "tree-sitter-grammars/tree-sitter-vim", "039c8d0aa1deae00ddeb0374dd70bcc0ec56938d", "", "f699eb09ace8baccc3ba5035458b2d9f8783ea30b5f4a3e2a080d291152b58e7", &[]),
-        parser("vimdoc", "neovim/tree-sitter-vimdoc", "23daa416c1ff5d15f59a1aa648f031d6e3ee15c5", "", "7f49d96014083308e519db59a88ea2d0029dcba24085f5372fd80ee6d9731fda", &[]),
-        parser("query", "tree-sitter-grammars/tree-sitter-query", "8e9e223812ff30854fbc912adbec696ba5f0e023", "", "c0482fc205d2a955045fc276f56552e40ebee4749ad00c4bda05d95db7704e0a", &[]),
-        parser("markdown", "tree-sitter-grammars/tree-sitter-markdown", "a0a00f817d02412bd92c54d316f164d827b57b5c", "tree-sitter-markdown", "a712569a59f127fd44a1cb59eecdb05d63fa2ccb4622b7d822bff199bf6fb133", &[]),
-        parser("markdown_inline", "tree-sitter-grammars/tree-sitter-markdown", "a0a00f817d02412bd92c54d316f164d827b57b5c", "tree-sitter-markdown-inline", "a712569a59f127fd44a1cb59eecdb05d63fa2ccb4622b7d822bff199bf6fb133", &[]),
-        parser("rust", "tree-sitter/tree-sitter-rust", "77a3747266f4d621d0757825e6b11edcbf991ca5", "", "dee82ddfd01bfc3a8ed201cc03b56448107d3217a4b3a7a8fc7fa6bc32b2405b", &[]),
-        parser("python", "tree-sitter/tree-sitter-python", "v0.25.0", "", "4609a3665a620e117acf795ff01b9e965880f81745f287a16336f4ca86cf270c", &[]),
-        parser("javascript", "tree-sitter/tree-sitter-javascript", "58404d8cf191d69f2674a8fd507bd5776f46cb11", "", "f3e51e9f7b129f62a817551ae22a878dac5c18d71c456d5ad73e9c82d687f33d", &["ecma", "jsx"]),
-        parser("typescript", "tree-sitter/tree-sitter-typescript", "75b3874edb2dc714fb1fd77a32013d0f8699989f", "typescript", "96ce4d1b513767d414bcca408efd9b49879162cceecdbed79a88e8ad2184f385", &["ecma"]),
-        parser("tsx", "tree-sitter/tree-sitter-typescript", "75b3874edb2dc714fb1fd77a32013d0f8699989f", "tsx", "96ce4d1b513767d414bcca408efd9b49879162cceecdbed79a88e8ad2184f385", &["ecma", "jsx"]),
-        parser("json", "tree-sitter/tree-sitter-json", "254c42a6476413b776221e03982ac8ae159eeb72", "", "5735ec109268bdc25eb67875b96bc891de1f405253a1d3f9528a504249b0f832", &[]),
-        parser("yaml", "tree-sitter-grammars/tree-sitter-yaml", "a1c4812a73ec5e089de8e441fdea3a921e8d5079", "", "6548cd059983e8073dfa39f102641f71d045b37f3a05b7ebd799ad17df8471d1", &[]),
-        parser("toml", "tree-sitter-grammars/tree-sitter-toml", "64b56832c2cffe41758f28e05c756a3a98d16f41", "", "feeb2e1cf531588cdcfb9c57292620151a08597f18a98dad26cc17fd4b544dcb", &[]),
-        parser("bash", "tree-sitter/tree-sitter-bash", "a06c2e4415e9bc0346c6b86d401879ffb44058f7", "", "879e8951ea2cc82455407e3eda0293319657ec53e83191e0fb5a67430d10d804", &[]),
-        parser("html", "tree-sitter/tree-sitter-html", "73a3947324f6efddf9e17c0ea58d454843590cc0", "", "892f6b732e08bcb90918a985fdee58d6a0fd7a90326af601a2536a5d477583fa", &["html_tags"]),
-        parser("css", "tree-sitter/tree-sitter-css", "dda5cfc5722c429eaba1c910ca32c2c0c5bb1a3f", "", "c47392e483feb9137d8f0acf9ca6e916b820122c260324454a9980c75c98c3c5", &[]),
-        parser("go", "tree-sitter/tree-sitter-go", "2346a3ab1bb3857b48b29d779a1ef9799a248cd7", "", "94d08fc0f727a8dbe03203e2aaf1c5dc33a57e496b583049324eddc79769797b", &[]),
-        parser("c", "tree-sitter/tree-sitter-c", "b780e47fc780ddc8da13afa35a3f4ed5c157823d", "", "dc3979e40fce678c27273ba8ab93b48b5acd6b91d1dfde6a4451222d366d689f", &[]),
-    ];
-    let style = |s: &str| format!("JetBrainsMonoNerdFont-{s}.ttf");
-    let font = FontPin {
-        version: NERD_FONTS.into(),
-        download: Download {
-            url: gh_release("ryanoasis/nerd-fonts", &format!("v{NERD_FONTS}"), "JetBrainsMono.tar.xz"),
-            sha256: "04d5e8f903693f9dd13e16f867e994834e681eb3c72c0d337a770dcda09010cf".into(),
-        },
-        files: vec![style("Regular"), style("Bold"), style("Italic"), style("BoldItalic"), "OFL.txt".into()],
-    };
-    Manifest { tools, plugins, parsers, font }
+#[cfg(test)]
+fn version_text(v: [u32; 3]) -> String {
+    format!("{}.{}.{}", v[0], v[1], v[2])
 }
 
-fn tarball_url(repo: &str, rev: &str) -> String {
-    format!("https://codeload.github.com/{repo}/tar.gz/{rev}")
+#[cfg(test)]
+fn download_json(d: &Download) -> Value {
+    json!({"url": d.url, "sha256": d.sha256, "size": d.size})
+}
+
+/// A table as `downloads.json` holds it (tests write their fake tables with it).
+#[cfg(test)]
+pub fn table_json(m: &Manifest) -> Value {
+    let tools: Vec<Value> = m
+        .tools
+        .iter()
+        .map(|t| {
+            let downloads: Map<String, Value> = t.assets.iter().map(|(p, d)| (p.key().to_string(), download_json(d))).collect();
+            json!({"id": t.id, "version": t.version, "min_yours": t.min_yours.map(version_text), "names": t.names, "exe": t.exe, "single_gz": t.single_gz, "downloads": downloads})
+        })
+        .collect();
+    let plugins: Vec<Value> = m.plugins.iter().map(|p| json!({"name": p.name, "repo": p.repo, "rev": p.rev, "url": p.url, "sha256": p.sha256, "size": p.size})).collect();
+    let parsers: Vec<Value> = m
+        .parsers
+        .iter()
+        .map(|p| json!({"lang": p.lang, "repo": p.repo, "rev": p.rev, "location": p.location, "requires": p.requires, "url": p.url, "sha256": p.sha256, "size": p.size}))
+        .collect();
+    let f = &m.font;
+    json!({"format": 1, "tools": tools, "plugins": plugins, "parsers": parsers,
+        "font": {"family": f.family, "version": f.version, "url": f.download.url, "sha256": f.download.sha256, "size": f.download.size, "files": f.files}})
+}
+
+/// Read a download table (`downloads.json`). Keys it doesn't know (`about`, `note`) are left alone. Only the shape is
+/// checked here; `table_problems` says whether it is pinned well enough to install.
+pub fn parse_table(text: &str) -> Result<Manifest, String> {
+    let v: Value = serde_json::from_str(text).map_err(|e| format!("the download table isn't valid JSON ({e})"))?;
+    let obj = v.as_object().ok_or("the download table must be a JSON object")?;
+    if let Some(f) = obj.get("format") {
+        if f.as_u64() != Some(1) {
+            return Err("the download table is in a format this platoon doesn't know (it reads format 1)".into());
+        }
+    }
+    fn s(v: &Value, k: &str, what: &str) -> Result<String, String> {
+        match v.get(k) {
+            Some(Value::String(x)) => Ok(x.clone()),
+            None | Some(Value::Null) => Err(format!("{what} has no \"{k}\"")),
+            Some(_) => Err(format!("{what}: \"{k}\" must be text")),
+        }
+    }
+    fn opt_s(v: &Value, k: &str, what: &str) -> Result<String, String> {
+        match v.get(k) {
+            None | Some(Value::Null) => Ok(String::new()),
+            _ => s(v, k, what),
+        }
+    }
+    fn texts(v: &Value, k: &str, what: &str) -> Result<Vec<String>, String> {
+        match v.get(k) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from).ok_or_else(|| format!("{what}: \"{k}\" must be a list of text"))).collect(),
+            Some(_) => Err(format!("{what}: \"{k}\" must be a list of text")),
+        }
+    }
+    fn size(v: &Value, what: &str) -> Result<u64, String> {
+        match v.get("size") {
+            Some(n) => n.as_u64().ok_or_else(|| format!("{what}: \"size\" must be a whole number of bytes")),
+            None => Err(format!("{what} has no \"size\"")),
+        }
+    }
+    fn download(v: &Value, what: &str) -> Result<Download, String> {
+        Ok(Download { url: s(v, "url", what)?, sha256: s(v, "sha256", what)?, size: size(v, what)? })
+    }
+    fn list<'a>(obj: &'a Map<String, Value>, k: &str) -> Result<&'a [Value], String> {
+        match obj.get(k) {
+            Some(Value::Array(a)) if a.len() <= MAX_ENTRIES => Ok(a),
+            Some(Value::Array(_)) => Err(format!("the download table has more than {MAX_ENTRIES} \"{k}\"")),
+            None => Ok(&[]),
+            Some(_) => Err(format!("the download table's \"{k}\" must be a list")),
+        }
+    }
+    let mut tools = Vec::new();
+    for (i, t) in list(obj, "tools")?.iter().enumerate() {
+        let what = format!("tool {}", t.get("id").and_then(Value::as_str).map_or_else(|| format!("#{}", i + 1), String::from));
+        let min_yours = match t.get("min_yours") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(m)) => Some(parse_version(m).ok_or_else(|| format!("{what}: \"min_yours\" isn't a version like 0.12.0"))?),
+            Some(_) => return Err(format!("{what}: \"min_yours\" must be a version like 0.12.0")),
+        };
+        let mut assets = Vec::new();
+        match t.get("downloads") {
+            Some(Value::Object(d)) => {
+                for (k, dv) in d {
+                    let p = Platform::from_key(k).ok_or_else(|| format!("{what}: \"{k}\" isn't a computer platoon knows (linux-x64, linux-arm64, macos-arm64, macos-x64)"))?;
+                    assets.push((p, download(dv, &format!("{what} for {k}"))?));
+                }
+            }
+            _ => return Err(format!("{what} has no \"downloads\" (one per computer)")),
+        }
+        tools.push(ToolPin {
+            id: s(t, "id", &what)?,
+            version: s(t, "version", &what)?,
+            min_yours,
+            names: texts(t, "names", &what)?,
+            exe: s(t, "exe", &what)?,
+            single_gz: t.get("single_gz").and_then(Value::as_bool).unwrap_or(false),
+            assets,
+        });
+    }
+    let mut plugins = Vec::new();
+    for (i, p) in list(obj, "plugins")?.iter().enumerate() {
+        let what = format!("plugin {}", p.get("name").and_then(Value::as_str).map_or_else(|| format!("#{}", i + 1), String::from));
+        let d = download(p, &what)?;
+        plugins.push(PluginPin { name: s(p, "name", &what)?, repo: opt_s(p, "repo", &what)?, rev: s(p, "rev", &what)?, url: d.url, sha256: d.sha256, size: d.size });
+    }
+    let mut parsers = Vec::new();
+    for (i, p) in list(obj, "parsers")?.iter().enumerate() {
+        let what = format!("parser {}", p.get("lang").and_then(Value::as_str).map_or_else(|| format!("#{}", i + 1), String::from));
+        let d = download(p, &what)?;
+        parsers.push(ParserPin {
+            lang: s(p, "lang", &what)?,
+            repo: opt_s(p, "repo", &what)?,
+            rev: s(p, "rev", &what)?,
+            location: opt_s(p, "location", &what)?,
+            url: d.url,
+            sha256: d.sha256,
+            size: d.size,
+            requires: texts(p, "requires", &what)?,
+        });
+    }
+    let f = obj.get("font").ok_or("the download table has no \"font\"")?;
+    let font = FontPin { family: s(f, "family", "the font")?, version: s(f, "version", "the font")?, download: download(f, "the font")?, files: texts(f, "files", "the font")? };
+    Ok(Manifest { tools, plugins, parsers, font })
+}
+
+/// A name platoon makes a folder or a file of (a tool's id, a plugin's folder, a language): letters, digits, `.`,
+/// `_` and `-`, not starting with a dot.
+fn plain_name(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && !s.starts_with('.') && s.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// A path inside an unpacked download: relative, no `..`, no hidden parts.
+fn inside(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 200 && !s.starts_with('/') && s.split('/').all(|p| !p.is_empty() && p != "." && p != ".." && !p.starts_with('.') && !p.contains('\\'))
+}
+
+fn hex64(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// What the table fetches in all on `platform`, in bytes (a download used twice, like one grammar's two languages, counts
+/// once).
+pub fn download_bytes(m: &Manifest, platform: Platform) -> u64 {
+    let mut all: Vec<(&str, u64)> = Vec::new();
+    for t in &m.tools {
+        if let Some((_, d)) = t.assets.iter().find(|(p, _)| *p == platform) {
+            all.push((&d.sha256, d.size));
+        }
+    }
+    all.extend(m.plugins.iter().map(|p| (p.sha256.as_str(), p.size)));
+    all.extend(m.parsers.iter().map(|p| (p.sha256.as_str(), p.size)));
+    all.push((&m.font.download.sha256, m.font.download.size));
+    all.sort();
+    all.dedup_by(|a, b| a.0 == b.0);
+    all.iter().map(|(_, n)| n).sum()
+}
+
+/// What is wrong with one download's pin: an https link ending in a plain file name, a sha256, a size.
+fn download_problems(what: &str, d: &Download) -> Vec<String> {
+    let mut out = Vec::new();
+    if !d.url.starts_with("https://") || d.url.contains(char::is_whitespace) || d.url.len() > 400 {
+        out.push(format!("{what}: its address must be an https:// link"));
+    } else if d.url.rsplit('/').next().is_none_or(|b| !plain_name(b)) {
+        out.push(format!("{what}: its address must end in a plain file name"));
+    }
+    if !hex64(&d.sha256) {
+        out.push(format!("{what}: it needs its sha256 (64 lowercase hex digits), so a changed file is never used"));
+    }
+    if d.size == 0 {
+        out.push(format!("{what}: it needs its size in bytes"));
+    } else if d.size > MAX_DOWNLOAD_BYTES {
+        out.push(format!("{what}: {} is more than one download may be ({})", megabytes(d.size), megabytes(MAX_DOWNLOAD_BYTES)));
+    }
+    out
+}
+
+/// Why a table can't be installed from, in plain words (empty: it can). Every download is https, has a sha256 and
+/// its size, none too big, all of them together under `MAX_TABLE_BYTES`; every name platoon makes a folder or a file
+/// of is a plain name and every path stays inside its folder; nvim is there (the editor is nothing without it).
+pub fn table_problems(m: &Manifest) -> Vec<String> {
+    let mut out = Vec::new();
+    if !m.tools.iter().any(|t| t.id == "nvim") {
+        out.push("it has no tool \"nvim\": the editor is Neovim".into());
+    }
+    for t in &m.tools {
+        if t.assets.is_empty() {
+            out.push(format!("tool {} has no downloads", t.id));
+        }
+        for (p, d) in &t.assets {
+            out.extend(download_problems(&format!("tool {} for {}", t.id, p.key()), d));
+        }
+    }
+    for p in &m.plugins {
+        out.extend(download_problems(&format!("plugin {}", p.name), &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size }));
+    }
+    for p in &m.parsers {
+        out.extend(download_problems(&format!("parser {}", p.lang), &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size }));
+    }
+    out.extend(download_problems("the font", &m.font.download));
+    for t in &m.tools {
+        if !plain_name(&t.id) {
+            out.push(format!("the tool id \"{}\" isn't a plain name", t.id));
+        }
+        if !inside(&t.exe) {
+            out.push(format!("tool {}: \"exe\" must be a path inside its download", t.id));
+        }
+        if t.names.is_empty() || t.names.iter().any(|n| !plain_name(n)) {
+            out.push(format!("tool {}: \"names\" must be the plain program names it goes by", t.id));
+        }
+    }
+    for p in &m.plugins {
+        if !plain_name(&p.name) {
+            out.push(format!("the plugin name \"{}\" isn't a plain name", p.name));
+        }
+    }
+    for p in &m.parsers {
+        if !plain_name(&p.lang) || p.requires.iter().any(|r| !plain_name(r)) {
+            out.push(format!("parser {}: its language names must be plain names", p.lang));
+        }
+        if !p.location.is_empty() && !inside(&p.location) {
+            out.push(format!("parser {}: \"location\" must be a folder inside its download", p.lang));
+        }
+        if !plain_name(&p.rev) {
+            out.push(format!("parser {}: \"rev\" must be a commit or a tag", p.lang));
+        }
+    }
+    if m.font.files.is_empty() || m.font.files.iter().any(|f| !plain_name(f)) {
+        out.push("the font: \"files\" must be plain file names in its archive".into());
+    }
+    let mut ids: Vec<String> = m.tools.iter().map(|t| format!("tool {}", t.id)).chain(m.plugins.iter().map(|p| format!("plugin {}", p.name))).chain(m.parsers.iter().map(|p| format!("parser {}", p.lang))).collect();
+    ids.sort();
+    for w in ids.windows(2) {
+        if w[0] == w[1] {
+            out.push(format!("{} is listed twice", w[0]));
+        }
+    }
+    for p in [Platform::LinuxX64, Platform::LinuxArm64, Platform::MacArm64, Platform::MacX64] {
+        let total = download_bytes(m, p);
+        if total > MAX_TABLE_BYTES {
+            out.push(format!("on {} it downloads {}, more than the {} a plugin may", p.key(), megabytes(total), megabytes(MAX_TABLE_BYTES)));
+        }
+    }
+    out.dedup();
+    out
 }
 
 // ---- where things go ------------------------------------------------------------------------------------------------
@@ -286,7 +468,7 @@ fn font_dir_from(env: &dyn Fn(&str) -> Option<String>, mac: bool) -> PathBuf {
 }
 
 /// Everything an install, a status check or a removal needs to know about this computer.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Dirs {
     /// `<data>/editor`.
     pub editor: PathBuf,
@@ -473,7 +655,7 @@ pub enum ItemState {
     OutOfDate,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Item {
     pub part: Part,
     /// `tool:nvim`, `plugin:neo-tree.nvim`, `parser:lua`, `font`.
@@ -482,7 +664,7 @@ pub struct Item {
     pub state: ItemState,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Status {
     pub items: Vec<Item>,
     /// The last install found no C compiler, so no parsers were built (highlighting is what nvim ships with).
@@ -493,6 +675,7 @@ pub struct Status {
 
 impl Status {
     /// Nothing of the editor is there at all.
+    #[cfg(test)]
     pub fn nothing(&self) -> bool {
         self.items.iter().all(|i| i.state == ItemState::Missing)
     }
@@ -503,14 +686,10 @@ impl Status {
     }
 
     /// What is missing or out of date, by name.
+    #[cfg(test)]
     pub fn needs(&self) -> Vec<&str> {
         self.items.iter().filter(|i| i.state != ItemState::Ok && !(self.no_compiler && i.part == Part::Highlighting)).map(|i| i.name.as_str()).collect()
     }
-}
-
-/// What platoon's editor folder holds now, compared with the pins. Reads files only; runs nothing.
-pub fn status(dirs: &Dirs) -> Status {
-    status_with(dirs, &pinned())
 }
 
 fn tool_ok(dirs: &Dirs, tool: &ToolPin, rec: &Value, platform: Platform) -> ItemState {
@@ -528,7 +707,7 @@ fn tool_ok(dirs: &Dirs, tool: &ToolPin, rec: &Value, platform: Platform) -> Item
     }
 }
 
-pub fn status_with(dirs: &Dirs, m: &Manifest) -> Status {
+pub fn status(dirs: &Dirs, m: &Manifest) -> Status {
     let rec = load_record(dirs);
     let get = |k: &str| rec.get(k).cloned();
     let mut items = Vec::new();
@@ -638,13 +817,8 @@ pub struct Report {
     pub notes: Vec<String>,
     /// The Nerd Font is in place (installed now or before).
     pub font: bool,
-}
-
-/// Install whatever is missing or out of date, with the pins in this build. Parts run at the same time; `progress`
-/// is called from worker threads as each piece finishes. An error names what failed; everything that succeeded stays
-/// installed and recorded, so running it again carries on from there.
-pub fn install(dirs: &Dirs, progress: &(dyn Fn(Progress) + Sync)) -> Result<Report, String> {
-    install_with(dirs, &pinned(), progress)
+    /// The family name to pick it by in the terminal.
+    pub font_family: String,
 }
 
 enum Job<'a> {
@@ -696,7 +870,7 @@ fn lock(dirs: &Dirs) -> Result<Lock, String> {
     }
 }
 
-pub fn install_with(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sync)) -> Result<Report, String> {
+pub fn install(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sync)) -> Result<Report, String> {
     let start = Instant::now();
     let Some(platform) = dirs.platform else {
         return Err("The code editor can't be installed on this computer: platoon only has downloads for Linux and macOS, on x86_64 and ARM.".into());
@@ -705,7 +879,7 @@ pub fn install_with(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sy
     // Whatever an interrupted install left half done goes; nothing in it was ever recorded.
     let _ = fs::remove_dir_all(dirs.tmp());
     fs::create_dir_all(dirs.tmp()).map_err(|e| format!("couldn't make {}: {e}", dirs.tmp().display()))?;
-    let before = status_with(dirs, m);
+    let before = status(dirs, m);
     let ok = |key: &str| before.items.iter().any(|i| i.key == key && i.state == ItemState::Ok);
     let cc = compiler(dirs);
 
@@ -794,19 +968,20 @@ pub fn install_with(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sy
 
     report.yours.sort();
     if cc.is_none() {
-        report.notes.push("No C compiler was found, so syntax highlighting is limited to the few languages Neovim comes with. Install one (gcc or clang) and run `platoon setup --add editor` again for the rest.".into());
+        report.notes.push("No C compiler was found, so syntax highlighting is limited to the few languages Neovim comes with. Install one (gcc or clang) and run `platoon plugin add editor` again for the rest.".into());
     }
     // A parser that didn't build doesn't stop the editor: it only means plainer colors for that language.
     let (parser_fails, other): (Vec<_>, Vec<_>) = failures.into_iter().partition(|(p, _)| *p == Part::Highlighting);
     if !parser_fails.is_empty() {
         report.notes.push(format!(
-            "Highlighting for {} couldn't be prepared ({}); those files will show with plainer colors. Running `platoon setup --add editor` again tries once more.",
+            "Highlighting for {} couldn't be prepared ({}); those files will show with plainer colors. Running `platoon plugin add editor` again tries once more.",
             parser_fails.iter().map(|(_, e)| e.split(':').next().unwrap_or("").to_string()).collect::<Vec<_>>().join(", "),
             parser_fails.first().map(|(_, e)| e.as_str()).unwrap_or("")
         ));
     }
-    let now = status_with(dirs, m);
+    let now = status(dirs, m);
     report.font = now.items.iter().any(|i| i.key == "font" && i.state == ItemState::Ok);
+    report.font_family = m.font.family.clone();
     report.disk_bytes = size_of(&dirs.editor) + font_bytes(dirs);
     report.took = start.elapsed();
     if !other.is_empty() {
@@ -937,7 +1112,7 @@ fn install_tool(dirs: &Dirs, t: &ToolPin, platform: Platform, work: &Path) -> Re
 }
 
 fn install_plugin(dirs: &Dirs, p: &PluginPin, work: &Path) -> Result<Done, String> {
-    let d = Download { url: tarball_url(&p.repo, &p.rev), sha256: p.sha256.clone() };
+    let d = Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size };
     let file = fetch(dirs, &d, work).map_err(|e| format!("{}: {e}", p.name))?;
     let unpacked = work.join("unpacked");
     fs::create_dir_all(&unpacked).map_err(|e| e.to_string())?;
@@ -950,7 +1125,7 @@ fn install_plugin(dirs: &Dirs, p: &PluginPin, work: &Path) -> Result<Done, Strin
 /// library), then lay it out as nvim-treesitter does: `parser/<lang>.so`, `parser-info/<lang>.revision`, and its
 /// queries linked from the plugin.
 fn install_parser(dirs: &Dirs, p: &ParserPin, work: &Path, cc: &Path) -> Result<Done, String> {
-    let d = Download { url: tarball_url(&p.repo, &p.rev), sha256: p.sha256.clone() };
+    let d = Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size };
     let file = fetch(dirs, &d, work)?;
     let src_root = work.join("src");
     fs::create_dir_all(&src_root).map_err(|e| e.to_string())?;
@@ -1050,7 +1225,11 @@ fn fetch(dirs: &Dirs, d: &Download, work: &Path) -> Result<PathBuf, String> {
         }
         None => {
             let o = Command::new("curl")
-                .args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "30", "-o"])
+                .args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "2", "--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "30"])
+                // A download bigger than its pin says is stopped rather than fetched in full.
+                .arg("--max-filesize")
+                .arg(d.size.to_string())
+                .arg("-o")
                 .arg(&file)
                 .arg(&d.url)
                 .stdin(Stdio::null())
@@ -1063,6 +1242,11 @@ fn fetch(dirs: &Dirs, d: &Download, work: &Path) -> Result<PathBuf, String> {
                 return Err(format!("the download failed ({})", if why.is_empty() { d.url.clone() } else { why }));
             }
         }
+    }
+    let len = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+    if len != d.size {
+        let _ = fs::remove_file(&file);
+        return Err(format!("the download of {base} isn't the file platoon expects (it is {len} bytes, not {}), so it wasn't used", d.size));
     }
     let got = sha256_file(&file).map_err(|e| e.to_string())?;
     if got != d.sha256 {
@@ -1120,6 +1304,8 @@ pub fn remove(dirs: &Dirs) -> Result<Removed, String> {
     let lock = lock(dirs)?;
     let rec = load_record(dirs);
     let mut out = Removed { editor: true, bytes: size_of(&dirs.editor) + font_bytes(dirs), ..Removed::default() };
+    // The record goes first: a removal that stops half way never leaves a folder that looks installed.
+    let _ = fs::remove_file(dirs.record_path());
     if let Some(r) = rec.get("font") {
         let dir = PathBuf::from(str_of(r, "dir"));
         for f in r.get("files").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str) {
@@ -1146,15 +1332,15 @@ pub fn megabytes(bytes: u64) -> String {
 }
 
 /// How to pick the font in the terminal, plainly. Nothing in any terminal's settings is changed.
-pub fn font_advice(mac: bool) -> String {
-    let mut lines = vec![format!("To see the editor's icons, pick \"{FONT_FAMILY}\" as your terminal's font:")];
+pub fn font_advice(family: &str, mac: bool) -> String {
+    let mut lines = vec![format!("To see the editor's icons, pick \"{family}\" as your terminal's font:")];
     if mac {
         lines.push("  Terminal: Settings > Profiles > Text > Font > Change".into());
         lines.push("  iTerm2: Settings > Profiles > Text > Font".into());
     } else {
         lines.push("  Xfce Terminal: Edit > Preferences > Appearance > Font".into());
     }
-    lines.push(format!("  Ghostty: add the line  font-family = \"{FONT_FAMILY}\"  to its config file"));
+    lines.push(format!("  Ghostty: add the line  font-family = \"{family}\"  to its config file"));
     lines.join("\n")
 }
 
@@ -1171,12 +1357,12 @@ pub fn render_report(r: &Report, dirs: &Dirs) -> String {
     }
     lines.extend(r.notes.iter().cloned());
     if r.font {
-        lines.push(font_advice(dirs.platform.is_some_and(Platform::is_mac)));
+        lines.push(font_advice(&r.font_family, dirs.platform.is_some_and(Platform::is_mac)));
     }
     lines.join("\n")
 }
 
-/// Progress for `platoon setup`: in a terminal one line redrawn in place ("Neovim ✓  Plugins 9/11  ..."), else a
+/// Progress for `platoon plugin add editor`: in a terminal one line redrawn in place ("Neovim ✓  Plugins 9/11  ..."), else a
 /// line as each part finishes.
 pub struct Printer {
     tty: bool,
@@ -1398,7 +1584,8 @@ pub mod testing {
         for (id, min, names, exe) in [("nvim", Some([0, 12, 0]), vec!["nvim"], "bin/nvim"), ("rg", None, vec!["rg"], "rg"), ("fd", None, vec!["fd", "fdfind"], "fd")] {
             let name = format!("{id}-fake.tar.gz");
             let sha = pack(mirror, &name, &format!("{id}-dist"), &[(exe, "#!/bin/sh\necho fake\n"), ("README", "x")]);
-            let assets = Platform::ALL.iter().map(|p| (*p, Download { url: format!("https://example.invalid/{name}"), sha256: sha.clone() })).collect();
+            let size = fs::metadata(mirror.join(&name)).unwrap().len();
+            let assets = Platform::ALL.iter().map(|p| (*p, Download { url: format!("https://example.invalid/{name}"), sha256: sha.clone(), size })).collect();
             tools.push(ToolPin { id: id.into(), version: "1.0.0".into(), min_yours: min, names: names.into_iter().map(String::from).collect(), exe: exe.into(), single_gz: false, assets });
         }
         // The fourth, a single gzipped program like tree-sitter's.
@@ -1409,6 +1596,7 @@ pub mod testing {
         assert!(st.success());
         fs::remove_file(&raw).unwrap();
         let sha = sha256_file(&gz).unwrap();
+        let size = fs::metadata(&gz).unwrap().len();
         tools.push(ToolPin {
             id: "tree-sitter".into(),
             version: "0.27.0".into(),
@@ -1416,19 +1604,21 @@ pub mod testing {
             names: vec!["tree-sitter".into()],
             exe: "tree-sitter".into(),
             single_gz: true,
-            assets: Platform::ALL.iter().map(|p| (*p, Download { url: "https://example.invalid/ts-fake.gz".into(), sha256: sha.clone() })).collect(),
+            assets: Platform::ALL.iter().map(|p| (*p, Download { url: "https://example.invalid/ts-fake.gz".into(), sha256: sha.clone(), size })).collect(),
         });
         let mut plugins = Vec::new();
         for name in ["alpha.nvim", "nvim-treesitter"] {
             let rev = format!("rev-{name}");
             let sha = pack(mirror, &rev, &format!("{name}-{rev}"), &[("lua/x.lua", "return 1"), ("runtime/queries/lang1/highlights.scm", "; q"), ("runtime/queries/dep/highlights.scm", "; d")]);
-            plugins.push(PluginPin { name: name.into(), repo: format!("o/{name}"), rev, sha256: sha });
+            let size = fs::metadata(mirror.join(&rev)).unwrap().len();
+            plugins.push(PluginPin { name: name.into(), repo: format!("o/{name}"), url: format!("https://example.invalid/{rev}"), rev, sha256: sha, size });
         }
         let mut parsers = Vec::new();
         for (lang, requires) in [("lang1", vec!["dep".to_string()]), ("lang2", vec![])] {
             let rev = format!("prev-{lang}");
             let sha = pack(mirror, &rev, &format!("tree-sitter-{lang}"), &[("src/parser.c", "int x;"), ("src/scanner.c", "int y;")]);
-            parsers.push(ParserPin { lang: lang.into(), repo: format!("o/{lang}"), rev, location: String::new(), sha256: sha, requires });
+            let size = fs::metadata(mirror.join(&rev)).unwrap().len();
+            parsers.push(ParserPin { lang: lang.into(), repo: format!("o/{lang}"), url: format!("https://example.invalid/{rev}"), rev, location: String::new(), sha256: sha, size, requires });
         }
         let files = vec!["FakeNerdFont-Regular.ttf".to_string(), "OFL.txt".to_string()];
         let fstage = mirror.join(".font");
@@ -1440,7 +1630,13 @@ pub mod testing {
         let st = Command::new("tar").arg("-czf").arg(mirror.join("Font.tar.xz")).arg("-C").arg(&fstage).args(["FakeNerdFont-Regular.ttf", "OFL.txt", "FakeNerdFontMono-Regular.ttf"]).status().unwrap();
         assert!(st.success());
         fs::remove_dir_all(&fstage).unwrap();
-        let font = FontPin { version: "9".into(), download: Download { url: "https://example.invalid/Font.tar.xz".into(), sha256: sha256_file(&mirror.join("Font.tar.xz")).unwrap() }, files };
+        let font_file = mirror.join("Font.tar.xz");
+        let font = FontPin {
+            family: "Fake Nerd Font".into(),
+            version: "9".into(),
+            download: Download { url: "https://example.invalid/Font.tar.xz".into(), sha256: sha256_file(&font_file).unwrap(), size: fs::metadata(&font_file).unwrap().len() },
+            files,
+        };
         Manifest { tools, plugins, parsers, font }
     }
 
@@ -1488,8 +1684,9 @@ mod tests {
     }
 
     #[test]
-    fn the_pins_are_complete_for_every_computer() {
-        let m = pinned();
+    fn the_editor_plugins_table_is_complete_for_every_computer() {
+        let m = crate::editorplugin::bundled_table();
+        assert!(table_problems(&m).is_empty(), "{:?}", table_problems(&m));
         let hex = |s: &str| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase());
         let ids: Vec<&str> = m.tools.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, ["nvim", "rg", "fd", "tree-sitter"]);
@@ -1497,7 +1694,7 @@ mod tests {
             for p in Platform::ALL {
                 let d = &t.assets.iter().find(|(q, _)| *q == p).unwrap_or_else(|| panic!("{} has no download for {p:?}", t.id)).1;
                 assert!(d.url.starts_with("https://github.com/") && d.url.contains(&t.version), "{}", d.url);
-                assert!(hex(&d.sha256), "{}: {}", t.id, d.sha256);
+                assert!(hex(&d.sha256) && d.size > 100_000, "{}: {} {}", t.id, d.sha256, d.size);
             }
             assert_eq!(t.assets.len(), 4, "{}", t.id);
         }
@@ -1512,14 +1709,21 @@ mod tests {
             assert!(p.rev.len() == 40 && p.rev.chars().all(|c| c.is_ascii_hexdigit()), "{}: a commit, not a branch: {}", p.name, p.rev);
             assert!(hex(&p.sha256), "{}", p.name);
             assert!(p.repo.contains('/'), "{}", p.repo);
+            assert_eq!(p.url, format!("https://codeload.github.com/{}/tar.gz/{}", p.repo, p.rev), "{}", p.name);
+            assert!(p.size > 0, "{}", p.name);
         }
         let langs: Vec<&str> = m.parsers.iter().map(|p| p.lang.as_str()).collect();
         for want in ["lua", "vim", "vimdoc", "query", "markdown", "markdown_inline", "rust", "python", "javascript", "typescript", "tsx", "json", "yaml", "toml", "bash", "html", "css", "go", "c"] {
             assert!(langs.contains(&want), "{want}");
         }
         for p in &m.parsers {
-            assert!(hex(&p.sha256) && !p.rev.is_empty() && p.repo.contains('/'), "{}", p.lang);
+            assert!(hex(&p.sha256) && !p.rev.is_empty() && p.repo.contains('/') && p.size > 0, "{}", p.lang);
+            assert_eq!(p.url, format!("https://codeload.github.com/{}/tar.gz/{}", p.repo, p.rev), "{}", p.lang);
         }
+        assert_eq!(m.font.family, "JetBrainsMono Nerd Font");
+        // What it fetches on this machine's kind of computer: tens of MB, not hundreds.
+        let mb = download_bytes(&m, Platform::LinuxX64) / 1_000_000;
+        assert!((40..120).contains(&mb), "{mb} MB");
         assert!(m.font.download.url.ends_with("JetBrainsMono.tar.xz") && hex(&m.font.download.sha256));
         assert!(m.font.files.contains(&"JetBrainsMonoNerdFont-Regular.ttf".to_string()) && m.font.files.contains(&"OFL.txt".to_string()));
         // Every download has its own last part, which is what the mirror folder is keyed by.
@@ -1560,9 +1764,9 @@ mod tests {
         let base = tmp("install");
         let m = fake(&base.join("mirror"));
         let d = dirs(&base, vec![fake_cc(&base)]);
-        assert!(status_with(&d, &m).nothing());
+        assert!(status(&d, &m).nothing());
         let seen = Mutex::new(Vec::new());
-        let r = install_with(&d, &m, &|p| seen.lock().unwrap().push(p)).unwrap();
+        let r = install(&d, &m, &|p| seen.lock().unwrap().push(p)).unwrap();
         assert_eq!(r.fetched, 4 + 2 + 2 + 1, "every tool, plugin, parser and the font");
         assert!(r.yours.is_empty() && r.notes.is_empty() && r.font, "{r:?}");
         assert!(r.disk_bytes > 0);
@@ -1594,7 +1798,7 @@ mod tests {
         assert_eq!(v["items"]["parser:lang2"]["rev"], "prev-lang2");
         assert_eq!(v["items"]["font"]["files"], json!(["FakeNerdFont-Regular.ttf", "OFL.txt"]));
         assert!(v.get("no_compiler").is_none());
-        let st = status_with(&d, &m);
+        let st = status(&d, &m);
         assert!(st.complete() && st.needs().is_empty(), "{:?}", st.needs());
         assert!(nerd_font_present_with(&d, &|| false));
         // Progress: each part reached its total.
@@ -1606,7 +1810,7 @@ mod tests {
         let before = fs::read_to_string(d.record_path()).unwrap();
         let log_before = fs::read_to_string(base.join("cc.log")).unwrap();
         fs::remove_dir_all(base.join("mirror")).unwrap();
-        let r = install_with(&d, &m, &quiet).unwrap();
+        let r = install(&d, &m, &quiet).unwrap();
         assert_eq!(r.fetched, 0);
         assert_eq!(fs::read_to_string(d.record_path()).unwrap(), before);
         assert_eq!(fs::read_to_string(base.join("cc.log")).unwrap(), log_before);
@@ -1620,13 +1824,13 @@ mod tests {
         m.plugins[0].sha256 = "0".repeat(64);
         m.tools[0].assets.iter_mut().for_each(|(_, d)| d.sha256 = "1".repeat(64));
         let d = dirs(&base, vec![fake_cc(&base)]);
-        let err = install_with(&d, &m, &quiet).unwrap_err();
+        let err = install(&d, &m, &quiet).unwrap_err();
         assert!(err.contains("Neovim: nvim:") && err.contains("checksum differs") && err.contains("Plugins: alpha.nvim"), "{err}");
         assert!(err.contains("what did install is kept"), "{err}");
         assert!(!d.plugins().join("alpha.nvim").exists());
         assert!(!d.bin().join("nvim").exists() && !d.editor.join("tools/nvim").exists());
         assert!(!d.editor.join("tmp").exists(), "the refused download is gone too");
-        let st = status_with(&d, &m);
+        let st = status(&d, &m);
         let state = |k: &str| st.items.iter().find(|i| i.key == k).unwrap().state.clone();
         assert_eq!(state("tool:nvim"), ItemState::Missing);
         assert_eq!(state("plugin:alpha.nvim"), ItemState::Missing);
@@ -1634,9 +1838,9 @@ mod tests {
         assert!(!st.complete());
         assert!(record(&d)["items"].get("plugin:alpha.nvim").is_none());
         // Fixed pins: the next run fetches only those two.
-        let r = install_with(&d, &good, &quiet).unwrap();
+        let r = install(&d, &good, &quiet).unwrap();
         assert_eq!(r.fetched, 2);
-        assert!(status_with(&d, &good).complete());
+        assert!(status(&d, &good).complete());
     }
 
     #[test]
@@ -1645,19 +1849,21 @@ mod tests {
         let mirror = base.join("mirror");
         let mut m = fake(&mirror);
         let d = dirs(&base, vec![fake_cc(&base)]);
-        install_with(&d, &m, &quiet).unwrap();
+        install(&d, &m, &quiet).unwrap();
         // A new commit of one plugin.
         let sha = pack(&mirror, "rev-alpha-2", "alpha.nvim-2", &[("lua/x.lua", "return 2")]);
         m.plugins[0].rev = "rev-alpha-2".into();
+        m.plugins[0].url = "https://example.invalid/rev-alpha-2".into();
+        m.plugins[0].size = fs::metadata(mirror.join("rev-alpha-2")).unwrap().len();
         m.plugins[0].sha256 = sha;
-        let st = status_with(&d, &m);
+        let st = status(&d, &m);
         assert_eq!(st.needs(), ["alpha.nvim"]);
-        assert_eq!(install_with(&d, &m, &quiet).unwrap().fetched, 1);
+        assert_eq!(install(&d, &m, &quiet).unwrap().fetched, 1);
         assert_eq!(fs::read_to_string(d.plugins().join("alpha.nvim/lua/x.lua")).unwrap(), "return 2");
         // A plugin and a parser platoon no longer pins are taken out.
         m.plugins.remove(0);
         m.parsers.remove(1);
-        install_with(&d, &m, &quiet).unwrap();
+        install(&d, &m, &quiet).unwrap();
         assert!(!d.plugins().join("alpha.nvim").exists() && !d.site().join("parser/lang2.so").exists());
         assert!(record(&d)["items"].get("plugin:alpha.nvim").is_none() && record(&d)["items"].get("parser:lang2").is_none());
         assert!(d.site().join("queries/lang1").exists() && d.site().join("queries/dep").exists());
@@ -1673,7 +1879,7 @@ mod tests {
         write_exe(&own.join("fdfind"), "echo 'fdfind 9.0.0'");
         write_exe(&own.join("tree-sitter"), "echo 'tree-sitter 0.25.3'");
         let d = dirs(&base, vec![own.clone(), fake_cc(&base)]);
-        let r = install_with(&d, &m, &quiet).unwrap();
+        let r = install(&d, &m, &quiet).unwrap();
         assert_eq!(fs::read_link(d.bin().join("nvim")).unwrap(), own.join("nvim"));
         assert_eq!(fs::read_link(d.bin().join("rg")).unwrap(), own.join("rg"));
         assert_eq!(fs::read_link(d.bin().join("fd")).unwrap(), own.join("fdfind"), "Debian's name for fd");
@@ -1682,11 +1888,11 @@ mod tests {
         assert!(!d.editor.join("tools/nvim").exists() && !d.editor.join("tools/rg").exists());
         assert_eq!(r.yours, [format!("fd ({})", own.join("fdfind").display()), format!("nvim ({})", own.join("nvim").display()), format!("rg ({})", own.join("rg").display())]);
         assert_eq!(record(&d)["items"]["tool:nvim"], json!({"source": "yours", "path": own.join("nvim").to_string_lossy()}));
-        assert!(status_with(&d, &m).complete());
+        assert!(status(&d, &m).complete());
         // Their nvim goes away: the link is broken, so it is missing, and the next run downloads one.
         fs::remove_file(own.join("nvim")).unwrap();
-        assert_eq!(status_with(&d, &m).needs(), ["nvim"]);
-        install_with(&d, &m, &quiet).unwrap();
+        assert_eq!(status(&d, &m).needs(), ["nvim"]);
+        install(&d, &m, &quiet).unwrap();
         assert_eq!(fs::read_link(d.bin().join("nvim")).unwrap(), d.editor.join("tools/nvim/bin/nvim"));
     }
 
@@ -1697,7 +1903,7 @@ mod tests {
         let own = base.join("own-bin");
         write_exe(&own.join("nvim"), "echo 'NVIM v0.11.4'");
         let d = dirs(&base, vec![own, fake_cc(&base)]);
-        let r = install_with(&d, &m, &quiet).unwrap();
+        let r = install(&d, &m, &quiet).unwrap();
         assert!(r.yours.is_empty(), "{:?}", r.yours);
         assert_eq!(fs::read_link(d.bin().join("nvim")).unwrap(), d.editor.join("tools/nvim/bin/nvim"));
         // platoon's own bin folder on PATH isn't taken for the user's.
@@ -1711,16 +1917,16 @@ mod tests {
         let m = fake(&base.join("mirror"));
         let d = dirs(&base, vec![]);
         let seen = Mutex::new(Vec::new());
-        let r = install_with(&d, &m, &|p| seen.lock().unwrap().push(p)).unwrap();
+        let r = install(&d, &m, &|p| seen.lock().unwrap().push(p)).unwrap();
         assert!(r.notes.iter().any(|n| n.contains("No C compiler") && n.contains("limited")), "{:?}", r.notes);
         assert!(!d.site().join("parser").exists() && !d.site().join("queries").exists(), "no queries without their parsers");
-        let st = status_with(&d, &m);
+        let st = status(&d, &m);
         assert!(st.no_compiler && st.complete(), "{:?}", st.needs());
         assert!(!seen.into_inner().unwrap().iter().any(|p| p.part == Part::Highlighting));
         // A compiler later: the parsers are built.
         let d = Dirs { search_path: vec![fake_cc(&base)], ..d };
-        install_with(&d, &m, &quiet).unwrap();
-        let st = status_with(&d, &m);
+        install(&d, &m, &quiet).unwrap();
+        let st = status(&d, &m);
         assert!(!st.no_compiler && st.complete() && d.site().join("parser/lang1.so").is_file());
     }
 
@@ -1731,10 +1937,10 @@ mod tests {
         let bin = base.join("badcc");
         write_exe(&bin.join("cc"), "echo 'parser.c:1: error: boom' >&2; exit 1");
         let d = dirs(&base, vec![bin]);
-        let r = install_with(&d, &m, &quiet).unwrap();
+        let r = install(&d, &m, &quiet).unwrap();
         assert!(r.notes.iter().any(|n| n.contains("lang1") && n.contains("plainer colors")), "{:?}", r.notes);
         assert!(!d.site().join("parser/lang1.so").exists());
-        assert!(!status_with(&d, &m).complete());
+        assert!(!status(&d, &m).complete());
     }
 
     #[test]
@@ -1744,7 +1950,7 @@ mod tests {
         let own = base.join("own-bin");
         write_exe(&own.join("rg"), "echo 'ripgrep 14.0.0'");
         let d = dirs(&base, vec![own.clone(), fake_cc(&base)]);
-        install_with(&d, &m, &quiet).unwrap();
+        install(&d, &m, &quiet).unwrap();
         // Things that aren't platoon's, beside what is.
         fs::write(d.fonts.join("MyOwnFont.ttf"), "mine").unwrap();
         let other_font = base.join("fonts/Other.ttf");
@@ -1757,11 +1963,11 @@ mod tests {
         assert!(d.fonts.join("MyOwnFont.ttf").is_file() && other_font.is_file(), "only the files platoon put there");
         assert!(!d.fonts.join("FakeNerdFont-Regular.ttf").exists());
         assert!(base.join("data/other").is_dir());
-        assert!(status_with(&d, &m).nothing());
+        assert!(status(&d, &m).nothing());
         assert!(!nerd_font_present_with(&d, &|| false));
         assert_eq!(remove(&d).unwrap(), Removed::default(), "nothing the second time");
         // With nothing else in it, platoon's font folder goes too.
-        install_with(&d, &m, &quiet).unwrap();
+        install(&d, &m, &quiet).unwrap();
         fs::remove_file(d.fonts.join("MyOwnFont.ttf")).unwrap();
         remove(&d).unwrap();
         assert!(!d.fonts.exists() && base.join("fonts").is_dir());
@@ -1773,9 +1979,9 @@ mod tests {
         let m = fake(&base.join("mirror"));
         let d = dirs(&base, vec![]);
         let held = lock(&d).unwrap();
-        assert!(install_with(&d, &m, &quiet).unwrap_err().contains("another platoon"));
+        assert!(install(&d, &m, &quiet).unwrap_err().contains("another platoon"));
         drop(held);
-        assert!(install_with(&d, &m, &quiet).is_ok());
+        assert!(install(&d, &m, &quiet).is_ok());
     }
 
     #[test]
@@ -1785,9 +1991,9 @@ mod tests {
         let d = dirs(&base, vec![fake_cc(&base)]);
         // What a killed run leaves: a half-unpacked plugin in tmp/, and no record.
         fs::create_dir_all(d.tmp().join("w0-1/unpacked/lua")).unwrap();
-        assert!(status_with(&d, &m).nothing());
-        install_with(&d, &m, &quiet).unwrap();
-        assert!(!d.tmp().exists() && status_with(&d, &m).complete());
+        assert!(status(&d, &m).nothing());
+        install(&d, &m, &quiet).unwrap();
+        assert!(!d.tmp().exists() && status(&d, &m).complete());
     }
 
     #[test]
@@ -1795,23 +2001,77 @@ mod tests {
         let base = tmp("unsupported");
         let m = fake(&base.join("mirror"));
         let d = Dirs { platform: None, ..dirs(&base, vec![]) };
-        assert!(install_with(&d, &m, &quiet).unwrap_err().contains("can't be installed on this computer"));
-        assert!(!status_with(&d, &m).complete());
+        assert!(install(&d, &m, &quiet).unwrap_err().contains("can't be installed on this computer"));
+        assert!(!status(&d, &m).complete());
     }
 
     #[test]
     fn the_words_are_plain() {
         let d = dirs(Path::new("/x"), vec![]);
-        let r = Report { took: Duration::from_millis(41_600), disk_bytes: 151_400_000, fetched: 3, yours: vec!["rg (/usr/bin/rg)".into()], notes: vec![], font: true };
+        let r = Report { took: Duration::from_millis(41_600), disk_bytes: 151_400_000, fetched: 3, yours: vec!["rg (/usr/bin/rg)".into()], notes: vec![], font: true, font_family: "JetBrainsMono Nerd Font".into() };
         let text = render_report(&r, &d);
         assert!(text.starts_with("The code editor is ready: 151 MB in /x/data/editor, took 42 s."), "{text}");
         assert!(text.contains("Used your own: rg (/usr/bin/rg).") && text.contains("Xfce Terminal: Edit > Preferences > Appearance > Font"), "{text}");
         assert!(text.contains("font-family = \"JetBrainsMono Nerd Font\""), "{text}");
-        assert!(font_advice(true).contains("iTerm2") && !font_advice(true).contains("Xfce"));
+        assert!(font_advice("F", true).contains("iTerm2") && !font_advice("F", true).contains("Xfce"));
         let p = |done, total, failed| Printer::cell(&Progress { part: Part::Plugins, done, total, failed });
         assert_eq!(p(9, 11, 0), "Plugins 9/11");
         assert_eq!(p(11, 11, 0), "Plugins 11/11 ✓");
         assert_eq!(p(10, 11, 1), "Plugins 10/11 (1 failed)");
         assert_eq!(Printer::cell(&Progress { part: Part::Neovim, done: 1, total: 1, failed: 0 }), "Neovim ✓");
+    }
+
+    #[test]
+    fn a_table_reads_back_what_it_writes_and_its_problems_are_said_plainly() {
+        let base = tmp("table");
+        let m = fake(&base.join("mirror"));
+        let text = serde_json::to_string_pretty(&table_json(&m)).unwrap();
+        let back = parse_table(&text).unwrap();
+        assert_eq!(back, m);
+        // The fake's addresses are https and pinned: nothing wrong.
+        assert!(table_problems(&m).is_empty(), "{:?}", table_problems(&m));
+        let problems = |f: &dyn Fn(&mut Manifest)| {
+            let mut t = m.clone();
+            f(&mut t);
+            table_problems(&t).join("\n")
+        };
+        assert!(problems(&|t| t.plugins[0].url = "http://example.invalid/x".into()).contains("plugin alpha.nvim: its address must be an https:// link"));
+        assert!(problems(&|t| t.tools[1].assets[0].1.sha256 = String::new()).contains("tool rg for linux-x64: it needs its sha256"));
+        assert!(problems(&|t| t.font.download.size = 0).contains("the font: it needs its size in bytes"));
+        assert!(problems(&|t| t.parsers[0].size = 400_000_000).contains("more than one download may be"));
+        assert!(problems(&|t| {
+            for p in &mut t.plugins {
+                p.size = 250_000_000;
+                p.sha256 = sha256_hex(p.name.as_bytes());
+            }
+            t.parsers.iter_mut().for_each(|p| p.size = 250_000_000);
+        })
+        .contains("more than the"));
+        assert!(problems(&|t| t.plugins[0].name = "../escape".into()).contains("isn't a plain name"));
+        assert!(problems(&|t| t.tools[0].exe = "../../bin/sh".into()).contains("\"exe\" must be a path inside its download"));
+        assert!(problems(&|t| t.font.files[0] = "../x.ttf".into()).contains("plain file names"));
+        assert!(problems(&|t| t.tools.retain(|x| x.id != "nvim")).contains("no tool \"nvim\""));
+        assert!(problems(&|t| {
+            let again = t.plugins[0].clone();
+            t.plugins.push(again);
+        })
+        .contains("plugin alpha.nvim is listed twice"));
+        // The shape: plain words too.
+        assert!(parse_table("[]").unwrap_err().contains("must be a JSON object"));
+        assert!(parse_table(r#"{"format": 2}"#).unwrap_err().contains("format this platoon doesn't know"));
+        let mut v = table_json(&m);
+        v.get_mut("plugins").and_then(|p| p.get_mut(0)).and_then(Value::as_object_mut).unwrap().remove("size");
+        assert!(parse_table(&v.to_string()).unwrap_err().contains("plugin alpha.nvim has no \"size\""));
+    }
+
+    #[test]
+    fn a_download_of_another_size_is_refused() {
+        let base = tmp("size");
+        let d = dirs(&base, vec![]);
+        let mut m = fake(d.mirror.as_ref().unwrap());
+        m.font.download.size += 1;
+        let err = install(&d, &m, &quiet).unwrap_err();
+        assert!(err.contains("Font: font: the download of Font.tar.xz isn't the file platoon expects (it is"), "{err}");
+        assert!(!status(&d, &m).items.iter().any(|i| i.key == "font" && i.state == ItemState::Ok));
     }
 }

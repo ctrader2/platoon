@@ -93,6 +93,10 @@ impl Lab {
             ("PLATOON_CONFIG_DIR", s(&self.config)),
             ("PLATOON_DATA_DIR", s(&self.data)),
             ("PLATOON_PLUGIN_SOURCE", s(&self.repo)),
+            // The code editor's font and downloads: the lab's too (never the real font folder, never the network).
+            ("PLATOON_FONT_DIR", s(&self.base.join("fonts"))),
+            ("PLATOON_EDITOR_MIRROR", s(&self.base.join("mirror"))),
+            ("PLATOON_SKIP_FC_CACHE", "1".into()),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
             ("PLATOON_NOTES_HELPER", "off".into()),
         ]
@@ -192,4 +196,48 @@ fn the_command_line_lists_adds_removes_and_checks_plugins() {
     assert!(code == 2 && err.contains("usage: platoon plugin"), "{err}");
     // Nothing was ever written outside the lab.
     assert!(lab.data.join("plugins").starts_with(&lab.base));
+}
+
+impl Lab {
+    /// Put platoon's own code editor plugin (`plugins/editor`, as it is in this repository) in the lab's catalog.
+    fn with_editor(&self) {
+        let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor");
+        let theirs = self.repo.join("plugins/editor");
+        for rel in ["plugin.json", "downloads.json", "config/init.lua", "config/lua/platoon/tree.lua", "config/shell.sh"] {
+            fs::create_dir_all(theirs.join(rel).parent().unwrap()).unwrap();
+            fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
+        }
+        let index = json!({"plugins": [{"id": "editor", "version": "1.0.0"}, {"id": "harbor", "version": "1.0.0"}]});
+        fs::write(self.repo.join("plugins/index.json"), index.to_string()).unwrap();
+        git(&self.repo, &["add", "-A"]);
+        git(&self.repo, &["commit", "-q", "-m", "editor"]);
+    }
+}
+
+/// The code editor plugin on the Plugins tab and from the command line, like any other, with what it downloads. It is
+/// never installed here (its real table would need the network); installing it is tested with fake downloads.
+#[test]
+fn the_editor_plugin_shows_on_the_tab_and_in_the_list_with_what_it_downloads() {
+    let lab = Lab::new("plug-editor");
+    lab.with_editor();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 32, 130);
+    t.wait_for_all(&["make the shop", "4 Plugins"]);
+    t.send(b"4");
+    t.wait_for_all(&["Code editor (Neovim)", "Harbor themes", "Adds", "the code editor (Neovim, its tools and plugins,", "it downloads about"]);
+    t.wait_for_all(&["Not installed. Enter installs it and its downloads; then v on a session", "enter install"]);
+    t.send(b"\r");
+    t.wait_for_all(&["Install Code editor (Neovim)?", "It downloads about", "y install", "n not now"]);
+    t.send(b"n");
+    t.wait_gone("Install Code editor (Neovim)?");
+    assert!(!lab.data.join("plugins/editor").exists() && !lab.data.join("editor").exists());
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+
+    let (code, out, err) = lab.cli(&["plugin", "list"]);
+    assert_eq!(code, 0, "{err}");
+    let line = out.lines().find(|l| l.contains("Code editor (Neovim)")).unwrap_or_else(|| panic!("{out}"));
+    assert!(line.contains("editor") && line.contains("(the code editor, downloads about ") && line.ends_with(" MB)"), "{line}");
+    let (code, out, _) = lab.cli(&["plugin", "check", &s(&Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor"))]);
+    assert!(code == 0 && out.contains("adds: the code editor") && out.contains("Looks good"), "{out}");
+    assert!(!lab.base.join("fonts").exists());
 }

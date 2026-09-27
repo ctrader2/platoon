@@ -3,9 +3,10 @@
 //! it, its version, the oldest platoon it works with, and what it adds) and the files it names.
 //!
 //! What a plugin can add is a list of kinds (`KINDS`), each a key of `plugin.json` naming files: `"themes":
-//! ["themes/Harbor Night"]`. Only themes exist in this version; later kinds (platoon's editor, skills, squads and
-//! agents) are new rows of `KINDS` and a loader of their own, and `plugin.json` keys this platoon doesn't know are
-//! left alone (a plugin made for a newer platoon says so with `platoon`).
+//! ["themes/Harbor Night"]`, and platoon's code editor, `"editor": {"downloads": "downloads.json", "config": [...]}`
+//! (its download table and the editor's settings files; `editorplugin.rs`). Later kinds (skills, squads and agents)
+//! are new rows of `KINDS` and a loader of their own, and `plugin.json` keys this platoon doesn't know are left alone
+//! (a plugin made for a newer platoon says so with `platoon`).
 //!
 //! On this computer:
 //!
@@ -76,10 +77,16 @@ pub struct KindInfo {
     pub key: &'static str,
     pub one: &'static str,
     pub many: &'static str,
+    /// A list of files (`"themes": [...]`); otherwise one thing described by an object (`"editor": {...}`), said as
+    /// `one` whatever its files.
+    pub list: bool,
 }
 
-/// What plugins can add in this version. The editor, skills, squads and agents come later, as rows here.
-pub const KINDS: &[KindInfo] = &[KindInfo { key: "themes", one: "theme", many: "themes" }];
+/// What plugins can add in this version. Skills, squads and agents come later, as rows here.
+pub const KINDS: &[KindInfo] = &[
+    KindInfo { key: "themes", one: "theme", many: "themes", list: true },
+    KindInfo { key: crate::editorplugin::KIND, one: "the code editor", many: "the code editor", list: false },
+];
 
 /// The keys of `plugin.json` that aren't kinds.
 const FIELDS: &[&str] = &["id", "name", "description", "version", "author", "license", "platoon"];
@@ -103,6 +110,8 @@ pub struct Manifest {
     pub platoon: String,
     /// What it adds: (kind key, the files named), in `KINDS` order, only the kinds it has.
     pub adds: Vec<(&'static str, Vec<String>)>,
+    /// platoon's code editor, when it adds that: its download table and settings files (also in `adds`).
+    pub editor: Option<crate::editorplugin::Spec>,
     /// Keys this platoon doesn't know (a later kind, a note): left alone.
     pub unknown: Vec<String>,
 }
@@ -127,6 +136,9 @@ impl Manifest {
             .iter()
             .filter_map(|k| {
                 let n = self.files(k.key).len();
+                if !k.list {
+                    return (n > 0).then(|| k.one.to_string());
+                }
                 (n > 0).then(|| format!("{n} {}", if n == 1 { k.one } else { k.many }))
             })
             .collect();
@@ -215,9 +227,15 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         return Err(format!("\"platoon\" should be the oldest platoon version it works with, like {}; it is \"{platoon}\"", platoon_version()));
     }
     let mut adds = Vec::new();
+    let mut editor = None;
     for kind in KINDS {
         match obj.get(kind.key) {
             None => {}
+            Some(v) if !kind.list => {
+                let spec = crate::editorplugin::parse_spec(v)?;
+                adds.push((kind.key, spec.files()));
+                editor = Some(spec);
+            }
             Some(Value::Array(items)) => {
                 let mut files = Vec::new();
                 for item in items {
@@ -232,7 +250,7 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
         }
     }
     let unknown = obj.keys().filter(|k| !FIELDS.contains(&k.as_str()) && !KINDS.iter().any(|kind| kind.key == k.as_str())).map(|k| clean(k)).collect();
-    Ok(Manifest { id, name, description, version, author, license, platoon, adds, unknown })
+    Ok(Manifest { id, name, description, version, author, license, platoon, adds, editor, unknown })
 }
 
 fn read_manifest(dir: &Path) -> Result<Manifest, String> {
@@ -340,6 +358,8 @@ pub struct CheckReport {
     pub notes: Vec<String>,
     /// The names of the themes it adds, in its order.
     pub themes: Vec<String>,
+    /// What installing the code editor it adds downloads on this computer, in bytes.
+    pub download_bytes: Option<u64>,
     pub files: usize,
     pub bytes: u64,
 }
@@ -380,7 +400,13 @@ pub fn check(dir: &Path) -> CheckReport {
         r.problems.push(format!("{} can't be used here: {why}", m.name));
     }
     if m.adds.is_empty() {
-        r.problems.push("it adds nothing: list its theme files under \"themes\" in plugin.json".into());
+        r.problems.push("it adds nothing: list its theme files under \"themes\" in plugin.json (or the editor's files under \"editor\")".into());
+    }
+    if let Some(spec) = &m.editor {
+        let rel: Vec<(String, PathBuf, u64)> = files.iter().map(|f| (f.rel.clone(), f.path.clone(), f.len)).collect();
+        let (problems, bytes) = crate::editorplugin::check_spec(spec, &rel, safe_rel);
+        r.problems.extend(problems);
+        r.download_bytes = bytes;
     }
     for key in &m.unknown {
         r.notes.push(format!("\"{key}\" in plugin.json isn't something this platoon knows; it is left alone"));
@@ -474,6 +500,9 @@ pub enum Origin {
     Catalog { source: String, rf: String, commit: String },
     /// A folder on this computer (someone making a plugin).
     Folder { path: String },
+    /// The copy of it that came with this platoon (the code editor, taken over from an install made before it was a
+    /// plugin). Updated from the catalog like one from there.
+    Bundled { version: String },
 }
 
 impl Origin {
@@ -482,6 +511,7 @@ impl Origin {
         match self {
             Origin::Catalog { commit, .. } => format!("the catalog (commit {})", short(commit)),
             Origin::Folder { path } => format!("a folder: {}", crate::dirs::tilde(path, home)),
+            Origin::Bundled { version } => format!("the copy that came with platoon {version}"),
         }
     }
 }
@@ -644,6 +674,7 @@ impl Store {
                 let s = |k: &str| v.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
                 let origin = match v.get("origin").and_then(Value::as_str) {
                     Some("folder") => Origin::Folder { path: s("path") },
+                    Some("bundled") => Origin::Bundled { version: s("platoon") },
                     _ => Origin::Catalog { source: s("source"), rf: s("ref"), commit: s("commit") },
                 };
                 Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0) })
@@ -671,6 +702,11 @@ impl Store {
         let hash = tree_hash(&files).map_err(|e| format!("couldn't read the plugin's files: {e}"))?;
         let _lock = self.lock()?;
         let mut rec = self.read_record()?;
+        if m.editor.is_some() {
+            if let Some(other) = self.installed().into_iter().find(|p| p.manifest.editor.is_some() && p.id() != m.id) {
+                return Err(format!("{} can't be installed while {} is: platoon has one code editor. Remove {} first.", m.name, other.manifest.name, other.id()));
+            }
+        }
         let before = self.get(&m.id);
         if let Some(b) = &before {
             if b.sha256 == hash && b.origin == origin {
@@ -725,6 +761,7 @@ impl Store {
         let entry = match &origin {
             Origin::Catalog { source, rf, commit } => json!({"origin": "catalog", "source": source, "ref": rf, "commit": commit}),
             Origin::Folder { path } => json!({"origin": "folder", "path": path}),
+            Origin::Bundled { version } => json!({"origin": "bundled", "platoon": version}),
         };
         let mut entry = entry.as_object().cloned().unwrap_or_default();
         entry.insert("version".into(), json!(m.version));
@@ -737,7 +774,7 @@ impl Store {
         if let Some(plugins) = rec.get_mut("plugins").and_then(Value::as_object_mut) {
             // Keys a later platoon added to this plugin's record are kept.
             let mut merged = plugins.get(&m.id).and_then(Value::as_object).cloned().unwrap_or_default();
-            for key in ["origin", "source", "ref", "commit", "path"] {
+            for key in ["origin", "source", "ref", "commit", "path", "platoon"] {
                 merged.remove(key);
             }
             merged.extend(entry);
@@ -828,6 +865,8 @@ pub struct Entry {
     pub sha256: String,
     /// Why it can't be installed here (it needs a newer platoon, ...); empty when it can.
     pub problems: Vec<String>,
+    /// What installing the code editor it adds downloads on this computer.
+    pub download_bytes: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -1002,7 +1041,7 @@ pub fn read_catalog(dir: &Path) -> (Vec<Entry>, Vec<String>) {
         }
         let mut ignored = Vec::new();
         let sha256 = tree_hash(&walk(&folder, &mut ignored)).unwrap_or_default();
-        entries.push(Entry { manifest: m, dir: folder, sha256, problems: report.problems });
+        entries.push(Entry { manifest: m, dir: folder, sha256, problems: report.problems, download_bytes: report.download_bytes });
     }
     (entries, skipped)
 }
@@ -1049,7 +1088,7 @@ pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updat
 
 /// The catalog's version of an installed plugin is different from what is installed.
 pub fn update_available(p: &Installed, catalog: &Catalog) -> bool {
-    matches!(p.origin, Origin::Catalog { .. }) && catalog.get(p.id()).is_some_and(|e| e.sha256 != p.sha256 && e.problems.is_empty())
+    matches!(p.origin, Origin::Catalog { .. } | Origin::Bundled { .. }) && catalog.get(p.id()).is_some_and(|e| e.sha256 != p.sha256 && e.problems.is_empty())
 }
 
 // ---- themes from plugins ------------------------------------------------------------------------------------------

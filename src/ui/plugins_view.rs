@@ -7,7 +7,11 @@ use crate::app::{PlugRow, PlugState};
 /// The keys of the Plugins tab, for the plugin selected.
 pub(super) fn plugins_tab_hints(app: &App) -> Vec<Hint<'static>> {
     let mut out: Vec<Hint<'static>> = Vec::new();
-    match app.pl.selected_row().map(|r| r.state) {
+    let row = app.pl.selected_row();
+    if row.as_ref().is_some_and(|r| editor_unfinished(app, r)) {
+        out.push(("enter", "finish downloads", None));
+    }
+    match row.map(|r| r.state) {
         Some(PlugState::Available) => out.push(("enter", "install", None)),
         Some(PlugState::Update) => {
             out.push(("enter", "update", None));
@@ -52,7 +56,7 @@ pub(super) fn draw_plugins_tab(f: &mut Frame, app: &App, area: Rect) {
     match sel {
         Some(r) => draw_plugin_detail(f, app, ri, r),
         None => {
-            let msg = "Plugins add things to platoon that not everyone wants, like more color themes. They come from platoon's \
+            let msg = "Plugins add things to platoon that not everyone wants, like its code editor or more color themes. They come from platoon's \
                        own catalog, where anyone can send one (see plugins/README.md in platoon's repository).";
             f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(t.subtext)), ri);
         }
@@ -74,6 +78,19 @@ fn catalog_status(app: &App) -> (String, Color) {
         Some(c) => (format!("Catalog: commit {}", crate::plugins::short(&c.commit)), t.dim),
         None => ("Catalog: not fetched yet".into(), t.dim),
     }
+}
+
+/// The code editor plugin is installed but not everything it downloads is there.
+fn editor_unfinished(app: &App, r: &PlugRow) -> bool {
+    r.manifest.editor.is_some() && r.state.installed() && !app.pl.editor_complete
+}
+
+/// How a row's state is said: the code editor's unfinished downloads too.
+fn state_words(app: &App, r: &PlugRow) -> String {
+    if editor_unfinished(app, r) {
+        return "Installed · downloads not finished".into();
+    }
+    r.state.words()
 }
 
 fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
@@ -110,6 +127,7 @@ fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
         let name = fit_end(&r.manifest.name, name_w);
         let gap = w.saturating_sub(name.chars().count() + version.chars().count());
         let state_color = match r.state {
+            _ if editor_unfinished(app, r) => t.warn,
             PlugState::Update | PlugState::Unavailable(_) => t.warn,
             ref s if s.installed() => t.ok,
             _ => t.dim,
@@ -121,7 +139,7 @@ fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
                 Span::styled(" ".repeat(gap), base),
                 Span::styled(version, base.fg(t.dim)),
             ]),
-            Line::from(vec![Span::styled("  ", base), Span::styled(fit_end(&r.state.words(), w), base.fg(state_color))]),
+            Line::from(vec![Span::styled("  ", base), Span::styled(fit_end(&state_words(app, r), w), base.fg(state_color))]),
         ];
         f.render_widget(Paragraph::new(lines).style(base), rect);
         y += per;
@@ -149,7 +167,14 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
     };
     field("Version", version, t.subtext);
     let names = m.theme_names();
-    let adds = if names.is_empty() { m.adds_words() } else { format!("{}: {}", m.adds_words(), names.join(", ")) };
+    let adds = if m.editor.is_some() {
+        let size = r.download_bytes.map_or(String::new(), |b| format!("; it downloads {}", crate::editorplugin::size_words(b)));
+        format!("{} (Neovim, its tools and plugins, syntax highlighting, a font with icons){size}", m.adds_words())
+    } else if names.is_empty() {
+        m.adds_words()
+    } else {
+        format!("{}: {}", m.adds_words(), names.join(", "))
+    };
     field("Adds", adds, t.subtext);
     if let Some(l) = &m.license {
         field("License", l.clone(), t.subtext);
@@ -161,7 +186,13 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
     field("From", from, t.subtext);
     field("Needs", format!("platoon {} or newer", m.platoon), t.subtext);
     lines.push(Line::raw(""));
+    let editor = m.editor.is_some();
     let (what, color) = match &r.state {
+        _ if editor_unfinished(app, r) => ("Installed, but not everything it downloads is there yet: enter finishes it (only what is missing is fetched). d removes it.".to_string(), t.warn),
+        PlugState::Available if editor => ("Not installed. Enter installs it and its downloads; then v on a session or a ticket opens it.".to_string(), t.dim),
+        PlugState::Installed | PlugState::FromFolder | PlugState::NotInCatalog if editor => {
+            ("Installed. v on a session or a ticket opens it. d removes it with everything it downloaded.".to_string(), t.ok)
+        }
         PlugState::Available => ("Not installed. Enter installs it.".to_string(), t.dim),
         PlugState::Installed => ("Installed. Its themes are in the settings (s, then Theme). d removes it.".to_string(), t.ok),
         PlugState::Update => ("An update is ready: enter installs it. d removes the plugin.".to_string(), t.warn),

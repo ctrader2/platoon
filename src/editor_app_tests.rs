@@ -4,7 +4,7 @@
 //! request the event loop would take is looked at instead).
 
 use crate::app::{App, Confirm, EdTarget, Mode};
-use crate::editor_install::{self, testing as fake};
+use crate::editor_install::{testing as fake, Dirs};
 use crate::host::HostInfo;
 use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
@@ -290,7 +290,7 @@ fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     // The question is open while the ticket turns Done and the squad stops.
     l.app.ed.stand_in = false;
     v(&mut l.app);
-    assert!(matches!(l.app.mode, Mode::Confirm(Confirm::InstallEditor)));
+    assert!(matches!(l.app.mode, Mode::Confirm(Confirm::InstallEditor { .. })));
     let mut t = Tickets::open(&l.w.config, &l.project);
     t.squad_says(1, &State::Done, "", None).unwrap();
     l.app.reload_for_test();
@@ -311,41 +311,55 @@ fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     assert!(!l.wt.exists(), "removed once the editor has closed");
 }
 
+/// An app whose editor folder and plugin catalog are temp ones: a catalog repository with the editor plugin, its
+/// table a mirror of tiny fake downloads.
+fn with_editor_catalog(app: &mut App, name: &str) -> Dirs {
+    let base = fake::tmp(name);
+    let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
+    let (repo, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
+    app.ed.dirs = dirs.clone();
+    app.ed.stand_in = false;
+    app.pl.source = crate::plugins::testing::source(&repo);
+    dirs
+}
+
 #[test]
-fn not_installed_it_offers_to_install_then_opens_and_no_says_how_to_do_it_later() {
+fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_opens() {
     let w = World::new("ed-install");
     let root = w.base.join("proj");
     repo(&root);
     w.transcript("s-1", &s(&root), "hello", 5);
     let mut app = w.app();
-    let fake_dir = fake::tmp("app-install");
-    let dirs = fake::dirs(&fake_dir, vec![fake::fake_cc(&fake_dir)]);
-    let manifest = fake::fake(dirs.mirror.as_ref().unwrap());
-    app.ed.dirs = dirs.clone();
-    app.ed.manifest = Some(manifest.clone());
-    app.ed.stand_in = false;
-    // Removed by the user before: an explicit v still asks.
-    crate::totickets::change_choice(&w.config, crate::setup::EDITOR, &[("asked", Some(true.into())), ("wanted", Some(false.into())), ("removed", Some(true.into()))]).unwrap();
+    let dirs = with_editor_catalog(&mut app, "app-install");
 
     v(&mut app);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor)));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
     key(&mut app, KeyCode::Char('n'));
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("platoon setup --add editor")), "{:?}", app.notice);
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("The Plugins tab (4) or `platoon plugin add editor`")), "{:?}", app.notice);
     assert!(app.take_editor_request().is_none());
-    assert!(!dirs.editor.join("installed.json").exists(), "nothing installed on a no");
+    assert!(!dirs.editor.join("installed.json").exists() && crate::editorplugin::installed(&app.pl.store).is_none(), "nothing installed on a no");
 
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
     assert!(app.editor_busy());
     app.refresh_until_for_test(20, "the install to finish", |a| !a.editor_busy());
-    assert!(crate::editor::ready(&editor_install::status_with(&dirs, &manifest)), "installed");
+    let p = crate::editorplugin::installed(&app.pl.store).expect("the plugin, from the catalog");
+    assert!(matches!(p.origin, crate::plugins::Origin::Catalog { .. }));
+    assert!(crate::editorplugin::complete(&app.pl.store, &dirs), "and its downloads");
+    assert!(app.pl.editor_complete && app.pl.installed.iter().any(|p| p.id() == "editor"), "the Plugins tab knows");
     assert_eq!(opened(&mut app), vec![s(&root)], "and then opened");
-    let choice = crate::totickets::choice(&w.config, crate::setup::EDITOR);
-    assert_eq!(choice.get("wanted"), Some(&serde_json::Value::Bool(true)));
-    assert_eq!(choice.get("removed"), None, "wanted again, like `platoon setup --add editor`");
+    // The editor's settings are the plugin's.
+    assert!(app.editor_config_files().iter().any(|(p, _)| p == "init.lua"));
 
     // Installed: v opens straight away.
     v(&mut app);
+    assert_eq!(opened(&mut app), vec![s(&root)]);
+    // A part gone: v asks to finish the downloads (the plugin is there), and only that is fetched.
+    fs::remove_dir_all(dirs.site().join("pack/platoon/start/alpha.nvim")).unwrap();
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: true, .. })));
+    key(&mut app, KeyCode::Char('y'));
+    app.refresh_until_for_test(20, "the downloads to finish", |a| !a.editor_busy());
     assert_eq!(opened(&mut app), vec![s(&root)]);
 }
 
@@ -354,16 +368,67 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     let w = World::new("ed-install-fail");
     w.transcript("s-1", &s(&w.base), "hello", 5);
     let mut app = w.app();
-    let fake_dir = fake::tmp("app-install-fail");
-    // Platoon's real pins against an empty mirror: every download is missing, and the network is never used.
-    app.ed.dirs = fake::dirs(&fake_dir, vec![]);
-    fs::create_dir_all(app.ed.dirs.mirror.as_ref().unwrap()).unwrap();
-    app.ed.stand_in = false;
+    let dirs = with_editor_catalog(&mut app, "app-install-fail");
+    // Every download missing from the mirror (the network is never used).
+    fs::remove_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
+    fs::create_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
     app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("didn't finish installing")), "{:?}", app.notice);
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("didn't finish installing") && n.contains("`platoon plugin add editor`, tries again")), "{:?}", app.notice);
     assert!(app.take_editor_request().is_none());
+    // No catalog to be had at all: said plainly too.
+    let w2 = World::new("ed-install-nocat");
+    w2.transcript("s-1", &s(&w2.base), "hello", 5);
+    let mut app = w2.app();
+    app.ed.stand_in = false;
+    app.ed.dirs = fake::dirs(&fake::tmp("app-install-nocat"), vec![]);
+    v(&mut app);
+    key(&mut app, KeyCode::Char('y'));
+    app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("couldn't reach its plugin catalog")), "{:?}", app.notice);
+}
+
+/// An editor installed before it was a plugin: `v` opens it at once (no question), and the app took it over as the
+/// editor plugin when it started, downloading nothing.
+#[test]
+fn an_editor_from_before_plugins_opens_at_once_and_is_taken_over() {
+    let w = World::new("ed-before");
+    let root = w.base.join("proj");
+    repo(&root);
+    w.transcript("s-1", &s(&root), "hello", 5);
+    let mut app = w.app();
+    let base = fake::tmp("app-before");
+    let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
+    fs::create_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
+    crate::editorplugin::testing::folder_from_before(&dirs);
+    app.ed.dirs = dirs.clone();
+    app.ed.stand_in = false;
+    // Before the take-over (the app of a platoon just updated): it opens at once, with the settings that came with
+    // platoon.
+    assert!(crate::editorplugin::installed(&app.pl.store).is_none());
+    v(&mut app);
+    assert_eq!(opened(&mut app), vec![s(&root)]);
+    assert!(app.editor_config_files().iter().any(|(p, t)| p == "init.lua" && t.contains("PLATOON_EDITOR_SESSION")));
+    let before = fs::read(dirs.editor.join("installed.json")).unwrap();
+    app.take_over_editor();
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("nothing was downloaded")), "{:?}", app.notice);
+    assert!(app.pl.installed.iter().any(|p| p.id() == "editor") && app.pl.editor_complete);
+    assert_eq!(fs::read(dirs.editor.join("installed.json")).unwrap(), before);
+    // Removing it from the Plugins tab takes the folder and the font off (no catalog here: the tab shows what is
+    // installed).
+    key(&mut app, KeyCode::Char('4'));
+    app.refresh_until_for_test(20, "the catalog to be tried", |a| !a.plugins_busy());
+    assert_eq!(app.pl.selected_row().map(|r| r.manifest.id), Some("editor".to_string()));
+    key(&mut app, KeyCode::Char('d'));
+    assert!(matches!(&app.mode, Mode::Confirm(Confirm::RemovePlugin { editor: true, .. })));
+    key(&mut app, KeyCode::Char('y'));
+    assert!(!dirs.editor.exists() && !dirs.fonts.exists());
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("and everything it downloaded")), "{:?}", app.notice);
+    // Now v offers the plugin again; the machine's own editors are unaffected (next test).
+    key(&mut app, KeyCode::Char('1'));
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
 }
 
 // ---- the machine's own editors (`fileeditors.rs`) -------------------------------------------------------------------
@@ -491,7 +556,7 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
     assert!(app.file_pick().platoon_missing);
     key(&mut app, KeyCode::Char('g'));
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor)));
+    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { .. })));
     key(&mut app, KeyCode::Char('n'));
     assert_eq!(settings::load(&w.config).0.files_editor, "platoon");
 }

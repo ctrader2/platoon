@@ -15,14 +15,18 @@
 //! (`files_editor` in the settings; platoon's editor until the user picks another, and instead of one no longer
 //! installed, said once), or, with "Always ask which editor" on, the list with the favourite starred and picked
 //! (picking another makes it the favourite). Everything else is the same for every editor: the squad-still-working
-//! question, bringing a removed worktree back, the folder picker. Only platoon's own is ever installed. A terminal
+//! question, bringing a removed worktree back, the folder picker. Only platoon's own is ever installed: it is a plugin
+//! (`editorplugin.rs`), and `v` on it when it isn't there offers the plugin: fetched from the catalog, installed, then
+//! its downloads, with progress in the footer, then it opens. A terminal
 //! editor of the user's own (Helix, their Neovim) is handed the terminal as platoon's is (`main.rs`); one with a
 //! window of its own starts beside platoon, and a ticket's worktree opened in one is kept after the work until `w`
 //! (platoon cannot tell when that window closes).
 
 use super::*;
 use crate::editor::{self, Request};
-use crate::editor_install::{self, Dirs, Part, Progress, Report};
+use crate::editor_install::{Dirs, Part, Progress, Report};
+use crate::editorplugin;
+use crate::plugins::{self, Origin};
 use crate::fileeditors::{self, FileEditor, Runs};
 use crate::tickets::{State, Ticket, Tickets};
 use std::collections::BTreeMap;
@@ -61,6 +65,8 @@ pub struct FilePick {
 }
 
 enum InstallMsg {
+    /// What it is doing before the downloads: fetching the catalog, installing the plugin.
+    Stage(String),
     Progress(Progress),
     Done(Result<Report, String>),
 }
@@ -71,11 +77,10 @@ pub struct EdState {
     request: Option<Request>,
     installing: Option<Receiver<InstallMsg>>,
     progress: BTreeMap<Part, Progress>,
+    /// What the install is doing before its downloads start.
+    stage: Option<String>,
     /// Where the editor is installed.
     pub dirs: Dirs,
-    /// Installs from this instead of platoon's pins (unit tests: a mirror of fake downloads).
-    #[cfg(test)]
-    pub manifest: Option<editor_install::Manifest>,
     /// Run this instead of the editor (tests), as `PLATOON_NVIM_BIN` does.
     pub stand_in: bool,
     /// The editors `v` can offer: platoon's own, then this computer's (`fileeditors::detect`, when platoon started).
@@ -101,7 +106,7 @@ impl EdState {
     #[cfg(test)]
     fn dirs() -> Dirs {
         let none = std::env::temp_dir().join(format!("platoon-unit-no-editor-{}", std::process::id()));
-        Dirs { editor: none.join("editor"), fonts: none.join("fonts"), mirror: Some(none.join("mirror")), search_path: Vec::new(), refresh_fonts: false, platform: Some(editor_install::Platform::LinuxX64) }
+        Dirs { editor: none.join("editor"), fonts: none.join("fonts"), mirror: Some(none.join("mirror")), search_path: Vec::new(), refresh_fonts: false, platform: Some(crate::editor_install::Platform::LinuxX64) }
     }
 
     pub fn new() -> Self {
@@ -111,9 +116,8 @@ impl EdState {
             request: None,
             installing: None,
             progress: BTreeMap::new(),
+            stage: None,
             dirs: Self::dirs(),
-            #[cfg(test)]
-            manifest: None,
             stand_in: editor::stand_in(&env),
             files: Self::files(),
             fpick: FilePick::default(),
@@ -286,7 +290,7 @@ impl App {
             if self.ed.installing.is_some() {
                 self.notify("The code editor is being installed. It opens when that is done.");
             } else {
-                self.mode = Mode::Confirm(Confirm::InstallEditor);
+                self.ask_install_editor();
             }
             return;
         }
@@ -387,16 +391,41 @@ impl App {
         }
     }
 
-    /// Enough of the editor is installed to open it (or a test named a stand-in).
+    /// Enough of the editor is installed to open it (or a test named a stand-in): by the editor plugin's table, or
+    /// (an editor installed before it was a plugin, not taken over yet) by the copy that came with platoon.
     fn editor_installed(&self) -> bool {
-        if self.ed.stand_in {
-            return true;
+        self.ed.stand_in || editorplugin::ready(&self.pl.store, &self.ed.dirs)
+    }
+
+    /// The question before installing the editor plugin (or finishing its downloads), with what it downloads.
+    pub(super) fn ask_install_editor(&mut self) {
+        let plugin = editorplugin::installed(&self.pl.store).is_some();
+        // Without the plugin: what the catalog's (as last fetched) downloads, else the one that came with platoon.
+        let from_catalog = if plugin { None } else { self.pl.catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).and_then(|e| e.download_bytes) };
+        let bytes = from_catalog.unwrap_or_else(|| editorplugin::download_bytes(&self.pl.store));
+        self.mode = Mode::Confirm(Confirm::InstallEditor { bytes, plugin });
+    }
+
+    /// An editor started by platoon (this window's or another's) has folders open now.
+    pub(super) fn ed_open_now(&self) -> bool {
+        !editor::open_now(&self.cache).is_empty()
+    }
+
+    /// The editor's settings files for this opening (the editor plugin's; see `editorplugin::config_files`).
+    pub fn editor_config_files(&self) -> Vec<(String, String)> {
+        editorplugin::config_files(&self.pl.store)
+    }
+
+    /// An editor installed before it was a plugin becomes the editor plugin (no network, nothing downloaded), said once.
+    pub(crate) fn take_over_editor(&mut self) {
+        match editorplugin::adopt(&self.pl.store, &self.ed.dirs) {
+            Some(Ok(p)) => {
+                self.plugins_changed();
+                self.notify(editorplugin::adopted_words(&p));
+            }
+            Some(Err(e)) => self.notify(format!("Your code editor couldn't be made a plugin yet ({e}); it keeps working.")),
+            None => {}
         }
-        #[cfg(test)]
-        if let Some(m) = &self.ed.manifest {
-            return editor::ready(&editor_install::status_with(&self.ed.dirs, m));
-        }
-        editor::ready(&editor_install::status(&self.ed.dirs))
     }
 
     /// Yes to "the squad is still working".
@@ -414,39 +443,50 @@ impl App {
         self.ed.flow = None;
         self.ed.note = None;
         if installing {
-            self.notify("No code editor, then. `platoon setup --add editor` installs it later.");
+            self.notify("No code editor, then. The Plugins tab (4) or `platoon plugin add editor` installs it later.");
         }
     }
 
-    /// Yes to installing it: off the UI thread, with a progress line; it opens once it is there. Remembered as
-    /// wanted, like `platoon setup --add editor` (also after the user removed it: pressing `v` asked for it).
+    /// Yes to installing it: off the UI thread, with a progress line; it opens once it is there. Without the editor
+    /// plugin: the catalog is fetched (its last copy when it can't be reached) and the plugin installed from it first;
+    /// then whatever its table has that the editor folder doesn't is downloaded.
     pub(super) fn install_editor(&mut self) {
         self.mode = Mode::List;
-        let _ = crate::totickets::change_choice(
-            &self.config,
-            setup::EDITOR,
-            &[("asked", Some(serde_json::Value::Bool(true))), ("wanted", Some(serde_json::Value::Bool(true))), ("removed", None)],
-        );
-        let dirs = self.ed.dirs.clone();
-        #[cfg(test)]
-        let manifest = self.ed.manifest.clone();
+        let (dirs, store, source) = (self.ed.dirs.clone(), self.pl.store.clone(), self.pl.source.clone());
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let progress = tx.clone();
-            let report = move |p| {
-                let _ = progress.send(InstallMsg::Progress(p));
+            let stage = |line: &str| {
+                let _ = tx.send(InstallMsg::Stage(line.to_string()));
             };
-            #[cfg(test)]
-            let done = match manifest {
-                Some(m) => editor_install::install_with(&dirs, &m, &report),
-                None => editor_install::install(&dirs, &report),
-            };
-            #[cfg(not(test))]
-            let done = editor_install::install(&dirs, &report);
+            let plugin = (|| -> Result<(), String> {
+                if editorplugin::installed(&store).is_some() {
+                    return Ok(());
+                }
+                stage("Installing the code editor: fetching the plugin catalog…");
+                let catalog = match plugins::fetch(&store, &source) {
+                    Ok(c) => c,
+                    Err(e) => plugins::cached(&store, &source).ok_or(e)?,
+                };
+                let entry = catalog.get(editorplugin::ID).ok_or("platoon's plugin catalog has no code editor plugin")?;
+                if !entry.problems.is_empty() {
+                    return Err(format!("{} can't be installed here: {}", entry.manifest.name, entry.problems.join("; ")));
+                }
+                stage("Installing the code editor: its plugin…");
+                let origin = Origin::Catalog { source: catalog.source.clone(), rf: catalog.rf.clone(), commit: catalog.commit.clone() };
+                store.install(&entry.dir, origin).map(|_| ())
+            })();
+            let done = plugin.and_then(|()| {
+                let progress = tx.clone();
+                let report = move |p| {
+                    let _ = progress.send(InstallMsg::Progress(p));
+                };
+                editorplugin::install_downloads(&store, &dirs, &report)
+            });
             let _ = tx.send(InstallMsg::Done(done));
         });
         self.ed.installing = Some(rx);
         self.ed.progress.clear();
+        self.ed.stage = None;
         self.notify("Installing the code editor…");
     }
 
@@ -458,7 +498,11 @@ impl App {
             .values()
             .map(|p| if p.done + p.failed >= p.total && p.failed == 0 { format!("{} ✓", p.part.label()) } else { format!("{} {}/{}", p.part.label(), p.done, p.total) })
             .collect();
-        if parts.is_empty() { "Installing the code editor…".into() } else { format!("Installing the code editor: {}", parts.join("  ")) }
+        match (&self.ed.stage, parts.is_empty()) {
+            (_, false) => format!("Installing the code editor: {}", parts.join("  ")),
+            (Some(stage), true) => stage.clone(),
+            (None, true) => "Installing the code editor…".into(),
+        }
     }
 
     /// Called on every refresh: the install's progress, and when it is done, the editor opened (unless the user is
@@ -471,6 +515,7 @@ impl App {
                 Ok(InstallMsg::Progress(p)) => {
                     self.ed.progress.insert(p.part, p);
                 }
+                Ok(InstallMsg::Stage(line)) => self.ed.stage = Some(line),
                 Ok(InstallMsg::Done(r)) => {
                     done = Some(r);
                     break;
@@ -488,6 +533,11 @@ impl App {
             return;
         };
         self.ed.installing = None;
+        // The plugin may be new, and the catalog was fetched: the Plugins tab shows both.
+        if let Some(c) = plugins::cached(&self.pl.store, &self.pl.source) {
+            self.pl.catalog = Some(c);
+        }
+        self.plugins_changed();
         match r {
             Ok(_) if matches!(self.mode, Mode::List) && self.ed.flow.is_some() => {
                 self.notify("The code editor is installed.");
@@ -499,7 +549,7 @@ impl App {
             }
             Err(e) => {
                 self.ed.flow = None;
-                self.notify(format!("The code editor didn't finish installing: {e} `platoon setup --add editor` tries again."));
+                self.notify(format!("The code editor didn't finish installing: {e} v, or `platoon plugin add editor`, tries again."));
             }
         }
     }

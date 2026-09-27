@@ -4,7 +4,8 @@ This folder is the catalog platoon offers on its **Plugins** tab (`4`) and with 
 folder here, named after its id, and `index.json` lists them in the order platoon shows them.
 
 A plugin holds **files, never code**: a `plugin.json` that says what it is and what it adds, and those files. In this
-version a plugin can add **color themes**. (Later: platoon's code editor, skills, and squads and agents.)
+version a plugin can add **color themes**, or **platoon's code editor** (one plugin, `editor`; see "The code editor
+kind" below). (Later: skills, and squads and agents.)
 
 ## Making a theme plugin
 
@@ -74,6 +75,40 @@ says what is wrong, in plain words, or "Looks good". It checks that:
 Try it for real with `platoon plugin add ./sea-themes`: its themes appear in the settings (`s`, then Theme), with your
 plugin's name beside them. `platoon plugin remove sea-themes` takes it off again.
 
+## The code editor kind
+
+The `editor` plugin here is platoon's code editor (Neovim, opened with `v`). platoon has the code that installs and runs
+it; the plugin has the data: what to download and the editor's settings files.
+
+```json
+"editor": {
+  "downloads": "downloads.json",
+  "config": ["config/init.lua", "config/lua/platoon/tree.lua", "config/shell.sh"]
+}
+```
+
+- `downloads`: the download table. `tools` (Neovim and the programs it uses: an `id`, the `version`, the oldest of the
+  user's own copies to use instead as `min_yours`, the `names` it goes by on PATH, the program inside the download as
+  `exe`, and one download per computer: `linux-x64`, `linux-arm64`, `macos-arm64`, `macos-x64`), `plugins` (Neovim
+  plugins as commit tarballs, installed as native packages), `parsers` (syntax highlighting, built with the C compiler;
+  revisions as the pinned nvim-treesitter's `parsers.lua` names them) and the `font`. **Every download has an https
+  address, its sha256 and its exact size in bytes**: platoon refuses a file that differs in either, and a table missing
+  one is refused whole, so what lands on someone's computer is exactly what was reviewed here. `note` and `about` are
+  free text.
+- `config`: the editor's settings files, all under `config/`. Each lands at the same path under the editor's own config
+  folder every time it opens (`config/init.lua` is what Neovim starts with and must be there). They are text.
+
+`platoon plugin check plugins/editor` also checks: the table reads, only https, every hash and size there, no single
+download over 300 MB and no more than 600 MB in all on any computer, every name platoon makes a folder or a file of is
+a plain name and every path stays inside its download, and the settings files are text inside `config/`. Only one code
+editor plugin can be installed at a time.
+
+These files run inside Neovim on the user's computer, and the table decides what programs are downloaded: a change to
+this plugin is reviewed like a change to platoon's code. To move a download to a newer version, change its `rev` (or
+version), `url`, `sha256` and `size` together, from the release's published digest or two downloads that match, and
+raise the plugin's `version`; installed editors then fetch only what changed. platoon keeps a copy of this plugin in its
+own build (for taking over an editor installed before the editor was a plugin), and a test checks the copy is whole.
+
 ## Sending it
 
 1. Fork platoon's repository and put your folder in `plugins/`.
@@ -89,7 +124,8 @@ plugin's name beside them. `platoon plugin remove sea-themes` takes it off again
 ## What is reviewed
 
 - It passes `platoon plugin check`, and the index matches.
-- It is files only and adds only what it says.
+- It is files only and adds only what it says. For the code editor: every download pinned, from its project's own
+  releases or commits.
 - **Where the colors come from.** Your own, or a theme whose license allows it: say which, and keep its license and credit
   in the plugin (a `LICENSE` or a line in the theme file). Commercial themes can't be accepted.
 - The name and description are plain and honest, and nothing in it is personal (no paths, emails or machine names beyond

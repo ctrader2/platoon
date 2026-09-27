@@ -226,13 +226,14 @@ impl Term {
         self.text().split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// `platoon setup`'s last question in a terminal, asked once: whether to install the optional code editor.
-    /// Answered with Enter (no), and waits until the answer has been taken.
+    /// Waits for `platoon setup` to end, and checks it asked nothing about the code editor (a plugin now, installed
+    /// separately; setup used to ask last). Its exit code.
     #[allow(dead_code)]
-    pub fn decline_editor(&mut self) {
-        self.wait_for_flat("Install the code editor platoon can open on a ticket's work?");
-        self.send(b"\r");
-        self.wait_for_flat("No code editor, then.");
+    pub fn exit_without_editor_question(&mut self) -> u32 {
+        let code = self.wait_exit();
+        let shown = self.flat();
+        assert!(!shown.contains("Install the code editor") && !shown.contains("Code editor"), "setup asked about the code editor:\n{shown}");
+        code
     }
 
     pub fn wait_for_flat(&mut self, text: &str) {

@@ -10,6 +10,7 @@ mod describe;
 mod dirs;
 mod editor;
 mod editor_install;
+mod editorplugin;
 mod editors;
 mod fileeditors;
 mod guard;
@@ -117,9 +118,7 @@ fn main() -> io::Result<()> {
         Some("themes") => return themes(),
         Some("plugin") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
-            let (mut out, mut err) = (io::stdout(), io::stderr());
-            let home = std::env::var("HOME").unwrap_or_default();
-            std::process::exit(plugincli::cli(&args, &plugins::Store::from_env(), &plugins::Source::from_env(), &home, &mut out, &mut err));
+            std::process::exit(plugin_cli(|c, out, err| plugincli::cli(&args, c, out, err)));
         }
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -198,8 +197,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   the /to-tickets skill that turns a conversation into tickets
                   and asks once whether to install the optional code editor
   setup --remove to-tickets   take the /to-tickets skill out again
-  setup --add editor          install the code editor (Neovim, its plugins, a font with icons)
-  setup --remove editor       take the code editor and its font off again
+  setup --add editor          the same as `plugin add editor` (the code editor is a plugin now)
+  setup --remove editor       the same as `plugin remove editor`
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...
                   make a ticket in that project and print its number (#N); with no --folder it
@@ -211,7 +210,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   themes          list the color themes: the built-in ones, your own and those of plugins
   plugin list | add <id or folder> | remove <id> | update [id] | check <folder>
                   plugins from platoon's catalog: see what there is, install, take off,
-                  update; check a plugin folder you are making
+                  update; check a plugin folder you are making. `plugin add editor` installs
+                  platoon's code editor (Neovim, its plugins, a font with icons)
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
@@ -232,8 +232,7 @@ fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
         let states = setup::check(&claude::claude_root(), &archive::config_dir());
         if !setup::ready(&states) {
-            let editor = setup::editor_line(&archive::config_dir(), &editor_install::Dirs::from_env());
-            eprintln!("{}", setup::render_blocked_with(&states, Some(&editor), use_color(true)));
+            eprintln!("{}", setup::render_blocked(&states, use_color(true)));
             std::process::exit(1);
         }
     }
@@ -255,10 +254,8 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
-    let editor_dirs = editor_install::Dirs::from_env();
     match setup::run(&root, &archive::config_dir()) {
-        Ok(mut report) => {
-            report.editor = Some(setup::editor_line(&archive::config_dir(), &editor_dirs));
+        Ok(report) => {
             println!("{}", setup::render_report(&report, &root, use_color(false)));
         }
         Err(e) => {
@@ -276,10 +273,18 @@ fn setup() -> io::Result<()> {
         let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), interactive };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
-    // The optional code editor: asked once; once wanted, kept up to date. Never changes the exit code.
-    let printer = editor_install::Printer::new(interactive);
-    setup::ask_about_editor(&archive::config_dir(), &editor_dirs, &editor_install::pinned(), interactive, &mut io::stdin().lock(), &mut io::stdout(), &printer);
     Ok(())
+}
+
+/// Run a `platoon plugin` command (or a setup alias of one) with this computer's folders. Its exit code.
+fn plugin_cli(f: impl FnOnce(&plugincli::Ctx, &mut dyn io::Write, &mut dyn io::Write) -> i32) -> i32 {
+    use std::io::IsTerminal;
+    let (mut out, mut err) = (io::stdout(), io::stderr());
+    let home = std::env::var("HOME").unwrap_or_default();
+    let (store, source, dirs) = (plugins::Store::from_env(), plugins::Source::from_env(), editor_install::Dirs::from_env());
+    let printer = editor_install::Printer::new(io::stdout().is_terminal());
+    let c = plugincli::Ctx { store: &store, source: &source, dirs: &dirs, home: &home, printer: &printer };
+    f(&c, &mut out, &mut err)
 }
 
 /// `platoon setup <args>`: `--remove <step>` (and remember it), `--add <step>` (undo that), `--replace <step>`
@@ -287,6 +292,10 @@ fn setup() -> io::Result<()> {
 fn setup_with(args: &[String]) -> i32 {
     let (root, config) = (claude::claude_root(), archive::config_dir());
     let done = match args {
+        // The code editor is a plugin now: said, then done as `platoon plugin add/remove editor`.
+        [flag, what] if what == setup::EDITOR && (flag == "--add" || flag == "--remove") => {
+            return plugin_cli(|c, out, err| plugincli::setup_alias(flag, c, out, err));
+        }
         [flag, what] if flag == "--remove" => setup::remove_step(&root, &config, what),
         [flag, what] if flag == "--add" => setup::add_step(&root, &config, what),
         [flag, what] if flag == "--replace" => setup::replace_step(&root, &config, what),
@@ -375,7 +384,8 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req:
         compile_parsers: editor_install::can_build_parsers(&dirs),
         copying: editor::Copying::like(app.clipboard_target()),
     };
-    let launch = match editor::prepare(&dirs, req, &look, &env, std::process::id()) {
+    let config = app.editor_config_files();
+    let launch = match editor::prepare(&dirs, req, &look, &env, std::process::id(), &config) {
         Ok(l) => l,
         Err(e) => return app.editor_closed(Err(e)),
     };

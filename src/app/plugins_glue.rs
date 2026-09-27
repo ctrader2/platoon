@@ -3,7 +3,10 @@
 //! the footer, removing. The work itself is in `plugins.rs`.
 
 use super::*;
+use crate::editor_install::{Dirs, Part, Progress};
+use crate::editorplugin;
 use crate::plugins::{self, Catalog, Installed, Manifest, Origin, Source, Store};
+use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
 
 pub const TOP_PLUGINS: usize = 3;
@@ -50,9 +53,13 @@ pub struct PlugRow {
     pub installed: Option<Installed>,
     /// Its folder in the fetched catalog.
     pub entry: Option<PathBuf>,
+    /// What installing it downloads besides (the code editor), in bytes.
+    pub download_bytes: Option<u64>,
 }
 
 enum JobMsg {
+    /// The code editor's downloads, as they go.
+    Progress(Progress),
     Done(Result<String, String>),
 }
 
@@ -72,13 +79,40 @@ pub struct PluginsState {
     pub job_label: String,
     /// The remove being asked about was asked from the settings screen, which the answer goes back to.
     from_settings: bool,
+    /// The code editor's downloads, as they go (installing the editor plugin).
+    progress: BTreeMap<Part, Progress>,
+    /// What the installed code editor plugin downloads, and whether all of it is there (`editor_facts`).
+    pub editor_bytes: Option<u64>,
+    pub editor_complete: bool,
 }
 
 impl PluginsState {
     pub fn new(store: Store, source: Source) -> Self {
         let catalog = plugins::cached(&store, &source);
         let installed = store.installed();
-        Self { store, source, catalog, installed, selected: 0, fetching: None, fetch_error: None, fetch_tried: false, job: None, job_label: String::new(), from_settings: false }
+        Self {
+            store,
+            source,
+            catalog,
+            installed,
+            selected: 0,
+            fetching: None,
+            fetch_error: None,
+            fetch_tried: false,
+            job: None,
+            job_label: String::new(),
+            from_settings: false,
+            progress: BTreeMap::new(),
+            editor_bytes: None,
+            editor_complete: false,
+        }
+    }
+
+    /// Look again at the installed code editor plugin: what it downloads, whether all of it is there.
+    pub fn editor_facts(&mut self, dirs: &Dirs) {
+        let installed = editorplugin::installed(&self.store).is_some();
+        self.editor_bytes = installed.then(|| editorplugin::download_bytes(&self.store));
+        self.editor_complete = installed && editorplugin::complete(&self.store, dirs);
     }
 
     /// Where platoon keeps plugins: the real data folder, or in a unit test one beside the test's config (never the
@@ -117,7 +151,7 @@ impl PluginsState {
                     None if !e.problems.is_empty() => PlugState::Unavailable(e.problems.join("; ")),
                     None => PlugState::Available,
                 };
-                out.push(PlugRow { manifest: e.manifest.clone(), state, installed, entry: Some(e.dir.clone()) });
+                out.push(PlugRow { manifest: e.manifest.clone(), state, installed, entry: Some(e.dir.clone()), download_bytes: e.download_bytes });
             }
         }
         for p in &self.installed {
@@ -126,10 +160,11 @@ impl PluginsState {
             }
             let state = match p.origin {
                 Origin::Folder { .. } => PlugState::FromFolder,
-                Origin::Catalog { .. } if self.catalog.is_some() => PlugState::NotInCatalog,
-                Origin::Catalog { .. } => PlugState::Installed,
+                _ if self.catalog.is_some() => PlugState::NotInCatalog,
+                _ => PlugState::Installed,
             };
-            out.push(PlugRow { manifest: p.manifest.clone(), state, installed: Some(p.clone()), entry: None });
+            let download_bytes = if p.manifest.editor.is_some() { self.editor_bytes } else { None };
+            out.push(PlugRow { manifest: p.manifest.clone(), state, installed: Some(p.clone()), entry: None, download_bytes });
         }
         out
     }
@@ -197,7 +232,16 @@ impl App {
             }
         }
         if let Some(rx) = &self.pl.job {
-            match rx.try_recv() {
+            let last = loop {
+                match rx.try_recv() {
+                    Ok(JobMsg::Progress(p)) => {
+                        self.pl.progress.insert(p.part, p);
+                    }
+                    other => break other,
+                }
+            };
+            match last {
+                Ok(JobMsg::Progress(_)) => {}
                 Ok(JobMsg::Done(r)) => {
                     self.pl.job = None;
                     self.plugins_changed();
@@ -211,7 +255,13 @@ impl App {
                     self.notify("The plugin didn't finish installing; nothing was changed.");
                 }
                 Err(TryRecvError::Empty) => {
-                    let line = self.pl.job_label.clone();
+                    let parts: Vec<String> = self
+                        .pl
+                        .progress
+                        .values()
+                        .map(|p| if p.done + p.failed >= p.total && p.failed == 0 { format!("{} ✓", p.part.label()) } else { format!("{} {}/{}", p.part.label(), p.done, p.total) })
+                        .collect();
+                    let line = if parts.is_empty() { self.pl.job_label.clone() } else { format!("{} {}", self.pl.job_label.trim_end_matches('…'), parts.join("  ")) };
                     self.notify(line);
                 }
             }
@@ -219,9 +269,11 @@ impl App {
     }
 
     /// Read what is installed again, and with it the themes (a theme in use whose plugin went gives way to the
-    /// default; one whose plugin came back is used again).
-    fn plugins_changed(&mut self) {
+    /// default; one whose plugin came back is used again) and the code editor's state.
+    pub(super) fn plugins_changed(&mut self) {
         self.pl.installed = self.pl.store.installed();
+        let dirs = self.ed.dirs.clone();
+        self.pl.editor_facts(&dirs);
         let n = self.pl.rows().len();
         self.pl.selected = self.pl.selected.min(n.saturating_sub(1));
         self.themes.refresh();
@@ -273,10 +325,24 @@ impl App {
                     self.notify("Another plugin is being installed; wait for it to finish.");
                     return;
                 }
-                self.mode = Mode::Confirm(Confirm::InstallPlugin { id: row.manifest.id.clone(), name: row.manifest.name.clone(), adds: row.manifest.adds_words(), update: None });
+                self.mode = Mode::Confirm(Confirm::InstallPlugin {
+                    id: row.manifest.id.clone(),
+                    name: row.manifest.name.clone(),
+                    adds: row.manifest.adds_words(),
+                    update: None,
+                    download: row.download_bytes,
+                });
             }
             PlugState::Update => self.ask_update_plugin(),
             PlugState::Unavailable(why) => self.notify(format!("{} can't be installed here: {why}", row.manifest.name)),
+            // The code editor plugin whose downloads didn't all finish: enter finishes them.
+            _ if row.manifest.editor.is_some() && !self.pl.editor_complete => {
+                if self.pl.working() || self.editor_busy() {
+                    self.notify("The code editor is being installed; wait for it to finish.");
+                } else {
+                    self.ask_install_editor();
+                }
+            }
             _ => self.notify(format!("{} is installed. d removes it.", row.manifest.name)),
         }
     }
@@ -297,7 +363,13 @@ impl App {
             return;
         }
         let was = row.installed.map(|p| p.manifest.version).unwrap_or_default();
-        self.mode = Mode::Confirm(Confirm::InstallPlugin { id: row.manifest.id.clone(), name: row.manifest.name.clone(), adds: row.manifest.adds_words(), update: Some((was, row.manifest.version.clone())) });
+        self.mode = Mode::Confirm(Confirm::InstallPlugin {
+            id: row.manifest.id.clone(),
+            name: row.manifest.name.clone(),
+            adds: row.manifest.adds_words(),
+            update: Some((was, row.manifest.version.clone())),
+            download: row.download_bytes,
+        });
     }
 
     /// `d`: take the selected plugin off (on the Plugins tab), or the selected installed one (in the settings).
@@ -321,7 +393,12 @@ impl App {
         }
         let in_use = self.themes.plugin_of(&self.theme.id).is_some() && self.theme.id.starts_with(&format!("{}{}/", plugins::THEME_PREFIX, p.id()));
         self.pl.from_settings = from_settings;
-        self.mode = Mode::Confirm(Confirm::RemovePlugin { id: p.id().to_string(), name: p.manifest.name.clone(), adds: p.manifest.adds_words(), in_use });
+        if p.manifest.editor.is_some() && (self.editor_busy() || self.ed_open_now()) {
+            self.notify("The code editor is being installed or is open; try again when it has finished.");
+            return;
+        }
+        let editor = p.manifest.editor.is_some();
+        self.mode = Mode::Confirm(Confirm::RemovePlugin { id: p.id().to_string(), name: p.manifest.name.clone(), adds: p.manifest.adds_words(), in_use, editor });
     }
 
     /// Yes to installing (or updating) a plugin from the catalog: on a thread, with a line in the footer.
@@ -333,27 +410,57 @@ impl App {
         let origin = Origin::Catalog { source: c.source.clone(), rf: c.rf.clone(), commit: c.commit.clone() };
         let name = row.manifest.name.clone();
         let updating = row.state == PlugState::Update;
+        let dirs = self.ed.dirs.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let r = store.install(&dir, origin).map(|o| {
+            let r = store.install(&dir, origin).map_err(|e| format!("Not installed: {e}")).and_then(|o| {
                 let m = &o.plugin().manifest;
-                match o {
-                    plugins::Outcome::Replaced { ref was, .. } => format!("{} is updated from {was} to {}.", m.name, m.version),
+                let said = match o {
+                    plugins::Outcome::Replaced { ref was, .. } if *was != m.version => format!("{} is updated from {was} to {}.", m.name, m.version),
+                    plugins::Outcome::Replaced { .. } => format!("{} {} is installed from the catalog.", m.name, m.version),
+                    _ if m.editor.is_some() => format!("{} is installed.", m.name),
                     _ => format!("{} is installed: {} added. Pick one in the settings (s, then Theme).", m.name, m.adds_words()),
+                };
+                if m.editor.is_none() {
+                    return Ok(said);
+                }
+                // The code editor: then what its table has that the editor folder doesn't.
+                let progress = tx.clone();
+                let report = move |p| {
+                    let _ = progress.send(JobMsg::Progress(p));
+                };
+                match editorplugin::install_downloads(&store, &dirs, &report) {
+                    Ok(_) => Ok(format!("{said} v on a session or a ticket opens it.")),
+                    Err(e) => Err(format!("{said} Its downloads didn't finish: {e} Enter on it here tries again.")),
                 }
             });
-            let _ = tx.send(JobMsg::Done(r.map_err(|e| format!("Not installed: {e}"))));
+            let _ = tx.send(JobMsg::Done(r));
         });
+        self.pl.progress.clear();
         self.pl.job = Some(rx);
         self.pl.job_label = if updating { format!("Updating {name}…") } else { format!("Installing {name}…") };
         let line = self.pl.job_label.clone();
         self.notify(line);
     }
 
-    /// Yes to removing a plugin: quick (a few small files), so done at once.
+    /// Yes to removing a plugin: quick (a few small files; the code editor's folder a moment longer), so done at once.
     pub(super) fn remove_plugin(&mut self, id: &str) {
         self.mode = if std::mem::take(&mut self.pl.from_settings) { Mode::Settings } else { Mode::List };
         let was_using = self.theme.id.starts_with(&format!("{}{id}/", plugins::THEME_PREFIX));
+        if editorplugin::is_editor(&self.pl.store, id) {
+            let r = editorplugin::remove(&self.pl.store, &self.ed.dirs, id);
+            self.plugins_changed();
+            self.setting = self.setting.min(self.pl.installed.len().saturating_sub(1));
+            match r {
+                Ok((p, removed)) => {
+                    let name = p.map_or_else(|| "The code editor".to_string(), |p| p.manifest.name);
+                    let size = if removed.editor { format!(" ({})", crate::editor_install::megabytes(removed.bytes)) } else { String::new() };
+                    self.notify(format!("Removed {name} and everything it downloaded{size}. v still opens your other editors."));
+                }
+                Err(e) => self.notify(format!("Not removed: {e}")),
+            }
+            return;
+        }
         let r = self.pl.store.remove(id);
         self.plugins_changed();
         self.setting = self.setting.min(self.pl.installed.len().saturating_sub(1));

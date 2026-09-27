@@ -25,16 +25,20 @@ already done, and a step whose command points at a platoon that no longer exists
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 | Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder): when platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly. If you changed the file, setup leaves it alone and says "changed by you"; `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says "removed by you"); `platoon setup --add to-tickets` puts it back |
-| Code editor | Optional, and not a setting at all: Neovim with a file tree, the changed files and their differences, search and a terminal, for looking at a ticket's or a session's work with `v`. See [The code editor](#the-code-editor) and [Opening the editor](#opening-the-editor-v) |
 
 ### The code editor
 
-`platoon setup` asks once, in a terminal, whether to install it ("About 150 MB, under a minute", default no) and remembers
-the answer in `setup.json`. `platoon setup --add editor` installs it any time; `platoon setup --remove editor` takes it off
-again and remembers that, so setup doesn't ask again. Once installed, a later `platoon setup` brings it up to date by
-itself (only what changed is fetched). Its checklist line never stops platoon from starting.
+platoon's code editor (Neovim with a file tree, the changed files and their differences, search and a terminal, for
+looking at a ticket's or a session's work with `v`) is optional and is a [plugin](#plugins), **Code editor (Neovim)**,
+installed separately: from the Plugins tab (`4`), with `platoon plugin add editor`, or by saying yes when `v` offers it.
+`platoon setup` doesn't ask about it. `platoon setup --add editor` and `--remove editor` still work: they say the editor
+is a plugin now and do `platoon plugin add editor` / `remove editor`. Without it, `v` still opens
+[the editors your computer has](#opening-the-editor-v).
 
-What it installs, all pinned to exact versions and checked against their checksums before anything is used:
+The plugin holds no programs: it is a download table (what to fetch, from where, and each file's checksum and size) and
+the editor's settings files. Installing it installs those, then downloads what the table lists (about 58 MB on Linux
+x86_64, usually under a minute; the Plugins tab and the question before installing say how much), all pinned to exact
+versions and checked against their checksums and sizes before anything is used:
 
 - **Neovim** 0.12.5, unless you already have Neovim 0.12 or newer, which is used instead.
 - **ripgrep** and **fd** (for searching), unless you have them (`fd` is `fdfind` on Debian and Ubuntu), and **tree-sitter**
@@ -53,7 +57,14 @@ Nothing needs sudo or a package manager: everything is downloaded with `curl` in
 the font into `~/.local/share/fonts/platoon` (macOS: `~/Library/Fonts`; `PLATOON_FONT_DIR` moves it). It never touches
 your own `~/.config/nvim` or Neovim's data. Downloads run side by side and are checked before being moved into place, so an
 install that fails or is interrupted never leaves something that looks finished; running it again carries on from there.
-Removing deletes platoon's folder and the font files platoon put there, never your own Neovim, ripgrep, fd or fonts.
+Removing the plugin (`d` on the Plugins tab, `platoon plugin remove editor`) deletes platoon's folder and the font files
+platoon put there, never your own Neovim, ripgrep, fd or fonts. An update of the plugin (a new table) fetches only what
+changed; `platoon plugin update` and `enter` on it also finish downloads that didn't complete.
+
+**An editor installed before it was a plugin** (with `platoon setup --add editor` or setup's old question) keeps working:
+the first time platoon or `platoon plugin` runs, it becomes the editor plugin by itself, from the copy of the plugin that
+came with platoon, so it needs no network and downloads nothing ("Your code editor is now the plugin …"). A later
+`platoon plugin add editor` or update from the catalog reuses everything already there with the same checksum.
 
 For tests: `PLATOON_EDITOR_MIRROR=<folder>` reads every download from that folder (by the last part of its address)
 instead of the network, and `PLATOON_SKIP_FC_CACHE=1` skips refreshing the font list.
@@ -74,9 +85,10 @@ In a session's live view every key goes to Claude: press `ctrl+space` to go back
 The editor opens **in the same window**: platoon's screen goes, the editor takes the whole terminal, and `q` brings you
 back to platoon exactly where you were. Sessions and squads keep running meanwhile. A few things happen first when needed:
 
-- **Not installed yet**: platoon offers to install it (about 150 MB, a few seconds; the progress shows at the bottom), then
-  opens it. Saying no is fine: `platoon setup --add editor` installs it later. This works after `platoon setup --remove
-  editor` too: pressing `v` is asking for it.
+- **Not installed yet**: platoon offers its plugin (it says how much it downloads): yes fetches the plugin catalog,
+  installs the plugin, then its downloads (the progress shows at the bottom), then opens it. Saying no is fine: the
+  Plugins tab (`4`) or `platoon plugin add editor` installs it later. This works after removing it too: pressing `v` is
+  asking for it. If the plugin is there but some of its downloads aren't, `v` offers to finish them.
 - **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it. The
   editor reads a file again when the squad changes it on disk, and warns before saving over a file that changed there.
 - **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as when
@@ -89,10 +101,15 @@ with a file tree. platoon only offers the ones it finds installed: on your `PATH
 
 | Editor | How it opens | Several folders |
 | --- | --- | --- |
-| platoon's editor (always offered; installed the first time you choose it) | here, in platoon's terminal | all of them |
+| platoon's editor (always offered; shown as "(not installed)" until its plugin is, which it offers the first time you choose it) | here, in platoon's terminal | all of them |
 | VS Code, Cursor, Zed, Sublime Text, Kate | a new window of its own, beside platoon | all of them in that one window |
 | IntelliJ IDEA (and Community), PyCharm (and Community), WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio | a window of its own | each in a window of its own, at most three (it says so when there were more) |
 | Helix, and **your own Neovim setup** (only when you have `~/.config/nvim`) | here, in platoon's terminal, with your own settings and environment, exactly like platoon's editor: closing it brings platoon back | the first one (it says which it left out) |
+
+A JetBrains IDE that is already running may open the folder in a window it has open, or ask: its command line has no
+documented way to ask for a new window (JetBrains' "Command-line interface" help lists none), so that is up to the IDE's
+own setting (Settings, Appearance & Behavior, System Settings, "Open project in"). platoon never changes an IDE's
+settings.
 
 Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offered here; they stay in the notes' list (`e`).
 
@@ -147,8 +164,8 @@ the internet and a C compiler), and without them the file simply isn't colored. 
 definition, errors as you type) in this version.
 
 Where things are: the editor runs `<platoon's data folder>/editor/bin/nvim` with the settings platoon writes to
-`editor/config/` each time it opens (`init.lua`, `lua/platoon/tree.lua`, and a small `shell` script that gives the
-editor's terminal your own environment back). Neovim's own history, swap and undo files stay in `editor/nvim/`. For tests,
+`editor/config/` each time it opens: the editor plugin's settings files (`init.lua`, `lua/platoon/tree.lua`, and a small
+`shell.sh` that gives the editor's terminal your own environment back). Neovim's own history, swap and undo files stay in `editor/nvim/`. For tests,
 `PLATOON_NVIM_BIN` runs another program instead of the editor.
 
 ## The list
@@ -1250,20 +1267,23 @@ system prompt). A squad file from before the leader moved to the settings may st
 
 ## Plugins
 
-Plugins add things to platoon that not everyone wants. In this version a plugin adds **color themes**; later ones will
-bring platoon's code editor, skills, and squads and agents. A plugin is a folder of plain files (a `plugin.json` that says
-what it is and what it adds, and those files): nothing in it runs. Plugins come from platoon's own **catalog**, the
+Plugins add things to platoon that not everyone wants. In this version a plugin adds **color themes** or **platoon's
+[code editor](#the-code-editor)** (the **Code editor (Neovim)** plugin); later ones will bring skills, and squads and
+agents. A plugin is a folder of plain files (a `plugin.json` that says what it is and what it adds, and those files):
+platoon never runs anything in it. The code editor plugin is the one kind that leads to programs: its download table
+names Neovim and its tools, each pinned by checksum and size, and its settings files run inside that Neovim; so its
+details and the question before installing say how much it downloads. Plugins come from platoon's own **catalog**, the
 [`plugins/`](plugins/) folder of platoon's repository, where anyone can send one by pull request (see
 [plugins/README.md](plugins/README.md) for how to make, check and send one).
 
 **The Plugins tab** (`4`) lists what the catalog has and what you have installed. The first time you open it in a run,
 platoon fetches the catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The selected
-plugin's details are on the right: what it is, who made it, its version, what it adds (the themes by name), its license,
-where it came from and the oldest platoon it works with.
+plugin's details are on the right: what it is, who made it, its version, what it adds (the themes by name; for the code
+editor, how much it downloads), its license, where it came from and the oldest platoon it works with.
 
 | Key | Does |
 | --- | --- |
-| `enter` | install the selected plugin (after asking), or update it when the catalog has a newer one; a line in the footer says when it is done |
+| `enter` | install the selected plugin (after asking), or update it when the catalog has a newer one; a line in the footer says when it is done (for the code editor, with its download progress). On the code editor when some of its downloads are missing: finish them |
 | `u` | update the selected plugin |
 | `d` | remove the selected plugin (after asking) |
 | `f` | check the catalog again |
@@ -1273,9 +1293,9 @@ The same from the command line:
 
 ```
 platoon plugin list              the catalog and what is installed
-platoon plugin add <id>          install one from the catalog
+platoon plugin add <id>          install one from the catalog (`add editor`: the code editor and its downloads)
 platoon plugin add ./my-plugin   install one from a folder on this computer (while you make one)
-platoon plugin remove <id>
+platoon plugin remove <id>       (`remove editor`: with everything it downloaded, and its font)
 platoon plugin update [id]       bring the installed ones (or one) up to the catalog
 platoon plugin check <folder>    check a plugin folder before you send it
 ```

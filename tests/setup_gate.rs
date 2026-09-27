@@ -36,6 +36,8 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         .env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"))
         .env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"))
         .env("PLATOON_SKIP_FC_CACHE", "1")
+        // ...nor platoon's real plugin catalog (the network): a source that isn't there.
+        .env("PLATOON_PLUGIN_SOURCE", cache.parent().unwrap().join("no-plugin-source"))
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .output()
@@ -222,6 +224,7 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     cmd.env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"));
     cmd.env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"));
     cmd.env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"));
+    cmd.env("PLATOON_PLUGIN_SOURCE", cache.parent().unwrap().join("no-plugin-source"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
@@ -383,48 +386,34 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     assert_eq!(fs::read_dir(&themes).unwrap().count(), 6);
 }
 
-/// The optional code editor through the real binary: a line in the checklist that never blocks, `--remove` remembered,
-/// and `--add` with nothing to download from (an empty mirror, so never the network) fails plainly and leaves nothing
-/// that looks installed.
+/// The code editor is a plugin now: setup neither asks about it nor shows a line for it (an old `setup.json` that
+/// remembers the old question still reads), and `setup --add/--remove editor` say so and do the plugin's add/remove
+/// (here with no catalog to reach: said plainly, nothing installed; never the network).
 #[test]
-fn the_code_editor_is_optional_its_line_says_how_to_install_it_and_remove_is_remembered() {
+fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
     let (claude, cache) = dirs("editor");
     let base = cache.parent().unwrap().to_path_buf();
-    let editor_line = |shown: &str| -> String {
-        let at = shown.find("Code editor").unwrap_or_else(|| panic!("{shown}"));
-        shown[at..].lines().take(2).collect::<Vec<_>>().join("\n")
-    };
+    fs::create_dir_all(base.join("config")).unwrap();
+    fs::write(base.join("config/setup.json"), r#"{"editor": {"asked": true, "wanted": true}}"#).unwrap();
     let out = platoon(&claude, &cache, &["setup"]);
-    assert!(out.status.success());
+    assert!(out.status.success(), "{out:?}");
     let shown = text(&out.stdout);
-    assert!(editor_line(&shown).contains("not installed: `platoon setup --add editor` installs it"), "{shown}");
-    assert!(shown.contains("[–] Code editor"), "never a cross: {shown}");
-    assert!(!shown.contains("Install the code editor"), "no question without a terminal: {shown}");
-    assert!(!base.join("data").exists() && !base.join("fonts").exists(), "nothing installed");
-    // Blocked start: the line is there too, still not a cross.
+    assert!(!shown.contains("Code editor") && !shown.contains("Install the code editor"), "{shown}");
     fs::write(claude.join("settings.json"), "{}").unwrap();
     let err = text(&platoon(&claude, &cache, &[]).stderr);
-    assert!(err.contains("[–] Code editor") && err.matches("[✗]").count() == 2, "{err}");
+    assert!(!err.contains("Code editor") && err.matches("[✗]").count() == 2, "{err}");
     assert!(platoon(&claude, &cache, &["setup"]).status.success());
+    let choices: serde_json::Value = serde_json::from_str(&fs::read_to_string(base.join("config/setup.json")).unwrap()).unwrap();
+    assert_eq!(choices["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is left alone");
 
-    // Removed before it was ever installed: said, and remembered.
-    let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
-    assert!(out.status.success(), "{out:?}");
-    assert!(text(&out.stdout).starts_with("The code editor wasn't installed. `platoon setup` won't ask about it again"), "{out:?}");
-    let choices = || -> serde_json::Value { serde_json::from_str(&fs::read_to_string(base.join("config/setup.json")).unwrap()).unwrap() };
-    assert_eq!(choices()["editor"], serde_json::json!({"asked": true, "wanted": false, "removed": true}));
-    assert!(editor_line(&text(&platoon(&claude, &cache, &["setup"]).stdout)).contains("removed by you: `platoon setup --add editor` puts it back"));
-
-    // Added, with nothing to download: it fails plainly, and nothing looks installed.
     let out = platoon(&claude, &cache, &["setup", "--add", "editor"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
-    let err = text(&out.stderr);
-    assert!(err.contains("didn't finish installing") && err.contains("isn't in the mirror folder") && err.contains("tries again"), "{err}");
-    assert!(!base.join("fonts").exists(), "no font");
-    assert!(!base.join("data/editor/site").exists() && !base.join("data/editor/tools").exists() && !base.join("data/editor/tmp").exists());
-    assert_eq!(choices()["editor"], serde_json::json!({"asked": true, "wanted": true}));
-    let line = editor_line(&text(&platoon(&claude, &cache, &["setup"]).stdout));
-    assert!(line.contains("`platoon setup --add editor`") && !line.contains("[✓]"), "{line}");
+    assert!(text(&out.stdout).starts_with("The code editor is a plugin now: this is `platoon plugin add editor`."), "{out:?}");
+    assert!(text(&out.stderr).contains("platoon couldn't reach its plugin catalog"), "{out:?}");
+    assert!(!base.join("data/editor").exists() && !base.join("data/plugins/editor").exists() && !base.join("fonts").exists(), "nothing installed");
+    let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
+    assert!(out.status.success(), "{out:?}");
+    assert!(text(&out.stdout).contains("this is `platoon plugin remove editor`") && text(&out.stdout).contains("isn't installed; there is nothing to remove"), "{out:?}");
     // `--replace` is only for the skill.
     let out = platoon(&claude, &cache, &["setup", "--replace", "editor"]);
     assert_eq!(out.status.code(), Some(1));
