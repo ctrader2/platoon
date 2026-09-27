@@ -5,6 +5,7 @@
 //! - `init.lua` and `lua/platoon/tree.lua` (compiled into platoon from `src/editor/`, rewritten at every opening),
 //! - a session file (`config/session-<platoon's pid>.json`, named by `PLATOON_EDITOR_SESSION`): the folders, the commits
 //!   a ticket's changes are counted from, platoon's theme turned into the editor's colors, whether there are icons,
+//!   where a copy goes (as platoon copies: `PLATOON_CLIPBOARD`, the helper `platoon clipboard-hold`),
 //! - its XDG folders inside `<editor>/nvim/` (nvim writes its state even with `--clean`, and nvim-treesitter would put
 //!   parsers in `~/.local/share/nvim`), `<editor>/bin` first on PATH, and the user's own values of those variables in
 //!   `PLATOON_KEEP_<name>`, which `config/shell` (the editor's 'shell') puts back for the terminal and `:!`.
@@ -469,13 +470,53 @@ pub fn colors_json(t: &Theme, mode: ColorMode) -> Value {
 
 // ---- the session file -----------------------------------------------------------------------------------------------
 
-/// How the editor looks: platoon's theme as it is drawn now, the terminal's colors, the font's icons.
+/// How the editor looks: platoon's theme as it is drawn now, the terminal's colors, the font's icons; and where its
+/// copies go.
 pub struct Look<'a> {
     pub theme: &'a Theme,
     pub mode: ColorMode,
     pub icons: bool,
     /// A parser platoon didn't build can be built on first open (tree-sitter and a C compiler are there).
     pub compile_parsers: bool,
+    pub copying: Copying,
+}
+
+/// Where a yank in the editor goes: where platoon's own copies go (`clipboard::Target`, from `PLATOON_CLIPBOARD`).
+/// For the system clipboard the editor runs `helper` (this platoon, `clipboard-hold`) with the text; OSC 52 it writes
+/// itself (`init.lua`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Copying {
+    pub target: crate::clipboard::Target,
+    pub helper: Option<PathBuf>,
+}
+
+impl Copying {
+    /// Copies go where platoon's do; the helper is this very program.
+    pub fn like(target: crate::clipboard::Target) -> Copying {
+        use crate::clipboard::Target;
+        let helper = if target == Target::System { std::env::current_exe().ok() } else { None };
+        Copying { target, helper }
+    }
+
+    /// Nothing leaves the editor.
+    #[cfg(test)]
+    pub fn off() -> Copying {
+        Copying { target: crate::clipboard::Target::Off, helper: None }
+    }
+
+    fn json(&self) -> Value {
+        use crate::clipboard::{Target, HOLD_COMMAND, MAX_OSC52_PAYLOAD};
+        let target = match self.target {
+            Target::System => "system",
+            Target::Osc52 => "osc52",
+            Target::Off => "off",
+        };
+        let helper = match (&self.helper, self.target) {
+            (Some(p), Target::System) => json!([p, HOLD_COMMAND]),
+            _ => Value::Null,
+        };
+        json!({"target": target, "helper": helper, "osc52_max": MAX_OSC52_PAYLOAD})
+    }
 }
 
 pub fn config_dir(dirs: &Dirs) -> PathBuf {
@@ -503,6 +544,7 @@ pub fn session_json(req: &Request, look: &Look, dirs: &Dirs) -> Value {
         "compile_parsers": look.compile_parsers,
         "roots": roots,
         "colors": colors_json(look.theme, look.mode),
+        "clipboard": look.copying.json(),
     })
 }
 
@@ -1093,7 +1135,7 @@ mod tests {
             roots: vec![Root { path: "/r/shop-worktrees/ticket-3".into(), name: "shop · #3".into(), repo: Some("/r/shop-worktrees/ticket-3".into()), repo_name: Some("shop".into()), base: Some("abc123".into()), kind: "worktree" }],
         };
         for icons in [true, false] {
-            let v = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons, compile_parsers: true }, &dirs);
+            let v = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons, compile_parsers: true, copying: Copying::off() }, &dirs);
             assert_eq!(v["icons"], icons);
             assert_eq!(v["title"], "#3 Basket");
             assert_eq!(v["roots"][0]["base"], "abc123");
@@ -1104,9 +1146,44 @@ mod tests {
         }
         // A folder's name with quotes and backslashes stays itself (JSON, never pasted into Lua or a shell).
         let odd = Request { title: "a \"b\" \\ c".into(), roots: vec![] };
-        let v = session_json(&odd, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false }, &dirs);
+        let v = session_json(&odd, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &dirs);
         let back: Value = serde_json::from_str(&v.to_string()).unwrap();
         assert_eq!(back["title"], "a \"b\" \\ c");
+    }
+
+    #[test]
+    fn the_session_file_says_where_copies_go_as_platoon_copies() {
+        use crate::clipboard::Target;
+        let d = tmp("sessionclip");
+        let dirs = testing::dirs(&d, vec![]);
+        let t = Theme::default();
+        let req = Request { title: "x".into(), roots: vec![] };
+        let clip = |copying: Copying| session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying }, &dirs)["clipboard"].clone();
+        // The default (system): this very platoon holds the text on the system clipboard, and OSC 52 too.
+        let sys = Copying::like(Target::System);
+        let me = std::env::current_exe().unwrap();
+        assert_eq!(sys.helper.as_deref(), Some(me.as_path()));
+        assert_eq!(clip(sys), json!({"target": "system", "helper": [me, "clipboard-hold"], "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD}));
+        // OSC 52 only, or nothing: no helper is ever named.
+        assert_eq!(clip(Copying::like(Target::Osc52)), json!({"target": "osc52", "helper": null, "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD}));
+        assert_eq!(clip(Copying::like(Target::Off))["target"], "off");
+        assert_eq!(clip(Copying::like(Target::Off))["helper"], Value::Null);
+        assert_eq!(clip(Copying { target: Target::Osc52, helper: Some(me.clone()) })["helper"], Value::Null, "a helper only for the system clipboard");
+    }
+
+    #[test]
+    fn the_editors_settings_send_a_yank_out_and_paste_from_its_own_registers() {
+        // `y` into the unnamed register goes out (TextYankPost); deletes don't; 'clipboard' stays empty, so `p`
+        // never asks the provider, and the provider's paste is the editor's own last copy (never the terminal).
+        assert!(INIT_LUA.contains("o.clipboard = ''"));
+        assert!(INIT_LUA.contains("vim.api.nvim_create_autocmd('TextYankPost'"));
+        assert!(INIT_LUA.contains("ev.operator == 'y' and (ev.regname == nil or ev.regname == '')"));
+        assert!(INIT_LUA.contains("vim.g.clipboard = {\n  name = 'platoon',"));
+        assert!(INIT_LUA.contains("require('vim.ui.clipboard.osc52').copy('+')(out)"), "OSC 52 by Neovim's own provider");
+        assert!(!INIT_LUA.contains("osc52').paste"), "never OSC 52 paste: many terminals don't answer it");
+        assert!(INIT_LUA.contains("return { last.lines, last.regtype }"));
+        assert!(INIT_LUA.contains("pcall(vim.system, CB.helper, { stdin = text, detach = true"));
+        assert!(INIT_LUA.contains("CB.target == 'system' and type(CB.helper) == 'table'"), "the helper only for the system clipboard");
     }
 
     #[test]
@@ -1120,7 +1197,7 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let req = Request { title: "x".into(), roots: folder_roots(&s(&root), "git") };
         let env = env_of(&[("PLATOON_NVIM_BIN", "/bin/true"), ("HOME", home.to_str().unwrap()), ("PATH", "/usr/bin")]);
-        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false }, &env, 7).unwrap();
+        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7).unwrap();
         let cfg = config_dir(&dirs);
         assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), INIT_LUA);
         assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), TREE_LUA);
@@ -1144,7 +1221,7 @@ mod tests {
         fs::write(&live, "{}").unwrap();
         // The user's git folder gone: the link goes too.
         fs::remove_dir(home.join(".config/git")).unwrap();
-        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false }, &env, 7).unwrap();
+        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off() }, &env, 7).unwrap();
         assert!(fs::symlink_metadata(xdg_dir(&dirs).join("config/git")).is_err());
         assert!(!stale.exists() && live.exists());
     }

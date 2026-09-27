@@ -129,6 +129,8 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-notify") => std::process::exit(squads::run_notify_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-tool") => std::process::exit(squads::run_tool_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-prompt") => std::process::exit(squads::run_prompt_hook()),
+        // Run by the code editor for each copy (`clipboard::run_hold`).
+        Some(clipboard::HOLD_COMMAND) => std::process::exit(clipboard::run_hold()),
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -199,8 +201,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
-                  notes-update   internal: run by
-                  Claude Code, or by platoon itself";
+                  notes-update, clipboard-hold   internal: run by
+                  Claude Code, or by platoon itself (and its code editor)";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
 fn statusline() -> io::Result<()> {
@@ -353,6 +355,7 @@ fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req:
         mode: editor::color_mode(&theme, depth, no_color),
         icons: editor_install::nerd_font_present(&dirs),
         compile_parsers: editor_install::can_build_parsers(&dirs),
+        copying: editor::Copying::like(app.clipboard_target()),
     };
     let launch = match editor::prepare(&dirs, req, &look, &env, std::process::id()) {
         Ok(l) => l,

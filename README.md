@@ -107,6 +107,14 @@ rename, `esc` closes the panel, `?` lists its keys. In a list that pops up (find
 differences: `tab` goes to the next file, `esc` closes them. In the terminal, press `esc` twice to scroll or copy, and `q`
 from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon).
 
+**Copying.** Copying in the editor (`y` on a selection, `yy`, `"+y`) puts the text on the system clipboard, where
+platoon's own copies go (see [Copying text from a session](#copying-text-from-a-session); `PLATOON_CLIPBOARD` applies here too): through platoon itself,
+so nothing like `xclip` needs to be installed, and as an OSC 52 sequence for terminals that take one. Deleting (`d`, `x`)
+doesn't touch the system clipboard, and `p` pastes what you copied or deleted in the editor. To paste something copied
+in another program, use your terminal's paste (`ctrl+shift+v` in Xfce Terminal and Ghostty). For each copy platoon
+leaves a small `platoon clipboard-hold` running in the background that hands the text to whoever pastes, the way
+`xclip` does; it ends when something else is copied (at most after a day).
+
 The editor's colors come from platoon's theme (with "Terminal colors", from your terminal's own). With JetBrainsMono Nerd
 Font (or any Nerd Font) picked in your terminal it shows icons; without one, plain marks. Code is colored in the 19
 languages installed up front; opening a file in another language builds its highlighting quietly the first time (it needs
@@ -1008,7 +1016,9 @@ folder of its own: it works in the ticket's work folder.
   you). A worktree with changes not yet committed (changed files, or new files git doesn't ignore) is kept: the
   ticket's screen says "Kept because it has changes not yet committed.", and `w` removes it anyway after asking (those
   changes are lost; the branch stays). Cancelling a ticket with such a worktree says so in its question. A removed
-  worktree shows as "Removed; its branch ticket/<N> is kept." Continuing the squad later (enter on the ticket, or writing
+  worktree shows as "Removed; its branch ticket/<N> is kept." Either way the status line says it once, one line per
+  ticket (for example "Removed #7's worktree (its branch ticket/7 is kept)." or "Kept #7's worktree: it has changes not
+  yet committed (w on the ticket removes it)."). Continuing the squad later (enter on the ticket, or writing
   to its session) makes the worktree again from its branch, at the same place, before the squad goes on. platoon only
   ever removes the folder it made for that ticket, when git lists it as that repository's worktree on the ticket's branch.
 - **Its own work folder.** Every ticket handed to a squad gets a private work folder, kept with the ticket in

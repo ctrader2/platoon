@@ -170,6 +170,11 @@ impl Clipboard {
         Self::new(Target::from_env(), Box::new(SystemSink::default()))
     }
 
+    /// Which routes this clipboard uses (the code editor copies the same way).
+    pub fn target(&self) -> Target {
+        self.target
+    }
+
     /// A clipboard that copies nothing anywhere: what an `App` has until it is given a real one.
     pub fn off() -> Self {
         struct Nowhere;
@@ -214,6 +219,67 @@ impl Clipboard {
         };
         out
     }
+}
+
+// ---- `platoon clipboard-hold`: the code editor's way to the system clipboard ---------------------------------------
+
+/// The hidden command the code editor runs for each copy, with the text on its input.
+pub const HOLD_COMMAND: &str = "clipboard-hold";
+
+/// The longest a `clipboard-hold` stays in the background holding a copy nothing else has replaced.
+const HOLD_FOR: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// `platoon clipboard-hold`: put the text on its input on the system clipboard (and the primary selection), then, on
+/// X11 and Wayland, stay in the background holding it until something else is copied (at most `HOLD_FOR`), because
+/// there the program that copied is the one that hands the text over when it is pasted (what `xclip` does). Started
+/// by the code editor (`src/editor/init.lua`) only when `PLATOON_CLIPBOARD` is `system`; it prints nothing, and its
+/// exit code is all it says (0 copied, 1 not).
+pub fn run_hold() -> i32 {
+    use std::io::Read;
+    let mut text = String::new();
+    if io::stdin().read_to_string(&mut text).is_err() || text.is_empty() {
+        return 1;
+    }
+    let (text, _) = truncate(&text, MAX_COPY_BYTES);
+    let text = text.to_owned();
+    background();
+    match hold(&text) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// Carry on without the editor: a session of its own (a closing terminal doesn't end it) and nothing of the
+/// terminal's kept open.
+fn background() {
+    // SAFETY: plain system calls on this process's own descriptors; setsid fails harmlessly when already a leader.
+    unsafe {
+        libc::setsid();
+        let null = libc::open(c"/dev/null".as_ptr(), libc::O_RDWR);
+        if null >= 0 {
+            for fd in 0..3 {
+                libc::dup2(null, fd);
+            }
+            if null > 2 {
+                libc::close(null);
+            }
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn hold(text: &str) -> Result<(), String> {
+    use arboard::{LinuxClipboardKind, SetExtLinux};
+    let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    let _ = board.set().clipboard(LinuxClipboardKind::Primary).text(text.to_owned());
+    board.set().clipboard(LinuxClipboardKind::Clipboard).wait_until(std::time::Instant::now() + HOLD_FOR).text(text.to_owned()).map_err(|e| e.to_string())
+}
+
+/// (macOS keeps what was copied after the program has gone: nothing to wait for.)
+#[cfg(not(all(unix, not(target_os = "macos"))))]
+fn hold(text: &str) -> Result<(), String> {
+    let _ = HOLD_FOR;
+    arboard::Clipboard::new().and_then(|mut b| b.set_text(text.to_owned())).map_err(|e| e.to_string())
 }
 
 /// The sequence that sets the terminal's clipboard (`c`) to base64 `payload`.

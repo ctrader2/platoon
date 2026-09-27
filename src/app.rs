@@ -47,7 +47,7 @@ mod squads_glue;
 mod squadwork_glue;
 mod squadtab_glue;
 mod tickets_glue;
-mod worktree_glue;
+pub(crate) mod worktree_glue;
 #[cfg(test)]
 pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
@@ -2632,6 +2632,11 @@ impl App {
             }
             _ => self.selection = None,
         }
+    }
+
+    /// Where copies go (`PLATOON_CLIPBOARD`; nowhere in a unit test): the code editor copies the same way.
+    pub fn clipboard_target(&self) -> crate::clipboard::Target {
+        self.clipboard.target()
     }
 
     #[cfg(test)]

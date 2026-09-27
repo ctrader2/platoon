@@ -196,6 +196,8 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     assert_eq!(roots, vec![s(&lab.work), s(&docs)]);
     assert_eq!(session["roots"][0]["repo"], s(&lab.work).as_str());
     assert_eq!(session["colors"]["mode"], "terminal", "NO_COLOR (the harness): nothing forced");
+    // Copies go where platoon's go: PLATOON_CLIPBOARD=osc52 (the harness) means OSC 52 only, no system helper.
+    assert_eq!(session["clipboard"], json!({"target": "osc52", "helper": null, "osc52_max": 100000}));
     // Keys reach the editor, not platoon (a `q` or `2` would quit platoon or switch its tab).
     t.send(b"q2 typed\r");
     assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
@@ -343,4 +345,36 @@ fn v_typed_into_a_box_is_a_letter() {
     t.wait_for("❯ v");
     std::thread::sleep(Duration::from_millis(300));
     assert!(lab.runs().is_empty(), "the editor never started");
+}
+
+/// The helper the editor runs for each copy says "not copied" (exit 1) at once when there is nothing to copy or no
+/// display to copy to, and never waits. (Run with an empty environment: no display, so the real clipboard can't be
+/// reached.)
+#[test]
+fn the_clipboard_helper_gives_up_at_once_without_text_or_a_display() {
+    use std::io::Write;
+    for text in ["", "some text"] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_platoon"))
+            .arg("clipboard-hold")
+            .env_clear()
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
+        let until = std::time::Instant::now() + Duration::from_secs(10);
+        let status = loop {
+            if let Some(st) = child.try_wait().unwrap() {
+                break st;
+            }
+            if std::time::Instant::now() > until {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("the helper kept waiting with {text:?}");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(1), "{text:?}");
+    }
 }

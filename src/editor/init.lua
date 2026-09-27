@@ -57,7 +57,7 @@ o.laststatus = 3
 o.expandtab = true
 o.shiftwidth = 4
 o.tabstop = 4
--- Nothing is copied to the system clipboard unless asked for with "+y.
+-- Copying: see "copying" below (a yank also goes to the system clipboard; deleting and pasting stay in the editor).
 o.clipboard = ''
 -- The squad (or anything else) may change files while they are open here: read them again when they change on disk
 -- and nothing was changed here; Vim's own warning (W12) stays for a file changed both here and on disk.
@@ -66,6 +66,72 @@ o.autoread = true
 if S.shell and vim.uv.fs_stat(S.shell) then
   o.shell = S.shell
 end
+
+-- ---- copying: to the system clipboard, the way platoon copies -----------------------------------------------------
+--
+-- A yank (`y`, `yy`, `Y`, `y` on a selection; also "+y) goes where platoon's own copies go, as PLATOON_CLIPBOARD
+-- says (the session's `clipboard`):
+-- - "system": the system clipboard through platoon itself (`platoon clipboard-hold`, which stays in the background
+--   holding the text until something else is copied, the way xclip does; no clipboard tool needs to be installed),
+--   and OSC 52, the escape sequence that asks the terminal to set its own clipboard (Ghostty, kitty, WezTerm, iTerm2,
+--   and over SSH);
+-- - "osc52": only OSC 52; "off": nothing leaves the editor.
+-- Deleting (`d`, `x`, `c`) doesn't touch the system clipboard. Pasting (`p`, and "+p) always pastes from the editor's
+-- own registers: nothing asks the terminal for its clipboard (many terminals never answer, and Neovim would wait for
+-- ten seconds); text copied in another program is pasted with the terminal's own paste (ctrl+shift+v).
+
+local CB = S.clipboard or { target = 'off' }
+local last = { lines = { '' }, regtype = 'v' }
+
+--- `lines` as a clipboard provider is given them: a whole-line copy ends with an empty item (its last line break).
+local function copy_out(lines, regtype)
+  local out = vim.list_extend({}, lines)
+  last = { lines = out, regtype = regtype or 'v' }
+  if CB.target ~= 'system' and CB.target ~= 'osc52' then
+    return
+  end
+  local text = table.concat(out, '\n')
+  if CB.target == 'system' and type(CB.helper) == 'table' and #CB.helper > 0 then
+    pcall(vim.system, CB.helper, { stdin = text, detach = true, stdout = false, stderr = false })
+  end
+  -- A sequence longer than terminals take is printed as garbage by some: bigger texts go by the system route only.
+  local max = tonumber(CB.osc52_max) or 100000
+  if 4 * math.ceil(#text / 3) <= max then
+    pcall(function()
+      require('vim.ui.clipboard.osc52').copy('+')(out)
+    end)
+  end
+end
+
+-- "+y and "*y go through this provider; plain `y` (into the unnamed register) is sent out by the autocmd below, so
+-- that deletes and pastes never touch it.
+vim.g.clipboard = {
+  name = 'platoon',
+  copy = { ['+'] = copy_out, ['*'] = copy_out },
+  paste = {
+    ['+'] = function()
+      return { last.lines, last.regtype }
+    end,
+    ['*'] = function()
+      return { last.lines, last.regtype }
+    end,
+  },
+  cache_enabled = false,
+}
+
+vim.api.nvim_create_autocmd('TextYankPost', {
+  group = vim.api.nvim_create_augroup('platoon_copy', { clear = true }),
+  callback = function()
+    local ev = vim.v.event
+    if ev.operator == 'y' and (ev.regname == nil or ev.regname == '') then
+      local lines = vim.list_extend({}, ev.regcontents)
+      if (ev.regtype or ''):sub(1, 1) == 'V' then
+        table.insert(lines, '')
+      end
+      copy_out(lines, ev.regtype)
+    end
+  end,
+})
 
 -- ---- colors: platoon's theme ---------------------------------------------------------------------------------------
 

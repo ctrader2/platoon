@@ -64,6 +64,31 @@ fn worktree_root(w: &Worktree, number: u32) -> PathBuf {
     path.ancestors().find(|a| a.file_name().is_some_and(|n| n.to_string_lossy() == name)).unwrap_or(path).to_path_buf()
 }
 
+/// The one line said when platoon has, by itself, removed ticket `number`'s worktrees after the work (`removed` of
+/// them), or kept some for the first time because they have changes not yet committed (`kept`). A worktree kept
+/// before is not said again (it is looked at again each time platoon starts, in case the changes were committed).
+pub fn removal_notice(number: u32, removed: usize, kept: usize) -> Option<String> {
+    let branch = crate::squads::branch_name(number);
+    let removed_part = match removed {
+        0 => None,
+        1 => Some(format!("Removed #{number}'s worktree (its branch {branch} is kept)")),
+        n => Some(format!("Removed #{number}'s worktrees ({n}); their branch {branch} is kept")),
+    };
+    let kept_part = match (kept, removed_part.is_some()) {
+        (0, _) => None,
+        (1, false) => Some(format!("Kept #{number}'s worktree: it has changes not yet committed (w on the ticket removes it)")),
+        (n, false) => Some(format!("Kept #{number}'s worktrees ({n}): they have changes not yet committed (w on the ticket removes them)")),
+        (1, true) => Some("kept one with changes not yet committed (w on the ticket removes it)".to_string()),
+        (n, true) => Some(format!("kept {n} with changes not yet committed (w on the ticket removes them)")),
+    };
+    match (removed_part, kept_part) {
+        (None, None) => None,
+        (Some(r), None) => Some(format!("{r}.")),
+        (None, Some(k)) => Some(format!("{k}.")),
+        (Some(r), Some(k)) => Some(format!("{r}; {k}.")),
+    }
+}
+
 impl App {
     /// Note where sessions are working now (from Claude Code's registry and platoon's hosts).
     /// And where a code editor has a folder open, in this platoon window or another (`editor::open_now`).
@@ -151,6 +176,7 @@ impl App {
         self.wt.removing = None;
         let mut store = Tickets::open(&self.config, &project);
         let mut refused = None;
+        let (mut removed, mut newly_kept) = (0, 0);
         for (path, r) in &got {
             let mark = match r {
                 Removal::Removed => WtMark::Removed,
@@ -160,8 +186,15 @@ impl App {
                     continue;
                 }
             };
-            if let Err(e) = store.mark_worktree(number, path, mark) {
-                refused.get_or_insert_with(|| e.to_string());
+            match store.mark_worktree(number, path, mark) {
+                Ok(changed) => match mark {
+                    WtMark::Removed => removed += 1,
+                    _ if changed => newly_kept += 1,
+                    _ => {}
+                },
+                Err(e) => {
+                    refused.get_or_insert_with(|| e.to_string());
+                }
             }
         }
         self.reread_all_tickets();
@@ -169,6 +202,11 @@ impl App {
             match refused {
                 Some(why) => self.notify(format!("#{number}'s worktree wasn't removed: {why}")),
                 None => self.notify(format!("#{number}'s worktree is removed. Its branch {} is kept.", crate::squads::branch_name(number))),
+            }
+        } else if !self.editor_holds(&project, number) {
+            // (`v` on the ticket waited for this removal and is about to bring the worktree back: nothing to say.)
+            if let Some(line) = removal_notice(number, removed, newly_kept) {
+                self.notify(line);
             }
         }
     }
@@ -327,6 +365,12 @@ impl App {
         }
         self.start_removing(project, number, todo, true);
         self.notify(format!("Removing #{number}'s worktree…"));
+    }
+
+    /// How many worktrees have been looked at (in a unit test).
+    #[cfg(test)]
+    pub fn worktrees_tried_for_test(&self) -> usize {
+        self.wt.tried.len()
     }
 
     /// Wait (in a unit test) until no worktree is being removed or made again.
