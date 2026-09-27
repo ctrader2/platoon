@@ -20,8 +20,20 @@ const EVERY: Duration = Duration::from_secs(2);
 /// What a ticket says while its worktree is made again, before its squad is continued.
 pub const BRINGING_BACK: &str = "Bringing its worktree back…";
 
+/// How long `v` waits for a removal of the ticket's worktree that had just started.
+const REMOVAL_WAIT: Duration = Duration::from_secs(10);
+
 /// How long `c` may wait for git to say whether a worktree has changes, before asking.
 const ASK_BUDGET: Duration = Duration::from_millis(1500);
+
+/// What happens once a ticket's removed worktrees are back.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum After {
+    /// Its squad is continued.
+    Squad,
+    /// The code editor opens on it (`v`).
+    Editor,
+}
 
 /// One ticket's worktrees, being removed or made again off the UI thread.
 struct Out<T> {
@@ -35,7 +47,7 @@ pub struct WtState {
     /// Worktrees being removed: (path, what came of it). `anyway`: the user said yes to losing their changes.
     removing: Option<(Out<Vec<(String, Removal)>>, bool)>,
     /// Removed worktrees being made again from their branch, to continue the squad.
-    back: Option<Out<Result<Vec<Worktree>, String>>>,
+    back: Option<(Out<Result<Vec<Worktree>, String>>, After)>,
     /// Worktrees already looked at for the ticket as it stood (project, number, path, the ticket's `updated`): each is
     /// tried once, and again only when the ticket changes (or platoon starts again), never over and over.
     tried: HashSet<(String, u32, String, u64)>,
@@ -54,8 +66,15 @@ fn worktree_root(w: &Worktree, number: u32) -> PathBuf {
 
 impl App {
     /// Note where sessions are working now (from Claude Code's registry and platoon's hosts).
+    /// And where a code editor has a folder open, in this platoon window or another (`editor::open_now`).
     pub(super) fn note_busy_dirs(&mut self, live: &[Live]) {
-        self.wt.busy_dirs = live.iter().map(|l| PathBuf::from(&l.cwd)).chain(self.hosts.iter().map(|h| PathBuf::from(&h.dir))).filter(|d| !d.as_os_str().is_empty()).collect();
+        self.wt.busy_dirs = live
+            .iter()
+            .map(|l| PathBuf::from(&l.cwd))
+            .chain(self.hosts.iter().map(|h| PathBuf::from(&h.dir)))
+            .chain(crate::editor::open_now(&self.cache))
+            .filter(|d| !d.as_os_str().is_empty())
+            .collect();
     }
 
     /// A session is working in ticket `number`'s worktree `w` (or a folder inside it).
@@ -71,7 +90,7 @@ impl App {
 
     fn working_on(&self, project: &str, number: u32) -> bool {
         let is = |p: &str, n: u32| p == project && n == number;
-        self.wt.removing.as_ref().is_some_and(|(o, _)| is(&o.project, o.number)) || self.wt.back.as_ref().is_some_and(|o| is(&o.project, o.number))
+        self.wt.removing.as_ref().is_some_and(|(o, _)| is(&o.project, o.number)) || self.wt.back.as_ref().is_some_and(|(o, _)| is(&o.project, o.number))
     }
 
     /// Called on every refresh: take in what came back, and every couple of seconds look for a closed ticket whose
@@ -85,7 +104,8 @@ impl App {
         self.wt.last = Some(Instant::now());
         let mut pick: Option<(String, u32, u64, Vec<Worktree>)> = None;
         for (project, t) in self.every_ticket() {
-            if !t.state.closed() || t.worktrees.is_empty() || self.squad_running(t) || self.working_on(project, t.number) {
+            // (`v` on the ticket is on its way to opening the editor there: left alone until it has.)
+            if !t.state.closed() || t.worktrees.is_empty() || self.squad_running(t) || self.working_on(project, t.number) || self.editor_holds(project, t.number) {
                 continue;
             }
             let todo: Vec<Worktree> = t
@@ -159,6 +179,11 @@ impl App {
     /// hand), make it again from its branch, off the UI thread, and continue the squad once it is there. True when
     /// that is under way (or the ticket must wait a moment), false when there is nothing to bring back.
     pub(super) fn bring_worktrees_back(&mut self, number: u32) -> bool {
+        self.bring_worktrees_back_then(number, After::Squad)
+    }
+
+    /// `bring_worktrees_back`, then `then`.
+    pub(super) fn bring_worktrees_back_then(&mut self, number: u32, then: After) -> bool {
         let Some(project) = self.open_project.clone() else { return false };
         let Some(t) = self.ticket(number).cloned() else { return false };
         let gone: Vec<String> = t.worktrees.iter().filter(|w| w.is_gone()).map(|w| w.folder.clone()).collect();
@@ -182,14 +207,29 @@ impl App {
         if let Some(store) = self.tk.store.as_mut() {
             store.set_busy(number, Some(BRINGING_BACK));
         }
-        self.wt.back = Some(Out { project, number, rx });
+        self.wt.back = Some((Out { project, number, rx }, then));
         true
+    }
+
+    /// `v` on ticket `number`: when platoon has just started removing its worktree (it went Done and its squad
+    /// stopped a moment ago), wait for that to finish and write it down, so the editor opens on a worktree that
+    /// stays, brought back from its branch if it went.
+    pub(super) fn settle_removal(&mut self, project: &str, number: u32) {
+        let start = Instant::now();
+        while self.wt.removing.as_ref().is_some_and(|(o, _)| o.project == project && o.number == number) {
+            self.take_removals();
+            if start.elapsed() > REMOVAL_WAIT {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// The worktrees are back: written on the ticket, then its squad continued (beside the ticket when its screen is
     /// still showing).
     fn take_back(&mut self) {
-        let Some(out) = &self.wt.back else { return };
+        let Some((out, then)) = &self.wt.back else { return };
+        let then = *then;
         let got = match out.rx.try_recv() {
             Ok(got) => got,
             Err(TryRecvError::Empty) => return,
@@ -205,6 +245,9 @@ impl App {
             Err(e) => {
                 self.reread_all_tickets();
                 self.notify(format!("Couldn't bring #{number}'s worktree back: {e}"));
+                if then == After::Editor {
+                    self.editor_cancel(false);
+                }
                 return;
             }
         };
@@ -213,6 +256,10 @@ impl App {
             let _ = store.mark_worktree(number, &w.path, WtMark::Present);
         }
         self.reread_all_tickets();
+        if then == After::Editor {
+            self.editor_continue();
+            return;
+        }
         let show = self.open_project.as_deref() == Some(project.as_str()) && self.tk.open == Some(number) && matches!(self.mode, Mode::List);
         if let Err(e) = self.launch_leader_in(&project, number, None, show) {
             self.notify(format!("Couldn't start the squad: {e}"));

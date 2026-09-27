@@ -156,7 +156,14 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let hints = fit_hints(hints, room, &["tabs", "active/archived", "move", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"]);
+    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"];
+    // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
+    if app.open_project.is_some() && app.tk.open.is_some() {
+        droppable.retain(|d| *d != "editor");
+        let at = droppable.iter().position(|d| *d == "waits for").map_or(droppable.len(), |i| i + 1);
+        droppable.insert(at, "editor");
+    }
+    let hints = fit_hints(hints, room, &droppable);
     let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
@@ -208,6 +215,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'static>> {
         ("a", archive_verb, Some(Action::Archive)),
         ("m", "project", Some(Action::Assign)),
         ("h", "hand-off", Some(Action::HandOff)),
+        ("v", "editor", Some(Action::Editor)),
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
@@ -243,6 +251,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
         out.push(("h", "hand-off", Some(Action::HandOff)));
+        out.push(("v", "editor", Some(Action::Editor)));
     } else if app.pane == Pane::Tickets {
         let on_divider = matches!(app.ticket_rows().get(app.ticket_selected()), Some(TRow::Divider(_)));
         out = vec![("enter", if on_divider { "show/hide" } else { "open" }, None), ("n", "new ticket", None)];
@@ -256,6 +265,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'static>> {
                 out.push(("c", "cancel", None));
             }
             out.push(("e", "edit", None));
+            out.push(("v", "editor", Some(Action::Editor)));
         }
     } else {
         out = vec![
@@ -307,6 +317,7 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'static>> {
         ("r", "rename", None),
         ("f", "folders", None),
         ("b", "waits for", None),
+        ("v", "editor", Some(Action::Editor)),
         ("↑↓", "scroll", None),
         ("esc", "back", Some(Action::Leave)),
         ("q", "quit", Some(Action::Quit)),
@@ -2927,6 +2938,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     f.render_widget(Clear, r);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
+        _ if p.editor => "code editor: pick a folder to open".to_string(),
         (Some(n), _) => format!("a folder for ticket #{n}"),
         (None, Some(pr)) => format!("new session in {}: pick a directory", pr.name),
         (None, None) => "new session: pick a directory".to_string(),
@@ -3012,6 +3024,23 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 if *sessions == 1 { "" } else { "s" }
             ),
             "delete",
+        ),
+        Confirm::EditorWhileWorking { number, title } => (
+            "squad at work",
+            format!("Open #{number} {title} in the editor anyway?"),
+            "The squad is still working in these files; what you change may clash with it. The editor reads a file again when \
+             the squad changes it, and asks before saving over a file the squad changed."
+                .to_string(),
+            "open anyway",
+        ),
+        Confirm::InstallEditor => (
+            "code editor",
+            "The code editor isn't installed. Install it now?".to_string(),
+            format!(
+                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder: about {} MB, a few seconds. Your own Neovim settings are not touched; `platoon setup --remove editor` takes it off again.",
+                crate::editor_install::APPROX_MB
+            ),
+            "install",
         ),
         Confirm::DeleteSquad { id, name } => (
             "delete squad",
@@ -3125,7 +3154,11 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
-    let no = if matches!(c, Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. }) { "keep it" } else { "cancel" };
+    let no = match c {
+        Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. } => "keep it",
+        Confirm::InstallEditor => "not now",
+        _ => "cancel",
+    };
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }

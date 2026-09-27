@@ -31,7 +31,6 @@ pub enum Removal {
 /// from, as written on the ticket. A worktree made before platoon wrote that down: where its branch left `main`
 /// (else `master`), else where it left the repository's HEAD as it is now (HEAD itself if they share nothing). None
 /// when its branch or its repository isn't there any more. `program` is git.
-#[allow(dead_code)] // For the editor's "what did this ticket change" (the next piece of work); tested here.
 pub fn diff_base(w: &Worktree, program: &str) -> Option<String> {
     if let Some(b) = &w.base {
         return Some(b.clone());

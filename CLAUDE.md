@@ -78,7 +78,9 @@ cargo build --release                    # must be warning-free
 
 Test environment knobs: `PLATOON_CLAUDE_BIN` (a stand-in for `claude`), `PLATOON_SKIP_SETUP_CHECK=1`, `PLATOON_BADGES`,
 `PLATOON_COLORS`, `PLATOON_IDLE_SECS_PER_MINUTE`, `PLATOON_CLIPBOARD`, `PLATOON_NOTES_QUIET_SECS`, `PLATOON_NOTES_MAX_LIFE_SECS`,
-`PLATOON_NOTES_HELPER=off`, `PLATOON_DATA_DIR`, `PLATOON_FONT_DIR`, `PLATOON_EDITOR_MIRROR` (downloads from a folder, never the network), `PLATOON_SKIP_FC_CACHE=1`. `tests/common` `Term::spawn` fixes them for
+`PLATOON_NOTES_HELPER=off`, `PLATOON_DATA_DIR`, `PLATOON_FONT_DIR`, `PLATOON_EDITOR_MIRROR` (downloads from a folder, never the network), `PLATOON_SKIP_FC_CACHE=1`, `PLATOON_NVIM_BIN` (a stand-in for the
+code editor's nvim; `tests/editor.rs` uses a script that records what it was started with). A test that runs a real nvim must point
+every `XDG_*` into a temp dir: nvim writes `~/.local/state/nvim` even with `--clean`. `tests/common` `Term::spawn` fixes them for
 terminal tests. Run the whole suite twice before trusting it and fix races instead of retrying. In a terminal test, a frame arrives
 as a stream and `wait_for` can return halfway through one: wait for every line you rely on (`Term::wait_for_all`) and
 snapshot only from `Term::stable()` when the claim is about the whole frame (what is missing, what order, how many). A real `claude` cannot be
@@ -88,11 +90,12 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 
 | File | What it does |
 | --- | --- |
-| `main.rs` | entry point, subcommands (`setup`, `open`, `host`, `statusline`, `hook guard`, `hook session-start`, `hook stop`, `hook squad-stop`, `hook squad-gate`, `hook squad-notify`, `hook squad-tool`, `hook squad-prompt`, `themes`, `ticket`), event loop; most unit tests live here |
+| `main.rs` | entry point, subcommands (`setup`, `open`, `host`, `statusline`, `hook guard`, `hook session-start`, `hook stop`, `hook squad-stop`, `hook squad-gate`, `hook squad-notify`, `hook squad-tool`, `hook squad-prompt`, `themes`, `ticket`), event loop, handing the terminal to the code editor and back (`open_editor`); most unit tests live here |
 | `app.rs` | app state and all input handling (modes: list, filter, picker, confirm, attached, settings, theme picker); tabs Sessions, Projects, Squads (`1` `2` `3`) |
 | `ui.rs` | all drawing (header and tabs, rows, footer, popups, attached view; the Squads tab in `ui/squads_view.rs`); `model.rs` the row types |
 | `claude.rs`, `index.rs` | read Claude Code's undocumented on-disk state (also the installed skills, `skills/*/SKILL.md`, and the names only of the user's MCP servers in `.claude.json`); the persistent incremental index of conversations |
 | `host.rs`, `client.rs`, `open.rs` | the detached per-session host (owns claude's pty, serves many windows), the client, `platoon open` |
+| `editor.rs`, `editor/init.lua`, `editor/tree.lua`, `editor/shell.sh`, `app/editor_glue.rs` | the code editor (`v`): which folders it opens (a session's with its `/add-dir` folders, a ticket's worktrees with their base, its plain folders and work folder, a picked folder), the session file (roots, bases, icons, colors from the theme: truecolor, 256 or Terminal colors), nvim's environment (XDG inside `<editor>/nvim`, the user's values in `PLATOON_KEEP_*` for `shell.sh`), handing the terminal over and back (`main.rs` `open_editor`), marks of open folders (`<cache>/editor-open`) that keep the worktree clean-up away (`editor.rs`); the Lua config compiled in (options, `q` back to platoon, leader keys, multi-root tree and changed files as neo-tree sources in `tree.lua`, diffview, gitsigns, snacks picker and terminal, which-key, lualine, blink.cmp, treesitter); the app side: what `v` opens from where, the squad-working question, the install offer and its progress, bringing a removed worktree back first (`app/editor_glue.rs`). Installing it is `editor_install.rs` |
 | `guard.rs`, `setup.rs`, `usage.rs` | one-writer-per-conversation hook (which also carries a project's notes into a running session), the `platoon setup` checklist and gate, statusline plan usage |
 | `archive.rs`, `settings.rs`, `dirs.rs` | archive list, settings file and the settings screen catalog, directory picker sources |
 | `mcp.rs`, `procs.rs` | telling MCP servers from other child processes (idle stop), process table |

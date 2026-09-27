@@ -333,7 +333,6 @@ impl Dirs {
     fn record_path(&self) -> PathBuf {
         self.editor.join("installed.json")
     }
-    #[allow(dead_code)] // for the editor itself (the app's `v`), next
     /// The nvim to run: platoon's link to the user's own or to the downloaded one. None until installed.
     pub fn nvim(&self) -> Option<PathBuf> {
         let p = self.bin().join("nvim");
@@ -390,6 +389,12 @@ fn yours(dirs: &Dirs, tool: &ToolPin) -> Option<PathBuf> {
         None => Some(p),
         Some(min) => version_of(&p).filter(|v| *v >= min).map(|_| p),
     }
+}
+
+/// A parser platoon didn't build up front can be built when a file of its language is first opened: the tree-sitter
+/// CLI is in platoon's folder and there is a C compiler.
+pub fn can_build_parsers(dirs: &Dirs) -> bool {
+    runnable(&dirs.bin().join("tree-sitter")) && compiler(dirs).is_some()
 }
 
 /// The C compiler parsers are built with: `cc`, else `gcc`, else `clang`, on the search path.
@@ -578,12 +583,10 @@ pub fn status_with(dirs: &Dirs, m: &Manifest) -> Status {
 
 /// A Nerd Font is there for the editor's icons: the one platoon installed, or (Linux) any the font list knows, or
 /// (macOS) any in the user's or the system's font folder. Phase 3 uses plain icons without one.
-#[allow(dead_code)] // for the editor itself (the app's `v`), next
 pub fn nerd_font_present(dirs: &Dirs) -> bool {
     nerd_font_present_with(dirs, &system_has_nerd_font)
 }
 
-#[allow(dead_code)]
 fn nerd_font_present_with(dirs: &Dirs, system: &dyn Fn() -> bool) -> bool {
     let rec = load_record(dirs);
     let ours = rec.get("font").is_some_and(|r| {
@@ -593,7 +596,6 @@ fn nerd_font_present_with(dirs: &Dirs, system: &dyn Fn() -> bool) -> bool {
     ours || system()
 }
 
-#[allow(dead_code)]
 fn system_has_nerd_font() -> bool {
     if cfg!(target_os = "macos") {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
@@ -641,7 +643,6 @@ pub struct Report {
 /// Install whatever is missing or out of date, with the pins in this build. Parts run at the same time; `progress`
 /// is called from worker threads as each piece finishes. An error names what failed; everything that succeeded stays
 /// installed and recorded, so running it again carries on from there.
-#[allow(dead_code)] // for the editor itself (the app's `v` offers the install when nothing is there), next
 pub fn install(dirs: &Dirs, progress: &(dyn Fn(Progress) + Sync)) -> Result<Report, String> {
     install_with(dirs, &pinned(), progress)
 }

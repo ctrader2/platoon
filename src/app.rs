@@ -38,6 +38,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
 mod projects_glue;
@@ -47,6 +48,8 @@ mod squadwork_glue;
 mod squadtab_glue;
 mod tickets_glue;
 mod worktree_glue;
+#[cfg(test)]
+pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_PROJECTS, TOP_SESSIONS, TOP_SQUADS};
@@ -165,6 +168,8 @@ pub enum Action {
     Undo,
     /// `H` on a session that is in a project: write a brief and start a new session from it.
     HandOff,
+    /// `v`: open the code editor on what is selected (or pick a folder).
+    Editor,
 }
 
 /// Clickable regions, recorded by the UI each frame.
@@ -261,6 +266,10 @@ pub enum Confirm {
     RemoveWorktree { number: u32, branch: String },
     /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
     HandAnyway { number: u32, squad: String, title: String, says: String },
+    /// `v` on a ticket whose squad is still working in its files: open the editor anyway?
+    EditorWhileWorking { number: u32, title: String },
+    /// `v` while the code editor isn't installed: install it now?
+    InstallEditor,
     /// Delete one of the user's own squads.
     DeleteSquad { id: String, name: String },
     /// Put a built-in squad the user changed back as platoon has it.
@@ -327,6 +336,8 @@ pub struct Picker {
     pub project: Option<String>,
     /// Picking a folder to add to this ticket (of the open project), rather than one to start a session in.
     pub ticket: Option<u32>,
+    /// Picking a folder to open the code editor in (`v` with nothing selected).
+    pub editor: bool,
 }
 
 impl Picker {
@@ -516,6 +527,8 @@ pub struct App {
     pub sw: squadwork_glue::WorkState,
     /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
     pub wt: worktree_glue::WtState,
+    /// The code editor (`v`): the questions before it opens, installing it, the request the event loop takes.
+    pub ed: editor_glue::EdState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
     /// The first line of the notes in view.
@@ -672,7 +685,7 @@ impl App {
             mode: Mode::List,
             search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None, find: FindData::new() },
             rename: Rename { id: String::new(), input: String::new(), original: String::new() },
-            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None, ticket: None },
+            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None, ticket: None, editor: false },
             hosts: Vec::new(),
             client: None,
             spawned: Vec::new(),
@@ -697,6 +710,7 @@ impl App {
             sq: SquadState::new(),
             sw: squadwork_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
+            ed: editor_glue::EdState::new(),
             sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
             notes_seen: None,
@@ -1122,6 +1136,7 @@ impl App {
         self.start_from_line();
         self.poll_squad_work();
         self.poll_worktrees();
+        self.poll_editor_install();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();
@@ -1324,6 +1339,11 @@ impl App {
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
             (Action::HandOff, Mode::List) if !self.projects_list_showing() => self.start_handoff(),
+            (Action::Editor, Mode::List) => self.code_editor_key(),
+            (Action::Confirm, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_anyway(),
+            (Action::Cancel, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_cancel(false),
+            (Action::Confirm, Mode::Confirm(Confirm::InstallEditor)) => self.install_editor(),
+            (Action::Cancel, Mode::Confirm(Confirm::InstallEditor)) => self.editor_cancel(true),
             (Action::Confirm, Mode::Handoff) => self.take_handoff(),
             (Action::Cancel, Mode::Handoff) => self.cancel_handoff(),
             (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),
@@ -1350,6 +1370,7 @@ impl App {
                 self.mode = Mode::List;
                 self.adopt(&pids, &id, &name, cwd, restore);
             }
+            (Action::Confirm, Mode::Picker) if self.picker.editor => self.take_editor_folder(),
             (Action::Confirm, Mode::Picker) if self.picker.ticket.is_some() => {
                 if let (Some(dir), Some(n)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.ticket) {
                     self.add_ticket_folder(n, dir);
@@ -1624,7 +1645,7 @@ impl App {
         all.extend(dirs::candidates(self.reader.root(), &self.home));
         let mut seen = std::collections::HashSet::new();
         all.retain(|p| seen.insert(p.clone()));
-        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None };
+        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None, editor: false };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
     }

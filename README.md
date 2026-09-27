@@ -25,7 +25,7 @@ already done, and a step whose command points at a platoon that no longer exists
 | Project notes | Hands a [project's](#projects) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions. If you set platoon up before projects existed, run `platoon setup` once more to add it |
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 | Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder): when platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly. If you changed the file, setup leaves it alone and says "changed by you"; `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says "removed by you"); `platoon setup --add to-tickets` puts it back |
-| Code editor | Optional, and not a setting at all: Neovim with a file tree, the changed files and their differences, search and a terminal, for looking at a ticket's work (the editor itself comes in a later version). See [The code editor](#the-code-editor) |
+| Code editor | Optional, and not a setting at all: Neovim with a file tree, the changed files and their differences, search and a terminal, for looking at a ticket's or a session's work with `v`. See [The code editor](#the-code-editor) and [Opening the editor](#opening-the-editor-v) |
 
 ### The code editor
 
@@ -57,6 +57,66 @@ Removing deletes platoon's folder and the font files platoon put there, never yo
 
 For tests: `PLATOON_EDITOR_MIRROR=<folder>` reads every download from that folder (by the last part of its address)
 instead of the network, and `PLATOON_SKIP_FC_CACHE=1` skips refreshing the font list.
+
+### Opening the editor (`v`)
+
+Press `v` anywhere in platoon's lists to look at the work in the code editor:
+
+| Where | What it opens |
+| --- | --- |
+| a conversation's row (Sessions tab, a project's Sessions pane) | its folder, and the folders added to it with `/add-dir` |
+| a ticket's row or its screen | the ticket's worktrees (every repository the squad works in), its folders that aren't in git as they are, and its work folder when there is something in it |
+| anywhere else (the Squads tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
+
+In a session's live view every key goes to Claude: press `ctrl+space` to go back to the list, then `v`. Typed into a box
+(search, a name, the folder picker), `v` is just a letter.
+
+The editor opens **in the same window**: platoon's screen goes, the editor takes the whole terminal, and `q` brings you
+back to platoon exactly where you were. Sessions and squads keep running meanwhile. A few things happen first when needed:
+
+- **Not installed yet**: platoon offers to install it (about 150 MB, a few seconds; the progress shows at the bottom), then
+  opens it. Saying no is fine: `platoon setup --add editor` installs it later. This works after `platoon setup --remove
+  editor` too: pressing `v` is asking for it.
+- **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it. The
+  editor reads a file again when the squad changes it on disk, and warns before saving over a file that changed there.
+- **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as when
+  you continue the squad. While the editor is open, platoon never removes a worktree it has open.
+
+**Inside the editor.** It is Neovim with platoon's own settings (your own `~/.config/nvim` is never read or changed); Vim's
+keys work as usual, with these changes and additions. `space` is the key for platoon's own actions: press it and wait, and
+a list of them appears.
+
+| Key | Does |
+| --- | --- |
+| `q` | back to platoon. With changes you haven't saved it asks: save them, discard them, or keep editing. A program still running in the editor's terminal is stopped (it asks first) |
+| `Q` | record a macro (what `q` does in plain Vim) |
+| `space e` | the file tree: every folder of the ticket or session, each at the top level, with git's marks (`+` added, `~` changed, `-` removed, `?` new) |
+| `space c` | the changed files, one group per repository: for a ticket, everything its branch changed since its worktree was made (committed or not); for a session, what isn't committed yet |
+| `space d` | the differences of the repository of the file you are in (asks which, when there are several and you are in none); `space D` picks another repository |
+| `space h` | the history of this file |
+| `space f` | find a file in every folder; `space s` search for text in every folder |
+| `space b` | the files you have open |
+| `space t` or `ctrl+/` | a terminal, in the repository of the file you are in; the same key hides it. Everything there runs with your own settings (git, cargo, claude) |
+| `]h` `[h` | the next or previous change in this file; `space g s` stage it, `space g u` undo it, `space g p` show it, `space g b` who changed this line |
+| `space w` | save this file |
+| `space ?` | every key |
+
+In the file tree and the changed files: `enter` (or `l`, `→`) opens a file or a folder, `h` (`←`) closes a folder, `1` and `2`
+(or `tab`) switch between Files and Changed files, `D` shows the differences of that repository, `a` `d` `r` add, delete and
+rename, `esc` closes the panel, `?` lists its keys. In a list that pops up (finding files, searching), `esc` closes it. In the
+differences: `tab` goes to the next file, `esc` closes them. In the terminal, press `esc` twice to scroll or copy, and `q`
+from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon).
+
+The editor's colors come from platoon's theme (with "Terminal colors", from your terminal's own). With JetBrainsMono Nerd
+Font (or any Nerd Font) picked in your terminal it shows icons; without one, plain marks. Code is colored in the 19
+languages installed up front; opening a file in another language builds its highlighting quietly the first time (it needs
+the internet and a C compiler), and without them the file simply isn't colored. There are no language servers (going to a
+definition, errors as you type) in this version.
+
+Where things are: the editor runs `<platoon's data folder>/editor/bin/nvim` with the settings platoon writes to
+`editor/config/` each time it opens (`init.lua`, `lua/platoon/tree.lua`, and a small `shell` script that gives the
+editor's terminal your own environment back). Neovim's own history, swap and undo files stay in `editor/nvim/`. For tests,
+`PLATOON_NVIM_BIN` runs another program instead of the editor.
 
 ## The list
 
@@ -97,6 +157,7 @@ before.
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
+| `v` | open the conversation's folders in the [code editor](#opening-the-editor-v) |
 | `1` `2` | switch between the Sessions and Projects tabs (or click them); the current tab is underlined and each shows a count badge |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
@@ -823,6 +884,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | Key (a ticket's screen) | Does |
 | --- | --- |
 | `e` | edit the body in your editor |
+| `v` | open its work in the [code editor](#opening-the-editor-v): its worktrees, what their branch changed, diffs, a terminal (also on its row in the Tickets pane) |
 | `r` | rename it (its file keeps its name) |
 | `c` | cancel it, after asking "Cancel ticket #N?" (`y` yes, `n` or `esc` no). When its squad's session is running, the question says it will be stopped too, and yes stops that one session (its conversation is kept). On a ticket that is Cancelled already, `c` only says so |
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |

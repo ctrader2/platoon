@@ -8,6 +8,7 @@ mod clipboard;
 mod colordepth;
 mod describe;
 mod dirs;
+mod editor;
 mod editor_install;
 mod editors;
 mod guard;
@@ -46,6 +47,8 @@ mod totickets;
 mod ui;
 mod usertheme;
 mod worktrees;
+#[cfg(test)]
+mod editor_app_tests;
 #[cfg(test)]
 mod handoff_app_tests;
 #[cfg(test)]
@@ -88,6 +91,7 @@ use ratatui::crossterm::{
         KeyEventKind,
     },
     execute,
+    terminal::{enable_raw_mode, Clear, ClearType, EnterAlternateScreen},
 };
 use std::{io, time::{Duration, Instant}};
 
@@ -300,12 +304,15 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let start = Instant::now();
     let mut last_refresh = Instant::now();
     while !app.quit {
+        if let Some(req) = app.take_editor_request() {
+            open_editor(terminal, &mut app, &req, depth, no_color);
+        }
         app.poll_stops();
         app.poll_editors();
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() || app.editor_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
@@ -332,6 +339,51 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     // Stops still running for the archive key get a few seconds to finish, so their records are written.
     app.finish_stops();
     Ok(app.hosts.len())
+}
+
+/// Hand the terminal to the code editor (`v`), wait for it to close, and take the terminal back: platoon's screen
+/// goes (raw mode off, the alternate screen left) so the editor draws on the real terminal, then comes back drawn in
+/// full, where the user was. Nothing of platoon reads the keyboard or draws in between (this loop is waiting).
+fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req: &editor::Request, depth: colordepth::Depth, no_color: bool) {
+    let dirs = app.editor_dirs().clone();
+    let env = |k: &str| std::env::var(k).ok();
+    let theme = app.effective_theme().clone();
+    let look = editor::Look {
+        theme: &theme,
+        mode: editor::color_mode(&theme, depth, no_color),
+        icons: editor_install::nerd_font_present(&dirs),
+        compile_parsers: editor_install::can_build_parsers(&dirs),
+    };
+    let launch = match editor::prepare(&dirs, req, &look, &env, std::process::id()) {
+        Ok(l) => l,
+        Err(e) => return app.editor_closed(Err(e)),
+    };
+    // Other platoon windows must not remove a worktree the editor has open (`worktree_glue`).
+    let mark = editor::mark_open(&app.cache, std::process::id(), &req.dirs()).ok();
+    let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
+    ratatui::restore();
+    let ran = editor::run(&launch);
+    let _ = enable_raw_mode();
+    let _ = execute!(io::stdout(), EnterAlternateScreen, Clear(ClearType::All), EnableMouseCapture, EnableBracketedPaste);
+    // Everything is drawn again: an empty frame first makes ratatui's idea of the screen blank (as it now is), so the
+    // next frame is drawn in full. (Not `terminal.clear()`: it asks the terminal where the cursor is, and a terminal
+    // that doesn't answer holds everything up.) The cursor is hidden again too.
+    let _ = terminal.draw(|_| {});
+    let _ = terminal.hide_cursor();
+    editor::finish(&launch);
+    if let Some(m) = mark {
+        editor::unmark(&m);
+    }
+    let result = match ran {
+        Ok(st) if st.success() => Ok(()),
+        // Closed by a signal or with an error of its own: said, and platoon carries on.
+        Ok(st) => Err(match st.code() {
+            Some(c) => format!("it stopped with exit code {c}"),
+            None => "it was stopped".to_string(),
+        }),
+        Err(e) => Err(e.to_string()),
+    };
+    app.editor_closed(result);
 }
 
 #[cfg(test)]
@@ -1869,9 +1921,9 @@ mod tests {
         ch(&mut app, '/');
         ch(&mut app, 'j');
         assert_eq!(app.filter, "j");
-        // And the footer no longer advertises them.
+        // And the footer no longer advertises them (wide enough for the arrows' hint next to `v editor`).
         key(&mut app, KeyCode::Esc);
-        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(140, 24)).unwrap();
         let shown = draw(&mut term, &app);
         assert!(!shown.contains("j/k") && shown.contains("↑↓"), "{shown}");
     }

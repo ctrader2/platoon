@@ -264,6 +264,8 @@ impl App {
             // On a ticket (its screen, or its row in the Tickets pane) `s` does nothing: it was the ticket's state, which
             // the squad sets now (the user only cancels, with `c`), and settings popping up there would surprise.
             KeyCode::Char('s') if !ctrl && !self.ticket_has_keys() => return self.act(Action::Settings),
+            // The code editor, from anywhere: on what is selected, or on a folder the picker asks for.
+            KeyCode::Char('v') if !ctrl && !alt => return self.act(Action::Editor),
             // 1 is the first top-level tab, 2 the second; a number with no tab does nothing.
             KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => return self.switch_top(c as usize - '1' as usize),
             _ => {}
