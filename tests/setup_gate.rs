@@ -312,8 +312,10 @@ fn themes_lists_the_built_ins_without_setup_and_touches_nothing() {
     assert_eq!(
         ids,
         [
-            "catppuccin-mocha", "catppuccin-macchiato", "tokyo-night", "dracula", "one-dark", "nord", "gruvbox-dark", "rose-pine",
-            "kanagawa-wave", "night-owl", "ayu-mirage", "vesper", "claude", "terminal"
+            "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "tokyo-night", "tokyo-night-storm", "dracula", "one-dark",
+            "nord", "gruvbox-dark", "gruvbox-material-dark", "rose-pine", "rose-pine-moon", "kanagawa-wave", "kanagawa-dragon",
+            "night-owl", "ayu-mirage", "vesper", "solarized-dark", "github-dark", "material-ocean", "everforest-dark-hard", "nightfox",
+            "sonokai", "moonfly", "melange-dark", "flexoki-dark", "oxocarbon", "poimandres", "horizon", "synthwave", "claude", "terminal"
         ]
     );
     assert!(shown.contains("Catppuccin Mocha  (default)") && shown.contains("Rosé Pine") && shown.contains("Terminal colors"), "{shown}");

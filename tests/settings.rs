@@ -219,7 +219,8 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     t.wait_for("sample");
     t.wait_for("1 theme file skipped");
     let screen = t.text();
-    assert!(screen.contains("Deep Sea") && screen.contains("yours") && screen.contains("Bright Day:"), "{screen}");
+    // (The user's own theme is at the end of the list, past the built-ins: it is seen below, after jumping there.)
+    assert!(screen.contains("Bright Day:"), "{screen}");
     t.wait_fg(1, 3, mocha.1); // not faded: still the accent, not the muted border color
 
     // Down previews the next theme on the whole screen: the frame's inside and the header's title change...
@@ -240,6 +241,7 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     t.wait_for("sample");
     t.send(b"G");
     t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
+    t.wait_for_all(&["Deep Sea", "yours"]);
     t.send(b"\r");
     t.wait_gone("sample");
     until("the theme to reach the file", || fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some_and(|v| v["theme"] == "user:deep-sea"));

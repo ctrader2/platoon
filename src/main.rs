@@ -2552,7 +2552,7 @@ mod tests {
         let w = theme_world("tl-preview");
         let mut app = w.app();
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        let (mocha, macchiato, tokyo) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("tokyo-night"));
+        let (mocha, macchiato, frappe) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("catppuccin-frappe"));
 
         let list_before = { draw(&mut term, &app); snapshot(&term) };
         ch(&mut app, 's');
@@ -2560,7 +2560,7 @@ mod tests {
         key(&mut app, KeyCode::Enter);
         let picker_before = { draw(&mut term, &app); snapshot(&term) };
 
-        for (moves, want) in [(1, &macchiato), (1, &tokyo)] {
+        for (moves, want) in [(1, &macchiato), (1, &frappe)] {
             for _ in 0..moves {
                 key(&mut app, KeyCode::Down);
             }
@@ -2615,7 +2615,7 @@ mod tests {
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Settings), "enter returns to the settings");
         assert!(app.preview.is_none());
-        assert_eq!((app.theme.id.as_str(), saved_theme(&w).as_deref()), ("tokyo-night", Some("tokyo-night")));
+        assert_eq!((app.theme.id.as_str(), saved_theme(&w).as_deref()), ("catppuccin-frappe", Some("catppuccin-frappe")));
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
         assert_eq!(v["note"], "mine");
         assert_eq!(v["nested"], serde_json::json!({"a":[1,{"b":null}]}));
@@ -2623,10 +2623,10 @@ mod tests {
         assert!(!w.config.join("settings.json.bak").exists() && !w.config.join("settings.json.tmp").exists());
         // The settings row shows what was kept, and the list marks it as the saved one.
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-        assert!(draw(&mut term, &app).contains("Tokyo Night"));
+        assert!(draw(&mut term, &app).contains("Catppuccin Frappé"));
         key(&mut app, KeyCode::Enter);
         let shown = draw(&mut term, &app);
-        let line = shown.lines().find(|l| l.contains("Tokyo Night")).unwrap();
+        let line = shown.lines().find(|l| l.contains("Catppuccin Frappé")).unwrap();
         assert!(line.contains("✓"), "the saved theme has a check: {line}");
         assert_eq!(shown.matches('✓').count(), 1);
 
@@ -2671,11 +2671,11 @@ mod tests {
         assert_eq!(std::fs::read(config_file(&w)).unwrap(), before);
         // The ends hold.
         open_themes(&mut app);
-        for _ in 0..40 {
+        for _ in 0..80 {
             key(&mut app, KeyCode::Down);
         }
         assert_eq!(app.tpick.selected, app.tpick.list.len() - 1);
-        for _ in 0..40 {
+        for _ in 0..80 {
             key(&mut app, KeyCode::Up);
         }
         assert_eq!(app.tpick.selected, 0);
@@ -2712,7 +2712,7 @@ mod tests {
         key(&mut app, KeyCode::Right);
         assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("catppuccin-macchiato"), "catppuccin-macchiato"));
         assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none(), "no preview and no list on this path");
-        for (k, want) in [('l', "tokyo-night"), ('+', "dracula"), ('=', "one-dark"), ('h', "dracula"), ('-', "tokyo-night")] {
+        for (k, want) in [('l', "catppuccin-frappe"), ('+', "tokyo-night"), ('=', "tokyo-night-storm"), ('h', "tokyo-night"), ('-', "catppuccin-frappe")] {
             ch(&mut app, k);
             assert_eq!(saved_theme(&w).as_deref(), Some(want), "{k:?}");
         }
@@ -2720,7 +2720,7 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
         // All the way to the end of the list, which is where the user's own themes are; and it stops there.
-        for _ in 0..30 {
+        for _ in 0..80 {
             key(&mut app, KeyCode::Right);
         }
         assert_eq!((saved_theme(&w).as_deref(), app.theme.name.as_str()), (Some("user:my-theme"), "My Theme"));
@@ -2834,7 +2834,8 @@ mod tests {
         let w = theme_world("tl-content");
         let mut app = w.app();
         open_themes(&mut app);
-        let mut term = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        // Tall enough for every built-in, the user's themes and the note at once.
+        let mut term = Terminal::new(TestBackend::new(140, 60)).unwrap();
         let shown = draw(&mut term, &app);
         let buf = snapshot(&term);
         for t in Theme::all() {
@@ -2922,7 +2923,7 @@ mod tests {
         open_themes(&mut app);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         draw(&mut term, &app);
-        let (mocha, macchiato, tokyo) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("tokyo-night"));
+        let (mocha, macchiato, frappe) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("catppuccin-frappe"));
         let row = |app: &App, i: usize| hit_rect(app, |h| matches!(h, Hit::ThemeRow(x) if *x == i));
 
         // Hovering lights an entry up but previews nothing.
@@ -2934,18 +2935,18 @@ mod tests {
 
         // A click previews it and saves nothing; the whole app is recolored.
         click(&mut app, r2.x + 4, r2.y);
-        assert_eq!((app.tpick.selected, app.effective_theme().id.as_str()), (2, "tokyo-night"));
+        assert_eq!((app.tpick.selected, app.effective_theme().id.as_str()), (2, "catppuccin-frappe"));
         assert_eq!(saved_theme(&w).as_deref(), Some("catppuccin-mocha"));
         draw(&mut term, &app);
         let (px, py) = locate(term.backend().buffer(), "platoon");
-        assert_eq!(term.backend().buffer()[(px, py)].fg, tokyo.accent);
+        assert_eq!(term.backend().buffer()[(px, py)].fg, frappe.accent);
 
         // The wheel moves the highlight one entry at a time, previewing as it goes.
         app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 5, row: 5, modifiers: KeyModifiers::NONE });
         assert_eq!(app.effective_theme().id, macchiato.id);
         app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 5, row: 5, modifiers: KeyModifiers::NONE });
         app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollDown, column: 5, row: 5, modifiers: KeyModifiers::NONE });
-        assert_eq!(app.effective_theme().id, "dracula");
+        assert_eq!(app.effective_theme().id, "tokyo-night");
 
         // A click on the panel that is not an entry does nothing; an entry other than the previewed one previews it.
         draw(&mut term, &app);
@@ -2956,7 +2957,7 @@ mod tests {
         let r = row(&app, 3);
         click(&mut app, r.x + 4, r.y);
         assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none());
-        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("dracula"), "dracula"));
+        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("tokyo-night"), "tokyo-night"));
     }
 
     #[test]
@@ -2984,7 +2985,7 @@ mod tests {
         start(&mut app, &mut term);
         let r5 = hit_rect(&app, |h| matches!(h, Hit::ThemeRow(5)));
         click(&mut app, r5.x + 4, r5.y);
-        assert_eq!(app.effective_theme().id, "nord");
+        assert_eq!(app.effective_theme().id, "dracula");
         draw(&mut term, &app);
         click_action(&mut app, Action::Cancel);
         assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none());

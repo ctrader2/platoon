@@ -22,17 +22,31 @@ places where a role uses a color that is not in the palette to stay readable, ar
 
 | Theme | Original author / project | License |
 | --- | --- | --- |
-| Catppuccin Mocha, Catppuccin Macchiato | [Catppuccin](https://github.com/catppuccin/catppuccin) (Catppuccin Org) | MIT |
-| Tokyo Night | [Enkia, tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme) | see the upstream repository's license |
+| Catppuccin Mocha, Catppuccin Macchiato, Catppuccin Frappé | [Catppuccin](https://github.com/catppuccin/catppuccin) (Catppuccin Org) | MIT |
+| Tokyo Night, Tokyo Night Storm | [Enkia, tokyo-night-vscode-theme](https://github.com/enkia/tokyo-night-vscode-theme); the terminal palettes are from [folke/tokyonight.nvim](https://github.com/folke/tokyonight.nvim) | MIT (tokyo-night-vscode-theme); Apache-2.0 (tokyonight.nvim) |
 | Dracula | [Dracula Theme](https://github.com/dracula/dracula-theme) (Zeno Rocha and contributors) | MIT |
 | One Dark | Atom's One Dark syntax theme, [atom/one-dark-syntax](https://github.com/atom/one-dark-syntax) (GitHub) | MIT |
 | Nord | [Nord](https://github.com/nordtheme/nord) (Arctic Ice Studio / Sven Greb) | MIT |
 | Gruvbox Dark | [gruvbox](https://github.com/morhetz/gruvbox) (Pavel Pertsev) | MIT |
-| Rosé Pine | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT |
-| Kanagawa Wave | [kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim) (rebelot) | see the upstream repository's license |
+| Gruvbox Material Dark | [gruvbox-material](https://github.com/sainnhe/gruvbox-material) (sainnhe) | MIT |
+| Rosé Pine, Rosé Pine Moon | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT |
+| Kanagawa Wave, Kanagawa Dragon | [kanagawa.nvim](https://github.com/rebelot/kanagawa.nvim) (rebelot) | MIT |
 | Night Owl | [night-owl-vscode-theme](https://github.com/sdras/night-owl-vscode-theme) (Sarah Drasner) | see the upstream repository's license |
 | Ayu Mirage | [ayu](https://github.com/ayu-theme/ayu-colors) (Ike Ku) | see the upstream repository's license |
 | Vesper | [vesper](https://github.com/raunofreiberg/vesper) (Rauno Freiberg) | see the upstream repository's license |
+| Solarized Dark | [Solarized](https://github.com/altercation/solarized) (Ethan Schoonover); the palette is iTerm2's own Solarized Dark preset ("iTerm2 Solarized Dark") | MIT |
+| GitHub Dark | GitHub's "Dark Default" theme, [primer/github-vscode-theme](https://github.com/primer/github-vscode-theme) (GitHub) | MIT |
+| Material Ocean | [material.vim](https://github.com/kaicataldo/material.vim) (Kai Cataldo), after Mattia Astorino's Material Theme | MIT |
+| Everforest Dark Hard | [everforest](https://github.com/sainnhe/everforest) (sainnhe), terminal port [everforest.iterm2](https://github.com/icewind/everforest.iterm2) | MIT |
+| Nightfox | [nightfox.nvim](https://github.com/EdenEast/nightfox.nvim) (EdenEast) | MIT |
+| Sonokai | [sonokai](https://github.com/sainnhe/sonokai) (sainnhe) | MIT |
+| Moonfly | [vim-moonfly-colors](https://github.com/bluz71/vim-moonfly-colors) (bluz71) | MIT |
+| Melange Dark | [melange-nvim](https://github.com/savq/melange-nvim) (savq) | MIT |
+| Flexoki Dark | [Flexoki](https://github.com/kepano/flexoki) (Steph Ango) | MIT |
+| Oxocarbon | [oxocarbon.nvim](https://github.com/nyoom-engineering/oxocarbon.nvim) (Nyoom Engineering); two roles use colors of IBM's [Carbon](https://github.com/carbon-design-system/carbon) design system | MIT (oxocarbon.nvim); Apache-2.0 (Carbon) |
+| Poimandres | [poimandres-theme](https://github.com/drcmda/poimandres-theme) (drcmda) | MIT |
+| Horizon | [horizon-theme-vscode](https://github.com/jolaleye/horizon-theme-vscode) (jolaleye) | MIT |
+| Synthwave | contributed straight to [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (brettstil, 2017), with no separate upstream project | MIT (the iTerm2-Color-Schemes collection) |
 | Claude | The colors of Claude Code's own terminal interface (Anthropic) | not a third-party theme: only color values, no code or files |
 | Terminal colors | uses your terminal's own colors | none |
 

@@ -1,4 +1,4 @@
-//! Themes. Every color the UI draws comes from a `Theme`, so a theme is one entry in `SPECS` (or, later, a
+//! Themes. Every color the UI draws comes from a `Theme`, so a theme is one entry in `SPECS` (or a user's theme
 //! file). The built-ins are dark only, compiled in, and always in the order the picker will show them.
 //!
 //! A fixed theme is a `bg`/`text` pair plus a 16-color palette; the eleven UI roles are picked from the
@@ -16,8 +16,9 @@ pub const MIN_SUBTEXT: f64 = 4.5;
 pub const MIN_DIM: f64 = 3.0;
 pub const MIN_ROLE: f64 = 4.5;
 /// The least Lab distance (`delta_e`) between two of accent / busy / ok / warn / err. Set from the closest pair
-/// among the built-ins (Catppuccin Mocha's lavender accent and mauve busy, 19, whose values are fixed by the
-/// original design): every status is told from every other, and from the accent, by more than a hair. A
+/// among the first built-ins (Catppuccin Mocha's lavender accent and mauve busy, 19, whose values are fixed by the
+/// original design; Melange Dark's amber accent and yellow warn, 18.8, are now the closest): every status is told
+/// from every other, and from the accent, by more than a hair. A
 /// pair whose difference is mostly lightness would still pass, which is why each role is also checked
 /// against the background. User themes are held to the same floor.
 pub const MIN_DELTA_E: f64 = 18.0;
@@ -101,6 +102,25 @@ use Pick::{P, X};
 /// - Kanagawa: busy is the theme's orange and `err` its lighter wave red (the palette's red is too dark).
 /// - Ayu Mirage: accent is the theme's orange.
 /// - Vesper: accent is its amber (palette 11), so `warn` is a lemon yellow to stay apart from it.
+/// - Catppuccin Frappé: accent/busy are the official lavender and mauve, like Mocha and Macchiato; surface,
+///   border, dim and subtext are Frappé's own surface0, surface1, overlay1 and subtext0 (the mixed dim was too
+///   faint on a selected row).
+/// - Gruvbox Material Dark: accent is the theme's orange (not in the palette), like Gruvbox Dark; surface, border,
+///   dim and subtext are its own bg1, bg3, grey1 and grey2 (the mixed dim was too faint on a selected row).
+/// - Rosé Pine Moon: like Rosé Pine, the palette's "green" is pine (a blue), so `ok` is the same soft green.
+/// - Kanagawa Dragon: busy is the theme's dragon orange (not in the palette); its violet sat too close to the
+///   blue accent.
+/// - Solarized Dark: Solarized's accents are all a middle lightness that reads under 4.5:1 on its background, and
+///   lifting them toward its grey text washes them out, so accent (violet) and err (red) are Solarized's own
+///   violet and red made lighter by hand. Violet rather than blue: a blue selection turns too light in 256 colors.
+///   The body text is lifted, as for every theme whose foreground reads under 7:1.
+/// - Flexoki Dark: busy is Flexoki's purple (the palette has magenta but no purple); accent is its cyan, because
+///   the blue is too dark for a visible selection color.
+/// - Oxocarbon: the palette has no yellow and its "red" is a cyan, so `warn` and `err` are IBM Carbon's yellow
+///   and red (Oxocarbon is built on IBM's Carbon design colors).
+/// - Poimandres: `ok` is its mint (palette 2), the nearest it has to green, and `err` its hot red (a pink-red).
+/// - Horizon: the palette's yellow is a peach, so `warn` is an amber of my own in the same warm tone.
+/// - Synthwave: the palette's red is a hot pink (used as busy), so `err` is its red-orange (palette 5).
 const SPECS: &[Spec] = &[
     Spec {
         id: "catppuccin-mocha",
@@ -136,12 +156,44 @@ const SPECS: &[Spec] = &[
         err: P(1),
     },
     Spec {
+        id: "catppuccin-frappe",
+        name: "Catppuccin Frappé",
+        bg: 0x303446,
+        text: 0xc6d0f5,
+        palette: [
+            0x51576d, 0xe78284, 0xa6d189, 0xe5c890, 0x8caaee, 0xf4b8e4, 0x81c8be, 0xa5adce, 0x626880, 0xe67172, 0x8ec772, 0xd9ba73,
+            0x7b9ef0, 0xf2a4db, 0x5abfb5, 0xb5bfe2,
+        ],
+        tuned: Some([0x414559, 0x51576d, 0x838ba7, 0xa5adce]),
+        accent: X(0xbabbf1),
+        busy: X(0xca9ee6),
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
         id: "tokyo-night",
         name: "Tokyo Night",
         bg: 0x1a1b26,
         text: 0xc0caf5,
         palette: [
             0x15161e, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6, 0x414868, 0xf7768e, 0x9ece6a, 0xe0af68,
+            0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
+        ],
+        tuned: None,
+        accent: P(12),
+        busy: P(13),
+        ok: P(10),
+        warn: P(11),
+        err: P(9),
+    },
+    Spec {
+        id: "tokyo-night-storm",
+        name: "Tokyo Night Storm",
+        bg: 0x24283b,
+        text: 0xc0caf5,
+        palette: [
+            0x1d202f, 0xf7768e, 0x9ece6a, 0xe0af68, 0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xa9b1d6, 0x4e5575, 0xf7768e, 0x9ece6a, 0xe0af68,
             0x7aa2f7, 0xbb9af7, 0x7dcfff, 0xc0caf5,
         ],
         tuned: None,
@@ -216,6 +268,22 @@ const SPECS: &[Spec] = &[
         err: P(9),
     },
     Spec {
+        id: "gruvbox-material-dark",
+        name: "Gruvbox Material Dark",
+        bg: 0x282828,
+        text: 0xd4be98,
+        palette: [
+            0x282828, 0xea6962, 0xa9b665, 0xd8a657, 0x7daea3, 0xd3869b, 0x89b482, 0xd4be98, 0x7c6f64, 0xea6962, 0xa9b665, 0xd8a657,
+            0x7daea3, 0xd3869b, 0x89b482, 0xddc7a1,
+        ],
+        tuned: Some([0x32302f, 0x45403d, 0x928374, 0xa89984]),
+        accent: X(0xe78a4e), // orange
+        busy: P(5),
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
         id: "rose-pine",
         name: "Rosé Pine",
         bg: 0x191724,
@@ -227,6 +295,22 @@ const SPECS: &[Spec] = &[
         tuned: None,
         accent: P(5), // iris
         busy: P(6),   // rose
+        ok: X(0x9ccfa0),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "rose-pine-moon",
+        name: "Rosé Pine Moon",
+        bg: 0x232136,
+        text: 0xe0def4,
+        palette: [
+            0x393552, 0xeb6f92, 0x3e8fb0, 0xf6c177, 0x9ccfd8, 0xc4a7e7, 0xea9a97, 0xe0def4, 0x6e6a86, 0xeb6f92, 0x3e8fb0, 0xf6c177,
+            0x9ccfd8, 0xc4a7e7, 0xea9a97, 0xe0def4,
+        ],
+        tuned: None,
+        accent: P(5), // iris
+        busy: P(6), // rose
         ok: X(0x9ccfa0),
         warn: P(3),
         err: P(1),
@@ -246,6 +330,22 @@ const SPECS: &[Spec] = &[
         ok: P(10),
         warn: P(11),
         err: X(0xe46876),
+    },
+    Spec {
+        id: "kanagawa-dragon",
+        name: "Kanagawa Dragon",
+        bg: 0x181616,
+        text: 0xc5c9c5,
+        palette: [
+            0x0d0c0c, 0xc4746e, 0x8a9a7b, 0xc4b28a, 0x8ba4b0, 0xa292a3, 0x8ea4a2, 0xc8c093, 0xa6a69c, 0xe46876, 0x87a987, 0xe6c384,
+            0x7fb4ca, 0x938aa9, 0x7aa89f, 0xc5c9c5,
+        ],
+        tuned: None,
+        accent: P(4), // dragon blue
+        busy: X(0xb6927b), // dragon orange
+        ok: P(10),
+        warn: P(11),
+        err: P(9),
     },
     Spec {
         id: "night-owl",
@@ -294,6 +394,214 @@ const SPECS: &[Spec] = &[
         ok: P(2),
         warn: X(0xf2e07f),
         err: P(9),
+    },
+    Spec {
+        id: "solarized-dark",
+        name: "Solarized Dark",
+        bg: 0x002b36,
+        text: 0x839496,
+        palette: [
+            0x073642, 0xdc322f, 0x859900, 0xb58900, 0x268bd2, 0xd33682, 0x2aa198, 0xeee8d5, 0x335e69, 0xcb4b16, 0x586e75, 0x657b83,
+            0x839496, 0x6c71c4, 0x93a1a1, 0xfdf6e3,
+        ],
+        tuned: None,
+        accent: X(0x8488cd), // violet, lightened
+        busy: P(6), // cyan
+        ok: P(2),
+        warn: P(3),
+        err: X(0xe56563), // red, lightened
+    },
+    Spec {
+        id: "github-dark",
+        name: "GitHub Dark",
+        bg: 0x0d1117,
+        text: 0xe6edf3,
+        palette: [
+            0x484f58, 0xff7b72, 0x3fb950, 0xd29922, 0x58a6ff, 0xbc8cff, 0x39c5cf, 0xb1bac4, 0x6e7681, 0xffa198, 0x56d364, 0xe3b341,
+            0x79c0ff, 0xd2a8ff, 0x56d4dd, 0xffffff,
+        ],
+        tuned: None,
+        accent: P(4),
+        busy: P(5),
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "material-ocean",
+        name: "Material Ocean",
+        bg: 0x0f111a,
+        text: 0x8f93a2,
+        palette: [
+            0x546e7a, 0xff5370, 0xc3e88d, 0xffcb6b, 0x82aaff, 0xc792ea, 0x89ddff, 0xffffff, 0x546e7a, 0xff5370, 0xc3e88d, 0xffcb6b,
+            0x82aaff, 0xc792ea, 0x89ddff, 0xffffff,
+        ],
+        tuned: None,
+        accent: P(4),
+        busy: P(5),
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "everforest-dark-hard",
+        name: "Everforest Dark Hard",
+        bg: 0x1e2326,
+        text: 0xd3c6aa,
+        palette: [
+            0x7a8478, 0xe67e80, 0xa7c080, 0xdbbc7f, 0x7fbbb3, 0xd699b6, 0x83c092, 0xf2efdf, 0xa6b0a0, 0xf85552, 0x8da101, 0xdfa000,
+            0x3a94c5, 0xdf69ba, 0x35a77c, 0xfffbef,
+        ],
+        tuned: None,
+        accent: P(4), // blue
+        busy: P(5), // purple
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "nightfox",
+        name: "Nightfox",
+        bg: 0x192330,
+        text: 0xcdcecf,
+        palette: [
+            0x393b44, 0xc94f6d, 0x81b29a, 0xdbc074, 0x719cd6, 0x9d79d6, 0x63cdcf, 0xdfdfe0, 0x575860, 0xd16983, 0x8ebaa4, 0xe0c989,
+            0x86abdc, 0xbaa1e2, 0x7ad5d6, 0xe4e4e5,
+        ],
+        tuned: None,
+        accent: P(12),
+        busy: P(13),
+        ok: P(10),
+        warn: P(11),
+        err: P(9),
+    },
+    Spec {
+        id: "sonokai",
+        name: "Sonokai",
+        bg: 0x2c2e34,
+        text: 0xe2e2e3,
+        palette: [
+            0x181819, 0xfc5d7c, 0x9ed072, 0xe7c664, 0x76cce0, 0xb39df3, 0xf39660, 0xe2e2e3, 0x7f8490, 0xfc5d7c, 0x9ed072, 0xe7c664,
+            0x76cce0, 0xb39df3, 0xf39660, 0xe2e2e3,
+        ],
+        tuned: None,
+        accent: P(4), // blue
+        busy: P(5), // purple
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "moonfly",
+        name: "Moonfly",
+        bg: 0x080808,
+        text: 0xbdbdbd,
+        palette: [
+            0x323437, 0xff5454, 0x8cc85f, 0xe3c78a, 0x80a0ff, 0xcf87e8, 0x79dac8, 0xc6c6c6, 0x949494, 0xff5189, 0x36c692, 0xc6c684,
+            0x74b2ff, 0xae81ff, 0x85dc85, 0xe4e4e4,
+        ],
+        tuned: None,
+        accent: P(4), // blue
+        busy: P(5), // violet
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "melange-dark",
+        name: "Melange Dark",
+        bg: 0x292522,
+        text: 0xece1d7,
+        palette: [
+            0x34302c, 0xbd8183, 0x78997a, 0xe49b5d, 0x7f91b2, 0xb380b0, 0x7b9695, 0xc1a78e, 0x867462, 0xd47766, 0x85b695, 0xebc06d,
+            0xa3a9ce, 0xcf9bc2, 0x89b3b6, 0xece1d7,
+        ],
+        tuned: None,
+        accent: P(3), // amber
+        busy: P(13),
+        ok: P(10),
+        warn: P(11),
+        err: P(9),
+    },
+    Spec {
+        id: "flexoki-dark",
+        name: "Flexoki Dark",
+        bg: 0x100f0f,
+        text: 0xcecdc3,
+        palette: [
+            0x100f0f, 0xd14d41, 0x879a39, 0xd0a215, 0x4385be, 0xce5d97, 0x3aa99f, 0x878580, 0x575653, 0xaf3029, 0x66800b, 0xad8301,
+            0x205ea6, 0xa02f6f, 0x24837b, 0xcecdc3,
+        ],
+        tuned: None,
+        accent: P(6), // cyan
+        busy: X(0x8b7ec8), // purple
+        ok: P(2),
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "oxocarbon",
+        name: "Oxocarbon",
+        bg: 0x161616,
+        text: 0xf2f4f8,
+        palette: [
+            0x161616, 0x00dfdb, 0x00b4ff, 0xff4297, 0x00c15a, 0xc693ff, 0xff74b8, 0xf2f4f8, 0x585858, 0x00dfdb, 0x00b4ff, 0xff4297,
+            0x00c15a, 0xc693ff, 0xff74b8, 0xf2f4f8,
+        ],
+        tuned: None,
+        accent: P(2), // blue
+        busy: P(5), // purple
+        ok: P(4), // green
+        warn: X(0xf1c21b), // IBM Carbon yellow
+        err: X(0xfa4d56), // IBM Carbon red
+    },
+    Spec {
+        id: "poimandres",
+        name: "Poimandres",
+        bg: 0x1a1e28,
+        text: 0xa6accd,
+        palette: [
+            0x1a1e28, 0xd0679d, 0x5de4c7, 0xfffac2, 0x89ddff, 0xfcc5e9, 0xadd7ff, 0xffffff, 0xa6accd, 0xd0679d, 0x5de4c7, 0xfffac2,
+            0xadd7ff, 0xfae4fc, 0x89ddff, 0xffffff,
+        ],
+        tuned: None,
+        accent: P(6), // light blue
+        busy: P(5), // pink
+        ok: P(2), // mint
+        warn: P(3),
+        err: P(1),
+    },
+    Spec {
+        id: "horizon",
+        name: "Horizon",
+        bg: 0x1c1e26,
+        text: 0xd5d8da,
+        palette: [
+            0x000000, 0xe95678, 0x29d398, 0xfab795, 0x26bbd9, 0xee64ac, 0x59e1e3, 0xe5e5e5, 0x666666, 0xec6a88, 0x3fdaa4, 0xfbc3a7,
+            0x3fc4de, 0xf075b5, 0x6be4e6, 0xe5e5e5,
+        ],
+        tuned: None,
+        accent: P(4), // cyan
+        busy: P(5), // pink
+        ok: P(2),
+        warn: X(0xf9c46b),
+        err: P(1),
+    },
+    Spec {
+        id: "synthwave",
+        name: "Synthwave",
+        bg: 0x000000,
+        text: 0xdad9c7,
+        palette: [
+            0x000000, 0xf6188f, 0x1ebb2b, 0xfdf834, 0x2186ec, 0xf85a21, 0x12c3e2, 0xffffff, 0x7f7094, 0xf841a0, 0x25c141, 0xfdf454,
+            0x2f9ded, 0xf97137, 0x19cde6, 0xffffff,
+        ],
+        tuned: None,
+        accent: P(14), // cyan
+        busy: P(9), // hot pink
+        ok: P(10),
+        warn: P(11),
+        err: P(5), // red-orange
     },
     // Claude Code's own dark palette (taken from its binary). The 16 colors are built around it: red is its
     // error rose, green its success green, yellow its warning amber, blue its periwinkle, magenta its purple
@@ -606,8 +914,10 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "catppuccin-mocha", "catppuccin-macchiato", "tokyo-night", "dracula", "one-dark", "nord", "gruvbox-dark", "rose-pine",
-                "kanagawa-wave", "night-owl", "ayu-mirage", "vesper", "claude", "terminal"
+                "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "tokyo-night", "tokyo-night-storm", "dracula", "one-dark",
+                "nord", "gruvbox-dark", "gruvbox-material-dark", "rose-pine", "rose-pine-moon", "kanagawa-wave", "kanagawa-dragon",
+                "night-owl", "ayu-mirage", "vesper", "solarized-dark", "github-dark", "material-ocean", "everforest-dark-hard", "nightfox",
+                "sonokai", "moonfly", "melange-dark", "flexoki-dark", "oxocarbon", "poimandres", "horizon", "synthwave", "claude", "terminal"
             ]
         );
         let mut sorted = ids.clone();
@@ -734,7 +1044,7 @@ mod tests {
             assert!(ansi.iter().all(|c| matches!(c, Color::Rgb(..))), "{}", t.id);
             assert!(t.roles().iter().all(|(_, c)| matches!(c, Color::Rgb(..))), "{}", t.id);
         }
-        assert_eq!(fixed().len(), 13, "everything but Terminal colors");
+        assert_eq!(fixed().len(), 31, "everything but Terminal colors");
     }
 
     #[test]

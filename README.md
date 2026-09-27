@@ -367,9 +367,11 @@ gate refuses it says why and how to switch it on.
 
 ### Themes
 
-platoon ships with dark color themes: Catppuccin Mocha (the default), Catppuccin Macchiato, Tokyo Night, Dracula,
-One Dark, Nord, Gruvbox Dark, Rosé Pine, Kanagawa Wave, Night Owl, Ayu Mirage, Vesper, Claude (Claude Code's own
-colors) and Terminal colors. `platoon themes` lists them with a swatch of each and their ids.
+platoon ships with 32 dark color themes: Catppuccin Mocha (the default), Catppuccin Macchiato, Catppuccin Frappé,
+Tokyo Night, Tokyo Night Storm, Dracula, One Dark, Nord, Gruvbox Dark, Gruvbox Material Dark, Rosé Pine, Rosé Pine
+Moon, Kanagawa Wave, Kanagawa Dragon, Night Owl, Ayu Mirage, Vesper, Solarized Dark, GitHub Dark, Material Ocean,
+Everforest Dark Hard, Nightfox, Sonokai, Moonfly, Melange Dark, Flexoki Dark, Oxocarbon, Poimandres, Horizon,
+Synthwave, Claude (Claude Code's own colors) and Terminal colors. `platoon themes` lists them with a swatch of each and their ids.
 
 **Picking one.** Press `s` (the settings open on the Theme row) and `enter`. A list of themes opens on the right,
 next to your real screen, each with a strip of its main colors and a check on the one you use now. Move with `↑` `↓`
