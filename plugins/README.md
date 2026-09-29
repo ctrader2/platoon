@@ -3,6 +3,12 @@
 This folder is the catalog platoon offers in its settings (`s`, then **Plugins**) and with `platoon plugin list`. Each plugin is a
 folder here, named after its id, and `index.json` lists them in the order platoon shows them.
 
+**The catalog is built into platoon**: when platoon is built, every file of each plugin `index.json` lists goes into the
+program (`build.rs`; nothing else of the repository, and hidden files are left out). Installing a plugin copies it from
+there, with no network, so people get exactly what was reviewed and released. A plugin that is new or changed here
+reaches people with the next platoon; a newer platoon updates the plugins installed from its catalog when it starts
+(themes and the code editor by themselves, skills, squads and agents only after showing what changed and asking).
+
 A plugin holds **files, never code**: a `plugin.json` that says what it is and what it adds, and those files. A plugin
 can add **color themes**, **platoon's code editor** (one plugin, `editor`; see "The code editor kind" below), **Claude
 Code skills**, and **squads and agents** (see "Skills, squads and agents" below). One plugin can add several kinds.
@@ -66,7 +72,8 @@ platoon shows each one: what it is, what it may do in plain words, and its whole
 `platoon plugin show <id>`). An update that changes one is shown again. Write them to be read by the person installing
 them: plain, short, and doing only what the description says.
 
-`changelog` here is a small working example of all three: a skill, a squad and two agents of its own.
+The examples below are of a made-up plugin `release-kit`: a skill that writes a release note, a squad that reads what
+changed and writes the note, and its two agents.
 
 ### A skill
 
@@ -74,11 +81,11 @@ A folder under `skills/`, named after the skill, holding its `SKILL.md` and any 
 reference). Name it `plugin.json`'s way:
 
 ```json
-"skills": ["skills/changelog-entry"]
+"skills": ["skills/release-kit-notes"]
 ```
 
-- **Its name is namespaced by the plugin**: the plugin's id, or the id, a dash and more (the plugin `changelog` brings
-  `changelog-entry`). So two plugins never clash, and the user can tell where a skill in Claude Code came from. Lowercase
+- **Its name is namespaced by the plugin**: the plugin's id, or the id, a dash and more (the plugin `release-kit` brings
+  `release-kit-notes`). So two plugins never clash, and the user can tell where a skill in Claude Code came from. Lowercase
   letters, digits and dashes, at most 64 characters; never `to-tickets` (platoon's own).
 - `SKILL.md` starts with front matter: `name` (the folder's name) and `description` (at most 1024 characters: Claude reads
   it to decide when the skill fits, so say when to use it, and when not). The usual optional keys are fine and are shown
@@ -98,11 +105,11 @@ In the same formats as the user's own `squads/<id>.json` and `agents/<id>.json` 
 file's name being its id:
 
 ```json
-"squads": ["squads/changelog.json"],
-"agents": ["agents/change-reader.json", "agents/changelog-writer.json"]
+"squads": ["squads/release.json"],
+"agents": ["agents/change-reader.json", "agents/notes-writer.json"]
 ```
 
-An agent:
+An agent (`agents/change-reader.json`):
 
 ```json
 {
@@ -111,7 +118,21 @@ An agent:
   "can_change_files": false,
   "can_run_commands": true,
   "can_use_web": false,
-  "guidance": "You are the change-reader. ..."
+  "guidance": "You are the change-reader. Read the commits since the last release and list what a user would notice. Change nothing."
+}
+```
+
+A squad (`squads/release.json`): its steps name agents by id, and a step may send the work back to an earlier one.
+
+```json
+{
+  "name": "Release notes",
+  "can_do": "Writes the release notes for a release.",
+  "workflow": [
+    {"agent": "change-reader", "does": "Lists what changed."},
+    {"agent": "notes-writer", "does": "Writes the notes at the top of CHANGELOG.md."},
+    {"agent": "editor", "does": "Checks the notes read well.", "back_to": 2, "times": 1}
+  ]
 }
 ```
 
@@ -120,7 +141,7 @@ id: **platoon's built-in agents** (`planner`, `builder`, `reviewer`, `verifier`,
 `report-writer`, `checker`, `outliner`, `tech-writer`, `editor`, `summarizer`) **and the plugin's own**, nothing else.
 
 - Ids are lowercase letters, digits and dashes, at most 24 characters; no id or name of a built-in squad or agent; an
-  agent is never called `leader`. On the user's computer they are namespaced (`plugin:changelog/change-reader`), so they
+  agent is never called `leader`. On the user's computer they are namespaced (`plugin:release-kit/change-reader`), so they
   never clash with the user's own or another plugin's.
 - Every rule the user's own squads and agents follow: a name, a model (`opus`, `sonnet`, `haiku`), a system prompt, 1 to
   12 steps, at most 8 different agents, a step sends the work back only to an earlier step, 1 to 5 times.
@@ -191,8 +212,9 @@ editor plugin can be installed at a time.
 These files run inside Neovim on the user's computer, and the table decides what programs are downloaded: a change to
 this plugin is reviewed like a change to platoon's code. To move a download to a newer version, change its `rev` (or
 version), `url`, `sha256` and `size` together, from the release's published digest or two downloads that match, and
-raise the plugin's `version`; installed editors then fetch only what changed. platoon keeps a copy of this plugin in its
-own build (for taking over an editor installed before the editor was a plugin), and a test checks the copy is whole.
+raise the plugin's `version`; installed editors then fetch only what changed (a newer platoon does it by itself when it
+starts). Like every plugin here it is built into platoon (which also uses it to take over an editor installed before the
+editor was a plugin), and a test checks the copy is this folder, file for file.
 
 ## Sending it
 
@@ -203,8 +225,9 @@ own build (for taking over an editor installed before the editor was a plugin), 
    { "id": "sea-themes", "name": "Sea themes", "version": "1.0.0" }
    ```
 
-3. Run `platoon plugin check plugins/sea-themes` and `cargo test` (a test checks every plugin here and the index).
-4. Open a pull request that says what the plugin adds.
+3. Run `platoon plugin check plugins/sea-themes` and `cargo test` (a test checks every plugin here and the index). To try
+   it as people will get it, build platoon (`cargo build`): it is in the catalog built in.
+4. Open a pull request that says what the plugin adds. Once it is merged, the next platoon brings it.
 
 ## What is reviewed
 
@@ -218,6 +241,4 @@ own build (for taking over an editor installed before the editor was a plugin), 
 - A new version of a plugin raises `version`.
 
 The `example-themes` plugin here is a small working example: two themes, Harbor Night and Moss Lantern, with colors made
-for platoon (MIT). `changelog` is one of a skill (`changelog-entry`), a squad (Changelog) and its two agents
-(`change-reader`, which only reads and runs git commands; `changelog-writer`, which only changes `CHANGELOG.md`), with the
-built-in `editor` checking the result (MIT).
+for platoon (MIT).

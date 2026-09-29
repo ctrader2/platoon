@@ -1,5 +1,6 @@
-//! `platoon plugin ...`: the catalog and the installed plugins from the command line. `list`, `add <id|folder>`,
-//! `remove <id>`, `update [id]`, `show <id|folder>`, and `check <folder>` for someone making a plugin. The work is in
+//! `platoon plugin ...`: the catalog (built into platoon) and the installed plugins from the command line. `list`,
+//! `add <id|folder>`, `remove <id>`, `update [id]`, `show <id|folder>`, and `check <folder>` for someone making a
+//! plugin. `update` brings the plugins installed from the catalog up to this platoon's versions. The work is in
 //! `plugins.rs`; for the code editor plugin also its downloads (`editorplugin.rs`): adding or updating it fetches what
 //! the editor folder lacks, removing it takes the folder and the font off. `platoon setup --add/--remove editor` come
 //! here too.
@@ -11,7 +12,7 @@
 use crate::editor_install::{self, Dirs, Printer};
 use crate::editorplugin;
 use crate::pluginreview;
-use crate::plugins::{self, Catalog, Origin, Outcome, Source, Store, Updated};
+use crate::plugins::{self, Catalog, CatalogFrom, Origin, Outcome, Store, Updated};
 use std::{
     io::Write,
     path::{Path, PathBuf},
@@ -20,7 +21,8 @@ use std::{
 /// What a `platoon plugin` command works on.
 pub struct Ctx<'a> {
     pub store: &'a Store,
-    pub source: &'a Source,
+    /// Where the catalog comes from: built into platoon (a test gives a folder).
+    pub from: &'a CatalogFrom,
     /// The code editor's folders (its plugin's downloads go there).
     pub dirs: &'a Dirs,
     pub home: &'a str,
@@ -33,14 +35,14 @@ pub struct Ctx<'a> {
 }
 
 pub const USAGE: &str = "usage: platoon plugin list | add <id or folder> [--yes] | remove <id> | update [id] [--yes] | show <id or folder> | check <folder>
-  list             the plugins in platoon's catalog, and the ones installed
+  list             the plugins in platoon's catalog (built into platoon), and the ones installed
   add <id>         install a plugin from the catalog
   add <folder>     install a plugin from a folder on this computer (for making one; say ./name for a folder here)
                    A plugin with skills, squads or agents (instructions Claude follows) is shown first and
                    asked about; --yes installs it without asking (read it first with show)
   remove <id>      take a plugin off again
-  update [id]      bring the installed plugins (or one) up to the catalog's version (changed instructions are
-                   shown and asked about again; --yes updates without asking)
+  update [id]      bring the plugins installed from the catalog (or one) up to this platoon's versions (skills,
+                   squads and agents are shown and asked about again; --yes updates without asking)
   show <id>        everything a plugin adds that Claude follows, in full: each skill, squad and agent
   check <folder>   check a plugin folder before sending it: its plugin.json, its files, what it adds";
 
@@ -50,6 +52,7 @@ pub fn cli(args: &[String], c: &Ctx, out: &mut dyn Write, err: &mut dyn Write) -
     let args: Vec<&str> = args.iter().map(String::as_str).filter(|a| *a != "--yes" && *a != "-y").collect();
     let arg = |i: usize| args.get(i).copied();
     if !matches!(arg(0), Some("check" | "show") | None) {
+        c.store.forget_fetched_catalog();
         take_over_editor(c, out, err);
     }
     match (arg(0), arg(1), args.len()) {
@@ -148,51 +151,37 @@ fn editor_downloads(c: &Ctx, out: &mut dyn Write, err: &mut dyn Write) -> bool {
         }
     }
 }
-fn fetch(store: &Store, source: &Source, out: &mut dyn Write) -> Result<Catalog, String> {
-    let _ = writeln!(out, "Fetching the plugin catalog…");
-    let _ = out.flush();
-    plugins::fetch(store, source)
+/// The catalog: built into platoon, no network.
+fn load(c: &Ctx) -> Catalog {
+    plugins::load_catalog(c.from)
 }
 
-fn list(c: &Ctx, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let (store, source, home) = (c.store, c.source, c.home);
+fn list(c: &Ctx, out: &mut dyn Write, _err: &mut dyn Write) -> i32 {
+    let (store, home) = (c.store, c.home);
     let installed = store.installed();
-    let catalog = match fetch(store, source, out) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            let _ = writeln!(err, "{e}");
-            let old = plugins::cached(store, source);
-            if old.is_some() {
-                let _ = writeln!(err, "Showing the catalog as it was when it was last fetched.");
-            }
-            old
-        }
-    };
-    let code = i32::from(catalog.is_none());
-    if let Some(c) = &catalog {
-        let _ = writeln!(out, "\nIn the catalog (commit {}):", plugins::short(&c.commit));
-        if c.entries.is_empty() {
-            let _ = writeln!(out, "  nothing yet");
-        }
-        let w = c.entries.iter().map(|e| e.manifest.id.len()).max().unwrap_or(0);
-        for e in &c.entries {
-            let m = &e.manifest;
-            let state = match installed.iter().find(|p| p.id() == m.id) {
-                Some(p) if plugins::update_available(p, c) => format!("  [installed {}, update available]", p.manifest.version),
-                Some(_) => "  [installed]".to_string(),
-                None if !e.problems.is_empty() => format!("  [can't be installed: {}]", e.problems.join("; ")),
-                None => String::new(),
-            };
-            let adds = match e.download_bytes {
-                Some(b) => format!("{}, downloads {}", m.adds_words(), editorplugin::size_words(b)),
-                None => m.adds_words(),
-            };
-            let _ = writeln!(out, "  {:<w$}  {:<8} {} ({adds}){state}", m.id, m.version, m.name);
-            let _ = writeln!(out, "  {:<w$}  {}", "", m.description);
-        }
-        for s in &c.skipped {
-            let _ = writeln!(out, "  (left out: {s})");
-        }
+    let cat = load(c);
+    let _ = writeln!(out, "In the catalog:");
+    if cat.entries.is_empty() {
+        let _ = writeln!(out, "  nothing yet");
+    }
+    let w = cat.entries.iter().map(|e| e.manifest.id.len()).max().unwrap_or(0);
+    for e in &cat.entries {
+        let m = &e.manifest;
+        let state = match installed.iter().find(|p| p.id() == m.id) {
+            Some(p) if plugins::update_available(p, &cat) => format!("  [installed {}, update available]", p.manifest.version),
+            Some(_) => "  [installed]".to_string(),
+            None if !e.problems.is_empty() => format!("  [can't be installed: {}]", e.problems.join("; ")),
+            None => String::new(),
+        };
+        let adds = match e.download_bytes {
+            Some(b) => format!("{}, downloads {}", m.adds_words(), editorplugin::size_words(b)),
+            None => m.adds_words(),
+        };
+        let _ = writeln!(out, "  {:<w$}  {:<8} {} ({adds}){state}", m.id, m.version, m.name);
+        let _ = writeln!(out, "  {:<w$}  {}", "", m.description);
+    }
+    for s in &cat.skipped {
+        let _ = writeln!(out, "  (left out: {s})");
     }
     let _ = writeln!(out, "\nInstalled:");
     if installed.is_empty() {
@@ -206,7 +195,7 @@ fn list(c: &Ctx, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             let _ = writeln!(out, "  {:<w$}  its downloads aren't complete: `platoon plugin add {}` finishes them", "", m.id);
         }
     }
-    code
+    0
 }
 
 /// A folder rather than an id: it has a slash, starts with a dot or a tilde, or is a folder here and not an id.
@@ -262,7 +251,7 @@ fn id_in(dir: &Path) -> Option<String> {
 }
 
 fn add(c: &Ctx, what: &str, yes: bool, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let (store, source) = (c.store, c.source);
+    let store = c.store;
     if is_folder(what) {
         let Some(dir) = folder_of(what) else {
             let _ = writeln!(err, "There is no folder at {what}.");
@@ -282,13 +271,7 @@ fn add(c: &Ctx, what: &str, yes: bool, out: &mut dyn Write, err: &mut dyn Write)
             }
         };
     }
-    let catalog = match fetch(store, source, out) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = writeln!(err, "{e}");
-            return 1;
-        }
-    };
+    let catalog = load(c);
     let Some(entry) = catalog.get(what) else {
         let _ = writeln!(err, "There is no plugin called \"{what}\" in the catalog. `platoon plugin list` shows what there is.");
         return 1;
@@ -297,15 +280,21 @@ fn add(c: &Ctx, what: &str, yes: bool, out: &mut dyn Write, err: &mut dyn Write)
         let _ = writeln!(err, "{} can't be installed: {}", entry.manifest.name, entry.problems.join("; "));
         return 1;
     }
+    let unpacked = match entry.unpack() {
+        Ok(u) => u,
+        Err(e) => {
+            let _ = writeln!(err, "{e}");
+            return 1;
+        }
+    };
     let was = store.get(what);
     if !was.as_ref().is_some_and(|p| p.sha256 == entry.sha256) {
         let update = was.as_ref().map(|p| (p.manifest.version.clone(), entry.manifest.version.clone()));
-        if let Err(code) = confirmed(c, &entry.dir, installed_dir(store, what), update.as_ref().map(|(a, b)| (a.as_str(), b.as_str())), yes, out, err) {
+        if let Err(code) = confirmed(c, unpacked.dir(), installed_dir(store, what), update.as_ref().map(|(a, b)| (a.as_str(), b.as_str())), yes, out, err) {
             return code;
         }
     }
-    let origin = Origin::Catalog { source: catalog.source.clone(), rf: catalog.rf.clone(), commit: catalog.commit.clone() };
-    match store.install_noting(&entry.dir, origin) {
+    match store.install_noting(unpacked.dir(), Origin::Catalog) {
         Ok((o, notes)) => after_install(c, &o, &notes, out, err),
         Err(e) => {
             let _ = writeln!(err, "{e}");
@@ -368,7 +357,7 @@ fn remove(c: &Ctx, id: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 }
 
 fn update(c: &Ctx, only: Option<&str>, yes: bool, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let (store, source) = (c.store, c.source);
+    let store = c.store;
     let installed = store.installed();
     if let Some(id) = only {
         if !installed.iter().any(|p| p.id() == id) {
@@ -379,13 +368,7 @@ fn update(c: &Ctx, only: Option<&str>, yes: bool, out: &mut dyn Write, err: &mut
         let _ = writeln!(out, "No plugins are installed.");
         return 0;
     }
-    let catalog = match fetch(store, source, out) {
-        Ok(c) => c,
-        Err(e) => {
-            let _ = writeln!(err, "{e}");
-            return 1;
-        }
-    };
+    let catalog = load(c);
     let mut code = 0;
     let editor_name = editorplugin::installed(store).map(|p| p.manifest.name);
     let mut results = Vec::new();
@@ -393,7 +376,11 @@ fn update(c: &Ctx, only: Option<&str>, yes: bool, out: &mut dyn Write, err: &mut
         // Changed instructions are shown and asked about again first.
         if let Some(e) = catalog.get(p.id()).filter(|e| plugins::update_available(p, &catalog) && (e.manifest.has_instructions() || p.manifest.has_instructions())) {
             let versions = (p.manifest.version.clone(), e.manifest.version.clone());
-            if let Err(c2) = confirmed(c, &e.dir, Some(store.plugin_dir(p.id())), Some((&versions.0, &versions.1)), yes, out, err) {
+            let asked = e.unpack().map_err(|e| {
+                let _ = writeln!(err, "{e}");
+                1
+            });
+            if let Err(c2) = asked.and_then(|u| confirmed(c, u.dir(), Some(store.plugin_dir(p.id())), Some((&versions.0, &versions.1)), yes, out, err)) {
                 code = code.max(c2);
                 continue;
             }
@@ -430,10 +417,12 @@ fn update(c: &Ctx, only: Option<&str>, yes: bool, out: &mut dyn Write, err: &mut
     code
 }
 
-/// `platoon plugin show <id or folder>`: everything a plugin adds that Claude follows, in full. From the catalog (as
-/// last fetched, when it can't be reached), else the installed copy; or a folder.
+/// `platoon plugin show <id or folder>`: everything a plugin adds that Claude follows, in full. From the catalog, else
+/// the installed copy; or a folder.
 fn show(c: &Ctx, what: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let (store, source) = (c.store, c.source);
+    let store = c.store;
+    // A catalog plugin's files, written out for as long as this runs.
+    let mut unpacked = None;
     let (dir, from) = if is_folder(what) {
         match folder_of(what) {
             Some(d) => (d, "a folder on this computer".to_string()),
@@ -443,19 +432,19 @@ fn show(c: &Ctx, what: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             }
         }
     } else {
-        let catalog = match plugins::fetch(store, source) {
-            Ok(cat) => Some(cat),
-            Err(e) => {
-                let old = plugins::cached(store, source);
-                if old.is_none() && store.get(what).is_none() {
+        let catalog = load(c);
+        match (catalog.get(what), store.get(what)) {
+            (Some(e), _) => match e.unpack() {
+                Ok(u) => {
+                    let d = u.dir().to_path_buf();
+                    unpacked = Some(u);
+                    (d, "the catalog".to_string())
+                }
+                Err(e) => {
                     let _ = writeln!(err, "{e}");
                     return 1;
                 }
-                old
-            }
-        };
-        match (catalog.as_ref().and_then(|cat| cat.get(what).map(|e| (e.dir.clone(), cat.commit.clone()))), store.get(what)) {
-            (Some((d, commit)), _) => (d, format!("the catalog (commit {})", plugins::short(&commit))),
+            },
             (None, Some(p)) => (store.plugin_dir(p.id()), format!("the copy installed here, from {}", p.origin.words(c.home))),
             (None, None) => {
                 let _ = writeln!(err, "There is no plugin called \"{what}\" in the catalog or installed. `platoon plugin list` shows what there is.");
@@ -490,6 +479,7 @@ fn show(c: &Ctx, what: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     for g in &review.gone {
         let _ = writeln!(out, "\nNo longer in this version: {g}.");
     }
+    drop(unpacked);
     0
 }
 
@@ -534,18 +524,18 @@ mod tests {
     use crate::plugins::testing::*;
     use std::path::PathBuf;
 
-    fn run(args: &[&str], store: &Store, source: &Source) -> (i32, String, String) {
+    fn run(args: &[&str], store: &Store, from: &CatalogFrom) -> (i32, String, String) {
         // The editor's folders beside the store's (a test of the editor gives its own, with a mirror).
         let base = store.dir.parent().unwrap().parent().unwrap();
-        run_with(args, store, source, &crate::editor_install::testing::dirs(base, vec![]))
+        run_with(args, store, from, &crate::editor_install::testing::dirs(base, vec![]))
     }
 
-    fn run_with(args: &[&str], store: &Store, source: &Source, dirs: &Dirs) -> (i32, String, String) {
+    fn run_with(args: &[&str], store: &Store, from: &CatalogFrom, dirs: &Dirs) -> (i32, String, String) {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let printer = Printer::quiet();
         let config = store.dir.parent().unwrap().parent().unwrap().join("config");
-        let c = Ctx { store, source, dirs, home: "/home/u", printer: &printer, config: &config, ask: &|_| None };
+        let c = Ctx { store, from, dirs, home: "/home/u", printer: &printer, config: &config, ask: &|_| None };
         let code = cli(&args, &c, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
     }
@@ -555,9 +545,9 @@ mod tests {
         use crate::editor_install::testing as fake;
         let base = tmp("cli-editor");
         let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
-        let (repo, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
+        let (cat, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
         let store = Store::new(base.join("data/plugins"));
-        let src = source(&repo);
+        let src = from(&cat);
         let r = |args: &[&str]| run_with(args, &store, &src, &dirs);
         let (code, out, _) = r(&["list"]);
         assert_eq!(code, 0);
@@ -566,7 +556,7 @@ mod tests {
         let (mut o, mut e) = (Vec::new(), Vec::new());
         let printer = Printer::quiet();
         let config = base.join("config");
-        let c = Ctx { store: &store, source: &src, dirs: &dirs, home: "/home/u", printer: &printer, config: &config, ask: &|_| None };
+        let c = Ctx { store: &store, from: &src, dirs: &dirs, home: "/home/u", printer: &printer, config: &config, ask: &|_| None };
         assert_eq!(setup_alias("--add", &c, &mut o, &mut e), 0, "{}", String::from_utf8_lossy(&e));
         let out = String::from_utf8(o).unwrap();
         assert!(out.starts_with("The code editor is a plugin now: this is `platoon plugin add editor`.\n"), "{out}");
@@ -599,22 +589,16 @@ mod tests {
         assert!(code == 0 && out.contains("isn't installed; there is nothing to remove"), "{out}");
     }
 
-    /// A catalog repository holding the plugin with a skill, a squad and two agents (`squadplugin::testing::plugin`).
+    /// A catalog folder holding a plugin with a skill, a squad and two agents (`squadplugin::testing::plugin`).
     fn instructions_catalog(base: &Path, version: &str) -> PathBuf {
-        let repo = base.join("source");
-        let cat = repo.join(plugins::CATALOG_FOLDER);
+        let cat = base.join("catalog");
         let _ = std::fs::remove_dir_all(cat.join("changelog"));
         crate::squadplugin::testing::plugin(&cat, "changelog", version);
         std::fs::write(cat.join(plugins::INDEX), serde_json::json!({"plugins": [{"id": "changelog", "version": version}]}).to_string()).unwrap();
-        if !repo.join(".git").exists() {
-            git(&repo, &["init", "--quiet"]);
-        }
-        git(&repo, &["add", "-A"]);
-        git(&repo, &["commit", "--quiet", "-m", "catalog"]);
-        repo
+        cat
     }
 
-    fn run_asking(args: &[&str], store: &Store, source: &Source, answer: Option<bool>) -> (i32, String, String) {
+    fn run_asking(args: &[&str], store: &Store, from: &CatalogFrom, answer: Option<bool>) -> (i32, String, String) {
         let base = store.dir.parent().unwrap().parent().unwrap();
         let dirs = crate::editor_install::testing::dirs(base, vec![]);
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -626,7 +610,7 @@ mod tests {
             asked.set(asked.get() + 1);
             answer
         };
-        let c = Ctx { store, source, dirs: &dirs, home: "/home/u", printer: &printer, config: &config, ask: &ask };
+        let c = Ctx { store, from, dirs: &dirs, home: "/home/u", printer: &printer, config: &config, ask: &ask };
         let code = cli(&args, &c, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
     }
@@ -634,15 +618,15 @@ mod tests {
     #[test]
     fn a_plugin_with_instructions_is_shown_and_asked_about_and_refused_without_a_terminal_unless_yes() {
         let base = tmp("cli-instructions");
-        let repo = instructions_catalog(&base, "1.0.0");
+        let cat = instructions_catalog(&base, "1.0.0");
         let claude = base.join("claude");
         let store = Store::with_claude(base.join("data/plugins"), claude.clone());
-        let src = source(&repo);
+        let src = from(&cat);
         let skill = claude.join("skills/changelog-entry/SKILL.md");
         // show: everything, in full, without installing anything.
         let (code, out, err) = run_asking(&["show", "changelog"], &store, &src, None);
         assert_eq!(code, 0, "{err}");
-        assert!(out.starts_with("changelog name 1.0.0 by Someone, license MIT\nWhat changelog is.\nFrom the catalog (commit "), "{out}");
+        assert!(out.starts_with("changelog name 1.0.0 by Someone, license MIT\nWhat changelog is.\nFrom the catalog. It adds 1 skill, 1 squad, 2 agents."), "{out}");
         for want in ["==== Skill: changelog-entry ====", "Do the thing carefully", "==== Squad: changelog squad ====", "2. **changelog-writer** (this plugin)", "==== Agent: change-reader ====", crate::squadplugin::testing::READER, "- Can run commands on this computer"] {
             assert!(out.contains(want), "{want}: {out}");
         }
@@ -666,10 +650,9 @@ mod tests {
         let (code, out, _) = run_asking(&["add", "changelog"], &store, &src, None);
         assert!(code == 0 && out.contains("already installed"), "{out}");
         // An update that changes an agent's instructions asks again; not in a terminal it waits for --yes.
-        let repo = instructions_catalog(&base, "1.1.0");
-        let reader = repo.join("plugins/changelog/agents/change-reader.json");
+        let cat = instructions_catalog(&base, "1.1.0");
+        let reader = cat.join("changelog/agents/change-reader.json");
         std::fs::write(&reader, std::fs::read_to_string(&reader).unwrap().replace("change nothing", "change nothing at all")).unwrap();
-        git(&repo, &["commit", "--quiet", "-am", "reader"]);
         let (code, out, err) = run_asking(&["update"], &store, &src, None);
         assert_eq!(code, 1);
         assert!(out.contains("changelog name 1.0.0 -> 1.1.0 changes instructions Claude follows with your permissions. Read them again:") && out.contains("Agent change-reader  [changed]"), "{out}");
@@ -703,24 +686,24 @@ mod tests {
     #[test]
     fn list_add_update_remove_and_check_from_the_command_line() {
         let base = tmp("cli");
-        let (repo, commit) = catalog_repo(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)])]);
+        let cat = catalog_dir(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)])]);
         let store = Store::new(base.join("data/plugins"));
-        let src = source(&repo);
+        let src = from(&cat);
         let (code, out, _) = run(&["list"], &store, &src);
         assert_eq!(code, 0);
-        assert!(out.contains(&format!("In the catalog (commit {}):", &commit[..7])), "{out}");
+        assert!(out.starts_with("In the catalog:\n"), "{out}");
         assert!(out.contains("sea-themes  1.0.0    sea-themes name (1 theme)\n"), "{out}");
         assert!(out.contains("Installed:\n  none"), "{out}");
         let (code, out, err) = run(&["add", "sea-themes"], &store, &src);
         assert_eq!(code, 0, "{err}");
         assert!(out.contains("Installed sea-themes name 1.0.0 (1 theme)."), "{out}");
         let (_, out, _) = run(&["list"], &store, &src);
-        assert!(out.contains("(1 theme)  [installed]") && out.contains(&format!("from the catalog (commit {})", &commit[..7])), "{out}");
+        assert!(out.contains("(1 theme)  [installed]") && out.contains("sea-themes name (1 theme), from the catalog"), "{out}");
         let (code, out, _) = run(&["add", "sea-themes"], &store, &src);
         assert!(code == 0 && out.contains("already installed"), "{out}");
         let (code, out, _) = run(&["update"], &store, &src);
         assert!(code == 0 && out.contains("sea-themes name is up to date."), "{out}");
-        commit_catalog(&repo, &[("sea-themes", "1.1.0", &[("Deep", &GOOD_THEME.replace("#14181f", "#121212"))])]);
+        write_catalog(&cat, &[("sea-themes", "1.1.0", &[("Deep", &GOOD_THEME.replace("#14181f", "#121212"))])]);
         let (_, out, _) = run(&["list"], &store, &src);
         assert!(out.contains("[installed 1.0.0, update available]"), "{out}");
         let (code, out, _) = run(&["update", "sea-themes"], &store, &src);
@@ -743,10 +726,10 @@ mod tests {
         std::fs::write(dir.join("themes/Mine"), "background = #ffffff\nforeground = #000000\n").unwrap();
         let (code, out, _) = run(&["check", &dir.to_string_lossy()], &store, &src);
         assert!(code == 1 && out.contains("  - themes/Mine: it is a light theme") && out.contains("Not ready"), "{out}");
-        // A catalog that can't be reached.
-        let gone = Source { url: base.join("nowhere").to_string_lossy().into_owned(), rf: "main".into() };
+        // A catalog without it (an empty one).
+        let gone = CatalogFrom::Folder(base.join("nowhere"));
         let (code, _, err) = run(&["add", "sea-themes"], &store, &gone);
-        assert!(code == 1 && err.starts_with("platoon couldn't reach its plugin catalog:"), "{err}");
+        assert!(code == 1 && err.contains("There is no plugin called \"sea-themes\" in the catalog"), "{err}");
         assert_eq!(run(&["frobnicate"], &store, &src).0, 2);
         assert_eq!(run(&[], &store, &src).0, 2);
     }

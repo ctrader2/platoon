@@ -109,7 +109,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.send(b"s");
     t.wait_for("Settings file:");
     t.send(b"\x1b[Z");
-    t.wait_for("No plugins installed.");
+    t.wait_for("No plugins installed, and none from the catalog to show.");
     t.send(b"\x1b[Z");
     t.wait_for("Editing files");
     t.send(b"\x1b[Z");

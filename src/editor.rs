@@ -836,11 +836,11 @@ mod tests {
 
     /// The editor plugin's files, as the catalog has them (`plugins/editor`).
     fn plugin_file(rel: &str) -> &'static str {
-        crate::editorplugin::BUNDLED.iter().find(|(p, _)| *p == rel).unwrap().1
+        crate::editorplugin::bundled_files().into_iter().find(|(p, _)| *p == rel).unwrap().1
     }
 
     fn config() -> Vec<(String, String)> {
-        crate::editorplugin::BUNDLED.iter().filter_map(|(p, t)| p.strip_prefix("config/").map(|r| (r.to_string(), t.to_string()))).collect()
+        crate::editorplugin::bundled_files().into_iter().filter_map(|(p, t)| p.strip_prefix("config/").map(|r| (r.to_string(), t.to_string()))).collect()
     }
     use crate::tickets::Worktree;
     use std::collections::HashMap;

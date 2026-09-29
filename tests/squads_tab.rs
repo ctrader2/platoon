@@ -319,7 +319,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"s");
     t.wait_for("Settings file:");
     t.send(b"\x1b[Z");
-    t.wait_for("No plugins installed.");
+    t.wait_for("No plugins installed, and none from the catalog to show.");
     t.send(b"\x1b[Z");
     t.wait_for("Editing files");
     t.send(b"\x1b[Z");

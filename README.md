@@ -59,12 +59,13 @@ your own `~/.config/nvim` or Neovim's data. Downloads run side by side and are c
 install that fails or is interrupted never leaves something that looks finished; running it again carries on from there.
 Removing the plugin (`d` on it in the settings' Plugins tab, `platoon plugin remove editor`) deletes platoon's folder and the font files
 platoon put there, never your own Neovim, ripgrep, fd or fonts. An update of the plugin (a new table) fetches only what
-changed; `platoon plugin update` and `enter` on it also finish downloads that didn't complete.
+changed: a newer platoon updates the plugin by itself when it starts, and says so; `platoon plugin update` and `enter`
+on it also finish downloads that didn't complete.
 
 **An editor installed before it was a plugin** (with `platoon setup --add editor` or setup's old question) keeps working:
 the first time platoon or `platoon plugin` runs, it becomes the editor plugin by itself, from the copy of the plugin that
 came with platoon, so it needs no network and downloads nothing ("Your code editor is now the plugin …"). A later
-`platoon plugin add editor` or update from the catalog reuses everything already there with the same checksum.
+`platoon plugin add editor` or update reuses everything already there with the same checksum.
 
 For tests: `PLATOON_EDITOR_MIRROR=<folder>` reads every download from that folder (by the last part of its address)
 instead of the network, and `PLATOON_SKIP_FC_CACHE=1` skips refreshing the font list.
@@ -85,8 +86,8 @@ In a session's live view every key goes to Claude: press the [back key](#keys-ba
 The editor opens **in the same window**: platoon's screen goes, the editor takes the whole terminal, and `q` brings you
 back to platoon exactly where you were. Sessions and squads keep running meanwhile. A few things happen first when needed:
 
-- **Not installed yet**: platoon offers its plugin (it says how much it downloads): yes fetches the plugin catalog,
-  installs the plugin, then its downloads (the progress shows at the bottom), then opens it. Saying no is fine: the
+- **Not installed yet**: platoon offers its plugin (it says how much it downloads): yes installs the plugin (it comes
+  with platoon), then its downloads (the progress shows at the bottom), then opens it. Saying no is fine: the
   settings (`s`, then **Plugins**) or `platoon plugin add editor` installs it later. This works after removing it too: pressing `v` is
   asking for it. If the plugin is there but some of its downloads aren't, `v` offers to finish them.
 - **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it. The
@@ -406,8 +407,7 @@ when naming is held up, why (`Naming is waiting: ...`).
 
 **Plugins**: every [plugin](#plugins), the ones you have installed and the ones the catalog has, one line each: its name,
 its version and where it stands (**Installed**, **Update ready**, **Available**; also "Installed from a folder", "Installed, not
-in the catalog", "Can't be installed here"). The first time the settings open in a run platoon fetches the catalog; the line
-under the list says how that went (installed plugins are listed even when it can't be reached; `f` tries again). `↑` `↓`
+in the catalog", "Can't be installed here"). Under the list is the selected plugin's description. `↑` `↓`
 choose one, `d` removes an installed one (after asking), and `enter` (or a click on the selected one) opens the
 [plugin screen](#plugins) on it: its details, install, update and remove. The back key or `esc` there comes back here, on
 the same plugin.
@@ -1297,7 +1297,7 @@ beside the ticket (`tickets/<NN>-squad-<k>.json`). Changing the squad or its age
 leader, also when it is continued later: it goes on with the squad as it was. The next ticket gets them as they are then.
 
 **Squads and agents from plugins.** A [plugin](#plugins) can bring squads and agents. They are listed after your own,
-labelled with the plugin's name (**From Changelog**), and can be handed tickets (`a`) like any squad. They are **read
+labelled with the plugin's name (**From** and the plugin's name), and can be handed tickets (`a`) like any squad. They are **read
 only**: the plugin's version is what you read before you installed it, and an update of the plugin replaces it. `c`
 makes a copy of your own to change (a copied squad still uses the plugin's agents; copy those too for a squad that is
 all yours). A plugin's squad uses platoon's built-in agents and the plugin's own, never yours. Your own squads may use a
@@ -1305,8 +1305,9 @@ plugin's agents: removing that plugin names those squads first, and afterwards t
 ("needs fixing") until you pick another. A ticket whose squad has started keeps its snapshot, so it keeps working after
 its plugin is removed; one waiting in the line for a plugin's squad keeps a copy of that squad beside it
 (`tickets/<NN>-queued-crew.json`) and starts with it. Inside a squad's session a plugin's squad and its own agents go by
-their short names (`changelog-leader`, `changelog-change-reader`); a plugin's agent in one of your squads goes by the
-plugin and its name (`changelog--change-reader`), which no other agent's name can be.
+their short names (for a plugin `release-kit` with a squad `release` and an agent `reader`: `release-leader`,
+`release-reader`); a plugin's agent in one of your squads goes by the plugin and its name (`release-kit--reader`), which
+no other agent's name can be.
 
 Your squads and agents, and the built-in ones once you change them, are in `~/.config/platoon/squads/<id>.json` and
 `~/.config/platoon/agents/<id>.json`, one file each; a squad's steps name its agents by their id, which is made from the
@@ -1329,7 +1330,17 @@ platoon never runs anything in it. The code editor plugin is the one kind that l
 names Neovim and its tools, each pinned by checksum and size, and its settings files run inside that Neovim; so its
 details and the question before installing say how much it downloads. Plugins come from platoon's own **catalog**, the
 [`plugins/`](plugins/) folder of platoon's repository, where anyone can send one by pull request (see
-[plugins/README.md](plugins/README.md) for how to make, check and send one).
+[plugins/README.md](plugins/README.md) for how to make, check and send one). **The catalog is built into platoon**:
+every plugin there ships inside the program, so installing one needs no network (only the code editor's own downloads
+do), and you get exactly what was reviewed and released with your platoon. A new plugin, or a new version of one, comes
+with a new platoon.
+
+**A newer platoon updates your plugins.** When platoon starts and has a newer version of a plugin you installed from its
+catalog, it updates it and says so in one line ("Updated with platoon: Code editor (Neovim) 1.2.0, …"); for the code
+editor, whatever changed in what it downloads is fetched too, with the progress at the bottom. A plugin with skills,
+squads or agents is not updated without asking: platoon shows what changed (as below) and asks. If you say no (`n`,
+`esc`), it doesn't ask again for that version, and the settings still show **Update ready** for it. A plugin you
+installed from a folder is never touched, and one the catalog no longer has stays as it is.
 
 **Skills, squads and agents are instructions Claude follows with your permissions**, so platoon shows them before they
 are installed. `enter` on such a plugin lists each **skill**, **squad** and **agent** it adds, with what it may do in plain
@@ -1344,27 +1355,27 @@ that runs on your computer, and a plugin holds no code.
 
 **A plugin's skills** go into Claude Code's own skills folder (`~/.claude/skills/<name>/`, or `CLAUDE_CONFIG_DIR`'s),
 where Claude finds them like the ones you made; type `/<name>` in a new Claude session. A plugin's skills are named after
-it (the plugin `changelog` brings `changelog-entry`), so two plugins never clash, and platoon writes one only where that
+it (a plugin `release-kit` may bring `release-kit` or `release-kit-notes`), so two plugins never clash, and platoon writes one only where that
 name is free: a skill folder platoon didn't put there is never written over (the install is refused and names it).
 platoon records what it wrote; removing the plugin deletes a skill only if it is exactly as platoon wrote it. One you
 changed is kept, and platoon says so (an update keeps your changed copy too). **Its squads and agents** are on the
 [Squads tab](#squads), read only.
 
 **In the settings** (`s`, then the **Plugins** tab) every plugin is listed, installed or not, with where it stands; `d`
-removes one there. `enter` on one opens **the plugin screen** on it, full screen: the catalog and what you have installed on
-the left, the selected plugin's details on the right. The first time the settings open in a run, platoon fetches the
-catalog (a spinner shows at the bottom of the list while it does); `f` checks again. The back key (`ctrl+space`), `esc`
-or `q` goes back to the settings, on the same plugin. The details are: what it is, who made it, its version, what it adds (the themes by name; for the code
-editor, how much it downloads), its license, where it came from and the oldest platoon it works with.
+removes one there, and the selected one's description shows under the list. `enter` on one opens **the plugin screen**
+on it, full screen: the catalog and what you have installed on the left, the selected plugin's details on the right.
+The back key (`ctrl+space`), `esc` or `q` goes back to the settings, on the same plugin; `1` `2` `3` go straight to
+Sessions, Projects or Squads. The details are: what it is, who made it, its version, what it adds (the themes by name;
+for the code editor, how much it downloads), its license and the oldest platoon it works with.
 
 | Key | Does |
 | --- | --- |
 | `enter` | install the selected plugin (after asking; for one with skills, squads or agents, after showing each to read), or update it when the catalog has a newer one; a line in the footer says when it is done (for the code editor, with its download progress). On the code editor when some of its downloads are missing: finish them |
 | `u` | update the selected plugin |
 | `d` | remove the selected plugin (after asking) |
-| `f` | check the catalog again |
 | `↑` `↓` `g` `G` | move |
 | `ctrl+space`, `esc`, `q` | back to the settings' Plugins tab, on the same plugin |
+| `1` `2` `3` | straight to Sessions, Projects or Squads |
 
 The same from the command line:
 
@@ -1375,22 +1386,18 @@ platoon plugin add ./my-plugin   install one from a folder on this computer (whi
 platoon plugin add <id> --yes    install one with skills, squads or agents without being asked (read it first)
 platoon plugin show <id>         everything a plugin's skills, squads and agents tell Claude, in full
 platoon plugin remove <id>       (`remove editor`: with everything it downloaded, and its font)
-platoon plugin update [id]       bring the installed ones (or one) up to the catalog (changed instructions: asked again)
+platoon plugin update [id]       bring the ones from the catalog (or one) up to this platoon's (skills, squads, agents: asked)
 platoon plugin check <folder>    check a plugin folder before you send it
 ```
-
-**How the catalog is fetched.** With `git`: a shallow copy of just the `plugins/` folder of platoon's repository, at its
-`main` branch. While the repository is private this uses your own git login; once it is public no login is needed. platoon
-never asks for a password: if git has no saved login it says so ("platoon couldn't reach its plugin catalog: …") and the
-plugin list shows the copy it fetched last, if there is one. For each installed plugin platoon writes down the commit it came
-from and a checksum of its files.
 
 **Where they go.** Installed plugins are in platoon's data folder, `~/.local/share/platoon/plugins/<id>/` (macOS:
 `~/Library/Application Support/platoon/plugins/`; `$PLATOON_DATA_DIR/plugins` if you set it), with `installed.json` beside
 them. An install is copied and checked in a staging folder first and only then moved into place and recorded, so one that
-fails or is interrupted never looks installed; two platoons never change plugins at the same time. For tests,
-`PLATOON_PLUGIN_SOURCE` (a repository URL or folder) and `PLATOON_PLUGIN_REF` (a branch or tag) fetch the catalog from
-somewhere else.
+fails or is interrupted never looks installed; two platoons never change plugins at the same time. For each one platoon
+writes down where it came from (the catalog, or a folder) and a checksum of its files. platoon versions from before the
+catalog was built in kept a copy of it in `plugins/.catalog/`; a newer platoon deletes that copy the first time it
+starts. For tests, `PLATOON_PLUGIN_CATALOG` (a folder laid out like `plugins/`) is used instead of the built-in
+catalog.
 
 ## Sessions started in platoon keep running
 

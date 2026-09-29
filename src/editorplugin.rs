@@ -19,7 +19,7 @@
 //! what `<data>/editor` doesn't already have with the same checksum. Removing it removes `<data>/editor` and the font.
 //!
 //! An editor installed before it was a plugin (`<data>/editor` complete, no editor plugin) is taken over quietly: the
-//! copy of the plugin compiled into this platoon (`BUNDLED`, the same files as `plugins/editor`) is installed as the
+//! copy of the plugin built into this platoon (`bundled_files`: the built-in catalog's `editor`, the same files as `plugins/editor`) is installed as the
 //! editor plugin, which needs no network, and its table's checksums match what is there, so nothing is downloaded.
 //! With no editor plugin at all, the editor's settings files are that copy too, so `v` never breaks.
 
@@ -39,15 +39,11 @@ const CONFIG: &str = "config/";
 /// The file nvim is started with.
 pub const INIT: &str = "config/init.lua";
 
-/// The editor plugin as it was when this platoon was built: the catalog's `plugins/editor`, file for file (a test keeps
-/// the list whole).
-pub const BUNDLED: &[(&str, &str)] = &[
-    ("plugin.json", include_str!("../plugins/editor/plugin.json")),
-    ("downloads.json", include_str!("../plugins/editor/downloads.json")),
-    ("config/init.lua", include_str!("../plugins/editor/config/init.lua")),
-    ("config/lua/platoon/tree.lua", include_str!("../plugins/editor/config/lua/platoon/tree.lua")),
-    ("config/shell.sh", include_str!("../plugins/editor/config/shell.sh")),
-];
+/// The editor plugin as it was when this platoon was built: the built-in catalog's `editor` (`plugins/editor`), file
+/// for file, as (path inside it, text). Its files are all text (`check_spec`).
+pub fn bundled_files() -> Vec<(&'static str, &'static str)> {
+    plugins::builtin_plugin(ID).into_iter().filter_map(|(rel, bytes)| std::str::from_utf8(bytes).ok().map(|t| (rel, t))).collect()
+}
 
 /// What `"editor"` in `plugin.json` says.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -131,7 +127,7 @@ pub fn bundled_table() -> Table {
 }
 
 fn bundled(path: &str) -> &'static str {
-    BUNDLED.iter().find(|(p, _)| *p == path).map_or("", |(_, t)| t)
+    bundled_files().into_iter().find(|(p, _)| *p == path).map_or("", |(_, t)| t)
 }
 
 /// The installed plugin that adds the code editor (at most one can be installed).
@@ -176,7 +172,7 @@ pub fn config_files(store: &Store) -> Vec<(String, String)> {
             return f;
         }
     }
-    BUNDLED.iter().filter_map(|(p, t)| p.strip_prefix(CONFIG).map(|rel| (rel.to_string(), t.to_string()))).collect()
+    bundled_files().into_iter().filter_map(|(p, t)| p.strip_prefix(CONFIG).map(|rel| (rel.to_string(), t.to_string()))).collect()
 }
 
 /// Enough of the editor is installed to open it (`editor::ready`), by the installed plugin's table, or (no plugin
@@ -207,7 +203,7 @@ pub fn adopt(store: &Store, dirs: &Dirs) -> Option<Result<Installed, String>> {
     let stage = store.dir.join(format!(".bundled-{}", std::process::id()));
     let _ = fs::remove_dir_all(&stage);
     let written = (|| -> std::io::Result<()> {
-        for (rel, text) in BUNDLED {
+        for (rel, text) in bundled_files() {
             let p = stage.join(rel);
             fs::create_dir_all(p.parent().unwrap_or(&stage))?;
             fs::write(p, text)?;
@@ -262,7 +258,7 @@ pub mod testing {
     pub fn plugin(base: &Path, id: &str, version: &str, mirror: &Path) -> (PathBuf, Table) {
         let table = fake::fake(mirror);
         let dir = base.join(id);
-        for (rel, text) in BUNDLED {
+        for (rel, text) in bundled_files() {
             let p = dir.join(rel);
             fs::create_dir_all(p.parent().unwrap()).unwrap();
             fs::write(&p, text).unwrap();
@@ -308,16 +304,13 @@ pub mod testing {
         assert!(editor_install::status(d, &real).complete());
     }
 
-    /// A catalog repository with the fake editor plugin (id `editor`) and a theme plugin.
+    /// A catalog folder with the fake editor plugin (id `editor`) and a theme plugin.
     pub fn catalog(base: &Path, mirror: &Path) -> (PathBuf, Table) {
-        let (repo, _) = plugins::testing::catalog_repo(base, &[("sea-themes", "1.0.0", &[("Deep", plugins::testing::GOOD_THEME)])]);
-        let cat = repo.join(plugins::CATALOG_FOLDER);
+        let cat = plugins::testing::catalog_dir(base, &[("sea-themes", "1.0.0", &[("Deep", plugins::testing::GOOD_THEME)])]);
         let (_, table) = plugin(&cat, ID, "1.0.0", mirror);
         let index = json!({"plugins": [{"id": ID, "version": "1.0.0"}, {"id": "sea-themes", "version": "1.0.0"}]});
         fs::write(cat.join(plugins::INDEX), index.to_string()).unwrap();
-        plugins::testing::git(&repo, &["add", "-A"]);
-        plugins::testing::git(&repo, &["commit", "--quiet", "-m", "editor"]);
-        (repo, table)
+        (cat, table)
     }
 }
 
@@ -349,9 +342,12 @@ mod tests {
         }
         walk(&dir, &dir, &mut on_disk);
         on_disk.sort();
-        let mut listed: Vec<String> = BUNDLED.iter().map(|(p, _)| p.to_string()).collect();
+        let mut listed: Vec<String> = bundled_files().iter().map(|(p, _)| p.to_string()).collect();
         listed.sort();
-        assert_eq!(on_disk, listed, "BUNDLED must list every file of plugins/editor");
+        assert_eq!(on_disk, listed, "the built-in copy has every file of plugins/editor");
+        for (rel, text) in bundled_files() {
+            assert_eq!(fs::read_to_string(dir.join(rel)).unwrap(), text, "{rel}");
+        }
         let r = plugins::check(&dir);
         assert!(r.ok() && r.notes.is_empty(), "{:?} {:?}", r.problems, r.notes);
         let m = r.manifest.unwrap();
@@ -469,14 +465,10 @@ mod tests {
         // Installing the plugin's downloads now reuses everything: nothing fetched, the empty mirror never asked.
         let r = install_downloads(&s, &d, &fake::quiet).unwrap();
         assert_eq!(r.fetched, 0);
-        // The same from the catalog's copy (what `platoon plugin add editor` installs over it): same table, nothing.
-        let (repo, _) = plugins::testing::catalog_repo(&base.join("cat"), &[]);
-        let cat_dir = repo.join(plugins::CATALOG_FOLDER).join(ID);
-        for (rel, text) in BUNDLED {
-            fs::create_dir_all(cat_dir.join(rel).parent().unwrap()).unwrap();
-            fs::write(cat_dir.join(rel), text).unwrap();
-        }
-        let o = s.install(&cat_dir, Origin::Catalog { source: "x".into(), rf: "main".into(), commit: "c".into() }).unwrap();
+        // The same from the built-in catalog (what `platoon plugin add editor` installs over it): same table, nothing.
+        let built_in = plugins::load_catalog(&plugins::CatalogFrom::BuiltIn);
+        let u = built_in.get(ID).unwrap().unpack().unwrap();
+        let o = s.install(u.dir(), Origin::Catalog).unwrap();
         assert!(matches!(o, Outcome::Replaced { .. }));
         assert_eq!(install_downloads(&s, &d, &fake::quiet).unwrap().fetched, 0);
         // Removed: the folder and the font go, and there is nothing to take over any more.

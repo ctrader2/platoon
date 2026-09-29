@@ -311,15 +311,15 @@ fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     assert!(!l.wt.exists(), "removed once the editor has closed");
 }
 
-/// An app whose editor folder and plugin catalog are temp ones: a catalog repository with the editor plugin, its
-/// table a mirror of tiny fake downloads.
+/// An app whose editor folder and plugin catalog are temp ones: a catalog folder with the editor plugin, its table a
+/// mirror of tiny fake downloads.
 fn with_editor_catalog(app: &mut App, name: &str) -> Dirs {
     let base = fake::tmp(name);
     let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
-    let (repo, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
+    let (cat, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
     app.ed.dirs = dirs.clone();
     app.ed.stand_in = false;
-    app.pl.source = crate::plugins::testing::source(&repo);
+    app.pl.use_catalog(crate::plugins::testing::from(&cat));
     dirs
 }
 
@@ -344,7 +344,7 @@ fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_op
     assert!(app.editor_busy());
     app.refresh_until_for_test(20, "the install to finish", |a| !a.editor_busy());
     let p = crate::editorplugin::installed(&app.pl.store).expect("the plugin, from the catalog");
-    assert!(matches!(p.origin, crate::plugins::Origin::Catalog { .. }));
+    assert_eq!(p.origin, crate::plugins::Origin::Catalog);
     assert!(crate::editorplugin::complete(&app.pl.store, &dirs), "and its downloads");
     assert!(app.pl.editor_complete && app.pl.installed.iter().any(|p| p.id() == "editor"), "the plugin list knows");
     assert_eq!(opened(&mut app), vec![s(&root)], "and then opened");
@@ -377,7 +377,7 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
     assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("didn't finish installing") && n.contains("`platoon plugin add editor`, tries again")), "{:?}", app.notice);
     assert!(app.take_editor_request().is_none());
-    // No catalog to be had at all: said plainly too.
+    // A catalog without the editor plugin: said plainly too.
     let w2 = World::new("ed-install-nocat");
     w2.transcript("s-1", &s(&w2.base), "hello", 5);
     let mut app = w2.app();
@@ -386,7 +386,7 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
     app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("couldn't reach its plugin catalog")), "{:?}", app.notice);
+    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("platoon's plugin catalog has no code editor plugin")), "{:?}", app.notice);
 }
 
 /// An editor installed before it was a plugin: `v` opens it at once (no question), and the app took it over as the

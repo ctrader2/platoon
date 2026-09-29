@@ -162,7 +162,7 @@ fn quitting_the_ui_leaves_the_session_running() {
     // plugin catalog.
     cmd.env("PLATOON_DATA_DIR", cache.join("data"));
     cmd.env("PLATOON_FONT_DIR", cache.join("fonts"));
-    cmd.env("PLATOON_PLUGIN_SOURCE", cache.join("no-plugin-source"));
+    cmd.env("PLATOON_PLUGIN_CATALOG", cache.join("no-plugin-catalog"));
     cmd.env("PLATOON_CLAUDE_BIN", "sh");
     cmd.env("PLATOON_SKIP_SETUP_CHECK", "1"); // this test is about sessions, not setup
     cmd.env("TERM", "xterm-256color");

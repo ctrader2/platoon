@@ -289,7 +289,7 @@ fn plugin_cli(f: impl FnOnce(&plugincli::Ctx, &mut dyn io::Write, &mut dyn io::W
     use std::io::IsTerminal;
     let (mut out, mut err) = (io::stdout(), io::stderr());
     let home = std::env::var("HOME").unwrap_or_default();
-    let (store, source, dirs) = (plugins::Store::from_env(), plugins::Source::from_env(), editor_install::Dirs::from_env());
+    let (store, from, dirs) = (plugins::Store::from_env(), plugins::CatalogFrom::from_env(), editor_install::Dirs::from_env());
     let printer = editor_install::Printer::new(io::stdout().is_terminal());
     let config = archive::config_dir();
     // A yes/no question in the terminal; none where there is no terminal to ask in.
@@ -303,7 +303,7 @@ fn plugin_cli(f: impl FnOnce(&plugincli::Ctx, &mut dyn io::Write, &mut dyn io::W
         io::stdin().read_line(&mut line).ok()?;
         Some(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
     };
-    let c = plugincli::Ctx { store: &store, source: &source, dirs: &dirs, home: &home, printer: &printer, config: &config, ask: &ask };
+    let c = plugincli::Ctx { store: &store, from: &from, dirs: &dirs, home: &home, printer: &printer, config: &config, ask: &ask };
     f(&c, &mut out, &mut err)
 }
 

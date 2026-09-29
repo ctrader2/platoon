@@ -1,11 +1,12 @@
-//! Plugins at the level of the app: the settings' Plugins tab listing every plugin (the catalog fetched from a local git
-//! repository when the settings open) and the plugin screen it opens (installing with the confirm and the footer line,
-//! the theme it adds in the theme picker with its plugin's name, an update, removing: a theme in use gives way to the
-//! default), and back to the settings on the same plugin. Every folder is a temp one (the data folder sits beside the
-//! test's config); the catalog is a temp git repository, never the network.
+//! Plugins at the level of the app: the settings' Plugins tab listing every plugin (the catalog read when the settings
+//! open) with the selected one's description, and the plugin screen it opens (installing with the confirm and the
+//! footer line, the theme it adds in the theme picker with its plugin's name, an update, removing: a theme in use gives
+//! way to the default; `1` `2` `3` to a tab), and back to the settings on the same plugin. A newer platoon's catalog
+//! updating installed plugins when the app starts. Every folder is a temp one (the data folder sits beside the test's
+//! config); the catalog is a temp folder standing in for the one built into platoon.
 
 use crate::app::{App, Confirm, Mode, PlugState};
-use crate::plugins::testing::{catalog_repo, commit_catalog, source, GOOD_THEME};
+use crate::plugins::testing::{bump, catalog_dir, from, list_in_index, write_catalog, GOOD_THEME};
 use crate::testkit::World;
 use crate::ui;
 use ratatui::{
@@ -37,19 +38,19 @@ const DUSK: &str = "background = #1a1420\nforeground = #eee4f2\npalette = 1=#ff7
 /// A world with a catalog of two plugins, and its app pointed at it.
 fn world(name: &str) -> (World, App, std::path::PathBuf) {
     let w = World::new(name);
-    let (repo, _) = catalog_repo(&w.base, &[("sea-themes", "1.0.0", &[("Deep Water", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", DUSK)])]);
+    let cat = catalog_dir(&w.base, &[("sea-themes", "1.0.0", &[("Deep Water", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", DUSK)])]);
     let mut app = w.app();
-    app.pl.source = source(&repo);
-    (w, app, repo)
+    app.pl.use_catalog(from(&cat));
+    (w, app, cat)
 }
 
-/// `s`, the Plugins tab (the last: shift+tab from the first), the catalog fetched.
+/// `s`, the Plugins tab (the last: shift+tab from the first).
 fn open_settings_plugins(app: &mut App) {
     ch(app, 's');
     assert!(matches!(app.mode, Mode::Settings));
     key(app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, crate::settings::TAB_PLUGINS);
-    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    assert!(!app.plugins_busy(), "nothing to wait for: the catalog comes with platoon");
 }
 
 /// The plugin screen, from the settings' Plugins tab, on its first plugin.
@@ -70,7 +71,7 @@ fn install(app: &mut App, id: &str) {
 }
 
 #[test]
-fn the_plugin_screen_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme_is_labelled_in_the_picker() {
+fn the_plugin_screen_installs_a_theme_plugin_from_the_catalog_whose_theme_is_labelled_in_the_picker() {
     let (w, mut app, _) = world("plug-tab");
     let mut term = Terminal::new(TestBackend::new(130, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
@@ -79,8 +80,12 @@ fn the_plugin_screen_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme
     let rows = app.pl.rows();
     assert_eq!(rows.iter().map(|r| (r.manifest.id.as_str(), r.state.clone())).collect::<Vec<_>>(), [("sea-themes", PlugState::Available), ("dusk", PlugState::Available)]);
     let shown = flat(&draw(&mut term, &app));
-    for want in ["Settings · Plugins", "sea-themes name", "dusk name", "Not installed", "What sea-themes is.", "Adds 1 theme: Deep Water", "Catalog: commit", "enter install", "f check the catalog", "ctrl+space back to settings"] {
+    for want in ["Settings · Plugins", "sea-themes name", "dusk name", "Not installed", "What sea-themes is.", "Adds 1 theme: Deep Water", "By Someone", "Needs platoon 0.1.0 or newer", "enter install", "ctrl+space back to settings"] {
         assert!(shown.contains(want), "{want}: {shown}");
+    }
+    // Where it comes from isn't a line of its own any more, and there is nothing to fetch.
+    for gone in ["From ", "Catalog:", "check the catalog", "f check"] {
+        assert!(!shown.contains(gone), "{gone}: {shown}");
     }
     // Nothing in the user's real places: the store is beside this test's config.
     assert!(app.pl.store.dir.starts_with(&w.base));
@@ -136,12 +141,14 @@ fn the_plugin_screen_fetches_the_catalog_and_installs_a_theme_plugin_whose_theme
 
 #[test]
 fn an_update_in_the_catalog_is_offered_and_installed() {
-    let (_w, mut app, repo) = world("plug-update");
+    let (_w, mut app, cat) = world("plug-update");
     open_tab(&mut app);
     install(&mut app, "sea-themes");
-    commit_catalog(&repo, &[("sea-themes", "1.1.0", &[("Deep Water", &GOOD_THEME.replace("#14181f", "#111820"))])]);
+    // `f` fetches nothing (the catalog comes with platoon); a newer platoon brings the new one.
+    write_catalog(&cat, &[("sea-themes", "1.1.0", &[("Deep Water", &GOOD_THEME.replace("#14181f", "#111820"))])]);
     ch(&mut app, 'f');
-    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    assert!(!app.plugins_busy() && app.pl.rows().len() == 2 && app.pl.rows()[0].state == PlugState::Installed);
+    app.pl.use_catalog(from(&cat));
     let rows = app.pl.rows();
     assert_eq!(rows.len(), 1, "dusk left the catalog and was never installed");
     assert_eq!(rows[0].state, PlugState::Update);
@@ -155,45 +162,41 @@ fn an_update_in_the_catalog_is_offered_and_installed() {
 }
 
 #[test]
-fn a_catalog_that_cannot_be_reached_is_said_plainly_in_the_settings() {
-    let w = World::new("plug-unreachable");
+fn an_empty_catalog_is_said_plainly_in_the_settings_and_f_does_nothing() {
+    let w = World::new("plug-empty");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(120, 26)).unwrap();
     open_settings_plugins(&mut app);
-    assert!(app.pl.fetch_error.as_deref().unwrap().starts_with("platoon couldn't reach its plugin catalog:"));
     let shown = flat(&draw(&mut term, &app));
-    for want in ["No plugins installed, and none from the catalog to show.", "Couldn't reach the catalog, so only installed plugins show. f tries again."] {
-        assert!(shown.contains(want), "{want}: {shown}");
-    }
+    assert!(shown.contains("No plugins installed, and none from the catalog to show."), "{shown}");
     assert!(shown.contains("↑↓ move ctrl+space back") && !shown.contains("d remove"), "nothing to open or remove: {shown}");
     // Enter with nothing listed says why, rather than doing nothing, and stays in the settings.
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::Settings) && app.active_notice().is_some());
-    // f tries again (and fails again, quietly: the line says so).
+    assert!(matches!(app.mode, Mode::Settings) && app.active_notice() == Some("No plugins to show."));
+    // f does nothing at all.
     app.notice = None;
     ch(&mut app, 'f');
-    assert!(app.plugins_busy());
-    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
-    assert!(matches!(app.mode, Mode::Settings) && app.pl.fetch_error.is_some());
-    // An installed plugin is still listed when the catalog can't be reached.
+    assert!(!app.plugins_busy() && matches!(app.mode, Mode::Settings) && app.active_notice().is_none());
+    // An installed plugin is still listed when the catalog doesn't have it.
     let src = w.base.join("src");
     let dir = crate::plugins::testing::plugin(&src, "dusk", "0.3.0", &[("Dusk", DUSK)]);
     app.pl.store.install(&dir, crate::plugins::Origin::Folder { path: "/home/u/dusk".into() }).unwrap();
     app.plugins_changed_for_test();
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove ctrl+space back"), "{shown}");
+    assert!(shown.contains("What dusk is."), "its description under the list: {shown}");
 }
 
 #[test]
 fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_an_installed_one() {
-    let (_w, mut app, repo) = world("plug-settings");
+    let (_w, mut app, cat) = world("plug-settings");
     open_tab(&mut app);
     install(&mut app, "sea-themes");
     install(&mut app, "dusk");
     // A newer sea-themes in the catalog, and a third plugin not installed.
-    commit_catalog(&repo, &[("sea-themes", "1.1.0", &[("Deep Water", &GOOD_THEME.replace("#14181f", "#111820"))]), ("dusk", "0.3.0", &[("Dusk", DUSK)]), ("moss", "2.0.0", &[("Moss", GOOD_THEME)])]);
-    ch(&mut app, 'f');
-    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    let newer = GOOD_THEME.replace("#14181f", "#111820");
+    write_catalog(&cat, &[("sea-themes", "1.1.0", &[("Deep Water", newer.as_str())]), ("dusk", "0.3.0", &[("Dusk", DUSK)]), ("moss", "2.0.0", &[("Moss", GOOD_THEME)])]);
+    app.pl.use_catalog(from(&cat));
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings) && app.settings_tab == crate::settings::TAB_PLUGINS);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -205,7 +208,8 @@ fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_
         assert!(l.contains(&format!("{name}  {version}")) && l.contains(&format!(" {state} ")), "{name}: {l}");
     }
     let flat_shown = flat(&shown);
-    for want in ["Catalog: commit", "Enter opens a plugin: what it adds, and install, update or remove.", "↑↓ move enter open d remove ctrl+space back"] {
+    // (dusk was selected last on the plugin screen, so it is here: its description under the list.)
+    for want in ["What dusk is.", "Enter opens a plugin: what it adds, and install, update or remove.", "↑↓ move enter open d remove ctrl+space back"] {
         assert!(flat_shown.contains(want), "{want}: {flat_shown}");
     }
     assert!(!flat_shown.contains("press 4"), "{flat_shown}");
@@ -279,8 +283,8 @@ fn enter_opens_the_plugin_screen_on_that_plugin_and_back_returns_to_the_settings
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Settings · Plugins") && shown.contains("▎ dusk name") && shown.contains("What dusk is."), "{shown}");
-    // `s` and the tab numbers do nothing here.
-    for c in ['s', '1', '2', '4', 'v', '/'] {
+    // `s` does nothing here, nor keys of the list (`4` is no tab).
+    for c in ['s', '4', 'v', '/', 'f'] {
         ch(&mut app, c);
         assert!(matches!(app.mode, Mode::Plugins), "{c}");
     }
@@ -343,16 +347,12 @@ fn the_plugin_screen_opened_over_a_projects_screen_goes_back_to_it() {
 
 // ---- plugins with skills, squads and agents ---------------------------------------------------------------------------
 
-/// A catalog repository holding the plugin with a skill, a squad and two agents (`squadplugin::testing::plugin`).
-fn instructions_repo(base: &std::path::Path) -> std::path::PathBuf {
-    let repo = base.join("source");
-    let cat = repo.join(crate::plugins::CATALOG_FOLDER);
+/// A catalog folder holding a plugin with a skill, a squad and two agents (`squadplugin::testing::plugin`).
+fn instructions_catalog(base: &std::path::Path) -> std::path::PathBuf {
+    let cat = base.join("catalog");
     crate::squadplugin::testing::plugin(&cat, "changelog", "1.0.0");
-    std::fs::write(cat.join(crate::plugins::INDEX), serde_json::json!({"plugins": [{"id": "changelog", "version": "1.0.0"}]}).to_string()).unwrap();
-    crate::plugins::testing::git(&repo, &["init", "--quiet"]);
-    crate::plugins::testing::git(&repo, &["add", "-A"]);
-    crate::plugins::testing::git(&repo, &["commit", "--quiet", "-m", "catalog"]);
-    repo
+    list_in_index(&cat, "changelog", "1.0.0");
+    cat
 }
 
 /// Where the list's pane ends on the Squads tab, and its text, flat.
@@ -364,9 +364,9 @@ fn squads_left(text: &str) -> String {
 #[test]
 fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_agents_are_read_only_on_the_squads_tab() {
     let w = World::new("plug-review");
-    let repo = instructions_repo(&w.base);
+    let cat = instructions_catalog(&w.base);
     let mut app = w.app();
-    app.pl.source = source(&repo);
+    app.pl.use_catalog(from(&cat));
     let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
     open_tab(&mut app);
     let shown = flat(&draw(&mut term, &app));
@@ -384,7 +384,8 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
         "Skill changelog-entry",
         "– Claude may use it by itself when it fits; you can also type /changelog-entry",
         "Squad changelog squad",
-        "– 3 steps, done by change-reader (this plugin), changelog-writer (this plugin) and editor (built in)",
+        "– 3 steps, done by change-reader (this plugin), changelog-writer (this plugin) and editor",
+        "(built in)",
         "Agent change-reader",
         "– Can run commands on this computer",
         "Agent changelog-writer",
@@ -602,25 +603,19 @@ fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_afte
 #[test]
 fn an_update_that_changes_an_agents_instructions_is_shown_again_with_the_changes_marked() {
     let w = World::new("plug-review-update");
-    let repo = instructions_repo(&w.base);
+    let cat = instructions_catalog(&w.base);
     let mut app = w.app();
-    app.pl.source = source(&repo);
+    app.pl.use_catalog(from(&cat));
     open_tab(&mut app);
     key(&mut app, KeyCode::Enter);
     ch(&mut app, 'y');
     app.refresh_until_for_test(20, "the install", |a| !a.plugins_busy());
     assert!(app.pl.store.get("changelog").is_some());
     // 1.1.0 changes the reader's instructions.
-    let cat = repo.join(crate::plugins::CATALOG_FOLDER);
-    for f in ["changelog/plugin.json", "index.json"] {
-        let p = cat.join(f);
-        std::fs::write(&p, std::fs::read_to_string(&p).unwrap().replace("1.0.0", "1.1.0")).unwrap();
-    }
+    bump(&cat, "changelog", "1.1.0");
     let reader = cat.join("changelog/agents/change-reader.json");
     std::fs::write(&reader, std::fs::read_to_string(&reader).unwrap().replace("change nothing", "change nothing, not even a tag")).unwrap();
-    crate::plugins::testing::git(&repo, &["commit", "--quiet", "-am", "1.1.0"]);
-    ch(&mut app, 'f');
-    app.refresh_until_for_test(20, "the catalog", |a| !a.plugins_busy());
+    app.pl.use_catalog(from(&cat));
     assert_eq!(app.pl.rows()[0].state, PlugState::Update);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::PluginReview), "asked again, with what changed: {:?}", app.active_notice());
@@ -645,9 +640,9 @@ fn an_update_that_changes_an_agents_instructions_is_shown_again_with_the_changes
 #[test]
 fn the_back_key_goes_from_a_plugins_file_to_the_list_of_what_it_adds_and_then_closes_it() {
     let w = World::new("plug-review-back");
-    let repo = instructions_repo(&w.base);
+    let cat = instructions_catalog(&w.base);
     let mut app = w.app();
-    app.pl.source = source(&repo);
+    app.pl.use_catalog(from(&cat));
     open_tab(&mut app);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::PluginReview));
@@ -667,4 +662,171 @@ fn the_back_key_goes_from_a_plugins_file_to_the_list_of_what_it_adds_and_then_cl
     assert!(matches!(app.mode, Mode::List));
     ch(&mut app, 'q');
     assert!(app.quit);
+}
+
+#[test]
+fn one_two_three_on_the_plugin_screen_go_straight_to_a_tab_and_no_hint_says_so() {
+    let (_w, mut app, _) = world("plug-digits");
+    app.projects.create("Web shop").unwrap();
+    app.reload_for_test();
+    let mut term = Terminal::new(TestBackend::new(130, 30)).unwrap();
+    for (c, top) in [('1', 0), ('2', 1), ('3', 2)] {
+        open_tab(&mut app);
+        let shown = flat(&draw(&mut term, &app));
+        assert!(!shown.contains("1-3") && !shown.contains("tabs"), "no hint for them: {shown}");
+        ch(&mut app, c);
+        assert!(matches!(app.mode, Mode::List) && !app.plugin_screen_showing(), "{c}: the plugin screen and the settings are closed");
+        assert_eq!(app.top, top, "{c}");
+        let shown = flat(&draw(&mut term, &app));
+        assert!(!shown.contains("Settings · Plugins") && !shown.contains("Settings file:"), "{c}: {shown}");
+    }
+    // From over a project's screen: the tab, not the project.
+    ch(&mut app, '2');
+    key(&mut app, KeyCode::Enter);
+    assert!(app.open_project.is_some());
+    open_tab(&mut app);
+    ch(&mut app, '1');
+    assert!(matches!(app.mode, Mode::List) && app.top == 0 && app.open_project.is_none());
+}
+
+#[test]
+fn the_settings_show_the_selected_plugins_description_cut_to_a_few_lines() {
+    let w = World::new("plug-description");
+    let cat = catalog_dir(&w.base, &[("sea-themes", "1.0.0", &[("Deep Water", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", DUSK)])]);
+    // A long description for dusk: more than three lines at this width.
+    let path = cat.join("dusk/plugin.json");
+    let long = "Dusk has a long story to tell. ".repeat(12);
+    let mut m: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    m.as_object_mut().unwrap().insert("description".into(), serde_json::json!(long.trim()));
+    std::fs::write(&path, m.to_string()).unwrap();
+    let mut app = w.app();
+    app.pl.use_catalog(from(&cat));
+    open_settings_plugins(&mut app);
+    let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(flat(&shown).contains("What sea-themes is."), "{shown}");
+    let at = |text: &str, what: &str| text.lines().position(|l| l.contains(what)).unwrap_or_else(|| panic!("{what}: {text}"));
+    assert!(at(&shown, "What sea-themes is.") > at(&shown, "dusk name"), "under the list: {shown}");
+    let height = shown.lines().filter(|l| l.contains('│')).count();
+    key(&mut app, KeyCode::Down);
+    let shown = draw(&mut term, &app);
+    assert!(!shown.contains("What sea-themes is."));
+    let told: Vec<&str> = shown.lines().filter(|l| l.contains("Dusk has a long story")).collect();
+    assert_eq!(told.len(), 3, "three lines at most: {shown}");
+    assert!(told[2].trim_end_matches(['│', ' ']).ends_with('…'), "cut with an ellipsis: {}", told[2]);
+    assert_eq!(shown.lines().filter(|l| l.contains('│')).count(), height, "the popup keeps its size");
+    assert!(flat(&shown).contains("Enter opens a plugin"), "{shown}");
+}
+
+/// A world whose app starts with plugins installed from its catalog, then a newer platoon (a newer catalog) starts.
+fn installed_then_newer(name: &str) -> (World, std::path::PathBuf) {
+    let w = World::new(name);
+    let cat = catalog_dir(&w.base, &[("sea-themes", "1.0.0", &[("Deep Water", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", DUSK)])]);
+    crate::squadplugin::testing::plugin(&cat, "changelog", "1.0.0");
+    list_in_index(&cat, "changelog", "1.0.0");
+    let store = crate::plugins::store_for(&w.config);
+    let c = crate::plugins::load_catalog(&from(&cat));
+    for id in ["sea-themes", "dusk", "changelog"] {
+        store.install(c.get(id).unwrap().unpack().unwrap().dir(), crate::plugins::Origin::Catalog).unwrap();
+    }
+    // One of the user's own, from a folder: never touched.
+    let mine = crate::plugins::testing::plugin(&w.base.join("mine"), "moss", "1.0.0", &[("Moss", GOOD_THEME)]);
+    store.install(&mine, crate::plugins::Origin::Folder { path: "/home/u/moss".into() }).unwrap();
+    (w, cat)
+}
+
+/// The app as it starts with catalog `cat` (standing in for the one built into it).
+fn start(w: &World, cat: &std::path::Path) -> App {
+    let mut app = w.app();
+    app.pl.use_catalog(from(cat));
+    app.update_with_platoon();
+    app.refresh_until_for_test(20, "the updates at start", |a| !a.plugins_busy());
+    app
+}
+
+#[test]
+fn a_newer_platoon_updates_its_theme_plugins_quietly_says_so_once_and_asks_about_one_with_instructions() {
+    let (w, cat) = installed_then_newer("plug-auto");
+    // Nothing newer: nothing done, nothing said, nothing asked.
+    let app = start(&w, &cat);
+    assert!(matches!(app.mode, Mode::List) && app.active_notice().is_none(), "{:?}", app.active_notice());
+    drop(app);
+    // A newer platoon: sea-themes and the instructions plugin are newer; moss (from a folder) too, but it is the user's.
+    bump(&cat, "sea-themes", "1.1.0");
+    bump(&cat, "changelog", "1.1.0");
+    crate::plugins::testing::plugin(&cat, "moss", "9.0.0", &[("Moss", GOOD_THEME)]);
+    list_in_index(&cat, "moss", "9.0.0");
+    let reader = cat.join("changelog/agents/change-reader.json");
+    std::fs::write(&reader, std::fs::read_to_string(&reader).unwrap().replace("change nothing", "change nothing, not even a tag")).unwrap();
+    let mut app = start(&w, &cat);
+    assert_eq!(app.active_notice(), Some("Updated with platoon: sea-themes name 1.1.0."), "one line");
+    let store = crate::plugins::store_for(&w.config);
+    assert_eq!(store.get("sea-themes").unwrap().manifest.version, "1.1.0");
+    assert_eq!(store.get("dusk").unwrap().manifest.version, "0.3.0");
+    assert_eq!(store.get("moss").unwrap().manifest.version, "1.0.0", "a folder's plugin is never touched");
+    // The one with instructions: shown, with what changed, and asked.
+    assert!(matches!(app.mode, Mode::PluginReview), "{:?}", app.active_notice());
+    let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    for want in ["Update changelog name from 1.0.0 to 1.1.0?", "Agent change-reader · changed", "y update", "n not now"] {
+        assert!(shown.contains(want), "{want}: {shown}");
+    }
+    assert_eq!(store.get("changelog").unwrap().manifest.version, "1.0.0", "nothing until asked");
+    // No: it stays, and that version isn't asked about again; the settings still say an update is ready.
+    ch(&mut app, 'n');
+    assert!(matches!(app.mode, Mode::List));
+    assert!(app.active_notice().unwrap().starts_with("changelog name stays at 1.0.0; platoon won't ask about 1.1.0 again."), "{:?}", app.active_notice());
+    assert_eq!(store.get("changelog").unwrap().manifest.version, "1.0.0");
+    let row = app.pl.rows().into_iter().find(|r| r.manifest.id == "changelog").unwrap();
+    assert_eq!(row.state, PlugState::Update);
+    assert_eq!(row.state.short_words(), "Update ready");
+    drop(app);
+    let app = start(&w, &cat);
+    assert!(matches!(app.mode, Mode::List) && app.active_notice().is_none(), "not asked again, nothing said: {:?}", app.active_notice());
+    drop(app);
+    // A still newer version asks again, and yes updates it.
+    bump(&cat, "changelog", "1.2.0");
+    let mut app = start(&w, &cat);
+    assert!(matches!(app.mode, Mode::PluginReview));
+    assert!(flat(&draw(&mut term, &app)).contains("Update changelog name from 1.0.0 to 1.2.0?"));
+    ch(&mut app, 'y');
+    app.refresh_until_for_test(20, "the update", |a| !a.plugins_busy());
+    assert!(app.active_notice().unwrap().contains("changelog name is updated from 1.0.0 to 1.2.0"), "{:?}", app.active_notice());
+    assert!(crate::agentfile::get(&w.config, "plugin:changelog/change-reader").unwrap().guidance.contains("not even a tag"));
+    drop(app);
+    // Everything up to date: nothing said, nothing asked.
+    let app = start(&w, &cat);
+    assert!(matches!(app.mode, Mode::List) && app.active_notice().is_none(), "{:?}", app.active_notice());
+}
+
+#[test]
+fn a_question_at_start_waits_for_the_list_and_esc_is_a_no() {
+    let (w, cat) = installed_then_newer("plug-auto-wait");
+    bump(&cat, "changelog", "1.1.0");
+    let mut app = w.app();
+    app.pl.use_catalog(from(&cat));
+    // The user is in the settings when the question comes: it waits.
+    ch(&mut app, 's');
+    app.update_with_platoon();
+    app.refresh_for_test();
+    assert!(matches!(app.mode, Mode::Settings));
+    key(&mut app, KeyCode::Esc);
+    app.refresh_for_test();
+    assert!(matches!(app.mode, Mode::PluginReview), "asked once the list shows");
+    // Esc (or the back key) is no, too.
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(crate::plugins::store_for(&w.config).get("changelog").unwrap().declined.as_deref(), Some("1.1.0"));
+}
+
+#[test]
+fn the_old_catalog_an_earlier_platoon_fetched_goes_when_the_app_starts() {
+    let w = World::new("plug-old-catalog");
+    let store = crate::plugins::store_for(&w.config);
+    std::fs::create_dir_all(store.dir.join(".catalog/editor")).unwrap();
+    std::fs::write(store.dir.join(".catalog.json"), "{}").unwrap();
+    std::fs::write(store.dir.join("keep-me"), "x").unwrap();
+    let _app = w.app();
+    assert!(!store.dir.join(".catalog").exists() && !store.dir.join(".catalog.json").exists());
+    assert!(store.dir.join("keep-me").exists());
 }

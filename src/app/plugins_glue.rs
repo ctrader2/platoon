@@ -1,8 +1,13 @@
-//! Plugins in the app: the settings screen's Plugins tab (every plugin, installed or in the catalog, one line each;
-//! `d` removes one, enter opens it) and the plugin screen it opens (`Mode::Plugins`, full screen: the list and the
-//! selected one's details, install, update, remove, `f`), which goes back to the settings on the same plugin. The
-//! catalog is fetched with git on a thread the first time the settings open in a run, and again with `f`; installing
-//! and updating run on a thread with a line in the footer. The work itself is in `plugins.rs`.
+//! Plugins in the app: the settings screen's Plugins tab (every plugin, installed or in the catalog, one line each, and
+//! the selected one's description; `d` removes one, enter opens it) and the plugin screen it opens (`Mode::Plugins`,
+//! full screen: the list and the selected one's details, install, update, remove; `1` `2` `3` go straight to a tab),
+//! which goes back to the settings on the same plugin. The catalog is built into platoon (`plugins.rs`), read the first
+//! time it is needed in a run; installing and updating run on a thread with a line in the footer.
+//!
+//! When platoon starts, the plugins installed from the catalog that this platoon has a newer version of are updated
+//! (`update_with_platoon`): themes and the code editor quietly on a thread (the editor's changed downloads too, with
+//! the progress in the footer), said in one line; one with skills, squads or agents is shown in the review and asked
+//! about, one at a time, when the list is showing. A no is remembered for that version (`Store::decline_update`).
 //!
 //! A plugin with skills, squads or agents (instructions Claude follows with the user's permissions) is not installed
 //! from a plain yes/no: `Mode::PluginReview` lists each one with what it may do, `enter` reads one in full (Markdown,
@@ -13,7 +18,7 @@ use super::*;
 use crate::editor_install::{Dirs, Part, Progress};
 use crate::editorplugin;
 use crate::pluginreview::{self, Item};
-use crate::plugins::{self, Catalog, Installed, Manifest, Origin, Source, Store};
+use crate::plugins::{self, Catalog, CatalogFrom, Entry, Installed, Manifest, Origin, Store};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
 
@@ -23,7 +28,7 @@ pub enum PlugState {
     /// In the catalog, not installed.
     Available,
     Installed,
-    /// Installed, and the catalog has other files for it now.
+    /// Installed, and the catalog has a newer version of it.
     Update,
     /// Installed from a folder on this computer.
     FromFolder,
@@ -69,8 +74,8 @@ pub struct PlugRow {
     pub manifest: Manifest,
     pub state: PlugState,
     pub installed: Option<Installed>,
-    /// Its folder in the fetched catalog.
-    pub entry: Option<PathBuf>,
+    /// The catalog's plugin (its files, to show and install).
+    pub entry: Option<Entry>,
     /// What installing it downloads besides (the code editor), in bytes.
     pub download_bytes: Option<u64>,
 }
@@ -85,6 +90,8 @@ pub struct Review {
     /// What the version installed has that this one doesn't: "the agent change-reader".
     pub gone: Vec<String>,
     pub selected: usize,
+    /// platoon asked about this update when it started (a no is remembered for this version).
+    pub at_start: bool,
     /// The item read in full, when one is.
     pub reading: Option<usize>,
     /// The first line in view, of the list and of the item being read; and how many lines the last frame showed.
@@ -101,15 +108,16 @@ enum JobMsg {
 
 pub struct PluginsState {
     pub store: Store,
-    pub source: Source,
+    /// Where the catalog comes from: built into platoon (a test gives a folder).
+    pub from: CatalogFrom,
+    /// The catalog, once read in this run (`load_catalog`).
     pub catalog: Option<Catalog>,
     pub installed: Vec<Installed>,
     pub selected: usize,
-    fetching: Option<Receiver<Result<Catalog, String>>>,
-    /// Why the last fetch failed (the cached copy, if any, is still shown).
-    pub fetch_error: Option<String>,
-    /// The catalog has been asked for in this run (it is fetched once, when the settings first open).
-    fetch_tried: bool,
+    /// Updates of plugins with instructions this platoon brings, still to be asked about (one at a time).
+    pub asks: Vec<plugins::Ask>,
+    /// The job running is the quiet update at start: nothing is said until it has something to say.
+    quiet_job: bool,
     /// The full-screen plugin screen is open (`Mode::Plugins`, or a question or the review over it).
     pub screen: bool,
     job: Option<Receiver<JobMsg>>,
@@ -127,18 +135,16 @@ pub struct PluginsState {
 }
 
 impl PluginsState {
-    pub fn new(store: Store, source: Source) -> Self {
-        let catalog = plugins::cached(&store, &source);
+    pub fn new(store: Store, from: CatalogFrom) -> Self {
         let installed = store.installed();
         Self {
             store,
-            source,
-            catalog,
+            from,
+            catalog: None,
             installed,
             selected: 0,
-            fetching: None,
-            fetch_error: None,
-            fetch_tried: false,
+            asks: Vec::new(),
+            quiet_job: false,
             screen: false,
             job: None,
             job_label: String::new(),
@@ -158,23 +164,33 @@ impl PluginsState {
     }
 
     /// Where platoon keeps plugins: the real data folder, or in a unit test one beside the test's config (never the
-    /// user's), with a catalog source that isn't there until a test gives one.
+    /// user's), with an empty catalog until a test gives one (`use_catalog`).
     pub fn for_config(config: &Path) -> Self {
         #[cfg(test)]
         {
             let store = plugins::store_for(config);
             let base = store.dir.parent().and_then(Path::parent).unwrap_or(config).to_path_buf();
-            Self::new(store, Source { url: base.join("no-plugin-source").to_string_lossy().into_owned(), rf: "main".into() })
+            Self::new(store, CatalogFrom::Folder(base.join("no-plugin-catalog")))
         }
         #[cfg(not(test))]
         {
             let _ = config;
-            Self::new(Store::from_env(), Source::from_env())
+            Self::new(Store::from_env(), CatalogFrom::from_env())
         }
     }
 
-    pub fn fetching(&self) -> bool {
-        self.fetching.is_some()
+    /// Read the catalog, the first time it is needed in a run.
+    pub fn ensure_catalog(&mut self) {
+        if self.catalog.is_none() {
+            self.catalog = Some(plugins::load_catalog(&self.from));
+        }
+    }
+
+    /// Take the catalog from `from` (a test), read afresh.
+    #[cfg(test)]
+    pub fn use_catalog(&mut self, from: CatalogFrom) {
+        self.from = from;
+        self.catalog = Some(plugins::load_catalog(&self.from));
     }
 
     pub fn working(&self) -> bool {
@@ -194,7 +210,7 @@ impl PluginsState {
                     None if !e.problems.is_empty() => PlugState::Unavailable(e.problems.join("; ")),
                     None => PlugState::Available,
                 };
-                out.push(PlugRow { manifest: e.manifest.clone(), state, installed, entry: Some(e.dir.clone()), download_bytes: e.download_bytes });
+                out.push(PlugRow { manifest: e.manifest.clone(), state, installed, entry: Some(e.clone()), download_bytes: e.download_bytes });
             }
         }
         for p in &self.installed {
@@ -249,7 +265,7 @@ impl App {
     pub(super) fn open_plugin_screen(&mut self) {
         let rows = self.pl.rows();
         if rows.is_empty() {
-            self.notify(if self.pl.fetching() { "The catalog is still being fetched." } else { "No plugins to show yet." });
+            self.notify("No plugins to show.");
             return;
         }
         self.pl.selected = self.setting.min(rows.len() - 1);
@@ -272,67 +288,100 @@ impl App {
     }
 
     /// The keys of the plugin screen. It is not a top-level list: the quit key goes back, like esc and the back key
-    /// (which arrives here as esc), and `s` and the tab numbers do nothing.
+    /// (which arrives here as esc), and `s` does nothing. `1` `2` `3` go straight to Sessions, Projects, Squads (the
+    /// plugin screen and the settings close).
     pub(super) fn plugin_screen_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
         if self.keys.get().quit.matches(&key) || key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
             return self.close_plugin_screen();
+        }
+        if let KeyCode::Char(c @ '1'..='3') = key.code {
+            if !ctrl && !alt {
+                self.pl.screen = false;
+                self.pl.review = None;
+                self.notice = None;
+                self.mode = Mode::List;
+                self.switch_top(c as usize - '1' as usize);
+                return;
+            }
         }
         self.plugin_list_key(key);
     }
 
     /// Something of the plugins is running on a thread (the event loop refreshes more often meanwhile).
     pub fn plugins_busy(&self) -> bool {
-        self.pl.fetching() || self.pl.working()
+        self.pl.working()
     }
 
-    /// Called when the settings (or the plugin screen) open: the catalog is fetched the first time in a run.
+    /// Called when the settings (or the plugin screen) open: the catalog is read the first time in a run.
     pub(super) fn plugins_shown(&mut self) {
-        if !self.pl.fetch_tried {
-            self.fetch_catalog();
+        if self.pl.catalog.is_none() {
+            let (on_screen, in_settings) = (self.pl.id_at(self.pl.selected), self.pl.id_at(self.setting));
+            self.pl.ensure_catalog();
+            self.keep_plugin_selection(on_screen, in_settings);
         }
     }
 
-    /// Fetch the catalog on a thread (`f`, and the first time the settings open).
-    pub(super) fn fetch_catalog(&mut self) {
-        if self.pl.fetching() {
+    /// When platoon starts: the copy of the catalog an older platoon fetched goes, and the plugins installed from the
+    /// catalog that this platoon has a newer version of are updated: themes and the code editor on a thread, said in
+    /// one line when done (nothing said when nothing was updated); the ones with instructions are asked about, one at
+    /// a time, once the list is showing (`poll_plugins`).
+    pub(crate) fn update_with_platoon(&mut self) {
+        self.pl.store.forget_fetched_catalog();
+        // Only a plugin from the catalog can be updated by it: without one, the catalog isn't even read.
+        if !plugins::any_from_catalog(&self.pl.store) {
             return;
         }
-        self.pl.fetch_tried = true;
-        let (store, source) = (self.pl.store.clone(), self.pl.source.clone());
+        self.pl.ensure_catalog();
+        let Some(catalog) = self.pl.catalog.clone() else { return };
+        let plan = plugins::auto_plan(&self.pl.store, &catalog);
+        self.pl.asks = plan.ask.clone();
+        if plan.quiet.is_empty() || self.pl.working() {
+            return;
+        }
+        let (store, dirs) = (self.pl.store.clone(), self.ed.dirs.clone());
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(plugins::fetch(&store, &source));
+            let (done, failed) = plugins::auto_update(&store, &catalog, &plan);
+            let mut said = plugins::updated_words(&done);
+            for f in &failed {
+                said = format!("{said} {f}.").trim_start().to_string();
+            }
+            // The code editor's downloads that changed with it, as an update fetches them.
+            if done.iter().any(|(_, _, editor)| *editor) {
+                let progress = tx.clone();
+                let report = move |p| {
+                    let _ = progress.send(JobMsg::Progress(p));
+                };
+                if let Err(e) = editorplugin::install_downloads(&store, &dirs, &report) {
+                    said = format!("{said} The code editor's downloads didn't finish: {e} Enter on it in the settings (s, then Plugins) tries again.");
+                }
+            }
+            let _ = tx.send(JobMsg::Done(if failed.is_empty() { Ok(said) } else { Err(said) }));
         });
-        self.pl.fetching = Some(rx);
+        self.pl.progress.clear();
+        self.pl.job = Some(rx);
+        self.pl.quiet_job = true;
+        self.pl.job_label = "Updating the code editor…".into();
     }
 
-    /// Called on every refresh: a fetch or an install that finished.
-    pub(super) fn poll_plugins(&mut self) {
-        if let Some(rx) = &self.pl.fetching {
-            match rx.try_recv() {
-                Ok(Ok(c)) => {
-                    // The rows may come in another order now: the same plugins stay selected.
-                    let (on_screen, in_settings) = (self.pl.id_at(self.pl.selected), self.pl.id_at(self.setting));
-                    self.pl.catalog = Some(c);
-                    self.pl.fetch_error = None;
-                    self.pl.fetching = None;
-                    self.keep_plugin_selection(on_screen, in_settings);
-                }
-                Ok(Err(e)) => {
-                    if self.plugin_screen_showing() {
-                        self.notify(e.clone());
-                    }
-                    self.pl.fetch_error = Some(e);
-                    self.pl.fetching = None;
-                }
-                Err(TryRecvError::Disconnected) => {
-                    self.pl.fetch_error = Some("platoon couldn't reach its plugin catalog: the fetch stopped half way".into());
-                    self.pl.fetching = None;
-                }
-                Err(TryRecvError::Empty) => {}
-            }
+    /// The next update platoon asks about at start, when nothing else is going on: its review, over the list.
+    fn ask_next_update(&mut self) {
+        if self.pl.asks.is_empty() || self.pl.working() || !matches!(self.mode, Mode::List) || self.pl.review.is_some() {
+            return;
         }
+        let ask = self.pl.asks.remove(0);
+        let Some(row) = self.pl.rows().into_iter().find(|r| r.manifest.id == ask.id && r.state == PlugState::Update) else { return };
+        self.open_review(&row, Some((ask.from, ask.to)));
+        if let Some(r) = self.pl.review.as_mut() {
+            r.at_start = true;
+        }
+    }
+
+    /// Called on every refresh: an install that finished, and an update to ask about.
+    pub(super) fn poll_plugins(&mut self) {
+        self.ask_next_update();
         if let Some(rx) = &self.pl.job {
             let last = loop {
                 match rx.try_recv() {
@@ -346,16 +395,26 @@ impl App {
                 Ok(JobMsg::Progress(_)) => {}
                 Ok(JobMsg::Done(r)) => {
                     self.pl.job = None;
+                    let quiet = std::mem::take(&mut self.pl.quiet_job);
                     self.plugins_changed();
                     match r {
+                        // Nothing updated after all (another platoon did it a moment before): nothing to say.
+                        Ok(msg) if msg.is_empty() => {
+                            if quiet {
+                                self.notice = None;
+                            }
+                        }
                         Ok(msg) | Err(msg) => self.notify(msg),
                     }
+                    self.ask_next_update();
                 }
                 Err(TryRecvError::Disconnected) => {
                     self.pl.job = None;
+                    self.pl.quiet_job = false;
                     self.plugins_changed();
                     self.notify("The plugin didn't finish installing; nothing was changed.");
                 }
+                Err(TryRecvError::Empty) if self.pl.quiet_job && self.pl.progress.is_empty() => {}
                 Err(TryRecvError::Empty) => {
                     let parts: Vec<String> = self
                         .pl
@@ -424,10 +483,6 @@ impl App {
             KeyCode::Enter | KeyCode::Char('i') => self.plugin_enter(),
             KeyCode::Char('u') => self.ask_update_plugin(),
             KeyCode::Char('d') => self.ask_remove_plugin(false),
-            KeyCode::Char('f') => {
-                self.fetch_catalog();
-                self.notify("Checking the catalog for plugins…");
-            }
             _ => {}
         }
     }
@@ -435,7 +490,7 @@ impl App {
     /// Enter on a plugin: install it, update it, or say why not.
     fn plugin_enter(&mut self) {
         let Some(row) = self.pl.selected_row() else {
-            self.notify(if self.pl.fetching() { "The catalog is still being fetched." } else { "No plugins to show. f checks the catalog again." });
+            self.notify("No plugins to show.");
             return;
         };
         match &row.state {
@@ -492,8 +547,8 @@ impl App {
         // Instructions Claude follows that the update changes are shown again first.
         if row.manifest.has_instructions() || row.installed.as_ref().is_some_and(|p| p.manifest.has_instructions()) {
             let old = self.pl.store.plugin_dir(&row.manifest.id);
-            if let Some(dir) = row.entry.as_ref() {
-                match pluginreview::review(dir, Some(&old)) {
+            if let Some(entry) = row.entry.as_ref() {
+                match entry.unpack().and_then(|u| pluginreview::review(u.dir(), Some(&old))) {
                     Ok((_, r)) if r.changed() => return self.open_review(&row, Some((was, row.manifest.version.clone()))),
                     Ok(_) => {}
                     Err(e) => return self.notify(e),
@@ -547,9 +602,9 @@ impl App {
     /// Show what the plugin of `row` adds that Claude follows (`update`: the versions, when it replaces the one
     /// installed, whose items are compared with it).
     fn open_review(&mut self, row: &PlugRow, update: Option<(String, String)>) {
-        let Some(dir) = row.entry.clone() else { return };
+        let Some(entry) = row.entry.as_ref() else { return };
         let old = update.as_ref().map(|_| self.pl.store.plugin_dir(&row.manifest.id));
-        match pluginreview::review(&dir, old.as_deref()) {
+        match entry.unpack().and_then(|u| pluginreview::review(u.dir(), old.as_deref())) {
             Ok((m, r)) => {
                 self.pl.review = Some(Review {
                     id: m.id.clone(),
@@ -558,6 +613,7 @@ impl App {
                     items: r.items,
                     gone: r.gone,
                     selected: 0,
+                    at_start: false,
                     reading: None,
                     top: Cell::new(0),
                     read_top: Cell::new(0),
@@ -578,10 +634,19 @@ impl App {
         self.install_plugin(&r.id);
     }
 
-    /// `n` or esc on the review: nothing is installed.
+    /// `n` or esc on the review: nothing is installed. An update platoon asked about when it started isn't asked
+    /// about again for this version.
     pub(super) fn close_review(&mut self) {
-        self.pl.review = None;
+        let r = self.pl.review.take();
         self.mode = self.plugins_base();
+        if let Some(r) = r.filter(|r| r.at_start) {
+            let (from, to) = r.update.clone().unwrap_or_default();
+            match self.pl.store.decline_update(&r.id, &to) {
+                Ok(()) => self.notify(format!("{} stays at {from}; platoon won't ask about {to} again. The settings (s, then Plugins) can update it.", r.name)),
+                Err(e) => self.notify(format!("{} stays at {from}. ({e})", r.name)),
+            }
+            self.plugins_changed();
+        }
     }
 
     pub(super) fn review_key(&mut self, key: KeyEvent) {
@@ -644,16 +709,15 @@ impl App {
     pub(super) fn install_plugin(&mut self, id: &str) {
         self.mode = self.plugins_base();
         self.pl.review = None;
-        let (Some(c), Some(row)) = (self.pl.catalog.clone(), self.pl.rows().into_iter().find(|r| r.manifest.id == id)) else { return };
-        let Some(dir) = row.entry.clone() else { return };
+        let Some(row) = self.pl.rows().into_iter().find(|r| r.manifest.id == id) else { return };
+        let Some(entry) = row.entry.clone() else { return };
         let store = self.pl.store.clone();
-        let origin = Origin::Catalog { source: c.source.clone(), rf: c.rf.clone(), commit: c.commit.clone() };
         let name = row.manifest.name.clone();
         let updating = row.state == PlugState::Update;
         let dirs = self.ed.dirs.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let r = store.install_noting(&dir, origin).map_err(|e| format!("Not installed: {e}")).and_then(|(o, notes)| {
+            let r = entry.unpack().and_then(|u| store.install_noting(u.dir(), Origin::Catalog)).map_err(|e| format!("Not installed: {e}")).and_then(|(o, notes)| {
                 let m = &o.plugin().manifest;
                 let mut said = match o {
                     plugins::Outcome::Replaced { ref was, .. } if *was != m.version => format!("{} is updated from {was} to {}.", m.name, m.version),
@@ -682,6 +746,7 @@ impl App {
         });
         self.pl.progress.clear();
         self.pl.job = Some(rx);
+        self.pl.quiet_job = false;
         self.pl.job_label = if updating { format!("Updating {name}…") } else { format!("Installing {name}…") };
         let line = self.pl.job_label.clone();
         self.notify(line);
@@ -736,7 +801,6 @@ impl App {
             KeyCode::End | KeyCode::Char('G') => self.setting = last,
             KeyCode::Enter => self.open_plugin_screen(),
             KeyCode::Char('d') | KeyCode::Delete => self.ask_remove_plugin(true),
-            KeyCode::Char('f') => self.fetch_catalog(),
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ' | 'h' | 'l' | '-' | '+' | '=' | 'r') => {}
             _ => return false,
         }

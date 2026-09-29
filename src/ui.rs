@@ -161,7 +161,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member", "check the catalog"];
+    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
     if app.open_project.is_some() && app.tk.open.is_some() {
         droppable.retain(|d| *d != "editor");
@@ -1913,9 +1913,11 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
         notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
     }
     if tab == crate::settings::TAB_PLUGINS {
-        // Where the catalog stands, on one line (so the popup keeps its size as it changes), then what enter does.
-        let (status, color) = plugins_view::catalog_status(app);
-        notes.push((fit_end(&status, w), color));
+        // The selected plugin's description (a few lines at most, cut with "…"), then what enter does.
+        let rows = app.pl.rows();
+        if let Some(r) = rows.get(app.setting.min(rows.len().saturating_sub(1))) {
+            notes.extend(plugins_view::description_lines(r, w).into_iter().map(|l| (l, t.text)));
+        }
         let msg = "Enter opens a plugin: what it adds, and install, update or remove.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.subtext)));
     }
@@ -1938,7 +1940,11 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
         let items = &SETTINGS_TABS[tab].items;
         let mut entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1) + SETTINGS_TABS[tab].headings.len();
         if tab == crate::settings::TAB_PLUGINS {
-            entries = plugins_view::plugin_settings_height(app);
+            // Room for the longest description of any plugin, so the popup keeps its size as the selection moves.
+            let rows = app.pl.rows();
+            let shown = rows.get(app.setting.min(rows.len().saturating_sub(1))).map_or(0, |r| plugins_view::description_lines(r, w).len());
+            let most = rows.iter().map(|r| plugins_view::description_lines(r, w).len()).max().unwrap_or(0);
+            entries = plugins_view::plugin_settings_height(app) + most - shown.min(most);
         }
         entries + 1 + settings_notes(app, tab, w).len()
     };

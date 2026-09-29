@@ -36,8 +36,8 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         .env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"))
         .env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"))
         .env("PLATOON_SKIP_FC_CACHE", "1")
-        // ...nor platoon's real plugin catalog (the network): a source that isn't there.
-        .env("PLATOON_PLUGIN_SOURCE", cache.parent().unwrap().join("no-plugin-source"))
+        // ...nor the plugin catalog built into platoon: a catalog folder that isn't there.
+        .env("PLATOON_PLUGIN_CATALOG", cache.parent().unwrap().join("no-plugin-catalog"))
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .output()
@@ -224,7 +224,7 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     cmd.env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"));
     cmd.env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"));
     cmd.env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"));
-    cmd.env("PLATOON_PLUGIN_SOURCE", cache.parent().unwrap().join("no-plugin-source"));
+    cmd.env("PLATOON_PLUGIN_CATALOG", cache.parent().unwrap().join("no-plugin-catalog"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
@@ -388,7 +388,7 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
 
 /// The code editor is a plugin now: setup neither asks about it nor shows a line for it (an old `setup.json` that
 /// remembers the old question still reads), and `setup --add/--remove editor` say so and do the plugin's add/remove
-/// (here with no catalog to reach: said plainly, nothing installed; never the network).
+/// (here with an empty catalog in place of the built-in one: said plainly, nothing installed; never the network).
 #[test]
 fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
     let (claude, cache) = dirs("editor");
@@ -409,7 +409,7 @@ fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
     let out = platoon(&claude, &cache, &["setup", "--add", "editor"]);
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(text(&out.stdout).starts_with("The code editor is a plugin now: this is `platoon plugin add editor`."), "{out:?}");
-    assert!(text(&out.stderr).contains("platoon couldn't reach its plugin catalog"), "{out:?}");
+    assert!(text(&out.stderr).contains("There is no plugin called \"editor\" in the catalog"), "{out:?}");
     assert!(!base.join("data/editor").exists() && !base.join("data/plugins/editor").exists() && !base.join("fonts").exists(), "nothing installed");
     let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
     assert!(out.status.success(), "{out:?}");

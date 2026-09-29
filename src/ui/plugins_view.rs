@@ -1,5 +1,5 @@
 //! Drawing plugins: the settings screen's Plugins tab (every plugin, installed or in the catalog, one line each with
-//! where it stands), and the plugin screen it opens (full screen: the catalog and the installed plugins on the left,
+//! where it stands, and the selected one's description under them), and the plugin screen it opens (full screen: the catalog and the installed plugins on the left,
 //! the selected one's details on the right, and the key hints).
 
 use super::*;
@@ -23,7 +23,8 @@ pub(super) fn plugin_screen_hints(app: &App) -> Vec<Hint<'_>> {
         Some(s) if s.installed() => out.push(("d", "remove", None)),
         _ => {}
     }
-    out.extend([("f", "check the catalog", None), ("↑↓", "move", None), (app.back_label(), "back to settings", Some(Action::Cancel))]);
+    // (`1` `2` `3` go straight to a tab from here too; not shown, as on the settings.)
+    out.extend([("↑↓", "move", None), (app.back_label(), "back to settings", Some(Action::Cancel))]);
     out
 }
 
@@ -44,14 +45,7 @@ pub(super) fn draw_plugin_screen(f: &mut Frame, app: &App, area: Rect) {
     let lb = block(" Settings · Plugins ".into(), true);
     let li = lb.inner(left).inner(Margin::new(1, 0));
     f.render_widget(lb, left);
-    // The last line of the list says where the catalog stands.
-    let status_h = u16::from(li.height > 3);
-    let list = Rect::new(li.x, li.y, li.width, li.height - status_h);
-    draw_plugin_list(f, app, list, &rows);
-    if status_h > 0 {
-        let (text, color) = catalog_status(app);
-        f.render_widget(Paragraph::new(fit_end(&text, li.width as usize)).style(Style::new().fg(color)), Rect::new(li.x, li.bottom() - 1, li.width, 1));
-    }
+    draw_plugin_list(f, app, li, &rows);
     let sel = rows.get(app.pl.selected.min(rows.len().saturating_sub(1)));
     let title = sel.map_or(" About plugins ".to_string(), |r| format!(" {} ", r.manifest.name));
     let rb = block(title, false);
@@ -60,28 +54,29 @@ pub(super) fn draw_plugin_screen(f: &mut Frame, app: &App, area: Rect) {
     match sel {
         Some(r) => draw_plugin_detail(f, app, ri, r),
         None => {
-            let msg = "Plugins add things to platoon that not everyone wants, like its code editor or more color themes. They come from platoon's \
-                       own catalog, where anyone can send one (see plugins/README.md in platoon's repository).";
+            let msg = "Plugins add things to platoon that not everyone wants, like its code editor or more color themes. They come with platoon, \
+                       in its own catalog, where anyone can send one (see plugins/README.md in platoon's repository).";
             f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(t.subtext)), ri);
         }
     }
 }
 
-/// "⠋ Checking the catalog…", "Catalog: commit 1a2b3c4", or that it couldn't be reached.
-pub(super) fn catalog_status(app: &App) -> (String, Color) {
-    let t = app.effective_theme();
-    if app.pl.fetching() {
-        let spin = SPINNER[(app.tick % 10) as usize];
-        return (format!("{spin} Checking the catalog…"), t.dim);
+/// The most lines the selected plugin's description has under the settings' list (the rest is cut with "…").
+pub(super) const DESCRIPTION_LINES: usize = 3;
+
+/// The description of plugin `r`, wrapped to `w` and cut to `DESCRIPTION_LINES` lines, the last ending in "…" when
+/// there was more.
+pub(super) fn description_lines(r: &PlugRow, w: usize) -> Vec<String> {
+    let mut lines = wrap(&r.manifest.description, w.max(1));
+    if lines.len() > DESCRIPTION_LINES {
+        lines.truncate(DESCRIPTION_LINES);
+        if let Some(last) = lines.last_mut() {
+            let keep = w.max(2) - 1;
+            let cut: String = last.chars().take(keep).collect();
+            *last = format!("{}…", cut.trim_end());
+        }
     }
-    if app.pl.fetch_error.is_some() {
-        let old = if app.pl.catalog.is_some() { ": showing the last copy" } else { ", so only installed plugins show" };
-        return (format!("Couldn't reach the catalog{old}. f tries again."), t.warn);
-    }
-    match &app.pl.catalog {
-        Some(c) => (format!("Catalog: commit {}", crate::plugins::short(&c.commit)), t.dim),
-        None => ("Catalog: not fetched yet".into(), t.dim),
-    }
+    lines
 }
 
 /// The code editor plugin is installed but not everything it downloads is there.
@@ -100,15 +95,7 @@ fn state_words(app: &App, r: &PlugRow) -> String {
 fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
     let t = app.effective_theme();
     if rows.is_empty() {
-        let msg = if app.pl.fetching() {
-            "Fetching the catalog…".to_string()
-        } else if let Some(e) = &app.pl.fetch_error {
-            format!("{e}. f tries again.")
-        } else {
-            "No plugins yet. f checks the catalog again.".to_string()
-        };
-        let color = if app.pl.fetch_error.is_some() && !app.pl.fetching() { t.warn } else { t.dim };
-        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(color)), li);
+        f.render_widget(Paragraph::new("No plugins to show.").wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), li);
         return;
     }
     let per = 3u16;
@@ -188,11 +175,6 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
     if let Some(l) = &m.license {
         field("License", l.clone(), t.subtext);
     }
-    let from = match &r.installed {
-        Some(p) => p.origin.words(&app.home),
-        None => "the catalog".to_string(),
-    };
-    field("From", from, t.subtext);
     field("Needs", format!("platoon {} or newer", m.platoon), t.subtext);
     lines.push(Line::raw(""));
     let editor = m.editor.is_some();
@@ -241,7 +223,7 @@ pub(super) fn draw_plugin_settings(f: &mut Frame, app: &App, area: Rect) -> u16 
     }
     let rows = app.pl.rows();
     if rows.is_empty() {
-        let msg = if app.pl.fetching() { "No plugins installed. Checking the catalog for more…" } else { "No plugins installed, and none from the catalog to show." };
+        let msg = "No plugins installed, and none from the catalog to show.";
         f.render_widget(Paragraph::new(Span::styled(fit_end(msg, area.width as usize), Style::new().fg(t.dim))), Rect::new(area.x, area.y, area.width, 1));
         return area.y + 1;
     }

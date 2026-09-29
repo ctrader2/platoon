@@ -554,7 +554,7 @@ pub struct App {
     pub ed: editor_glue::EdState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
-    /// The plugins: the catalog, what is installed, a fetch or an install running.
+    /// The plugins: the catalog, what is installed, an install running.
     pub pl: PluginsState,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
@@ -804,6 +804,8 @@ impl App {
         // An editor installed before it was a plugin becomes the editor plugin (quietly, from the copy that came with
         // platoon: no network, nothing downloaded).
         app.take_over_editor();
+        // A newer platoon brings newer plugins: those installed from its catalog are updated (or asked about).
+        app.update_with_platoon();
         app.pl.editor_facts(&app.ed.dirs);
         // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
         // `.claude.json` in that same (temporary) folder, never the user's own.
@@ -1723,7 +1725,7 @@ impl App {
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
-        // The Plugins tab lists the catalog's plugins too: it is fetched the first time in a run.
+        // The Plugins tab lists the catalog's plugins too: it is read the first time in a run.
         self.plugins_shown();
     }
 

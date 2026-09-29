@@ -104,9 +104,9 @@ impl Term {
         cmd.env("PLATOON_FONT_DIR", spare.join("fonts"));
         cmd.env("PLATOON_EDITOR_MIRROR", spare.join("mirror"));
         cmd.env("PLATOON_SKIP_FC_CACHE", "1");
-        // ...nor platoon's real plugin catalog (the network): a source that isn't there, unless a test gives its own.
-        cmd.env("PLATOON_PLUGIN_SOURCE", spare.join("no-plugin-source"));
-        cmd.env("PLATOON_PLUGIN_REF", "main");
+        // ...nor the plugin catalog built into platoon (it changes as plugins are added): a catalog folder that isn't
+        // there, so no plugins show, unless a test gives its own (an empty value: the built-in one).
+        cmd.env("PLATOON_PLUGIN_CATALOG", spare.join("no-plugin-catalog"));
         for (k, v) in env {
             cmd.env(k, v);
         }

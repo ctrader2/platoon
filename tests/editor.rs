@@ -326,45 +326,66 @@ fn pack(mirror: &Path, name: &str, top: &str, files: &[(&str, &str)]) -> Value {
     json!({"url": format!("https://example.invalid/{name}"), "sha256": sha256(&out), "size": fs::metadata(&out).unwrap().len()})
 }
 
-/// A plugin catalog (a git repository) whose code editor plugin is platoon's own (`plugins/editor`: its settings
-/// files) with a download table of tiny fake downloads in a mirror: its "Neovim" is the stand-in (so after the install
-/// platoon runs the stand-in as the editor's own nvim), one Neovim plugin, a font. Never the network.
+/// A plugin catalog (a folder standing in for the one built into platoon: `PLATOON_PLUGIN_CATALOG`) whose code
+/// editor plugin is platoon's own (`plugins/editor`: its settings files, its version) with a download table of tiny
+/// fake downloads in a mirror: its "Neovim" is the stand-in (so after the install platoon runs the stand-in as the
+/// editor's own nvim), one Neovim plugin, a font. Never the network.
 fn editor_catalog(lab: &Lab) -> (PathBuf, PathBuf) {
+    editor_catalog_with(lab, None, &[])
+}
+
+/// The same at `version` (None: the plugin's own), with more fake Neovim plugins (`extra`, by name). A download
+/// already in the mirror is kept as it is (the same file, the same checksum), so a later table changes only what it adds.
+fn editor_catalog_with(lab: &Lab, version: Option<&str>, extra: &[&str]) -> (PathBuf, PathBuf) {
     let mirror = lab.base.join("mirror");
     fs::create_dir_all(&mirror).unwrap();
-    let nvim = pack(&mirror, "nvim-fake.tar.gz", "nvim-dist", &[("bin/nvim", STAND_IN)]);
-    let alpha = pack(&mirror, "rev-alpha", "alpha-rev", &[("lua/alpha.lua", "return 1")]);
-    let font = pack(&mirror, "Font.tar.xz", "", &[("FakeNerdFont-Regular.ttf", "font"), ("OFL.txt", "licence")]);
+    let packed = |name: &str, top: &str, files: &[(&str, &str)]| {
+        let out = mirror.join(name);
+        if out.is_file() {
+            json!({"url": format!("https://example.invalid/{name}"), "sha256": sha256(&out), "size": fs::metadata(&out).unwrap().len()})
+        } else {
+            pack(&mirror, name, top, files)
+        }
+    };
+    let nvim = packed("nvim-fake.tar.gz", "nvim-dist", &[("bin/nvim", STAND_IN)]);
+    let font = packed("Font.tar.xz", "", &[("FakeNerdFont-Regular.ttf", "font"), ("OFL.txt", "licence")]);
     let downloads: serde_json::Map<String, Value> = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"].iter().map(|k| (k.to_string(), nvim.clone())).collect();
-    let mut alpha_pin = json!({"name": "alpha.nvim", "repo": "o/alpha", "rev": "rev-alpha"});
-    alpha_pin.as_object_mut().unwrap().extend(alpha.as_object().unwrap().clone());
+    let mut pins = Vec::new();
+    for name in std::iter::once("alpha.nvim").chain(extra.iter().copied()) {
+        let short = name.trim_end_matches(".nvim");
+        let got = packed(&format!("rev-{short}"), &format!("{short}-rev"), &[(&format!("lua/{short}.lua"), "return 1")]);
+        let mut pin = json!({"name": name, "repo": format!("o/{short}"), "rev": format!("rev-{short}")});
+        pin.as_object_mut().unwrap().extend(got.as_object().unwrap().clone());
+        pins.push(pin);
+    }
     let mut font_pin = json!({"family": "Fake Nerd Font", "version": "1", "files": ["FakeNerdFont-Regular.ttf", "OFL.txt"]});
     font_pin.as_object_mut().unwrap().extend(font.as_object().unwrap().clone());
     // Never the machine's own nvim, whatever it has: only a version no nvim has would be taken.
     let table = json!({"format": 1, "tools": [{"id": "nvim", "version": "1.0.0", "min_yours": "999.0.0", "names": ["nvim"], "exe": "bin/nvim", "downloads": downloads}],
-        "plugins": [alpha_pin], "parsers": [], "font": font_pin});
-    let repo = lab.base.join("catalog");
+        "plugins": pins, "parsers": [], "font": font_pin});
+    let cat = lab.base.join("catalog");
     let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor");
-    let theirs = repo.join("plugins/editor");
+    let theirs = cat.join("editor");
     for rel in ["plugin.json", "config/init.lua", "config/lua/platoon/tree.lua", "config/shell.sh"] {
         fs::create_dir_all(theirs.join(rel).parent().unwrap()).unwrap();
         fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
     }
     fs::write(theirs.join("downloads.json"), serde_json::to_string_pretty(&table).unwrap()).unwrap();
     // The index names the version the plugin's own file has (a catalog whose two disagree is refused).
-    let version = serde_json::from_str::<Value>(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap()["version"].clone();
-    fs::write(repo.join("plugins/index.json"), json!({"plugins": [{"id": "editor", "version": version}]}).to_string()).unwrap();
-    git(&repo, &["init", "-q"]);
-    git(&repo, &["add", "-A"]);
-    git(&repo, &["commit", "-q", "-m", "catalog"]);
-    (repo, mirror)
+    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap();
+    if let Some(v) = version {
+        manifest.as_object_mut().unwrap().insert("version".into(), json!(v));
+        fs::write(theirs.join("plugin.json"), serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
+    }
+    fs::write(cat.join("index.json"), json!({"plugins": [{"id": "editor", "version": manifest["version"].clone()}]}).to_string()).unwrap();
+    (cat, mirror)
 }
 
 #[test]
 fn not_installed_v_offers_the_plugin_and_yes_installs_it_and_its_downloads_then_opens_it() {
     let lab = Lab::new("ed-term-install");
     lab.session(&[]);
-    let (repo, mirror) = editor_catalog(&lab);
+    let (cat, mirror) = editor_catalog(&lab);
     // No stand-in named: the editor's own nvim is asked for, and it isn't installed. The catalog and the downloads
     // are the lab's; the "Neovim" it installs is the stand-in, allowed to run (an empty PLATOON_FORBID_REAL_EDITOR).
     let env: Vec<(&str, String)> = lab
@@ -373,7 +394,7 @@ fn not_installed_v_offers_the_plugin_and_yes_installs_it_and_its_downloads_then_
         .filter(|(k, _)| *k != "PLATOON_NVIM_BIN")
         .chain([
             ("PLATOON_EDITOR_MIRROR", s(&mirror)),
-            ("PLATOON_PLUGIN_SOURCE", s(&repo)),
+            ("PLATOON_PLUGIN_CATALOG", s(&cat)),
             ("PLATOON_FONT_DIR", s(&lab.base.join("fonts"))),
             ("PLATOON_FORBID_REAL_EDITOR", String::new()),
             ("PATH", "/usr/bin:/bin".to_string()),
@@ -383,7 +404,7 @@ fn not_installed_v_offers_the_plugin_and_yes_installs_it_and_its_downloads_then_
     t.wait_for("make the shop");
     t.send(b"v");
     t.wait_for_all(&["platoon's code editor isn't installed. Install its plugin now?", "not now"]);
-    // (What it downloads: the catalog's figure once fetched; before that, the one that came with platoon.)
+    // (What it downloads: the catalog's figure.)
     t.wait_for("It downloads about");
     t.send(b"n");
     t.wait_for_flat("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.");
@@ -624,7 +645,7 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
     t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last (Plugins), then Editors before it
-    t.wait_for("No plugins installed.");
+    t.wait_for("No plugins installed, and none from the catalog to show.");
     t.send(b"\x1b[Z");
     t.wait_for_all(&["Editing platoon's text", "Editor for notes and tickets", "Editing files", "Editor for files (v)", "Always ask which editor"]);
     let shown = t.stable();
@@ -660,6 +681,53 @@ fn the_editor_is_given_the_back_key_from_keys_json() {
     assert_eq!(session_of(&run)["keys"], json!({"back": "<M-x>"}));
     t.send(b"done\r");
     t.wait_for_all(&["make the shop", "v editor"]);
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+}
+
+#[test]
+fn a_newer_editor_plugin_is_updated_when_platoon_starts_and_fetches_only_what_changed() {
+    let lab = Lab::new("ed-term-auto");
+    lab.session(&[]);
+    let (cat, mirror) = editor_catalog_with(&lab, Some("1.0.0"), &[]);
+    let env: Vec<(&str, String)> = lab
+        .env()
+        .into_iter()
+        .chain([
+            ("PLATOON_EDITOR_MIRROR", s(&mirror)),
+            ("PLATOON_PLUGIN_CATALOG", s(&cat)),
+            ("PLATOON_FONT_DIR", s(&lab.base.join("fonts"))),
+            ("PLATOON_SKIP_FC_CACHE", "1".into()),
+            ("PATH", "/usr/bin:/bin".to_string()),
+        ])
+        .collect();
+    let cli = |args: &[&str]| {
+        let out = Command::new(BIN).args(args).envs(env.iter().map(|(k, v)| (*k, v.as_str()))).current_dir(&lab.base).stdin(Stdio::null()).output().unwrap();
+        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+    };
+    let (code, out, err) = cli(&["plugin", "add", "editor"]);
+    assert_eq!(code, 0, "{out}{err}");
+    let site = lab.data.join("editor/site/pack/platoon/start");
+    assert!(site.join("alpha.nvim/lua/alpha.lua").is_file());
+    // A newer platoon: the editor plugin 1.1.0 with one more Neovim plugin. What didn't change leaves the mirror, so
+    // fetching it again would fail: only the new one can be fetched.
+    editor_catalog_with(&lab, Some("1.1.0"), &["beta.nvim"]);
+    for name in ["nvim-fake.tar.gz", "rev-alpha", "Font.tar.xz"] {
+        fs::remove_file(mirror.join(name)).unwrap();
+    }
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
+    t.wait_for_flat("Updated with platoon: Code editor (Neovim) 1.1.0.");
+    assert!(site.join("beta.nvim/lua/beta.lua").is_file() && site.join("alpha.nvim/lua/alpha.lua").is_file());
+    let installed: Value = serde_json::from_str(&fs::read_to_string(lab.data.join("plugins/installed.json")).unwrap()).unwrap();
+    assert_eq!(installed["plugins"]["editor"]["version"], "1.1.0");
+    let shown = t.stable();
+    assert!(!shown.contains("didn't finish"), "{shown}");
+    t.send(b"q");
+    assert_eq!(t.wait_exit(), 0);
+    // Started again: nothing more to do, nothing said.
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
+    t.wait_for("make the shop");
+    assert!(!t.stable().contains("Updated with platoon"));
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }

@@ -16,21 +16,22 @@
 //! ```text
 //! <data>/plugins/                 `PLATOON_DATA_DIR`, as the code editor uses
 //!   <id>/...                      an installed plugin: a copy of its folder
-//!   installed.json                what is installed: version, where from (catalog commit or folder), sha256
-//!   .catalog/, .catalog.json      the catalog as last fetched, and from where (source, ref, commit)
-//!   .lock, .tmp/, .fetch/         one change at a time; installs are staged in .tmp, fetches cloned in .fetch
+//!   installed.json                what is installed: version, where from (the catalog or a folder), sha256
+//!   .lock, .tmp/                  one change at a time; installs are staged in .tmp
 //! ```
 //!
 //! A plugin counts as installed only when `installed.json` lists it and its folder is there: an install copies into
 //! `.tmp`, checks the copy, moves it into place and only then records it, so one that fails or is interrupted never
 //! looks installed. Removing un-records first, then deletes.
 //!
-//! The catalog is fetched with `git` (a shallow, sparse, blob-filtered clone of `plugins/` at a ref), so it works
-//! with the user's own git login while the repository is private and without one once it is public.
-//! `GIT_TERMINAL_PROMPT=0`: a missing login fails at once with a plain message rather than waiting for a password.
+//! The catalog is BUILT INTO platoon: `build.rs` puts every file of each plugin `plugins/index.json` lists into the
+//! binary (`builtin_files`), so installing one needs no network and a user gets exactly what was reviewed and released
+//! with their platoon. Showing or installing one unpacks its files into a private temporary folder for as long as it
+//! takes (`Entry::unpack`), and `check` runs on them there as on any folder. A newer platoon brings newer plugins: at
+//! start `auto_plan` says which installed ones to update quietly (themes, the code editor) and which to ask about
+//! first (skills, squads and agents: instructions Claude follows).
 //!
-//! Knobs: `PLATOON_PLUGIN_SOURCE` (a repository URL or a local path instead of platoon's own; tests use a temp git
-//! repository, never the network), `PLATOON_PLUGIN_REF` (a branch or tag instead of `main`).
+//! Knob: `PLATOON_PLUGIN_CATALOG`, a folder laid out like `plugins/` used instead of the built-in catalog (tests).
 
 use crate::editor_install::{sha256_file, sha256_hex};
 use crate::theme::{contrast, delta_e, luminance, Theme, MIN_DELTA_E, MIN_ROLE, MIN_TEXT};
@@ -39,19 +40,17 @@ use serde_json::{json, Map, Value};
 use std::{
     ffi::OsStr,
     fs, io,
-    io::Read,
     os::unix::{fs::PermissionsExt, io::AsRawFd},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
 
-/// Where the official catalog lives: platoon's own repository, its `plugins/` folder.
-pub const DEFAULT_SOURCE: &str = "https://github.com/ctrader2/platoon.git";
-pub const DEFAULT_REF: &str = "main";
-/// The catalog's folder in the repository.
+/// The catalog's folder in platoon's repository.
 pub const CATALOG_FOLDER: &str = "plugins";
 pub const MANIFEST: &str = "plugin.json";
 pub const INDEX: &str = "index.json";
@@ -72,8 +71,6 @@ const MAX_DESCRIPTION: usize = 400;
 const MAX_AUTHOR: usize = 80;
 const MAX_LICENSE: usize = 60;
 const MAX_PATH: usize = 200;
-/// A fetch of the catalog that takes longer than this is given up (a network that hangs).
-const FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// A kind of thing a plugin can add: its key in `plugin.json`, and how one and many of them are called.
 pub struct KindInfo {
@@ -519,8 +516,8 @@ pub fn theme_problems(p: &usertheme::Parsed) -> Vec<String> {
 /// Where an installed plugin came from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Origin {
-    /// The official catalog: the repository it was fetched from, the ref and the commit.
-    Catalog { source: String, rf: String, commit: String },
+    /// The catalog that came with platoon (before the catalog was built in: fetched with git; the same to update).
+    Catalog,
     /// A folder on this computer (someone making a plugin).
     Folder { path: String },
     /// The copy of it that came with this platoon (the code editor, taken over from an install made before it was a
@@ -529,18 +526,14 @@ pub enum Origin {
 }
 
 impl Origin {
-    /// "the catalog (commit 1a2b3c4)", "a folder: ~/my-plugin".
+    /// "the catalog", "a folder: ~/my-plugin".
     pub fn words(&self, home: &str) -> String {
         match self {
-            Origin::Catalog { commit, .. } => format!("the catalog (commit {})", short(commit)),
+            Origin::Catalog => "the catalog".into(),
             Origin::Folder { path } => format!("a folder: {}", crate::dirs::tilde(path, home)),
             Origin::Bundled { version } => format!("the copy that came with platoon {version}"),
         }
     }
-}
-
-pub fn short(commit: &str) -> &str {
-    &commit[..commit.len().min(7)]
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -553,11 +546,19 @@ pub struct Installed {
     pub installed_at: u64,
     /// The skills platoon wrote into Claude Code's skills folder for it (and the changed copies it kept).
     pub skills: Vec<crate::skillplugin::Placed>,
+    /// The catalog's version the user said no to updating to when platoon asked at start (`Store::decline_update`):
+    /// not asked again for that version.
+    pub declined: Option<String>,
 }
 
 impl Installed {
     pub fn id(&self) -> &str {
         &self.manifest.id
+    }
+
+    /// It came from the catalog (or the copy of it that came with platoon), so the catalog updates it.
+    pub fn from_catalog(&self) -> bool {
+        matches!(self.origin, Origin::Catalog | Origin::Bundled { .. })
     }
 }
 
@@ -591,6 +592,10 @@ pub struct Store {
     #[cfg(test)]
     pub fail_record: bool,
 }
+
+/// The key of a plugin's record in `installed.json` that holds the version the user said no to (older platoons leave it
+/// alone, as any key they don't know).
+const DECLINED: &str = "declined_update";
 
 /// One change at a time: an exclusive lock on `.lock`, let go when dropped.
 struct Lock(#[allow(dead_code)] fs::File);
@@ -642,14 +647,6 @@ impl Store {
 
     fn tmp(&self) -> PathBuf {
         self.dir.join(".tmp")
-    }
-
-    fn catalog_dir(&self) -> PathBuf {
-        self.dir.join(".catalog")
-    }
-
-    fn catalog_record(&self) -> PathBuf {
-        self.dir.join(".catalog.json")
     }
 
     /// An installed plugin's folder.
@@ -710,14 +707,15 @@ impl Store {
                 let origin = match v.get("origin").and_then(Value::as_str) {
                     Some("folder") => Origin::Folder { path: s("path") },
                     Some("bundled") => Origin::Bundled { version: s("platoon") },
-                    _ => Origin::Catalog { source: s("source"), rf: s("ref"), commit: s("commit") },
+                    _ => Origin::Catalog,
                 };
                 let skills = v
                     .get("skills")
                     .and_then(Value::as_object)
                     .map(|o| o.iter().filter_map(|(name, p)| crate::skillplugin::Placed::from_json(name, p)).collect())
                     .unwrap_or_default();
-                Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0), skills })
+                let declined = v.get(DECLINED).and_then(Value::as_str).map(String::from);
+                Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0), skills, declined })
             })
             .collect();
         out.sort_by(|a, b| a.manifest.name.to_lowercase().cmp(&b.manifest.name.to_lowercase()).then(a.id().cmp(b.id())));
@@ -834,7 +832,7 @@ impl Store {
             },
         };
         let entry = match &origin {
-            Origin::Catalog { source, rf, commit } => json!({"origin": "catalog", "source": source, "ref": rf, "commit": commit}),
+            Origin::Catalog => json!({"origin": "catalog"}),
             Origin::Folder { path } => json!({"origin": "folder", "path": path}),
             Origin::Bundled { version } => json!({"origin": "bundled", "platoon": version}),
         };
@@ -853,7 +851,8 @@ impl Store {
         if let Some(plugins) = rec.get_mut("plugins").and_then(Value::as_object_mut) {
             // Keys a later platoon added to this plugin's record are kept.
             let mut merged = plugins.get(&m.id).and_then(Value::as_object).cloned().unwrap_or_default();
-            for key in ["origin", "source", "ref", "commit", "path", "platoon", "skills"] {
+            // (`source`, `ref` and `commit`: where a catalog fetched with git came from, before it was built in.)
+            for key in ["origin", "source", "ref", "commit", "path", "platoon", "skills", DECLINED] {
                 merged.remove(key);
             }
             merged.extend(entry);
@@ -921,31 +920,38 @@ impl Store {
 
 // ---- the catalog --------------------------------------------------------------------------------------------------
 
-/// Where the catalog is fetched from.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Source {
-    /// A git URL, or a folder on this computer (a repository).
-    pub url: String,
-    /// A branch or a tag.
-    pub rf: String,
+mod built_in {
+    include!(concat!(env!("OUT_DIR"), "/catalog.rs"));
 }
 
-impl Source {
-    /// platoon's own repository at `main`, unless `PLATOON_PLUGIN_SOURCE` / `PLATOON_PLUGIN_REF` say otherwise.
-    pub fn from_env() -> Source {
-        let env = |k: &str| std::env::var(k).ok().filter(|v| !v.trim().is_empty());
-        Source { url: env("PLATOON_PLUGIN_SOURCE").unwrap_or_else(|| DEFAULT_SOURCE.into()), rf: env("PLATOON_PLUGIN_REF").unwrap_or_else(|| DEFAULT_REF.into()) }
-    }
+/// Every file of the catalog built into this platoon: (its path in `plugins/`, its bytes). `index.json`, and the
+/// files of each plugin it lists.
+pub fn builtin_files() -> &'static [(&'static str, &'static [u8])] {
+    built_in::FILES
+}
 
-    /// What git is given: a folder as a `file://` URL (so a shallow clone is shallow there too).
-    fn git_url(&self) -> String {
-        let u = self.url.trim();
-        if u.contains("://") || (u.contains('@') && u.contains(':')) {
-            return u.to_string();
+/// The files of the built-in catalog's plugin `id`, as (path inside the plugin, bytes).
+pub fn builtin_plugin(id: &str) -> Vec<(&'static str, &'static [u8])> {
+    let prefix = format!("{id}/");
+    builtin_files().iter().filter_map(|(rel, bytes)| rel.strip_prefix(prefix.as_str()).map(|r| (r, *bytes))).collect()
+}
+
+/// Where the catalog comes from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CatalogFrom {
+    /// Built into this platoon: the repository's `plugins/` as it was when this platoon was built.
+    BuiltIn,
+    /// A folder laid out like `plugins/` (`PLATOON_PLUGIN_CATALOG`: tests). One that isn't there is an empty catalog.
+    Folder(PathBuf),
+}
+
+impl CatalogFrom {
+    /// The built-in catalog, unless `PLATOON_PLUGIN_CATALOG` names a folder.
+    pub fn from_env() -> CatalogFrom {
+        match std::env::var_os("PLATOON_PLUGIN_CATALOG").filter(|v| !v.is_empty()) {
+            Some(dir) => CatalogFrom::Folder(PathBuf::from(dir)),
+            None => CatalogFrom::BuiltIn,
         }
-        let p = Path::new(u);
-        let abs = if p.is_absolute() { p.to_path_buf() } else { std::env::current_dir().unwrap_or_default().join(p) };
-        format!("file://{}", abs.display())
     }
 }
 
@@ -953,20 +959,80 @@ impl Source {
 #[derive(Clone, Debug)]
 pub struct Entry {
     pub manifest: Manifest,
-    /// Its folder in the fetched catalog.
-    pub dir: PathBuf,
     pub sha256: String,
     /// Why it can't be installed here (it needs a newer platoon, ...); empty when it can.
     pub problems: Vec<String>,
     /// What installing the code editor it adds downloads on this computer.
     pub download_bytes: Option<u64>,
+    /// Its files, (path inside it, bytes): what `unpack` writes out.
+    files: Arc<Vec<(String, Vec<u8>)>>,
+}
+
+/// A catalog plugin's files written out into a private temporary folder, for as long as this lives (it is deleted
+/// when dropped): what showing and installing it read.
+pub struct Unpacked {
+    root: PathBuf,
+    dir: PathBuf,
+}
+
+impl Unpacked {
+    /// The plugin's folder.
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+}
+
+impl Drop for Unpacked {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
+}
+
+/// A new folder only this user can enter, in the system's temporary folder: made fresh (never one that was already
+/// there, whoever made it).
+fn scratch() -> io::Result<PathBuf> {
+    use std::os::unix::fs::DirBuilderExt;
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let mut last = io::Error::other("no free name");
+    for _ in 0..16 {
+        let p = std::env::temp_dir().join(format!("platoon-plugin-{}-{nanos}", unique()));
+        match fs::DirBuilder::new().mode(0o700).create(&p) {
+            Ok(()) => return Ok(p),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => last = e,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last)
+}
+
+/// Write `files` (path inside `name`, bytes) into a fresh scratch folder, under `name`.
+fn unpack_files<'a>(name: &str, files: impl IntoIterator<Item = (&'a str, &'a [u8])>) -> Result<Unpacked, String> {
+    let say = |e: io::Error| format!("couldn't unpack the plugin catalog into a temporary folder: {e}");
+    let root = scratch().map_err(say)?;
+    let u = Unpacked { dir: root.join(name), root };
+    fs::create_dir_all(&u.dir).map_err(say)?;
+    for (rel, bytes) in files {
+        if !safe_rel(rel) {
+            return Err(format!("the plugin catalog has a file that can't be written out ({})", clean(rel)));
+        }
+        let to = u.dir.join(rel);
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent).map_err(say)?;
+        }
+        fs::write(&to, bytes).map_err(say)?;
+    }
+    Ok(u)
+}
+
+impl Entry {
+    /// Its files, written out into a private temporary folder: what `check`, the review and `Store::install` read.
+    pub fn unpack(&self) -> Result<Unpacked, String> {
+        unpack_files(&self.manifest.id, self.files.iter().map(|(rel, b)| (rel.as_str(), b.as_slice())))
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct Catalog {
-    pub source: String,
-    pub rf: String,
-    pub commit: String,
     pub entries: Vec<Entry>,
     /// Listed in the index but not usable, and why: "foo: plugin.json has no \"version\"".
     pub skipped: Vec<String>,
@@ -978,129 +1044,16 @@ impl Catalog {
     }
 }
 
-/// Run git by `deadline`, with no way to ask for a password. Its output, or what it said went wrong.
-fn git(dir: &Path, args: &[&str], deadline: Instant) -> Result<String, String> {
-    let mut cmd = Command::new("git");
-    cmd.current_dir(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .env("GCM_INTERACTIVE", "never")
-        .env_remove("GIT_DIR")
-        .env_remove("GIT_WORK_TREE")
-        .env_remove("GIT_INDEX_FILE")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let mut child = match cmd.spawn() {
-        Ok(c) => c,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Err("git isn't installed".into()),
-        Err(e) => return Err(format!("git couldn't start ({e})")),
+/// The catalog: the one built into platoon (unpacked for a moment to be read and checked), or a folder's.
+pub fn load_catalog(from: &CatalogFrom) -> Catalog {
+    let (entries, skipped) = match from {
+        CatalogFrom::Folder(dir) => read_catalog(dir),
+        CatalogFrom::BuiltIn => match unpack_files(CATALOG_FOLDER, builtin_files().iter().copied()) {
+            Ok(u) => read_catalog(u.dir()),
+            Err(e) => (Vec::new(), vec![e]),
+        },
     };
-    let (mut out, mut err) = (child.stdout.take(), child.stderr.take());
-    let read_out = thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(o) = out.as_mut() {
-            let _ = o.take(1 << 20).read_to_end(&mut s);
-        }
-        s
-    });
-    let read_err = thread::spawn(move || {
-        let mut s = Vec::new();
-        if let Some(e) = err.as_mut() {
-            let _ = e.take(1 << 16).read_to_end(&mut s);
-        }
-        s
-    });
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let out = String::from_utf8_lossy(&read_out.join().unwrap_or_default()).into_owned();
-                let err = String::from_utf8_lossy(&read_err.join().unwrap_or_default()).into_owned();
-                return if status.success() { Ok(out) } else { Err(git_error(&err)) };
-            }
-            Ok(None) if Instant::now() < deadline => thread::sleep(Duration::from_millis(20)),
-            _ => {
-                // Out of time: this is our own child, and only it is ended.
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("it took too long (no answer from the network?)".into());
-            }
-        }
-    }
-}
-
-/// What git said went wrong, in a few plain words.
-fn git_error(stderr: &str) -> String {
-    let low = stderr.to_lowercase();
-    if low.contains("could not read username") || low.contains("terminal prompts disabled") || low.contains("authentication failed") {
-        return "git needs a login for it and none is saved (the catalog is private for now)".into();
-    }
-    if low.contains("could not resolve host") || low.contains("unable to access") && low.contains("resolve") {
-        return "no network connection (the address couldn't be found)".into();
-    }
-    if low.contains("remote branch") && low.contains("not found") {
-        return "the catalog's branch or tag wasn't found".into();
-    }
-    if low.contains("does not appear to be a git repository") || low.contains("repository") && low.contains("not found") {
-        return "there is no repository there".into();
-    }
-    let line = stderr.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("warning:") && !l.starts_with("hint:")).last().unwrap_or("git failed");
-    let line = line.strip_prefix("fatal: ").unwrap_or(line);
-    clean(line).chars().take(160).collect()
-}
-
-/// Fetch the catalog from `source` (a shallow, sparse clone of its `plugins/` folder at the ref), keep it as this
-/// computer's copy of the catalog, and read it.
-pub fn fetch(store: &Store, source: &Source) -> Result<Catalog, String> {
-    let say = |why: String| format!("platoon couldn't reach its plugin catalog: {why}");
-    let work = store.dir.join(".fetch").join(unique());
-    fs::create_dir_all(&work).map_err(|e| say(format!("couldn't make {}: {e}", work.display())))?;
-    let result = (|| -> Result<Catalog, String> {
-        let deadline = Instant::now() + FETCH_TIMEOUT;
-        let url = source.git_url();
-        git(&work, &["clone", "--quiet", "--depth", "1", "--filter=blob:none", "--sparse", "--no-checkout", "--single-branch", "--branch", &source.rf, "--", &url, "repo"], deadline).map_err(say)?;
-        let repo = work.join("repo");
-        git(&repo, &["sparse-checkout", "set", "--no-cone", &format!("/{CATALOG_FOLDER}/")], deadline).map_err(say)?;
-        git(&repo, &["checkout", "--quiet", &source.rf], deadline).map_err(say)?;
-        let commit = git(&repo, &["rev-parse", "HEAD"], deadline).map_err(say)?.trim().to_string();
-        let got = repo.join(CATALOG_FOLDER);
-        if !got.is_dir() {
-            return Err(format!("platoon's plugin catalog isn't there yet: its repository has no {CATALOG_FOLDER} folder on {}", source.rf));
-        }
-        let _lock = store.lock()?;
-        let next = store.dir.join(format!(".catalog-new-{}", unique()));
-        fs::rename(&got, &next).map_err(|e| format!("couldn't keep the catalog: {e}"))?;
-        let old = store.dir.join(format!(".catalog-old-{}", unique()));
-        let had = store.catalog_dir().exists();
-        if had {
-            let _ = fs::rename(store.catalog_dir(), &old);
-        }
-        if let Err(e) = fs::rename(&next, store.catalog_dir()) {
-            if had {
-                let _ = fs::rename(&old, store.catalog_dir());
-            }
-            let _ = fs::remove_dir_all(&next);
-            return Err(format!("couldn't keep the catalog: {e}"));
-        }
-        let _ = fs::remove_dir_all(&old);
-        let rec = json!({"source": source.url, "ref": source.rf, "commit": commit, "fetched_at": now()});
-        write_atomic(&store.catalog_record(), &serde_json::to_string_pretty(&rec).unwrap_or_default()).map_err(|e| format!("couldn't keep the catalog: {e}"))?;
-        drop(_lock);
-        cached(store, source).ok_or_else(|| "the catalog couldn't be read after fetching it".to_string())
-    })();
-    let _ = fs::remove_dir_all(&work);
-    result
-}
-
-/// The catalog as last fetched from `source`, without going to the network. None if it never was.
-pub fn cached(store: &Store, source: &Source) -> Option<Catalog> {
-    let rec: Value = serde_json::from_str(&fs::read_to_string(store.catalog_record()).ok()?).ok()?;
-    let s = |k: &str| rec.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
-    if s("source") != source.url || s("ref") != source.rf {
-        return None;
-    }
-    let (entries, skipped) = read_catalog(&store.catalog_dir());
-    Some(Catalog { source: s("source"), rf: s("ref"), commit: s("commit"), entries, skipped })
+    Catalog { entries, skipped }
 }
 
 /// The plugins a catalog folder offers: those its `index.json` lists (in its order), each read from its folder.
@@ -1133,10 +1086,24 @@ pub fn read_catalog(dir: &Path) -> (Vec<Entry>, Vec<String>) {
             continue;
         }
         let mut ignored = Vec::new();
-        let sha256 = tree_hash(&walk(&folder, &mut ignored)).unwrap_or_default();
-        entries.push(Entry { manifest: m, dir: folder, sha256, problems: report.problems, download_bytes: report.download_bytes });
+        let found = walk(&folder, &mut ignored);
+        let sha256 = tree_hash(&found).unwrap_or_default();
+        // Its files are kept to be written out again when it is shown or installed (a plugin too big to install
+        // keeps none: it can't be installed anyway).
+        let files: Vec<(String, Vec<u8>)> = if report.bytes <= MAX_PLUGIN_BYTES { found.iter().filter_map(|f| fs::read(&f.path).ok().map(|b| (f.rel.clone(), b))).collect() } else { Vec::new() };
+        entries.push(Entry { manifest: m, sha256, problems: report.problems, download_bytes: report.download_bytes, files: Arc::new(files) });
     }
     (entries, skipped)
+}
+
+/// The catalog's version is newer than the one installed.
+pub fn newer(p: &Installed, e: &Entry) -> bool {
+    matches!((parse_version(&e.manifest.version), parse_version(&p.manifest.version)), (Some(a), Some(b)) if a > b)
+}
+
+/// The catalog has a newer version of an installed plugin that came from it, one that can be installed here.
+pub fn update_available(p: &Installed, catalog: &Catalog) -> bool {
+    p.from_catalog() && catalog.get(p.id()).is_some_and(|e| e.problems.is_empty() && newer(p, e))
 }
 
 /// What `update` did for one plugin.
@@ -1153,8 +1120,8 @@ pub enum Updated {
     Failed { name: String, why: String },
 }
 
-/// Bring installed plugins up to the catalog: each (or the one named) that came from the catalog and whose files
-/// there are different now is installed again.
+/// Bring installed plugins up to the catalog: each (or the one named) that came from the catalog and whose version
+/// there is newer is installed again. One another platoon updated a moment before is up to date.
 pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updated> {
     let mut out = Vec::new();
     for p in store.installed().into_iter().filter(|p| only.is_none_or(|id| p.id() == id)) {
@@ -1167,12 +1134,17 @@ pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updat
             out.push(Updated::Gone { name });
             continue;
         };
-        if e.sha256 == p.sha256 {
+        if !newer(&p, e) {
             out.push(Updated::UpToDate { name });
             continue;
         }
-        let origin = Origin::Catalog { source: catalog.source.clone(), rf: catalog.rf.clone(), commit: catalog.commit.clone() };
-        match store.install_noting(&e.dir, origin) {
+        if !e.problems.is_empty() {
+            out.push(Updated::Failed { name, why: e.problems.join("; ") });
+            continue;
+        }
+        let done = e.unpack().and_then(|u| store.install_noting(u.dir(), Origin::Catalog));
+        match done {
+            Ok((Outcome::Same(_), _)) => out.push(Updated::UpToDate { name }),
             Ok((o, notes)) => out.push(Updated::Done { name, from: p.manifest.version.clone(), to: o.plugin().manifest.version.clone(), notes }),
             Err(why) => out.push(Updated::Failed { name, why }),
         }
@@ -1180,9 +1152,104 @@ pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updat
     out
 }
 
-/// The catalog's version of an installed plugin is different from what is installed.
-pub fn update_available(p: &Installed, catalog: &Catalog) -> bool {
-    matches!(p.origin, Origin::Catalog { .. } | Origin::Bundled { .. }) && catalog.get(p.id()).is_some_and(|e| e.sha256 != p.sha256 && e.problems.is_empty())
+/// An update of an installed plugin to ask the user about first (it has instructions Claude follows).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ask {
+    pub id: String,
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// What a newer platoon does with the plugins installed from its catalog when it starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AutoPlan {
+    /// Updated quietly, then said in one line: themes and the code editor (ids).
+    pub quiet: Vec<String>,
+    /// Asked about first, with the review of what changed: skills, squads and agents. One the user said no to for
+    /// that same version isn't here.
+    pub ask: Vec<Ask>,
+}
+
+/// Which installed plugins a newer catalog updates: only those installed from the catalog whose version there is
+/// newer (one installed from a folder is never touched; one the catalog no longer has stays as it is).
+pub fn auto_plan(store: &Store, catalog: &Catalog) -> AutoPlan {
+    let mut plan = AutoPlan::default();
+    for p in store.installed() {
+        if !update_available(&p, catalog) {
+            continue;
+        }
+        let Some(e) = catalog.get(p.id()) else { continue };
+        if e.manifest.has_instructions() || p.manifest.has_instructions() {
+            if p.declined.as_deref() != Some(e.manifest.version.as_str()) {
+                plan.ask.push(Ask { id: p.id().to_string(), name: e.manifest.name.clone(), from: p.manifest.version.clone(), to: e.manifest.version.clone() });
+            }
+        } else {
+            plan.quiet.push(p.id().to_string());
+        }
+    }
+    plan
+}
+
+/// Something installed came from the catalog: only then is there anything for a new catalog to update.
+pub fn any_from_catalog(store: &Store) -> bool {
+    store.installed().iter().any(Installed::from_catalog)
+}
+
+/// Update the plugins of `plan.quiet` from the catalog: what was updated, as (name, version, it is the code editor),
+/// and what couldn't be, in plain words.
+pub fn auto_update(store: &Store, catalog: &Catalog, plan: &AutoPlan) -> (Vec<(String, String, bool)>, Vec<String>) {
+    let (mut done, mut failed) = (Vec::new(), Vec::new());
+    for id in &plan.quiet {
+        for u in update(store, catalog, Some(id)) {
+            match u {
+                Updated::Done { name, to, .. } => {
+                    let editor = catalog.get(id).is_some_and(|e| e.manifest.editor.is_some());
+                    done.push((name, to, editor));
+                }
+                Updated::Failed { name, why } => failed.push(format!("{name} couldn't be updated: {why}")),
+                _ => {}
+            }
+        }
+    }
+    (done, failed)
+}
+
+/// The one line that says what was updated with platoon: "Updated with platoon: Code editor (Neovim) 1.2.0, Theme
+/// pack 1.1.0." Empty when nothing was.
+pub fn updated_words(done: &[(String, String, bool)]) -> String {
+    if done.is_empty() {
+        return String::new();
+    }
+    let list: Vec<String> = done.iter().map(|(name, version, _)| format!("{name} {version}")).collect();
+    format!("Updated with platoon: {}.", list.join(", "))
+}
+
+impl Store {
+    /// The user said no to updating plugin `id` to `version` when platoon asked at start: kept in its record, so the
+    /// same version isn't asked about again (a newer one is). Nothing else changes.
+    pub fn decline_update(&self, id: &str, version: &str) -> Result<(), String> {
+        let _lock = self.lock()?;
+        let mut rec = self.read_record()?;
+        let Some(entry) = rec.get_mut("plugins").and_then(Value::as_object_mut).and_then(|p| p.get_mut(id)).and_then(Value::as_object_mut) else {
+            return Ok(());
+        };
+        entry.insert(DECLINED.into(), json!(version));
+        self.write_record(&rec)
+    }
+
+    /// The copy of the catalog an older platoon fetched with git (`.catalog/`, and `.catalog.json` saying from where):
+    /// platoon's own, unused now, so it goes. Nothing else in the folder is touched.
+    pub fn forget_fetched_catalog(&self) {
+        let old = self.dir.join(".catalog");
+        if fs::symlink_metadata(&old).is_ok_and(|m| m.is_dir()) {
+            let _ = fs::remove_dir_all(&old);
+        }
+        let record = self.dir.join(".catalog.json");
+        if fs::symlink_metadata(&record).is_ok_and(|m| m.is_file()) {
+            let _ = fs::remove_file(&record);
+        }
+    }
 }
 
 // ---- themes from plugins ------------------------------------------------------------------------------------------
@@ -1270,9 +1337,8 @@ pub fn fingerprint(store: &Store) -> Option<(u64, Option<std::time::SystemTime>)
 
 #[cfg(test)]
 pub mod testing {
-    //! Plugin folders and a catalog repository for tests (here, in the app's tests and in `plugincli`).
+    //! Plugin folders and catalog folders for tests (here, in the app's tests and in `plugincli`).
     use super::*;
-    use std::process::Command;
 
     pub fn tmp(name: &str) -> PathBuf {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-plugins-{name}-{}-{}", std::process::id(), unique())));
@@ -1297,51 +1363,49 @@ pub mod testing {
         dir
     }
 
-    pub fn git(dir: &Path, args: &[&str]) -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
-            .args(args)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
-        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    /// A catalog folder laid out like `plugins/` in `<base>/catalog`, with these plugins (id, version, themes).
+    pub fn catalog_dir(base: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) -> PathBuf {
+        let cat = base.join("catalog");
+        write_catalog(&cat, plugins);
+        cat
     }
 
-    /// A git repository shaped like platoon's: some code outside `plugins/`, and a catalog with these plugins
-    /// (id, version, themes). Returns it and the commit.
-    pub fn catalog_repo(base: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) -> (PathBuf, String) {
-        let repo = base.join("source");
-        fs::create_dir_all(repo.join("src")).unwrap();
-        fs::write(repo.join("src/main.rs"), "fn main() {}\n").unwrap();
-        fs::write(repo.join("README.md"), "not the catalog\n").unwrap();
-        super::testing::git(&repo, &["init", "--quiet"]);
-        let commit = commit_catalog(&repo, plugins);
-        (repo, commit)
-    }
-
-    /// Replace the catalog in `repo` with these plugins and commit.
-    pub fn commit_catalog(repo: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) -> String {
-        let cat = repo.join(CATALOG_FOLDER);
-        let _ = fs::remove_dir_all(&cat);
-        fs::create_dir_all(&cat).unwrap();
+    /// Replace the catalog in `cat` with these plugins (what a newer platoon brings).
+    pub fn write_catalog(cat: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) {
+        let _ = fs::remove_dir_all(cat);
+        fs::create_dir_all(cat).unwrap();
         let mut index = Vec::new();
         for (id, version, themes) in plugins {
-            plugin(&cat, id, version, themes);
+            plugin(cat, id, version, themes);
             index.push(json!({"id": id, "version": version}));
         }
         fs::write(cat.join(INDEX), serde_json::to_string_pretty(&json!({"plugins": index})).unwrap()).unwrap();
-        git(repo, &["add", "-A"]);
-        git(repo, &["commit", "--quiet", "-m", "catalog"]);
-        git(repo, &["rev-parse", "HEAD"])
     }
 
-    pub fn source(repo: &Path) -> Source {
-        Source { url: repo.to_string_lossy().into_owned(), rf: "main".into() }
+    /// Change the version of plugin `id` in catalog `cat` (its plugin.json and the index) to `to`.
+    pub fn bump(cat: &Path, id: &str, to: &str) {
+        let mut m: Value = serde_json::from_str(&fs::read_to_string(cat.join(id).join(MANIFEST)).unwrap()).unwrap();
+        m.as_object_mut().unwrap().insert("version".into(), json!(to));
+        fs::write(cat.join(id).join(MANIFEST), serde_json::to_string_pretty(&m).unwrap()).unwrap();
+        let mut index: Value = serde_json::from_str(&fs::read_to_string(cat.join(INDEX)).unwrap()).unwrap();
+        for p in index.get_mut("plugins").and_then(Value::as_array_mut).unwrap() {
+            if p.get("id").and_then(Value::as_str) == Some(id) {
+                p.as_object_mut().unwrap().insert("version".into(), json!(to));
+            }
+        }
+        fs::write(cat.join(INDEX), index.to_string()).unwrap();
+    }
+
+    /// Add plugin folder `dir` (already in `cat`) to the catalog's index.
+    pub fn list_in_index(cat: &Path, id: &str, version: &str) {
+        let path = cat.join(INDEX);
+        let mut index: Value = fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({"plugins": []}));
+        index.get_mut("plugins").and_then(Value::as_array_mut).unwrap().push(json!({"id": id, "version": version}));
+        fs::write(path, index.to_string()).unwrap();
+    }
+
+    pub fn from(cat: &Path) -> CatalogFrom {
+        CatalogFrom::Folder(cat.to_path_buf())
     }
 }
 
@@ -1558,66 +1622,207 @@ mod tests {
     }
 
     #[test]
-    fn the_catalog_is_fetched_sparsely_from_a_git_repo_and_the_commit_is_recorded() {
-        let base = tmp("fetch");
-        let (repo, commit) = catalog_repo(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
+    fn the_catalog_is_read_unpacked_to_install_and_updates_only_to_a_newer_version() {
+        let base = tmp("catalog");
+        let cat = catalog_dir(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
         let s = store(&base);
-        let src = source(&repo);
-        assert!(cached(&s, &src).is_none());
-        let cat = fetch(&s, &src).unwrap();
-        assert_eq!(cat.commit, commit);
-        let ids: Vec<&str> = cat.entries.iter().map(|e| e.manifest.id.as_str()).collect();
+        let c = load_catalog(&from(&cat));
+        let ids: Vec<&str> = c.entries.iter().map(|e| e.manifest.id.as_str()).collect();
         assert_eq!(ids, ["sea-themes", "dusk"], "in the index's order");
-        assert!(s.catalog_dir().join("sea-themes/themes/Deep").is_file());
-        assert!(!s.catalog_dir().join("README.md").exists() && !s.dir.join(".catalog/src").exists(), "only the plugins folder");
-        assert!(!s.dir.join(".fetch").read_dir().unwrap().any(|_| true), "the clone is gone");
-        // The copy kept is there without the network, for the same source only.
-        assert_eq!(cached(&s, &src).unwrap().commit, commit);
-        assert!(cached(&s, &Source { url: "elsewhere".into(), rf: "main".into() }).is_none());
-        // Installing from it records the commit.
-        let e = cat.get("dusk").unwrap();
-        let o = s.install(&e.dir, Origin::Catalog { source: cat.source.clone(), rf: cat.rf.clone(), commit: cat.commit.clone() }).unwrap();
-        assert!(matches!(&o.plugin().origin, Origin::Catalog { commit: c, .. } if *c == commit));
+        assert!(c.skipped.is_empty(), "{:?}", c.skipped);
+        // Unpacked into a private folder of its own, gone again when done with.
+        let e = c.get("dusk").unwrap();
+        let u = e.unpack().unwrap();
+        let root = u.dir().parent().unwrap().to_path_buf();
+        assert!(u.dir().join("themes/Dusk").is_file() && u.dir().ends_with("dusk"));
+        assert_eq!(fs::metadata(&root).unwrap().permissions().mode() & 0o777, 0o700, "only this user can look in");
+        let o = s.install(u.dir(), Origin::Catalog).unwrap();
+        drop(u);
+        assert!(!root.exists(), "the unpacked copy is gone");
+        assert_eq!(o.plugin().origin, Origin::Catalog);
         assert_eq!(o.plugin().sha256, e.sha256);
-        // Nothing new: up to date. A new commit that changes it: updated; one it no longer has: kept.
-        assert_eq!(update(&s, &cat, None), [Updated::UpToDate { name: "dusk name".into() }]);
-        let newer = commit_catalog(&repo, &[("dusk", "0.4.0", &[("Dusk", &GOOD_THEME.replace("#14181f", "#101010"))])]);
-        let cat2 = fetch(&s, &src).unwrap();
-        assert_eq!(cat2.commit, newer);
-        assert!(update_available(&s.get("dusk").unwrap(), &cat2));
-        assert_eq!(update(&s, &cat2, Some("dusk")), [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into(), notes: Vec::new() }]);
-        assert!(matches!(s.get("dusk").unwrap().origin, Origin::Catalog { commit: c, .. } if c == newer));
-        commit_catalog(&repo, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)])]);
-        let cat3 = fetch(&s, &src).unwrap();
-        assert_eq!(update(&s, &cat3, None), [Updated::Gone { name: "dusk name".into() }]);
+        // Nothing newer: up to date. The same version with other files is not an update (a new version raises it).
+        assert_eq!(update(&s, &c, None), [Updated::UpToDate { name: "dusk name".into() }]);
+        write_catalog(&cat, &[("dusk", "0.3.0", &[("Dusk", &GOOD_THEME.replace("#14181f", "#101010"))])]);
+        let c2 = load_catalog(&from(&cat));
+        assert!(!update_available(&s.get("dusk").unwrap(), &c2));
+        // A newer version: updated.
+        bump(&cat, "dusk", "0.4.0");
+        let c3 = load_catalog(&from(&cat));
+        assert!(update_available(&s.get("dusk").unwrap(), &c3));
+        assert_eq!(update(&s, &c3, Some("dusk")), [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into(), notes: Vec::new() }]);
+        assert_eq!(s.get("dusk").unwrap().manifest.version, "0.4.0");
+        // An older one (an older platoon) is no update either.
+        bump(&cat, "dusk", "0.2.0");
+        assert_eq!(update(&s, &load_catalog(&from(&cat)), None), [Updated::UpToDate { name: "dusk name".into() }]);
+        // One the catalog no longer has: kept.
+        write_catalog(&cat, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)])]);
+        assert_eq!(update(&s, &load_catalog(&from(&cat)), None), [Updated::Gone { name: "dusk name".into() }]);
         assert!(s.get("dusk").is_some());
+        // A catalog folder that isn't there is an empty catalog, and says why.
+        let none = load_catalog(&from(&base.join("no-such-catalog")));
+        assert!(none.entries.is_empty() && none.skipped == ["the catalog has no readable index.json"]);
     }
 
     #[test]
-    fn a_repository_without_a_catalog_says_so() {
-        let base = tmp("no-catalog");
-        let repo = base.join("source");
-        fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join("README.md"), "code only\n").unwrap();
-        super::testing::git(&repo, &["init", "--quiet"]);
-        super::testing::git(&repo, &["add", "-A"]);
-        super::testing::git(&repo, &["commit", "--quiet", "-m", "no catalog"]);
-        let e = fetch(&store(&base), &source(&repo)).unwrap_err();
-        assert_eq!(e, "platoon's plugin catalog isn't there yet: its repository has no plugins folder on main");
-    }
-
-    #[test]
-    fn a_catalog_that_cannot_be_reached_says_so_plainly_and_keeps_the_old_copy() {
-        let base = tmp("fetch-fail");
-        let (repo, _) = catalog_repo(&base, &[("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
+    fn a_record_from_when_the_catalog_was_fetched_with_git_reads_as_from_the_catalog() {
+        let base = tmp("old-record");
+        let cat = catalog_dir(&base, &[("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
         let s = store(&base);
-        fetch(&s, &source(&repo)).unwrap();
-        let e = fetch(&s, &Source { url: base.join("no-repo").to_string_lossy().into_owned(), rf: "main".into() }).unwrap_err();
-        assert!(e.starts_with("platoon couldn't reach its plugin catalog: "), "{e}");
-        let e = fetch(&s, &Source { url: repo.to_string_lossy().into_owned(), rf: "no-such-branch".into() }).unwrap_err();
-        assert!(e.contains("branch or tag wasn't found"), "{e}");
-        assert!(cached(&s, &source(&repo)).is_some(), "the copy fetched before is kept");
-        assert!(git_error("fatal: could not read Username for 'https://github.com': terminal prompts disabled").contains("needs a login"));
+        let c = load_catalog(&from(&cat));
+        let u = c.get("dusk").unwrap().unpack().unwrap();
+        s.install(u.dir(), Origin::Catalog).unwrap();
+        // As an older platoon wrote it: where the catalog was fetched from, and a key it wrote that this one doesn't know.
+        let mut rec: Value = serde_json::from_str(&fs::read_to_string(s.record_path()).unwrap()).unwrap();
+        let p = rec.get_mut("plugins").and_then(|p| p.get_mut("dusk")).and_then(Value::as_object_mut).unwrap();
+        p.insert("source".into(), json!("https://example.invalid/platoon.git"));
+        p.insert("ref".into(), json!("main"));
+        p.insert("commit".into(), json!("0123456789abcdef"));
+        p.insert("later".into(), json!(true));
+        fs::write(s.record_path(), rec.to_string()).unwrap();
+        let p = s.get("dusk").unwrap();
+        assert!(p.from_catalog() && p.origin == Origin::Catalog);
+        assert_eq!(p.origin.words("/home/u"), "the catalog");
+        // The same files again: nothing changes. A newer version: its record loses the git keys, keeps the unknown one.
+        assert!(matches!(s.install(u.dir(), Origin::Catalog).unwrap(), Outcome::Same(_)));
+        bump(&cat, "dusk", "0.4.0");
+        update(&s, &load_catalog(&from(&cat)), None);
+        let rec: Value = serde_json::from_str(&fs::read_to_string(s.record_path()).unwrap()).unwrap();
+        let p = &rec["plugins"]["dusk"];
+        assert!(p.get("source").is_none() && p.get("commit").is_none() && p.get("ref").is_none(), "{p}");
+        assert_eq!((p["origin"].as_str(), p["later"].as_bool()), (Some("catalog"), Some(true)));
+    }
+
+    #[test]
+    fn a_newer_catalog_updates_themes_quietly_asks_about_instructions_and_remembers_a_no_for_that_version_only() {
+        let base = tmp("auto");
+        let claude = base.join("claude");
+        let s = Store::with_claude(base.join("data/plugins"), claude);
+        let cat = catalog_dir(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
+        crate::squadplugin::testing::plugin(&cat, "kit", "1.0.0");
+        list_in_index(&cat, "kit", "1.0.0");
+        let mine = plugin(&base.join("mine"), "moss", "1.0.0", &[("Moss", GOOD_THEME)]);
+        // Nothing installed: nothing to do (and the catalog needn't even be read).
+        assert!(!any_from_catalog(&s));
+        let c = load_catalog(&from(&cat));
+        for id in ["sea-themes", "dusk", "kit"] {
+            let u = c.get(id).unwrap().unpack().unwrap();
+            s.install(u.dir(), Origin::Catalog).unwrap();
+        }
+        s.install(&mine, folder(&mine)).unwrap();
+        assert!(any_from_catalog(&s));
+        assert_eq!(auto_plan(&s, &c), AutoPlan::default(), "nothing newer: nothing to do");
+        // A newer platoon: sea-themes and kit are newer, dusk isn't; moss (from a folder) is in the catalog too, newer.
+        bump(&cat, "sea-themes", "1.1.0");
+        bump(&cat, "kit", "1.1.0");
+        plugin(&cat, "moss", "9.0.0", &[("Moss", GOOD_THEME)]);
+        list_in_index(&cat, "moss", "9.0.0");
+        let c = load_catalog(&from(&cat));
+        let plan = auto_plan(&s, &c);
+        assert_eq!(plan.quiet, ["sea-themes"]);
+        assert_eq!(plan.ask, [Ask { id: "kit".into(), name: "kit name".into(), from: "1.0.0".into(), to: "1.1.0".into() }]);
+        let (done, failed) = auto_update(&s, &c, &plan);
+        assert!(failed.is_empty(), "{failed:?}");
+        assert_eq!(done, [("sea-themes name".to_string(), "1.1.0".to_string(), false)]);
+        assert_eq!(updated_words(&done), "Updated with platoon: sea-themes name 1.1.0.");
+        assert_eq!(s.get("sea-themes").unwrap().manifest.version, "1.1.0");
+        assert_eq!(s.get("kit").unwrap().manifest.version, "1.0.0", "not updated without asking");
+        assert_eq!(s.get("moss").unwrap().manifest.version, "1.0.0", "a folder's plugin is never touched");
+        // Again: only the question is left; the same run twice changes nothing more.
+        let plan = auto_plan(&s, &c);
+        assert!(plan.quiet.is_empty() && plan.ask.len() == 1);
+        assert!(auto_update(&s, &c, &plan).0.is_empty());
+        assert_eq!(updated_words(&[]), "");
+        // No to 1.1.0: not asked again for it; its state is still "update ready".
+        s.decline_update("kit", "1.1.0").unwrap();
+        assert_eq!(s.get("kit").unwrap().declined.as_deref(), Some("1.1.0"));
+        assert_eq!(auto_plan(&s, &c), AutoPlan::default());
+        assert!(update_available(&s.get("kit").unwrap(), &c));
+        // A still newer one is asked about again.
+        bump(&cat, "kit", "1.2.0");
+        let c = load_catalog(&from(&cat));
+        assert_eq!(auto_plan(&s, &c).ask.iter().map(|a| a.to.as_str()).collect::<Vec<_>>(), ["1.2.0"]);
+        // Updating it (the user said yes) forgets the no.
+        let u = c.get("kit").unwrap().unpack().unwrap();
+        s.install(u.dir(), Origin::Catalog).unwrap();
+        assert_eq!(s.get("kit").unwrap().declined, None);
+        // Declining a plugin that isn't installed changes nothing.
+        s.decline_update("nothing", "1.0.0").unwrap();
+        assert!(s.get("nothing").is_none());
+    }
+
+    #[test]
+    fn two_platoons_starting_at_once_update_a_plugin_once_and_only_one_says_so() {
+        let base = tmp("auto-twice");
+        let cat = catalog_dir(&base, &[("sea-themes", "1.0.0", &[("Deep", GOOD_THEME)]), ("dusk", "0.3.0", &[("Dusk", GOOD_THEME)])]);
+        let s = store(&base);
+        let c = load_catalog(&from(&cat));
+        for id in ["sea-themes", "dusk"] {
+            s.install(c.get(id).unwrap().unpack().unwrap().dir(), Origin::Catalog).unwrap();
+        }
+        bump(&cat, "sea-themes", "1.1.0");
+        bump(&cat, "dusk", "0.4.0");
+        let c = load_catalog(&from(&cat));
+        // Both plan before either updates (as two windows opened together), then both update.
+        let plans = [auto_plan(&s, &c), auto_plan(&s, &c)];
+        let runs: Vec<(Vec<(String, String, bool)>, Vec<String>)> = thread::scope(|sc| {
+            let hs: Vec<_> = plans.iter().map(|plan| sc.spawn(|| auto_update(&s, &c, plan))).collect();
+            hs.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        for (_, failed) in &runs {
+            assert!(failed.is_empty(), "{failed:?}");
+        }
+        let mut said: Vec<String> = runs.iter().flat_map(|(d, _)| d.iter().map(|(n, ..)| n.clone())).collect();
+        said.sort();
+        assert_eq!(said, ["dusk name", "sea-themes name"], "each update said once, by whichever did it");
+        assert_eq!((s.get("sea-themes").unwrap().manifest.version.as_str(), s.get("dusk").unwrap().manifest.version.as_str()), ("1.1.0", "0.4.0"));
+        assert!(!s.tmp().exists());
+    }
+
+    #[test]
+    fn the_catalog_an_older_platoon_fetched_is_deleted_and_nothing_else() {
+        let base = tmp("old-catalog");
+        let s = store(&base);
+        fs::create_dir_all(s.dir.join(".catalog/editor")).unwrap();
+        fs::write(s.dir.join(".catalog/index.json"), "{}").unwrap();
+        fs::write(s.dir.join(".catalog.json"), "{}").unwrap();
+        fs::create_dir_all(s.dir.join("editor")).unwrap();
+        fs::write(s.dir.join("installed.json"), "{}").unwrap();
+        fs::write(s.dir.join(".lock"), "").unwrap();
+        s.forget_fetched_catalog();
+        let mut left: Vec<String> = fs::read_dir(&s.dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, [".lock", "editor", "installed.json"]);
+        s.forget_fetched_catalog();
+        store(&base.join("nothing-here")).forget_fetched_catalog();
+        assert!(!base.join("nothing-here").exists(), "nothing is made either");
+    }
+
+    #[test]
+    fn the_built_in_catalog_is_the_repositorys_plugins_folder_file_for_file() {
+        let cat = Path::new(env!("CARGO_MANIFEST_DIR")).join(CATALOG_FOLDER);
+        let (on_disk, skipped) = read_catalog(&cat);
+        assert!(skipped.is_empty(), "{skipped:?}");
+        // Every file of every listed plugin, and the index, byte for byte; nothing else of the repository.
+        let mut want: Vec<String> = vec![INDEX.to_string()];
+        for e in &on_disk {
+            let mut ignored = Vec::new();
+            want.extend(walk(&cat.join(&e.manifest.id), &mut ignored).into_iter().map(|f| format!("{}/{}", e.manifest.id, f.rel)));
+        }
+        want.sort();
+        let mut got: Vec<String> = builtin_files().iter().map(|(rel, _)| rel.to_string()).collect();
+        got.sort();
+        assert_eq!(got, want);
+        for (rel, bytes) in builtin_files() {
+            assert_eq!(fs::read(cat.join(rel)).unwrap(), *bytes, "{rel}");
+        }
+        // Read from inside platoon: the same plugins, the same files.
+        let built = load_catalog(&CatalogFrom::BuiltIn);
+        assert!(built.skipped.is_empty(), "{:?}", built.skipped);
+        let ids = |es: &[Entry]| es.iter().map(|e| (e.manifest.id.clone(), e.manifest.version.clone(), e.sha256.clone())).collect::<Vec<_>>();
+        assert_eq!(ids(&built.entries), ids(&on_disk));
+        assert!(built.entries.iter().all(|e| e.problems.is_empty()));
+        assert!(builtin_plugin(crate::editorplugin::ID).iter().any(|(rel, _)| *rel == crate::editorplugin::INIT));
     }
 
     #[test]
@@ -1728,7 +1933,7 @@ mod tests {
         assert!(skipped.is_empty(), "{skipped:?}");
         assert!(!entries.is_empty());
         for e in &entries {
-            let r = check(&e.dir);
+            let r = check(&cat.join(&e.manifest.id));
             assert!(r.ok() && r.notes.is_empty(), "{}: {:?} {:?}", e.manifest.id, r.problems, r.notes);
         }
         // Every folder with a plugin.json is in the index: nothing sits in the catalog unoffered.

@@ -16,7 +16,7 @@
 //! installed, said once), or, with "Always ask which editor" on, the list with the favourite starred and picked
 //! (picking another makes it the favourite). Everything else is the same for every editor: the squad-still-working
 //! question, bringing a removed worktree back, the folder picker. Only platoon's own is ever installed: it is a plugin
-//! (`editorplugin.rs`), and `v` on it when it isn't there offers the plugin: fetched from the catalog, installed, then
+//! (`editorplugin.rs`), and `v` on it when it isn't there offers the plugin: installed from the catalog built into platoon, then
 //! its downloads, with progress in the footer, then it opens. A terminal
 //! editor of the user's own (Helix, their Neovim) is handed the terminal as platoon's is (`main.rs`); one with a
 //! window of its own starts beside platoon, and a ticket's worktree opened in one is kept after the work until `w`
@@ -26,7 +26,7 @@ use super::*;
 use crate::editor::{self, Request};
 use crate::editor_install::{Dirs, Part, Progress, Report};
 use crate::editorplugin;
-use crate::plugins::{self, Origin};
+use crate::plugins::Origin;
 use crate::fileeditors::{self, FileEditor, Runs};
 use crate::tickets::{State, Ticket, Tickets};
 use std::collections::BTreeMap;
@@ -65,7 +65,7 @@ pub struct FilePick {
 }
 
 enum InstallMsg {
-    /// What it is doing before the downloads: fetching the catalog, installing the plugin.
+    /// What it is doing before the downloads: installing the plugin.
     Stage(String),
     Progress(Progress),
     Done(Result<Report, String>),
@@ -400,7 +400,10 @@ impl App {
     /// The question before installing the editor plugin (or finishing its downloads), with what it downloads.
     pub(super) fn ask_install_editor(&mut self) {
         let plugin = editorplugin::installed(&self.pl.store).is_some();
-        // Without the plugin: what the catalog's (as last fetched) downloads, else the one that came with platoon.
+        // Without the plugin: what the catalog's downloads, else the one built into platoon.
+        if !plugin {
+            self.pl.ensure_catalog();
+        }
         let from_catalog = if plugin { None } else { self.pl.catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).and_then(|e| e.download_bytes) };
         let bytes = from_catalog.unwrap_or_else(|| editorplugin::download_bytes(&self.pl.store));
         self.mode = Mode::Confirm(Confirm::InstallEditor { bytes, plugin });
@@ -448,11 +451,12 @@ impl App {
     }
 
     /// Yes to installing it: off the UI thread, with a progress line; it opens once it is there. Without the editor
-    /// plugin: the catalog is fetched (its last copy when it can't be reached) and the plugin installed from it first;
-    /// then whatever its table has that the editor folder doesn't is downloaded.
+    /// plugin: the plugin is installed from the catalog first; then whatever its table has that the editor folder
+    /// doesn't is downloaded.
     pub(super) fn install_editor(&mut self) {
         self.mode = self.plugins_base();
-        let (dirs, store, source) = (self.ed.dirs.clone(), self.pl.store.clone(), self.pl.source.clone());
+        self.pl.ensure_catalog();
+        let (dirs, store, catalog) = (self.ed.dirs.clone(), self.pl.store.clone(), self.pl.catalog.clone());
         let (tx, rx) = channel();
         thread::spawn(move || {
             let stage = |line: &str| {
@@ -462,18 +466,13 @@ impl App {
                 if editorplugin::installed(&store).is_some() {
                     return Ok(());
                 }
-                stage("Installing the code editor: fetching the plugin catalog…");
-                let catalog = match plugins::fetch(&store, &source) {
-                    Ok(c) => c,
-                    Err(e) => plugins::cached(&store, &source).ok_or(e)?,
-                };
-                let entry = catalog.get(editorplugin::ID).ok_or("platoon's plugin catalog has no code editor plugin")?;
+                let entry = catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).ok_or("platoon's plugin catalog has no code editor plugin")?;
                 if !entry.problems.is_empty() {
                     return Err(format!("{} can't be installed here: {}", entry.manifest.name, entry.problems.join("; ")));
                 }
                 stage("Installing the code editor: its plugin…");
-                let origin = Origin::Catalog { source: catalog.source.clone(), rf: catalog.rf.clone(), commit: catalog.commit.clone() };
-                store.install(&entry.dir, origin).map(|_| ())
+                let unpacked = entry.unpack()?;
+                store.install(unpacked.dir(), Origin::Catalog).map(|_| ())
             })();
             let done = plugin.and_then(|()| {
                 let progress = tx.clone();
@@ -533,10 +532,7 @@ impl App {
             return;
         };
         self.ed.installing = None;
-        // The plugin may be new, and the catalog was fetched: the plugin list shows both.
-        if let Some(c) = plugins::cached(&self.pl.store, &self.pl.source) {
-            self.pl.catalog = Some(c);
-        }
+        // The plugin may be new: the plugin list shows it.
         self.plugins_changed();
         match r {
             Ok(_) if matches!(self.mode, Mode::List) && self.ed.flow.is_some() => {
