@@ -258,7 +258,8 @@ fn mixed(a: Color, b: Color, t: f64) -> Option<Color> {
 pub fn base16(t: &Theme) -> Option<[(String, Color); 16]> {
     let ansi = t.ansi?;
     let lift = |c: Color| theme::lift_contrast(c, t.bg, t.text, theme::MIN_ROLE);
-    let white = Color::Rgb(255, 255, 255);
+    // base06 and base07 are the text's stronger shades: lighter on a dark theme, darker on a light one.
+    let strongest = t.strongest();
     let sel = t.selection_bg().unwrap_or_else(|| theme::mix(t.bg, t.accent, 0.25));
     let cols = [
         t.bg,
@@ -267,8 +268,8 @@ pub fn base16(t: &Theme) -> Option<[(String, Color); 16]> {
         t.dim,
         t.subtext,
         t.text,
-        theme::mix(t.text, white, 0.3),
-        theme::mix(t.text, white, 0.6),
+        theme::mix(t.text, strongest, 0.3),
+        theme::mix(t.text, strongest, 0.6),
         lift(ansi[9]),
         lift(theme::mix(ansi[9], ansi[11], 0.5)),
         lift(ansi[11]),
@@ -415,6 +416,10 @@ pub fn colors_json(t: &Theme, mode: ColorMode) -> Value {
         ColorMode::Indexed256 => "256",
         ColorMode::Terminal => "terminal",
     }));
+    // Neovim's `background`: which way round the theme is (not said for Terminal colors: the terminal knows).
+    if mode != ColorMode::Terminal {
+        out.insert("background".into(), json!(if t.light { "light" } else { "dark" }));
+    }
     if mode != ColorMode::Terminal {
         if let Some(b) = base16(t) {
             let pal: Map<String, Value> = b.iter().filter_map(|(k, c)| hex(*c).map(|h| (k.clone(), json!(h)))).collect();

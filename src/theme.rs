@@ -1,5 +1,7 @@
 //! Themes. Every color the UI draws comes from a `Theme`, so a theme is one entry in `SPECS` (or a user's theme
-//! file). The built-ins are dark only, compiled in, and always in the order the picker will show them.
+//! file, or a plugin's). The built-ins are dark, compiled in, and always in the order the picker will show them. A
+//! plugin's theme may be light (`Theme::light`): the contrast rules are symmetric (WCAG's ratio doesn't care which
+//! side is lighter), and everything that is lifted to read goes toward black on a light theme instead of white.
 //!
 //! A fixed theme is a `bg`/`text` pair plus a 16-color palette; the eleven UI roles are picked from the
 //! palette (or given as a hex), and whatever is derived (surface, border, dim, subtext) or too faint to read
@@ -10,7 +12,7 @@
 use crate::usertheme::Registry;
 use ratatui::style::Color;
 
-/// WCAG contrast floors against `bg` (dark themes only; see `lift_contrast`).
+/// WCAG contrast floors against `bg`, for dark and light themes alike (see `lift_contrast`).
 pub const MIN_TEXT: f64 = 7.0;
 pub const MIN_SUBTEXT: f64 = 4.5;
 pub const MIN_DIM: f64 = 3.0;
@@ -46,6 +48,19 @@ pub struct Theme {
     /// The theme's 16 terminal colors, used to recolor sessions shown inside platoon. `None`: leave the
     /// emulator's colors as they are (Terminal colors, where the terminal does the coloring).
     pub ansi: Option<[Color; 16]>,
+    /// Drawn on a light background (dark text): only plugins' themes so far. False for every built-in and for
+    /// Terminal colors, whose background platoon can't know. Anything that needs "lighter" or "darker than the text"
+    /// asks this (the code editor's `background`, the text on a project's colored badge).
+    pub light: bool,
+}
+
+/// A background at least this bright (WCAG luminance) makes a light theme; below it, a dark one. The built-ins are
+/// all well below it.
+pub const LIGHT_LUMINANCE: f64 = 0.2;
+
+/// Whether `bg` is a light theme's background.
+pub fn is_light(bg: Color) -> bool {
+    luminance(bg) >= LIGHT_LUMINANCE
 }
 
 impl Default for Theme {
@@ -656,6 +671,7 @@ impl Spec {
             err: role(self.err),
             on_accent: bg,
             ansi: Some(self.palette.map(rgb)),
+            light: false,
         }
     }
 }
@@ -669,6 +685,22 @@ impl Theme {
     /// A built-in by id. The user's own themes are found through `Registry::by_id`.
     pub fn by_id(id: &str) -> Option<Theme> {
         Self::all().into_iter().find(|t| t.id == id)
+    }
+
+    /// The color text moves toward to stand out more: white on a dark theme, black on a light one.
+    pub fn strongest(&self) -> Color {
+        if self.light { Color::Rgb(0, 0, 0) } else { Color::Rgb(255, 255, 255) }
+    }
+
+    /// Text for a fill of `fill` (a pill, a badge): the more readable of the theme's background and text, or, when
+    /// neither reads at 4.5:1 (a middling color like a light theme's yellow), black or white, whichever reads better.
+    pub fn text_on(&self, fill: Color) -> Color {
+        let best = |a: Color, b: Color| if contrast(a, fill) >= contrast(b, fill) { a } else { b };
+        let own = best(self.bg, self.text);
+        if contrast(own, fill) >= MIN_ROLE {
+            return own;
+        }
+        best(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255))
     }
 
     /// One of the user's own theme files rather than a built-in.
@@ -711,6 +743,7 @@ impl Theme {
             err: Color::LightRed,
             on_accent: Color::Black,
             ansi: None,
+            light: false,
         }
     }
 
@@ -869,8 +902,8 @@ pub fn contrast(a: Color, b: Color) -> f64 {
 }
 
 /// `color` itself if it already has `min` contrast against `bg`; otherwise the first color on the way to
-/// `toward` (normally the theme's text color: lighter, on a dark theme) that does, in 1% steps, so a
-/// derived or borrowed color is lifted by as little as it takes and keeps its hue as far as possible.
+/// `toward` (normally the theme's text color: lighter on a dark theme, darker on a light one) that does, in 1%
+/// steps, so a derived or borrowed color is lifted by as little as it takes and keeps its hue as far as possible.
 /// `toward` itself when even that is not enough. Reusable for user themes.
 pub fn lift_contrast(color: Color, bg: Color, toward: Color, min: f64) -> Color {
     if contrast(color, bg) >= min || channels(color).is_none() {

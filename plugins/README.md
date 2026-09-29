@@ -39,8 +39,22 @@ agent may name an MCP server the user has set up themselves (see below).
    ```
 
    platoon picks its colors from these slots: the accent from 12 (or 4), "working" from 13 (or 5), "done" and other good
-   news from 10 (or 2), warnings from 11 (or 3), errors from 9 (or 1). Give all sixteen if you can; sessions shown inside
-   platoon are recolored with them.
+   news from 10 (or 2), warnings from 11 (or 3), errors from 9 (or 1). On a **light** background it takes the normal
+   color (4, 5, 2, 3, 1) when that one reads, else the bright one: a light theme's normal colors are usually its darker
+   ones. Give all sixteen if you can; sessions shown inside platoon are recolored with them.
+
+   Where a palette's own color doesn't read well enough (see "Checking it"), pick platoon's color yourself, without
+   touching the palette the sessions use:
+
+   ```
+   platoon-accent = #1d62eb
+   platoon-busy = #8538ea
+   platoon-ok = #2f7620
+   platoon-warn = #955f13
+   platoon-err = #d20f39
+   ```
+
+   Any of the five, each on its own. Ghostty doesn't know these keys; they are platoon's.
 3. Write `plugin.json`:
 
    ```json
@@ -173,10 +187,11 @@ says what is wrong, in plain words, or "Looks good". It checks that:
 - every file it names is in the folder (paths inside it only: no `/` at the start, no `..`);
 - the folder holds plain files only (no links), at most 200 of them and 1 MiB in all; a theme file is at most 64 KiB;
 - every skill, squad and agent follows the rules in "Skills, squads and agents" above;
-- every theme is a **dark** theme that reads well **as it is**: the text at 7:1 against the background, the five colors
+- every theme, dark or light, reads well **as it is**: the text at 7:1 against the background, the five colors
   platoon uses for meaning (accent, working, good news, warnings, errors) at 4.5:1, and those five clearly different from
   each other. (Your own themes folder lifts colors until they read; a plugin's themes have to read without help, like
-  the built-in ones.)
+  the built-in ones.) A light theme's yellows and greens usually need darkening to reach 4.5:1: give them with
+  `platoon-warn` and `platoon-ok`, and say in the file where they came from.
 
 Try it for real with `platoon plugin add ./sea-themes`: its themes appear in the settings (`s`, then Theme), with your
 plugin's name beside them. `platoon plugin remove sea-themes` takes it off again.
@@ -240,5 +255,7 @@ editor was a plugin), and a test checks the copy is this folder, file for file.
   the author's name).
 - A new version of a plugin raises `version`.
 
-The `example-themes` plugin here is a small working example: two themes, Harbor Night and Moss Lantern, with colors made
-for platoon (MIT).
+The `theme-pack` plugin here is the Theme pack: twenty themes, twelve dark and eight light. Harbor Night and Moss Lantern
+have colors made for platoon (MIT); the rest are well-known themes whose palettes come from Ghostty's theme files, each
+file saying where it comes from, its license and the colors platoon picked by hand ([CREDITS.md](theme-pack/CREDITS.md)
+lists them all).

@@ -78,6 +78,8 @@ mod stop_app_tests;
 #[cfg(test)]
 mod select_app_tests;
 #[cfg(test)]
+mod theme_pack_tests;
+#[cfg(test)]
 mod smart_app_tests;
 #[cfg(test)]
 mod testkit;

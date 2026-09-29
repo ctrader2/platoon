@@ -8,7 +8,7 @@
 //! ...). Nothing in here may panic or hang on a strange file: sizes and counts are capped, only regular files
 //! are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather than guessed at.
 
-use crate::theme::{contrast, delta_e, lift_contrast, luminance, mix, Theme, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT};
+use crate::theme::{contrast, delta_e, is_light, lift_contrast, mix, Theme, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT};
 use ratatui::style::Color;
 use std::{
     collections::HashSet,
@@ -29,15 +29,51 @@ const MAX_ENTRIES: usize = 1000;
 const MAX_NAME: usize = 40;
 /// The id prefix of every user theme, so it can never collide with a built-in.
 pub const ID_PREFIX: &str = "user:";
-/// Same rule the built-ins are tested against.
-const MAX_BG_LUMINANCE: f64 = 0.2;
-
-/// What a theme file says: the two required colors and whichever palette slots it defines.
+/// What a theme file says: the two required colors, whichever palette slots it defines, and the colors it picks for
+/// platoon's five roles itself, if any (`platoon-accent = #hex`, see `ROLE_KEYS`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Parsed {
     pub background: Color,
     pub foreground: Color,
     pub palette: [Option<Color>; 16],
+    /// accent, busy, ok, warn, err as the file picks them, where a palette's own color doesn't suit (a theme made
+    /// for platoon, like the built-ins' hand-picked colors). Ghostty has no such keys; they are platoon's own.
+    pub roles: [Option<Color>; 5],
+}
+
+/// The keys a theme file can pick platoon's five roles with, in `Parsed::roles` order.
+pub const ROLE_KEYS: [&str; 5] = ["platoon-accent", "platoon-busy", "platoon-ok", "platoon-warn", "platoon-err"];
+/// The palette slots each role comes from, (bright, normal), in `Parsed::roles` order.
+pub const ROLE_SLOTS: [(usize, usize); 5] = [(12, 4), (13, 5), (10, 2), (11, 3), (9, 1)];
+
+impl Parsed {
+    /// Whether the file is a light theme.
+    pub fn light(&self) -> bool {
+        is_light(self.background)
+    }
+
+    /// The five role colors the file gives, accent / busy / ok / warn / err (None where it gives none): a color the
+    /// file picks itself (`platoon-accent`, ...), else a palette slot. On a dark background the bright slot (12, 13,
+    /// 10, 11, 9) and failing that the normal one (4, 5, 2, 3, 1), as always. On a light one the normal slot when
+    /// it reads on the background, else the bright one when that does, else whichever reads better: a light
+    /// theme's normal colors are usually its darker ones, but not always (Gruvbox Light's are the other way round).
+    pub fn role_picks(&self) -> [Option<Color>; 5] {
+        let light = self.light();
+        let reads = |c: &Color| contrast(*c, self.background) >= MIN_ROLE;
+        std::array::from_fn(|i| {
+            let (hi, lo) = ROLE_SLOTS[i];
+            let (bright, normal) = (self.palette[hi], self.palette[lo]);
+            self.roles[i].or_else(|| {
+                if !light {
+                    return bright.or(normal);
+                }
+                normal.filter(reads).or(bright.filter(reads)).or(match (normal, bright) {
+                    (Some(n), Some(b)) => Some(if contrast(b, self.background) > contrast(n, self.background) { b } else { n }),
+                    (n, b) => n.or(b),
+                })
+            })
+        })
+    }
 }
 
 /// `#RRGGBB`, `RRGGBB` or `#RGB`, either case, optionally quoted.
@@ -58,15 +94,16 @@ fn hex(s: &str) -> Option<Color> {
     }
 }
 
-/// Read a theme file's text. Lines are `key = value`; only `background`, `foreground` and `palette = N=#hex` (N
-/// 0..=15) count, everything else (cursor and selection colors, comments, blank lines, lines with no `=`) is
-/// ignored. A later line for the same key wins, as in Ghostty. A bad color in a palette slot leaves that slot
+/// Read a theme file's text. Lines are `key = value`; only `background`, `foreground`, `palette = N=#hex` (N
+/// 0..=15) and platoon's own role keys (`ROLE_KEYS`) count, everything else (cursor and selection colors, comments,
+/// blank lines, lines with no `=`) is ignored. A later line for the same key wins, as in Ghostty. A bad color in a palette slot leaves that slot
 /// undefined (it gets filled in later); a missing or bad background or foreground is an error, since a theme
 /// without them can't be made.
 pub fn parse(text: &str) -> Result<Parsed, String> {
     let mut background: Option<Result<Color, String>> = None;
     let mut foreground: Option<Result<Color, String>> = None;
     let mut palette = [None; 16];
+    let mut roles = [None; 5];
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -87,12 +124,17 @@ pub fn parse(text: &str) -> Result<Parsed, String> {
                     }
                 }
             }
-            _ => {}
+            other => {
+                if let Some(i) = ROLE_KEYS.iter().position(|k| *k == other) {
+                    // A bad color leaves the role to the palette, like a bad palette entry.
+                    roles[i] = hex(value);
+                }
+            }
         }
     }
     let background = background.ok_or("no background color")??;
     let foreground = foreground.ok_or("no foreground color")??;
-    Ok(Parsed { background, foreground, palette })
+    Ok(Parsed { background, foreground, palette, roles })
 }
 
 /// A value quoted in a message: short, and free of anything that could act on a terminal.
@@ -102,6 +144,7 @@ fn shorten(s: &str) -> String {
 }
 
 const WHITE: Color = Color::Rgb(255, 255, 255);
+const BLACK: Color = Color::Rgb(0, 0, 0);
 
 /// The colors used where a file leaves a role's slots out: the hues of One Dark, which read on any dark background.
 const HUES: [u32; 6] = [0xe06c75, 0x98c379, 0xe5c07b, 0x61afef, 0xc678dd, 0x56b6c2];
@@ -143,30 +186,41 @@ fn mixed_until(bg: Color, text: Color, from: f64, ok: impl Fn(Color) -> bool) ->
     }
 }
 
-/// The theme a file describes, or why there isn't one. Same roles as the built-ins: bg and text from the file,
-/// surface, border, dim and subtext mixed between them, accent / busy / ok / warn / err from palette slots
-/// 12 / 13 / 10 / 11 / 9 (falling back to 4 / 5 / 2 / 3 / 1). Then the contrast floors: the roles and the
-/// muted text are lifted toward the text color until they read, surface and border are kept apart from the
-/// background and from each other, and the five colors that carry meaning are kept clearly distinct.
+/// The theme one of the user's own files describes, or why there isn't one: `build`, for a dark theme. The user's
+/// own files stay dark: one is lifted until it reads, and a background between dark and light can't be lifted
+/// into anything readable. (A plugin's theme may be light: it is checked to read as it is, see `plugins::check`.)
 pub fn theme_from(id: String, name: String, p: &Parsed) -> Result<Theme, String> {
-    let (bg, fg) = (p.background, p.foreground);
-    if luminance(bg) >= MAX_BG_LUMINANCE {
+    if p.light() {
         return Err("light themes aren't supported".into());
     }
+    Ok(build(id, name, p))
+}
+
+/// The theme a file describes. Same roles as the built-ins: bg and text from the file, surface, border, dim and
+/// subtext mixed between them, accent / busy / ok / warn / err as `Parsed::role_picks` finds them. Then the
+/// contrast floors: the roles and the muted text are lifted toward the text color until they read, surface and
+/// border are kept apart from the background and from each other, and the five colors that carry meaning are kept
+/// clearly distinct. On a light background everything works the same way the other way round: the text and
+/// whatever is lifted go darker (toward black rather than white), and the surface is a little darker than the
+/// background.
+pub fn build(id: String, name: String, p: &Parsed) -> Theme {
+    let (bg, fg) = (p.background, p.foreground);
+    let light = p.light();
+    let strongest = if light { BLACK } else { WHITE };
     let pal = resolve(p);
-    let slot = |hi: usize, lo: usize| p.palette[hi].or(p.palette[lo]).unwrap_or(pal[hi]);
-    let picks = [slot(12, 4), slot(13, 5), slot(10, 2), slot(11, 3), slot(9, 1)];
+    let given = p.role_picks();
+    let picks: [Color; 5] = std::array::from_fn(|i| given[i].unwrap_or(pal[ROLE_SLOTS[i].0]));
 
     // Everything is mixed toward the text color; the text itself is lifted last, on the surface it will sit on.
-    let toward = lift_contrast(fg, bg, WHITE, MIN_TEXT);
+    let toward = lift_contrast(fg, bg, strongest, MIN_TEXT);
     let surface = mixed_until(bg, toward, 0.09, |c| contrast(c, bg) >= 1.08);
-    let text = lift_contrast(toward, surface, WHITE, 6.0);
+    let text = lift_contrast(toward, surface, strongest, 6.0);
     let border = mixed_until(bg, toward, 0.20, |c| contrast(c, bg) >= 1.25 && contrast(c, surface) >= 1.1);
     let dim = lift_contrast(lift_contrast(mix(bg, toward, 0.46), bg, toward, MIN_DIM), surface, toward, 2.5);
     let subtext = lift_contrast(mix(bg, toward, 0.72), bg, toward, MIN_SUBTEXT);
     let roles = distinct(picks, bg, text);
     let [accent, busy, ok, warn, err] = roles;
-    Ok(Theme {
+    Theme {
         id,
         name,
         bg,
@@ -182,7 +236,8 @@ pub fn theme_from(id: String, name: String, p: &Parsed) -> Result<Theme, String>
         err,
         on_accent: bg,
         ansi: Some(pal),
-    })
+        light,
+    }
 }
 
 /// The five role colors, each lifted to read on `bg`, and no two of them alike: one that is too close to an
@@ -437,6 +492,7 @@ impl Registry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::luminance;
 
     fn c(hex: u32) -> Color {
         rgb(hex)
@@ -629,6 +685,49 @@ mod tests {
         // Right at the threshold the built-ins use.
         assert!(theme_from("u".into(), "n".into(), &parse("background=#707070\nforeground=#fff").unwrap()).is_ok(), "luminance {:.3}", luminance(c(0x707070)));
         assert!(theme_from("u".into(), "n".into(), &parse("background=#808080\nforeground=#fff").unwrap()).is_err(), "luminance {:.3}", luminance(c(0x808080)));
+    }
+
+    #[test]
+    fn a_file_can_pick_platoons_five_colors_itself_and_a_bad_pick_leaves_it_to_the_palette() {
+        let text = format!("{NORD}platoon-accent = #88c0d0\nPLATOON-ERR = e0838c\nplatoon-busy = nope\nplatoon-other = #ffffff\n");
+        let p = parse(&text).unwrap();
+        assert_eq!(p.roles, [Some(c(0x88c0d0)), None, None, None, Some(c(0xe0838c))]);
+        assert_eq!(p.role_picks(), [Some(c(0x88c0d0)), Some(c(0xb48ead)), Some(c(0xa3be8c)), Some(c(0xebcb8b)), Some(c(0xe0838c))]);
+        let t = build("user:n".into(), "N".into(), &p);
+        assert_eq!((t.accent, t.err), (c(0x88c0d0), c(0xe0838c)), "the file's own picks, which read, are used as they are");
+        assert_eq!(parse(NORD).unwrap().roles, [None; 5], "a Ghostty file has none");
+    }
+
+    #[test]
+    fn a_light_file_picks_the_colors_that_read_on_it_and_builds_a_light_theme_the_user_folder_still_refuses() {
+        // Normal colors that read (blue, magenta), one that doesn't where the bright one does (green), and a pale
+        // yellow pair where neither does: the darker of the two is picked (and lifted when built).
+        let text = "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 12=#6fa0ff\npalette = 5=#9a2fa0\npalette = 13=#e08ae6\npalette = 2=#7fcf7f\npalette = 10=#2e7d32\npalette = 3=#f0d060\npalette = 11=#d8a820\npalette = 1=#c62828\npalette = 9=#ff8080";
+        let p = parse(text).unwrap();
+        assert!(p.light());
+        assert_eq!(p.role_picks(), [Some(c(0x1a55c0)), Some(c(0x9a2fa0)), Some(c(0x2e7d32)), Some(c(0xd8a820)), Some(c(0xc62828))]);
+        let t = build("plugin:x/l".into(), "L".into(), &p);
+        assert!(t.light && t.strongest() == c(0));
+        assert_eq!(t.text, c(0x202020));
+        assert!(luminance(t.surface) < luminance(t.bg) && luminance(t.border) < luminance(t.surface), "darker toward the text");
+        let on = |x: Color| contrast(x, t.bg);
+        assert!(on(t.text) >= MIN_TEXT && on(t.subtext) >= MIN_SUBTEXT && on(t.dim) >= MIN_DIM);
+        for x in [t.accent, t.busy, t.ok, t.warn, t.err] {
+            assert!(on(x) >= MIN_ROLE, "{x:?}");
+        }
+        assert!(luminance(t.warn) < luminance(c(0xd8a820)), "the yellow is darkened until it reads, not lightened");
+        assert!(contrast(t.dim, t.surface) >= 2.5 && contrast(t.text, t.surface) >= 6.0);
+        // A light theme with faint text gets darker text, never lighter.
+        let faint = build("x".into(), "F".into(), &parse("background = #fafafa\nforeground = #9a9a9a").unwrap());
+        assert!(contrast(faint.text, faint.bg) >= MIN_TEXT && luminance(faint.text) < luminance(c(0x9a9a9a)));
+        // The user's own folder stays dark only.
+        assert_eq!(theme_from("user:l".into(), "L".into(), &p).unwrap_err(), "light themes aren't supported");
+        // Text on a fill: the theme's own text or background when one reads, else black or white.
+        assert_eq!(t.text_on(t.accent), t.bg);
+        assert_eq!(t.text_on(c(0xf0d060)), t.text);
+        assert_eq!(t.text_on(c(0xb07a10)), c(0), "a middling color: neither of the theme's reads at 4.5:1");
+        let dark = build("x".into(), "D".into(), &parse(NORD).unwrap());
+        assert!(!dark.light && dark.strongest() == c(0xffffff));
     }
 
     #[test]

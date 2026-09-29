@@ -2,7 +2,7 @@
   "id": "editor",
   "name": "Code editor (Neovim)",
   "description": "platoon's own code editor, opened with v on a session or a ticket: Neovim with a file tree, the changed files and their differences, search and a terminal. Installing it downloads Neovim, a few tools, its plugins and a font with icons, each checked against its pinned checksum.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "platoon",
   "platoon": "0.1.0",
   "editor": {

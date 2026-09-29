@@ -357,7 +357,13 @@ fn draw_shelf(f: &mut Frame, app: &App, area: Rect, labels: &[&str], counts: &[u
 
 /// A project's badge: its letters on its color.
 fn badge_span(t: &Theme, p: &crate::projects::Project) -> Span<'static> {
-    Span::styled(format!(" {} ", p.badge), Style::new().fg(crate::projects::badge_text(t)).bg(crate::projects::slot_color(t, &p.color)).add_modifier(Modifier::BOLD))
+    Span::styled(format!(" {} ", p.badge), project_fill(t, p))
+}
+
+/// A project's badge or pill: bold text that reads on the project's color.
+fn project_fill(t: &Theme, p: &crate::projects::Project) -> Style {
+    let fill = crate::projects::slot_color(t, &p.color);
+    Style::new().fg(crate::projects::badge_text(t, fill)).bg(fill).add_modifier(Modifier::BOLD)
 }
 
 fn badge_width(p: &crate::projects::Project) -> usize {
@@ -1610,7 +1616,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         match app.projects.of(&s.id) {
             Some(p) => {
                 let text = fit_end(project_label(p, term_w), c.project - 3);
-                let style = Style::new().fg(crate::projects::badge_text(t)).bg(crate::projects::slot_color(t, &p.color)).add_modifier(Modifier::BOLD);
+                let style = project_fill(t, p);
                 let spans = pill(t, app.rounded, &text, style, bg, bg);
                 let used = text.chars().count() + 2;
                 l1.extend(spans);

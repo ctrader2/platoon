@@ -146,9 +146,10 @@ vim.api.nvim_create_autocmd('TextYankPost', {
 local C = S.colors
 local truecolor = C.mode == 'truecolor'
 o.termguicolors = truecolor
--- platoon's own themes are dark; with the terminal's own colors the terminal says which it is.
+-- Dark or light, as platoon's theme is (an older platoon doesn't say: its themes were all dark); with the terminal's
+-- own colors the terminal says which it is.
 if C.mode ~= 'terminal' then
-  o.background = 'dark'
+  o.background = C.background == 'light' and 'light' or 'dark'
 end
 
 --- A role's color as this terminal takes it: '#rrggbb' in truecolor, a 0-255 number otherwise.

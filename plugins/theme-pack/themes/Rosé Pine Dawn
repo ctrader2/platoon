@@ -1,0 +1,27 @@
+# Rosé Pine Dawn: Rosé Pine Dawn (github.com/rose-pine/rose-pine-theme). License: MIT.
+# Colors from Ghostty's theme file "Rose Pine Dawn" (iTerm2-Color-Schemes).
+# Changed for platoon: the text, from #575279.
+# platoon's own picks below: text is Rosé Pine's a shade darker to read at 7:1; the accent is iris, warnings gold and errors love, each darkened to read at 4.5:1, and working is pine; good news is a green of platoon's own (the palette's green is pine, a blue).
+background = #faf4ed
+foreground = #534e73
+palette = 0=#f2e9e1
+palette = 1=#b4637a
+palette = 2=#286983
+palette = 3=#ea9d34
+palette = 4=#56949f
+palette = 5=#907aa9
+palette = 6=#d7827e
+palette = 7=#575279
+palette = 8=#9893a5
+palette = 9=#b4637a
+palette = 10=#286983
+palette = 11=#ea9d34
+palette = 12=#56949f
+palette = 13=#907aa9
+palette = 14=#d7827e
+palette = 15=#575279
+platoon-accent = #79668e
+platoon-busy = #286983
+platoon-ok = #3f7a4a
+platoon-warn = #966421
+platoon-err = #a0586d

@@ -34,7 +34,7 @@
 //! Knob: `PLATOON_PLUGIN_CATALOG`, a folder laid out like `plugins/` used instead of the built-in catalog (tests).
 
 use crate::editor_install::{sha256_file, sha256_hex};
-use crate::theme::{contrast, delta_e, luminance, Theme, MIN_DELTA_E, MIN_ROLE, MIN_TEXT};
+use crate::theme::{contrast, delta_e, Theme, MIN_DELTA_E, MIN_ROLE, MIN_TEXT};
 use crate::usertheme;
 use serde_json::{json, Map, Value};
 use std::{
@@ -456,10 +456,6 @@ pub fn check(dir: &Path) -> CheckReport {
             Err(e) => vec![e.clone()],
         };
         if problems.is_empty() {
-            if let Err(e) = parsed.and_then(|p| usertheme::theme_from(String::new(), name.clone(), &p)) {
-                r.problems.push(format!("{file}: {e}"));
-                continue;
-            }
             names.push(name.clone());
             r.themes.push(name);
         } else {
@@ -476,23 +472,22 @@ fn theme_name(file: &str) -> String {
 }
 
 /// Why a theme file doesn't read well enough to be offered, in plain words (empty: it does). The same floors the
-/// built-ins are held to, on the file's own colors, before any lifting.
+/// built-ins are held to, on the file's own colors, before any lifting: the text at 7:1 on the background, the five
+/// colors that carry meaning (`Parsed::role_picks`: the file's own `platoon-accent` ... or its palette) at 4.5:1
+/// and told apart. Dark and light themes alike: the ratio is the same whichever side is the lighter.
 pub fn theme_problems(p: &usertheme::Parsed) -> Vec<String> {
     let mut out = Vec::new();
     let (bg, fg) = (p.background, p.foreground);
-    if luminance(bg) >= 0.2 {
-        out.push("it is a light theme; platoon's themes are dark".into());
-        return out;
-    }
     let ratio = |c| contrast(c, bg);
     if ratio(fg) < MIN_TEXT {
         out.push(format!("the text is hard to read on the background ({:.1}:1; it needs {MIN_TEXT}:1)", ratio(fg)));
     }
-    let roles = [("accent", 12, 4), ("busy", 13, 5), ("ok", 10, 2), ("warning", 11, 3), ("error", 9, 1)];
+    let names = ["accent", "busy", "ok", "warning", "error"];
     let mut picked = Vec::new();
-    for (role, hi, lo) in roles {
-        match p.palette[hi].or(p.palette[lo]) {
-            None => out.push(format!("palette {hi} (or {lo}) is missing: it is the {role} color")),
+    for (i, pick) in p.role_picks().into_iter().enumerate() {
+        let (role, (hi, lo)) = (names[i], usertheme::ROLE_SLOTS[i]);
+        match pick {
+            None => out.push(format!("palette {hi} (or {lo}) is missing: it is the {role} color (or give it as {})", usertheme::ROLE_KEYS[i])),
             Some(c) => {
                 if ratio(c) < MIN_ROLE {
                     out.push(format!("the {role} color is hard to read on the background ({:.1}:1; it needs {MIN_ROLE}:1)", ratio(c)));
@@ -1285,7 +1280,7 @@ pub fn themes(store: &Store, taken: &[String]) -> Vec<PluginTheme> {
             let lower = name.to_lowercase();
             let clash = taken.iter().any(|t| t.to_lowercase() == lower) || out.iter().any(|t| t.theme.name.to_lowercase() == lower);
             let shown = if clash { format!("{name} ({})", p.manifest.name) } else { name };
-            let Ok(theme) = usertheme::read_theme_text(&path, meta.len()).and_then(|t| usertheme::parse(&t)).and_then(|parsed| usertheme::theme_from(id, shown, &parsed)) else {
+            let Ok(theme) = usertheme::read_theme_text(&path, meta.len()).and_then(|t| usertheme::parse(&t)).map(|parsed| usertheme::build(id, shown, &parsed)) else {
                 continue;
             };
             out.push(PluginTheme { theme, plugin: p.manifest.name.clone() });
@@ -1519,8 +1514,13 @@ mod tests {
         let alike = GOOD_THEME.replace("#e6c170", "#8bd49d");
         let dir = plugin(&base, "alike", "1.0.0", &[("A", &alike)]);
         assert!(reasons(&dir).contains("the ok and warning colors look too alike"), "{}", reasons(&dir));
-        let light = plugin(&base, "light", "1.0.0", &[("A", "background = #fafafa\nforeground = #111111")]);
-        assert!(reasons(&light).contains("it is a light theme"));
+        // A light theme is held to the same floors (the ratio is the same either way round): faint yellow on white
+        // doesn't read, and a light theme with no colors of its own has none to offer.
+        let light = plugin(&base, "light", "1.0.0", &[("A", "background = #fafafa\nforeground = #111111\npalette = 1=#c0392b\npalette = 2=#2e7d32\npalette = 3=#f5d76e\npalette = 4=#1565c0\npalette = 5=#8e24aa")]);
+        assert!(reasons(&light).contains("the warning color is hard to read on the background (1.4:1"), "{}", reasons(&light));
+        assert!(!reasons(&light).contains("light"), "being light is no reason by itself: {}", reasons(&light));
+        let bare_light = plugin(&base, "bare-light", "1.0.0", &[("A", "background = #fafafa\nforeground = #111111")]);
+        assert!(reasons(&bare_light).contains("palette 12 (or 4) is missing"));
         let sparse = plugin(&base, "sparse", "1.0.0", &[("A", "background = #111111\nforeground = #eeeeee")]);
         assert!(reasons(&sparse).contains("palette 12 (or 4) is missing: it is the accent color"));
         // Too big, a link, nothing added, a newer platoon.
@@ -1594,8 +1594,8 @@ mod tests {
         let base = tmp("install-fail");
         let s = store(&base);
         // A plugin that fails its check never gets as far as a file.
-        let bad = plugin(&base, "bad", "1.0.0", &[("A", "background = #fff\nforeground = #000")]);
-        assert!(s.install(&bad, folder(&bad)).unwrap_err().contains("can't be installed: themes/A: it is a light theme"));
+        let bad = plugin(&base, "bad", "1.0.0", &[("A", "background = #fff\nforeground = #bbb")]);
+        assert!(s.install(&bad, folder(&bad)).unwrap_err().contains("can't be installed: themes/A: the text is hard to read"));
         assert!(!s.plugin_dir("bad").exists());
         // The record can't be written after the files are in place: they go again.
         let good = plugin(&base, "good", "1.0.0", &[("A", GOOD_THEME)]);

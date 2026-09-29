@@ -1,0 +1,23 @@
+# Flexoki Light: Flexoki by Steph Ango (github.com/kepano/flexoki). License: MIT.
+# Colors from Ghostty's theme file "Flexoki Light" (iTerm2-Color-Schemes).
+# platoon's own picks below: good news and warnings are Flexoki's green and yellow darkened to read at 4.5:1.
+background = #fffcf0
+foreground = #100f0f
+palette = 0=#100f0f
+palette = 1=#af3029
+palette = 2=#66800b
+palette = 3=#ad8301
+palette = 4=#205ea6
+palette = 5=#a02f6f
+palette = 6=#24837b
+palette = 7=#6f6e69
+palette = 8=#b7b5ac
+palette = 9=#d14d41
+palette = 10=#879a39
+palette = 11=#d0a215
+palette = 12=#4385be
+palette = 13=#ce5d97
+palette = 14=#3aa99f
+palette = 15=#cecdc3
+platoon-ok = #637c0b
+platoon-warn = #916e01

@@ -42,9 +42,15 @@ pub const SLOTS: &[(&str, &str)] = &[
     ("busy", "Purple"),
 ];
 
-/// A slot's color in `t`. An unknown name (a newer version's) is the accent.
+/// A slot's color in `t`. An unknown name (a newer version's) is the accent. On a light theme the palette's normal
+/// color (4, 5, 6, 2, 3, 1) where it stands out from the background more than the bright one: a light theme's bright
+/// colors are often the paler ones.
 pub fn slot_color(t: &Theme, slot: &str) -> Color {
-    let palette = |i: usize| t.ansi.map_or(Color::Indexed(i as u8), |p| p[i]);
+    let palette = |i: usize| match t.ansi {
+        None => Color::Indexed(i as u8),
+        Some(p) if t.light && crate::theme::contrast(p[i - 8], t.bg) > crate::theme::contrast(p[i], t.bg) => p[i - 8],
+        Some(p) => p[i],
+    };
     match slot {
         "busy" => t.busy,
         "blue" => palette(12),
@@ -57,9 +63,11 @@ pub fn slot_color(t: &Theme, slot: &str) -> Color {
     }
 }
 
-/// The text color drawn on a badge of any slot color.
-pub fn badge_text(t: &Theme) -> Color {
-    t.on_accent
+/// The text color drawn on a badge of `fill` (a slot's color). On a dark theme `on_accent` (its background), which
+/// reads on its colors; on a light one, whatever reads on that fill (`Theme::text_on`), since a light theme's colors
+/// can be pale or dark.
+pub fn badge_text(t: &Theme, fill: Color) -> Color {
+    if t.light { t.text_on(fill) } else { t.on_accent }
 }
 
 /// One line, trimmed, at most `max` characters.

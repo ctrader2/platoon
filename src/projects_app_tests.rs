@@ -254,7 +254,7 @@ fn a_session_in_a_project_shows_the_project_as_a_pill_in_its_own_column() {
     let row = &lines[rows[0]];
     assert_eq!(col_of(row, " Web shop ").unwrap(), proj_x, "{}", text_of(row));
     for c in &row[proj_x..proj_x + 10] {
-        assert_eq!((c.bg, c.fg), (color, projects::badge_text(&t)));
+        assert_eq!((c.bg, c.fg), (color, projects::badge_text(&t, color)));
     }
     assert_ne!(row[proj_x + 10].bg, color, "then a gap on the row's own color");
     // The badge letters are not in front of the name any more.
@@ -313,7 +313,7 @@ fn where_the_terminal_has_the_glyphs_the_project_pill_is_round() {
         assert_eq!(row[proj_x].symbol(), "\u{e0b6}", "{}", text_of(row));
         assert_eq!((row[proj_x].fg, row[proj_x].bg), (color, row_bg));
         assert_eq!(col_of(row, "Web shop"), Some(proj_x + 1));
-        assert_eq!((row[proj_x + 1].bg, row[proj_x + 1].fg), (color, projects::badge_text(&t)));
+        assert_eq!((row[proj_x + 1].bg, row[proj_x + 1].fg), (color, projects::badge_text(&t, color)));
         assert_eq!(row[proj_x + 9].symbol(), "\u{e0b4}");
         assert_eq!((row[proj_x + 9].fg, row[proj_x + 9].bg), (color, row_bg));
         assert_eq!(row[proj_x + 10].bg, row_bg);

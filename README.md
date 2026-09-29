@@ -581,6 +581,7 @@ Tokyo Night, Tokyo Night Storm, Dracula, One Dark, Nord, Gruvbox Dark, Gruvbox M
 Moon, Kanagawa Wave, Kanagawa Dragon, Night Owl, Ayu Mirage, Vesper, Solarized Dark, GitHub Dark, Material Ocean,
 Everforest Dark Hard, Nightfox, Sonokai, Moonfly, Melange Dark, Flexoki Dark, Oxocarbon, Poimandres, Horizon,
 Synthwave, Claude (Claude Code's own colors) and Terminal colors. `platoon themes` lists them with a swatch of each and their ids.
+Twenty more, light ones among them, come with the [Theme pack](#themes-from-plugins) plugin.
 
 **Picking one.** Press `s` (the settings open on the Theme row) and `enter`. A list of themes opens on the right,
 next to your real screen, each with a strip of its main colors and a check on the one you use now. Move with `↑` `↓`
@@ -618,7 +619,8 @@ is a copy, for example `mkdir -p ~/.config/platoon/themes && cp /usr/share/ghost
 the list after the built-ins, marked `yours`, with the id `user:<file name>` (`user:deep-sea`) that goes in
 `settings.json`. Things to know:
 
-- Dark themes only. A file whose background is light is skipped, and so is anything that isn't a readable theme file
+- Dark themes only (light ones come from plugins, see below). A file whose background is light is skipped, and so is
+  anything that isn't a readable theme file
   (too big, not text, no background or foreground). The picker says how many were skipped and why, and so does
   `platoon themes`.
 - Contrast is adjusted for you. Text, the muted grays, the accent and the status colors are lightened as far as it
@@ -632,16 +634,24 @@ the list after the built-ins, marked `yours`, with the id `user:<file name>` (`u
 - A folder with more than 300 files is read only as far as its first 300 (in name order); subfolders and names starting
   with a dot are ignored.
 
-**Themes from plugins.** More themes come as [plugins](#plugins) from platoon's catalog. Once one is installed its themes are
-in the list after yours, each with the plugin's name beside it, and their ids are `plugin:<plugin>/<theme>`
-(`plugin:example-themes/harbor-night`), so they never clash with a built-in or one of yours. Removing the plugin takes its
-themes away; if you were using one, platoon shows the default theme and keeps the id in `settings.json`, so installing the
-plugin again brings it back.
+<a id="themes-from-plugins"></a>**Themes from plugins.** More themes come as [plugins](#plugins) from platoon's catalog.
+Once one is installed its themes are in the list after yours, each with the plugin's name beside it, and their ids are
+`plugin:<plugin>/<theme>` (`plugin:theme-pack/solarized-light`), so they never clash with a built-in or one of yours.
+Removing the plugin takes its themes away; if you were using one, platoon shows the default theme and keeps the id in
+`settings.json`, so installing the plugin again brings it back.
+
+The **Theme pack** plugin (`theme-pack`) has twenty: twelve dark (Harbor Night, Moss Lantern, Ayu Dark, Doom One,
+Embark, Everblush, GitHub Dark Dimmed, Iceberg Dark, Jellybeans, Srcery, Tomorrow Night, Zenbones Dark) and
+eight **light** ones (Catppuccin Latte, Dayfox, Flexoki Light, GitHub Light, Gruvbox Light, One Half Light, Rosé Pine
+Dawn, Solarized Light). On a light theme everything platoon draws is dark on light, and so is the code editor (`v`). The
+Claude session you view inside platoon gets the theme's background and colors too, but Claude Code picks some colors of
+its own: with a light theme in platoon, choose a light theme in Claude Code as well (its `/theme` command).
 
 `terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
 whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the
 background and a bright black that reads as grey; if your terminal theme's black is the same as its background, the
-highlighted row is shown only by the marker beside it.
+highlighted row is shown only by the marker beside it. It assumes a dark terminal theme: on a light one the highlighted
+row is a black band that is hard to read, so pick one of the Theme pack's light themes instead.
 
 Themes use 24-bit color. Terminals that don't support it (macOS Terminal.app, some tmux setups) get the nearest of
 the 256 xterm colors instead, worked out for each cell as it is drawn. platoon decides from `COLORTERM`

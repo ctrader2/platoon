@@ -723,9 +723,9 @@ mod tests {
         assert!(out.contains("Installed my-themes name 0.1.0"));
         let (_, out, _) = run(&["update"], &store, &src);
         assert!(out.contains("was installed from a folder"), "{out}");
-        std::fs::write(dir.join("themes/Mine"), "background = #ffffff\nforeground = #000000\n").unwrap();
+        std::fs::write(dir.join("themes/Mine"), "background = #ffffff\nforeground = #999999\n").unwrap();
         let (code, out, _) = run(&["check", &dir.to_string_lossy()], &store, &src);
-        assert!(code == 1 && out.contains("  - themes/Mine: it is a light theme") && out.contains("Not ready"), "{out}");
+        assert!(code == 1 && out.contains("  - themes/Mine: the text is hard to read") && out.contains("Not ready"), "{out}");
         // A catalog without it (an empty one).
         let gone = CatalogFrom::Folder(base.join("nowhere"));
         let (code, _, err) = run(&["add", "sea-themes"], &store, &gone);

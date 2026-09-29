@@ -121,7 +121,7 @@ pub struct PluginsState {
     /// The full-screen plugin screen is open (`Mode::Plugins`, or a question or the review over it).
     pub screen: bool,
     job: Option<Receiver<JobMsg>>,
-    /// What the job is doing, for the footer: "Installing Example themes…".
+    /// What the job is doing, for the footer: "Installing Theme pack…".
     pub job_label: String,
     /// The remove being asked about was asked from the settings screen, which the answer goes back to.
     from_settings: bool,
