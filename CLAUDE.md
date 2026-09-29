@@ -1,69 +1,29 @@
 # platoon
 
 A terminal app (Rust, ratatui) for managing Claude Code sessions on Linux and macOS: every conversation in one list, live
-shared sessions, archive, themes. Private repo `ctrader2/platoon`, branch `main`.
+shared sessions, archive, themes.
 
-## Start of every session
-
-1. Read **"Where we are"** at the top of `docs/requirements.md` (a session-start hook prints it). It says what is built,
-   what is in progress (including any uncommitted work), what is unverified and what is next.
-2. `git status -sb`, `git log --oneline -5` and `git worktree list` (work in progress lives in worktrees, see "Parallel
-   work"). If there is uncommitted work you did not write, find out what it is before building on top of it, and never
-   sweep it into an unrelated commit (`git add` files by explicit path).
-
-## The notes (`docs/`)
-
-`docs/` is a symlink to `~/repos/project-docs/platoon/` (private repo `ctrader2/project-docs`), and it is gitignored here.
-It holds `requirements.md` (design notes and decisions) and `agent-brief-template.md`.
-
-- When a decision is made or something is built, **update `docs/requirements.md`** in the same piece of work: append a dated
-  section, and keep the short **"Where we are"** section at the top current (built / in progress / unverified / next).
-- A Stop hook commits and pushes changes to the notes repo at the end of every turn. If it ever fails, commit and push in
-  `~/repos/project-docs` by hand. Never put secrets or tokens in the notes.
+A personal `CLAUDE.local.md` (gitignored) may add a maintainer's own workflow on top of this file.
 
 ## Working rules
 
 - **Discuss before building** anything non-trivial: plan, ask the questions that change the answer, then build.
-- **Commit when a change is finished and green**: `cargo test` fully passes and `cargo build --release` has no warnings.
-  Commit with a message that says why, ending with the trailer
-  `Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>`. Never commit a failing or half-built state. No force push, no
-  amending or rewriting pushed commits.
-- **Implementation steps go to a fresh agent** with a full brief (`docs/agent-brief-template.md`): context, the user's
-  decisions, the task, the safety rules, the quality bar, and the report format. An agent's report is a claim: verify it
-  yourself before telling the user it is done.
+- **Commit only when green**: `cargo test` fully passes (run it twice: a test that fails once is a race to fix, not to
+  retry) and `cargo build --release` has no warnings. The commit message says why.
+- If there is uncommitted work you did not write, find out what it is before building on top of it, and never sweep it into
+  an unrelated commit (`git add` files by explicit path).
+- Keep the file table below current when a source file is added or its job changes.
 
-## Parallel work: one worktree per piece of work (decided 2026-09-25)
+## Safety (platoon runs against your real Claude Code setup)
 
-Up to **three** pieces of work run at once, each in its own git worktree. `~/repos/platoon` itself stays on a clean `main`
-(the user reinstalls from it) and nobody builds features there.
-
-1. **Start**: `git worktree add ~/repos/platoon-worktrees/<name> -b work/<name> main`. The agent's brief names that folder;
-   the agent works, builds and tests only there (its own `target/`, so the first build is from scratch).
-2. **The agent** commits on `work/<name>` when green (full suite twice, release build clean) and stops. It does **not**
-   rebase, merge or push, and it does **not** edit `docs/` (a worktree has no `docs/`): its "built" write-up for the notes
-   goes in its final report.
-3. **Landing** (`/land <name>`), done by the orchestrator, **one branch at a time**: rebase the branch onto the latest
-   `main`, resolve conflicts, then `/verify` checks on the combined code (tests twice, release build, the user's files,
-   stray processes); only when green, fast-forward `main`, `git push origin main`, write the notes, and remove the worktree
-   and the branch. After each landing, every branch still waiting is rebased and retested again before it can land.
-4. **Conflicts**: the orchestrator resolves the mechanical ones; anything that needs judgement goes back to the agent that
-   wrote the code (it keeps its context), and the result is retested.
-5. **Branches stay local** until they land (so they can be rebased freely without a force push); only `main` is pushed.
-6. Parallel work goes best when the pieces touch different areas: `app.rs`, `ui.rs`, `main.rs`, `settings.rs` and the
-   file table below are where conflicts will come from; say so in the brief when two pieces share one.
-- Tell the user plainly what was verified and what was not. Nobody here can see colors, run macOS, or use a real `claude`
-  past its trust-folder prompt: say so, and say what to eyeball.
-- The user's terminal is Xfce Terminal on X11 (Ghostty is installed too). Explain in plain language; the user does not want
-  jargon in the UI.
-
-## Safety (the user's live setup runs on this machine)
+Whoever runs the tests probably uses Claude Code and platoon on the same machine, so:
 
 - Tests are hermetic: temp dirs for `CLAUDE_CONFIG_DIR`, `PLATOON_CACHE_DIR` and `PLATOON_CONFIG_DIR`. Never write to the real
   `~/.claude`, `~/.claude.json`, `~/.cache/platoon`, `~/.config/platoon`, and never touch the real clipboard from a test.
-- Never run `platoon setup` against the real config, never edit `~/.claude/settings.json`, never run `cargo install` or replace
-  `~/.cargo/bin/platoon` (the user's Claude Code settings point at it; the user reinstalls when they want to). Use `target/`.
-- Never signal or kill a process you did not start. The user's own `platoon host ... claude --resume ...` sessions and their
-  Claude Code session are running. Use `ps`; never broad `pkill -f`/`pgrep -f` patterns (they match your own shell).
+- Never run `platoon setup` against the real config, never edit `~/.claude/settings.json`, and never `cargo install` or
+  replace an installed `platoon` (Claude Code settings may point at it). Use `target/`.
+- Never signal or kill a process you did not start: live `platoon host ... claude --resume ...` sessions and Claude Code
+  itself may be running. Use `ps`; never broad `pkill -f`/`pgrep -f` patterns (they match your own shell).
 - serde_json: mutable indexing (`v["a"]["b"]`) silently creates null keys. Use `get_mut`.
 
 ## Build and test
@@ -129,8 +89,3 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 
 Notes that matter: rows are conversations keyed by session id (several live processes can share one); all knowledge of
 Claude's file formats stays in `claude.rs`; the settings file preserves keys it does not know.
-
-## Commands
-
-`/verify` checks a finished piece of work the way I check an agent's report. `/land <name>` brings a worktree's branch
-onto `main` (rebase, resolve, `/verify` on the combined code, push, notes, clean up).

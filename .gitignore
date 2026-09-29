@@ -1,2 +1,6 @@
 /docs
 /target
+# A maintainer's own Claude Code setup, kept outside the repo
+/CLAUDE.local.md
+/.claude/commands
+/.claude/settings.local.json
