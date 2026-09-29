@@ -1255,11 +1255,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         let text = if n > 0 { format!("   {spin} indexing {n}…") } else { format!("   {spin} indexing…") };
         left.push(Span::styled(text, Style::new().fg(t.dim)));
     }
-    // The smart names being made: how far along, while there is work.
-    if let Some((done, total, _)) = app.smart_progress() {
-        let paused = if app.smart_idle().is_some() { " (paused)" } else { "" };
-        left.push(Span::styled(format!("   {} Indexing {done} of {total}{paused}", app.marker()), Style::new().fg(t.dim)));
-    }
     // Nothing that spends tokens can run right now: say so quietly, and why. It goes as soon as the reason does.
     // The header is where it belongs: it shows on every tab, so notes that stopped updating can't go unnoticed.
     let so_far = left.iter().map(|s| s.content.chars().count()).sum::<usize>();

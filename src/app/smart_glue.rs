@@ -365,8 +365,9 @@ impl App {
         self.update_view();
     }
 
-    /// "Indexing 12 of 240": how far the work has got and how much there is, while there is some. The flag says it is
-    /// waiting rather than working.
+    /// How far the naming has got and how much there is, while there is some. The flag says it is waiting rather than
+    /// working. The screen no longer shows it (the count was noise); the tests read it.
+    #[cfg(test)]
     pub fn smart_progress(&self) -> Option<(usize, usize, bool)> {
         (self.smart.total > 0 && self.settings.get().feature_on("names")).then_some((self.smart.done, self.smart.total, self.smart.flight.is_none()))
     }

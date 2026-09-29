@@ -1391,7 +1391,9 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
 }
 
 #[test]
-fn the_header_says_how_far_the_indexing_has_got_while_there_is_work_and_nothing_when_there_is_not() {
+fn the_header_never_counts_the_names_being_made() {
+    // The count ("Indexing 0 of 4") was noise: the names arrive on their own, and a stop still shows through the
+    // header's note on why nothing that spends tokens can run.
     let w = World::new("rd-progress");
     for i in 1..=4 {
         simple(&w, &format!("c{i}"), &format!("please look into topic number {i} for me"), 100 * i as u64);
@@ -1402,25 +1404,10 @@ fn the_header_says_how_far_the_indexing_has_got_while_there_is_work_and_nothing_
     let mut app = app_with(&w, &fake);
     let mut term = Terminal::new(TestBackend::new(112, 24)).unwrap();
     app.refresh_until_for_test(10, "the first call to start", |_| fake.calls() == 1);
+    assert!(app.smart_progress().is_some(), "there is work");
     let shown = screen(&mut term, &app);
-    let header = shown.lines().nth(1).unwrap();
-    assert!(header.contains("✦ Indexing 0 of 4"), "{header}");
-    assert!(!header.contains("(paused)"));
-    let (x, y) = at(&shown, "Indexing 0 of 4").unwrap();
-    assert_eq!(term.backend().buffer()[(x, y)].fg, app.theme.dim, "quiet, like the other counters");
-    app.refresh_until_for_test(10, "the first two to be named", |a| a.smart_progress().is_some_and(|p| p.0 == 2));
-    assert!(screen(&mut term, &app).lines().nth(1).unwrap().contains("Indexing 2 of 4"));
+    assert!(!shown.lines().nth(1).unwrap().contains("Indexing"), "{shown}");
     app.settle_ai_for_test(10);
-    let done = screen(&mut term, &app);
-    assert!(!done.contains("Indexing"), "gone when the work is done:\n{done}");
-    // Paused (a gate says no): the words say so.
-    let l = Ledger::open(&w.cache);
-    l.note_failure(usage::now(), crate::ledger::FailKind::Network).unwrap();
-    simple(&w, "c5", "please look into topic number 5 for me", 10);
-    app.refresh_for_test();
-    app.refresh_for_test();
-    let shown = screen(&mut term, &app);
-    assert!(shown.lines().nth(1).unwrap().contains("Indexing 0 of 1 (paused)"), "{shown}");
 }
 
 #[test]
