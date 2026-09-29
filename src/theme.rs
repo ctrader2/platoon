@@ -967,6 +967,10 @@ mod tests {
         assert_eq!(Theme::default().name, "Catppuccin Mocha");
         assert_eq!(Theme::all().last().map(|t| t.name.as_str()), Some("Terminal colors"));
         assert!(Theme::all().iter().all(|t| !t.name.is_empty()));
+        // The ids are written out, never made from the names; the accented names still give the same id as a slug.
+        for t in Theme::all().iter().filter(|t| !t.name.is_ascii()) {
+            assert_eq!(crate::usertheme::slug(&t.name), t.id, "{}", t.name);
+        }
     }
 
     #[test]
@@ -1173,7 +1177,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("themes")).unwrap();
         std::fs::write(dir.join("themes/Deep Sea"), "background = #0a1622\nforeground = #dde6ee\n").unwrap();
         std::fs::write(dir.join("themes/Dracula"), "background = #101010\nforeground = #eeeeee\n").unwrap();
-        std::fs::write(dir.join("themes/Sunny"), "background = #ffffff\nforeground = #000000\n").unwrap();
+        std::fs::write(dir.join("themes/Sunny"), "background = #ffffff\nforeground = #bbbbbb\n").unwrap();
         let reg = Registry::open(&dir);
         let plain = render_list(None, &reg);
         let lines: Vec<&str> = plain.lines().collect();
@@ -1184,11 +1188,11 @@ mod tests {
         assert_eq!(lines[2 * n + 2], "user:dracula           Dracula (yours)", "a built-in's name is marked in the name, and not twice");
         assert_eq!(lines[2 * n + 4], "");
         assert!(lines[2 * n + 5].starts_with("1 theme file skipped in ") && lines[2 * n + 5].ends_with("themes:"), "{}", lines[2 * n + 5]);
-        assert_eq!(lines[2 * n + 6], "  Sunny: light themes aren't supported");
+        assert!(lines[2 * n + 6].starts_with("  Sunny: a light theme has to read as it is: the text is hard to read on the background (1.9:1; it needs 7:1)"), "{}", lines[2 * n + 6]);
         assert_eq!(lines.len(), 2 * n + 7);
         let color = render_list(Some(Depth::TrueColor), &reg);
         assert!(color.contains("48;2;10;22;34m"), "the user theme's swatch is on its own background");
-        assert!(color.contains("Sunny: light themes aren't supported") && !color.contains("skipped in \x1b"));
+        assert!(color.contains("Sunny: a light theme has to read as it is") && !color.contains("skipped in \x1b"));
     }
     #[test]
     fn the_selection_color_keeps_the_themes_text_readable_and_is_clearly_not_the_background() {

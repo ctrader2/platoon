@@ -377,13 +377,18 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     assert!(shown.contains("Nord (yours)") && !shown.contains("Nord (yours)  (yours)"), "a name a built-in has is marked once: {shown}");
     assert!(shown.contains("bg #0a1622"), "the roles are listed like a built-in's:\n{shown}");
     assert!(shown.contains("3 theme files skipped in "), "{shown}");
-    for want in ["Nord Light: light themes aren't supported", "Half: no background color", "Noise: the file isn't text"] {
+    fs::write(themes.join("Paper"), "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 5=#9a2fa0\npalette = 2=#2e7d32\npalette = 3=#8a5d00\npalette = 1=#c62828\n").unwrap();
+    let out = platoon(&claude, &cache, &["themes"]);
+    let shown = text(&out.stdout);
+    assert!(shown.contains("user:paper") && shown.contains("Paper  (yours)"), "a light theme that reads as it is is one of the user's:\n{shown}");
+    let nord_light = "Nord Light: a light theme has to read as it is: palette 12 (or 4) is missing: it is the accent color (or give it as platoon-accent), and 4 more problems";
+    for want in [nord_light, "Half: no background color", "Noise: the file isn't text"] {
         assert!(shown.lines().any(|l| l.trim() == want), "{want:?} in:\n{shown}");
     }
     assert!(!shown.contains("A Folder") && !shown.contains('\x1b'));
     // Nothing is written anywhere, and the folder the user made is untouched.
     assert!(fs::read_dir(&claude).unwrap().next().is_none() && fs::read_dir(&cache).unwrap().next().is_none());
-    assert_eq!(fs::read_dir(&themes).unwrap().count(), 6);
+    assert_eq!(fs::read_dir(&themes).unwrap().count(), 7);
 }
 
 /// The code editor is a plugin now: setup neither asks about it nor shows a line for it (an old `setup.json` that

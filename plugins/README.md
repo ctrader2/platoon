@@ -189,8 +189,8 @@ says what is wrong, in plain words, or "Looks good". It checks that:
 - every skill, squad and agent follows the rules in "Skills, squads and agents" above;
 - every theme, dark or light, reads well **as it is**: the text at 7:1 against the background, the five colors
   platoon uses for meaning (accent, working, good news, warnings, errors) at 4.5:1, and those five clearly different from
-  each other. (Your own themes folder lifts colors until they read; a plugin's themes have to read without help, like
-  the built-in ones.) A light theme's yellows and greens usually need darkening to reach 4.5:1: give them with
+  each other. (Your own themes folder lifts a dark theme's colors until they read; a plugin's themes, and a light theme
+  in your own folder, have to read without help, like the built-in ones.) A light theme's yellows and greens usually need darkening to reach 4.5:1: give them with
   `platoon-warn` and `platoon-ok`, and say in the file where they came from.
 
 Try it for real with `platoon plugin add ./sea-themes`: its themes appear in the settings (`s`, then Theme), with your

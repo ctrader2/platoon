@@ -617,15 +617,20 @@ That is all it needs: the background, the foreground, and any of the 16 `palette
 worked out; the other keys Ghostty themes carry are ignored). Ghostty's own themes are in this format, so borrowing one
 is a copy, for example `mkdir -p ~/.config/platoon/themes && cp /usr/share/ghostty/themes/Nord ~/.config/platoon/themes/`. Your themes appear in
 the list after the built-ins, marked `yours`, with the id `user:<file name>` (`user:deep-sea`) that goes in
-`settings.json`. Things to know:
+`settings.json`. The id keeps only plain letters and digits: an accented letter becomes its plain one (`Crème Brûlée`
+is `user:creme-brulee`). Things to know:
 
-- Dark themes only (light ones come from plugins, see below). A file whose background is light is skipped, and so is
-  anything that isn't a readable theme file
-  (too big, not text, no background or foreground). The picker says how many were skipped and why, and so does
-  `platoon themes`.
-- Contrast is adjusted for you. Text, the muted grays, the accent and the status colors are lightened as far as it
-  takes to read on your background (and kept clearly different from each other), so a sloppy file still gives a usable
-  theme. What the file says is used as it is wherever it already reads well.
+- On a dark theme, contrast is adjusted for you. Text, the muted grays, the accent and the status colors are lightened
+  as far as it takes to read on your background (and kept clearly different from each other), so a sloppy file still
+  gives a usable theme. What the file says is used as it is wherever it already reads well.
+- A light theme (a light background) is used as it is, so it has to read well already, by the same rules as a plugin's
+  theme: the text at 7:1 against the background, the accent and the four status colors at 4.5:1 and clearly different
+  from each other. Where a palette color doesn't reach that, you can pick platoon's color yourself with
+  `platoon-accent`, `platoon-busy`, `platoon-ok`, `platoon-warn` and `platoon-err` lines (see
+  [plugins/README.md](plugins/README.md)); the Theme pack's light themes are good examples.
+- A file that can't be used is skipped: a light theme that doesn't read well enough (the reason says what falls short),
+  or anything that isn't a readable theme file (too big, not text, no background or foreground). The picker says how
+  many were skipped and why, and so does `platoon themes`.
 - A file named like a built-in (a copy of Nord, say) is its own theme, shown as `Nord (yours)`; two files whose names
   differ only in capitals count as one (the first, in name order, is used). `platoon themes` prints every id.
 - Changes to the folder are noticed within a couple of seconds; nothing needs restarting. If you pick a user theme and
@@ -636,7 +641,8 @@ the list after the built-ins, marked `yours`, with the id `user:<file name>` (`u
 
 <a id="themes-from-plugins"></a>**Themes from plugins.** More themes come as [plugins](#plugins) from platoon's catalog.
 Once one is installed its themes are in the list after yours, each with the plugin's name beside it, and their ids are
-`plugin:<plugin>/<theme>` (`plugin:theme-pack/solarized-light`), so they never clash with a built-in or one of yours.
+`plugin:<plugin>/<theme>`, the theme's part made from its name as yours are (`plugin:theme-pack/solarized-light`,
+`plugin:theme-pack/rose-pine-dawn`), so they never clash with a built-in or one of yours.
 Removing the plugin takes its themes away; if you were using one, platoon shows the default theme and keeps the id in
 `settings.json`, so installing the plugin again brings it back.
 

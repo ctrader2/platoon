@@ -34,7 +34,7 @@
 //! Knob: `PLATOON_PLUGIN_CATALOG`, a folder laid out like `plugins/` used instead of the built-in catalog (tests).
 
 use crate::editor_install::{sha256_file, sha256_hex};
-use crate::theme::{contrast, delta_e, Theme, MIN_DELTA_E, MIN_ROLE, MIN_TEXT};
+use crate::theme::Theme;
 use crate::usertheme;
 use serde_json::{json, Map, Value};
 use std::{
@@ -385,8 +385,9 @@ impl CheckReport {
 
 /// Everything a plugin folder must be to be installed (and to be accepted into the catalog): a readable manifest,
 /// the files it names there, plain files only, not too big, made for this platoon, and every theme parses and reads
-/// well: text and the five colors that carry meaning at platoon's contrast floors, those five told apart. (A user's
-/// own theme file is lifted until it reads; a plugin's is held to the bar the built-ins meet as they are.)
+/// well as it is (`usertheme::problems`): text and the five colors that carry meaning at platoon's contrast floors,
+/// those five told apart. (A dark theme in the user's own folder is lifted until it reads; a plugin's is held to the
+/// bar the built-ins meet as they are, and so is a light one of the user's.)
 pub fn check(dir: &Path) -> CheckReport {
     let mut r = CheckReport::default();
     if !dir.is_dir() {
@@ -452,7 +453,7 @@ pub fn check(dir: &Path) -> CheckReport {
         }
         let parsed = usertheme::read_theme_text(&entry.path, entry.len).and_then(|t| usertheme::parse(&t));
         let problems = match &parsed {
-            Ok(p) => theme_problems(p),
+            Ok(p) => usertheme::problems(p),
             Err(e) => vec![e.clone()],
         };
         if problems.is_empty() {
@@ -469,41 +470,6 @@ pub fn check(dir: &Path) -> CheckReport {
 /// A theme's name: its file's name, as for the user's own theme files.
 fn theme_name(file: &str) -> String {
     usertheme::display_name(OsStr::new(file.rsplit('/').next().unwrap_or(file)))
-}
-
-/// Why a theme file doesn't read well enough to be offered, in plain words (empty: it does). The same floors the
-/// built-ins are held to, on the file's own colors, before any lifting: the text at 7:1 on the background, the five
-/// colors that carry meaning (`Parsed::role_picks`: the file's own `platoon-accent` ... or its palette) at 4.5:1
-/// and told apart. Dark and light themes alike: the ratio is the same whichever side is the lighter.
-pub fn theme_problems(p: &usertheme::Parsed) -> Vec<String> {
-    let mut out = Vec::new();
-    let (bg, fg) = (p.background, p.foreground);
-    let ratio = |c| contrast(c, bg);
-    if ratio(fg) < MIN_TEXT {
-        out.push(format!("the text is hard to read on the background ({:.1}:1; it needs {MIN_TEXT}:1)", ratio(fg)));
-    }
-    let names = ["accent", "busy", "ok", "warning", "error"];
-    let mut picked = Vec::new();
-    for (i, pick) in p.role_picks().into_iter().enumerate() {
-        let (role, (hi, lo)) = (names[i], usertheme::ROLE_SLOTS[i]);
-        match pick {
-            None => out.push(format!("palette {hi} (or {lo}) is missing: it is the {role} color (or give it as {})", usertheme::ROLE_KEYS[i])),
-            Some(c) => {
-                if ratio(c) < MIN_ROLE {
-                    out.push(format!("the {role} color is hard to read on the background ({:.1}:1; it needs {MIN_ROLE}:1)", ratio(c)));
-                }
-                picked.push((role, c));
-            }
-        }
-    }
-    for (i, (a, ca)) in picked.iter().enumerate() {
-        for (b, cb) in &picked[i + 1..] {
-            if delta_e(*ca, *cb) < MIN_DELTA_E {
-                out.push(format!("the {a} and {b} colors look too alike"));
-            }
-        }
-    }
-    out
 }
 
 // ---- installed plugins --------------------------------------------------------------------------------------------

@@ -102,7 +102,7 @@ fn the_pack_is_the_theme_pack_with_its_twenty_themes_dark_and_light() {
 #[test]
 fn every_theme_of_the_pack_reads_well_as_it_is_and_after_the_derivation() {
     for (name, parsed, t) in pack_themes() {
-        assert!(plugins::theme_problems(&parsed).is_empty(), "{name}: {:?}", plugins::theme_problems(&parsed));
+        assert!(usertheme::problems(&parsed).is_empty(), "{name}: {:?}", usertheme::problems(&parsed));
         // What the file says is what platoon uses: nothing needed lifting.
         let picks = parsed.role_picks();
         assert_eq!([t.accent, t.busy, t.ok, t.warn, t.err].map(Some), picks, "{name}: the roles are the file's own, untouched");
@@ -437,6 +437,65 @@ fn every_light_theme_of_the_pack_draws_every_main_screen_legibly() {
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Char('1'));
     }
+}
+
+#[test]
+fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
+    let mut w = World::new("light-user");
+    w.transcript("aaa", "/srv/alpha", "refactor the parser", 40);
+    w.transcript("bbb", "/srv/beta", "add a login page", 30);
+    w.live("bbb", "/srv/beta", 1, "busy");
+    // The user's own copy of a light theme, under a name with an accent: `user:creme-brulee`.
+    let dir = w.config.join("themes");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::copy(pack_dir().join("themes/Catppuccin Latte"), dir.join("Crème Brûlée")).unwrap();
+    std::fs::write(dir.join("Too Pale"), "background = #ffffff\nforeground = #cccccc\n").unwrap();
+    crate::settings::save(&w.config, &crate::settings::Settings { theme: "user:creme-brulee".into(), ..crate::settings::load(&w.config).0 }).unwrap();
+    let mut app = w.app();
+    assert_eq!(app.theme.id, "user:creme-brulee", "the user's light theme is in effect");
+    assert!(app.theme.light && app.theme.name == "Crème Brûlée");
+    let skipped = app.themes().skipped().reasons();
+    assert_eq!(skipped.len(), 1, "{skipped:?}");
+    assert!(skipped[0].starts_with("Too Pale: a light theme has to read as it is: the text is hard to read"), "{skipped:?}");
+    let t = app.theme.clone();
+    let c = KeyCode::Char;
+    let screens: [(&[KeyCode], &str, &str); 5] = [
+        (&[], "the Sessions list", "refactor the parser"),
+        (&[c('s')], "settings", "╭ Settings"),
+        (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
+        (&[c('n')], "the folder picker", "pick a directory"),
+        (&[c('3')], "squads", "[Squads]"),
+    ];
+    for (keys, what, sign) in screens {
+        app.mode = Mode::List;
+        key(&mut app, KeyCode::Char('1'));
+        for k in keys {
+            key(&mut app, *k);
+        }
+        let mut term = Terminal::new(TestBackend::new(130, 30)).unwrap();
+        let shown = draw(&mut term, &app);
+        assert!(shown.contains(sign), "{what}: {shown}");
+        assert_eq!(lines(&term)[1][1].bg, t.bg, "{what}: on the light background");
+        assert_legible(&term, &t, what);
+        if what == "the theme list" {
+            assert!(shown.contains("1 theme file skipped"), "{shown}");
+        }
+        for _ in 0..3 {
+            key(&mut app, KeyCode::Esc);
+        }
+    }
+}
+
+#[test]
+fn the_pack_s_rose_pine_dawn_is_rose_pine_dawn() {
+    let all = pack_themes();
+    let dawn = &all.iter().find(|(n, _, _)| n == "Rosé Pine Dawn").unwrap().2;
+    assert_eq!(dawn.id, "plugin:theme-pack/rose-pine-dawn");
+    let w = World::new("light-dawn-id");
+    plugins::store_for(&w.config).install(&pack_dir(), Origin::Folder { path: pack_dir().to_string_lossy().into_owned() }).unwrap();
+    let reg = usertheme::Registry::open_with_plugins(&w.config, &plugins::store_for(&w.config).dir);
+    assert_eq!(reg.by_id("plugin:theme-pack/rose-pine-dawn").map(|t| t.name), Some("Rosé Pine Dawn".to_string()));
+    assert!(reg.by_id("plugin:theme-pack/ros-pine-dawn").is_none(), "the old id is gone (a saved one falls back to the default)");
 }
 
 #[test]

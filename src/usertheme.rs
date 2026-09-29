@@ -2,10 +2,11 @@
 //! file (`~/.config/platoon/themes/Nord` is the theme "Nord"). Ghostty's bundled themes use the same format, so
 //! copying one over just works.
 //!
-//! A file is turned into a `Theme` the way the built-ins are: the same role derivation, then the same contrast
-//! floors, so a sloppy or low-contrast file still gives something readable. What can't be made to work is
-//! skipped with a reason that the picker and `platoon themes` show (a light theme, a file that isn't a theme,
-//! ...). Nothing in here may panic or hang on a strange file: sizes and counts are capped, only regular files
+//! A file is turned into a `Theme` the way the built-ins are, and the way a plugin's themes are: the same role
+//! derivation, then the same contrast floors. A dark file is lifted until it reads, so a sloppy or low-contrast one
+//! still gives something readable; a light one has to read as it is, like a plugin's. What can't be made to work is
+//! skipped with a reason that the picker and `platoon themes` show (a light theme that doesn't read, a file that isn't
+//! a theme, ...). Nothing in here may panic or hang on a strange file: sizes and counts are capped, only regular files
 //! are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather than guessed at.
 
 use crate::theme::{contrast, delta_e, is_light, lift_contrast, mix, Theme, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT};
@@ -186,14 +187,59 @@ fn mixed_until(bg: Color, text: Color, from: f64, ok: impl Fn(Color) -> bool) ->
     }
 }
 
-/// The theme one of the user's own files describes, or why there isn't one: `build`, for a dark theme. The user's
-/// own files stay dark: one is lifted until it reads, and a background between dark and light can't be lifted
-/// into anything readable. (A plugin's theme may be light: it is checked to read as it is, see `plugins::check`.)
+/// The theme one of the user's own files describes, or why there isn't one. A dark file is built (`build`) and lifted
+/// until it reads, whatever it says. A light one is held to the floors a plugin's theme is (`problems`: it has to read
+/// as it is, since a background just on the light side leaves nothing to lift the text toward) and then built the same
+/// way; one that doesn't read gets the first reason, in plain words, and how many more there are.
 pub fn theme_from(id: String, name: String, p: &Parsed) -> Result<Theme, String> {
     if p.light() {
-        return Err("light themes aren't supported".into());
+        let problems = problems(p);
+        if let Some(first) = problems.first() {
+            let more = match problems.len() - 1 {
+                0 => String::new(),
+                1 => ", and 1 more problem".into(),
+                n => format!(", and {n} more problems"),
+            };
+            return Err(format!("a light theme has to read as it is: {first}{more}"));
+        }
     }
     Ok(build(id, name, p))
+}
+
+/// Why a theme file doesn't read well enough to be used as it is, in plain words (empty: it does). The same floors the
+/// built-ins are held to, on the file's own colors, before any lifting: the text at 7:1 on the background, the five
+/// colors that carry meaning (`Parsed::role_picks`: the file's own `platoon-accent` ... or its palette) at 4.5:1
+/// and told apart. Dark and light themes alike: the ratio is the same whichever side is the lighter. Every plugin
+/// theme is held to it (`plugins::check`), and so is a light theme in the user's own folder (`theme_from`).
+pub fn problems(p: &Parsed) -> Vec<String> {
+    let mut out = Vec::new();
+    let (bg, fg) = (p.background, p.foreground);
+    let ratio = |c| contrast(c, bg);
+    if ratio(fg) < MIN_TEXT {
+        out.push(format!("the text is hard to read on the background ({:.1}:1; it needs {MIN_TEXT}:1)", ratio(fg)));
+    }
+    let names = ["accent", "busy", "ok", "warning", "error"];
+    let mut picked = Vec::new();
+    for (i, pick) in p.role_picks().into_iter().enumerate() {
+        let (role, (hi, lo)) = (names[i], ROLE_SLOTS[i]);
+        match pick {
+            None => out.push(format!("palette {hi} (or {lo}) is missing: it is the {role} color (or give it as {})", ROLE_KEYS[i])),
+            Some(c) => {
+                if ratio(c) < MIN_ROLE {
+                    out.push(format!("the {role} color is hard to read on the background ({:.1}:1; it needs {MIN_ROLE}:1)", ratio(c)));
+                }
+                picked.push((role, c));
+            }
+        }
+    }
+    for (i, (a, ca)) in picked.iter().enumerate() {
+        for (b, cb) in &picked[i + 1..] {
+            if delta_e(*ca, *cb) < MIN_DELTA_E {
+                out.push(format!("the {a} and {b} colors look too alike"));
+            }
+        }
+    }
+    out
 }
 
 /// The theme a file describes. Same roles as the built-ins: bg and text from the file, surface, border, dim and
@@ -266,13 +312,19 @@ pub fn display_name(file: &OsStr) -> String {
     name.chars().take(MAX_NAME).collect::<String>().trim_end().to_string()
 }
 
-/// Lowercase ASCII letters and digits, anything else a single dash: `Nord Light` is `nord-light`. A name with no
-/// ASCII at all gets a short hash, so the id is still stable from run to run.
+/// Lowercase ASCII letters and digits, anything else a single dash: `Nord Light` is `nord-light`. An accented Latin
+/// letter is its plain letter (`Rosé Pine Dawn` is `rose-pine-dawn`, see `plain_letters`), and a combining accent (a
+/// name written decomposed, as macOS may store a file name) adds nothing. A name with nothing left gets a short hash,
+/// so the id is still stable from run to run.
 pub fn slug(name: &str) -> String {
     let mut out = String::new();
-    for c in name.chars() {
+    for c in name.chars().flat_map(char::to_lowercase) {
         if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
+            out.push(c);
+        } else if let Some(plain) = plain_letters(c) {
+            out.push_str(plain);
+        } else if matches!(c, '\u{300}'..='\u{36f}') {
+            // A combining accent belongs to the letter before it.
         } else if !out.is_empty() && !out.ends_with('-') {
             out.push('-');
         }
@@ -284,6 +336,38 @@ pub fn slug(name: &str) -> String {
         return format!("theme-{:08x}", hash as u32);
     }
     out
+}
+
+/// A lowercase Latin-1 or Latin Extended-A letter as plain ASCII letters (é is e, ß is ss, æ is ae, þ is th), or None
+/// for anything else.
+fn plain_letters(c: char) -> Option<&'static str> {
+    Some(match c {
+        'à' | 'á' | 'â' | 'ã' | 'ä' | 'å' | 'ā' | 'ă' | 'ą' => "a",
+        'æ' => "ae",
+        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => "c",
+        'ď' | 'đ' | 'ð' => "d",
+        'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => "e",
+        'ĝ' | 'ğ' | 'ġ' | 'ģ' => "g",
+        'ĥ' | 'ħ' => "h",
+        'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => "i",
+        'ĳ' => "ij",
+        'ĵ' => "j",
+        'ķ' | 'ĸ' => "k",
+        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => "l",
+        'ñ' | 'ń' | 'ņ' | 'ň' | 'ŉ' | 'ŋ' => "n",
+        'ò' | 'ó' | 'ô' | 'õ' | 'ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => "o",
+        'œ' => "oe",
+        'ŕ' | 'ŗ' | 'ř' => "r",
+        'ś' | 'ŝ' | 'ş' | 'š' | 'ſ' => "s",
+        'ß' => "ss",
+        'ţ' | 'ť' | 'ŧ' => "t",
+        'þ' => "th",
+        'ù' | 'ú' | 'û' | 'ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => "u",
+        'ŵ' => "w",
+        'ý' | 'ÿ' | 'ŷ' => "y",
+        'ź' | 'ż' | 'ž' => "z",
+        _ => return None,
+    })
 }
 
 /// A file that didn't become a theme, and why.
@@ -308,7 +392,7 @@ impl Scan {
         self.skipped.len() + self.over_limit
     }
 
-    /// "Nord Light: light themes aren't supported", one per file, plus a line for files never read.
+    /// "Half: no background color", one per file, plus a line for files never read.
     pub fn reasons(&self) -> Vec<String> {
         let mut out: Vec<String> = self.skipped.iter().map(|s| format!("{}: {}", s.name, s.reason)).collect();
         if self.over_limit > 0 {
@@ -603,10 +687,11 @@ mod tests {
         assert!(luminance(t.ansi.unwrap()[2]) < luminance(c(0x55ff55)), "the normal green is derived, darker");
     }
 
-    /// Everything the built-ins are held to, for one derived theme. A floor is only demanded where white on that
-    /// background could meet it: on a dark but not very dark one (a saturated blue) nothing can read at 7:1.
+    /// Everything the built-ins are held to, for one derived theme, dark or light. A floor is only demanded where
+    /// white (black, on a light one) on that background could meet it: on a dark but not very dark one (a saturated
+    /// blue) nothing can read at 7:1.
     fn assert_readable(t: &Theme) {
-        let reach = contrast(WHITE, t.bg) - 0.01;
+        let reach = contrast(t.strongest(), t.bg) - 0.01;
         let on = |x: Color| contrast(x, t.bg);
         assert!(on(t.text) >= MIN_TEXT.min(reach), "{}: text {:.2}", t.name, on(t.text));
         assert!(on(t.subtext) >= MIN_SUBTEXT.min(reach), "{}: subtext {:.2}", t.name, on(t.subtext));
@@ -659,32 +744,46 @@ mod tests {
     }
 
     #[test]
-    fn every_bundled_ghostty_dark_theme_becomes_a_readable_theme_when_they_are_installed() {
+    fn every_bundled_ghostty_theme_becomes_a_readable_theme_or_a_light_one_says_why_when_they_are_installed() {
         // Not part of the shipped behavior, only a wide check when the machine has Ghostty (skipped otherwise).
         let dir = Path::new("/usr/share/ghostty/themes");
         let Ok(entries) = fs::read_dir(dir) else { return };
-        let (mut loaded, mut light) = (0, 0);
         for e in entries.flatten().take(500) {
             let Ok(text) = fs::read_to_string(e.path()) else { continue };
             let Ok(p) = parse(&text) else { continue };
-            match theme_from("user:t".into(), e.file_name().to_string_lossy().into_owned(), &p) {
+            let name = e.file_name().to_string_lossy().into_owned();
+            match theme_from("user:t".into(), name.clone(), &p) {
                 Ok(t) => {
+                    assert_eq!(t.light, p.light(), "{name}");
                     assert_readable(&t);
-                    loaded += 1;
                 }
-                Err(_) => light += 1,
+                Err(why) => assert!(p.light() && why.starts_with("a light theme has to read as it is: ") && !problems(&p).is_empty(), "{name}: {why}"),
             }
         }
-        assert!(loaded > 0 || light == 0);
     }
 
     #[test]
-    fn light_themes_are_refused_with_a_reason() {
-        let light = "background = #ffffff\nforeground = #000000";
-        assert_eq!(theme_from("user:l".into(), "L".into(), &parse(light).unwrap()).unwrap_err(), "light themes aren't supported");
-        // Right at the threshold the built-ins use.
+    fn a_light_theme_that_reads_as_it_is_loads_and_one_that_doesnt_says_why() {
+        // The Theme pack's Solarized Light, as a file in the user's folder: it reads on its background as it is.
+        let good = include_str!("../plugins/theme-pack/themes/Solarized Light");
+        let p = parse(good).unwrap();
+        assert!(p.light() && problems(&p).is_empty(), "{:?}", problems(&p));
+        let t = theme_from("user:sol".into(), "Sol".into(), &p).unwrap();
+        assert_eq!(t, build("user:sol".into(), "Sol".into(), &p), "built the way a plugin's theme is");
+        assert!(t.light && t.strongest() == c(0));
+        assert_eq!((t.text, t.accent, t.ok, t.warn), (c(0x47565c), c(0x6268b8), c(0x687700), c(0x8b6900)), "used as it is");
+        assert_readable(&t);
+        // Black on white with no colors of its own: it has no accent to offer, and says so first.
+        let bare = theme_from("user:l".into(), "L".into(), &parse("background = #ffffff\nforeground = #000000").unwrap()).unwrap_err();
+        assert_eq!(bare, "a light theme has to read as it is: palette 12 (or 4) is missing: it is the accent color (or give it as platoon-accent), and 4 more problems");
+        // Faint text: the text's own ratio, in plain words, and a light theme is never lightened or darkened to fit.
+        let faint = format!("{good}\nforeground = #b0b0a8");
+        let why = theme_from("u".into(), "n".into(), &parse(&faint).unwrap()).unwrap_err();
+        assert!(why.starts_with("a light theme has to read as it is: the text is hard to read on the background (2.") && why.ends_with("it needs 7:1)") && !why.contains("more"), "{why}");
+        // Right at the threshold the built-ins use: just dark is lifted and loads; just light has nothing to reach 7:1 with.
         assert!(theme_from("u".into(), "n".into(), &parse("background=#707070\nforeground=#fff").unwrap()).is_ok(), "luminance {:.3}", luminance(c(0x707070)));
-        assert!(theme_from("u".into(), "n".into(), &parse("background=#808080\nforeground=#fff").unwrap()).is_err(), "luminance {:.3}", luminance(c(0x808080)));
+        let why = theme_from("u".into(), "n".into(), &parse("background=#808080\nforeground=#fff").unwrap()).unwrap_err();
+        assert!(why.contains("the text is hard to read on the background (3.9:1; it needs 7:1)"), "luminance {:.3}: {why}", luminance(c(0x808080)));
     }
 
     #[test]
@@ -699,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn a_light_file_picks_the_colors_that_read_on_it_and_builds_a_light_theme_the_user_folder_still_refuses() {
+    fn a_light_file_picks_the_colors_that_read_on_it_and_builds_a_light_theme() {
         // Normal colors that read (blue, magenta), one that doesn't where the bright one does (green), and a pale
         // yellow pair where neither does: the darker of the two is picked (and lifted when built).
         let text = "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 12=#6fa0ff\npalette = 5=#9a2fa0\npalette = 13=#e08ae6\npalette = 2=#7fcf7f\npalette = 10=#2e7d32\npalette = 3=#f0d060\npalette = 11=#d8a820\npalette = 1=#c62828\npalette = 9=#ff8080";
@@ -720,8 +819,9 @@ mod tests {
         // A light theme with faint text gets darker text, never lighter.
         let faint = build("x".into(), "F".into(), &parse("background = #fafafa\nforeground = #9a9a9a").unwrap());
         assert!(contrast(faint.text, faint.bg) >= MIN_TEXT && luminance(faint.text) < luminance(c(0x9a9a9a)));
-        // The user's own folder stays dark only.
-        assert_eq!(theme_from("user:l".into(), "L".into(), &p).unwrap_err(), "light themes aren't supported");
+        // In the user's own folder a light theme has to read as it is, and this one's yellow doesn't.
+        let why = theme_from("user:l".into(), "L".into(), &p).unwrap_err();
+        assert!(why.starts_with("a light theme has to read as it is: the warning color is hard to read on the background (2."), "{why}");
         // Text on a fill: the theme's own text or background when one reads, else black or white.
         assert_eq!(t.text_on(t.accent), t.bg);
         assert_eq!(t.text_on(c(0xf0d060)), t.text);
@@ -735,13 +835,24 @@ mod tests {
         assert_eq!(slug("Nord"), "nord");
         assert_eq!(slug("Nord Light"), "nord-light");
         assert_eq!(slug("  --Catppuccin_Mocha!! "), "catppuccin-mocha");
-        assert_eq!(slug("Rosé Pine"), "ros-pine");
+        assert_eq!(slug("Rosé Pine"), "rose-pine", "an accented letter is its plain letter");
+        assert_eq!(slug("Rosé Pine Dawn"), "rose-pine-dawn");
+        assert_eq!(slug("Rose\u{301} Pine Dawn"), "rose-pine-dawn", "written decomposed, as macOS may store a file name");
+        assert_eq!(slug("ÀÁÂÄÃÅ àáâäãå"), "aaaaaa-aaaaaa");
+        assert_eq!(slug("Ça Ñu Öø Üü"), "ca-nu-oo-uu");
+        assert_eq!(slug("Straße Æther Œuvre"), "strasse-aether-oeuvre");
+        assert_eq!(slug("Łódź Ďěčí Þórr"), "lodz-deci-thorr");
+        assert_eq!(slug("Frappé"), "frappe");
+        assert_eq!(slug("Crème ☕ Brûlée"), "creme-brulee", "anything else is dropped, as before");
+        assert_eq!(slug("Nuit ƒ"), "nuit");
+        let greek = slug("Ωμέγα");
+        assert!(greek.starts_with("theme-"), "{greek}: not Latin, so the hash");
         assert_eq!(slug("a.b.c"), "a-b-c");
         let cjk = slug("夜の海");
         assert!(cjk.starts_with("theme-") && cjk.len() == 14, "{cjk}");
         assert_eq!(cjk, slug("夜の海"), "the same name gives the same id every run");
         assert_ne!(cjk, slug("夜の空"));
-        for name in ["Nord", "", "x y", "-", "..", "é"] {
+        for name in ["Nord", "", "x y", "-", "..", "é", "\u{301}", "ßẞİ", "Ǆ"] {
             let s = slug(name);
             assert!(!s.is_empty() && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'), "{s}");
             assert!(!s.starts_with('-') && !s.ends_with('-'));
@@ -779,6 +890,7 @@ mod tests {
         put(&d, "Zeta", "background = #000000\nforeground = #eeeeee\n");
         put(&d, "Alpha", "background = #10141c\nforeground = #eeeeee\n");
         put(&d, "Nord Light", "background = #eceff4\nforeground = #2e3440\n");
+        put(&d, "Paper", "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 5=#9a2fa0\npalette = 2=#2e7d32\npalette = 3=#8a5d00\npalette = 1=#c62828\n");
         put(&d, "Empty", "");
         put(&d, "Binary", [0u8, 159, 146, 150, 0xff, 0xfe]);
         put(&d, "Huge", vec![b'#'; (MAX_BYTES + 1) as usize]);
@@ -789,12 +901,13 @@ mod tests {
         put(&d, "Folder/inside", NORD);
         let scan = scan(&d.join("themes"));
         let names: Vec<&str> = scan.themes.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["Alpha", "Nord (yours)", "Zeta"], "name order; a name a built-in has is marked");
+        assert_eq!(names, ["Alpha", "Nord (yours)", "Paper", "Zeta"], "name order; a name a built-in has is marked; a light theme that reads");
         let ids: Vec<&str> = scan.themes.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, ["user:alpha", "user:nord", "user:zeta"]);
+        assert_eq!(ids, ["user:alpha", "user:nord", "user:paper", "user:zeta"]);
+        assert!(scan.themes[2].light && !scan.themes[0].light);
         let reasons = scan.reasons();
         let has = |name: &str, why: &str| reasons.iter().any(|r| r.starts_with(&format!("{name}: ")) && r.contains(why));
-        assert!(has("Nord Light", "light themes aren't supported"), "{reasons:?}");
+        assert!(has("Nord Light", "a light theme has to read as it is: palette 12 (or 4) is missing"), "{reasons:?}");
         assert!(has("Empty", "no background"), "{reasons:?}");
         assert!(has("Binary", "isn't text"), "{reasons:?}");
         assert!(has("Huge", "bigger than 64 KiB"), "{reasons:?}");

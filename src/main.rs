@@ -3144,7 +3144,7 @@ mod tests {
         assert_eq!(shown.matches('✓').count(), 1);
         assert!(shown.lines().find(|l| l.contains("Catppuccin Mocha")).unwrap().contains('✓'));
         // The light theme file was skipped, and the reason is in a dim note.
-        assert!(flat(&shown).contains("1 theme file skipped. Nord Light: light themes aren't supported"), "{shown}");
+        assert!(flat(&shown).contains("1 theme file skipped. Nord Light: a light theme has to read as it is: palette 12"), "{shown}");
         let (kx, ky) = locate(&buf, "1 theme file skipped");
         assert_eq!(buf[(kx, ky)].fg, app.theme.dim);
         // With nothing skipped there is no note.
