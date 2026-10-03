@@ -31,6 +31,7 @@ Any one of these. Each puts the `platoon` command on your path (the package is c
   has the files themselves, with their checksums.
 - The Linux builds are static: one file that runs on any distribution.
 - `cargo install` and building from source need Rust 1.88 or newer.
+- `platoon --version` says which version you have.
 
 Whichever you choose, platoon was last checked with the Claude Code version named in
 [What platoon changes](what-platoon-changes.md#it-reads-claude-codes-own-files), and it

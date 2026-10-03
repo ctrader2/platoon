@@ -43,9 +43,8 @@ body:
     id: platoon-version
     attributes:
       label: platoon version
-      description: |
-        The output of `platoon --version` if your platoon has it. Otherwise `cargo install --list | grep platoon-tui` (the version, and the commit for an install from git). Say how you installed it if it wasn't with cargo.
-      placeholder: platoon-tui v0.1.0 (https://github.com/ctrader2/platoon#70f408c)
+      description: The output of `platoon --version`, and how you installed it (Homebrew, the install script, cargo, Nix, from source).
+      placeholder: platoon 1.0.0, installed with Homebrew
     validations:
       required: true
   - type: input

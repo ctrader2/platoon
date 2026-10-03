@@ -116,6 +116,10 @@ use std::{
 fn main() -> io::Result<()> {
     match std::env::args().nth(1).as_deref() {
         None => {}
+        Some("--version" | "-V") => {
+            println!("{}", version_line());
+            return Ok(());
+        }
         Some("statusline") => return statusline(),
         Some("setup") if std::env::args().nth(2).is_some() => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -196,8 +200,13 @@ fn quit_line(running: usize) -> Option<String> {
     }
 }
 
+/// What `platoon --version` prints.
+fn version_line() -> String {
+    format!("platoon {}", versions::running())
+}
+
 const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
-               squads --kinds | themes | tokens]
+               squads --kinds | themes | tokens | uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. The back key (Ctrl+Space unless
@@ -218,6 +227,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
+  --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
                   notes-update   internal: run by Claude Code, or by platoon itself";

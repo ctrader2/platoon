@@ -495,3 +495,14 @@ fn there_is_no_editor_step_and_no_plugin_command() {
     assert!(text(&unknown.stderr).starts_with("usage: platoon") && !text(&unknown.stderr).contains("plugin"));
     assert!(!base.join("data").exists() && !base.join("fonts").exists(), "nothing installed anywhere");
 }
+
+#[test]
+fn version_prints_the_name_and_cargo_version_and_needs_no_setup() {
+    let (claude, cache) = dirs("version");
+    for flag in ["--version", "-V"] {
+        let out = platoon(&claude, &cache, &[flag]);
+        assert!(out.status.success(), "{flag}: {}", text(&out.stderr));
+        assert_eq!(text(&out.stdout), format!("platoon {}\n", env!("CARGO_PKG_VERSION")), "{flag}");
+    }
+    assert_eq!(fs::read_dir(&claude).unwrap().count(), 0, "nothing written");
+}
