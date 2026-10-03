@@ -339,7 +339,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
             // Anything may have changed (sessions, tickets, usage, the time a row says); the frame says whether it did.
             screen.dirty = true;
         }
-        // A notice that appears or runs out changes the footer.
+        // A notice that appears or runs out changes the footer. (One given by the work above belongs to this screen.)
+        app.settle_notice();
         let notice = app.active_notice().map(str::to_string);
         if notice != screen.notice {
             screen.notice = notice;
@@ -1003,7 +1004,7 @@ mod tests {
 
     /// The one-time notice, as it must read.
     fn notice_of(n: usize) -> String {
-        format!("Auto-archived {n} sessions idle for 2+ days. Find them under Archived.")
+        format!("Auto-archived {n} sessions idle for 2+ days. Find them in Archived.")
     }
 
     #[test]
@@ -1044,13 +1045,15 @@ mod tests {
             assert!(text.contains(&notice_of(143)), "{cols}x{rows}: notice cut off:\n{text}");
             assert!(flat(&text).contains("Active 1") && flat(&text).contains("Archived 143"), "{text}");
         }
-        // It covers the key hints, so it goes as soon as the user does anything.
+        // It takes the place of the key hints it can't share the line with (never `? help`), so it goes as soon as the
+        // user does anything.
         let mut app = app;
         let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
-        assert!(!draw(&mut term, &app).contains("enter open"));
+        let text = draw(&mut term, &app);
+        assert!(text.contains("? help") && !text.contains("s settings") && text.contains(&notice_of(143)), "{text}");
         key(&mut app, KeyCode::Down);
         let text = draw(&mut term, &app);
-        assert!(text.contains("enter open") && !text.contains("Auto-archived"), "{text}");
+        assert!(text.contains("enter open") && text.contains("s settings") && !text.contains("Auto-archived"), "{text}");
     }
 
     #[test]
@@ -1059,7 +1062,7 @@ mod tests {
         w.settings(120, 1);
         w.transcript("old", "/srv/old", "old work", 25 * 60);
         let app = w.app();
-        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 1+ day. Find it under Archived."));
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 1+ day. Find it in Archived."));
     }
 
     #[test]
@@ -1088,7 +1091,7 @@ mod tests {
         w.settings(120, 2);
         app.refresh_for_test();
         assert_eq!(app.counts, [0, 1], "the edited file is picked up on the next refresh");
-        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 2+ days. Find it under Archived."));
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 2+ days. Find it in Archived."));
 
         // A longer age puts nothing back (archiving is not undone by settings), but archives nothing more.
         w.settings(120, 30);
@@ -2417,7 +2420,7 @@ mod tests {
         assert_eq!(app.counts, [1, 1]);
         assert!(!app.settling());
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("Auto-archived 1 session idle for 1+ day. Find it under Archived."), "{shown}");
+        assert!(flat(&shown).contains("Auto-archived 1 session idle for 1+ day. Find it in Archived."), "{shown}");
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Right);
         assert_eq!(ids(&app), ["old"]);

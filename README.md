@@ -221,7 +221,7 @@ Two things happen on their own, so you don't have to think about them. Nothing i
 | What | When | What you see |
 | --- | --- | --- |
 | A session platoon runs is stopped | nobody has had it open, it hasn't been working, and it has printed nothing, for 2 hours | nothing: the row stays in the list like any conversation, and `enter` resumes it from its saved history |
-| A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 conversations idle for 2+ days. Find them under Archived.`) that stays until you press a key; the first time you run this version, many old conversations can be archived at once |
+| A conversation is archived | nothing is running it (a `Background` session counts as running) and it has had no activity for 2 days | a one-line notice (`Auto-archived 143 sessions idle for 2+ days. Find them in Archived.`) that stays until you press a key; the first time you run this version, many old conversations can be archived at once |
 
 Details worth knowing:
 

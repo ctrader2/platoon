@@ -542,3 +542,69 @@ fn a_session_folder_in_the_project_pane_is_cut_where_a_folder_starts() {
     let row = lines.iter().find(|l| l.contains("…/")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
     assert!(row.contains("/shop") && !row.contains("…c") && !row.contains("…o"), "{row}");
 }
+
+// ---- group 3: notices --------------------------------------------------------------------------------------------
+
+#[test]
+fn a_notice_stays_with_the_screen_it_was_given_on() {
+    let (_w, mut app) = three("n-screen");
+    let mut term = sized(&mut app, 120, 30);
+    // Renamed: the box closes and the notice is about that, so it shows on the list.
+    ch(&mut app, 'r');
+    key(&mut app, KeyCode::End);
+    for c in "-fix".chars() {
+        ch(&mut app, c);
+    }
+    key(&mut app, KeyCode::Enter);
+    let said = app.active_notice().expect("the rename says so").to_string();
+    assert!(said.starts_with("Renamed to"), "{said}");
+    assert!(draw(&mut term, &app).last().unwrap().contains(&said));
+    // Another tab: it doesn't follow.
+    ch(&mut app, '2');
+    assert_eq!(app.active_notice(), None);
+    let lines = draw(&mut term, &app);
+    assert!(!lines.iter().any(|l| l.contains("Renamed to")), "{}", lines.join("\n"));
+    // Nor does it come back with the first tab.
+    ch(&mut app, '1');
+    assert_eq!(app.active_notice(), None);
+    // A popup is another screen too.
+    app.notify("Copied 3 lines");
+    app.settle_notice();
+    ch(&mut app, 's');
+    assert_eq!(app.active_notice(), None, "not in the settings");
+    key(&mut app, KeyCode::Esc);
+}
+
+#[test]
+fn a_notice_from_before_attaching_never_shows_in_the_sessions_bar() {
+    let (_w, mut app) = three("n-attach");
+    app.notify("Renamed to \"alpha-fix\"");
+    app.settle_notice();
+    assert!(app.active_notice().is_some());
+    // Attached by something other than a key (as a hand-off or a squad does, from a refresh).
+    let (client, _host) = crate::client::Client::for_test(29, 120);
+    app.client = Some(client);
+    app.mode = Mode::Attached(4242);
+    assert_eq!(app.active_notice(), None, "before anything else ran");
+    app.settle_notice();
+    assert!(app.notice.is_none(), "and it is gone for good");
+    // One given with the attaching itself is about it: it shows there.
+    app.notify("Copied 2 lines");
+    app.settle_notice();
+    assert_eq!(app.active_notice(), Some("Copied 2 lines"));
+}
+
+#[test]
+fn a_long_notice_is_cut_beside_help_rather_than_take_its_place() {
+    let (_w, mut app) = three("n-footer");
+    app.notify("Couldn't save the name: the config folder is read only, so nothing was written and the old name stays");
+    for w in [60u16, 80, 120] {
+        let mut term = sized(&mut app, w, 24);
+        let lines = draw(&mut term, &app);
+        let footer = lines.last().unwrap();
+        assert!(footer.contains("? help"), "{w}: {footer}");
+        // Whole where it fits beside `? help`; cut with "…" where it doesn't.
+        assert!(footer.contains("Couldn't save the name") && footer.contains('…') == (w < 120), "{w}: {footer}");
+        assert!(footer.width() == w as usize, "{w}: {footer:?}");
+    }
+}

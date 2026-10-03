@@ -318,6 +318,17 @@ pub enum Confirm {
 pub const MIN_WIDTH: u16 = 60;
 pub const MIN_HEIGHT: u16 = 14;
 
+/// Which screen is showing, as far as notices go (`App::screen_id`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScreenId {
+    mode: std::mem::Discriminant<Mode>,
+    attached: Option<u32>,
+    top: usize,
+    project: Option<String>,
+    ticket: Option<u32>,
+    help: bool,
+}
+
 /// A terminal of `w` by `h` is too small for platoon's screens.
 pub fn too_small(w: u16, h: u16) -> bool {
     w < MIN_WIDTH || h < MIN_HEIGHT
@@ -525,7 +536,8 @@ pub struct App {
     pub client: Option<Client>,
     /// Host processes we started, kept only so they get reaped when they exit.
     spawned: Vec<std::process::Child>,
-    pub notice: Option<(String, Instant, Duration)>,
+    /// What happened, when, for how long it shows, and the screen it belongs to (`settle_notice`).
+    pub notice: Option<(String, Instant, Duration, Option<ScreenId>)>,
     pub mouse: (u16, u16),
     /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
     /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
@@ -946,18 +958,50 @@ impl App {
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
-        self.notice = Some((msg.into(), Instant::now(), NOTICE_FOR));
+        self.notice = Some((msg.into(), Instant::now(), NOTICE_FOR, None));
+    }
+
+    /// The screen showing, as far as notices go: the mode, the session attached, the tab, the project and ticket open,
+    /// and the help.
+    pub fn screen_id(&self) -> ScreenId {
+        ScreenId {
+            mode: std::mem::discriminant(&self.mode),
+            attached: if let Mode::Attached(pid) = self.mode { Some(pid) } else { None },
+            top: self.top,
+            project: self.open_project.clone(),
+            ticket: self.tk.open,
+            help: self.help_showing(),
+        }
+    }
+
+    /// A notice belongs to the screen it was given on: the one showing at the end of the key, click or refresh that gave
+    /// it (so a notice about a change of screen, given with it, stays with the new screen). Once the screen changes
+    /// again it goes, rather than follow the user onto another screen or into a session. Called after every event and
+    /// refresh.
+    pub fn settle_notice(&mut self) {
+        let now = self.screen_id();
+        if let Some((.., on)) = self.notice.as_mut() {
+            match on {
+                None => *on = Some(now),
+                Some(s) if *s != now => self.notice = None,
+                Some(_) => {}
+            }
+        }
     }
 
     /// The auto-archive notice stays until the user does something (it covers the key hints while it shows).
     fn dismiss_long_notice(&mut self) {
-        if self.notice.as_ref().is_some_and(|(_, _, ttl)| *ttl == AUTO_ARCHIVE_NOTICE_FOR) {
+        if self.notice.as_ref().is_some_and(|(_, _, ttl, _)| *ttl == AUTO_ARCHIVE_NOTICE_FOR) {
             self.notice = None;
         }
     }
 
+    /// The notice to show now: given lately, and on this screen (or given since the last event, not yet placed).
     pub fn active_notice(&self) -> Option<&str> {
-        self.notice.as_ref().filter(|(_, at, ttl)| at.elapsed() < *ttl).map(|(m, _, _)| m.as_str())
+        self.notice
+            .as_ref()
+            .filter(|(_, at, ttl, on)| at.elapsed() < *ttl && on.as_ref().is_none_or(|s| *s == self.screen_id()))
+            .map(|(m, ..)| m.as_str())
     }
 
     /// Indices into `sessions` for the rows on screen: current tab, narrowed by the filter.
@@ -1102,6 +1146,7 @@ impl App {
         self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
         let guard_on = setup::guard_installed(self.reader.root());
         self.refresh_with(host::discover(), guard_on);
+        self.settle_notice();
     }
 
     /// `refresh` with the same outside inputs as last time (after an action that changed our own state).
@@ -1353,9 +1398,10 @@ impl App {
                 let (n, plural) = (ids.len(), if ids.len() == 1 { "" } else { "s" });
                 let (them, day) = (if n == 1 { "it" } else { "them" }, if days == 1 { "day" } else { "days" });
                 self.notice = Some((
-                    format!("Auto-archived {n} session{plural} idle for {days}+ {day}. Find {them} under Archived."),
+                    format!("Auto-archived {n} session{plural} idle for {days}+ {day}. Find {them} in Archived."),
                     Instant::now(),
                     AUTO_ARCHIVE_NOTICE_FOR,
+                    None,
                 ));
             }
             Err(e) => self.notify(format!("Couldn't auto-archive: {e}")),
@@ -2486,6 +2532,11 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        self.key(key);
+        self.settle_notice();
+    }
+
+    fn key(&mut self, key: KeyEvent) {
         let own_screen = !matches!(self.mode, Mode::Attached(_) | Mode::EditNotes);
         if self.too_small() {
             return self.too_small_key(key, own_screen);
@@ -2736,6 +2787,11 @@ impl App {
     }
 
     pub fn on_paste(&mut self, text: &str) {
+        self.paste(text);
+        self.settle_notice();
+    }
+
+    fn paste(&mut self, text: &str) {
         if self.too_small() || self.help_showing() {
             return;
         }
@@ -2775,6 +2831,11 @@ impl App {
     }
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
+        self.mouse_event(m);
+        self.settle_notice();
+    }
+
+    fn mouse_event(&mut self, m: MouseEvent) {
         self.mouse = (m.column, m.row);
         // Too small, nothing is on screen to click or scroll.
         if self.too_small() {

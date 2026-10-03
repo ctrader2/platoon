@@ -515,7 +515,7 @@ impl App {
                         msg.push_str(
                             ". To hand a project's notes to its sessions, and keep them up to date, run `platoon setup` once more.",
                         );
-                        self.notice = Some((msg, Instant::now(), AUTO_ARCHIVE_NOTICE_FOR));
+                        self.notice = Some((msg, Instant::now(), AUTO_ARCHIVE_NOTICE_FOR, None));
                     } else {
                         self.notify(msg);
                     }

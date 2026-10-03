@@ -216,16 +216,9 @@ pub fn draw(f: &mut Frame, app: &App) {
         droppable.insert(at, "editor");
     }
     let hints = fit_hints(hints, room, &droppable);
-    match notice {
-        // A message that can't share the line with the key hints gets the whole line rather than being cut off.
-        Some(n) if hints_width(&hints) > room => {
-            // It may use the footer's side margin too: a notice that says something happened shouldn't be cut off for want of a column.
-            let wide = Rect::new(footer.x.saturating_sub(1), footer.y, footer.width + 2, 1);
-            f.render_widget(Paragraph::new(Span::styled(fit_end(n, wide.width as usize), Style::new().fg(t.warn))), wide);
-        }
-        // Still too long once the droppable ones are gone: the last ones go, but never `? help`, the way to all of them.
-        notice => draw_footer(f, app, footer, &keep_help(hints, room), notice.map(|n| (n.to_string(), t.warn))),
-    }
+    // Still too long once the droppable ones are gone: the last ones go, but never `? help`, the way to all of them. A
+    // notice that still doesn't fit beside it is cut with "…" (`draw_footer`) rather than take help's place.
+    draw_footer(f, app, footer, &keep_help(hints, room), notice.map(|n| (n.to_string(), t.warn)));
 
     match &app.mode {
         Mode::Picker => draw_picker(f, app, full),

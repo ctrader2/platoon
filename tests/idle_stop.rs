@@ -368,7 +368,7 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
     env.push(("PLATOON_CLAUDE_BIN", claude.to_string_lossy().into()));
     let mut t = Term::spawn(&[], &env, &r.work, 30, 110);
 
-    t.wait_for("Auto-archived 1 session idle for 2+ days. Find it under Archived.");
+    t.wait_for("Auto-archived 1 session idle for 2+ days. Find it in Archived.");
     assert!(t.flat().contains("Active 1") && t.flat().contains("Archived 1"), "{}", t.text());
     let file: serde_json::Value = serde_json::from_str(&fs::read_to_string(r.config.join("archive.json")).unwrap()).unwrap();
     assert!(file["archived"].get("dead-0001-aaaa").is_some() && file["archived"].get("live-0002-bbbb").is_none(), "{file}");
