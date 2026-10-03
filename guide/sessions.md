@@ -28,8 +28,9 @@ Each conversation takes two lines, its name line and its prompt line; the select
 `▎` in front of each. Conversations that only ever held slash commands are hidden. CONTEXT is left blank for a
 conversation platoon knows nothing about yet (no figure from Claude and nothing to estimate from).
 
-Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, `Background`, or `moved away` (see
-[Background sessions](#background-sessions)).
+Status is `working`, `done` (Claude finished and you haven't looked yet), `idle` (running, waiting for you: `●`),
+`Background`, or `moved away` (see [Background sessions](#background-sessions)). A conversation nothing runs right now
+shows a hollow `○` and no status: `enter` picks it up from its saved history.
 
 The name shown is, in this order: the one you gave it with `r` (platoon's own), then one you typed with `/rename` inside
 Claude, then, when the [smart features](tokens.md) are on, a short name platoon made up (marked with a quiet `✦` at the end
@@ -287,7 +288,7 @@ letter.
 installs none of its own and only offers the ones it finds installed: on your `PATH`, or where they install themselves
 (JetBrains Toolbox's scripts in `~/.local/share/JetBrains/Toolbox/scripts`, snaps in `/snap/bin`, `/opt/<app>/bin`,
 `~/.local/bin`; on macOS the apps in `/Applications` and `~/Applications`). When it finds none, `v` says so in one line
-at the bottom ("No code editor found: ...") and nothing opens.
+at the bottom ("No editor found: install ...") and nothing opens.
 
 | Editor | How it opens | Several folders |
 | --- | --- | --- |
@@ -303,7 +304,7 @@ settings.
 Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offered here; they stay in the
 [notes' list](projects.md#editing-the-notes) (`e`).
 
-Which one opens: your **favourite**, the first one found until you choose one (Settings, Editors: "Editor for files (v)").
+Which one opens: your **favourite**, the first one found until you choose one (Settings, Editors: "Editor for folders (v)").
 With "Always ask which editor" on, `v` shows the list every time, the favourite starred and picked (enter opens it);
 choosing another there makes it the favourite. A favourite that is no longer installed opens the first one found instead,
 and platoon says so once. Sessions and squads keep running meanwhile. A few things happen first when needed, whichever

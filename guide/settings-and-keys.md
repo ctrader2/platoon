@@ -31,7 +31,7 @@ stopped: that is how idle stop worked before this choice existed.
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
 | Description search: sessions sent / results / wider search | How many conversations a search by description ([Describe it](sessions.md#search)) sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
-| System prompt for Describe it | What platoon asks Claude for when you search by describing a conversation (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
+| System prompt for Describe it | What platoon asks Claude for when you search by describing a session (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 ### Smart features
 
@@ -60,7 +60,7 @@ What naming and summarizing your conversations reads, and how often. Under the e
 | Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
 | Archived sessions | Whether archived sessions are named too, slowly in the background. | Skip (default), In the background |
 | Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
-| System prompt for naming | What platoon asks Claude for when it names and summarizes your conversations (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
+| System prompt for naming | What platoon asks Claude for when it names and summarizes your sessions (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 ### Projects
 
@@ -79,8 +79,8 @@ In two groups:
 
 | Group | Setting | What it does | Choices |
 | --- | --- | --- | --- |
-| Editing platoon's text | Editor for notes and tickets | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
-| Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](sessions.md#opening-the-editor-v) found on this computer; the first one found until you choose |
+| Editing platoon's text | Editor for notes and tickets (e) | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
+| Editing files | Editor for folders (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](sessions.md#opening-the-editor-v) found on this computer; the first one found until you choose |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
 
 ### Moving around the settings
@@ -163,7 +163,8 @@ default, and at most the first 8,000 characters of one are sent.
 ## Keys: back and quit
 
 One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
-running), detaches `platoon open`, stops a notes editor running inside platoon, goes from a ticket's screen to its
+running), detaches `platoon open`, leaves a notes editor running inside platoon (after asking "Leave the editor?": `y` leaves
+and ends it, anything else stays, since what it hasn't saved would be lost), goes from a ticket's screen to its
 project's screen and from there to the list, leaves a squad's details, the settings, the theme list and the changes view,
 and cancels every question, box and list that pops up. `esc` does the same on platoon's own screens and popups (not in a
 session or an editor, where it is theirs), so the key hints there say `esc back`; in a session's live view and the notes

@@ -152,7 +152,7 @@ fn a_sessions_live_view_shows_what_its_program_writes_by_itself() {
     t.send(&[0]); // ctrl+space: back to the list
     t.wait_for("enter open");
     t.send(b"q");
-    t.wait_for("still running in the background");
+    t.wait_for("running: platoon picks");
     t.wait_exit();
     w.stop_host();
 }

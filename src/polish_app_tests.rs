@@ -368,7 +368,7 @@ fn the_screens_say_session_and_every_popup_title_starts_with_a_capital() {
     assert!(f.contains(&format!("{n} folder")) && !f.contains(" dirs"), "{f}");
     app.picker.editor = true;
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Code editor: pick a folder to open") && f.contains("enter open") && !f.contains("enter start"), "{f}");
+    assert!(f.contains("Pick a folder to open in your editor") && f.contains("enter open") && !f.contains("enter start"), "{f}");
     key(&mut app, KeyCode::Esc);
     // Every popup's title has a capital first letter, whatever it is.
     for k in ['r', 'm', 'n', 's', '?'] {
@@ -441,7 +441,7 @@ fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
     // (size, the words every row must show whole)
     let full = ["Can start", "Working", "Waiting on you", "Ready to publish", "Waits for #1", "Done", "Cancelled"];
     let short = ["Can start", "Working", "Waiting", "To publish", "Waits #1", "Done", "Cancelled"];
-    for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &full), (60, 24, &short)] {
+    for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &short), (60, 24, &short)] {
         let mut term = sized(&mut app, w, h);
         let lines = draw(&mut term, &app);
         let ctx = format!("{w}x{h}\n{}", lines.join("\n"));

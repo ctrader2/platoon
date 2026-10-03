@@ -144,7 +144,10 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
         let none = Rect::new(area.x, area.y, 0, 0);
         if sqt.focus == SqFocus::List { (area, none) } else { (none, area) }
     } else {
-        let left_w = (area.width * 30 / 100).clamp(26, 40).min(area.width.saturating_sub(20));
+        // A third of the width or so; wider, up to `LIST_MAX`, where the longest entry wants it and the details keep
+        // `DETAILS_MIN` (so `report-writer` isn't cut while the details have room to spare).
+        let base = (area.width * 30 / 100).clamp(26, 40);
+        let left_w = base.max(list_want(app).min(LIST_MAX).min(area.width.saturating_sub(DETAILS_MIN))).min(area.width.saturating_sub(20));
         let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(area);
         (left, right)
     };
@@ -203,6 +206,39 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
     } else {
         draw_squad_detail(f, app, ri);
     }
+}
+
+/// The widest the list pane gets to fit its longest entry, and the room the details keep beside it.
+const LIST_MAX: u16 = 56;
+const DETAILS_MIN: u16 = 60;
+
+/// How many squads use each agent (the draft counts).
+fn squads_using(app: &App) -> HashMap<String, usize> {
+    let sqt = &app.sqt;
+    let mut used: HashMap<String, usize> = HashMap::new();
+    for s in sqt.list.iter().filter_map(|l| l.squad.as_ref()).chain(sqt.draft.as_ref()) {
+        for id in s.agent_ids() {
+            *used.entry(id).or_default() += 1;
+        }
+    }
+    used
+}
+
+/// How wide the list pane wants to be to show every entry whole: the marker, the longest name with what goes beside it
+/// (an agent's model and squads, a squad's count of agents), the borders and the air inside them. Both lists count, so
+/// the pane keeps its width when `←` `→` switch between them.
+fn list_want(app: &App) -> u16 {
+    let sqt = &app.sqt;
+    let used = squads_using(app);
+    let agents = sqt
+        .agents
+        .iter()
+        .map(|l| l.name().width() + 1 + agent_right(l, &used).0.width())
+        .chain(sqt.agent_draft.as_ref().map(|d| d.name.width() + 1 + squadfile::model_label(&d.model).width()));
+    let squads =
+        sqt.list.iter().map(|l| l.name().width() + 2 + l.squad.as_ref().map_or(0, |s| count_words(s.agent_ids().len(), "agent").width()));
+    let longest = agents.chain(squads).max().unwrap_or(0);
+    u16::try_from(longest + 2 + 4).unwrap_or(u16::MAX)
 }
 
 fn drafting_line(f: &mut Frame, app: &App, li: Rect, y: u16) {
@@ -272,13 +308,7 @@ fn draw_squad_list(f: &mut Frame, app: &App, li: Rect, library: &[crate::agentfi
 fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
     let t = app.effective_theme();
     let sqt = &app.sqt;
-    // How many squads use each agent (the draft counts).
-    let mut used: HashMap<String, usize> = HashMap::new();
-    for s in sqt.list.iter().filter_map(|l| l.squad.as_ref()).chain(sqt.draft.as_ref()) {
-        for id in s.agent_ids() {
-            *used.entry(id).or_default() += 1;
-        }
-    }
+    let used = squads_using(app);
     // (the entry it is, if any; the line)
     let mut lines: Vec<(Option<usize>, Line<'static>)> = Vec::new();
     let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(t.dim).add_modifier(Modifier::BOLD));
@@ -538,7 +568,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         };
         detail_line(&mut lines, t, w, ri, sel_row == Some(*row), "", label, &value, Style::new().fg(t.dim), Style::new().fg(t.text), wraps);
     }
-    for l in wrap("Every squad has the same leader: its system prompt and model are in Settings (s) → Projects.", w) {
+    for l in wrap("Every squad has the same leader: its system prompt and model are in Settings\u{a0}(s)\u{a0}→\u{a0}Projects.", w) {
         lines.push((None, Line::styled(l, Style::new().fg(t.dim))));
     }
     lines.push((None, Line::raw("")));

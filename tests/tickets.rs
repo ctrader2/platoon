@@ -426,7 +426,8 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 24, 80);
     lab.open_project(&mut t);
     t.send(b"\t");
-    t.wait_for_all(&["#1 A rather", "Can start", "#2 Second", "Waits for #1", "Done and cancelled · 1"]);
+    // The short words (`Waits #1`), so the long title keeps 20 cells.
+    t.wait_for_all(&["#1 A rather long title…", "Can start", "#2 Second", "Waits #1", "Done and cancelled · 1"]);
     t.send(b"G\r");
     t.wait_for("#3 Third");
     let screen = t.stable();
@@ -439,7 +440,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let (row, _) = find(&mut t, "#2 Second");
     let line = screen.lines().nth(row as usize).unwrap();
     let pane = line.split('│').nth(1).unwrap_or("");
-    assert!(pane.contains("Waits for #1"), "inside its own pane: {line}");
+    assert!(pane.contains("Waits #1"), "inside its own pane: {line}");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

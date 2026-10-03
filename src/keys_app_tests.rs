@@ -337,13 +337,15 @@ fn the_back_key_stops_the_notes_editor_and_otherwise_every_key_is_the_editors() 
         thread::sleep(Duration::from_millis(10));
     }
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("ctrl+g stop the editor"));
+    assert!(flat(&draw(&mut term, &app)).contains("ctrl+g leave the editor"));
     ctrl_space(&mut app);
     key(&mut app, KeyCode::Esc);
     ch(&mut app, 'q');
     app.poll_editors();
     assert!(matches!(app.mode, Mode::EditNotes), "those are the editor's keys");
     app.on_key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
-    assert!(matches!(app.mode, Mode::List), "the back key stops it");
+    assert!(app.editing.as_ref().is_some_and(|e| e.leaving), "the back key asks first");
+    ch(&mut app, 'y');
+    assert!(matches!(app.mode, Mode::List), "and y stops it");
     assert!(app.open_project().is_some(), "back on the project's screen");
 }

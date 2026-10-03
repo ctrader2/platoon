@@ -267,8 +267,14 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     // Every agent is built in, as platoon has it: no heading over them (it would tell nothing apart).
     assert!(l.starts_with("Squads [Agents] ▎ planner"), "{l}");
     assert!(l.contains("▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
-    // A long name is cut with "…" rather than lose its model and count: every row says the same things.
-    for s in ["report-wri… Sonnet · 1 squad checker", "summarizer Sonnet · 1 squad"] {
+    // With room to spare beside the details, the list is as wide as its longest entry: no name is cut.
+    for s in ["report-writer Sonnet · 1 squad checker", "summarizer Sonnet · 1 squad"] {
+        assert!(l.contains(s), "{s}: {l}");
+    }
+    // Without it (the details keep their room), every row says the same, shorter: the model, and names whole.
+    let mut narrow = Terminal::new(TestBackend::new(90, 40)).unwrap();
+    let l = left(&draw(&mut narrow, &app));
+    for s in ["report-writer Sonnet checker Opus", "summarizer Sonnet"] {
         assert!(l.contains(s), "{s}: {l}");
     }
     key(&mut app, KeyCode::End);

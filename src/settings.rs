@@ -587,6 +587,8 @@ impl Tab {
 /// The tabs by position, for the code that treats one of them specially (see `tabs`).
 pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
+/// Where the squad leaders' system prompt and model are: `s` on the Squads tab opens the settings here.
+pub const TAB_PROJECTS: usize = 4;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
 
@@ -628,13 +630,13 @@ fn editors_items() -> Vec<Item> {
     };
     vec![
         editor(
-            "Editor for notes and tickets",
+            "Editor for notes and tickets (e)",
             "Opens a project's notes, a ticket's text and the system prompts (e). It is the one starred in that list, and \
              choosing another there changes it too.",
             EditorFor::Text,
         ),
         editor(
-            "Editor for files (v)",
+            "Editor for folders (v)",
             "Opens a ticket's or a session's folders (v): one of the editors this computer has that show a file tree. \
              Choosing another from v's list changes it too.",
             EditorFor::Files,
@@ -1238,7 +1240,7 @@ mod tests {
         let tab = &TABS[TAB_EDITORS];
         assert_eq!(tab.title, "Editors");
         let names: Vec<&str> = tab.items.iter().map(|i| i.name).collect();
-        assert_eq!(names, ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
+        assert_eq!(names, ["Editor for notes and tickets (e)", "Editor for folders (v)", "Always ask which editor"]);
         assert_eq!(tab.heading(0), Some("Editing platoon's text"));
         assert_eq!(tab.heading(1), Some("Editing files"));
         assert_eq!(tab.heading(2), None, "the switch belongs with the files editor");
@@ -1525,7 +1527,7 @@ mod tests {
         assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"]);
         assert_eq!(
             tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(),
-            ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]
+            ["Editor for notes and tickets (e)", "Editor for folders (v)", "Always ask which editor"]
         );
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();

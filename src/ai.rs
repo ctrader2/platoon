@@ -63,13 +63,13 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: "names",
         label: "Smart names and summaries",
-        description: "Gives each conversation a short name and a one-line summary, and keeps them up to date.",
+        description: "Gives each session a short name and a one-line summary, and keeps them up to date.",
         on_unless_switched_off: false,
     },
     Feature {
         id: "find",
         label: "Find a session by description",
-        description: "Finds the conversation you mean from a few words about it, when searching for exact words isn't enough.",
+        description: "Finds the session you mean from a few words about it, when searching for exact words isn't enough.",
         on_unless_switched_off: false,
     },
     Feature {
@@ -81,7 +81,7 @@ pub const FEATURES: &[Feature] = &[
     Feature {
         id: crate::describe::FEATURE,
         label: "Project descriptions",
-        description: "Gives each project the one line that says what it is, from its conversations' summaries and its notes, at most once an hour.",
+        description: "Gives each project the one line that says what it is, from its sessions' summaries and its notes, at most once an hour.",
         on_unless_switched_off: true,
     },
 ];

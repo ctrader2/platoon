@@ -240,10 +240,11 @@ fn draw_all(f: &mut Frame, app: &App) {
         "waits for",
         "edit",
         "back to the list",
-        "details",
         "copy",
         "remove",
         "member",
+        // A list's main key (enter on the Squads tab) goes last of all.
+        "details",
     ];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
     if app.open_project.is_some() && app.tk.open.is_some() {
@@ -314,8 +315,9 @@ fn draw_too_small(f: &mut Frame, app: &App, area: Rect) {
     if w == 0 || area.height == 0 {
         return;
     }
+    // A size stays on the line of the words that say what it is (`NBSP`): never "this window is" / "50×12".
     let first = format!(
-        "platoon needs at least {}×{} — this window is {}×{}",
+        "platoon needs at least\u{a0}{}×{} — this window is\u{a0}{}×{}",
         crate::app::MIN_WIDTH,
         crate::app::MIN_HEIGHT,
         area.width,
@@ -802,8 +804,11 @@ pub(crate) struct TCols {
 /// The state and what a ticket waits for have a column each only where that leaves the title this many cells; the
 /// one column they share says the same with fewer words to repeat ("New").
 const TICKET_TITLE_WIDE: usize = 24;
-/// The title gets at least this many cells before that one column says its short words.
-const TICKET_TITLE_MIN: usize = 12;
+/// The title gets at least this many cells (or as many as the longest title needs, but never fewer than
+/// `TICKET_TITLE_SHORTEST`) before that one column says its short words: the room goes to the titles, which say
+/// which ticket it is, as long as there is a title it would cut.
+const TICKET_TITLE_MIN: usize = 20;
+const TICKET_TITLE_SHORTEST: usize = 12;
 /// ... and at least this many in the narrowest pane, where that column says its short words; only below this is that
 /// column cut.
 const TICKET_TITLE_FLOOR: usize = 6;
@@ -812,9 +817,17 @@ const TICKET_TITLE_FLOOR: usize = 6;
 /// ticket waits for, each as wide as its longest value, never cut. `want_state`/`want_tail`: the longest state and tail;
 /// `want_merged`/`want_short`: the longest of the one column that holds both, in full and in short words. Where the
 /// title would get fewer than `TICKET_TITLE_WIDE` cells, the two share one column; where that leaves it fewer than
-/// `TICKET_TITLE_MIN`, the column says its short words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
-pub(crate) fn ticket_cols(width: usize, num: usize, want: (usize, usize), want_merged: usize, want_short: usize) -> TCols {
+/// `TICKET_TITLE_MIN` (fewer than the longest title wants, `want_title`), the column says its short words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
+pub(crate) fn ticket_cols(
+    width: usize,
+    num: usize,
+    want: (usize, usize),
+    want_merged: usize,
+    want_short: usize,
+    want_title: usize,
+) -> TCols {
     let (want_state, want_tail) = want;
+    let title_min = want_title.clamp(TICKET_TITLE_SHORTEST, TICKET_TITLE_MIN);
     let fixed = 1 + num + 1;
     let gap = |w: usize| if w > 0 { w + 2 } else { 0 };
     let title = |cols: usize| width.saturating_sub(fixed + cols);
@@ -822,7 +835,7 @@ pub(crate) fn ticket_cols(width: usize, num: usize, want: (usize, usize), want_m
         let t = title(gap(want_state) + gap(want_tail));
         return TCols { num, title: t, state: want_state, tail: want_tail, merged: false, short: false };
     }
-    if title(gap(want_merged)) >= TICKET_TITLE_MIN {
+    if title(gap(want_merged)) >= title_min {
         return TCols { num, title: title(gap(want_merged)), state: want_merged, tail: 0, merged: true, short: false };
     }
     let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_FLOOR);
@@ -896,7 +909,9 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
         }
     };
     let longest = |merged: bool, short: bool| shown.iter().map(|x| tail_of(x, merged, short).0.width()).max().unwrap_or(0);
-    let c = ticket_cols(area.width as usize, num, (want_state, longest(false, false)), longest(true, false), longest(true, true));
+    let want_title = shown.iter().map(|x| x.title.width()).max().unwrap_or(0);
+    let c =
+        ticket_cols(area.width as usize, num, (want_state, longest(false, false)), longest(true, false), longest(true, true), want_title);
     let selected = app.ticket_selected();
     let height = area.height as usize;
     app.pages.tickets.set(height.max(1));
@@ -1326,7 +1341,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.selected;
         let bg = if (sel && app.pane == Pane::Sessions) || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
-        let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, app.tick);
+        let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, s.running(), app.tick);
         let text = if s.archived { t.dim } else { t.text };
         let spans = vec![
             Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
@@ -1632,6 +1647,15 @@ struct Pad {
     last: usize,
 }
 
+impl Cols {
+    /// Cells from the row's left edge to where STATUS starts: the marker (3), then NAME, PROJECT, DIR, BRANCH and
+    /// MODEL with their shares of the spare width. A row's description line ends here, under the columns it describes.
+    fn status_at(&self) -> usize {
+        let p = &self.pad;
+        3 + self.name + p.name + self.project + p.project + self.dir + p.dir + self.branch + p.branch + self.model + p.model
+    }
+}
+
 impl Pad {
     #[cfg(test)]
     fn sum(&self) -> usize {
@@ -1839,7 +1863,10 @@ struct Look {
     status_color: Color,
 }
 
-fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
+/// `running`: a process runs the conversation now (`Session::running`). An idle one that runs says `● idle`; one that
+/// nothing runs (only its saved history is there) shows a hollow `○` and no word, so the few that run stand out
+/// from the many that don't, by mark and word, not by color alone.
+fn row_look(t: &Theme, status: Status, unread: bool, running: bool, tick: u64) -> Look {
     // Unread pulses between two shades about once a second.
     let pulse_on = (tick / 5).is_multiple_of(2);
     match (status, unread) {
@@ -1847,7 +1874,8 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
         (Status::Idle, true) => {
             Look { marker: "●", marker_color: if pulse_on { t.ok } else { t.dim }, status: "done", status_color: t.ok }
         }
-        (Status::Idle, false) => Look { marker: "○", marker_color: t.dim, status: "idle", status_color: t.dim },
+        (Status::Idle, false) if running => Look { marker: "●", marker_color: t.dim, status: "idle", status_color: t.dim },
+        (Status::Idle, false) => Look { marker: "○", marker_color: t.dim, status: "", status_color: t.dim },
         // The accent: every theme keeps it apart from the working, done and warning colors (`MIN_DELTA_E`) and
         // readable on the background (`MIN_ROLE`), so a running-in-the-background row can't be mistaken for those.
         (Status::Background, _) => Look { marker: "◆", marker_color: t.accent, status: "Background", status_color: t.accent },
@@ -1866,7 +1894,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     let text = if s.archived { t.dim } else { t.text };
     let subtext = if s.archived { t.dim } else { t.subtext };
 
-    let Look { marker, marker_color, status: status_text, status_color } = row_look(t, s.status, s.unread, app.tick);
+    let Look { marker, marker_color, status: status_text, status_color } = row_look(t, s.status, s.unread, s.running(), app.tick);
     let name_style = if s.unread { base.fg(t.ok).add_modifier(Modifier::BOLD) } else { base.fg(text) };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
@@ -1924,7 +1952,9 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     l1.push(gap(c.pad.context, base));
     l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1 + c.pad.last), base.fg(t.dim)));
 
-    let desc_w = (area.width as usize).saturating_sub(3);
+    // The description spans the columns that say what the session is (NAME to MODEL) and ends where STATUS starts,
+    // its last cell blank like every column's, so STATUS, CONTEXT and LAST stand clear under their titles.
+    let desc_w = c.status_at().min(area.width as usize).saturating_sub(3);
     let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(&s.description, desc_w.saturating_sub(1)), base.fg(t.dim))];
 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
@@ -2009,12 +2039,27 @@ fn footer_room(width: u16, hints: &[Hint<'_>]) -> usize {
     (width as usize).saturating_sub(hints_width(hints) + 3)
 }
 
-/// Break `text` into lines of at most `width` chars at word boundaries (a word longer than a line is split).
+/// A space that `wrap` never breaks a line at: words joined by it stay on one line (`Settings (s) → Projects`), and it
+/// is drawn as an ordinary space.
+pub(crate) const NBSP: char = '\u{a0}';
+
+/// Break `text` into lines of at most `width` chars at word boundaries (a word longer than a line is split). Words
+/// joined by `NBSP` move to the next line together.
 fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = wrap_words(text, width);
+    for l in &mut lines {
+        if l.contains(NBSP) {
+            *l = l.replace(NBSP, " ");
+        }
+    }
+    lines
+}
+
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
     let mut lines: Vec<String> = Vec::new();
     let mut line = String::new();
-    for word in text.split_whitespace() {
+    for word in text.split(|c: char| c.is_whitespace() && c != NBSP).filter(|w| !w.is_empty()) {
         let mut word = word;
         while word.chars().count() > width {
             if !line.is_empty() {
@@ -2613,6 +2658,11 @@ fn popup_ground(f: &mut Frame, t: &Theme, screen: Rect, r: Rect, fade: bool) {
     let right = if screen.right() - r.right() <= POPUP_SLIVER { screen.right() } else { r.right() + 1 };
     let buf = f.buffer_mut();
     for y in r.y..r.bottom() {
+        // A wide character just before the gap covers the gap's column with its second half: it goes too (blank, in
+        // the screen's faded style), or the gap would not be there. One that starts in the gap is blanked with it.
+        if left > screen.x && buf[(left - 1, y)].symbol().width() > 1 {
+            buf[(left - 1, y)].set_symbol(" ");
+        }
         for x in (left..r.x).chain(r.right()..right) {
             buf[(x, y)].reset();
             buf[(x, y)].set_symbol(" ").set_bg(t.bg);
@@ -2767,7 +2817,7 @@ fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
     let row = |selected: bool, status: Status, unread: bool, name: &str, pct: u8| -> Line<'static> {
         let bg = if selected { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
-        let look = row_look(t, status, unread, app.tick);
+        let look = row_look(t, status, unread, true, app.tick);
         // The status word goes first when the panel is narrow.
         let status_w = if w >= 36 { 8 } else { 0 };
         let name_w = w.saturating_sub(3 + status_w + BAR_WIDTH + 5);
@@ -3405,7 +3455,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 66), h);
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "Open with");
+    let block = modal_block(t, "Open in editor");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, list, note, foot] =
@@ -3590,9 +3640,34 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
             (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
         },
     };
-    let hints: [Hint; 1] = [(app.back_label(), "stop the editor", Some(Action::Back))];
+    let hints: [Hint; 1] = [(app.back_label(), "leave the editor", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
+    if edit.leaving {
+        draw_leave_editor(f, app, area);
+    }
+}
+
+/// Leaving ends the editor, and whatever it holds that wasn't saved goes with it: so the back key asks first, and
+/// staying is what any key but `y` does.
+fn draw_leave_editor(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    const SAYS: &str = "Anything you haven't saved there is lost.";
+    let w = (SAYS.width() as u16 + 6).clamp(30, 60).min(area.width);
+    let inner_w = w.saturating_sub(4).max(1) as usize;
+    let body = wrap(SAYS, inner_w).len().max(1) as u16;
+    let r = centered(area, w, body + 5);
+    app.hits.borrow_mut().clear();
+    popup_ground(f, t, area, r, true);
+    let block = modal_block(t, "Leave the editor");
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [a, b, _, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(body), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(Paragraph::new("Leave the editor?").style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
+    f.render_widget(Paragraph::new(SAYS).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
+    let hints: [Hint; 2] = [("y", "leave", Some(Action::Confirm)), ("n", "stay", Some(Action::Cancel))];
+    draw_footer(f, app, foot, &hints, None);
 }
 
 /// A project's color (from the theme) and badge.
@@ -3659,7 +3734,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     popup_ground(f, t, area, r, true);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
-        _ if p.editor => "Code editor: pick a folder to open".to_string(),
+        _ if p.editor => "Pick a folder to open in your editor".to_string(),
         (Some(n), _) => format!("A folder for ticket #{n}"),
         (None, Some(pr)) => format!("New session in {}: pick a folder", pr.name),
         (None, None) => "New session: pick a folder".to_string(),

@@ -71,7 +71,7 @@ marks. See [Environment variables](settings-and-keys.md#environment-variables).
 
 ## Editors
 
-**`v` says "No code editor found".** platoon only offers editors with a file tree that it finds installed. Install one
+**`v` says "No editor found".** platoon only offers editors with a file tree that it finds installed. Install one
 (VS Code, Zed, Helix, a JetBrains IDE, ...). See [Opening the editor](sessions.md#opening-the-editor-v).
 
 **A JetBrains IDE opened the folder in a window it already had.** That is the IDE's own setting ("Open project in"); platoon

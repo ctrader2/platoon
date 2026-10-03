@@ -198,7 +198,7 @@ fn quitting_the_ui_leaves_the_session_running() {
     writer.write_all(&[0]).unwrap(); // ctrl+space: back to the list
     wait_for("enter open");
     writer.write_all(b"q").unwrap();
-    wait_for("still running in the background");
+    wait_for("running: platoon picks");
     child.wait().unwrap();
 
     let (pid, _) = find_host(&cache).expect("host record vanished when platoon quit");

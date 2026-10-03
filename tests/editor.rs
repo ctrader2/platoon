@@ -355,7 +355,7 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for_all(&["╭ Open with", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
+    t.wait_for_all(&["╭ Open in editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
     let shown = t.stable();
     let rows: Vec<&str> = shown.lines().filter(|l| l.contains("VS Code") || l.contains("Helix")).collect();
     assert_eq!(rows.len(), 2, "{shown}");
@@ -370,7 +370,7 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     assert_eq!(t.fg_at(row, col), vt100::Color::Rgb(0xb4, 0xbe, 0xfe));
     // Enter: VS Code (a stand-in) starts beside platoon with both folders in one window; platoon stays on screen.
     t.send(b"\r");
-    t.wait_gone("╭ Open with");
+    t.wait_gone("╭ Open in editor");
     let argv = wait_file(&lab.out.join("code.argv"));
     assert_eq!(argv.lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&lab.work), s(&docs)]);
     assert_eq!(fs::read_to_string(lab.out.join("code.cwd")).unwrap().trim(), s(&lab.work));
@@ -428,19 +428,19 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
         "Editing platoon's text",
         "Editor for notes and tickets",
         "Editing files",
-        "Editor for files (v)",
+        "Editor for folders (v)",
         "Always ask which editor",
     ]);
     let shown = t.stable();
     let at = |needle: &str| shown.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{shown}"));
     assert!(at("Editing platoon's text") < at("Editor for notes and tickets"));
-    assert!(at("Editor for notes and tickets") < at("Editing files") && at("Editing files") < at("Editor for files (v)"));
-    assert!(at("Editor for files (v)") < at("Always ask which editor"));
-    let files_row = shown.lines().nth(at("Editor for files (v)")).unwrap();
+    assert!(at("Editor for notes and tickets") < at("Editing files") && at("Editing files") < at("Editor for folders (v)"));
+    assert!(at("Editor for folders (v)") < at("Always ask which editor"));
+    let files_row = shown.lines().nth(at("Editor for folders (v)")).unwrap();
     assert!(files_row.contains("VS Code"), "none chosen yet: the first one found, which v opens: {files_row}");
     // Down to the files editor, right: the next editor found here, saved at once.
     t.send(b"\x1b[B\x1b[C");
-    t.wait_for_all(&["Editor for files (v)", "Helix"]);
+    t.wait_for_all(&["Editor for folders (v)", "Helix"]);
     until("the choice to reach the settings file", || lab.settings()["files_editor"] == "helix");
     t.send(b"\x1b[B\r");
     until("always ask on", || lab.settings()["files_editor_ask"] == true);
@@ -459,7 +459,7 @@ fn v_with_no_editor_found_says_so() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for_flat("No code editor found: v opens VS Code, Zed, Helix, JetBrains IDEs and others once one is installed.");
+    t.wait_for_flat("No editor found: install VS Code, Zed, Helix or a JetBrains IDE.");
     let screen = t.stable();
     assert!(screen.contains("make the shop") && !screen.contains("open with"), "platoon stays as it was:\n{screen}");
     assert!(lab.runs().is_empty() && fs::read_dir(&lab.out).unwrap().next().is_none(), "nothing started");

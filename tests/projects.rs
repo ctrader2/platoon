@@ -299,7 +299,7 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
     t.send(b"\x1b");
     t.wait_for("PROJECT");
     t.send(b"q");
-    t.wait_for("still running in the background");
+    t.wait_for("running: platoon picks");
     t.wait_exit();
 }
 

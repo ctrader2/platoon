@@ -85,6 +85,12 @@ impl Session {
         [name, &dirs, branch.unwrap_or(""), description, summary].join("\n").to_lowercase()
     }
 
+    /// Is a Claude Code process running this conversation right now (in a platoon host or a terminal of its own)? A
+    /// process that only waits after handing the conversation to a background session doesn't count.
+    pub fn running(&self) -> bool {
+        self.procs.iter().any(|p| !p.parked)
+    }
+
     pub fn rehaystack(&mut self) {
         self.haystack =
             Self::make_haystack(&self.name, &self.dir, &self.extra_dirs, self.branch.as_deref(), &self.description, &self.summary);

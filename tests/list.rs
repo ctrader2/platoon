@@ -84,7 +84,9 @@ fn enter_on_a_saved_conversation_resumes_it_in_its_own_directory_with_no_dialog(
     w.save("beef-0001-aaaa", "refactor the widget", 5);
     let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 110);
     // The row, its status and the counts fill in together; half a frame can be read, so wait for all of them.
-    t.wait_for_all(&["refactor the widget", "idle"]); // listed although nothing is running it
+    // Listed although nothing is running it: the hollow mark, and no status word.
+    t.wait_for_all(&["refactor the widget", "○", "Active  1"]);
+    assert!(!t.stable().contains("idle"), "{}", t.text());
     assert!(t.stable().split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 1"), "{}", t.text());
     t.send(b"\r");
     t.wait_for_all(&["fake-claude args:--resume beef-0001-aaaa", &format!("cwd:{}", w.work.display())]);
@@ -94,7 +96,7 @@ fn enter_on_a_saved_conversation_resumes_it_in_its_own_directory_with_no_dialog(
     t.send(&[0]); // ctrl+space: back to the list
     t.wait_for("enter open");
     t.send(b"q");
-    t.wait_for("still running in the background");
+    t.wait_for("running: platoon picks");
     t.wait_exit();
     assert!(find_host(&w.cache).is_some(), "the resumed session must keep running after platoon quits");
     w.cleanup();

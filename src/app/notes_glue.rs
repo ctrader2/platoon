@@ -30,6 +30,8 @@ pub struct NotesEdit {
     /// What the file looked like when the editor started, so platoon can tell whether anything came of it.
     stamp: notes::Stamp,
     pub run: editors::Running,
+    /// The back key was pressed: the "Leave the editor?" question shows over it, and only `y` ends the editor.
+    pub leaving: bool,
 }
 
 /// An editor with a window of its own that platoon opened on a project's notes. platoon carries on as usual and
@@ -265,6 +267,7 @@ impl App {
                         name: e.name.clone(),
                         stamp,
                         run,
+                        leaving: false,
                     });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
@@ -374,6 +377,7 @@ impl App {
                         name: e.name.clone(),
                         stamp,
                         run,
+                        leaving: false,
                     });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
@@ -430,6 +434,7 @@ impl App {
                         name: e.name.clone(),
                         stamp,
                         run,
+                        leaving: false,
                     });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
@@ -494,6 +499,7 @@ impl App {
                         name: e.name.clone(),
                         stamp,
                         run,
+                        leaving: false,
                     });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
@@ -567,11 +573,20 @@ impl App {
         }
     }
 
-    /// Keys while a terminal editor has platoon's window: everything goes to the editor, except the chord that
-    /// ends it.
+    /// Keys while a terminal editor has platoon's window: everything goes to the editor, except the back key, which
+    /// asks whether to leave it (the editor may hold typing not yet saved). While that question shows, `y` leaves
+    /// and every other key stays: enter, esc and the back key again too, so a key pressed twice loses nothing.
     pub(super) fn editor_key(&mut self, key: KeyEvent) {
+        let Some(ed) = self.editing.as_mut() else { return };
+        if ed.leaving {
+            if matches!(key.code, KeyCode::Char('y' | 'Y')) && !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) {
+                return self.stop_editor();
+            }
+            ed.leaving = false;
+            return;
+        }
         if self.keys.get().back.matches(&key) {
-            return self.stop_editor();
+            return self.ask_leave_editor();
         }
         let Some(ed) = self.editing.as_mut() else { return };
         let app_cursor = ed.run.parser().lock().map(|p| p.screen().application_cursor()).unwrap_or(false);
@@ -585,7 +600,23 @@ impl App {
         }
     }
 
-    /// The back key in the editor: ask it to leave (it is platoon's own child) and go back to the project.
+    /// The back key (or a click on its hint) in the editor: ask first, since leaving ends the editor.
+    pub(super) fn ask_leave_editor(&mut self) {
+        if let Some(ed) = self.editing.as_mut() {
+            ed.leaving = true;
+        }
+    }
+
+    /// The question's answer by mouse: `leave` ends the editor, otherwise it stays.
+    pub(super) fn answer_leave_editor(&mut self, leave: bool) {
+        match self.editing.as_mut() {
+            Some(_) if leave => self.stop_editor(),
+            Some(ed) => ed.leaving = false,
+            None => {}
+        }
+    }
+
+    /// "Leave the editor?" answered yes: ask it to leave (it is platoon's own child) and go back to the project.
     fn stop_editor(&mut self) {
         if let Some(ed) = self.editing.as_mut() {
             ed.run.stop();

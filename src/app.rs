@@ -1565,6 +1565,10 @@ impl App {
                 self.delete_project(&id);
             }
             (Action::Back, Mode::Attached(_)) => self.detach(),
+            // The notes editor's hint and its "Leave the editor?" question, by mouse.
+            (Action::Back, Mode::EditNotes) => self.ask_leave_editor(),
+            (Action::Confirm, Mode::EditNotes) => self.answer_leave_editor(true),
+            (Action::Cancel, Mode::EditNotes) => self.answer_leave_editor(false),
             (Action::Confirm, Mode::Confirm(Confirm::Archive { id, name, .. })) => {
                 self.mode = Mode::List;
                 self.archive_conversation(&id, &name);
@@ -1876,7 +1880,8 @@ impl App {
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
         self.refresh_settings();
-        self.settings_tab = 0;
+        // From the Squads tab, on the tab its "Settings (s) → Projects" points at: the leaders' prompt and model.
+        self.settings_tab = if self.squads_tab_showing() { crate::settings::TAB_PROJECTS } else { 0 };
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;

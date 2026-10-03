@@ -2,6 +2,8 @@ mod agentfile;
 mod ai;
 mod app;
 mod archive;
+#[cfg(test)]
+mod clarity_app_tests;
 mod claude;
 mod client;
 mod clipboard;
@@ -175,15 +177,20 @@ fn main() -> io::Result<()> {
     let result = run(&mut terminal);
     let _ = execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste);
     ratatui::restore();
-    let running = result?;
-    if running > 0 {
-        println!(
-            "platoon: {running} session{} still running in the background. Run `platoon` to pick {} up.",
-            if running == 1 { "" } else { "s" },
-            if running == 1 { "it" } else { "them" }
-        );
+    if let Some(line) = quit_line(result?) {
+        println!("{line}");
     }
     Ok(())
+}
+
+/// What quitting says about the sessions platoon's hosts keep running: in the list they read `● idle` (or working),
+/// and the next platoon picks them up. Nothing when none runs.
+fn quit_line(running: usize) -> Option<String> {
+    match running {
+        0 => None,
+        1 => Some("1 session keeps running: platoon picks it up next time.".into()),
+        n => Some(format!("{n} sessions keep running: platoon picks them up next time.")),
+    }
 }
 
 const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
@@ -1573,6 +1580,9 @@ mod tests {
         let mut w = w;
         w.transcript("working", "/srv/gamma", "busy one", 3);
         let _busy = w.live("working", "/srv/gamma", 3, "busy");
+        // A running one that waits: `idle` (one that nothing runs has no word).
+        w.transcript("resting", "/srv/delta", "idle one", 4);
+        let _idle = w.live("resting", "/srv/delta", 4, "idle");
         for t in Theme::all() {
             choose_theme(&w, &t.id);
             let app = w.app();

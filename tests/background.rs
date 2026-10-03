@@ -168,7 +168,7 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
     t.send(&[0]);
     t.wait_for("enter open");
     t.send(b"q");
-    t.wait_for("still running in the background");
+    t.wait_for("running: platoon picks");
     t.wait_exit();
     assert!(w.service_alive(), "leaving platoon must not stop the background session");
     assert!(w.claude.join("sessions").read_dir().unwrap().count() == 1, "platoon touched the registry");

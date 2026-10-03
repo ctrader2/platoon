@@ -101,7 +101,7 @@ With the notes pane in focus (the right arrow on a project's screen):
 then for editors it knows by name: nano, Neovim, Vim, Helix, Micro, Emacs and `vi` in the terminal, and VS Code, Cursor,
 Zed, Sublime Text, Kate, gedit, GNOME Text Editor and Mousepad in windows of their own (TextEdit on macOS). Only the ones
 it finds are offered, by their plain names. An editor that lives in the terminal **runs inside platoon's window**, like a
-session (`ctrl+space` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
+session (`ctrl+space` then `y` ends it if it ever wedges); one with a window of its own opens beside platoon, which says so on the
 notes and reads them again as soon as you are done or the file changes. There is nothing to set up: whichever one you use
 is remembered (as `notes_editor` in `settings.json`, also chosen in Settings, Editors) and offered first, with a star, the
 next time. If platoon finds nothing at all it offers `nano` and `vi`.

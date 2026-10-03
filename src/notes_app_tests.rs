@@ -445,13 +445,41 @@ fn typing_in_the_editor_reaches_it_and_ctrl_space_gets_out_of_a_wedged_one() {
     wait_for_editor(&mut app);
     assert_eq!(notes_of(&w, &id), "# Overview\nhello from platoon\n");
 
-    // One that never exits: ctrl+space ends it (it is platoon's own child) and gives the screen back.
+    // One that never exits: ctrl+space asks "Leave the editor?", and `y` ends it (it is platoon's own child) and gives
+    // the screen back. Anything else stays: enter, esc, n and the back key again.
     let stuck = fake_editor(&w, "stucked", true, "echo STUCK; while :; do sleep 0.05; done");
     choose(&w, &mut app, vec![stuck], "stucked");
     edit(&mut app);
     wait_until("the stuck editor to draw", || {
         app.editing.as_ref().is_some_and(|e| e.run.parser().lock().unwrap().screen().contents().contains("STUCK"))
     });
-    app.on_key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL));
+    let back = || KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL);
+    let asking = |app: &App| matches!(app.mode, Mode::EditNotes) && app.editing.as_ref().is_some_and(|e| e.leaving);
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("ctrl+space leave the editor") && !f.contains("Leave the editor?"), "{f}");
+    app.on_key(back());
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Leave the editor?") && f.contains("Anything you haven't saved there is lost."), "{f}");
+    assert!(f.contains("y leave") && f.contains("n stay"), "{f}");
+    key(&mut app, KeyCode::Char('n'));
+    let f = flat(&draw(&mut term, &app));
+    assert!(!f.contains("Leave the editor?") && f.contains("STUCK"), "the question goes, the editor stays: {f}");
+    // By mouse: the bar's hint asks, "n stay" stays (never back to the list behind it).
+    app.act(crate::app::Action::Back);
+    assert!(asking(&app));
+    app.act(crate::app::Action::Cancel);
+    assert!(matches!(app.mode, Mode::EditNotes) && !asking(&app), "a click on stay stays");
+    for stay in [KeyCode::Enter, KeyCode::Esc, KeyCode::Char('n')] {
+        app.on_key(back());
+        assert!(asking(&app), "the back key asks first");
+        key(&mut app, stay);
+        assert!(matches!(app.mode, Mode::EditNotes) && !asking(&app), "{stay:?} stays in the editor");
+    }
+    app.on_key(back());
+    app.on_key(back());
+    assert!(matches!(app.mode, Mode::EditNotes) && !asking(&app), "the back key twice stays");
+    app.on_key(back());
+    key(&mut app, KeyCode::Char('y'));
     assert!(matches!(app.mode, Mode::List) && !app.notes_busy(), "back on the project's screen");
 }

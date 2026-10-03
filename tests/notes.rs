@@ -218,7 +218,7 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
 
     // The file was started from the template, and the editor is running inside platoon's own window.
     t.wait_for("FAKE NANO EDITING");
-    t.wait_for("ctrl+space stop the editor");
+    t.wait_for("ctrl+space leave the editor");
     let notes = lab.notes();
     for heading in ["# Summary", "# Decisions"] {
         assert!(notes.contains(heading), "{heading} missing from the template:\n{notes}");

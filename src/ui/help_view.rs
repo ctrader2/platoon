@@ -60,6 +60,12 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
+    // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
+    if !app.squads_tab_showing() && !app.projects_list_showing() && app.tk.open.is_none() {
+        out.push(Entry::Note(
+            "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
+        ));
+    }
     out.push(Entry::Note(
         "A ~ before a percentage means it is an estimate: platoon worked it out from the session's messages. Without it, the figure is Claude Code's own.".into(),
     ));
@@ -70,8 +76,8 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
 const KEY_MAX: usize = 18;
 
 /// The help's lines wrapped to `width`: keys in a column of their own in the key color, descriptions beside them with
-/// a hanging indent.
-fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
+/// a hanging indent; each with whether it is a section's heading.
+fn lines_marked(app: &App, width: usize) -> Vec<(Line<'static>, bool)> {
     let t = app.effective_theme();
     let all = entries(app);
     let key_w =
@@ -80,21 +86,26 @@ fn lines(app: &App, width: usize) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for e in all {
         match e {
-            Entry::Heading(h) => out.push(Line::styled(h, Style::new().fg(t.text).add_modifier(Modifier::BOLD))),
-            Entry::Blank => out.push(Line::raw("")),
-            Entry::Note(n) => out.extend(wrap(&n, width).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext)))),
+            Entry::Heading(h) => out.push((Line::styled(h, Style::new().fg(t.text).add_modifier(Modifier::BOLD)), true)),
+            Entry::Blank => out.push((Line::raw(""), false)),
+            Entry::Note(n) => out.extend(wrap(&n, width).into_iter().map(|l| (Line::styled(l, Style::new().fg(t.subtext)), false))),
             Entry::Key(k, d) => {
                 let room = width.saturating_sub(key_w).max(10);
                 let keyed = k.chars().count() + 2 <= key_w;
                 let mut desc = wrap(&d, room).into_iter();
                 let first = if keyed { desc.next().unwrap_or_default() } else { String::new() };
                 let pad = key_w.saturating_sub(k.chars().count());
-                out.push(Line::from(vec![
-                    Span::styled(k, Style::new().fg(t.accent)),
-                    Span::raw(" ".repeat(pad)),
-                    Span::styled(first, Style::new().fg(t.subtext)),
-                ]));
-                out.extend(desc.map(|l| Line::from(vec![Span::raw(" ".repeat(key_w)), Span::styled(l, Style::new().fg(t.subtext))])));
+                out.push((
+                    Line::from(vec![
+                        Span::styled(k, Style::new().fg(t.accent)),
+                        Span::raw(" ".repeat(pad)),
+                        Span::styled(first, Style::new().fg(t.subtext)),
+                    ]),
+                    false,
+                ));
+                out.extend(
+                    desc.map(|l| (Line::from(vec![Span::raw(" ".repeat(key_w)), Span::styled(l, Style::new().fg(t.subtext))]), false)),
+                );
             }
         }
     }
@@ -109,7 +120,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let w = area.width.saturating_sub(4).min(76);
     // Borders, a column of air each side.
     let text_w = w.saturating_sub(4) as usize;
-    let text = lines(app, text_w);
+    let text = lines_marked(app, text_w);
     // The text, a blank line and the keys of the popup itself, inside the borders.
     let want = text.len() as u16 + 4;
     let r = centered(area, w, want.min(area.height.saturating_sub(2)));
@@ -123,7 +134,17 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let max_top = text.len().saturating_sub(view_h);
     let top = app.help_top.get().min(max_top);
     app.help_top.set(top);
-    let shown: Vec<Line> = text.into_iter().skip(top).take(view_h).collect();
+    let total = text.len();
+    let mut shown: Vec<(Line, bool)> = text.into_iter().skip(top).take(view_h).collect();
+    // A heading is never the last line in view, alone above the fold with nothing of its section: it waits below the
+    // fold with the rest of it (and the blank line before it with it), and the "more below" count says so.
+    if top + shown.len() < total {
+        while shown.last().is_some_and(|(l, heading)| *heading || l.width() == 0) && shown.len() > 1 {
+            shown.pop();
+        }
+    }
+    let below = total - top - shown.len();
+    let shown: Vec<Line> = shown.into_iter().map(|(l, _)| l).collect();
     f.render_widget(Paragraph::new(shown), Rect::new(inner.x, inner.y, inner.width, view_h as u16));
     let mut keys = vec![Span::styled("esc", Style::new().fg(t.accent)), Span::styled(" close", Style::new().fg(hint_fg(t)))];
     if max_top > 0 {
@@ -132,7 +153,7 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
             Span::styled("↑↓", Style::new().fg(t.accent)),
             Span::styled(" scroll", Style::new().fg(hint_fg(t))),
         ]);
-        let more = if top < max_top { format!("   {} more lines below", max_top - top) } else { String::new() };
+        let more = if below > 0 { format!("   {below} more lines below") } else { String::new() };
         keys.push(Span::styled(more, Style::new().fg(t.dim)));
     }
     f.render_widget(Paragraph::new(Line::from(keys)), Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1));

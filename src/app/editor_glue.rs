@@ -25,7 +25,7 @@ use crate::fileeditors::{self, FileEditor, Runs};
 use crate::tickets::{State, Ticket, Tickets};
 
 /// What `v` says when this computer has none of the editors it can open.
-pub const NO_EDITOR: &str = "No code editor found: v opens VS Code, Zed, Helix, JetBrains IDEs and others once one is installed.";
+pub const NO_EDITOR: &str = "No editor found: install VS Code, Zed, Helix or a JetBrains IDE.";
 
 /// What `v` was pressed on.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -123,6 +123,11 @@ impl App {
             .or_else(|| if self.projects_list_showing() { self.selected_project().map(|p| p.id.clone()) } else { None });
         self.open_picker_in(project);
         self.picker.editor = true;
+        // The whole home folder is rarely what an editor should open: the first real folder is picked instead (the
+        // project's own first, where one is open), and `~` stays in the list for whoever wants it.
+        if let Some(i) = self.picker.results.iter().position(|p| *p != self.home) {
+            self.picker.selected = i;
+        }
     }
 
     /// Enter in the folder picker opened by `v`.
@@ -377,7 +382,7 @@ impl App {
     pub fn editor_closed(&mut self, result: Result<(), String>) {
         let note = self.ed.note.take();
         match (result, note) {
-            (Err(e), _) => self.notify(format!("The code editor didn't open: {e}")),
+            (Err(e), _) => self.notify(format!("The editor didn't open: {e}")),
             (Ok(()), Some(n)) => self.notify(n),
             (Ok(()), None) => {}
         }

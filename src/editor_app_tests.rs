@@ -577,7 +577,7 @@ fn the_settings_step_through_the_editors_this_computer_has() {
     for _ in 0..5 {
         key(&mut app, KeyCode::Tab);
     }
-    assert_eq!(app.items()[0].name, "Editor for notes and tickets");
+    assert_eq!(app.items()[0].name, "Editor for notes and tickets (e)");
     key(&mut app, KeyCode::Right);
     assert_eq!(settings::load(&w.config).0.notes_editor, "nano");
     key(&mut app, KeyCode::Right);
