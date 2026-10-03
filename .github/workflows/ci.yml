@@ -39,6 +39,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Docs name the same Claude Code version as checked-with/claude-code
         run: scripts/check-claude-version.sh
+      - name: shellcheck the scripts (the uninstall script must stay POSIX sh)
+        run: shellcheck scripts/*.sh
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
