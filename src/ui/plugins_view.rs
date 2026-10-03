@@ -24,7 +24,7 @@ pub(super) fn plugin_screen_hints(app: &App) -> Vec<Hint<'_>> {
         _ => {}
     }
     // (`1` `2` `3` go straight to a tab from here too; not shown, as on the settings.)
-    out.extend([("↑↓", "move", None), (app.back_label(), "back to settings", Some(Action::Cancel))]);
+    out.extend([("↑↓", "move", None), ("?", "help", Some(Action::Help)), (app.back_label(), "back to settings", Some(Action::Cancel))]);
     out
 }
 

@@ -1,7 +1,7 @@
 //! Shared helpers for the black-box tests: a scripted terminal, and a raw client of the host protocol.
 #![allow(dead_code)]
 
-use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
@@ -77,6 +77,8 @@ pub fn find_host(cache: &Path) -> Option<(u32, PathBuf)> {
 /// A command running in a real terminal we can type into and read.
 pub struct Term {
     child: Box<dyn Child + Send + Sync>,
+    /// The terminal's own end, kept for the life of the Term (and to resize it).
+    master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     rx: Receiver<Vec<u8>>,
     screen: vt100::Parser,
@@ -123,9 +125,18 @@ impl Term {
                 }
             }
         });
-        // Keep the master alive for the life of the Term by leaking it into a thread-less holder.
-        std::mem::forget(pair.master);
-        Self { child, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new() }
+        Self { child, master: pair.master, writer, rx, screen: vt100::Parser::new(rows, cols, 200), raw: Vec::new() }
+    }
+
+    /// Make the terminal `rows` by `cols`, as a window being resized does (the program gets SIGWINCH).
+    pub fn resize(&mut self, rows: u16, cols: u16) {
+        // What was drawn at the old size is taken in first, so it isn't read as drawn at the new one.
+        while let Ok(b) = self.rx.recv_timeout(Duration::from_millis(50)) {
+            self.screen.process(&b);
+            self.raw.extend_from_slice(&b);
+        }
+        self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
+        self.screen.screen_mut().set_size(rows, cols);
     }
 
     pub fn send(&mut self, bytes: &[u8]) {

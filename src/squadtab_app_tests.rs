@@ -57,16 +57,16 @@ fn split(text: &str) -> usize {
     text.lines().find_map(|l| l.chars().collect::<String>().find("╮╭").map(|at| l[..at].chars().count() + 1)).expect("two panes")
 }
 
-/// The list's pane, flat (the frame's rows below the tab bar, up to where the details begin).
+/// The list's pane, flat (the rows below the tab bar, up to where the details begin).
 fn left(text: &str) -> String {
     let at = split(text);
-    flat(&text.lines().skip(3).map(|l| l.chars().take(at).collect::<String>()).collect::<Vec<_>>().join("\n"))
+    flat(&text.lines().skip(2).map(|l| l.chars().take(at).collect::<String>()).collect::<Vec<_>>().join("\n"))
 }
 
 /// The details' pane, flat.
 fn right(text: &str) -> String {
     let at = split(text);
-    flat(&text.lines().skip(3).map(|l| l.chars().skip(at).collect::<String>()).collect::<Vec<_>>().join("\n"))
+    flat(&text.lines().skip(2).map(|l| l.chars().skip(at).collect::<String>()).collect::<Vec<_>>().join("\n"))
 }
 
 /// The app on the Squads tab.
@@ -190,7 +190,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("3 Squads 4"), "the tab and how many squads: {f}");
+    assert!(f.contains("3 Squads") && !f.contains("3 Squads 4"), "the tab, without a count: {f}");
     assert!(f.contains("[Squads] Agents"), "the switch, in the list's title: {f}");
     let l = left(&shown);
     assert!(l.contains("▎ Coding 4 agents Built in Research 4 agents Built in Docs 3 agents Built in Summarize 1 agent Built in"), "{l}");
@@ -259,7 +259,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
 fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_use_it() {
     let (_w, mut app) = on_the_tab("sqt-agents");
     key(&mut app, KeyCode::Right);
-    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(116, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let l = left(&shown);
     assert!(l.starts_with("Squads [Agents] Built in"), "{l}");
@@ -735,7 +735,10 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("describe a new squad") && f.contains("enter ask Claude to draft it") && f.contains("using your agents where they fit"),
+        f.contains("describe a new squad")
+            && f.contains("enter ask Claude to draft it")
+            && f.contains("using your")
+            && f.contains("agents where they fit"),
         "{f}"
     );
     typed(&mut app, "a squad that triages Sentry errors: a reader and a fixer");
@@ -799,7 +802,8 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     assert_eq!(agent_file(&w, "reader")["guidance"], "Read the error.");
     assert!(app.sqt.draft.is_none() && app.sqt.draft_agents.is_empty());
     assert_eq!(app.sqt.listed().map(|l| (l.id.as_str(), l.kind)), Some(("sentry-triage", Kind::Own)));
-    assert!(flat(&draw(&mut term, &app)).contains("3 Squads 5"));
+    assert_eq!(app.squad_list().len(), 5, "the new squad is listed with the four built in");
+    assert!(flat(&draw(&mut term, &app)).contains("Sentry"));
     assert!(app.sqt.agents.iter().any(|l| l.id == "reader" && l.kind == Kind::Own));
 }
 
@@ -1277,14 +1281,15 @@ fn twelve_steps_with_five_send_backs_scroll_at_80_columns() {
     // The words beside a loop: as much as fits in the width, never cut halfway.
     assert!(
         seen.contains("↩ back to step 1, at most once")
-            && seen.contains("↩ back to step 7, twice")
+            && seen.contains("↩ back to step 7, at most twice")
             && !seen.contains("↩ back to step 1 (planner), a…"),
         "{seen}"
     );
-    // Nothing runs past the pane: every line of the details stops at its right border.
-    for l in last.lines().skip(3).take(25) {
-        assert!(l.chars().count() <= 80, "{l}");
-        assert!(l.ends_with('│') || l.ends_with('╮') || l.ends_with('╯') || l.trim().is_empty() || !l.contains('╭'), "{l}");
+    // Nothing runs past the pane: every line of the details stops at its right border, a column short of the edge.
+    for l in last.lines().skip(2).take(25) {
+        assert!(l.chars().count() <= 80 && l.ends_with(' '), "{l}");
+        let l = l.trim_end();
+        assert!(l.ends_with('│') || l.ends_with('╮') || l.ends_with('╯') || l.is_empty(), "{l}");
     }
 }
 

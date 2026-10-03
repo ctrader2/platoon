@@ -10,6 +10,8 @@ use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
 use crate::theme::{Theme, contrast};
 use crate::tickets::{self, State, Ticket};
 use crate::usage::Usage;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod help_view;
 mod plugins_view;
 mod squads_view;
 
@@ -28,9 +30,12 @@ const SELECTION_MIN_FG_CONTRAST: f64 = 3.0;
 
 type Hint<'a> = (&'a str, &'a str, Option<Action>);
 
-/// The summary strip needs this many rows inside the frame (header, rule, column titles, footer, the strip and three
-/// rows of the list); on a shorter terminal it is left out.
+/// The summary strip needs a terminal this many rows tall (the header, the rule, the column titles and the footer,
+/// the strip, and at least three conversations of the list beside it); on a shorter terminal it is left out.
 const STRIP_MIN_HEIGHT: u16 = 15;
+
+/// Columns of air between the terminal's left and right edges and platoon's screens (there is no frame around them).
+const SIDE: u16 = 1;
 
 /// The selected conversation's summary in up to two lines, dim, with the generated-name marker in front of the first.
 fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
@@ -55,15 +60,13 @@ fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
 pub fn draw(f: &mut Frame, app: &App) {
     let t = app.effective_theme();
     app.hits.borrow_mut().clear();
-    f.render_widget(Block::default().style(Style::new().bg(t.bg)), f.area());
-
-    let frame = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(t.border))
-        .style(Style::new().bg(t.bg));
-    let inner = frame.inner(f.area());
-    f.render_widget(frame, f.area());
+    let full = f.area();
+    f.render_widget(Block::default().style(Style::new().bg(t.bg)), full);
+    // Below the smallest size there is only the message saying so: no squeezed screen, nothing to click.
+    if crate::app::too_small(full.width, full.height) {
+        draw_too_small(f, app, full);
+        return;
+    }
 
     if let (Mode::Attached(pid), Some(client)) = (&app.mode, &app.client) {
         if let Some(n) = app.split_showing() {
@@ -73,12 +76,36 @@ pub fn draw(f: &mut Frame, app: &App) {
         let dir = app.hosts.iter().find(|h| h.claude_pid == *pid).map(|h| h.dir.as_str()).unwrap_or("");
         // Folders added to the conversation are shown after the one its host started in.
         let extra = app.sessions.iter().find(|s| s.procs.iter().any(|p| p.pid == *pid)).map_or(&[][..], |s| &s.extra_dirs[..]);
-        draw_attached(f, app, client, dir, extra, inner);
+        draw_attached(f, app, client, dir, extra, full);
         return;
     }
     if let (Mode::EditNotes, Some(edit)) = (&app.mode, &app.editing) {
-        draw_editing(f, app, edit, inner);
+        draw_editing(f, app, edit, full);
         return;
+    }
+
+    // Platoon's own screens, a column of air at each side: the header and the rule under its tabs, the screen, the
+    // footer.
+    let body = full.inner(Margin::new(SIDE, 0));
+    let header = Rect::new(body.x, body.y, body.width, 1);
+    let rule = Rect::new(body.x, body.y + 1, body.width, 1);
+    let rest = Rect::new(body.x, body.y + 2, body.width, body.height.saturating_sub(2));
+    let tabs = draw_header(f, app, header);
+    draw_tab_rule(f, t, rule, &tabs);
+
+    // The Active/Archived switch of the Sessions and Projects lists sits at the right of the rule when it fits there
+    // (clear of the current tab's mark); otherwise it has the row under the rule to itself.
+    let lists = !app.plugin_screen_showing() && app.open_project.is_none() && !app.squads_tab_showing();
+    let (labels, counts, current): (Vec<&str>, &[usize], usize) = if app.projects_list_showing() {
+        (PTABS.iter().map(|(l, _)| *l).collect(), &app.pcounts, app.ptab)
+    } else {
+        (TABS.iter().map(|t| t.label).collect(), &app.counts, app.tab)
+    };
+    let shelf_on_rule = if lists { shelf_on_rule(rule, &tabs, &labels, counts) } else { None };
+    if let Some((at, arrows)) = shelf_on_rule {
+        // A gap in the rule before it, so it reads as a switch set into the line.
+        f.render_widget(Paragraph::new(" ").style(Style::new().bg(t.bg)), Rect::new(at.x - 1, at.y, 1, 1));
+        draw_shelf(f, app, at, &labels, counts, current, arrows);
     }
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
@@ -87,47 +114,41 @@ pub fn draw(f: &mut Frame, app: &App) {
         .selected_session()
         .map(|s| s.summary.as_str())
         .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.plugin_screen_showing());
-    let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
-    let term_w = f.area().width;
-    let [header, rule, shelf, titles, list, strip, footer] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
+    let strip_h = if summary.is_some() && full.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
+    let term_w = full.width;
+    let [shelf, titles, list, strip, footer] = Layout::vertical([
+        Constraint::Length(u16::from(shelf_on_rule.is_none())),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(strip_h),
         Constraint::Length(1),
     ])
-    .areas(inner.inner(Margin::new(2, 0)));
+    .areas(rest);
     if let (Some(text), true) = (summary, strip_h > 0) {
         draw_summary_strip(f, app, text, strip);
     }
 
-    let tabs = draw_header(f, app, header);
-    draw_tab_rule(f, t, rule, &tabs);
-    let hints: Vec<Hint> = if app.plugin_screen_showing() {
+    // Everything between the rule and the footer: a screen that isn't a list with column titles takes all of it.
+    let screen = Rect::new(rest.x, rest.y, rest.width, list.bottom() - rest.y);
+    if app.plugin_screen_showing() {
         // Opened from the settings, over whatever screen they were opened on: it takes the whole body.
-        plugins_view::draw_plugin_screen(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
-        plugins_view::plugin_screen_hints(app)
+        plugins_view::draw_plugin_screen(f, app, screen);
     } else if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
         // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
-        let body = Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y);
         // In the line for a free squad, its squad's place beside it is not there yet (an earlier squad's isn't its).
         if app.ticket(n).is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
-            draw_ticket_with_squad(f, app, n, body, term_w);
+            draw_ticket_with_squad(f, app, n, screen, term_w);
         } else {
-            draw_ticket_screen(f, app, n, body);
+            draw_ticket_screen(f, app, n, screen);
         }
-        ticket_screen_hints(app, n)
     } else if app.open_project.is_some() {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
-        project_screen_hints(app)
     } else if app.squads_tab_showing() {
-        squads_view::draw_squads_tab(f, app, Rect::new(shelf.x, shelf.y, shelf.width, list.bottom() - shelf.y));
-        squads_view::squads_tab_hints(app)
+        squads_view::draw_squads_tab(f, app, screen);
     } else if app.projects_list_showing() {
-        let labels: Vec<&str> = PTABS.iter().map(|(l, _)| *l).collect();
-        draw_shelf(f, app, shelf, &labels, &app.pcounts, app.ptab);
+        if shelf_on_rule.is_none() {
+            draw_shelf(f, app, shelf, &labels, counts, current, true);
+        }
         draw_project_columns(f, t, app, titles);
         if app.project_rows().is_empty() {
             let msg = if app.pcounts[app.ptab.min(1)] > 0 { "No projects match the filter" } else { PTABS[app.ptab.min(1)].1 };
@@ -136,10 +157,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         } else {
             draw_project_list(f, app, list);
         }
-        projects_hints(app)
     } else {
-        let labels: Vec<&str> = TABS.iter().map(|t| t.label).collect();
-        draw_shelf(f, app, shelf, &labels, &app.counts, app.tab);
+        if shelf_on_rule.is_none() {
+            draw_shelf(f, app, shelf, &labels, counts, current, true);
+        }
         let visible = app.visible();
         // The PROJECT column is sized from every row on the tab (so it doesn't jump while the filter is
         // typed); NAME and DIR from the rows actually listed.
@@ -160,11 +181,10 @@ pub fn draw(f: &mut Frame, app: &App) {
         } else {
             draw_list(f, app, visible, &c, term_w, list);
         }
-        sessions_hints(app)
-    };
+    }
     let hints = match app.mode {
         Mode::Search => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
-        _ => hints,
+        _ => screen_hints(app),
     };
     // The mouse and the obvious keys need no reminder: when the line is short of room (a narrow terminal, or a
     // notice sharing it) those hints go first.
@@ -199,49 +219,101 @@ pub fn draw(f: &mut Frame, app: &App) {
         droppable.insert(at, "editor");
     }
     let hints = fit_hints(hints, room, &droppable);
-    let hints = hints.as_slice();
     match notice {
         // A message that can't share the line with the key hints gets the whole line rather than being cut off.
-        Some(n) if hints_width(hints) > room => {
+        Some(n) if hints_width(&hints) > room => {
             // It may use the footer's side margin too: a notice that says something happened shouldn't be cut off for want of a column.
             let wide = Rect::new(footer.x.saturating_sub(1), footer.y, footer.width + 2, 1);
             f.render_widget(Paragraph::new(Span::styled(fit_end(n, wide.width as usize), Style::new().fg(t.warn))), wide);
         }
-        notice => draw_footer(f, app, footer, hints, notice.map(|n| (n.to_string(), t.warn))),
+        // Still too long once the droppable ones are gone: the last ones go, but never `? help`, the way to all of them.
+        notice => draw_footer(f, app, footer, &keep_help(hints, room), notice.map(|n| (n.to_string(), t.warn))),
     }
 
     match &app.mode {
-        Mode::Picker => draw_picker(f, app, inner),
+        Mode::Picker => draw_picker(f, app, full),
         Mode::Confirm(c) => {
             if matches!(c, Confirm::ResetInstructions { .. }) {
-                draw_settings_modal(f, app, inner);
+                draw_settings_modal(f, app, full);
             }
-            draw_confirm(f, app, c, inner)
+            draw_confirm(f, app, c, full)
         }
-        Mode::Settings => draw_settings_modal(f, app, inner),
-        Mode::Search => draw_search(f, app, inner),
-        Mode::Rename => draw_rename(f, app, inner),
-        Mode::ProjectName => draw_name_box(f, app, inner),
-        Mode::Assign => draw_assign(f, app, inner),
-        Mode::Look => draw_look(f, app, inner),
+        Mode::Settings => draw_settings_modal(f, app, full),
+        Mode::Search => draw_search(f, app, full),
+        Mode::Rename => draw_rename(f, app, full),
+        Mode::ProjectName => draw_name_box(f, app, full),
+        Mode::Assign => draw_assign(f, app, full),
+        Mode::Look => draw_look(f, app, full),
         Mode::PickEditor => {
             if app.epick.instructions.is_some() {
-                draw_settings_modal(f, app, inner);
+                draw_settings_modal(f, app, full);
             }
-            draw_editor_pick(f, app, inner)
+            draw_editor_pick(f, app, full)
         }
-        Mode::PickFileEditor => draw_file_editor_pick(f, app, inner),
-        Mode::Changes => draw_changes(f, app, inner),
-        Mode::Handoff => draw_handoff(f, app, inner),
-        Mode::TicketPick => draw_ticket_pick(f, app, inner),
-        Mode::SquadPick => draw_squad_pick(f, app, inner),
-        Mode::SquadChoice => squads_view::draw_squad_choice(f, app, inner),
-        Mode::SquadText => squads_view::draw_squad_text(f, app, inner),
-        Mode::PluginReview => plugins_view::draw_plugin_review(f, app, inner),
+        Mode::PickFileEditor => draw_file_editor_pick(f, app, full),
+        Mode::Changes => draw_changes(f, app, full),
+        Mode::Handoff => draw_handoff(f, app, full),
+        Mode::TicketPick => draw_ticket_pick(f, app, full),
+        Mode::SquadPick => draw_squad_pick(f, app, full),
+        Mode::SquadChoice => squads_view::draw_squad_choice(f, app, full),
+        Mode::SquadText => squads_view::draw_squad_text(f, app, full),
+        Mode::PluginReview => plugins_view::draw_plugin_review(f, app, full),
         // No fade here: the point is to see the real screen in the colors being tried.
-        Mode::Themes => draw_theme_list(f, app, inner),
+        Mode::Themes => draw_theme_list(f, app, full),
         _ => {}
     }
+    if app.help_showing() {
+        help_view::draw_help(f, app, full);
+    }
+}
+
+/// The keys of the screen showing, as its footer lists them (and the help popup, from the same table).
+fn screen_hints(app: &App) -> Vec<Hint<'_>> {
+    if app.plugin_screen_showing() {
+        plugins_view::plugin_screen_hints(app)
+    } else if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+        ticket_screen_hints(app, n)
+    } else if app.open_project.is_some() {
+        project_screen_hints(app)
+    } else if app.squads_tab_showing() {
+        squads_view::squads_tab_hints(app)
+    } else if app.projects_list_showing() {
+        projects_hints(app)
+    } else {
+        sessions_hints(app)
+    }
+}
+
+/// The message that is all platoon shows on a terminal below the smallest size it draws in, centered, in plain words.
+fn draw_too_small(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    let w = area.width as usize;
+    if w == 0 || area.height == 0 {
+        return;
+    }
+    let first = format!(
+        "platoon needs at least {}×{} — this window is {}×{}",
+        crate::app::MIN_WIDTH,
+        crate::app::MIN_HEIGHT,
+        area.width,
+        area.height
+    );
+    // In a session or the notes editor every key is theirs: nothing is sent while they can't be seen.
+    let then = if matches!(app.mode, Mode::Attached(_) | Mode::EditNotes) {
+        "Make the window bigger to see it again.".to_string()
+    } else {
+        format!("Make the window bigger, or press {} to quit.", app.quit_label())
+    };
+    let (a, b) = (wrap(&first, w), wrap(&then, w));
+    // A blank line between the two when there is room for it.
+    let gap = usize::from(a.len() + b.len() < area.height as usize);
+    let mut lines: Vec<Line> = a.into_iter().map(|l| Line::styled(l, Style::new().fg(t.text))).collect();
+    lines.extend(std::iter::repeat_n(Line::raw(""), gap));
+    lines.extend(b.into_iter().map(|l| Line::styled(l, Style::new().fg(t.dim))));
+    lines.truncate(area.height as usize);
+    let h = lines.len() as u16;
+    let at = Rect::new(area.x, area.y + (area.height - h) / 2, area.width, h);
+    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), at);
 }
 
 fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
@@ -259,6 +331,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
         ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
+        ("?", "help", Some(Action::Help)),
         (app.quit_label(), "quit", Some(Action::Quit)),
     ]
 }
@@ -277,6 +350,7 @@ fn projects_hints(app: &App) -> Vec<Hint<'_>> {
         ("1-3", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
+        ("?", "help", Some(Action::Help)),
         (app.quit_label(), "quit", Some(Action::Quit)),
     ]
 }
@@ -316,6 +390,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     out.extend([
         ("/", "search", Some(Action::Search)),
         ("tab shift+arrows", "panes", None),
+        ("?", "help", Some(Action::Help)),
         (app.back_label(), "back", Some(Action::Leave)),
     ]);
     out
@@ -355,19 +430,21 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
         ("b", "waits for", None),
         ("v", "editor", Some(Action::Editor)),
         ("↑↓", "scroll", None),
+        ("?", "help", Some(Action::Help)),
         (app.back_label(), "back", Some(Action::Leave)),
     ]);
     out
 }
 
-/// The line under the rule: Active and Archived of the tab showing, with their counts; the arrows switch them.
-fn draw_shelf(f: &mut Frame, app: &App, area: Rect, labels: &[&str], counts: &[usize], current: usize) {
+/// Active and Archived of the list showing, with their counts; the arrows switch them (`arrows`: the `←→` reminder
+/// after them). At the right of the rule under the tabs, or on the row under it when they don't fit there.
+fn draw_shelf(f: &mut Frame, app: &App, area: Rect, labels: &[&str], counts: &[usize], current: usize, arrows: bool) {
     let t = app.effective_theme();
     let mut spans = Vec::new();
     let mut x = area.x;
     for (i, label) in labels.iter().enumerate() {
         if i > 0 {
-            spans.push(Span::raw(" "));
+            spans.push(Span::styled(" ", Style::new().bg(t.bg)));
             x += 1;
         }
         let label = format!("{label} ");
@@ -381,8 +458,31 @@ fn draw_shelf(f: &mut Frame, app: &App, area: Rect, labels: &[&str], counts: &[u
         spans.extend(tab_chip(t, app.rounded, "", &label, count, i == current, hover));
         x += w;
     }
-    spans.push(Span::styled("  ←→", Style::new().fg(t.dim)));
+    if arrows {
+        spans.push(Span::styled(SHELF_ARROWS, Style::new().fg(t.dim).bg(t.bg)));
+    }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+const SHELF_ARROWS: &str = "  ←→";
+
+/// How wide `draw_shelf` draws.
+fn shelf_width(labels: &[&str], counts: &[usize], arrows: bool) -> u16 {
+    let chips: u16 = labels.iter().enumerate().map(|(i, l)| chip_width("", &format!("{l} "), counts.get(i).copied().unwrap_or(0))).sum();
+    chips + labels.len().saturating_sub(1) as u16 + if arrows { SHELF_ARROWS.chars().count() as u16 } else { 0 }
+}
+
+/// Where the Active/Archived switch goes on the rule under the tabs: at its right end, with a cell of air on either
+/// side, clear of the current tab's mark; with the `←→` reminder when that fits too. None when it doesn't fit (a narrow
+/// terminal, with the mark far to the right): it then has a row of its own.
+fn shelf_on_rule(rule: Rect, tabs: &[TabSpan], labels: &[&str], counts: &[usize]) -> Option<(Rect, bool)> {
+    let mark_end = tabs.iter().filter(|(_, _, current)| *current).map(|(x, w, _)| x + w).max().unwrap_or(rule.x);
+    let room = rule.right().saturating_sub(mark_end);
+    [true, false].into_iter().find_map(|arrows| {
+        let w = shelf_width(labels, counts, arrows);
+        // A cell of air between the mark and the switch, and one before the switch's first chip.
+        (w + 2 <= room).then(|| Rect::new(rule.right() - w, rule.y, w, 1)).map(|r| (r, arrows))
+    })
 }
 
 /// A project's badge: its letters on its color.
@@ -1291,8 +1391,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
     let mut spans = Vec::new();
-    // The top-level tabs count what is active: sessions, projects and squads.
-    let top_counts = [Some(app.counts.first().copied().unwrap_or(0)), Some(app.pcounts[0]), Some(app.squad_list().len())];
     // The plugin screen (from the settings) is none of the tabs: none is current there, and they aren't clicked.
     let on_tab = !app.plugin_screen_showing();
     for (i, tab) in TOPS.iter().enumerate() {
@@ -1300,15 +1398,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
             left.push(Span::raw(" "));
             x += 1;
         }
-        // A chip: ` 1 Sessions ` with the count in a badge after a little air. Round caps where the terminal has the
-        // glyphs, otherwise a padded square. Either way the text reads "1 Sessions 3".
+        // A chip: ` 1 Sessions `, the key dim and the label lit on the current tab. No count: the Active/Archived
+        // switch under it says how many there are.
         let current = on_tab && i == app.top;
         let (key, label) = (format!("{}", i + 1), format!(" {tab} "));
-        let count = top_counts.get(i).copied().flatten();
-        let w = match count {
-            Some(n) => chip_width(&key, &label, n),
-            None => (1 + key.chars().count() + label.chars().count()) as u16,
-        };
+        let w = (1 + key.chars().count() + label.chars().count()) as u16;
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
         if !rect.is_empty() && on_tab {
             app.hits.borrow_mut().push((rect, Hit::Top(i)));
@@ -1316,11 +1410,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         spans.push((x, w, current));
         x += w;
         let hover = on_tab && !current && rect.contains(app.mouse.into());
-        let mut chip = tab_chip(t, app.rounded, &key, &label, count.unwrap_or(0), current, hover);
-        if count.is_none() {
-            // Just the key and the label: the count's pill (the last one or three spans) goes.
-            chip.truncate(3);
-        }
+        let mut chip = tab_chip(t, app.rounded, &key, &label, 0, current, hover);
+        // Just the key and the label: the count's pill (the last one or three spans) goes.
+        chip.truncate(3);
         left.extend(chip);
     }
     if unread > 0 {
@@ -1399,16 +1491,14 @@ fn chip_width(key: &str, label: &str, count: usize) -> u16 {
 /// One tab of the header, ` 1 Active 3 `: the current tab is lit, a hovered one half lit, the rest quiet.
 fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, current: bool, hover: bool) -> Vec<Span<'static>> {
     let chip = if current || hover { t.surface } else { t.bg };
-    let (k, l, badge) = if current {
-        (
-            Style::new().fg(t.accent),
-            Style::new().fg(t.text).add_modifier(Modifier::BOLD),
-            Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD),
-        )
+    // The key is a quiet reminder in every state; the label says which tab is current.
+    let k = Style::new().fg(t.dim);
+    let (l, badge) = if current {
+        (Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
     } else if hover {
-        (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
+        (Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
     } else {
-        (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
+        (Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
     };
     let mut out = vec![
         Span::styled(" ", Style::new().bg(chip)),
@@ -1537,10 +1627,11 @@ fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
     for &i in rows {
         let s = &app.sessions[i];
         // A name platoon made up carries ` ✦ ` after it, inside the same column.
-        let n = s.name.chars().count() + if s.name_source == NameSource::Generated { 3 } else { 0 };
+        // In cells: a wide character takes two.
+        let n = s.name.width() + if s.name_source == NameSource::Generated { 3 } else { 0 };
         name = name.max(n);
         // Added folders count too; DIR_MAX still caps the column, and `fit_dirs` counts what doesn't fit.
-        dir = dir.max(s.dir.chars().count() + s.extra_dirs.iter().map(|d| 2 + d.chars().count()).sum::<usize>());
+        dir = dir.max(s.dir.width() + s.extra_dirs.iter().map(|d| 2 + d.width()).sum::<usize>());
         if name + COL_GAP >= NAME_MAX && dir + COL_GAP >= DIR_MAX {
             break; // both are already past their cap; nothing further can widen them
         }
@@ -1733,13 +1824,29 @@ fn hints_width(hints: &[Hint<'_>]) -> usize {
     words + 3 * hints.len().saturating_sub(1)
 }
 
-/// Drop the hints described by `droppable`, in that order, until the rest fit in `width`.
+/// What `? help` reads as in a footer: never dropped, since the help lists every hint that was.
+const HELP_HINT: &str = "help";
+
+/// Drop the hints described by `droppable`, in that order, until the rest fit in `width`. `? help` always stays.
 fn fit_hints<'a>(mut hints: Vec<Hint<'a>>, width: usize, droppable: &[&str]) -> Vec<Hint<'a>> {
-    for d in droppable {
+    for d in droppable.iter().filter(|d| **d != HELP_HINT) {
         if hints_width(&hints) <= width {
             break;
         }
         hints.retain(|h| h.1 != *d);
+    }
+    hints
+}
+
+/// Hints still too wide for `width` lose their last ones, but never `? help`: the way to every one that went.
+fn keep_help<'a>(mut hints: Vec<Hint<'a>>, width: usize) -> Vec<Hint<'a>> {
+    while hints_width(&hints) > width {
+        match hints.iter().rposition(|h| h.1 != HELP_HINT || h.0 != "?") {
+            Some(i) if hints.len() > 1 => {
+                hints.remove(i);
+            }
+            _ => break,
+        }
     }
     hints
 }
@@ -1814,16 +1921,42 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 }
 
 /// Keep the end of `s` (the file name of a path), with an ellipsis in front, when it is longer than `n`.
+/// Widths are terminal cells throughout: a Chinese or Japanese character or an emoji takes two.
 fn fit_start(s: &str, n: usize) -> String {
-    let len = s.chars().count();
-    if len <= n {
+    if s.width() <= n {
         return s.to_string();
     }
     if n == 0 {
         return String::new(); // a column with no room at all shows nothing, not even the ellipsis
     }
-    let tail: String = s.chars().skip(len - n.saturating_sub(1)).collect();
-    format!("…{tail}")
+    // The longest end of it that fits beside the ellipsis.
+    let mut room = n - 1;
+    let mut tail: Vec<char> = Vec::new();
+    for c in s.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if w > room {
+            break;
+        }
+        room -= w;
+        tail.push(c);
+    }
+    format!("…{}", tail.into_iter().rev().collect::<String>())
+}
+
+/// The longest start of `s` that takes at most `n` cells.
+fn take_cells(s: &str, n: usize) -> String {
+    let mut used = 0;
+    s.chars()
+        .take_while(|c| {
+            used += c.width().unwrap_or(0);
+            used <= n
+        })
+        .collect()
+}
+
+/// `s` with spaces after it to `n` cells (a wide character is two of them; `format!` would count it as one).
+fn pad_cells(s: &str, n: usize) -> String {
+    format!("{s}{}", " ".repeat(n.saturating_sub(s.width())))
 }
 
 /// Rows the settings tabs take at the top of the popup: the tab titles, and a rule under them.
@@ -3812,21 +3945,20 @@ fn bar_bg(t: &Theme, pct: u8, bg: Color, exact: bool, dimmed: bool) -> Vec<Span<
 /// Pad or truncate (with an ellipsis) to exactly `n` chars. Counts chars, not display width:
 /// wide characters (CJK, emoji) will need `unicode-width` before real data is shown.
 fn fit(s: &str, n: usize) -> String {
-    let len = s.chars().count();
-    if len > n {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+    if s.width() > n {
+        let mut out = take_cells(s, n.saturating_sub(1));
         if n > 0 {
             out.push('…');
         }
-        out
+        pad_cells(&out, n)
     } else {
-        format!("{s:<n$}")
+        pad_cells(s, n)
     }
 }
 
-/// Pad to exactly `n` chars, or cut from the front (`…` first) so that the end stays: a path's last folder.
+/// Pad to exactly `n` cells, or cut from the front (`…` first) so that the end stays: a path's last folder.
 fn fit_tail(s: &str, n: usize) -> String {
-    if s.chars().count() <= n { format!("{s:<n$}") } else { fit_start(s, n) }
+    if s.width() <= n { pad_cells(s, n) } else { pad_cells(&fit_start(s, n), n) }
 }
 
 /// A conversation's folder and the folders added to it (`/add-dir`), as one text: `~/repos/platoon, /`.
@@ -3845,24 +3977,24 @@ fn fit_dirs(main: &str, extra: &[String], n: usize) -> String {
         return fit_tail(main, n);
     }
     let full = dirs_text(main, extra);
-    if full.chars().count() <= n {
-        return format!("{full:<n$}");
+    if full.width() <= n {
+        return pad_cells(&full, n);
     }
     let count = format!(", +{}", extra.len());
-    let room = n.saturating_sub(count.chars().count());
+    let room = n.saturating_sub(count.width());
     if room < DIRS_MAIN_MIN {
         return fit_tail(main, n);
     }
     let shown = format!("{}{count}", fit_start(main, room));
-    format!("{shown:<n$}")
+    pad_cells(&shown, n)
 }
 
-/// Truncate to at most `n` chars (with an ellipsis), no padding.
+/// Truncate to at most `n` cells (with an ellipsis), no padding.
 fn fit_end(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
+    if s.width() <= n {
         s.to_string()
     } else {
-        let mut out: String = s.chars().take(n.saturating_sub(1)).collect();
+        let mut out = take_cells(s, n.saturating_sub(1));
         out.push('…');
         out
     }

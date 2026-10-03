@@ -35,13 +35,14 @@ fn col_of(line: &str, word: &str) -> Option<usize> {
     (0..cells.len().saturating_sub(w.len().saturating_sub(1))).find(|&i| cells[i..i + w.len()] == w[..])
 }
 
-/// The column titles are always the fourth line inside the frame; the first row's own line follows it.
-const TITLES: usize = 4;
-const FIRST_ROW: usize = 5;
+/// The column titles are the third line (the header, then the rule with the Active/Archived switch at its right, as
+/// it is at every width these tests use); the first row's own line follows it.
+const TITLES: usize = 2;
+const FIRST_ROW: usize = 3;
 
-/// How far the table reaches: the last cell written on the line, the frame's own border not counted.
+/// How far the table reaches: the last cell written on the line.
 fn table_end(line: &str) -> usize {
-    line.trim_end_matches(['│', ' ']).chars().count()
+    line.trim_end_matches(' ').chars().count()
 }
 
 /// Two conversations with short names and short paths.
@@ -67,11 +68,11 @@ fn on_a_wide_screen_the_columns_share_the_spare_width_and_the_row_fills_it() {
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
         let row = &lines[FIRST_ROW];
-        // The row reaches the right edge: the frame, its two-cell margin and the table's own trailing cell
-        // are all that is left of the line.
+        // The row reaches the right edge: the one-cell side margin and the table's own trailing cell are all
+        // that is left of the line.
         let end = table_end(head);
         assert_eq!(end, table_end(row), "{width}: the header and the row end together\n{head}\n{row}");
-        assert_eq!(end, width as usize - 4, "{width}: the table reaches the right edge\n{head}");
+        assert_eq!(end, width as usize - 2, "{width}: the table reaches the right edge\n{head}");
         // Every column keeps the width its content needs, plus an equal share of what is over. "alpha-one"
         // is the longest name (9) and "/srv/alpha-one" the longest path (14), each plus a two-cell gap.
         let starts = column_starts(head);
@@ -103,7 +104,7 @@ fn a_narrow_screen_still_shares_the_room_between_name_and_dir_as_it_did() {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        let table = width as usize - 6;
+        let table = width as usize - 2;
         let (branch, model) = (if table >= 90 { 16 } else { 0 }, if table >= 100 { 12 } else { 0 });
         let flex = table - (3 + BAR + 5 + 6 + 11 + branch + model);
         let starts = column_starts(head);
@@ -157,18 +158,20 @@ fn the_header_and_the_rows_are_the_same_width_at_every_terminal_width() {
             continue;
         }
         let (head, row) = (&lines[TITLES], &lines[FIRST_ROW]);
-        // Below about 12 columns there is no room for a table at all and only the frame is drawn.
-        if head.contains("LAST") {
-            assert_eq!(table_end(head), table_end(row), "{width}: the header and the row end together\n{head}\n{row}");
+        // Below the smallest size platoon draws in, there is only the message saying so.
+        if width < crate::app::MIN_WIDTH {
+            if width >= 30 {
+                assert!(lines.join(" ").contains("platoon needs at least 60×14"), "{width}: {lines:#?}");
+            }
+            assert!(!head.contains("LAST"), "{width}: no table: {head}");
+            continue;
         }
+        assert!(head.contains("LAST"), "{width}: {head}");
+        assert_eq!(table_end(head), table_end(row), "{width}: the header and the row end together\n{head}\n{row}");
         for line in &lines {
             assert!(line.chars().count() == width.max(1) as usize, "{width}: nothing is written past the terminal");
-            if width >= 2 {
-                assert!(
-                    line.ends_with('│') || line.ends_with('╮') || line.ends_with('╯') || line.ends_with('─'),
-                    "{width}: the frame is intact: {line}"
-                );
-            }
+            // No frame: a column of air at each side, so nothing touches the terminal's edges.
+            assert!(line.starts_with(' ') && line.ends_with(' '), "{width}: the side margins are clear: {line:?}");
         }
     }
 }
@@ -178,13 +181,13 @@ fn branch_and_model_still_drop_at_the_widths_they_always_did() {
     let w = short("l-drop");
     let mut app = w.app();
     app.notice = None;
-    // The rules go by the table's width, which is the terminal less the frame and the margins (6 cells).
-    for width in [80u16, 90, 95, 100, 120] {
+    // The rules go by the table's width, which is the terminal less the side margins (2 cells).
+    for width in [80u16, 90, 91, 92, 95, 100, 101, 102, 120] {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        assert_eq!(head.contains("BRANCH"), width as usize - 6 >= 90, "{width}: {head}");
-        assert_eq!(head.contains("MODEL"), width as usize - 6 >= 100, "{width}: {head}");
+        assert_eq!(head.contains("BRANCH"), width as usize - 2 >= 90, "{width}: {head}");
+        assert_eq!(head.contains("MODEL"), width as usize - 2 >= 100, "{width}: {head}");
         assert!(head.contains("STATUS") && head.contains("CONTEXT") && head.contains("LAST"), "{width}: {head}");
         assert_eq!(table_end(head), table_end(&lines[FIRST_ROW]), "{width}: the header and the row end together\n{head}");
     }
@@ -282,7 +285,7 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
         // The rows fill the width: they end where the header does, at the right edge.
         let row = lines.iter().find(|l| l.contains("Web shop")).expect("the row");
         assert_eq!(table_end(row), table_end(head), "{width}: the row and the header end together: {row}");
-        assert_eq!(table_end(head), width as usize - 4, "{width}: the list reaches the right edge: {head}");
+        assert_eq!(table_end(head), width as usize - 2, "{width}: the list reaches the right edge: {head}");
     }
 
     // A name past the cap stops there and is cut.
@@ -341,9 +344,9 @@ fn added_folders_follow_the_folder_in_the_dir_column_and_are_counted_when_they_d
     assert!(row_of(&lines, "~/repos/plain").contains("~/repos/plain  "), "a conversation without added folders is as before");
 
     // Narrow: the main folder is cut at the front and the rest counted.
-    let mut term = Terminal::new(TestBackend::new(64, 20)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
     let lines = draw(&mut term, &app);
-    assert!(!lines.iter().any(|l| l.contains("platoon, /")), "no room for the whole list at 64 wide\n{lines:#?}");
+    assert!(!lines.iter().any(|l| l.contains("platoon, /")), "no room for the whole list at 60 wide\n{lines:#?}");
     assert_eq!(lines.iter().filter(|l| l.contains(", +1")).count(), 2, "both rows with added folders count them\n{lines:#?}");
 
     // The quick filter finds a conversation by an added folder.

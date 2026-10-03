@@ -98,6 +98,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
     }
     out.extend([("tab shift+arrows", "panes", None), ("1-3", "tabs", None), ("s", "settings", Some(Action::Settings))]);
     // In the details the quit key goes back to the list (said above); only the list itself quits.
+    out.push(("?", "help", Some(Action::Help)));
     if sqt.focus == SqFocus::List {
         out.push((app.quit_label(), "quit", Some(Action::Quit)));
     }

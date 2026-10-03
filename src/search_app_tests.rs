@@ -691,14 +691,16 @@ fn the_dialog_fits_a_small_terminal_and_tiny_ones_do_not_panic() {
 }
 
 #[test]
-fn the_footer_offers_search_and_rename_and_stays_whole_at_80_columns() {
+fn the_footer_offers_search_and_help_at_80_columns_and_rename_where_it_fits() {
     let (_w, app) = four("s-footer");
     for cols in [80, 100, 140] {
         let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
         let shown = screen(&mut term, &app);
-        for want in ["/ search", "r rename", "s settings", "q quit", "enter open", "a archive"] {
+        for want in ["/ search", "s settings", "q quit", "enter open", "a archive", "? help"] {
             assert!(shown.contains(want), "{want:?} at {cols}\n{shown}");
         }
+        // At 80 columns `r rename` gives way to `? help`, which lists it.
+        assert_eq!(shown.contains("r rename"), cols > 80, "at {cols}\n{shown}");
         assert!(!shown.contains("/ filter"));
     }
 }

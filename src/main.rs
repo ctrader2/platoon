@@ -15,6 +15,8 @@ mod editor_install;
 mod editorplugin;
 mod editors;
 mod fileeditors;
+#[cfg(test)]
+mod frame_app_tests;
 mod gitfacts;
 mod guard;
 mod handoff;
@@ -645,7 +647,10 @@ mod tests {
         for banned in ["ext", "paused", "2 places", "kill", "x kill", "not open", "open elsewhere", "in platoon"] {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
         }
-        assert!(text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 3"), "{text}");
+        assert!(
+            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Projects 3 Squads"),
+            "{text}"
+        );
         // Working then finished while unseen -> "done".
         w.register(busy, "new-3", "/srv/gamma", 2, "idle");
         app.reload_for_test();
@@ -815,7 +820,7 @@ mod tests {
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
         assert!(
-            shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"),
+            shown.contains("1 Sessions 2 Projects 3 Squads ") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"),
             "{shown}"
         );
 
@@ -1963,7 +1968,7 @@ mod tests {
 
     /// Column ranges of the heavy underline (`━`) on the rule row.
     fn underline(shown: &str) -> Option<(usize, usize)> {
-        let row = shown.lines().nth(2)?; // frame, header, rule
+        let row = shown.lines().nth(1)?; // header, rule
         let cells: Vec<char> = row.chars().collect();
         let first = cells.iter().position(|&c| c == '━')?;
         let last = cells.iter().rposition(|&c| c == '━')?;
@@ -1975,17 +1980,17 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("1 Sessions 3") && flat(&shown).contains("2 Projects 0"), "{shown}");
-        let rule = shown.lines().nth(2).unwrap().to_string();
+        assert!(flat(&shown).contains("1 Sessions 2 Projects 3 Squads"), "{shown}");
+        let rule = shown.lines().nth(1).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
-        // The underline covers the whole first tab, name and badge, and not the other tab.
-        let header: Vec<char> = shown.lines().nth(1).unwrap().chars().collect();
+        // The underline covers the whole first tab, and not the other tab.
+        let header: Vec<char> = shown.lines().next().unwrap().chars().collect();
         let col_of = |needle: &str| {
             let text: String = header.iter().collect();
             text[..text.find(needle).unwrap()].chars().count()
         };
-        assert!(a_first <= col_of("1 Sessions") && a_last > col_of("1 Sessions") + "1 Sessions".len(), "{shown}");
+        assert!(a_first <= col_of("1 Sessions") && a_last >= col_of("1 Sessions") + "1 Sessions".len(), "{shown}");
         assert!(a_last < col_of("2 Projects"), "the other tab is not underlined: {shown}");
 
         ch(&mut app, '2');
@@ -1995,10 +2000,10 @@ mod tests {
         assert!(b_first > a_last, "{shown2}");
     }
 
-    /// The header cell for a character, searching one header row.
-    fn header_cells(term: &Terminal<TestBackend>) -> Vec<ratatui::buffer::Cell> {
+    /// The cells of one row of the screen.
+    fn row_cells(term: &Terminal<TestBackend>, y: u16) -> Vec<ratatui::buffer::Cell> {
         let buf = term.backend().buffer();
-        (0..buf.area.width).map(|x| buf[(x, 1)].clone()).collect()
+        (0..buf.area.width).map(|x| buf[(x, y)].clone()).collect()
     }
 
     fn cell_index(cells: &[ratatui::buffer::Cell], text: &str) -> usize {
@@ -2007,14 +2012,36 @@ mod tests {
     }
 
     #[test]
-    fn the_count_is_a_badge_set_apart_from_the_name_and_the_tab_still_clicks() {
+    fn the_tabs_carry_no_count_and_their_key_is_quiet() {
+        let (_w, app) = mixed_app("tabs-plain");
+        let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
+        draw(&mut term, &app);
+        let t = app.theme.clone();
+        let cells = row_cells(&term, 0);
+        let header: String = cells.iter().map(|c| c.symbol()).collect();
+        // The counts are on the Active/Archived switch under them, so the tabs are just a key and a name.
+        assert!(header.contains("1 Sessions   2 Projects   3 Squads"), "{header}");
+        for (key, name) in [("1", "1 Sessions"), ("2", "2 Projects"), ("3", "3 Squads")] {
+            let at = cell_index(&cells, name);
+            assert_eq!((cells[at].symbol(), cells[at].fg), (key, t.dim), "{name}: the key is dim, current or not");
+        }
+        let current = cell_index(&cells, "Sessions");
+        assert!(
+            cells[current].modifier.contains(ratatui::style::Modifier::BOLD) && cells[current].fg == t.text,
+            "the current tab's name is lit"
+        );
+    }
+
+    #[test]
+    fn the_count_is_a_badge_set_apart_from_the_name_and_the_switch_still_clicks() {
         let (_w, mut app) = mixed_app("tabs-badge");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         draw(&mut term, &app);
         let t = app.theme.clone();
-        let cells = header_cells(&term);
-        let name_end = cell_index(&cells, "1 Sessions") + "1 Sessions".len();
-        // Between the name and the badge there is air: cells on the tab's own background, not the badge's.
+        // The Active/Archived switch is at the right of the rule under the tabs.
+        let cells = row_cells(&term, 1);
+        let name_end = cell_index(&cells, "Active") + "Active".len();
+        // Between the name and the badge there is air: cells on the chip's own background, not the badge's.
         let badge_at = (name_end..cells.len()).find(|&i| cells[i].bg == t.accent).expect("the badge");
         assert!(badge_at - name_end >= 1, "a gap between the name and the badge");
         assert!(cells[name_end..badge_at].iter().all(|c| c.symbol() == " " && c.bg != t.accent));
@@ -2022,13 +2049,13 @@ mod tests {
         let three = (name_end..cells.len()).find(|&i| cells[i].symbol() == "3").unwrap();
         assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg));
         assert_eq!((cells[three - 1].symbol(), cells[three + 1].symbol()), (" ", " "), "padded");
-        // The badge on the tab you're not on is quieter.
-        let arch_end = cell_index(&cells, "2 Projects") + "2 Projects".len();
+        // The badge of the one you're not on is quieter.
+        let arch_end = cell_index(&cells, "Archived") + "Archived".len();
         let zero = (arch_end..cells.len()).find(|&i| cells[i].symbol() == "0").unwrap();
         assert_eq!(cells[zero].bg, t.surface);
-        // Clicking anywhere on a tab, badge included, switches to it.
+        // Clicking anywhere on a chip, badge included, switches to it.
         click(&mut app, zero as u16, 1);
-        assert_eq!(app.top, 1);
+        assert_eq!(app.tab, 1);
     }
 
     #[test]
@@ -2038,27 +2065,25 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         draw(&mut term, &app);
         let t = app.theme.clone();
-        let cells = header_cells(&term);
+        let cells = row_cells(&term, 1);
         let (left, right) = ('\u{e0b6}'.to_string(), '\u{e0b4}'.to_string());
         let three = cells.iter().position(|c| c.symbol() == "3").unwrap();
-        // Round caps hug the count: the left cap is accent on the tab's color, the right one accent on the page.
+        // Round caps hug the count: the left cap is accent on the chip's color, the right one accent on the page.
         assert_eq!((cells[three - 1].symbol(), cells[three + 1].symbol()), (left.as_str(), right.as_str()));
         assert_eq!((cells[three - 1].fg, cells[three + 1].fg, cells[three + 1].bg), (t.accent, t.accent, t.bg));
         assert_eq!((cells[three].bg, cells[three].fg), (t.accent, t.bg), "the count sits on the badge color");
         // Same air before the badge, and the text still reads as before.
-        let name_end = cell_index(&cells, "1 Sessions") + "1 Sessions".len();
+        let name_end = cell_index(&cells, "Active") + "Active".len();
         assert!(three - 1 - name_end >= 1 && cells[name_end].symbol() == " ");
         let plain: String = cells.iter().map(|c| c.symbol()).collect::<String>().replace(['\u{e0b6}', '\u{e0b4}'], "");
-        assert!(flat(&plain).contains("1 Sessions 3") && flat(&plain).contains("2 Projects 0"), "{plain}");
-        // The underline still spans the whole tab, caps included, and a click on the cap switches tabs.
-        let shown = draw(&mut term, &app);
-        let (first, last) = underline(&shown).unwrap();
-        assert!(first <= cell_index(&cells, "1 Sessions") && last > three, "{shown}");
+        assert!(flat(&plain).contains("Active 3") && flat(&plain).contains("Archived 0"), "{plain}");
+        // A click on the cap switches.
         let caps: Vec<usize> = cells.iter().enumerate().filter(|(_, c)| c.symbol() == left).map(|(i, _)| i).collect();
         click(&mut app, caps[1] as u16, 1);
-        assert_eq!(app.top, 1, "the Projects tab's cap");
-        click(&mut app, caps[2] as u16, 1);
-        assert_eq!(app.top, 2, "the Squads tab's cap");
+        assert_eq!(app.tab, 1, "the Archived chip's cap");
+        draw(&mut term, &app);
+        click(&mut app, caps[0] as u16, 1);
+        assert_eq!(app.tab, 0, "the Active chip's cap");
     }
 
     #[test]
@@ -2101,16 +2126,19 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-narrow");
         app.counts = vec![1234, 3];
         app.pcounts = [5678, 0];
-        // Three tabs with four-figure counts leave no room for the readout at 80 columns: it gives way there.
-        for (cols, bars) in [(100u16, false), (120, true), (140, true)] {
+        // The tabs carry no counts (the Active/Archived switch on the rule under them does), so big counts never
+        // crowd the readout: it shrinks to bare percentages beside the tabs, and has its bars where there is room.
+        for (cols, bars) in [(80u16, false), (100, true), (120, true), (140, true)] {
             app.usage = crate::usage::Usage::Ready(PlanUsage {
                 five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
                 seven_day: Some(Window { pct: 21, resets_at: 9_999_999_999 }),
             });
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
-            let header = shown.lines().nth(1).unwrap();
-            assert!(flat(header).contains("Sessions 1234") && flat(header).contains("Projects 5678"), "{cols}: {header}");
+            let header = shown.lines().next().unwrap();
+            assert!(flat(header).contains("1 Sessions 2 Projects 3 Squads"), "{cols}: {header}");
+            assert!(!header.contains("1234") && !header.contains("5678"), "{cols}: no counts in the tabs: {header}");
+            assert!(flat(shown.lines().nth(1).unwrap()).contains("Active 1234 Archived 3"), "{cols}: the counts are on the rule: {shown}");
             assert!(
                 header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"),
                 "{cols}: usage still readable: {header}"
@@ -2120,8 +2148,8 @@ mod tests {
         // With nothing to spare the readout gives way, never the tabs.
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
-        let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
-        assert!(flat(&header).contains("Sessions 1234") && flat(&header).contains("Projects 5678"), "{header}");
+        let header = draw(&mut term, &app).lines().next().unwrap().to_string();
+        assert!(flat(&header).contains("1 Sessions 2 Projects 3 Squads"), "{header}");
     }
 
     #[test]
@@ -2133,10 +2161,10 @@ mod tests {
         let json = serde_json::json!({"ts": 1_000, "context_pct": 5.0, "five_hour": null, "seven_day": {"pct": 3, "resets_at": 9_000}});
         std::fs::write(cache.join("status/aaaa.json"), json.to_string()).unwrap();
         // (At 80 columns, beside three tabs, both figures fit without their bars.)
-        for (cols, bars, weekly) in [(80u16, false, true), (100, false, true), (140, true, true)] {
+        for (cols, bars, weekly) in [(80u16, false, true), (100, true, true), (140, true, true)] {
             app.usage = crate::usage::Usage::Ready(crate::usage::load(&cache, 1_001).plan.unwrap());
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
-            let header = draw(&mut term, &app).lines().nth(1).unwrap().to_string();
+            let header = draw(&mut term, &app).lines().next().unwrap().to_string();
             assert!(header.contains("5h") && header.contains("0%"), "{cols}: {header}");
             assert_eq!(header.contains("7d") && header.contains("3%"), weekly, "{cols}: {header}");
             assert!(!header.contains("n/a"), "{cols}: {header}");
@@ -2156,13 +2184,13 @@ mod tests {
         let top = shown.lines().position(|l| l.contains("Settings")).unwrap();
         assert!(top >= 1, "{shown}");
         let border = shown.lines().nth(top).unwrap();
-        assert!(border.trim_start_matches('│').starts_with("  "), "the popup keeps clear of the frame:\n{shown}");
-        assert!(shown.lines().last().unwrap().starts_with('╰'), "{shown}");
+        assert!(border.starts_with("  "), "the popup has room around it:\n{shown}");
+        assert!(shown.lines().any(|l| l.trim_start().starts_with('╰')), "{shown}");
         // ...and what is behind it has faded: the header's accent title is now the muted border color.
         let buf = term.backend().buffer().clone();
-        let row: String = (0..buf.area.width).map(|x| buf[(x, 1)].symbol().to_string()).collect();
+        let row: String = (0..buf.area.width).map(|x| buf[(x, 0)].symbol().to_string()).collect();
         let x = row[..row.find("platoon").unwrap()].chars().count() as u16;
-        assert_eq!(buf[(x, 1)].fg, app.theme.border, "the backdrop is muted");
+        assert_eq!(buf[(x, 0)].fg, app.theme.border, "the backdrop is muted");
         // Clicking the faded list behind the popup closes it; clicking inside does not.
         let inside = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Setting(0))).map(|(r, _)| *r).unwrap();
         click(&mut app, inside.x + 2, inside.y);
@@ -2596,9 +2624,14 @@ mod tests {
         let w = World::new("set-short");
         let mut app = w.app();
         ch(&mut app, 's');
-        for rows in [8, 10, 12, 14, 16] {
+        for rows in [8, 10, 12, 13, 14, 15, 16] {
             let mut term = Terminal::new(TestBackend::new(60, rows)).unwrap();
             let text = draw(&mut term, &app); // must not panic
+            // Below the smallest size platoon draws in, only the message saying so.
+            if rows < crate::app::MIN_HEIGHT {
+                assert!(flat(&text).contains(&format!("platoon needs at least 60×14 — this window is 60×{rows}")), "60x{rows}\n{text}");
+                continue;
+            }
             assert!(text.contains("Theme") && text.contains("ctrl+space back"), "60x{rows}\n{text}");
             if rows >= 10 {
                 assert!(text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
@@ -2615,14 +2648,14 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 19.
+        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 17.
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 17)).unwrap();
         let third = draw(&mut term, &app);
         assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
-        // Too cramped to explain it: the entries and the way back are still whole.
-        let mut term = Terminal::new(TestBackend::new(60, 12)).unwrap();
+        // Too cramped to explain it (the smallest size platoon draws in): the entries and the way back are still whole.
+        let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
         assert!(cramped.contains(ITEMS[3].name) && cramped.contains("ctrl+space back"), "{cramped}");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
@@ -2682,7 +2715,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
         draw(&mut term, &app);
         let buf = term.backend().buffer();
-        assert_eq!((buf[(0, 0)].fg, buf[(1, 1)].bg), (app.theme.border, app.theme.bg), "drawn with the new theme");
+        assert_eq!((buf[(1, 1)].fg, buf[(1, 1)].bg), (app.theme.border, app.theme.bg), "drawn with the new theme: the rule under the tabs");
         assert_ne!(app.theme.bg, Theme::default().bg);
 
         choose_theme(&w, "terminal");
@@ -2751,13 +2784,16 @@ mod tests {
                     }
                 }
             };
-            for (cols, rows) in [(100, 24), (80, 24), (60, 16), (44, 12)] {
+            // Down to the smallest size platoon draws in, and below it (the message saying so, in the theme's colors).
+            for (cols, rows) in [(100, 24), (80, 24), (60, 16), (60, 14), (44, 12)] {
                 let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
                 app.mode = Mode::List;
                 let text = draw(&mut term, &app);
                 assert!(text.contains("platoon"), "{}: {cols}x{rows}\n{text}", t.id);
                 check(&term, "list");
-                assert_eq!(term.backend().buffer()[(0, 0)].fg, t.border, "{}: the frame", t.id);
+                if cols >= 60 {
+                    assert_eq!(term.backend().buffer()[(1, 1)].fg, t.border, "{}: the rule under the tabs", t.id);
+                }
                 ch(&mut app, 's');
                 draw(&mut term, &app);
                 check(&term, "settings");
@@ -3009,7 +3045,7 @@ mod tests {
             // The real list behind the panel, and the frame, in the previewed theme's colors...
             let (x, y) = locate(&buf, "platoon");
             assert_eq!(buf[(x, y)].fg, want.accent, "{}: the header title", want.id);
-            assert_eq!(buf[(0, 0)].fg, want.border, "{}: the frame", want.id);
+            assert_eq!(buf[(1, 1)].fg, want.border, "{}: the rule under the tabs", want.id);
             let (gx, gy) = locate(&buf, "gamma");
             assert_eq!((buf[(gx, gy)].fg, buf[(gx, gy)].bg), (want.text, want.surface), "{}: the selected row", want.id);
             let (bx, by) = locate(&buf, "beta");
@@ -3240,8 +3276,8 @@ mod tests {
         let (ax, ay) = locate(&buf, "Active");
         assert!(buf[(ax, ay)].modifier.contains(ratatui::style::Modifier::BOLD));
         assert!(!draw(&mut term, &app).contains("Settings file:"), "the settings popup gives way to the list");
-        // The frame is the same one the list has.
-        assert_eq!(buf[(0, 0)].fg, t.border);
+        // The rule under the tabs is the same one the list has.
+        assert_eq!(buf[(1, 1)].fg, t.border);
     }
 
     #[test]
@@ -3361,7 +3397,8 @@ mod tests {
                 let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
                 let shown = draw(&mut term, &app); // must not panic
                 let ctx = format!("{cols}x{rows} selecting {sel}\n{shown}");
-                if cols < 40 || rows < 8 {
+                if crate::app::too_small(cols, rows) {
+                    assert!(cols < 30 || flat(&shown).contains("platoon needs at least"), "{ctx}");
                     continue;
                 }
                 assert!(shown.contains("esc cancel") && shown.contains("enter use"), "{ctx}");
@@ -3503,7 +3540,7 @@ mod tests {
         assert_eq!(app.effective_theme().id, "catppuccin-macchiato", "but the preview wins while the list is open");
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         draw(&mut term, &app);
-        assert_eq!(term.backend().buffer()[(0, 0)].fg, by_id("catppuccin-macchiato").border);
+        assert_eq!(term.backend().buffer()[(1, 1)].fg, by_id("catppuccin-macchiato").border);
         key(&mut app, KeyCode::Esc);
         assert_eq!(app.effective_theme().id, "nord", "an edited id applies as usual once the list is closed");
         // Keeping works on top of the edited file, keeping its other keys.
@@ -3539,23 +3576,23 @@ mod tests {
         app.mode = Mode::Attached(4242);
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
         let cell = |term: &Terminal<TestBackend>, x: u16, y: u16| term.backend().buffer()[(x, y)].clone();
-        // The terminal area starts inside the frame: (1, 1).
+        // The terminal area starts at the top left: there is no frame around it.
         draw(&mut term, &app);
         let mocha = by_id("catppuccin-mocha");
-        assert_eq!((cell(&term, 1, 1).fg, cell(&term, 1, 1).bg), (mocha.ansi.unwrap()[1], mocha.bg), "red is the saved theme's red");
+        assert_eq!((cell(&term, 0, 0).fg, cell(&term, 0, 0).bg), (mocha.ansi.unwrap()[1], mocha.bg), "red is the saved theme's red");
         for id in ["tokyo-night", "dracula", "nord"] {
             let t = by_id(id);
             app.preview = Some(t.clone());
             draw(&mut term, &app);
-            assert_eq!(cell(&term, 1, 1).fg, t.ansi.unwrap()[1], "{id}: SGR 31 is the previewed theme's red");
-            assert_eq!(cell(&term, 6, 1).fg, t.text, "{id}: default text");
-            assert_eq!(cell(&term, 6, 1).bg, t.bg, "{id}: default background");
-            assert_eq!(cell(&term, 12, 1).bg, t.ansi.unwrap()[4], "{id}: SGR 44");
-            assert_eq!(cell(&term, 0, 0).fg, t.border, "{id}: the frame");
+            assert_eq!(cell(&term, 0, 0).fg, t.ansi.unwrap()[1], "{id}: SGR 31 is the previewed theme's red");
+            assert_eq!(cell(&term, 5, 0).fg, t.text, "{id}: default text");
+            assert_eq!(cell(&term, 5, 0).bg, t.bg, "{id}: default background");
+            assert_eq!(cell(&term, 11, 0).bg, t.ansi.unwrap()[4], "{id}: SGR 44");
+            assert_eq!(cell(&term, 0, 23).bg, t.bg, "{id}: the status bar");
         }
         app.preview = None;
         draw(&mut term, &app);
-        assert_eq!(cell(&term, 1, 1).fg, mocha.ansi.unwrap()[1], "back to the saved theme");
+        assert_eq!(cell(&term, 0, 0).fg, mocha.ansi.unwrap()[1], "back to the saved theme");
         drop(app); // closes the connection, which lets the server thread finish
         server.join().unwrap();
     }
@@ -3609,7 +3646,7 @@ mod tests {
         for k in 0..app.tpick.list.len() {
             app.select_theme_for_test(k);
             let t = app.effective_theme().clone();
-            for (cols, rows) in [(100, 24), (80, 24), (60, 20), (44, 12)] {
+            for (cols, rows) in [(100, 24), (80, 24), (60, 20), (60, 14)] {
                 let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
                 draw(&mut term, &app);
                 for c in cells(&term) {
@@ -3637,7 +3674,7 @@ mod tests {
                     }
                 }
                 if t.ansi.is_some() {
-                    assert_eq!(term.backend().buffer()[(0, 0)].fg, t.border, "{}: the frame", t.id);
+                    assert_eq!(term.backend().buffer()[(1, 1)].fg, t.border, "{}: the rule under the tabs", t.id);
                 }
                 term.draw(|f| {
                     ui::draw(f, &app);

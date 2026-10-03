@@ -193,8 +193,10 @@ fn a_worktree_with_changes_not_yet_committed_is_kept_said_on_its_screen_and_w_re
     assert!(matches!(l.app.mode, Mode::Confirm(Confirm::RemoveWorktree { number: 1, .. })));
     let f = flat(&draw(&mut term, &l.app));
     assert!(f.contains("Remove #1's worktree anyway?"), "{f}");
+    // (The question's lines share their rows with the screen behind it, so its words are checked in pieces.)
     assert!(
-        f.contains("It has changes not yet committed, and they will be lost. Its branch ticket/1 and everything committed on it are kept."),
+        f.contains("It has changes not yet committed, and they will be lost. Its branch")
+            && f.contains("ticket/1 and everything committed on it are kept."),
         "{f}"
     );
     assert!(f.contains("y remove it") && f.contains("n keep it"), "{f}");

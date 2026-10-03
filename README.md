@@ -175,9 +175,18 @@ Where things are: the editor runs `<platoon's data folder>/editor/bin/nvim` with
 
 ## The list
 
-The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them); each shows how many
-active ones it holds. ([Plugins](#plugins) are in the settings.) Under Sessions and Projects, each has **Active** and **Archived**: the left and right arrow
-keys switch them (or click them).
+The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them). ([Plugins](#plugins) are
+in the settings.) Under Sessions and Projects, each has **Active** and **Archived**, with how many each holds, at the right of
+the line under the tabs (on a narrow terminal, on the row under it): the left and right arrow keys switch them (or click them).
+
+`?` shows **every key of the screen you are on** in a popup, with the keys that work everywhere: the line at the bottom of
+the screen keeps only what fits, and `? help` is always in it. The popup scrolls when it is longer than the screen; `esc`,
+the back key or `?` closes it.
+
+platoon needs a terminal of at least **60 columns by 14 rows**. In a smaller one it says so (`platoon needs at least 60×14 —
+this window is 40×12`) and waits: no key does anything but quit (`q` or `ctrl+c`), and making the window bigger brings
+everything back as it was. In a session's live view nothing you type is sent while the window is too small, and the
+session keeps its size until there is room to show it again.
 
 One row per conversation, built from Claude Code's saved history, so everything you've ever run is there
 whether or not it's running. Each row shows the name, directory, branch, model, a status, how full the
@@ -219,11 +228,12 @@ before.
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
+| `?` | every key of the screen you are on |
 | `↑` `↓` `g` `G` | move (`g`/`G` jump to the first/last); the mouse works too |
 | `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a ticket's screen, or in a squad's details, `q` goes back one level |
 | `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](#keys-back-and-quit) |
 
-Count badges are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
+Count badges (beside Active and Archived) are drawn with round ends in terminals that ship their own symbol glyphs (Ghostty, Kitty,
 WezTerm) and as padded squares elsewhere, so nothing shows as an empty box. Set `PLATOON_BADGES=rounded` or
 `PLATOON_BADGES=square` to choose yourself.
 

@@ -328,10 +328,11 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     let f = flat(&shown);
     // The screen: the pane's number, said as what it is, and the cache reads beside it.
     assert!(f.contains("Tokens used 2.5M sent and written, plus 1.8M read again from Claude's cache"), "{f}");
-    // (The note about the session sits beside the explanation's first line, so it is checked in two pieces.)
+    // (The note about the session sits beside the explanation, so it is checked in pieces.)
     assert!(
         f.contains("2.5M sent to Claude and 10K written by Claude:")
-            && f.contains("the number the Tickets list shows. Read again from the cache"),
+            && f.contains("the number the Tickets list shows. Read again")
+            && f.contains("from the cache is the conversation so far"),
         "{f}"
     );
     assert!(!f.contains("in all"), "{f}");

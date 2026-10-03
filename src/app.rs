@@ -175,6 +175,8 @@ pub enum Action {
     HandOff,
     /// `v`: open the code editor on what is selected (or pick a folder).
     Editor,
+    /// `?`: every key of the screen showing, in a popup (`help_open`).
+    Help,
 }
 
 /// Clickable regions, recorded by the UI each frame.
@@ -299,6 +301,16 @@ pub enum Confirm {
     /// go with it; `extra`: what else is worth knowing first: its skills, the tickets its squads have, the user's own
     /// squads that use its agents).
     RemovePlugin { id: String, name: String, adds: String, in_use: bool, editor: bool, extra: String },
+}
+
+/// The smallest terminal platoon draws its screens in. Below it, `ui::draw` says so in one centered message instead of
+/// squeezing the screens into fragments, and no key acts but quit (`App::too_small`).
+pub const MIN_WIDTH: u16 = 60;
+pub const MIN_HEIGHT: u16 = 14;
+
+/// A terminal of `w` by `h` is too small for platoon's screens.
+pub fn too_small(w: u16, h: u16) -> bool {
+    w < MIN_WIDTH || h < MIN_HEIGHT
 }
 
 #[derive(Clone)]
@@ -605,6 +617,11 @@ pub struct App {
     /// The user's own themes, from `<config dir>/themes`.
     themes: Registry,
     pub quit: bool,
+    /// The help popup (`?`) is open over the screen showing: every key of that screen. It opens only on platoon's own
+    /// screens (`Mode::List` and `Mode::Plugins`), which stay as they are under it.
+    pub help_open: bool,
+    /// The first line of the help popup in view, when it is longer than the screen (kept in range by the drawing).
+    pub help_top: Cell<usize>,
     pub hits: RefCell<Vec<(Rect, Hit)>>,
     size: (u16, u16),
     reader: Reader,
@@ -795,6 +812,8 @@ impl App {
             rounded: false,
             plain_marker: false,
             hits: RefCell::new(Vec::new()),
+            help_open: false,
+            help_top: Cell::new(0),
             size: (80, 24),
             reader,
             indexer,
@@ -1027,7 +1046,13 @@ impl App {
         if self.sq.split.is_some() {
             return squads_glue::split_size(self.size);
         }
-        (self.size.1.saturating_sub(3).max(1), self.size.0.saturating_sub(2).max(1))
+        // The whole width, and every row but the status line under it.
+        (self.size.1.saturating_sub(1).max(1), self.size.0.max(1))
+    }
+
+    /// The terminal is below the smallest size platoon draws in (`MIN_WIDTH` x `MIN_HEIGHT`).
+    pub fn too_small(&self) -> bool {
+        too_small(self.size.0, self.size.1)
     }
 
     pub fn sync_size(&mut self, w: u16, h: u16) {
@@ -1035,6 +1060,12 @@ impl App {
             return;
         }
         self.size = (w, h);
+        self.clear_selection();
+        // Too small, the session isn't shown (a message is): it keeps the size it had rather than being squeezed into
+        // fragments it would have to redraw, and gets the new size when the window is big enough again.
+        if self.too_small() {
+            return;
+        }
         let (rows, cols) = self.pty_size();
         if let Some(c) = &mut self.client {
             c.resize(rows, cols);
@@ -1042,17 +1073,16 @@ impl App {
         if let Some(e) = &mut self.editing {
             e.run.resize(rows, cols);
         }
-        self.clear_selection();
     }
 
-    /// Where the session's screen is drawn in the attached view: inside the frame and above the status bar.
+    /// Where the session's screen is drawn in the attached view: the whole width, above the status bar.
     /// The same numbers as `pty_size` and `ui::draw_attached`.
     pub fn term_area(&self) -> Rect {
         if self.sq.split.is_some() {
             return split_areas(self.size.0, self.size.1).term;
         }
         let (rows, cols) = self.pty_size();
-        Rect::new(1, 1, cols, rows)
+        Rect::new(0, 0, cols, rows)
     }
 
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
@@ -1463,6 +1493,7 @@ impl App {
             (Action::Undo, Mode::List) => self.undo_notes(),
             (Action::HandOff, Mode::List) if !self.projects_list_showing() => self.start_handoff(),
             (Action::Editor, Mode::List) => self.code_editor_key(),
+            (Action::Help, Mode::List | Mode::Plugins) => self.open_help(),
             (Action::Confirm, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_anyway(),
             (Action::Cancel, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_cancel(false),
             (Action::Confirm, Mode::Confirm(Confirm::InstallEditor { .. })) => self.install_editor(),
@@ -2459,11 +2490,18 @@ impl App {
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
+        let own_screen = !matches!(self.mode, Mode::Attached(_) | Mode::EditNotes);
+        if self.too_small() {
+            return self.too_small_key(key, own_screen);
+        }
         self.dismiss_long_notice();
+        // Something else took the screen while the help was open: it doesn't come back with the screen later.
+        if self.help_open && !self.help_showing() {
+            self.help_open = false;
+        }
         let back = self.keys.get().back.matches(&key);
         // On platoon's own screens and popups the back key is a second esc: one level back, or cancel. (In a session
         // and in the notes editor it is theirs to handle, below: everything else there is typing.)
-        let own_screen = !matches!(self.mode, Mode::Attached(_) | Mode::EditNotes);
         let key = if back && own_screen { KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE) } else { key };
         // Ctrl+Space when it isn't the back key is nothing here (not the space that switches or picks things).
         if own_screen && key.code == KeyCode::Char(' ') && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -2471,6 +2509,14 @@ impl App {
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
+        if self.help_showing() {
+            return self.help_key(key);
+        }
+        // `?` on platoon's own screens (never where it is typed: a session, the notes editor, a box or a list being
+        // typed into are other modes) shows every key of the screen.
+        if key.code == KeyCode::Char('?') && !ctrl && !alt && matches!(self.mode, Mode::List | Mode::Plugins) {
+            return self.act(Action::Help);
+        }
         match self.mode.clone() {
             Mode::Attached(_) => {
                 // Typing moves the screen on (and the highlight would no longer be over what was selected).
@@ -2655,7 +2701,49 @@ impl App {
         self.clamp_selected();
     }
 
+    /// A key while the terminal is too small to show anything but the message saying so: nothing happens unseen. On
+    /// platoon's own screens the quit key and ctrl+c quit (the message says so); in a session or the notes editor every
+    /// key is theirs, so none is sent while they can't be seen.
+    fn too_small_key(&mut self, key: KeyEvent, own_screen: bool) {
+        let ctrl_c = key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        if own_screen && (ctrl_c || self.keys.get().quit.matches(&key)) {
+            self.quit = true;
+        }
+    }
+
+    /// The help popup is showing: open, and over one of the screens it opens on (a question that pops up over the
+    /// screen meanwhile takes the keys, and closes it).
+    pub fn help_showing(&self) -> bool {
+        self.help_open && matches!(self.mode, Mode::List | Mode::Plugins)
+    }
+
+    fn open_help(&mut self) {
+        self.help_open = true;
+        self.help_top.set(0);
+    }
+
+    /// Keys while the help popup is open: it scrolls, and esc (or the back key), `?` or the quit key close it.
+    fn help_key(&mut self, key: KeyEvent) {
+        let top = self.help_top.get();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('?') => self.help_open = false,
+            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => self.help_open = false,
+            _ if self.keys.get().quit.matches(&key) => self.help_open = false,
+            KeyCode::Down | KeyCode::Char('j') => self.help_top.set(top + 1),
+            KeyCode::Up | KeyCode::Char('k') => self.help_top.set(top.saturating_sub(1)),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.help_top.set(top + 10),
+            KeyCode::PageUp => self.help_top.set(top.saturating_sub(10)),
+            KeyCode::Home | KeyCode::Char('g') => self.help_top.set(0),
+            // As far as it goes: the drawing keeps it in range.
+            KeyCode::End | KeyCode::Char('G') => self.help_top.set(usize::MAX / 2),
+            _ => {}
+        }
+    }
+
     pub fn on_paste(&mut self, text: &str) {
+        if self.too_small() || self.help_showing() {
+            return;
+        }
         match self.mode.clone() {
             Mode::Attached(_) if self.attached_paused() => {}
             Mode::Attached(_) => {
@@ -2693,8 +2781,15 @@ impl App {
 
     pub fn on_mouse(&mut self, m: MouseEvent) {
         self.mouse = (m.column, m.row);
+        // Too small, nothing is on screen to click or scroll.
+        if self.too_small() {
+            return;
+        }
         if matches!(m.kind, MouseEventKind::Down(_)) {
             self.dismiss_long_notice();
+        }
+        if self.help_showing() {
+            return self.help_mouse(m);
         }
         match m.kind {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
@@ -2822,6 +2917,22 @@ impl App {
             _ => {}
         }
         self.update_view();
+    }
+
+    /// The wheel scrolls the help popup; a click outside it closes it (one inside does nothing).
+    fn help_mouse(&mut self, m: MouseEvent) {
+        let top = self.help_top.get();
+        match m.kind {
+            MouseEventKind::ScrollUp => self.help_top.set(top.saturating_sub(3)),
+            MouseEventKind::ScrollDown => self.help_top.set(top + 3),
+            MouseEventKind::Down(MouseButton::Left) => {
+                let inside = self.hits.borrow().iter().any(|(r, h)| matches!(h, Hit::Inert) && r.contains((m.column, m.row).into()));
+                if !inside {
+                    self.help_open = false;
+                }
+            }
+            _ => {}
+        }
     }
 
     fn clear_selection(&mut self) {

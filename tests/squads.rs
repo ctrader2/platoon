@@ -638,8 +638,8 @@ fn a_ticket_whose_squad_isnt_running_continues_it_with_the_same_flags_and_narrow
     // Narrow (90 columns): the session has the width, the ticket one line above it.
     let screen = t.stable();
     let lines: Vec<&str> = screen.lines().collect();
-    assert!(lines[1].contains("#1 Basket · Done"), "{screen}");
-    assert!(lines[2].contains("FAKE LEADER"), "{screen}");
+    assert!(lines[0].contains("#1 Basket · Done"), "{screen}");
+    assert!(lines[1].contains("FAKE LEADER"), "{screen}");
     t.send(b"typed here\r");
     t.wait_for("GOT:typed here");
     t.send(&[0]);
@@ -1118,7 +1118,7 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     let screen = t.stable();
     // The ticket's side only (the session's place is on the right).
     let left: Vec<String> =
-        screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+        screen.lines().map(|l| l.split('│').next().unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
     let at = |needle: &str| left.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle}:\n{screen}"));
     for (agent, n) in
         [("coding-leader", "25K + 300K from cache"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")]

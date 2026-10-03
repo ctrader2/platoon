@@ -175,9 +175,9 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     fs::create_dir_all(&docs).unwrap();
     lab.session(&[s(&docs)]);
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "v editor"]);
+    t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    editor_has_the_screen(&mut t, &["Sessions", "make the shop", "v editor"]);
+    editor_has_the_screen(&mut t, &["Sessions", "make the shop", "? help"]);
     let run = lab.only_run();
     // Started as platoon's nvim is: its own settings file, in the conversation's folder.
     let argv: Vec<String> = fs::read_to_string(run.join("argv")).unwrap().lines().map(String::from).collect();
@@ -218,7 +218,7 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     t.send(b"q2 typed\r");
     assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
     // Back: platoon's screen drawn in full, on the same tab, the row still selected.
-    t.wait_for_all(&["make the shop", "v editor", "Sessions"]);
+    t.wait_for_all(&["make the shop", "? help", "Sessions"]);
     let screen = t.stable();
     assert!(!screen.contains("STAND-IN EDITOR RUNNING"), "the editor's screen is gone:\n{screen}");
     assert!(
@@ -568,7 +568,7 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     // Colours as a terminal without NO_COLOR has them.
     env.push(("NO_COLOR", String::new()));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "v editor"]);
+    t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
     t.wait_for_all(&["╭ open with", "platoon's editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
     let shown = t.stable();
@@ -607,11 +607,11 @@ fn a_terminal_editor_of_yours_is_handed_the_terminal_on_the_first_folder_and_pla
     lab.session(&[s(&docs)]);
     let env = lab.own_editors(json!({"files_editor": "helix"}));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "v editor"]);
+    t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
     t.wait_for("STAND-IN HELIX RUNNING");
     let screen = t.stable();
-    assert!(!screen.contains("make the shop") && !screen.contains("v editor"), "platoon's screen is gone:\n{screen}");
+    assert!(!screen.contains("make the shop") && !screen.contains("? help"), "platoon's screen is gone:\n{screen}");
     let run = fs::read_dir(&lab.out)
         .unwrap()
         .flatten()
@@ -716,14 +716,14 @@ fn the_editor_is_given_the_back_key_from_keys_json() {
     lab.session(&[]);
     fs::write(lab.config.join("keys.json"), r#"{ "back": "alt+x" }"#).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "v editor"]);
+    t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
     t.wait_for("STAND-IN EDITOR RUNNING");
     let run = lab.only_run();
     until("the session file to be copied", || run.join("session.json").is_file());
     assert_eq!(session_of(&run)["keys"], json!({"back": "<M-x>"}));
     t.send(b"done\r");
-    t.wait_for_all(&["make the shop", "v editor"]);
+    t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }

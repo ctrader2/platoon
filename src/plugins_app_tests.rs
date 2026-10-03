@@ -288,11 +288,10 @@ fn four_does_nothing_and_the_header_has_three_tabs_even_when_narrow() {
     for width in [60u16, 80, 200] {
         let mut term = Terminal::new(TestBackend::new(width, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        let header = shown.lines().nth(1).unwrap().to_string();
+        let header = shown.lines().next().unwrap().to_string();
         assert!(header.contains("1 Sessions") && !header.contains("Plugins"), "{width}: {header}");
-        if width >= 80 {
-            assert!(header.contains("3 Squads"), "{width}: {header}");
-        }
+        // Without counts in them the three tabs fit whole even at the smallest width.
+        assert!(header.contains("3 Squads"), "{width}: {header}");
         if width == 200 {
             assert!(flat(&shown).contains("1-3 tabs"), "{width}: {}", flat(&shown));
         }

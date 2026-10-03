@@ -300,7 +300,7 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
     lab.reply(&format!(r#"{{"summary":"{summary}","done":["Built the basket page"],"next":[{}]}}"#, next.join(",")));
 
     // A small terminal: the box is 64 columns wide and shows 13 rows of text.
-    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 22, 70);
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 20, 68);
     t.wait_for("Add a basket page to the shop");
     t.send(b"h");
     t.wait_for_all(&["hand this work on", "# Session hand-off: shop", "more lines below", "esc cancel"]);

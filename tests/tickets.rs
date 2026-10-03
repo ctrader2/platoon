@@ -437,7 +437,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     }
     let (row, _) = find(&mut t, "#2 Second");
     let line = screen.lines().nth(row as usize).unwrap();
-    let pane = line.split('│').nth(2).unwrap_or("");
+    let pane = line.split('│').nth(1).unwrap_or("");
     assert!(pane.contains("waits for #1"), "inside its own pane: {line}");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();

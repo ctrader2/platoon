@@ -1521,7 +1521,7 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
     simple(&w, "aaa", "please fix the login redirect after sign in", 300);
     simple(&w, "bbb", "add a csv export to the invoices report", 400);
     simple(&w, "ccc", "why does the nightly build fail on ci", 500);
-    let long = "Fixing the redirect that sends people back to the sign in page after they have logged in, and adding a test for it, and then a third sentence that does not fit.";
+    let long = "Fixing the redirect that sends people back to the sign in page after they have logged in, and adding a test for it, and checking the other pages that redirect the same way, and then a third sentence that does not fit.";
     name_generated(&w, "aaa", "Login redirect fix", long);
     name_generated(&w, "bbb", "Invoices CSV", "Adding a CSV export to the invoices report.");
     let mut app = w.app();
@@ -1529,14 +1529,17 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
     let shown = screen(&mut term, &app);
     let lines: Vec<&str> = shown.lines().collect();
     let footer = lines.iter().position(|l| l.contains("enter open")).unwrap();
-    assert_eq!(footer, 22, "the footer is the last line inside the frame");
+    assert_eq!(footer, 23, "the footer is the last line: there is no frame");
     assert!(
         lines[footer - 2].contains("✦ Fixing the redirect")
-            && lines[footer - 1].starts_with("│    ")
+            && lines[footer - 1].starts_with("   ")
             && lines[footer - 1].contains("adding a test"),
         "two lines right above it:\n{shown}"
     );
-    assert!(lines[footer - 1].contains('…'), "a longer summary is cut with an ellipsis, not run into the frame:\n{shown}");
+    assert!(
+        lines[footer - 1].contains('…') && lines[footer - 1].ends_with(' '),
+        "a longer summary is cut with an ellipsis, not run to the edge:\n{shown}"
+    );
     assert!(!shown.contains("third sentence"));
     // The marker is dim, the words are the subtext color.
     let (x, y) = at(&shown, "✦ Fixing").unwrap();
@@ -1557,7 +1560,7 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
     );
     // Too short a terminal: it is left out, the list keeps its room.
     key(&mut app, KeyCode::Home);
-    for (rows, shown_strip) in [(16u16, false), (17, true), (20, true), (40, true)] {
+    for (rows, shown_strip) in [(14u16, false), (15, true), (20, true), (40, true)] {
         let mut t = Terminal::new(TestBackend::new(80, rows)).unwrap();
         let s = screen(&mut t, &app);
         assert_eq!(s.contains("✦ Fixing the redirect"), shown_strip, "80x{rows}:\n{s}");

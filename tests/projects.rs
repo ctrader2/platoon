@@ -168,7 +168,8 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     env.push(("NO_COLOR", String::new())); // the helper sets it, which makes platoon draw without any color
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
     t.wait_for("refactor the widget");
-    t.wait_for_flat("1 Sessions 2 2 Projects 0");
+    // The tabs carry no counts; the Active/Archived switch on the rule under them does.
+    t.wait_for_flat("1 Sessions 2 Projects 3 Squads");
     t.wait_for_flat("Active 2 Archived 0");
 
     // Left and right: Active and Archived.
@@ -187,7 +188,7 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     t.send(b"\r");
     t.wait_gone("╭ new project");
     t.wait_for_flat("WS Web shop");
-    t.wait_for_flat("2 Projects 1");
+    t.wait_for_flat("Active 1 Archived 0");
     let id = lab.projects()["projects"].as_object().unwrap().keys().next().unwrap().clone();
 
     // r renames it.
@@ -255,7 +256,6 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
     lab.project(&["aaaa-0001"], Some("# Overview\nSell socks online.\n"));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     t.wait_for("write the docs");
-    t.wait_for_flat("2 Projects 1");
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");

@@ -177,10 +177,11 @@ fn pane(t: &mut Term) -> String {
     let mut words: Vec<String> = Vec::new();
     for row in screen.lines() {
         let parts: Vec<&str> = row.split('\u{2502}').collect();
-        if parts.len() < 5 {
+        // ` │ sessions ││ notes │ `: the notes pane is the last part between borders.
+        if parts.len() < 4 {
             continue;
         }
-        words.extend(parts[parts.len() - 3].split_whitespace().map(str::to_string));
+        words.extend(parts[parts.len() - 2].split_whitespace().map(str::to_string));
     }
     words.join(" ")
 }

@@ -7,9 +7,10 @@ use crate::testkit::World;
 use ratatui::crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
 use std::{io::Read, os::unix::net::UnixStream, time::Duration};
 
-/// The session's screen is 21 rows by 78 columns at (1, 1) inside the 80x24 frame.
-const ROWS: u16 = 21;
-const COLS: u16 = 78;
+/// The session's screen is 23 rows by the whole 80 columns at (0, 0) of an 80x24 terminal: no frame around it, the
+/// status bar under it.
+const ROWS: u16 = 23;
+const COLS: u16 = 80;
 
 struct Rig {
     _w: World,
@@ -75,34 +76,34 @@ const TRACKING_SGR: &str = "\x1b[?1000h\x1b[?1006h";
 #[test]
 fn a_session_that_asked_for_mouse_reports_gets_the_wheel_and_our_scrollback_stays_put() {
     let mut r = rig(TRACKING_SGR, false);
-    // Screen column 10, row 5 is cell (9, 4) of the session: reported 1-based, relative to its screen.
-    r.wheel(true, 10, 5);
-    r.wheel(false, 1, 1);
-    r.wheel(false, 78, 21);
-    assert_eq!(String::from_utf8(r.sent()).unwrap(), "\x1b[<64;10;5M\x1b[<65;1;1M\x1b[<65;78;21M");
+    // Screen column 9, row 4 is cell (9, 4) of the session: reported 1-based.
+    r.wheel(true, 9, 4);
+    r.wheel(false, 0, 0);
+    r.wheel(false, 79, 22);
+    assert_eq!(String::from_utf8(r.sent()).unwrap(), "\x1b[<64;10;5M\x1b[<65;1;1M\x1b[<65;80;23M");
     assert_eq!(r.scrollback(), 0);
 }
 
 #[test]
 fn the_report_follows_the_encoding_the_session_asked_for() {
     let mut plain = rig("\x1b[?1000h", false);
-    plain.wheel(true, 10, 5);
+    plain.wheel(true, 9, 4);
     assert_eq!(plain.sent(), [0x1b, b'[', b'M', 96, 42, 37]);
     let mut utf8 = rig("\x1b[?1002h\x1b[?1005h", false);
-    utf8.wheel(false, 10, 5);
+    utf8.wheel(false, 9, 4);
     assert_eq!(utf8.sent(), [0x1b, b'[', b'M', 97, 42, 37]);
 }
 
 #[test]
 fn a_cell_the_plain_encoding_cannot_express_is_dropped_not_scrolled() {
     let mut r = rig("\x1b[?1000h", false);
-    // A 260 column terminal: the session's screen is 258 wide, so column 230 of it is past the 223 limit.
+    // A 260 column terminal: the session's screen is 260 wide, so column 230 of it is past the 223 limit.
     r.app.sync_size(260, 24);
     let _ = r.sent(); // the resize message
     r.wheel(true, 230, 5);
     assert!(r.sent().is_empty(), "nothing is sent for a cell it cannot tell");
     assert_eq!(r.scrollback(), 0, "and it does not scroll our own screen either");
-    r.wheel(true, 200, 5);
+    r.wheel(true, 199, 4);
     assert_eq!(r.sent(), [0x1b, b'[', b'M', 96, 32 + 200, 37]);
 }
 
@@ -137,15 +138,13 @@ fn a_paused_session_is_never_written_to() {
 }
 
 #[test]
-fn a_wheel_over_the_frame_or_the_status_bar_is_not_sent() {
+fn a_wheel_over_the_status_bar_is_not_sent() {
     let mut r = rig(TRACKING_SGR, false);
-    r.wheel(true, 0, 5); // the frame, left
-    r.wheel(true, 10, 0); // the frame, top
-    r.wheel(true, 79, 5); // the frame, right
-    r.wheel(true, 10, 22); // the frame, bottom
+    r.wheel(true, 0, 23); // the status bar, left end
     r.wheel(true, 10, 23); // the status bar
+    r.wheel(true, 79, 23); // the status bar, right end
     assert!(r.sent().is_empty());
-    assert_eq!(r.scrollback(), 15, "each one still scrolls our own screen, as before");
+    assert_eq!(r.scrollback(), 9, "each one still scrolls our own screen, as before");
 }
 
 #[test]
@@ -155,7 +154,7 @@ fn the_wheel_still_drops_the_selection_when_it_is_sent_on() {
     r.app.on_mouse(ev(MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), 2, 1));
     r.app.on_mouse(ev(MouseEventKind::Drag(ratatui::crossterm::event::MouseButton::Left), 9, 1));
     assert!(r.app.selection.is_some());
-    r.wheel(true, 10, 5);
+    r.wheel(true, 9, 4);
     assert!(r.app.selection.is_none());
     assert_eq!(r.sent(), b"\x1b[<64;10;5M");
 }
@@ -166,7 +165,7 @@ fn scrolling_back_first_and_then_meeting_a_session_that_wants_the_mouse_shows_th
     r.wheel(true, 10, 5);
     assert_eq!(r.scrollback(), 3);
     r.app.client.as_ref().unwrap().parser.lock().unwrap().process(TRACKING_SGR.as_bytes());
-    r.wheel(true, 10, 5);
+    r.wheel(true, 9, 4);
     assert_eq!(r.scrollback(), 0, "the view goes back to the live screen, where the session answers");
     assert_eq!(r.sent(), b"\x1b[<64;10;5M");
 }

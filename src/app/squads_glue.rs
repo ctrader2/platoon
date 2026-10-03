@@ -54,7 +54,8 @@ struct Starting {
 /// ticket one line above it.
 pub const SPLIT_MIN_WIDTH: u16 = 100;
 
-/// What the split view is drawn in, for a terminal of `w` by `h` (the frame around the whole app included).
+/// What the split view is drawn in, for a terminal of `w` by `h` (there is no frame around the app: the session reaches
+/// the right edge and the bottom, with only its status line under it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SplitAreas {
     /// The ticket beside the session, or (narrow) the one line above it.
@@ -69,24 +70,25 @@ pub struct SplitAreas {
 }
 
 pub fn split_areas(w: u16, h: u16) -> SplitAreas {
-    let inner = Rect::new(1, 1, w.saturating_sub(2).max(1), h.saturating_sub(2).max(2));
+    let all = Rect::new(0, 0, w.max(1), h.max(2));
     if w >= SPLIT_MIN_WIDTH {
-        let left = inner.width * 2 / 5;
-        let right = Rect::new(inner.x + left + 1, inner.y, inner.width.saturating_sub(left + 1).max(1), inner.height);
+        let left = all.width * 2 / 5;
+        let right = Rect::new(left + 1, 0, all.width.saturating_sub(left + 1).max(1), all.height);
         SplitAreas {
-            ticket: Rect::new(inner.x + 1, inner.y, left.saturating_sub(2).max(1), inner.height),
+            // A column of air at the left edge and before the line between the two.
+            ticket: Rect::new(1, 0, left.saturating_sub(2).max(1), all.height),
             wide: true,
-            rule_x: inner.x + left,
+            rule_x: left,
             term: Rect::new(right.x, right.y, right.width, right.height.saturating_sub(1).max(1)),
             bar: Rect::new(right.x, right.bottom().saturating_sub(1), right.width, 1),
         }
     } else {
         SplitAreas {
-            ticket: Rect::new(inner.x, inner.y, inner.width, 1),
+            ticket: Rect::new(1, 0, all.width.saturating_sub(2).max(1), 1),
             wide: false,
             rule_x: 0,
-            term: Rect::new(inner.x, inner.y + 1, inner.width, inner.height.saturating_sub(2).max(1)),
-            bar: Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
+            term: Rect::new(0, 1, all.width, all.height.saturating_sub(2).max(1)),
+            bar: Rect::new(0, all.bottom().saturating_sub(1), all.width, 1),
         }
     }
 }

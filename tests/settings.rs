@@ -210,7 +210,7 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     let mut t = Term::spawn(&[], &env, &base, 30, 100);
     t.wait_for("enter open");
     t.wait_bg(1, 1, mocha.0);
-    t.wait_fg(1, 3, mocha.1); // the "p" of the header's title
+    t.wait_fg(0, 1, mocha.1); // the "p" of the header's title
 
     // s, then Enter on the Theme row (the first): the list opens beside the real screen, which stays as it was.
     t.send(b"s");
@@ -221,19 +221,19 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     let screen = t.text();
     // (The user's own theme is at the end of the list, past the built-ins: it is seen below, after jumping there.)
     assert!(screen.contains("Bright Day:"), "{screen}");
-    t.wait_fg(1, 3, mocha.1); // not faded: still the accent, not the muted border color
+    t.wait_fg(0, 1, mocha.1); // not faded: still the accent, not the muted border color
 
     // Down previews the next theme on the whole screen: the frame's inside and the header's title change...
     t.send(b"\x1b[B");
     t.wait_bg(1, 1, macchiato.0);
-    t.wait_fg(1, 3, macchiato.1);
+    t.wait_fg(0, 1, macchiato.1);
     assert!(!saved_theme_key(&file), "previewing saves nothing:\n{}", fs::read_to_string(&file).unwrap());
 
     // ...and Esc puts everything back.
     t.send(b"\x1b");
     t.wait_gone("sample");
     t.wait_bg(1, 1, mocha.0);
-    t.wait_fg(1, 3, Rgb(0x45, 0x47, 0x5a)); // the settings popup is back, and fades the list behind it to Mocha's border color
+    t.wait_fg(0, 1, Rgb(0x45, 0x47, 0x5a)); // the settings popup is back, and fades the list behind it to Mocha's border color
     assert!(!saved_theme_key(&file));
 
     // Enter keeps: open again, jump to the last entry (the user's theme), see it, keep it.
@@ -349,12 +349,14 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
     for want in ["╭", "╰", "General", "Projects", "Settings file:", "ctrl+space back", "Used today"] {
         assert!(whole.contains(want), "{want:?} missing:\n{whole}");
     }
-    let inside: Vec<&str> = whole.lines().filter(|l| l.starts_with("│  │")).collect();
+    // The popup is 76 columns wide, two columns in from each edge of the terminal (there is no frame around the app).
+    let inside: Vec<Vec<char>> = whole.lines().map(|l| l.chars().collect::<Vec<_>>()).filter(|l| l.get(2) == Some(&'│')).collect();
     assert!(inside.len() >= 15, "{whole}");
     for line in inside {
-        // Drop the outer frame, then the popup's own right border: what is left ends in a blank.
-        let popup = line.trim_end_matches('│').trim_end().strip_suffix('│').unwrap_or_else(|| panic!("the popup's border is cut: {line}"));
-        assert!(popup.ends_with(' '), "text touches the border: {line}");
+        let text: String = line.iter().collect();
+        // The popup's own right border, with a blank before it: no text touches it.
+        assert_eq!(line.get(77), Some(&'│'), "the popup's border is cut: {text}");
+        assert_eq!(line.get(76), Some(&' '), "text touches the border: {text}");
     }
 
     // Esc closes the settings from any tab.

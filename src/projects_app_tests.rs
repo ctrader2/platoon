@@ -107,7 +107,13 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     let id = app.projects.all()[0].id.clone();
     assert_eq!(app.selected_project().map(|p| p.name.as_str()), Some("Web shop"));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("1 Sessions 4 2 Projects 1") && shown.contains("WS Web shop") && shown.contains("no sessions"), "{shown}");
+    assert!(
+        shown.contains("1 Sessions 2 Projects 3 Squads")
+            && shown.contains("Active 1")
+            && shown.contains("WS Web shop")
+            && shown.contains("no sessions"),
+        "{shown}"
+    );
     assert!(shown.contains("run `platoon setu"), "said once, since the notes hooks are not installed: {shown}");
     // Saved where it belongs.
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.config.join("projects.json")).unwrap()).unwrap();
@@ -428,26 +434,32 @@ fn with_a_project_column_every_row_still_fits_the_width() {
     app.notice = None;
     let t = app.theme.clone();
     let color = projects::slot_color(&t, &app.projects.get(&a).unwrap().color);
-    for width in [120u16, 100, 96, 95, 90, 89, 80, 69, 68, 60, 50, 40, 30] {
+    for width in [120u16, 100, 96, 95, 90, 89, 80, 69, 68, 65, 64, 60, 50, 40, 30] {
         let mut term = Terminal::new(TestBackend::new(width, 30)).unwrap();
-        draw(&mut term, &app);
+        let shown = draw(&mut term, &app);
+        // Below the smallest size platoon draws in, only the message saying so.
+        if width < crate::app::MIN_WIDTH {
+            assert!(flat(&shown).contains("platoon needs at least"), "{width}: {shown}");
+            continue;
+        }
         let lines = cells(&term);
         let h = header_row(&lines);
-        // The table's right edge: LAST ends where the rows' times end, with a column to spare before the frame.
+        // The table's right edge: LAST ends where the rows' times end, with a column to spare before the edge.
         let head = text_of(&lines[h]);
         let last_end = col_of(&lines[h], "LAST").map(|x| x + 4);
         let rows: Vec<usize> = (h + 1..lines.len()).filter(|&y| text_of(&lines[y]).contains("talks")).map(|y| y - 1).collect();
         assert_eq!(rows.len(), 4, "{width}: every row drawn");
         for &y in &rows {
             let line = text_of(&lines[y]);
-            let end = line.trim_end_matches(['│', ' ']).chars().count();
+            let end = line.trim_end_matches(' ').chars().count();
             if let Some(e) = last_end {
                 assert_eq!(end, e, "{width}: the row ends under LAST:\n{head}\n{line}");
             }
-            assert!(line.ends_with('│'), "{width}: the frame is not overwritten: {line}");
+            assert!(line.ends_with(' '), "{width}: nothing runs to the terminal's edge: {line}");
         }
         let has_col = head.contains("PROJECT");
-        assert_eq!(has_col, width >= 69, "{width}: {head}");
+        // (The table is the terminal less a column of air at each side.)
+        assert_eq!(has_col, width >= 65, "{width}: {head}");
         assert_eq!(pill_rows(&lines, color).is_empty(), !has_col, "{width}");
         // The pill switches to the badge letters below 90 real terminal columns.
         if has_col {

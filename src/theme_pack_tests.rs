@@ -270,7 +270,7 @@ fn the_sessions_list_in_a_light_theme_selected_row_badges_and_statuses() {
     let shown = draw(&mut term, &app);
     assert!(shown.contains("refactor the parser"), "{shown}");
     let ls = lines(&term);
-    assert_eq!((ls[0][0].fg, ls[1][1].bg), (t.border, t.bg), "the frame on the light background");
+    assert_eq!((ls[1][1].fg, ls[1][1].bg), (t.border, t.bg), "the rule under the tabs on the light background");
     // The selected row: a surface band (a little darker than the background) with the accent marker and the text.
     let sel = app.visible()[app.selected];
     let name = app.sessions[sel].name.clone();
@@ -368,7 +368,7 @@ fn a_projects_notes_in_a_light_theme() {
 fn the_attached_views_footer_and_session_in_a_light_theme() {
     let (_w, mut app, _) = light_world("light-attached", "Gruvbox Light");
     let t = app.theme.clone();
-    let (client, _host) = Client::for_test(21, 78);
+    let (client, _host) = Client::for_test(23, 80);
     client.parser.lock().unwrap().process(b"plain text\r\n\x1b[31mred words\x1b[0m\r\n");
     app.client = Some(client);
     app.mode = Mode::Attached(4242);
@@ -376,9 +376,9 @@ fn the_attached_views_footer_and_session_in_a_light_theme() {
     let shown = draw(&mut term, &app);
     let ls = lines(&term);
     assert!(shown.contains("back to list"), "{shown}");
-    let footer = &ls[22];
+    let footer = &ls[23];
     let hint = find(&ls, "back to list").unwrap();
-    assert_eq!(hint.0, 22, "the footer is the last line inside the frame");
+    assert_eq!(hint.0, 23, "the footer is the last line: there is no frame");
     let label = &footer[hint.1];
     assert_eq!((label.fg, label.bg), (t.dim, t.bg));
     let back = app.back_label().to_string();

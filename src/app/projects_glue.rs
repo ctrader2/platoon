@@ -338,7 +338,7 @@ impl App {
     }
 
     /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is not the settings.
-    fn ticket_has_keys(&self) -> bool {
+    pub(crate) fn ticket_has_keys(&self) -> bool {
         self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets)
     }
 

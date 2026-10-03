@@ -23,10 +23,10 @@ use std::{
     time::Duration,
 };
 
-/// The screen the tests share: 80x24, so the session's screen is 21 rows by 78 columns at (1, 1) inside the
-/// frame, and the status bar is the row below it.
-const ROWS: u16 = 21;
-const COLS: u16 = 78;
+/// The screen the tests share: 80x24, so the session's screen is 23 rows by the whole 80 columns at (0, 0) (there
+/// is no frame around the app), and the status bar is the row below it.
+const ROWS: u16 = 23;
+const COLS: u16 = 80;
 
 struct Rig {
     _w: World,
@@ -71,7 +71,7 @@ impl Rig {
 
     /// Screen coordinates of a cell of the session's screen.
     fn cell(row: u16, col: u16) -> (u16, u16) {
-        (col + 1, row + 1)
+        (col, row)
     }
 
     fn press(&mut self, row: u16, col: u16) {
@@ -264,10 +264,10 @@ fn the_back_hint_still_goes_back_and_leaves_no_selection_behind() {
 }
 
 #[test]
-fn a_press_on_the_status_bar_or_the_frame_does_not_start_a_selection() {
+fn a_press_on_the_status_bar_does_not_start_a_selection() {
     let mut r = rig(TEXT);
-    let bar = 22; // the row below the session's screen
-    for (x, y) in [(40, bar), (0, 0), (79, 10), (0, 23), (5, 23)] {
+    let bar = 23; // the row below the session's screen: the last row
+    for (x, y) in [(40, bar), (0, bar), (79, bar), (5, bar)] {
         r.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
         assert!(r.app.selection.is_none(), "({x},{y})");
         r.mouse(MouseEventKind::Drag(MouseButton::Left), x + 2, y);
@@ -293,9 +293,9 @@ fn dragging_past_an_edge_sticks_to_that_edge() {
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 500, 300);
     assert_eq!(r.app.selection.unwrap().head, Point::new(ROWS - 1, COLS - 1), "bottom right");
     r.mouse(MouseEventKind::Drag(MouseButton::Left), 0, 0);
-    assert_eq!(r.app.selection.unwrap().head, Point::new(0, 0), "top left, though that is the frame");
-    r.mouse(MouseEventKind::Drag(MouseButton::Left), 40, 22);
-    assert_eq!(r.app.selection.unwrap().head, Point::new(ROWS - 1, 39), "onto the status bar: the last row of the screen");
+    assert_eq!(r.app.selection.unwrap().head, Point::new(0, 0), "top left");
+    r.mouse(MouseEventKind::Drag(MouseButton::Left), 40, 23);
+    assert_eq!(r.app.selection.unwrap().head, Point::new(ROWS - 1, 40), "onto the status bar: the last row of the screen");
 }
 
 #[test]
@@ -381,9 +381,9 @@ fn selecting_while_scrolled_back_copies_what_is_on_screen() {
     r.mouse(MouseEventKind::ScrollUp, 10, 10);
     r.mouse(MouseEventKind::ScrollUp, 10, 10);
     let rows: Vec<String> = r.app.client.as_ref().unwrap().parser.lock().unwrap().screen().rows(0, COLS).collect();
-    assert_eq!((rows[0].as_str(), rows[1].as_str()), ("line 33", "line 34"), "six rows further back");
+    assert_eq!((rows[0].as_str(), rows[1].as_str()), ("line 31", "line 32"), "six rows further back");
     r.select((0, 0), (1, 20));
-    assert_eq!(r.system(), ["line 33\nline 34"]);
+    assert_eq!(r.system(), ["line 31\nline 32"]);
     // The highlight is on the same cells.
     r.draw();
     let sel = r.app.effective_theme().selection_bg().unwrap();
@@ -491,7 +491,7 @@ fn when_every_route_fails_the_status_bar_points_to_shift_drag() {
     });
     r.select((0, 6), (0, 10));
     assert_eq!(r.notice().as_deref(), Some("Copy failed: hold Shift and drag to select natively"));
-    let bar = r.draw().lines().nth(22).unwrap().to_string();
+    let bar = r.draw().lines().nth(23).unwrap().to_string();
     assert!(bar.contains("Copy failed: hold Shift and drag"), "{bar}");
 }
 

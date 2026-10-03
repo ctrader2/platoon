@@ -130,7 +130,11 @@ fn a_ticket_with_a_squad_is_only_cancelled_by_hand_and_s_does_nothing() {
     key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { squad: true, pid: None, .. })));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("Cancel ticket #1?") && shown.contains("Talking to its squad again opens it again."), "{shown}");
+    // (The question's lines share their rows with the screen behind it, so its words are checked in pieces.)
+    assert!(
+        shown.contains("Cancel ticket #1?") && shown.contains("Talking to its squad") && shown.contains("again opens it again."),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Char('y'));
     let t = Tickets::open(&w.config, &id).get(with).cloned().unwrap();
     assert_eq!((&t.state, t.leaders.len(), t.reason.as_str()), (&State::Cancelled, 1, ""), "the same leader, what it said gone");
@@ -234,14 +238,14 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(n), "the ticket's screen, not a session started by itself");
     assert!(matches!(app.mode, Mode::List));
-    let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(126, 34)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("The squad's session isn't running. Enter to continue it."), "{shown}");
     assert!(f.contains("Squad says Asks: Red or blue?"), "{shown}");
     // The squad by its name, and nothing more: whether its session runs is on the right.
     let squad_line = shown.lines().find(|l| l.contains("Coding squad")).expect(&shown);
-    assert!(squad_line.split('│').nth(1).unwrap().trim() == "Coding squad", "just \"Coding squad\": {squad_line}");
+    assert!(squad_line.split('│').next().unwrap().trim() == "Coding squad", "just \"Coding squad\": {squad_line}");
     assert!(!f.contains("Squad Coding") && !f.contains("its session isn't running") && !f.contains("let it publish"), "{shown}");
     assert!(f.contains("Worktree …/shop-worktrees/ticket-1 (ticket/1)"), "cut from the start when narrow: {shown}");
     assert!(f.contains("enter continue the squad"), "{shown}");
@@ -308,7 +312,13 @@ fn cancelling_a_ticket_whose_squad_runs_says_so_and_yes_stops_only_that_session(
     assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 1, pid: Some(p), .. }) if p == pid));
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("Cancel ticket #1?") && shown.contains("its squad's session, which is running, will be stopped"), "{shown}");
+    // (The question's lines share their rows with the screen behind it, so its words are checked in pieces.)
+    assert!(
+        shown.contains("Cancel ticket #1?")
+            && shown.contains("its squad's session,")
+            && shown.contains("which is running, will be stopped"),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Char('y'));
     assert_eq!(app.ticket(n).unwrap().state, State::Cancelled);
     assert_eq!(app.active_notice(), Some("#1 is Cancelled. Stopping its squad's session; its conversation is kept."));
@@ -326,16 +336,17 @@ fn cancelling_a_ticket_whose_squad_runs_says_so_and_yes_stops_only_that_session(
 fn the_split_puts_the_ticket_on_the_left_and_the_session_on_the_right_or_one_line_above_it_when_narrow() {
     let a = split_areas(120, 40);
     assert!(a.wide);
-    assert_eq!(a.ticket.y, 1);
+    assert_eq!(a.ticket.y, 0);
     assert!(a.ticket.width >= 40 && a.ticket.width <= 50, "{a:?}");
     assert!(a.rule_x >= a.ticket.right() && a.term.x == a.rule_x + 1, "{a:?}");
-    assert_eq!(a.term.right(), 119, "to the frame");
-    assert_eq!((a.term.y, a.term.bottom(), a.bar.y), (1, 38, 38), "{a:?}");
+    // No frame around the app: the session reaches the right edge and every row but its status line.
+    assert_eq!(a.term.right(), 120, "to the right edge");
+    assert_eq!((a.term.y, a.term.bottom(), a.bar.y), (0, 39, 39), "{a:?}");
     let n = split_areas(99, 30);
     assert!(!n.wide);
-    assert_eq!(n.ticket, Rect::new(1, 1, 97, 1));
-    assert_eq!(n.term, Rect::new(1, 2, 97, 26));
-    assert_eq!(n.bar, Rect::new(1, 28, 97, 1));
+    assert_eq!(n.ticket, Rect::new(1, 0, 97, 1));
+    assert_eq!(n.term, Rect::new(0, 1, 99, 28));
+    assert_eq!(n.bar, Rect::new(0, 29, 99, 1));
     assert_eq!(crate::app::SPLIT_MIN_WIDTH, 100);
 }
 

@@ -339,7 +339,8 @@ fn done_and_cancelled_are_folded_under_a_divider_and_come_back_up_when_new_again
     let shown = flat(&draw(&mut term, &app));
     assert!(
         shown.contains("Cancel ticket #3?")
-            && shown.contains("No squad has had it, so it stays cancelled.")
+            && shown.contains("No squad has had it, so it")
+            && shown.contains("stays cancelled.")
             && shown.contains("y cancel it")
             && shown.contains("n keep it"),
         "{shown}"

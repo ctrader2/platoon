@@ -67,19 +67,19 @@ fn a_session_that_asked_for_mouse_reports_hears_the_wheel() {
     t.send(b"printf '\\033[?1000h\\033[?1006h'; stty raw -echo; printf 'go-%s\\r\\n' $((6*7)); cat -v\r");
     t.wait_for("go-42");
 
-    // The pointer at screen column 20, row 8 (1-based); the session's screen starts inside a one-cell frame,
-    // so that is its column 19, row 7.
+    // The pointer at screen column 20, row 8 (1-based); the session's screen starts at the top left (there is no
+    // frame around the app), so that is its column 20, row 8 too.
     t.send(&wheel(true, 20, 8));
-    t.wait_for("^[[<64;19;7M");
+    t.wait_for("^[[<64;20;8M");
     t.send(&wheel(false, 30, 4));
-    t.wait_for("^[[<65;29;3M");
+    t.wait_for("^[[<65;30;4M");
 
-    // Over the frame it is not sent: the first row of the screen is the frame.
-    t.send(&wheel(true, 20, 1));
+    // Over the status bar it is not sent: the last row of the 30-row terminal is the bar.
+    t.send(&wheel(true, 20, 30));
     // Then a marker turn: once it shows, everything sent before it has been through the shell.
-    t.send(&wheel(true, 2, 2));
+    t.send(&wheel(true, 1, 1));
     t.wait_for("^[[<64;1;1M");
-    assert_eq!(t.text().matches("^[[<").count(), 3, "nothing for the frame:\n{}", t.text());
+    assert_eq!(t.text().matches("^[[<").count(), 3, "nothing for the status bar:\n{}", t.text());
 
     // The way back to the list is untouched.
     t.send(&[0]); // ctrl+space
