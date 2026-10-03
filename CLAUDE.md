@@ -66,6 +66,9 @@ The macOS tests run with `--no-fail-fast -- --nocapture`, so a failure's message
 Tests must hold on macOS too: no `/proc`, no GNU-only flags (`sed -i`, `date -d`), no `/bin/true`, no case-sensitive file
 names, and a temp folder that may be under the home folder (paths there are shown from `~`).
 `deny.yml` runs `cargo deny check` (`deny.toml`: licenses, advisories, crates.io only) with CI and weekly.
+`codeql.yml` runs CodeQL (Rust and the workflows, no build) on pushes to `main`, pull requests and weekly; while the
+repo is private it skips itself (code scanning needs a public repo or GitHub Code Security). Dependabot (`dependabot.yml`)
+opens weekly grouped minor/patch updates for cargo and the actions.
 `checked-with/claude-code` is the Claude Code version platoon was last checked with: README.md and the guide must name
 the same one (the script fails CI otherwise), so change them in one commit. `claude-code-watch.yml` checks npm daily and
 opens an issue "Check support for Claude Code X" for a newer version; no workflow commits, pushes or edits anything.
@@ -104,6 +107,10 @@ opens an issue "Check support for Claude Code X" for a newer version; no workflo
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
 | `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally) |
+| `.github/workflows/codeql.yml`, `.github/dependabot.yml` | CodeQL for Rust and the workflows (actions pinned by commit, skipped while the repo is private), Dependabot weekly for cargo and github-actions (minor and patch grouped, at most 3 open each) |
+| `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`, `.github/CODEOWNERS` | the issue forms (bug: versions, OS, terminal, theme; feature: the problem first), `config.yml` (no blank issues; questions to Discussions, vulnerabilities to private reporting), the pull request checklist, `* @ctrader2` |
+| `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md`, `SECURITY.md` | for contributors: before you start, build and test, the hermetic-test rule, a good pull request, AI-assisted contributions (welcome, disclosed, the contributor owns every line), MIT in = out; Contributor Covenant 2.1 (reports through GitHub, no email); what counts as a vulnerability and how to report it privately (latest release only) |
+| `demo/social-preview.png` | the repository's social preview (1280 x 640), uploaded by hand in the settings; how it was made is in `demo/README.md` |
 | `demo/` (repo root) | the README animation: `make-world.sh` (a made-up world in a temp folder: conversations, projects, notes, tickets, stand-in `claude` and `code`, running sessions as shell loops), `demo.tape` (the vhs recording, to the ignored `raw.mp4`), `render.sh` (ffmpeg: title card, captions, eased zooms; `platoon.gif`, the headline cut under 10 MB, and `platoon-tour.mp4`, the whole tour); how to re-record in `demo/README.md` |
 
 Notes that matter: rows are conversations keyed by session id (several live processes can share one); all knowledge of

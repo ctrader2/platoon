@@ -19,3 +19,7 @@ and the DejaVu Sans Mono and Noto Sans fonts. Where Chromium can't use its sandb
 `VHS_NO_SANDBOX=true vhs demo/demo.tape`. The camera, the captions and the GIF's pieces are tables at the top of
 `render.sh`, in seconds of `raw.mp4`: if you change the tape's timing, move them to match. Keep the GIF under 10 MB
 (GitHub does not show bigger README images).
+
+`social-preview.png` (1280 x 640, the picture GitHub shows when the repository is linked) is the Sessions list from
+the tour at 8 s, cropped to the terminal window, under the name and the README's first line, in Catppuccin Mocha's
+colors. It is uploaded by hand in the repository's settings (Social preview).

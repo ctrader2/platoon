@@ -14,3 +14,5 @@ Claude Code. These pages explain everything it does.
 | [Features that use tokens](tokens.md) | What asks Claude through your plan, how to turn it on, what is sent, the limits, and `platoon tokens` |
 | [What platoon changes](what-platoon-changes.md) | The hooks and files platoon adds, what squads may do, the folders it writes, no network and no telemetry, and how to remove it |
 | [Troubleshooting](troubleshooting.md) | Short answers to things that can go wrong, with links to the details |
+
+Want to help? [CONTRIBUTING.md](../CONTRIBUTING.md) says how to report a bug, suggest an idea or send a change.

@@ -1,0 +1,24 @@
+# Dependabot version updates: once a week, one pull request per ecosystem for the minor and patch updates together,
+# and a pull request of its own for each major update. Security updates (switched on in the repository's settings)
+# come as soon as an advisory is published, whatever this schedule says.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]

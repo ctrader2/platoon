@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Ask a question
+    url: https://github.com/ctrader2/platoon/discussions
+    about: Questions, ideas to talk through, and help with setting platoon up go to Discussions.
+  - name: Report a security problem
+    url: https://github.com/ctrader2/platoon/security/advisories/new
+    about: Report a vulnerability privately, never in a public issue. See SECURITY.md.

@@ -1,0 +1,67 @@
+name: CodeQL
+
+# Static analysis of platoon's Rust code and of these workflows. Results show on the Security tab (Code scanning).
+# A private repository has code scanning only with GitHub Code Security (paid), and without it the upload fails. So
+# while the repository is private, each run checks that first and skips the analysis (the job passes, doing nothing).
+# It takes effect once the repository is public; to use it on a private one with Code Security, drop the "Is code
+# scanning available?" step and the `if:` lines.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Tuesdays 13:00 UTC: new queries in a newer CodeQL run against code that hasn't changed.
+    - cron: "0 13 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: CodeQL (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      # Upload the results to code scanning.
+      security-events: write
+      # Read this workflow run's details (needed on a private repository).
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both are analysed from the source, with no build ("none").
+        language: [rust, actions]
+    steps:
+      - name: Is code scanning available?
+        id: scanning
+        # Scheduled runs carry no repository details in their event, so ask the API (this needs only contents: read).
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          private=$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)
+          echo "private=$private" >> "$GITHUB_OUTPUT"
+          if [ "$private" = true ]; then
+            echo "::notice::The repository is private: CodeQL is skipped (code scanning needs a public repository or GitHub Code Security)."
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.scanning.outputs.private == 'false'
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        if: steps.scanning.outputs.private == 'false'
+        uses: github/codeql-action/init@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - name: Analyze
+        if: steps.scanning.outputs.private == 'false'
+        uses: github/codeql-action/analyze@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          category: "/language:${{ matrix.language }}"

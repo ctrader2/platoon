@@ -80,3 +80,9 @@ MIT: see [LICENSE](LICENSE). The color themes belong to their authors and are cr
 
 platoon is an independent project. It is not affiliated with or endorsed by Anthropic, OpenAI or Google. Claude and
 Claude Code are trademarks of Anthropic.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says how, and everyone taking part
+follows the [code of conduct](CODE_OF_CONDUCT.md). Found a security problem? Please report it privately, as
+[SECURITY.md](SECURITY.md) describes.

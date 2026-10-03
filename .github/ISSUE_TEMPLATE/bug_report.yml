@@ -1,0 +1,85 @@
+name: Bug report
+description: Something in platoon doesn't work the way it should
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. A question rather than a bug? Ask in [Discussions](https://github.com/ctrader2/platoon/discussions).
+        **A security problem? Don't open an issue:** see [SECURITY.md](https://github.com/ctrader2/platoon/blob/main/SECURITY.md).
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Searched first
+      options:
+        - label: I searched the existing issues and this hasn't been reported yet.
+          required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What did platoon do?
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should it have done instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to make it happen
+      description: The keys you pressed or the commands you ran, from the start. If it happens only sometimes, say how often.
+      placeholder: |
+        1. Run `platoon`
+        2. Press ...
+        3. See ...
+    validations:
+      required: true
+  - type: input
+    id: platoon-version
+    attributes:
+      label: platoon version
+      description: |
+        The output of `platoon --version` if your platoon has it. Otherwise `cargo install --list | grep platoon-tui` (the version, and the commit for an install from git). Say how you installed it if it wasn't with cargo.
+      placeholder: platoon-tui v0.1.0 (https://github.com/ctrader2/platoon#70f408c)
+    validations:
+      required: true
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: The output of `claude --version`.
+      placeholder: 2.1.288 (Claude Code)
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: Ubuntu 24.04, macOS 15.6, ...
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal app
+      description: And a terminal multiplexer if you use one (tmux, Zellij, screen).
+      placeholder: Ghostty 1.2, Xfce Terminal, iTerm2, WezTerm inside tmux, ...
+    validations:
+      required: true
+  - type: input
+    id: theme
+    attributes:
+      label: Theme
+      description: Only if the bug is about how something looks. The theme's name from platoon's settings.
+      placeholder: Catppuccin Mocha
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error messages, logs or a screenshot
+      description: |
+        Paste any error text, or drag a screenshot in. Please look through it first: transcripts, notes and file paths can hold things you'd rather not share.

@@ -1,0 +1,43 @@
+name: Feature request
+description: Suggest something platoon could do, or do better
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Start with the problem: knowing what gets in your way helps more than a finished design, and there may be more than one way to solve it. For an open-ended idea you'd like to talk through first, [Discussions](https://github.com/ctrader2/platoon/discussions) are a good place.
+  - type: checkboxes
+    id: searched
+    attributes:
+      label: Searched first
+      options:
+        - label: I searched the existing issues and this hasn't been asked for yet.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Your idea
+      description: What would you like platoon to do? Keys, screens or commands, if you have them in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Other ways you've considered
+      description: Workarounds you use now, or other ways it could work.
+  - type: dropdown
+    id: help
+    attributes:
+      label: Would you like to build it?
+      description: See [CONTRIBUTING.md](https://github.com/ctrader2/platoon/blob/main/CONTRIBUTING.md). Agreeing on the plan here first saves work.
+      options:
+        - "No, just suggesting it"
+        - "Yes, with some guidance"
+        - "Yes"
