@@ -26,53 +26,9 @@ already done, and a step whose command points at a platoon that no longer exists
 | Notes updates | Lets platoon [keep a project's notes up to date](#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional, also added by running `platoon setup` again |
 | Tickets skill | Adds [`/to-tickets`](#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting: `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder): when platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly. If you changed the file, setup leaves it alone and says "changed by you"; `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as `SKILL.md.platoon-bak`). `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says "removed by you"); `platoon setup --add to-tickets` puts it back |
 
-### The code editor
-
-platoon's code editor (Neovim with a file tree, the changed files and their differences, search and a terminal, for
-looking at a ticket's or a session's work with `v`) is optional and is a [plugin](#plugins), **Code editor (Neovim)**,
-installed separately: from the settings (`s`, then **Plugins**), with `platoon plugin add editor`, or by saying yes when `v` offers it.
-`platoon setup` doesn't ask about it. `platoon setup --add editor` and `--remove editor` still work: they say the editor
-is a plugin now and do `platoon plugin add editor` / `remove editor`. Without it, `v` still opens
-[the editors your computer has](#opening-the-editor-v).
-
-The plugin holds no programs: it is a download table (what to fetch, from where, and each file's checksum and size) and
-the editor's settings files. Installing it installs those, then downloads what the table lists (about 58 MB on Linux
-x86_64, usually under a minute; the plugin's details and the question before installing say how much), all pinned to exact
-versions and checked against their checksums and sizes before anything is used:
-
-- **Neovim** 0.12.5, unless you already have Neovim 0.12 or newer, which is used instead.
-- **ripgrep** and **fd** (for searching), unless you have them (`fd` is `fdfind` on Debian and Ubuntu), and **tree-sitter**
-  0.27 (what builds syntax highlighting for more languages later), unless you have 0.26.1 or newer.
-- **Plugins**, as plain Neovim packages (no plugin manager): neo-tree (with plenary and nui), diffview, gitsigns, snacks,
-  nvim-treesitter, which-key, lualine, blink.cmp (with its built-in matcher, so nothing else is downloaded) and mini.nvim.
-- **Syntax highlighting** for 19 common languages (Lua, Vim script and help, Markdown, Rust, Python, JavaScript, TypeScript,
-  JSON, YAML, TOML, shell, HTML, CSS, Go, C and a few more), built with your C compiler. Without one the install still
-  finishes, and colors in code are limited to the few languages Neovim comes with.
-- **A font with icons**: JetBrainsMono Nerd Font (regular, bold, italic, bold italic). platoon doesn't change any terminal's
-  settings; afterwards it says how to pick the font (Xfce Terminal: Edit > Preferences > Appearance > Font; Ghostty:
-  `font-family = "JetBrainsMono Nerd Font"` in its config; macOS Terminal and iTerm2: their profile's font setting).
-
-Nothing needs sudo or a package manager: everything is downloaded with `curl` into platoon's own folder,
-`~/.local/share/platoon/editor` (macOS: `~/Library/Application Support/platoon/editor`; `PLATOON_DATA_DIR` moves it), and
-the font into `~/.local/share/fonts/platoon` (macOS: `~/Library/Fonts`; `PLATOON_FONT_DIR` moves it). It never touches
-your own `~/.config/nvim` or Neovim's data. Downloads run side by side and are checked before being moved into place, so an
-install that fails or is interrupted never leaves something that looks finished; running it again carries on from there.
-Removing the plugin (`d` on it in the settings' Plugins tab, `platoon plugin remove editor`) deletes platoon's folder and the font files
-platoon put there, never your own Neovim, ripgrep, fd or fonts. An update of the plugin (a new table) fetches only what
-changed: a newer platoon updates the plugin by itself when it starts, and says so; `platoon plugin update` and `enter`
-on it also finish downloads that didn't complete.
-
-**An editor installed before it was a plugin** (with `platoon setup --add editor` or setup's old question) keeps working:
-the first time platoon or `platoon plugin` runs, it becomes the editor plugin by itself, from the copy of the plugin that
-came with platoon, so it needs no network and downloads nothing ("Your code editor is now the plugin …"). A later
-`platoon plugin add editor` or update reuses everything already there with the same checksum.
-
-For tests: `PLATOON_EDITOR_MIRROR=<folder>` reads every download from that folder (by the last part of its address)
-instead of the network, and `PLATOON_SKIP_FC_CACHE=1` skips refreshing the font list.
-
 ### Opening the editor (`v`)
 
-Press `v` anywhere in platoon's lists to look at the work in the code editor:
+Press `v` anywhere in platoon's lists to look at the work in a code editor of your own:
 
 | Where | What it opens |
 | --- | --- |
@@ -83,29 +39,17 @@ Press `v` anywhere in platoon's lists to look at the work in the code editor:
 In a session's live view every key goes to Claude: press the [back key](#keys-back-and-quit) (`ctrl+space`) to go back to the list, then `v`. Typed into a box
 (search, a name, the folder picker), `v` is just a letter.
 
-The editor opens **in the same window**: platoon's screen goes, the editor takes the whole terminal, and `q` brings you
-back to platoon exactly where you were. Sessions and squads keep running meanwhile. A few things happen first when needed:
-
-- **Not installed yet**: platoon offers its plugin (it says how much it downloads): yes installs the plugin (it comes
-  with platoon), then its downloads (the progress shows at the bottom), then opens it. Saying no is fine: the
-  settings (`s`, then **Plugins**) or `platoon plugin add editor` installs it later. This works after removing it too: pressing `v` is
-  asking for it. If the plugin is there but some of its downloads aren't, `v` offers to finish them.
-- **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it. The
-  editor reads a file again when the squad changes it on disk, and warns before saving over a file that changed there.
-- **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as when
-  you continue the squad. While the editor is open, platoon never removes a worktree it has open.
-
-**Your own editors.** `v` can also open the work in an editor this computer already has, one that shows a whole folder
-with a file tree. platoon only offers the ones it finds installed: on your `PATH`, or where they install themselves
+`v` opens the work in an editor this computer already has, one that shows a whole folder with a file tree. platoon
+installs none of its own and only offers the ones it finds installed: on your `PATH`, or where they install themselves
 (JetBrains Toolbox's scripts in `~/.local/share/JetBrains/Toolbox/scripts`, snaps in `/snap/bin`, `/opt/<app>/bin`,
-`~/.local/bin`; on macOS the apps in `/Applications` and `~/Applications`):
+`~/.local/bin`; on macOS the apps in `/Applications` and `~/Applications`). When it finds none, `v` says so in one line
+at the bottom ("No code editor found: ...") and nothing opens.
 
 | Editor | How it opens | Several folders |
 | --- | --- | --- |
-| platoon's editor (always offered; shown as "(not installed)" until its plugin is, which it offers the first time you choose it) | here, in platoon's terminal | all of them |
 | VS Code, Cursor, Zed, Sublime Text, Kate | a new window of its own, beside platoon | all of them in that one window |
 | IntelliJ IDEA (and Community), PyCharm (and Community), WebStorm, GoLand, RustRover, CLion, PhpStorm, Rider, Android Studio | a window of its own | each in a window of its own, at most three (it says so when there were more) |
-| Helix, and **your own Neovim setup** (only when you have `~/.config/nvim`) | here, in platoon's terminal, with your own settings and environment, exactly like platoon's editor: closing it brings platoon back | the first one (it says which it left out) |
+| Helix, and **your own Neovim setup** (only when you have `~/.config/nvim`) | here, in platoon's terminal, with your own settings and environment: platoon's screen goes, the editor takes the whole terminal, and closing it brings platoon back exactly where you were | the first one (it says which it left out) |
 
 A JetBrains IDE that is already running may open the folder in a window it has open, or ask: its command line has no
 documented way to ask for a new window (JetBrains' "Command-line interface" help lists none), so that is up to the IDE's
@@ -114,69 +58,24 @@ settings.
 
 Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offered here; they stay in the notes' list (`e`).
 
-Which one opens: your **favourite**, platoon's editor until you choose another (Settings, Editors: "Editor for files (v)").
+Which one opens: your **favourite**, the first one found until you choose one (Settings, Editors: "Editor for files (v)").
 With "Always ask which editor" on, `v` shows the list every time, the favourite starred and picked (enter opens it);
-choosing another there makes it the favourite. A favourite that is no longer installed opens platoon's editor instead, and
-platoon says so once. The questions above (the squad still working, bringing a worktree back, the folder picker) are the
-same for every editor.
+choosing another there makes it the favourite. A favourite that is no longer installed opens the first one found instead,
+and platoon says so once. Sessions and squads keep running meanwhile. A few things happen first when needed, whichever
+editor it is:
+
+- **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it.
+- **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as when
+  you continue the squad. While an editor in platoon's terminal is open, platoon never removes a worktree it has open.
 
 An editor with a window of its own starts beside platoon and is left alone: platoon stays on screen, and closing platoon
 doesn't close it. platoon can't tell when that window closes, so **a ticket's worktree opened in one is kept** after the
 ticket is Done or cancelled: its screen says "Kept: opened in VS Code", and `w` removes it (after asking). An editor in
 platoon's terminal needs none of this: platoon waits for it to close.
 
-**Inside the editor.** It is Neovim with platoon's own settings (your own `~/.config/nvim` is never read or changed); Vim's
-keys work as usual, with these changes and additions. `space` is the key for platoon's own actions: press it and wait, and
-a list of them appears.
-
-| Key | Does |
-| --- | --- |
-| `q` | back to platoon. With changes you haven't saved it asks: save them, discard them, or keep editing. A program still running in the editor's terminal is stopped (it asks first) |
-| `ctrl+space` | back to platoon too, the same way, from anywhere: typing, selecting, the file tree, the differences, the terminal. It is the [back key](#keys-back-and-quit): another one set in `keys.json` is used here instead |
-| `ctrl+n` | while typing: the completion menu (words from your open files, file paths), then the next entry in it; `ctrl+p` the one before, `enter` takes it, `ctrl+e` closes it |
-| `Q` | record a macro (what `q` does in plain Vim) |
-| `space e` | the file tree: every folder of the ticket or session, each at the top level, with git's marks (`+` added, `~` changed, `-` removed, `?` new) |
-| `space c` | the changed files, one group per repository: for a ticket, everything its branch changed since its worktree was made (committed or not); for a session, what isn't committed yet |
-| `space d` | the differences of the repository of the file you are in (asks which, when there are several and you are in none); `space D` picks another repository |
-| `space h` | the history of this file |
-| `space f` | find a file in every folder; `space s` search for text in every folder |
-| `space b` | the files you have open |
-| `space t` or `ctrl+/` | a terminal, in the repository of the file you are in; the same key hides it. Everything there runs with your own settings (git, cargo, claude) |
-| `]h` `[h` | the next or previous change in this file; `space g s` stage it, `space g u` undo it, `space g p` show it, `space g b` who changed this line |
-| `space w` | save this file |
-| `space ?` | every key |
-
-In the file tree and the changed files: `enter` (or `l`, `→`) opens a file or a folder, `h` (`←`) closes a folder, `1` and `2`
-(or `tab`) switch between Files and Changed files, `D` shows the differences of that repository, `a` `d` `r` add, delete and
-rename, `esc` closes the panel, `?` lists its keys. In a list that pops up (finding files, searching), `esc` closes it. In the
-differences: `tab` goes to the next file, `esc` closes them. In the terminal, press `esc` twice to scroll or copy, and `q`
-from there goes back to platoon too. `ctrl+z` does nothing (it would leave the editor stopped behind platoon). An editor
-plugin from before the back key (version 1.0.0) keeps `q` and `space q` as the way back and `ctrl+space` for the completion
-menu; updating it (settings, **Plugins**, `enter` on it) brings both changes.
-
-**Copying.** Copying in the editor (`y` on a selection, `yy`, `"+y`) puts the text on the system clipboard, where
-platoon's own copies go (see [Copying text from a session](#copying-text-from-a-session); `PLATOON_CLIPBOARD` applies here too): through platoon itself,
-so nothing like `xclip` needs to be installed, and as an OSC 52 sequence for terminals that take one. Deleting (`d`, `x`)
-doesn't touch the system clipboard, and `p` pastes what you copied or deleted in the editor. To paste something copied
-in another program, use your terminal's paste (`ctrl+shift+v` in Xfce Terminal and Ghostty). For each copy platoon
-leaves a small `platoon clipboard-hold` running in the background that hands the text to whoever pastes, the way
-`xclip` does; it ends when something else is copied (at most after a day).
-
-The editor's colors come from platoon's theme (with "Terminal colors", from your terminal's own). With JetBrainsMono Nerd
-Font (or any Nerd Font) picked in your terminal it shows icons; without one, plain marks. Code is colored in the 19
-languages installed up front; opening a file in another language builds its highlighting quietly the first time (it needs
-the internet and a C compiler), and without them the file simply isn't colored. There are no language servers (going to a
-definition, errors as you type) in this version.
-
-Where things are: the editor runs `<platoon's data folder>/editor/bin/nvim` with the settings platoon writes to
-`editor/config/` each time it opens: the editor plugin's settings files (`init.lua`, `lua/platoon/tree.lua`, and a small
-`shell.sh` that gives the editor's terminal your own environment back). Neovim's own history, swap and undo files stay in `editor/nvim/`. For tests,
-`PLATOON_NVIM_BIN` runs another program instead of the editor.
-
 ## The list
 
-The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them). ([Plugins](#plugins) are
-in the settings.) Under Sessions and Projects, each has **Active** and **Archived**, with how many each holds, at the right of
+The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them). Under Sessions and Projects, each has **Active** and **Archived**, with how many each holds, at the right of
 the line under the tabs (on a narrow terminal, on the row under it): the left and right arrow keys switch them (or click them).
 
 `?` shows **every key of the screen you are on** in a popup, with the keys that work everywhere: the line at the bottom of
@@ -225,14 +124,14 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
-| `v` | open the conversation's folders in the [code editor](#opening-the-editor-v) |
+| `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
 | `1` `2` `3` | switch between the Sessions, Projects and [Squads](#squads) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
 | `?` | every key of the screen you are on |
-| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tickets, Squads and Agents, the settings and the plugins |
+| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tickets, Squads and Agents, and the settings |
 | `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a ticket's screen, or in a squad's details, `q` goes back one level |
 | `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](#keys-back-and-quit) |
 
@@ -348,8 +247,8 @@ Details worth knowing:
 
 ### Settings
 
-`s` opens the settings as a popup over the list; the [back key](#keys-back-and-quit) (`ctrl+space`), `esc`, `s`, `q`, or a click outside it closes it. The settings are in seven
-tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects**, **Editors** and **Plugins** (on a
+`s` opens the settings as a popup over the list; the [back key](#keys-back-and-quit) (`ctrl+space`), `esc`, `s`, `q`, or a click outside it closes it. The settings are in six
+tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects** and **Editors** (on a
 narrow terminal "Smart features" is shortened to "Smart", and where even then they don't all fit, the strip shows the tabs
 around the one showing, with `‹` or `›` on the side that has more; a click on one goes there). `tab` goes to the next tab and
 `shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
@@ -416,15 +315,8 @@ when naming is held up, why (`Naming is waiting: ...`).
 | Group | Setting | What it does | Choices |
 | --- | --- | --- | --- |
 | Editing platoon's text | Editor for notes and tickets | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](#editing-the-notes) on this computer |
-| Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | platoon's editor (default), and the [editors with a file tree](#opening-the-editor-v) found on this computer |
+| Editing files | Editor for files (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](#opening-the-editor-v) found on this computer; the first one found until you choose |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
-
-**Plugins**: every [plugin](#plugins), the ones you have installed and the ones the catalog has, one line each: its name,
-its version and where it stands (**Installed**, **Update ready**, **Available**; also "Installed from a folder", "Installed, not
-in the catalog", "Can't be installed here"). Under the list is the selected plugin's description. `↑` `↓`
-choose one, `d` removes an installed one (after asking), and `enter` (or a click on the selected one) opens the
-[plugin screen](#plugins) on it: its details, install, update and remove. The back key or `esc` there comes back here, on
-the same plugin.
 
 #### System prompts for each smart feature
 
@@ -479,20 +371,19 @@ by hand too:
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that
 setting, when it moves to the nearest step. Limits are 7 days (`idle_stop_minutes`) and 365 days
 (`auto_archive_days`). `idle_stop_ignores_mcp` and `search_archived` are `true` or `false`; anything else there means the default
-(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `files_editor` is `platoon` or an editor's id (`code`, `cursor`, `zed`, `subl`, `kate`, `idea`, `idea-community`, `pycharm`, `pycharm-community`, `webstorm`, `goland`, `rustrover`, `clion`, `phpstorm`, `rider`, `android-studio`, `helix`, `nvim`), kept as it is when that editor isn't installed; `files_editor_ask` is `true` or `false`; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
+(`true`). The search numbers are limited to 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters. `theme` is one of the [theme](#themes) ids (`user:...` for one of your own; a `plugin:theme-pack/<id>` an older platoon wrote reads as the built-in `<id>`). The token numbers are limited to 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`; `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an editor this computer no longer has is simply not starred and stays in the file until you use another; `files_editor` is empty until you choose (the first editor found opens; an older platoon's `platoon` reads the same) or an editor's id (`code`, `cursor`, `zed`, `subl`, `kate`, `idea`, `idea-community`, `pycharm`, `pycharm-community`, `webstorm`, `goland`, `rustrover`, `clion`, `phpstorm`, `rider`, `android-studio`, `helix`, `nvim`), kept as it is when that editor isn't installed; `files_editor_ask` is `true` or `false`; `notes_quiet_minutes` is 1 to 60; `squads_at_once` is 1 to 10; `notes_reply_chars` is 200 to 5000; `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30, `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300, 3 to 20 and 50 to 1000. Anything else in the file is kept when platoon saves. A missing or damaged file just means the defaults, and a damaged one is never replaced without keeping a `.bak` copy first.
 
 ### Keys: back and quit
 
 One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
-running), detaches `platoon open`, stops a notes editor running inside platoon, goes back to platoon from the code editor,
-goes from a ticket's screen to its project's screen and from there to the list, leaves a squad's details, a plugin's file,
-the plugin screen (back to the settings), the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
+running), detaches `platoon open`, stops a notes editor running inside platoon,
+goes from a ticket's screen to its project's screen and from there to the list, leaves a squad's details, the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
 same on platoon's own screens and popups (not in a session or an editor, where it is theirs), so the key hints there say
 `esc back`; in a session's live view and the notes editor they name the back key. On the top-level lists, with
 nothing open, it does what `esc` does there (clears a kept filter) and never quits.
 
 `q` quits, but only from the top-level lists (Sessions, Projects, Squads with nothing open). On a project's or a
-ticket's screen, in a squad's details, or on the plugin screen, it goes back one level instead. In a box you type in, `q` is just a letter.
+ticket's screen or in a squad's details, it goes back one level instead. In a box you type in, `q` is just a letter.
 
 Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
 platoon never writes this file; there is no entry for it on the settings screen. For example:
@@ -513,7 +404,6 @@ A key is written in lower case: `ctrl+`, `alt+` or `shift+`, then the key (`spac
 - A missing file means the defaults. An entry that breaks the rules is left out with one notice at the bottom of the screen,
   saying which entry and which key is used instead; a file that isn't JSON means the defaults, also said once. Names platoon
   doesn't know are left alone. An edit applies at once, without restarting (`platoon open` reads the file as it starts).
-- The code editor is given the back key each time it opens.
 
 ### Features that use tokens
 
@@ -591,12 +481,14 @@ gate refuses it says why and how to switch it on.
 
 ### Themes
 
-platoon ships with 32 dark color themes: Catppuccin Mocha (the default), Catppuccin Macchiato, Catppuccin Frappé,
+platoon ships with 52 color themes. 43 are dark: Catppuccin Mocha (the default), Catppuccin Macchiato, Catppuccin Frappé,
 Tokyo Night, Tokyo Night Storm, Dracula, One Dark, Nord, Gruvbox Dark, Gruvbox Material Dark, Rosé Pine, Rosé Pine
 Moon, Kanagawa Wave, Kanagawa Dragon, Night Owl, Ayu Mirage, Vesper, Solarized Dark, GitHub Dark, Material Ocean,
 Everforest Dark Hard, Nightfox, Sonokai, Moonfly, Melange Dark, Flexoki Dark, Oxocarbon, Poimandres, Horizon,
-Synthwave, Claude (Claude Code's own colors) and Terminal colors. `platoon themes` lists them with a swatch of each and their ids.
-Twenty more, light ones among them, come with the [Theme pack](#themes-from-plugins) plugin.
+Synthwave, Claude (Claude Code's own colors), Harbor Night, Moss Lantern, Ayu Dark, Doom One, Embark, Everblush, GitHub
+Dark Dimmed, Iceberg Dark, Jellybeans, Srcery, Tomorrow Night and Zenbones Dark. Eight are **light**: Catppuccin Latte,
+Dayfox, Flexoki Light, GitHub Light, Gruvbox Light, One Half Light, Rosé Pine Dawn and Solarized Light. And Terminal
+colors. `platoon themes` lists them with a swatch of each and their ids.
 
 **Picking one.** Press `s` (the settings open on the Theme row) and `enter`. A list of themes opens on the right,
 next to your real screen, each with a strip of its main colors and a check on the one you use now. Move with `↑` `↓`
@@ -638,11 +530,14 @@ is `user:creme-brulee`). Things to know:
 - On a dark theme, contrast is adjusted for you. Text, the muted grays, the accent and the status colors are lightened
   as far as it takes to read on your background (and kept clearly different from each other), so a sloppy file still
   gives a usable theme. What the file says is used as it is wherever it already reads well.
-- A light theme (a light background) is used as it is, so it has to read well already, by the same rules as a plugin's
-  theme: the text at 7:1 against the background, the accent and the four status colors at 4.5:1 and clearly different
-  from each other. Where a palette color doesn't reach that, you can pick platoon's color yourself with
-  `platoon-accent`, `platoon-busy`, `platoon-ok`, `platoon-warn` and `platoon-err` lines (see
-  [plugins/README.md](plugins/README.md)); the Theme pack's light themes are good examples.
+- A light theme (a light background) is used as it is, so it has to read well already, by the same rules as the built-in
+  light themes: the text at 7:1 against the background, the accent and the four status colors at 4.5:1 and clearly
+  different from each other. platoon takes the accent from palette 12 (or 4), "working" from 13 (or 5), good news from 10
+  (or 2), warnings from 11 (or 3) and errors from 9 (or 1); on a light background the normal color (4, 5, 2, 3, 1) when it
+  reads, else the bright one. Where a palette color doesn't reach the floor, you can pick platoon's color yourself, without
+  touching the palette sessions use, with `platoon-accent = #1d62eb` and likewise `platoon-busy`, `platoon-ok`,
+  `platoon-warn` and `platoon-err` lines; the built-in light themes' files in platoon's source (`src/themes/`) are good
+  examples.
 - A file that can't be used is skipped: a light theme that doesn't read well enough (the reason says what falls short),
   or anything that isn't a readable theme file (too big, not text, no background or foreground). The picker says how
   many were skipped and why, and so does `platoon themes`.
@@ -654,25 +549,16 @@ is `user:creme-brulee`). Things to know:
 - A folder with more than 300 files is read only as far as its first 300 (in name order); subfolders and names starting
   with a dot are ignored.
 
-<a id="themes-from-plugins"></a>**Themes from plugins.** More themes come as [plugins](#plugins) from platoon's catalog.
-Once one is installed its themes are in the list after yours, each with the plugin's name beside it, and their ids are
-`plugin:<plugin>/<theme>`, the theme's part made from its name as yours are (`plugin:theme-pack/solarized-light`,
-`plugin:theme-pack/rose-pine-dawn`), so they never clash with a built-in or one of yours.
-Removing the plugin takes its themes away; if you were using one, platoon shows the default theme and keeps the id in
-`settings.json`, so installing the plugin again brings it back.
-
-The **Theme pack** plugin (`theme-pack`) has twenty: twelve dark (Harbor Night, Moss Lantern, Ayu Dark, Doom One,
-Embark, Everblush, GitHub Dark Dimmed, Iceberg Dark, Jellybeans, Srcery, Tomorrow Night, Zenbones Dark) and
-eight **light** ones (Catppuccin Latte, Dayfox, Flexoki Light, GitHub Light, Gruvbox Light, One Half Light, Rosé Pine
-Dawn, Solarized Light). On a light theme everything platoon draws is dark on light, and so is the code editor (`v`). The
-Claude session you view inside platoon gets the theme's background and colors too, but Claude Code picks some colors of
-its own: with a light theme in platoon, choose a light theme in Claude Code as well (its `/theme` command).
+**Light themes.** On a light theme everything platoon draws is dark on light. The light themes' ids are made from their
+names (`catppuccin-latte`, `rose-pine-dawn`); one an older platoon saved as `plugin:theme-pack/<id>` (from its Theme pack
+plugin) reads as the built-in `<id>`. The Claude session you view inside platoon gets the theme's background and colors
+too, but Claude Code picks some colors of its own: with a light theme in platoon, choose a light theme in Claude Code as well (its `/theme` command).
 
 `terminal` (Terminal colors) draws with your terminal's own default colors and 16-color palette, so platoon follows
 whatever theme your terminal has. It relies on your terminal's palette having a black that differs from the
 background and a bright black that reads as grey; if your terminal theme's black is the same as its background, the
 highlighted row is shown only by the marker beside it. It assumes a dark terminal theme: on a light one the highlighted
-row is a black band that is hard to read, so pick one of the Theme pack's light themes instead.
+row is a black band that is hard to read, so pick one of the light themes instead.
 
 Themes use 24-bit color. Terminals that don't support it (macOS Terminal.app, some tmux setups) get the nearest of
 the 256 xterm colors instead, worked out for each cell as it is drawn. platoon decides from `COLORTERM`
@@ -1027,7 +913,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | Key (a ticket's screen) | Does |
 | --- | --- |
 | `e` | edit the body in your editor |
-| `v` | open its work in the [code editor](#opening-the-editor-v): its worktrees, what their branch changed, diffs, a terminal (also on its row in the Tickets pane) |
+| `v` | open its work in [your code editor](#opening-the-editor-v): its worktrees, its folders not in git and its work folder (also on its row in the Tickets pane) |
 | `r` | rename it (its file keeps its name) |
 | `c` | cancel it, after asking "Cancel ticket #N?" (`y` yes, `n` or `esc` no). When its squad's session is running, the question says it will be stopped too, and yes stops that one session (its conversation is kept). On a ticket that is Cancelled already, `c` only says so |
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |
@@ -1295,12 +1181,12 @@ kept: it may be there where the squad works. When a squad starts, an agent's ski
 and it may use other skills too (`Skill` is added to its tools), and it may use each of its MCP servers (`mcp__<name>`
 is added to its tools: without that, naming a server gives the agent nothing). The skills of Claude Code's own plugins
 aren't listed (type their name, `plugin:skill`), and neither are servers from claude.ai connectors or a project's
-`.mcp.json`; the skills of [platoon's plugins](#plugins) are, as they are in the skills folder. `enter` on a squad there opens it. **A change to an agent is a
+`.mcp.json`. `enter` on a squad there opens it. **A change to an agent is a
 change in every squad that uses it**, so the tab says where it is used; for a variant, copy the agent (`c`) and put the
-copy on the steps you want. The list groups the agents as built in, **User Modified**, your own and those of each plugin,
+copy on the steps you want. The list groups the agents as built in, **User Modified** and your own,
 each with its model and how many squads use it (with only built-in agents there are no headings); **+ New agent** at the end
 makes a blank one of your own. In the Squads list, a built-in squad as platoon has it says nothing under its name; the others
-say what sets them apart: **User Modified**, **Your own** or **From** and the plugin's name.
+say what sets them apart: **User Modified** or **Your own**.
 
 `↑` `↓` move in the list and in the details; `enter` (or `tab`, or `shift+→` / `ctrl+→`) goes into the details, and
 the back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the list. On a terminal under about 80
@@ -1331,19 +1217,6 @@ deleted, and platoon names the squads. The drafting calls' system prompts are **
 beside the ticket (`tickets/<NN>-squad-<k>.json`). Changing the squad or its agents afterwards doesn't change that
 leader, also when it is continued later: it goes on with the squad as it was. The next ticket gets them as they are then.
 
-**Squads and agents from plugins.** A [plugin](#plugins) can bring squads and agents. They are listed after your own,
-labelled with the plugin's name (**From** and the plugin's name), and can be handed tickets (`S`) like any squad. They are **read
-only**: the plugin's version is what you read before you installed it, and an update of the plugin replaces it. `c`
-makes a copy of your own to change (a copied squad still uses the plugin's agents; copy those too for a squad that is
-all yours). A plugin's squad uses platoon's built-in agents and the plugin's own, never yours. Your own squads may use a
-plugin's agents: removing that plugin names those squads first, and afterwards their steps show the agent as missing
-("needs fixing") until you pick another. A ticket whose squad has started keeps its snapshot, so it keeps working after
-its plugin is removed; one waiting in the line for a plugin's squad keeps a copy of that squad beside it
-(`tickets/<NN>-queued-crew.json`) and starts with it. Inside a squad's session a plugin's squad and its own agents go by
-their short names (for a plugin `release-kit` with a squad `release` and an agent `reader`: `release-leader`,
-`release-reader`); a plugin's agent in one of your squads goes by the plugin and its name (`release-kit--reader`), which
-no other agent's name can be.
-
 Your squads and agents, and the built-in ones once you change them, are in `~/.config/platoon/squads/<id>.json` and
 `~/.config/platoon/agents/<id>.json`, one file each; a squad's steps name its agents by their id, which is made from the
 name once and never changes. Keys platoon doesn't know are kept, and a file that can't be read is shown as such on the tab
@@ -1355,84 +1228,6 @@ existed, your text was carried into the built-in agents the first time platoon r
 are left as they were; the old Coding leader's text is not carried anywhere, as every squad's leader now shares one
 system prompt). A squad file from before the leader moved to the settings may still have its own `leader`,
 `needs_folder` and `use_worktree`: they are kept in the file as they are, and mean nothing any more.
-
-## Plugins
-
-Plugins add things to platoon that not everyone wants. A plugin adds **color themes**, **platoon's
-[code editor](#the-code-editor)** (the **Code editor (Neovim)** plugin), **Claude Code skills**, or **squads and
-agents**. A plugin is a folder of plain files (a `plugin.json` that says what it is and what it adds, and those files):
-platoon never runs anything in it. The code editor plugin is the one kind that leads to programs: its download table
-names Neovim and its tools, each pinned by checksum and size, and its settings files run inside that Neovim; so its
-details and the question before installing say how much it downloads. Plugins come from platoon's own **catalog**, the
-[`plugins/`](plugins/) folder of platoon's repository, where anyone can send one by pull request (see
-[plugins/README.md](plugins/README.md) for how to make, check and send one). **The catalog is built into platoon**:
-every plugin there ships inside the program, so installing one needs no network (only the code editor's own downloads
-do), and you get exactly what was reviewed and released with your platoon. A new plugin, or a new version of one, comes
-with a new platoon.
-
-**A newer platoon updates your plugins.** When platoon starts and has a newer version of a plugin you installed from its
-catalog, it updates it and says so in one line ("Updated with platoon: Code editor (Neovim) 1.2.0, …"); for the code
-editor, whatever changed in what it downloads is fetched too, with the progress at the bottom. A plugin with skills,
-squads or agents is not updated without asking: platoon shows what changed (as below) and asks. If you say no (`n`,
-`esc`), it doesn't ask again for that version, and the settings still show **Update ready** for it. A plugin you
-installed from a folder is never touched, and one the catalog no longer has stays as it is.
-
-**Skills, squads and agents are instructions Claude follows with your permissions**, so platoon shows them before they
-are installed. `enter` on such a plugin lists each **skill**, **squad** and **agent** it adds, with what it may do in plain
-words: when Claude uses a skill and what it may run without asking you; an agent's model and whether it can change
-files, run commands, use the web, which skills it starts with and which MCP servers it may use; a squad's steps and whose
-agents do them. `enter` on one reads it in full, on the whole screen (the skill's own text and files, the agent's whole
-system prompt, the squad's workflow; the back key or `esc` goes back to the list). `y` installs, `n` doesn't. An update that changes any of
-them is shown again the same way, with what is **new** or **changed** marked. On the command line `platoon plugin show
-<id>` prints all of it, and `platoon plugin add` prints the list and asks `[y/N]`; where there is no terminal to ask in it
-installs nothing unless you add `--yes` (read it with `show` first). MCP servers can't be plugins: a server is a program
-that runs on your computer, and a plugin holds no code.
-
-**A plugin's skills** go into Claude Code's own skills folder (`~/.claude/skills/<name>/`, or `CLAUDE_CONFIG_DIR`'s),
-where Claude finds them like the ones you made; type `/<name>` in a new Claude session. A plugin's skills are named after
-it (a plugin `release-kit` may bring `release-kit` or `release-kit-notes`), so two plugins never clash, and platoon writes one only where that
-name is free: a skill folder platoon didn't put there is never written over (the install is refused and names it).
-platoon records what it wrote; removing the plugin deletes a skill only if it is exactly as platoon wrote it. One you
-changed is kept, and platoon says so (an update keeps your changed copy too). **Its squads and agents** are on the
-[Squads tab](#squads), read only.
-
-**In the settings** (`s`, then the **Plugins** tab) every plugin is listed, installed or not, with where it stands; `d`
-removes one there, and the selected one's description shows under the list. `enter` on one opens **the plugin screen**
-on it, full screen: the catalog and what you have installed on the left, the selected plugin's details on the right.
-The back key (`ctrl+space`), `esc` or `q` goes back to the settings, on the same plugin; `1` `2` `3` go straight to
-Sessions, Projects or Squads. The details are: what it is, who made it, its version, what it adds (the themes by name;
-for the code editor, how much it downloads), its license and the oldest platoon it works with.
-
-| Key | Does |
-| --- | --- |
-| `enter` | install the selected plugin (after asking; for one with skills, squads or agents, after showing each to read), or update it when the catalog has a newer one; a line in the footer says when it is done (for the code editor, with its download progress). On the code editor when some of its downloads are missing: finish them |
-| `u` | update the selected plugin |
-| `d` | remove the selected plugin (after asking) |
-| `↑` `↓` `g` `G` | move |
-| `ctrl+space`, `esc`, `q` | back to the settings' Plugins tab, on the same plugin |
-| `1` `2` `3` | straight to Sessions, Projects or Squads |
-
-The same from the command line:
-
-```
-platoon plugin list              the catalog and what is installed
-platoon plugin add <id>          install one from the catalog (`add editor`: the code editor and its downloads)
-platoon plugin add ./my-plugin   install one from a folder on this computer (while you make one)
-platoon plugin add <id> --yes    install one with skills, squads or agents without being asked (read it first)
-platoon plugin show <id>         everything a plugin's skills, squads and agents tell Claude, in full
-platoon plugin remove <id>       (`remove editor`: with everything it downloaded, and its font)
-platoon plugin update [id]       bring the ones from the catalog (or one) up to this platoon's (skills, squads, agents: asked)
-platoon plugin check <folder>    check a plugin folder before you send it
-```
-
-**Where they go.** Installed plugins are in platoon's data folder, `~/.local/share/platoon/plugins/<id>/` (macOS:
-`~/Library/Application Support/platoon/plugins/`; `$PLATOON_DATA_DIR/plugins` if you set it), with `installed.json` beside
-them. An install is copied and checked in a staging folder first and only then moved into place and recorded, so one that
-fails or is interrupted never looks installed; two platoons never change plugins at the same time. For each one platoon
-writes down where it came from (the catalog, or a folder) and a checksum of its files. platoon versions from before the
-catalog was built in kept a copy of it in `plugins/.catalog/`; a newer platoon deletes that copy the first time it
-starts. For tests, `PLATOON_PLUGIN_CATALOG` (a folder laid out like `plugins/`) is used instead of the built-in
-catalog.
 
 ## Sessions started in platoon keep running
 
