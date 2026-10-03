@@ -593,7 +593,7 @@ fn ticket_columns_never_cut_the_state_and_share_one_column_then_short_words_befo
         let used = 1 + c.num + 1 + c.title + [c.state, c.tail].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
         assert!(used <= width.max(4 + 2 + 6), "{width}: {c:?}");
         match (c.merged, c.short) {
-            (false, _) => assert!((c.state, c.tail) == want.0 && c.title >= 12, "{width}: {c:?}"),
+            (false, _) => assert!((c.state, c.tail) == want.0 && c.title >= 24, "{width}: {c:?}"),
             (true, false) => assert!(c.state == want.1 && c.tail == 0 && c.title >= 12, "{width}: {c:?}"),
             // The short words are cut only when the title would be shorter than six cells.
             (true, true) => assert!(c.state == want.2 || (width < 4 + 2 + 6 + want.2 && c.title <= 8), "{width}: {c:?}"),

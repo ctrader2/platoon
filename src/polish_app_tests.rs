@@ -121,7 +121,7 @@ fn a_popup_leaves_no_sliver_of_the_screen_at_its_sides() {
         let left = (0..w).find(|&x| buf[(x, top as u16)].symbol() == "╭").unwrap();
         let right = (0..w).find(|&x| buf[(x, top as u16)].symbol() == "╮").unwrap();
         for y in top as u16..=bottom as u16 {
-            // A margin of two columns or fewer is blank; a wider one keeps the faded screen, with one blank column
+            // A margin of four columns or fewer is blank; a wider one keeps the faded screen, with one blank column
             // against the border.
             let blank = |x: u16| buf[(x, y)].symbol() == " ";
             if left <= ui::POPUP_SLIVER {
@@ -208,15 +208,15 @@ fn the_popup_ground_blanks_the_column_outside_each_edge_and_slivers_whole() {
         assert!(["│", "╮", "╯"].contains(&sym(&term, 21, y).as_str()), "{y}: the right border shows: {l}");
         assert_eq!(sym(&term, 22, y), " ", "{y}: {l}");
     }
-    // A popup two columns from each edge: the margins are blank, not two columns of the screen.
+    // A popup four columns from each edge: the margins are blank, not two columns of the screen beside a blank one.
     term.draw(|f| {
         wide(f);
-        ui::popup_for_test(f, &t, f.area(), Rect::new(2, 1, 26, 4));
+        ui::popup_for_test(f, &t, f.area(), Rect::new(4, 1, 22, 4));
     })
     .unwrap();
     for y in 1..5 {
         let l = shown(&term)[y as usize].clone();
-        assert!(l.starts_with("  ") && l.ends_with("  "), "{y}: {l:?}");
+        assert!(l.starts_with("    ") && l.ends_with("    "), "{y}: {l:?}");
     }
 }
 
@@ -461,8 +461,8 @@ fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
             assert!(pane.iter().any(|l| l.contains("#4 Checkout") && l.contains("…")), "a long title is cut with …: {ctx}");
         }
     }
-    // At 120 columns the state has its own column and what a ticket waits for another.
-    let mut term = sized(&mut app, 120, 40);
+    // Wide, the state has its own column and what a ticket waits for another.
+    let mut term = sized(&mut app, 200, 60);
     let pane = tickets_pane(&draw(&mut term, &app));
     let five = pane.iter().find(|l| l.contains("#5 ")).unwrap();
     assert!(five.contains("New") && five.trim_end().ends_with("Waits for #1"), "{five}");

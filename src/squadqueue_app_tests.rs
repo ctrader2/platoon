@@ -107,7 +107,8 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     assert_eq!(app.active_notice(), Some(crate::squadqueue::queued_notice(2, "Summarize", 1).as_str()));
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("#2 Ticket 2 Working Waiting for a free squad"), "{f}");
+    // (The state and what it is waiting for share one column at this width: the line says it.)
+    assert!(f.contains("#2 Ticket 2 Waiting for a free squad"), "{f}");
     // A third joins the line behind it.
     hand(&mut app, 3);
     assert!(on_disk(&w, &id, 3).queued.is_some() && app.sq.launched == [1]);

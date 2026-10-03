@@ -763,7 +763,10 @@ pub(crate) struct TCols {
     pub short: bool,
 }
 
-/// The title gets at least this many cells before the state and what it waits for share one column.
+/// The state and what a ticket waits for have a column each only where that leaves the title this many cells; the
+/// one column they share says the same with fewer words to repeat ("New").
+const TICKET_TITLE_WIDE: usize = 24;
+/// The title gets at least this many cells before that one column says its short words.
 const TICKET_TITLE_MIN: usize = 12;
 /// ... and at least this many in the narrowest pane, where that column says its short words; only below this is that
 /// column cut.
@@ -772,14 +775,14 @@ const TICKET_TITLE_FLOOR: usize = 6;
 /// How the Tickets pane's `width` is shared: the number, the title (whatever is left), then the state and what the
 /// ticket waits for, each as wide as its longest value, never cut. `want_state`/`want_tail`: the longest state and tail;
 /// `want_merged`/`want_short`: the longest of the one column that holds both, in full and in short words. Where the
-/// title would get fewer than `TICKET_TITLE_MIN` cells, the two share one column; still too narrow, it says its short
-/// words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
+/// title would get fewer than `TICKET_TITLE_WIDE` cells, the two share one column; where that leaves it fewer than
+/// `TICKET_TITLE_MIN`, the column says its short words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
 pub(crate) fn ticket_cols(width: usize, num: usize, want: (usize, usize), want_merged: usize, want_short: usize) -> TCols {
     let (want_state, want_tail) = want;
     let fixed = 1 + num + 1;
     let gap = |w: usize| if w > 0 { w + 2 } else { 0 };
     let title = |cols: usize| width.saturating_sub(fixed + cols);
-    if title(gap(want_state) + gap(want_tail)) >= TICKET_TITLE_MIN {
+    if title(gap(want_state) + gap(want_tail)) >= TICKET_TITLE_WIDE {
         let t = title(gap(want_state) + gap(want_tail));
         return TCols { num, title: t, state: want_state, tail: want_tail, merged: false, short: false };
     }
@@ -842,12 +845,12 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
     let tokens: std::collections::HashMap<u32, String> =
         shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
-    // Beside a state column of its own: what it waits for, and the tokens. In one column with the state: only what it
-    // says most, so it keeps its room.
+    // What it waits for (or, in one column with the state, what it says most), then the tokens; in the short words of
+    // the narrowest pane, no tokens.
     let tail_of = |x: &Ticket, merged: bool, short: bool| -> (String, bool) {
         let (tail, ready) = ticket_tail(x, all, merged, short);
         match tokens.get(&x.number) {
-            _ if merged => (tail, ready),
+            _ if short => (tail, ready),
             Some(n) if tail.is_empty() => (n.clone(), ready),
             Some(n) => (format!("{tail} · {n}"), ready),
             None => (tail, ready),
@@ -2501,9 +2504,9 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
-/// A margin this narrow or narrower between a popup and the screen's edge is left blank: a column or two of the
-/// screen behind would only be noise ("p╭ Settings").
-pub(crate) const POPUP_SLIVER: u16 = 2;
+/// A margin this narrow or narrower between a popup and the screen's edge is left blank: after the blank column against
+/// the border and the screen's own side column, a column or two of the screen behind would only be noise ("p╭ Settings").
+pub(crate) const POPUP_SLIVER: u16 = 4;
 
 /// The help's keys for the screen showing, as (section, key, what it does), and its notes as (section, "", note).
 #[cfg(test)]
