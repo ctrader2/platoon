@@ -9,7 +9,8 @@ A personal `CLAUDE.local.md` (gitignored) may add a maintainer's own workflow on
 
 - **Discuss before building** anything non-trivial: plan, ask the questions that change the answer, then build.
 - **Commit only when green**: `cargo test` fully passes (run it twice: a test that fails once is a race to fix, not to
-  retry) and `cargo build --release` has no warnings. The commit message says why.
+  retry), `cargo build --release` has no warnings, `cargo fmt --check` finds nothing to change and
+  `cargo clippy --all-targets -- -D warnings` passes. The commit message says why.
 - If there is uncommitted work you did not write, find out what it is before building on top of it, and never sweep it into
   an unrelated commit (`git add` files by explicit path).
 - Keep the file table below current when a source file is added or its job changes.
@@ -32,6 +33,8 @@ Whoever runs the tests probably uses Claude Code and platoon on the same machine
 export PATH="$HOME/.cargo/bin:$PATH"     # each shell call starts fresh
 cargo test                               # ~40s; tests/idle_stop.rs alone is ~20s
 cargo build --release                    # must be warning-free
+cargo fmt --check                        # the code is kept formatted: run `cargo fmt` to fix
+cargo clippy --all-targets -- -D warnings  # no clippy warnings, tests included
 ```
 
 `tests/fake-claude.sh` is the stand-in `claude -p` (records every call, answers from files) shared by `testkit::AiFake` and `tests/common`.
