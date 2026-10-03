@@ -14,6 +14,8 @@ A personal `CLAUDE.local.md` (gitignored) may add a maintainer's own workflow on
 - If there is uncommitted work you did not write, find out what it is before building on top of it, and never sweep it into
   an unrelated commit (`git add` files by explicit path).
 - Keep the file table below current when a source file is added or its job changes.
+- A change to what the user sees or does updates the matching page in `guide/` (and the README front page if it mentions
+  it) in the same commit.
 
 ## Safety (platoon runs against your real Claude Code setup)
 
