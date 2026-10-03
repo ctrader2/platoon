@@ -396,10 +396,10 @@ pub fn saved_session_ids(root: &Path) -> Vec<String> {
     for dir in fs::read_dir(root.join("projects")).into_iter().flatten().flatten() {
         for f in fs::read_dir(dir.path()).into_iter().flatten().flatten() {
             let p = f.path();
-            if p.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                if let Some(stem) = p.file_stem().and_then(|s| s.to_str()) {
-                    ids.push(stem.to_string());
-                }
+            if p.extension().and_then(|e| e.to_str()) == Some("jsonl")
+                && let Some(stem) = p.file_stem().and_then(|s| s.to_str())
+            {
+                ids.push(stem.to_string());
             }
         }
     }
@@ -824,10 +824,10 @@ fn finish_from_notice(text: &str, runs: &mut [MemberRun]) {
     };
     let Some(call) = between("<tool-use-id>", "</tool-use-id>") else { return };
     let status = between("<status>", "</status>").filter(|s| !s.is_empty()).unwrap_or_else(|| "completed".into());
-    if let Some(run) = runs.iter_mut().find(|r| r.call == call) {
-        if run.ended.is_none() {
-            run.ended = Some(status);
-        }
+    if let Some(run) = runs.iter_mut().find(|r| r.call == call)
+        && run.ended.is_none()
+    {
+        run.ended = Some(status);
     }
 }
 
@@ -899,12 +899,10 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
         if usage && branch && ts && title && env && !need_prompt {
             break;
         }
-        if !env {
-            if let Some(dirs) = added_dirs(line) {
-                t.extra_dirs = dirs;
-                env = true;
-                continue;
-            }
+        if !env && let Some(dirs) = added_dirs(line) {
+            t.extra_dirs = dirs;
+            env = true;
+            continue;
         }
         let is_title = line.contains("\"type\":\"ai-title\"");
         let is_turn = line.contains("\"type\":\"assistant\"") || line.contains("\"type\":\"user\"");
@@ -922,18 +920,17 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
                 }
             }
             Some(kind @ ("assistant" | "user")) => {
-                if !ts {
-                    if let Some(ms) = v["timestamp"].as_str().and_then(parse_iso_ms) {
-                        t.last_active_ms = Some(ms);
-                        ts = true;
-                    }
+                if !ts && let Some(ms) = v["timestamp"].as_str().and_then(parse_iso_ms) {
+                    t.last_active_ms = Some(ms);
+                    ts = true;
                 }
                 let side = v["isSidechain"].as_bool() == Some(true);
-                if !branch && !side {
-                    if let Some(b) = v["gitBranch"].as_str() {
-                        t.branch = Some(b.to_string());
-                        branch = true;
-                    }
+                if !branch
+                    && !side
+                    && let Some(b) = v["gitBranch"].as_str()
+                {
+                    t.branch = Some(b.to_string());
+                    branch = true;
                 }
                 // Subagent (sidechain) messages have their own context; ignore them.
                 if kind == "assistant" && !usage && !side {
@@ -950,11 +947,13 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
                         usage = true;
                     }
                 }
-                if kind == "user" && need_prompt && !side {
-                    if let Some(p) = real_prompt(&v) {
-                        t.first_prompt = Some(p);
-                        need_prompt = false;
-                    }
+                if kind == "user"
+                    && need_prompt
+                    && !side
+                    && let Some(p) = real_prompt(&v)
+                {
+                    t.first_prompt = Some(p);
+                    need_prompt = false;
                 }
             }
             _ => {}

@@ -309,11 +309,12 @@ impl App {
         if let EdTarget::Ticket { project, number } = &flow.target {
             let (project, number) = (project.clone(), *number);
             let gone = self.flow_ticket(&project, number).is_some_and(|t| t.worktrees.iter().any(|w| w.is_gone()));
-            if gone && self.open_project.as_deref() == Some(project.as_str()) {
-                if self.bring_worktrees_back_then(number, worktree_glue::After::Editor) {
-                    self.notify(format!("Bringing #{number}'s worktree back from its branch first…"));
-                    return;
-                }
+            if gone
+                && self.open_project.as_deref() == Some(project.as_str())
+                && self.bring_worktrees_back_then(number, worktree_glue::After::Editor)
+            {
+                self.notify(format!("Bringing #{number}'s worktree back from its branch first…"));
+                return;
             }
         }
         self.ed.flow = None;

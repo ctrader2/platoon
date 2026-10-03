@@ -527,6 +527,7 @@ impl Installed {
     }
 
     /// It came from the catalog (or the copy of it that came with platoon), so the catalog updates it.
+    #[allow(clippy::wrong_self_convention)] // "came from the catalog", a question about this plugin, not a constructor
     pub fn from_catalog(&self) -> bool {
         matches!(self.origin, Origin::Catalog | Origin::Bundled { .. })
     }
@@ -726,21 +727,22 @@ impl Store {
         let hash = tree_hash(&files).map_err(|e| format!("couldn't read the plugin's files: {e}"))?;
         let _lock = self.lock()?;
         let mut rec = self.read_record()?;
-        if m.editor.is_some() {
-            if let Some(other) = self.installed().into_iter().find(|p| p.manifest.editor.is_some() && p.id() != m.id) {
-                return Err(format!(
-                    "{} can't be installed while {} is: platoon has one code editor. Remove {} first.",
-                    m.name,
-                    other.manifest.name,
-                    other.id()
-                ));
-            }
+        if m.editor.is_some()
+            && let Some(other) = self.installed().into_iter().find(|p| p.manifest.editor.is_some() && p.id() != m.id)
+        {
+            return Err(format!(
+                "{} can't be installed while {} is: platoon has one code editor. Remove {} first.",
+                m.name,
+                other.manifest.name,
+                other.id()
+            ));
         }
         let before = self.get(&m.id);
-        if let Some(b) = &before {
-            if b.sha256 == hash && b.origin == origin {
-                return Ok((Outcome::Same(b.clone()), Vec::new()));
-            }
+        if let Some(b) = &before
+            && b.sha256 == hash
+            && b.origin == origin
+        {
+            return Ok((Outcome::Same(b.clone()), Vec::new()));
         }
         // Where its skills go, worked out before anything is touched.
         let old_skills = before.as_ref().map(|b| b.skills.clone()).unwrap_or_default();
@@ -789,10 +791,8 @@ impl Store {
         let dest = self.plugin_dir(&m.id);
         let old = self.tmp().join(format!("{}-old-{}", m.id, unique()));
         let had_old = fs::symlink_metadata(&dest).is_ok();
-        if had_old {
-            if let Err(e) = fs::rename(&dest, &old) {
-                return fail(format!("couldn't move the old copy of {} aside: {e}", m.name));
-            }
+        if had_old && let Err(e) = fs::rename(&dest, &old) {
+            return fail(format!("couldn't move the old copy of {} aside: {e}", m.name));
         }
         let put_back = || {
             let _ = fs::remove_dir_all(&dest);
@@ -1390,15 +1390,18 @@ pub mod testing {
         dir
     }
 
+    /// A plugin in a test catalog: id, version, and its themes (name, file text).
+    pub type CatalogPlugin<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
     /// A catalog folder laid out like `plugins/` in `<base>/catalog`, with these plugins (id, version, themes).
-    pub fn catalog_dir(base: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) -> PathBuf {
+    pub fn catalog_dir(base: &Path, plugins: &[CatalogPlugin]) -> PathBuf {
         let cat = base.join("catalog");
         write_catalog(&cat, plugins);
         cat
     }
 
     /// Replace the catalog in `cat` with these plugins (what a newer platoon brings).
-    pub fn write_catalog(cat: &Path, plugins: &[(&str, &str, &[(&str, &str)])]) {
+    pub fn write_catalog(cat: &Path, plugins: &[CatalogPlugin]) {
         let _ = fs::remove_dir_all(cat);
         fs::create_dir_all(cat).unwrap();
         let mut index = Vec::new();
@@ -1819,7 +1822,7 @@ mod tests {
         let c = load_catalog(&from(&cat));
         // Both plan before either updates (as two windows opened together), then both update.
         let plans = [auto_plan(&s, &c), auto_plan(&s, &c)];
-        let runs: Vec<(Vec<(String, String, bool)>, Vec<String>)> = thread::scope(|sc| {
+        let runs: Vec<_> = thread::scope(|sc| {
             let hs: Vec<_> = plans.iter().map(|plan| sc.spawn(|| auto_update(&s, &c, plan))).collect();
             hs.into_iter().map(|h| h.join().unwrap()).collect()
         });

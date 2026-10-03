@@ -893,7 +893,7 @@ fn the_rename_box_draws_the_name_the_hints_and_can_be_clicked() {
 fn a_new_prompt_length_reaches_the_index_only_once_the_settings_have_settled() {
     let (w, mut app) = four("s-cap");
     let long = "x ".repeat(1500); // 3000 characters
-    conv(&w, "eeeeeeee-0000", "/srv/e", &[&long.trim().to_string()], 50);
+    conv(&w, "eeeeeeee-0000", "/srv/e", &[long.trim()], 50);
     app.refresh_for_test();
     key(&mut app, KeyCode::Char('/'));
     key(&mut app, KeyCode::Tab);

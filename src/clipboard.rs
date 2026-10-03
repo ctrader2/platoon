@@ -511,7 +511,7 @@ mod tests {
         let (mut b, rec) = board(Target::System);
         let out = b.copy(&big);
         let rec = rec.lock().unwrap();
-        assert_eq!(rec.system, [big.clone()]);
+        assert_eq!(rec.system, std::slice::from_ref(&big));
         assert!(rec.terminal.is_empty(), "no oversized sequence is written");
         assert_eq!(out.osc52, Step::TooBig);
         assert!(out.notice().contains("too big for the terminal's clipboard"), "{}", out.notice());

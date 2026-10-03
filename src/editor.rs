@@ -456,10 +456,10 @@ pub fn colors_json(t: &Theme, mode: ColorMode) -> Value {
                 out.insert("base16_cterm".into(), Value::Object(ct));
             }
         }
-        if mode == ColorMode::TrueColor {
-            if let Some(a) = t.ansi {
-                out.insert("terminal".into(), Value::Array(a.iter().filter_map(|c| hex(*c)).map(Value::String).collect()));
-            }
+        if mode == ColorMode::TrueColor
+            && let Some(a) = t.ansi
+        {
+            out.insert("terminal".into(), Value::Array(a.iter().filter_map(|c| hex(*c)).map(Value::String).collect()));
         }
     }
     let mut roles = Map::new();

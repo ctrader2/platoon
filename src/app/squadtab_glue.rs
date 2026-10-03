@@ -1303,29 +1303,29 @@ impl App {
             "Made the agent \"{}\". It needs a system prompt before a squad can use it: enter on System prompt writes one.",
             a.name
         );
-        if let Some(i) = step {
-            if let Some(mut s) = self.squad_to_change().filter(|s| i < s.workflow.len()) {
-                s.workflow[i].agent = a.id.clone();
-                if self.commit_squad(s) {
-                    said = format!(
-                        "Made the agent \"{}\" and put it on step {}. It needs a system prompt before the squad can start: enter on System prompt writes one.",
-                        a.name,
-                        i + 1
-                    );
-                }
+        if let Some(i) = step
+            && let Some(mut s) = self.squad_to_change().filter(|s| i < s.workflow.len())
+        {
+            s.workflow[i].agent = a.id.clone();
+            if self.commit_squad(s) {
+                said = format!(
+                    "Made the agent \"{}\" and put it on step {}. It needs a system prompt before the squad can start: enter on System prompt writes one.",
+                    a.name,
+                    i + 1
+                );
             }
         }
-        if let Some(does) = new_step {
-            if let Some(mut s) = self.squad_to_change() {
-                s.workflow.push(WStep { agent: a.id.clone(), does, back: None, extra: Default::default() });
-                let n = s.workflow.len();
-                if self.commit_squad(s) {
-                    self.select_step(n - 1, true);
-                    said = format!(
-                        "Made the agent \"{}\" and added step {n}, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.",
-                        a.name
-                    );
-                }
+        if let Some(does) = new_step
+            && let Some(mut s) = self.squad_to_change()
+        {
+            s.workflow.push(WStep { agent: a.id.clone(), does, back: None, extra: Default::default() });
+            let n = s.workflow.len();
+            if self.commit_squad(s) {
+                self.select_step(n - 1, true);
+                said = format!(
+                    "Made the agent \"{}\" and added step {n}, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.",
+                    a.name
+                );
             }
         }
         if let Some(at) = self.sqt.agents.iter().position(|l| l.id == a.id) {

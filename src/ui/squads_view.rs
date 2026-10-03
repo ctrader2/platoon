@@ -190,15 +190,15 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
 
 fn drafting_line(f: &mut Frame, app: &App, li: Rect, y: u16) {
     let t = app.effective_theme();
-    if let Some(k) = app.sqt.drafting() {
-        if y < li.bottom() {
-            let spin = SPINNER[(app.tick % 10) as usize];
-            let what = if k == crate::app::Drafting::Agent { "an agent" } else { "a squad" };
-            f.render_widget(
-                Paragraph::new(fit_end(&format!("{spin} Claude is drafting {what}…"), li.width as usize)).style(Style::new().fg(t.dim)),
-                Rect::new(li.x, y, li.width, 1),
-            );
-        }
+    if let Some(k) = app.sqt.drafting()
+        && y < li.bottom()
+    {
+        let spin = SPINNER[(app.tick % 10) as usize];
+        let what = if k == crate::app::Drafting::Agent { "an agent" } else { "a squad" };
+        f.render_widget(
+            Paragraph::new(fit_end(&format!("{spin} Claude is drafting {what}…"), li.width as usize)).style(Style::new().fg(t.dim)),
+            Rect::new(li.x, y, li.width, 1),
+        );
     }
 }
 
@@ -479,19 +479,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
             DRow::CanDo => ("What it can do", s.can_do.clone(), 4),
             _ => continue,
         };
-        detail_line(
-            &mut lines,
-            &t,
-            w,
-            ri,
-            sel_row == Some(*row),
-            "",
-            label,
-            &value,
-            Style::new().fg(t.dim),
-            Style::new().fg(t.text),
-            wraps,
-        );
+        detail_line(&mut lines, t, w, ri, sel_row == Some(*row), "", label, &value, Style::new().fg(t.dim), Style::new().fg(t.text), wraps);
     }
     for l in wrap("Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.", w) {
         lines.push((None, Line::styled(l, Style::new().fg(t.dim))));
@@ -499,7 +487,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     lines.push((None, Line::raw("")));
     lines.push((None, heading("Workflow")));
     let rail = Rail { squad: s, known: &known, rows: &rows, sel: sel_row, draft_agent: &|id: &str| sqt.is_draft_agent(id) };
-    lines.extend(rail.lines(&t, w));
+    lines.extend(rail.lines(t, w));
     draw_scrolled(f, app, area, lines, sqt.row, &sqt.detail_top, focused);
 }
 
@@ -695,11 +683,11 @@ impl Rail<'_> {
                 for row in vert.iter_mut().take(out).skip(enter + 1) {
                     row[l.lane] = true;
                 }
-                for c in l.lane + 1..lanes {
-                    horiz[enter][c] = true;
+                for cell in horiz[enter].iter_mut().take(lanes).skip(l.lane + 1) {
+                    *cell = true;
                 }
-                for c in l.lane + 1..gutter {
-                    horiz[out][c] = true;
+                for cell in horiz[out].iter_mut().take(gutter).skip(l.lane + 1) {
+                    *cell = true;
                 }
                 ends.push((enter, l.lane, true));
                 ends.push((out, l.lane, false));
@@ -931,7 +919,7 @@ fn draw_agent_detail(f: &mut Frame, app: &App, area: Rect) {
         };
         let label_style =
             if matches!(row, ARow::UsedIn(_)) { Style::new().fg(t.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.dim) };
-        detail_line(&mut lines, &t, w, ri, sel, "", &label, &value, label_style, style, wraps);
+        detail_line(&mut lines, t, w, ri, sel, "", &label, &value, label_style, style, wraps);
     }
     if users.is_empty() {
         lines.push((None, Line::raw("")));

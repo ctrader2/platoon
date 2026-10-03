@@ -648,10 +648,10 @@ impl App {
             return self.report_projects_error(e);
         }
         let resting: Vec<String> = members.iter().filter(|m| !m.2).map(|m| m.0.clone()).collect();
-        if !resting.is_empty() {
-            if let Err(e) = self.archive.archive_many(&resting, usage::now()) {
-                self.notify(format!("Couldn't save the archive: {e}"));
-            }
+        if !resting.is_empty()
+            && let Err(e) = self.archive.archive_many(&resting, usage::now())
+        {
+            self.notify(format!("Couldn't save the archive: {e}"));
         }
         for (sid, sname, _) in members.iter().filter(|m| m.2) {
             self.archive_conversation(sid, sname);
@@ -669,10 +669,10 @@ impl App {
             Err(e) => return self.report_projects_error(e),
         };
         let back: Vec<String> = back.into_iter().filter(|s| self.archive.contains(s)).collect();
-        if !back.is_empty() {
-            if let Err(e) = self.archive.restore_many(&back, usage::now()) {
-                self.notify(format!("Couldn't save the archive: {e}"));
-            }
+        if !back.is_empty()
+            && let Err(e) = self.archive.restore_many(&back, usage::now())
+        {
+            self.notify(format!("Couldn't save the archive: {e}"));
         }
         let n = back.len();
         self.notify(format!("Restored the project \"{name}\" and {n} session{}", if n == 1 { "" } else { "s" }));

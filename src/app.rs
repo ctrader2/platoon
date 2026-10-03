@@ -369,10 +369,10 @@ impl Picker {
     fn update(&mut self, home: &str) {
         let q = self.input.trim();
         let mut res: Vec<String> = Vec::new();
-        if let Some(p) = dirs::expand(q, home) {
-            if Path::new(&p).is_dir() {
-                res.push(p);
-            }
+        if let Some(p) = dirs::expand(q, home)
+            && Path::new(&p).is_dir()
+        {
+            res.push(p);
         }
         if q.is_empty() {
             res.extend(self.all.iter().take(200).cloned());
@@ -380,7 +380,7 @@ impl Picker {
             let m = SkimMatcherV2::default();
             let mut scored: Vec<(i64, &String)> =
                 self.all.iter().filter_map(|p| m.fuzzy_match(&dirs::tilde(p, home), q).map(|s| (s, p))).collect();
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored.sort_by_key(|s| std::cmp::Reverse(s.0));
             res.extend(scored.into_iter().take(200).map(|(_, p)| p.clone()));
         }
         let mut seen = std::collections::HashSet::new();
@@ -866,11 +866,11 @@ impl App {
         self.switchboard.apply(&settings);
         let now = usage::now();
         self.tokens_today = Ledger::open(&self.cache).today(now).tokens();
-        if let Some((run, text)) = ai::backoff_notice(&settings, &self.cache, now) {
-            if self.ai_notice_seen.as_deref() != Some(run.as_str()) {
-                self.ai_notice_seen = Some(run);
-                self.notify(text);
-            }
+        if let Some((run, text)) = ai::backoff_notice(&settings, &self.cache, now)
+            && self.ai_notice_seen.as_deref() != Some(run.as_str())
+        {
+            self.ai_notice_seen = Some(run);
+            self.notify(text);
         }
     }
 
@@ -1077,17 +1077,17 @@ impl App {
         let attached = self.attached_pid();
         self.hosts = hosts;
         self.guard_on = guard_on;
-        if let Some(pid) = attached {
-            if self.client.as_ref().map_or(true, |c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid) {
-                self.mode = Mode::List;
-                self.client = None;
-                self.clear_selection();
-                // A squad's session that ended leaves its ticket showing, with the way to continue it.
-                if self.sq.split.take().is_some() {
-                    self.notify("The squad's session ended.");
-                } else {
-                    self.notify("Session ended");
-                }
+        if let Some(pid) = attached
+            && (self.client.as_ref().is_none_or(|c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid))
+        {
+            self.mode = Mode::List;
+            self.client = None;
+            self.clear_selection();
+            // A squad's session that ended leaves its ticket showing, with the way to continue it.
+            if self.sq.split.take().is_some() {
+                self.notify("The squad's session ended.");
+            } else {
+                self.notify("Session ended");
             }
         }
 
@@ -1249,10 +1249,10 @@ impl App {
         };
         self.rev += 1;
         self.update_view();
-        if let Some(id) = selected_id {
-            if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
-                self.selected = pos;
-            }
+        if let Some(id) = selected_id
+            && let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id)
+        {
+            self.selected = pos;
         }
         self.clamp_selected();
     }
@@ -2362,10 +2362,10 @@ impl App {
         match host::launch(&self.program, &dir, args, &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
-                if let (Some(p), true) = (project, place) {
-                    if let Err(e) = projects_mod::note_launch(&self.cache, pid, p, at_ms) {
-                        self.notify(format!("Couldn't note the new session's project: {e}"));
-                    }
+                if let (Some(p), true) = (project, place)
+                    && let Err(e) = projects_mod::note_launch(&self.cache, pid, p, at_ms)
+                {
+                    self.notify(format!("Couldn't note the new session's project: {e}"));
                 }
                 self.spawned.push(child);
                 self.hosts.push(info);

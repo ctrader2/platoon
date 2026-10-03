@@ -412,10 +412,10 @@ impl Projects {
     pub fn assign(&mut self, session: &str, project: Option<&str>) -> io::Result<()> {
         let (session, project) = (session.to_string(), project.map(String::from));
         self.change(move |root| {
-            if let Some(p) = &project {
-                if !root.get("projects").and_then(|x| x.get(p)).is_some_and(Value::is_object) {
-                    return Err("that project no longer exists".into());
-                }
+            if let Some(p) = &project
+                && !root.get("projects").and_then(|x| x.get(p)).is_some_and(Value::is_object)
+            {
+                return Err("that project no longer exists".into());
             }
             let old = root.get("sessions").and_then(|s| s.get(&session)).and_then(Value::as_str).map(String::from);
             if old.is_some() && old != project {
@@ -735,7 +735,7 @@ mod tests {
         let back = p.restore(&a).unwrap();
         assert_eq!(back, ["s1"]);
         assert!(!p.get(&a).unwrap().archived && p.get(&a).unwrap().archived_sessions.is_empty());
-        assert_eq!(Projects::open(&d).get(&a).unwrap().archived, false);
+        assert!(!Projects::open(&d).get(&a).unwrap().archived);
     }
 
     #[test]

@@ -117,12 +117,11 @@ pub fn parse(text: &str) -> Result<Parsed, String> {
             "background" => background = Some(color("background")),
             "foreground" => foreground = Some(color("foreground")),
             "palette" => {
-                if let Some((n, c)) = value.split_once('=') {
-                    if let (Ok(n), Some(c)) = (n.trim().parse::<usize>(), hex(c)) {
-                        if n < 16 {
-                            palette[n] = Some(c);
-                        }
-                    }
+                if let Some((n, c)) = value.split_once('=')
+                    && let (Ok(n), Some(c)) = (n.trim().parse::<usize>(), hex(c))
+                    && n < 16
+                {
+                    palette[n] = Some(c);
                 }
             }
             other => {

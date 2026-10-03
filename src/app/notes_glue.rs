@@ -133,10 +133,12 @@ impl App {
             return;
         };
         let stamp = notes::stamp(&self.config, &project);
-        if let Some((seen, was)) = self.notes_seen.take() {
-            if seen == project && was != stamp && !self.notes_busy() {
-                self.notify("The notes changed. Press c to see what changed, u to undo it.");
-            }
+        if let Some((seen, was)) = self.notes_seen.take()
+            && seen == project
+            && was != stamp
+            && !self.notes_busy()
+        {
+            self.notify("The notes changed. Press c to see what changed, u to undo it.");
         }
         self.notes_seen = Some((project, stamp));
     }
@@ -471,11 +473,11 @@ impl App {
             self.notify(format!("#{number} has no body file, so there is nothing to open."));
             return;
         }
-        if !path.exists() {
-            if let Err(err) = crate::projects::write_atomic(&path, crate::tickets::TEMPLATE) {
-                self.notify(format!("Couldn't start the ticket's body: {}", plain(&err)));
-                return;
-            }
+        if !path.exists()
+            && let Err(err) = crate::projects::write_atomic(&path, crate::tickets::TEMPLATE)
+        {
+            self.notify(format!("Couldn't start the ticket's body: {}", plain(&err)));
+            return;
         }
         let before = if path.exists() && before.is_empty() { std::fs::read_to_string(&path).unwrap_or_default() } else { before };
         let stamp = file_stamp(&path);
@@ -619,17 +621,15 @@ impl App {
             }
             None => false,
         };
-        if done {
-            if let Some(w) = self.notes_window.take() {
-                if let Some(sp) = &w.squad {
-                    self.after_squad_prompt_edit(sp);
-                    return self.poll_notes_changes();
-                }
-                match (w.instructions, w.ticket) {
-                    (Some(id), _) => self.after_instructions_edit(id, &w.before),
-                    (None, Some(n)) => self.after_ticket_edit(&w.project, n, &w.before, &w.name),
-                    (None, None) => self.after_edit(&w.project, w.stamp, &w.name),
-                }
+        if done && let Some(w) = self.notes_window.take() {
+            if let Some(sp) = &w.squad {
+                self.after_squad_prompt_edit(sp);
+                return self.poll_notes_changes();
+            }
+            match (w.instructions, w.ticket) {
+                (Some(id), _) => self.after_instructions_edit(id, &w.before),
+                (None, Some(n)) => self.after_ticket_edit(&w.project, n, &w.before, &w.name),
+                (None, None) => self.after_edit(&w.project, w.stamp, &w.name),
             }
         }
         self.poll_notes_changes();

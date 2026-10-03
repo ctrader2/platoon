@@ -859,13 +859,15 @@ mod tests {
 
     impl Session {
         fn start(rig: &mut Rig, script: &str, children: usize) -> Self {
-            let shell = Command::new("sh").args(["-c", script]).stdin(Stdio::piped()).spawn().unwrap();
-            rig.dog.claude_pid = shell.id();
-            let v = json!({"pid": shell.id(), "sessionId": "s", "kind": "interactive", "status": "idle"});
-            fs::write(rig.dir.join(format!("claude/sessions/{}.json", shell.id())), v.to_string()).unwrap();
+            // Held in `Self` from the start, so a panic below still kills and reaps the shell and its children (Drop).
+            let session = Self { shell: Command::new("sh").args(["-c", script]).stdin(Stdio::piped()).spawn().unwrap() };
+            let pid = session.shell.id();
+            rig.dog.claude_pid = pid;
+            let v = json!({"pid": pid, "sessionId": "s", "kind": "interactive", "status": "idle"});
+            fs::write(rig.dir.join(format!("claude/sessions/{pid}.json")), v.to_string()).unwrap();
             for _ in 0..250 {
-                if procs::live_descendants(shell.id()).is_some_and(|k| k.len() >= children) {
-                    return Self { shell };
+                if procs::live_descendants(pid).is_some_and(|k| k.len() >= children) {
+                    return session;
                 }
                 thread::sleep(Duration::from_millis(20));
             }

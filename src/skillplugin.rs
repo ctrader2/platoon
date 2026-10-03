@@ -788,7 +788,7 @@ mod tests {
         // A record that doesn't point into a skills folder is never acted on.
         let odd = Placed { name: "changelog-entry".into(), dir: base.join("elsewhere/changelog-entry"), files: Vec::new() };
         fs::create_dir_all(&odd.dir).unwrap();
-        assert!(take_away(&[odd.clone()]).is_empty());
+        assert!(take_away(std::slice::from_ref(&odd)).is_empty());
         assert!(odd.dir.exists());
     }
 }

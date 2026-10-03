@@ -41,20 +41,18 @@ impl Lab {
             let out = Command::new("date").args(["-u", "-d", &format!("@{s}"), "+%Y-%m-%dT%H:%M:%S.000Z"]).output().unwrap();
             String::from_utf8(out.stdout).unwrap().trim().to_string()
         };
-        let text = format!(
-            "{}\n{}\n",
-            format!(
-                r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{}","message":{{"role":"user","content":"{}"}}}}"#,
-                cwd.display(),
-                ts(secs - 5),
-                prompt
-            ),
-            format!(
-                r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"model":"claude-sonnet-5","content":[{{"type":"text","text":"On it."}}],"usage":{{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#,
-                cwd.display(),
-                ts(secs)
-            ),
+        let user = format!(
+            r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{}","message":{{"role":"user","content":"{}"}}}}"#,
+            cwd.display(),
+            ts(secs - 5),
+            prompt
         );
+        let assistant = format!(
+            r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"model":"claude-sonnet-5","content":[{{"type":"text","text":"On it."}}],"usage":{{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#,
+            cwd.display(),
+            ts(secs)
+        );
+        let text = format!("{user}\n{assistant}\n");
         fs::write(self.dir("claude/projects/-work").join(format!("{id}.jsonl")), text).unwrap();
     }
 

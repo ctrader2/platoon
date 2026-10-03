@@ -103,7 +103,7 @@ pub fn clean_text(s: &str, max: usize) -> String {
 }
 
 fn skip_csi(it: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    while let Some(n) = it.next() {
+    for n in it.by_ref() {
         if ('\u{40}'..='\u{7e}').contains(&n) {
             break;
         }
@@ -520,10 +520,10 @@ pub fn candidate_text(n: usize, it: &FindItem) -> String {
                 if let Some(first) = fp.prompts.first() {
                     t.push_str(&format!("First message: {}\n", cut(first, 150)));
                 }
-                if fp.prompts.len() > 1 {
-                    if let Some(last) = fp.prompts.last() {
-                        t.push_str(&format!("Last message: {}\n", cut(last, 150)));
-                    }
+                if fp.prompts.len() > 1
+                    && let Some(last) = fp.prompts.last()
+                {
+                    t.push_str(&format!("Last message: {}\n", cut(last, 150)));
                 }
             }
         }
@@ -595,7 +595,10 @@ pub fn parse_ranking(reply: &str, count: usize, limit: usize) -> Vec<Ranked> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{path::PathBuf, sync::Arc};
+    use std::{
+        path::{Path, PathBuf},
+        sync::Arc,
+    };
 
     fn fp(prompts: &[&str], reply: Option<&str>) -> Arc<FilePrompts> {
         Arc::new(FilePrompts::for_test("id", prompts, reply))
@@ -842,7 +845,7 @@ mod tests {
         fp(&refs, None)
     }
 
-    fn sums_with(dir: &PathBuf, entries: &[(&str, usize)]) -> Summaries {
+    fn sums_with(dir: &Path, entries: &[(&str, usize)]) -> Summaries {
         let mut s = Summaries::open(dir);
         let changes: Vec<(String, Entry)> = entries
             .iter()

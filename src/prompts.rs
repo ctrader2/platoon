@@ -305,7 +305,7 @@ impl Store {
         // Newest first: what the user is most likely to search for appears first.
         let mut changed: Vec<&Arc<Entry>> =
             entries.iter().filter(|e| !self.files.get(&e.path).is_some_and(|s| s.mtime == e.mtime && s.size == e.size)).collect();
-        changed.sort_by(|a, b| b.mtime.cmp(&a.mtime));
+        changed.sort_by_key(|e| std::cmp::Reverse(e.mtime));
 
         if !removed.is_empty() {
             self.unsaved = true;
@@ -1007,6 +1007,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)] // `[8..14]` is meant: a list of one marked span
     fn matches_are_marked_by_characters_even_after_lowercasing_changes_lengths() {
         assert_eq!(spans("Fix the Docker build", &words("docker")), [8..14]);
         assert_eq!(spans("aa bb aa", &words("aa")), [0..2, 6..8]);
@@ -1019,6 +1020,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::single_range_in_vec_init)] // `[0..6]` is meant: a list of one marked span
     fn a_snippet_shows_the_match_and_says_where_it_was_cut() {
         let text = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa NEEDLE bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
         let sp = spans(text, &words("needle"));
@@ -1200,7 +1202,7 @@ mod tests {
                 || text.lines().next().unwrap().contains(&format!("\"version\":{VERSION}")),
             "{text}"
         );
-        assert!(VERSION >= 2, "the reply made the saved format different");
+        const { assert!(VERSION >= 2, "the reply made the saved format different") };
         let again = Store::load(&d, 2000);
         assert_eq!(again.snapshot()[0].reply.as_deref(), Some("Done."));
         assert_eq!(again.snapshot()[0].substantive, 1);

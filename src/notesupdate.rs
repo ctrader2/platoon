@@ -960,10 +960,12 @@ pub fn merge(current: &str, state: &State, up: &Update, now: u64) -> Merged {
         // Which parts of the file this section speaks for: the ones it says it replaces, and one of its own name.
         let mut idxs: Vec<usize> = Vec::new();
         for name in s.was.iter().chain(std::iter::once(&s.heading)) {
-            if let Some(i) = doc.index(name) {
-                if !doc.parts[i].fixed() && !taken.contains(&i) && !idxs.contains(&i) {
-                    idxs.push(i);
-                }
+            if let Some(i) = doc.index(name)
+                && !doc.parts[i].fixed()
+                && !taken.contains(&i)
+                && !idxs.contains(&i)
+            {
+                idxs.push(i);
             }
         }
         idxs.sort_unstable();
@@ -1484,7 +1486,7 @@ My own notes, in my own words.
 
     #[test]
     fn decisions_are_dated_and_appended_and_the_heading_comes_back_if_it_is_missing() {
-        let before = OLD.replace("# Decisions\n\n- 2026-01-01: Use Postgres.\n", "# Decisions\n\n- 2026-01-01: Use Postgres.\n");
+        let before = OLD.to_string(); // its Decisions already hold "- 2026-01-01: Use Postgres."
         let up = Update { decisions: vec!["Use Postgres.".into(), "Ship on Friday.".into()], ..Update::default() };
         let m = merge(&before, &State::default(), &up, NOW);
         assert_eq!(m.added.len(), 1, "the one already there is not added again: {:?}", m.added);

@@ -43,12 +43,17 @@ struct Out<T> {
     rx: Receiver<T>,
 }
 
+/// What the removal thread sends back: each worktree's path and what came of it.
+type Removals = Out<Vec<(String, Removal)>>;
+/// What bringing removed worktrees back sends: the worktrees made again, or why not.
+type BroughtBack = Out<Result<Vec<Worktree>, String>>;
+
 #[derive(Default)]
 pub struct WtState {
     /// Worktrees being removed: (path, what came of it). `anyway`: the user said yes to losing their changes.
-    removing: Option<(Out<Vec<(String, Removal)>>, bool)>,
+    removing: Option<(Removals, bool)>,
     /// Removed worktrees being made again from their branch, to continue the squad.
-    back: Option<(Out<Result<Vec<Worktree>, String>>, After)>,
+    back: Option<(BroughtBack, After)>,
     /// Worktrees already looked at for the ticket as it stood (project, number, path, the ticket's `updated`): each is
     /// tried once, and again only when the ticket changes (or platoon starts again), never over and over.
     tried: HashSet<(String, u32, String, u64)>,

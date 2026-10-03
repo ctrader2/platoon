@@ -94,8 +94,8 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     let inside = |l: &str| l.chars().skip(left + 2).take(70).collect::<String>();
     let sep = (top..lines.len()).find(|&r| inside(lines[r]).starts_with("──────")).expect("separator");
     let foot = (sep..lines.len()).find(|&r| lines[r].contains("esc clear")).expect("footer");
-    for r in sep + 1..foot {
-        let row = inside(lines[r]);
+    for line in lines.iter().take(foot).skip(sep + 1) {
+        let row = inside(line);
         assert!(
             !row.contains("alpha") && !row.contains("beta") && !row.contains("/work/") && !row.contains("ago"),
             "row text in the empty results area: {row:?}\n{text}"
@@ -139,7 +139,7 @@ fn tab_finds_conversations_by_the_words_typed_in_them_and_enter_opens_the_archiv
     fs::write(w.base.join("config/archive.json"), r#"{"version":1,"archived":{"cccccccc-3333":1}}"#).unwrap();
     let mut t = Term::spawn(&[], &w.env(), &w.base, 30, 100);
     t.wait_for("alpha");
-    t.wait_for_flat("Archived 1".replace("Archived 1", "Archived 1").as_str());
+    t.wait_for_flat("Archived 1");
 
     t.send(b"/\t");
     t.wait_for("Type words you asked Claude about, in any order.");

@@ -116,10 +116,10 @@ pub fn is_stale(cache: &Path, pid: u32, started_at: u64) -> bool {
 /// Forget markers for processes that have exited.
 pub fn prune_stale(cache: &Path) {
     for e in fs::read_dir(stale_dir(cache)).into_iter().flatten().flatten() {
-        if let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) {
-            if !pid_alive(pid) {
-                let _ = fs::remove_file(e.path());
-            }
+        if let Some(pid) = e.file_name().to_str().and_then(|n| n.parse::<u32>().ok())
+            && !pid_alive(pid)
+        {
+            let _ = fs::remove_file(e.path());
         }
     }
 }

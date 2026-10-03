@@ -219,7 +219,7 @@ pub fn items(dir: &Path) -> Result<(Manifest, Vec<Item>), String> {
 /// Changed or Same, and what goes.
 pub fn review(new: &Path, old: Option<&Path>) -> Result<(Manifest, Review), String> {
     let (m, mut items) = items(new)?;
-    let before = old.and_then(|o| items_lenient(o)).unwrap_or_default();
+    let before = old.and_then(items_lenient).unwrap_or_default();
     if old.is_some() {
         for i in &mut items {
             i.change = match before.iter().find(|b| b.kind == i.kind && b.id == i.id) {

@@ -44,7 +44,7 @@ pub fn ticket_tokens(leaders: &[(String, Option<&LeaderLog>)]) -> Option<TicketT
 pub fn short(n: u64) -> String {
     let one = |v: u64, unit: u64, suffix: &str| {
         let tenths = (v * 10 + unit / 2) / unit;
-        if tenths < 100 && tenths % 10 != 0 {
+        if tenths < 100 && !tenths.is_multiple_of(10) {
             format!("{}.{}{suffix}", tenths / 10, tenths % 10)
         } else {
             format!("{}{suffix}", (v + unit / 2) / unit)

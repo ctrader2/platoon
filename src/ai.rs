@@ -299,10 +299,11 @@ pub fn gate_for(settings: &Settings, feature: &str, cache: &Path, now: u64, user
     if used >= settings.ai_daily_tokens {
         return Err(Refusal::OverBudget { used, cap: settings.ai_daily_tokens });
     }
-    if settings.ai_pause_percent > 0 && !user_initiated {
-        if let Some((pct, window)) = plan_percent(cache, now).filter(|(p, _)| u64::from(*p) > settings.ai_pause_percent) {
-            return Err(Refusal::PlanBusy { pct, limit: settings.ai_pause_percent, window });
-        }
+    if settings.ai_pause_percent > 0
+        && !user_initiated
+        && let Some((pct, window)) = plan_percent(cache, now).filter(|(p, _)| u64::from(*p) > settings.ai_pause_percent)
+    {
+        return Err(Refusal::PlanBusy { pct, limit: settings.ai_pause_percent, window });
     }
     Ok(())
 }
@@ -573,10 +574,10 @@ pub fn extract_json(text: &str) -> Option<Value> {
     if let Some(start) = trimmed.find("```") {
         let after = &trimmed[start + 3..];
         let body_start = after.find('\n').map_or(0, |i| i + 1);
-        if let Some(end) = after[body_start..].find("```") {
-            if let Ok(v) = serde_json::from_str::<Value>(after[body_start..body_start + end].trim()) {
-                return Some(v);
-            }
+        if let Some(end) = after[body_start..].find("```")
+            && let Ok(v) = serde_json::from_str::<Value>(after[body_start..body_start + end].trim())
+        {
+            return Some(v);
         }
     }
     // The outermost balanced object or array, respecting strings. A few starting points are tried; garbage stays cheap.

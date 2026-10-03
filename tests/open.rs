@@ -28,7 +28,9 @@ fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
             Ok(())
         });
     }
-    cmd.spawn().unwrap();
+    // The host is our child: reap it whenever it exits, or it stays a zombie until the test binary ends.
+    let mut host = cmd.spawn().unwrap();
+    thread::spawn(move || host.wait());
     until("host to publish itself", || find_host(cache).is_some());
     find_host(cache).unwrap()
 }

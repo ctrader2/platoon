@@ -1456,10 +1456,10 @@ pub fn run_stop_hook() -> i32 {
     let _ = std::panic::catch_unwind(|| {
         let Some(input) = read_stdin() else { return };
         let config = crate::archive::config_dir();
-        if let Some((project, number, State::Done)) = squad_stop(&input, &config) {
-            if Tickets::open(&config, &project).result(number).is_some() {
-                crate::notesrun::mark_project(&config, &crate::usage::cache_dir(), &project, crate::notesrun::now_ms());
-            }
+        if let Some((project, number, State::Done)) = squad_stop(&input, &config)
+            && Tickets::open(&config, &project).result(number).is_some()
+        {
+            crate::notesrun::mark_project(&config, &crate::usage::cache_dir(), &project, crate::notesrun::now_ms());
         }
     });
     0

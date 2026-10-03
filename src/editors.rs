@@ -278,10 +278,10 @@ impl Running {
 
     /// Ask the editor to leave (it is platoon's own child), and end it for good if it won't.
     pub fn stop(&mut self) {
-        if let Some(pid) = self.child.process_id() {
-            if pid > 1 {
-                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-            }
+        if let Some(pid) = self.child.process_id()
+            && pid > 1
+        {
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
         }
         let deadline = Instant::now() + STOP_WAIT;
         while Instant::now() < deadline {

@@ -741,10 +741,10 @@ impl Tickets {
             Ok(number)
         });
         // The list didn't take it: the body file it wrote goes too, so nothing is left without a ticket.
-        if result.is_err() {
-            if let Some(p) = written_file.take() {
-                let _ = fs::remove_file(p);
-            }
+        if result.is_err()
+            && let Some(p) = written_file.take()
+        {
+            let _ = fs::remove_file(p);
         }
         result
     }

@@ -220,10 +220,10 @@ pub fn table_json(m: &Manifest) -> Value {
 pub fn parse_table(text: &str) -> Result<Manifest, String> {
     let v: Value = serde_json::from_str(text).map_err(|e| format!("the download table isn't valid JSON ({e})"))?;
     let obj = v.as_object().ok_or("the download table must be a JSON object")?;
-    if let Some(f) = obj.get("format") {
-        if f.as_u64() != Some(1) {
-            return Err("the download table is in a format this platoon doesn't know (it reads format 1)".into());
-        }
+    if let Some(f) = obj.get("format")
+        && f.as_u64() != Some(1)
+    {
+        return Err("the download table is in a format this platoon doesn't know (it reads format 1)".into());
     }
     fn s(v: &Value, k: &str, what: &str) -> Result<String, String> {
         match v.get(k) {
@@ -647,10 +647,8 @@ fn record_flag(dirs: &Dirs, key: &str) -> bool {
 
 fn save_record(dirs: &Dirs, items: &Map<String, Value>, no_compiler: bool) -> Result<(), String> {
     let mut v = json!({"version": 1, "items": items});
-    if no_compiler {
-        if let Some(o) = v.as_object_mut() {
-            o.insert("no_compiler".into(), Value::Bool(true));
-        }
+    if no_compiler && let Some(o) = v.as_object_mut() {
+        o.insert("no_compiler".into(), Value::Bool(true));
     }
     let path = dirs.record_path();
     crate::projects::write_atomic(&path, &(serde_json::to_string_pretty(&v).unwrap_or_default() + "\n"))
@@ -1544,7 +1542,7 @@ impl Sha256 {
 
     fn block(&mut self, b: &[u8]) {
         let mut w = [0u32; 64];
-        for (i, c) in b.chunks_exact(4).enumerate() {
+        for (i, c) in b.as_chunks::<4>().0.iter().enumerate() {
             w[i] = u32::from_be_bytes([c[0], c[1], c[2], c[3]]);
         }
         for i in 16..64 {
@@ -1587,11 +1585,11 @@ impl Sha256 {
                 self.buf.clear();
             }
         }
-        let mut chunks = data.chunks_exact(64);
-        for c in &mut chunks {
+        let (blocks, rest) = data.as_chunks::<64>();
+        for c in blocks {
             self.block(c);
         }
-        self.buf.extend_from_slice(chunks.remainder());
+        self.buf.extend_from_slice(rest);
     }
 
     fn hex(mut self) -> String {
@@ -1602,7 +1600,7 @@ impl Sha256 {
             tail.push(0);
         }
         tail.extend_from_slice(&bits.to_be_bytes());
-        for c in tail.chunks_exact(64) {
+        for c in tail.as_chunks::<64>().0 {
             self.block(c);
         }
         self.h.iter().map(|x| format!("{x:08x}")).collect()

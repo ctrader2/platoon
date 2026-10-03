@@ -302,15 +302,16 @@ impl App {
         if self.keys.get().quit.matches(&key) || key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
             return self.close_plugin_screen();
         }
-        if let KeyCode::Char(c @ '1'..='3') = key.code {
-            if !ctrl && !alt {
-                self.pl.screen = false;
-                self.pl.review = None;
-                self.notice = None;
-                self.mode = Mode::List;
-                self.switch_top(c as usize - '1' as usize);
-                return;
-            }
+        if let KeyCode::Char(c @ '1'..='3') = key.code
+            && !ctrl
+            && !alt
+        {
+            self.pl.screen = false;
+            self.pl.review = None;
+            self.notice = None;
+            self.mode = Mode::List;
+            self.switch_top(c as usize - '1' as usize);
+            return;
         }
         self.plugin_list_key(key);
     }

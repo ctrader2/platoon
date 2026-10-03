@@ -43,10 +43,10 @@ pub fn diff_base(w: &Worktree, program: &str) -> Option<String> {
     let branch = format!("refs/heads/{}", w.branch);
     one(&["rev-parse", "--verify", "--quiet", &format!("{branch}^{{commit}}")])?;
     for trunk in ["refs/heads/main", "refs/heads/master"] {
-        if one(&["rev-parse", "--verify", "--quiet", trunk]).is_some() {
-            if let Some(mb) = one(&["merge-base", &branch, trunk]) {
-                return Some(mb);
-            }
+        if one(&["rev-parse", "--verify", "--quiet", trunk]).is_some()
+            && let Some(mb) = one(&["merge-base", &branch, trunk])
+        {
+            return Some(mb);
         }
     }
     let head = one(&["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;

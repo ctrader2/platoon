@@ -932,12 +932,12 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         head.push(Line::from(vec![label(if i == 0 { "Folders" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
     }
     // The private work folder platoon keeps for the ticket, once a squad has had it.
-    if x.leader().is_some() {
-        if let Some(store) = app.tickets_store() {
-            let work = tickets::work_dir(&app.config, store.project(), x.number);
-            let shown = fit_start(&tilde(&work.to_string_lossy(), &app.home), w.saturating_sub(LABEL));
-            head.push(Line::from(vec![label("Work folder"), Span::styled(shown, Style::new().fg(t.text))]));
-        }
+    if x.leader().is_some()
+        && let Some(store) = app.tickets_store()
+    {
+        let work = tickets::work_dir(&app.config, store.project(), x.number);
+        let shown = fit_start(&tilde(&work.to_string_lossy(), &app.home), w.saturating_sub(LABEL));
+        head.push(Line::from(vec![label("Work folder"), Span::styled(shown, Style::new().fg(t.text))]));
     }
     if x.blocked_by.is_empty() {
         head.push(Line::from(vec![label("Waits for"), Span::styled("nothing", Style::new().fg(t.subtext))]));
@@ -1157,7 +1157,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
     let dir_w = w.saturating_sub(4 + LAST_W + name_w);
     for (i, &idx) in visible.iter().enumerate() {
         let line = line_of(i);
-        if i == active && active <= visible.len() && line > 0 && line - 1 >= top && line - 1 < top + rows {
+        if i == active && active <= visible.len() && line > 0 && line > top && line - 1 < top + rows {
             let y = area.y + (line - 1 - top) as u16;
             f.render_widget(
                 Paragraph::new(Span::styled(
@@ -1643,7 +1643,7 @@ struct Look {
 
 fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
     // Unread pulses between two shades about once a second.
-    let pulse_on = (tick / 5) % 2 == 0;
+    let pulse_on = (tick / 5).is_multiple_of(2);
     match (status, unread) {
         (Status::Busy, _) => Look { marker: SPINNER[(tick % 10) as usize], marker_color: t.busy, status: "working", status_color: t.busy },
         (Status::Idle, true) => {
@@ -1958,13 +1958,12 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
 
     // The notes follow the entries directly.
-    let mut y =
+    let first =
         if on_plugins { plugins_view::draw_plugin_settings(f, app, rows_area) } else { draw_setting_rows(f, app, &current, rows_area) } + 1;
-    for (line, color) in &notes {
+    for ((line, color), y) in notes.iter().zip(first..) {
         if y < path_y {
             f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(*color))), Rect::new(area.x, y, area.width, 1));
         }
-        y += 1;
     }
     let path = Line::from(vec![
         Span::styled(label, Style::new().fg(t.dim)),
@@ -3083,10 +3082,11 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
         let line: String = chars[r.start..r.end].iter().collect();
         f.render_widget(Paragraph::new(Span::styled(line, style)), Rect::new(body.x, body.y + n as u16, body.width, 1));
     }
-    if let Some((row, col)) = at {
-        if row >= top && row < top + visible {
-            f.set_cursor_position((body.x + (col as u16).min(body.width.saturating_sub(1)), body.y + (row - top) as u16));
-        }
+    if let Some((row, col)) = at
+        && row >= top
+        && row < top + visible
+    {
+        f.set_cursor_position((body.x + (col as u16).min(body.width.saturating_sub(1)), body.y + (row - top) as u16));
     }
     let below = rows.len().saturating_sub(top + visible);
     handoff_ruler(f, t, sep, crate::textbox::more_label(top, true));
@@ -3486,7 +3486,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             }
         }
     };
-    let w = (l2.chars().count() as u16 + 6).min(72).max(30).min(area.width);
+    let w = (l2.chars().count() as u16 + 6).clamp(30, 72).min(area.width);
     // Size the box to its wrapped text (+1 line of slack for word wrapping) so nothing is ever cut off.
     let inner_w = w.saturating_sub(4).max(1) as usize;
     let body_lines = (l2.chars().count().div_ceil(inner_w) + 1) as u16;
@@ -3625,7 +3625,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     // Scrolled so the picked squad shows: from the first one that leaves room for it.
     let picked = app.sq.pick_selected.min(rows.len().saturating_sub(1));
-    let fits = |from: usize| rows.get(from..=picked).map_or(true, |r| r.iter().map(|r| r.len() as u16 + 2).sum::<u16>() <= list.height + 1);
+    let fits = |from: usize| rows.get(from..=picked).is_none_or(|r| r.iter().map(|r| r.len() as u16 + 2).sum::<u16>() <= list.height + 1);
     let start = (0..=picked).find(|&k| fits(k)).unwrap_or(picked);
     let mut y = list.y;
     for (i, (s, lines)) in app.sq.pick.iter().zip(&rows).enumerate().skip(start) {
@@ -4081,7 +4081,7 @@ mod tests {
         assert!(c.pad.name - c.pad.last <= 1, "and the rest still share alike: {} vs {}", c.pad.name, c.pad.last);
         // Narrow screen, long content: exactly the sharing of before (two fifths to NAME), nothing over.
         let narrow = cols(80, 0, GREEDY);
-        let flex = 80 - (fixed + 0 + 0);
+        let flex = 80 - fixed;
         assert_eq!((narrow.name, narrow.dir), (flex * 2 / 5, flex - flex * 2 / 5));
         assert_eq!(narrow.pad.sum(), 0);
     }

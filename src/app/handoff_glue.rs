@@ -27,8 +27,15 @@ pub(super) enum HandoffAnswer {
     /// The conversation has nothing in it yet: nothing was asked.
     Nothing,
     /// What the transcript said (when it started, how many messages), what git said (None: not a repository, or git
-    /// couldn't say), what the old session spent (None: no usage records), and Claude's answer.
-    Done { started_ms: Option<u64>, messages: Option<usize>, git: Option<GitFacts>, spent: Option<Spent>, answer: Result<Reply, AiError> },
+    /// couldn't say; boxed, as it is most of the message's size), what the old session spent (None: no usage records),
+    /// and Claude's answer.
+    Done {
+        started_ms: Option<u64>,
+        messages: Option<usize>,
+        git: Option<Box<GitFacts>>,
+        spent: Option<Spent>,
+        answer: Result<Reply, AiError>,
+    },
 }
 
 /// A test can hold the worker just before it reads the transcript, to show the screen keeps going meanwhile.
@@ -232,12 +239,14 @@ impl HandoffBox {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)] // "move the cursor to", not a conversion
     pub(super) fn to_line_start(&mut self) {
         self.goal = None;
         let (line, _) = self.cursor_at();
         self.cursor = self.index_of(line, 0);
     }
 
+    #[allow(clippy::wrong_self_convention)] // "move the cursor to", not a conversion
     pub(super) fn to_line_end(&mut self) {
         self.goal = None;
         let (line, _) = self.cursor_at();
@@ -354,7 +363,7 @@ impl App {
             };
             req.prompt = handoff::prompt(&material, git.as_ref());
             let answer = if never || req.cancel.is_cancelled() { Err(AiError::Cancelled) } else { runner.run(&settings, &req) };
-            let _ = tx.send(HandoffAnswer::Done { started_ms, messages, git, spent, answer });
+            let _ = tx.send(HandoffAnswer::Done { started_ms, messages, git: git.map(Box::new), spent, answer });
         });
         rx
     }
@@ -399,6 +408,7 @@ impl App {
             self.notify(format!("There is nothing in \"{}\" yet to hand on.", self.handoff.session_name));
             return;
         };
+        let git = git.map(|g| *g);
         self.handoff.facts.started_ms = started_ms;
         self.handoff.facts.messages = messages;
         self.handoff.top.set(0);
@@ -551,10 +561,10 @@ fn read_transcript(path: &Path, material: &mut handoff::Material) -> (Option<u64
     let read = crate::notesrun::read_session(path, handoff::MESSAGE_CHARS);
     let mut messages: Vec<String> = read.recent.iter().rev().take(handoff::MESSAGES).rev().cloned().collect();
     // What it set out to do matters as much as what was said last, so the first message comes too.
-    if let Some(first) = &read.first {
-        if !messages.first().is_some_and(|x| x == first) {
-            messages.insert(0, first.clone());
-        }
+    if let Some(first) = &read.first
+        && !messages.first().is_some_and(|x| x == first)
+    {
+        messages.insert(0, first.clone());
     }
     material.messages = messages;
     material.reply = read.reply;

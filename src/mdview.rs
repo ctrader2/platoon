@@ -486,12 +486,12 @@ fn cut_code(text: &str, avail: usize) -> Vec<String> {
             w += cw;
             end += 1;
         }
-        if end < rest.len() {
-            if let Some(sp) = rest[..end].iter().rposition(|c| *c == ' ') {
-                if sp >= end / 2 && sp > 0 {
-                    end = sp + 1;
-                }
-            }
+        if end < rest.len()
+            && let Some(sp) = rest[..end].iter().rposition(|c| *c == ' ')
+            && sp >= end / 2
+            && sp > 0
+        {
+            end = sp + 1;
         }
         out.push(rest[..end].iter().collect::<String>().trim_end().to_string());
         rest.drain(..end);

@@ -172,7 +172,7 @@ fn the_list_stays_responsive_with_five_thousand_rows() {
         app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     let typing = t.elapsed();
-    assert!(app.visible().len() > 0 && app.visible().len() < 200, "{} rows match", app.visible().len());
+    assert!(!app.visible().is_empty() && app.visible().len() < 200, "{} rows match", app.visible().len());
 
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let t = Instant::now();

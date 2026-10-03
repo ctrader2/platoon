@@ -210,11 +210,11 @@ fn attach(sock: &Path, rows: u16, cols: u16, back: &[Vec<u8>]) -> io::Result<End
             let mut last = terminal::size().unwrap_or((cols, rows));
             while !stop.load(Ordering::Relaxed) {
                 thread::sleep(Duration::from_millis(200));
-                if let Ok(now) = terminal::size() {
-                    if now != last {
-                        last = now;
-                        let _ = write_frame(&mut *writer.lock().unwrap(), F_RESIZE, &size_payload(now.1, now.0));
-                    }
+                if let Ok(now) = terminal::size()
+                    && now != last
+                {
+                    last = now;
+                    let _ = write_frame(&mut *writer.lock().unwrap(), F_RESIZE, &size_payload(now.1, now.0));
                 }
             }
         });

@@ -911,10 +911,9 @@ fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen
     // Too short for all six rows at once.
     let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
     let order: Vec<String> = app.project_rows().iter().map(|&i| app.projects.all()[i].name.clone()).collect();
-    for sel in 0..order.len() {
+    for (sel, name) in order.iter().enumerate() {
         app.pselected = sel;
         let shown = draw(&mut term, &app);
-        let name = &order[sel];
         let at = lines_with(&shown, name);
         assert_eq!(at.len(), 1, "{name}: {shown}");
         let hit = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::ProjectRow(i) if *i == sel)).map(|(r, _)| *r);

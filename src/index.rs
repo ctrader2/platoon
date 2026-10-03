@@ -175,7 +175,7 @@ impl Scanner {
         // Newest first: what the user is most likely to want appears first.
         let mut changed: Vec<(PathBuf, u64, u64)> =
             listing.into_iter().filter(|(p, m, s)| !self.map.get(p).is_some_and(|e| e.mtime == *m && e.size == *s)).collect();
-        changed.sort_by(|a, b| b.1.cmp(&a.1));
+        changed.sort_by_key(|c| std::cmp::Reverse(c.1));
 
         if !removed.is_empty() {
             self.unsaved = true;

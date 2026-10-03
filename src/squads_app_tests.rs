@@ -662,7 +662,7 @@ fn research_works_in_a_worktree_of_a_git_folder_and_writes_its_report_in_the_wor
     let notes = base.join("notes");
     std::fs::create_dir_all(&notes).unwrap();
     let folders = vec![shop.to_string_lossy().into_owned(), notes.to_string_lossy().into_owned()];
-    let (w, mut app, id, _fake) = handing("sq-read", &[folders.clone()]);
+    let (w, mut app, id, _fake) = handing("sq-read", std::slice::from_ref(&folders));
     hand_to(&mut app, 1, "Research");
     let work = crate::tickets::work_dir(&w.config, &id, 1);
     let wt = base.join("shop-worktrees/ticket-1");

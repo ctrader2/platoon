@@ -178,10 +178,11 @@ impl App {
         if !settings.feature_on("names") {
             (self.smart.done, self.smart.total, self.smart.idle) = (0, 0, None);
         }
-        if self.smart.flight.is_none() && self.smart.find_flight.is_none() {
-            if let Some(w) = self.smart.find_waiting.take() {
-                self.launch_find(&settings, w.req, w.ids);
-            }
+        if self.smart.flight.is_none()
+            && self.smart.find_flight.is_none()
+            && let Some(w) = self.smart.find_waiting.take()
+        {
+            self.launch_find(&settings, w.req, w.ids);
         }
         if settings.feature_on("names")
             && self.smart.flight.is_none()
@@ -406,10 +407,10 @@ impl App {
     pub fn archived_estimate(&self) -> Estimate {
         let s = self.settings.get();
         let key = (self.prompts.generation, self.rev, s.ai_prompts_per_session, s.ai_prompt_chars, s.ai_batch_size);
-        if let Some((k, e)) = &*self.smart.estimate.borrow() {
-            if *k == key {
-                return *e;
-            }
+        if let Some((k, e)) = &*self.smart.estimate.borrow()
+            && *k == key
+        {
+            return *e;
         }
         let chars = self
             .sessions

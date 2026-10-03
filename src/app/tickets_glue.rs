@@ -209,11 +209,11 @@ impl App {
     /// The keys that act on one ticket, the same on its screen and on its row.
     fn ticket_key(&mut self, number: u32, key: KeyEvent) {
         // While it is being handed to a squad, what would change that waits.
-        if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone()) {
-            if matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p' | 'w')) {
-                self.notify(format!("#{number}: {busy} Wait a moment."));
-                return;
-            }
+        if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone())
+            && matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p' | 'w'))
+        {
+            self.notify(format!("#{number}: {busy} Wait a moment."));
+            return;
         }
         match key.code {
             KeyCode::Char('e') => self.edit_ticket(number),

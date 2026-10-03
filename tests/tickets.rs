@@ -381,9 +381,7 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
         code == 1
             && out.is_empty()
             && err.trim()
-                == format!(
-                    "platoon ticket add: don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")"
-                ),
+                == "platoon ticket add: don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")",
         "{err}"
     );
     assert!(!lab.tickets_path().exists(), "nothing made");

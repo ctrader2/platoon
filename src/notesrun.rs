@@ -390,10 +390,10 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
             // Never read before: the whole conversation, once, within a cap of its own.
             None => {
                 let mut m: Vec<String> = read.recent.iter().rev().take(FULL_READ_MESSAGES).rev().cloned().collect();
-                if let Some(f) = &read.first {
-                    if !m.first().is_some_and(|x| x == f) {
-                        m.insert(0, f.clone());
-                    }
+                if let Some(f) = &read.first
+                    && !m.first().is_some_and(|x| x == f)
+                {
+                    m.insert(0, f.clone());
                 }
                 m
             }
@@ -418,7 +418,7 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
         ));
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
-    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.0));
     (Material { project: name.to_string(), sessions: sessions.into_iter().map(|(_, s)| s).collect(), results: Vec::new() }, seen)
 }
 
@@ -611,7 +611,7 @@ pub fn describe_material(config: &Path, id: &str, name: &str) -> describe::Mater
         let Some(e) = summaries.get(&sid) else { continue };
         sessions.push((e.at, describe::SessionLine { name: e.name.clone(), summary: e.summary.clone() }));
     }
-    sessions.sort_by(|a, b| b.0.cmp(&a.0));
+    sessions.sort_by_key(|s| std::cmp::Reverse(s.0));
     let notes = fs::read_to_string(projects.notes_path(id)).unwrap_or_default();
     describe::Material { project: name.to_string(), notes, sessions: sessions.into_iter().map(|(_, s)| s).collect() }
 }
@@ -675,10 +675,10 @@ enum Taken {
 }
 
 fn try_lock(path: &Path) -> Taken {
-    if let Some(dir) = path.parent() {
-        if let Err(e) = fs::create_dir_all(dir) {
-            return Taken::Cant(e);
-        }
+    if let Some(dir) = path.parent()
+        && let Err(e) = fs::create_dir_all(dir)
+    {
+        return Taken::Cant(e);
     }
     let mut file = match fs::OpenOptions::new().create(true).truncate(false).write(true).open(path) {
         Ok(f) => f,

@@ -107,7 +107,8 @@ pub struct Snapshot {
 /// with a 5-hour figure but no weekly one is missing data, not "nothing used yet".
 pub fn load(dir: &Path, now: u64) -> Snapshot {
     let mut context = HashMap::new();
-    let (mut five, mut seven): (Option<(u64, Window)>, Option<(u64, Window)>) = (None, None);
+    let mut five: Option<(u64, Window)> = None;
+    let mut seven: Option<(u64, Window)> = None;
     // The newest report that carried a 5-hour figure, expired or not, and the newest that left it out
     // while its weekly figure was still running (see above).
     let (mut five_newest, mut five_unstarted): (Option<u64>, Option<u64>) = (None, None);
@@ -132,7 +133,7 @@ pub fn load(dir: &Path, now: u64) -> Snapshot {
         };
         for (slot, key) in [(&mut five, "five_hour"), (&mut seven, "seven_day")] {
             if let Some((pct, resets_at)) = figure(key) {
-                let newer = slot.as_ref().map_or(true, |(t, _)| ts > *t);
+                let newer = slot.as_ref().is_none_or(|(t, _)| ts > *t);
                 if resets_at > now && newer {
                     *slot = Some((ts, Window { pct: pct.min(100) as u8, resets_at }));
                 }
@@ -145,7 +146,7 @@ pub fn load(dir: &Path, now: u64) -> Snapshot {
         }
     }
     // A tie goes to the real figure.
-    if five_unstarted.is_some_and(|t| five_newest.map_or(true, |n| t > n)) {
+    if five_unstarted.is_some_and(|t| five_newest.is_none_or(|n| t > n)) {
         five = Some((five_unstarted.unwrap_or(0), Window { pct: 0, resets_at: 0 }));
     }
     let plan = match (five, seven) {
@@ -284,9 +285,7 @@ mod tests {
         status(&dir, "empty", 1_000, None, Some((0, 9_000)));
         let (pct, _) = crate::ai::plan_percent(&dir, 1_001).unwrap();
         assert_eq!(pct, 0);
-        let mut settings = crate::settings::Settings::default();
-        settings.tokens_enabled = true;
-        settings.ai_pause_percent = 1;
+        let settings = crate::settings::Settings { tokens_enabled: true, ai_pause_percent: 1, ..Default::default() };
         let refused = crate::ai::gate(&settings, crate::ai::TEST_FEATURE, &dir, 1_001).err();
         assert!(!matches!(refused, Some(crate::ai::Refusal::PlanBusy { .. })));
     }

@@ -243,10 +243,10 @@ pub fn load(src: &Sources) -> Config {
 
     // The directory as given and as the system resolves it (Claude keys its per-project entries by one of them).
     let mut dirs = vec![src.cwd.clone()];
-    if let Ok(real) = fs::canonicalize(&src.cwd) {
-        if real != src.cwd {
-            dirs.push(real);
-        }
+    if let Ok(real) = fs::canonicalize(&src.cwd)
+        && real != src.cwd
+    {
+        dirs.push(real);
     }
 
     // User config: user-scoped servers, and this directory's "local" ones.
@@ -597,10 +597,10 @@ pub fn terminate_if_same(t: &Tracked) -> bool {
     if now.zombie || now.start != t.start {
         return false;
     }
-    if let (Some(before), Some(after)) = (&t.argv, procs::cmdline(t.pid)) {
-        if *before != after {
-            return false;
-        }
+    if let (Some(before), Some(after)) = (&t.argv, procs::cmdline(t.pid))
+        && *before != after
+    {
+        return false;
     }
     unsafe { libc::kill(t.pid as i32, libc::SIGTERM) == 0 }
 }

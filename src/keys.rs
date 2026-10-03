@@ -125,14 +125,14 @@ impl Chord {
             }
         };
         // Shift with a letter is the upper-case letter; with another character, the character itself is written.
-        if c.shift {
-            if let Name::Char(ch) = c.key {
-                if ch.is_alphabetic() && !c.ctrl && !c.alt {
-                    c.key = Name::Char(ch.to_uppercase().next().unwrap_or(ch));
-                    c.shift = false;
-                } else if !ch.is_alphabetic() {
-                    return Err(format!("has shift with \"{ch}\": write the character shift gives instead"));
-                }
+        if c.shift
+            && let Name::Char(ch) = c.key
+        {
+            if ch.is_alphabetic() && !c.ctrl && !c.alt {
+                c.key = Name::Char(ch.to_uppercase().next().unwrap_or(ch));
+                c.shift = false;
+            } else if !ch.is_alphabetic() {
+                return Err(format!("has shift with \"{ch}\": write the character shift gives instead"));
             }
         }
         Ok(c)

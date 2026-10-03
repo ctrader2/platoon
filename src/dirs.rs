@@ -52,17 +52,17 @@ pub fn candidates(claude_root: &Path, home: &str) -> Vec<String> {
             }
         }
     }
-    recent.sort_by(|a, b| b.0.cmp(&a.0));
+    recent.sort_by_key(|r| std::cmp::Reverse(r.0));
     for (_, p) in recent {
         add(p);
     }
 
     // zoxide, if installed: already ordered by frecency.
-    if let Ok(o) = Command::new("zoxide").args(["query", "--list"]).output() {
-        if o.status.success() {
-            for line in String::from_utf8_lossy(&o.stdout).lines() {
-                add(line.to_string());
-            }
+    if let Ok(o) = Command::new("zoxide").args(["query", "--list"]).output()
+        && o.status.success()
+    {
+        for line in String::from_utf8_lossy(&o.stdout).lines() {
+            add(line.to_string());
         }
     }
 
