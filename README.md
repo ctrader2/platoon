@@ -540,6 +540,8 @@ is `user:creme-brulee`). Things to know:
   touching the palette sessions use, with `platoon-accent = #1d62eb` and likewise `platoon-busy`, `platoon-ok`,
   `platoon-warn` and `platoon-err` lines; the built-in light themes' files in platoon's source (`src/themes/`) are good
   examples.
+- The band behind the selected row is always worked out from your background and text, dark or light: a clear step
+  from the background (1.4:1), with whatever text sits on it kept readable there.
 - A file that can't be used is skipped: a light theme that doesn't read well enough (the reason says what falls short),
   or anything that isn't a readable theme file (too big, not text, no background or foreground). The picker says how
   many were skipped and why, and so does `platoon themes`.

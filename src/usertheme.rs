@@ -10,7 +10,10 @@
 //! are capped, only regular files are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather
 //! than guessed at.
 
-use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, Theme, contrast, delta_e, is_light, lift_contrast, mix};
+use crate::theme::{
+    MIN_BORDER_ON_SURFACE, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_SURFACE, MIN_TEXT, Theme, contrast, delta_e, is_light,
+    lift_contrast, mix,
+};
 use ratatui::style::Color;
 use std::{
     collections::HashSet,
@@ -247,8 +250,8 @@ pub fn problems(p: &Parsed) -> Vec<String> {
 /// contrast floors: the roles and the muted text are lifted toward the text color until they read, surface and
 /// border are kept apart from the background and from each other, and the five colors that carry meaning are kept
 /// clearly distinct. On a light background everything works the same way the other way round: the text and
-/// whatever is lifted go darker (toward black rather than white), and the surface is a little darker than the
-/// background.
+/// whatever is lifted go darker (toward black rather than white), and the surface (the selection fill) is darker
+/// than the background by `MIN_SURFACE`.
 pub fn build(id: String, name: String, p: &Parsed) -> Theme {
     let (bg, fg) = (p.background, p.foreground);
     let light = p.light();
@@ -259,10 +262,12 @@ pub fn build(id: String, name: String, p: &Parsed) -> Theme {
 
     // Everything is mixed toward the text color; the text itself is lifted last, on the surface it will sit on.
     let toward = lift_contrast(fg, bg, strongest, MIN_TEXT);
-    let surface = mixed_until(bg, toward, 0.09, |c| contrast(c, bg) >= 1.08);
-    let text = lift_contrast(toward, surface, strongest, 6.0);
-    let border = mixed_until(bg, toward, 0.20, |c| contrast(c, bg) >= 1.25 && contrast(c, surface) >= 1.1);
-    let dim = lift_contrast(lift_contrast(mix(bg, toward, 0.46), bg, toward, MIN_DIM), surface, toward, 2.5);
+    let surface = mixed_until(bg, toward, 0.09, |c| contrast(c, bg) >= MIN_SURFACE);
+    let text = lift_contrast(toward, surface, strongest, MIN_SUBTEXT);
+    let border = mixed_until(bg, toward, 0.20, |c| contrast(c, bg) >= 1.25 && contrast(c, surface) >= MIN_BORDER_ON_SURFACE);
+    // Dim and subtext are held to their floors on the page; on the selection fill they are kept readable where they
+    // are drawn (`Theme::readable_on`), so a stronger fill doesn't make them heavier everywhere.
+    let dim = lift_contrast(mix(bg, toward, 0.46), bg, toward, MIN_DIM);
     let subtext = lift_contrast(mix(bg, toward, 0.72), bg, toward, MIN_SUBTEXT);
     let roles = distinct(picks, bg, text);
     let [accent, busy, ok, warn, err] = roles;
@@ -664,12 +669,15 @@ mod tests {
             assert!(on(col) >= MIN_ROLE.min(reach), "{}: {n} {:.2}", t.name, on(col));
         }
         assert!(on(t.text) >= on(t.subtext) && on(t.subtext) >= on(t.dim), "{}: text stays ordered", t.name);
-        assert!(contrast(t.surface, t.bg) >= 1.08, "{}: surface vs bg", t.name);
+        assert!(contrast(t.surface, t.bg) >= MIN_SURFACE.min(on(t.text)), "{}: surface vs bg", t.name);
         assert!(contrast(t.border, t.bg) >= 1.25, "{}: border vs bg", t.name);
-        assert!(contrast(t.border, t.surface) >= 1.1, "{}: border vs surface", t.name);
+        assert!(contrast(t.border, t.surface) >= MIN_BORDER_ON_SURFACE, "{}: border vs surface", t.name);
         if luminance(t.bg) < 0.05 {
-            assert!(contrast(t.dim, t.surface) >= 2.5, "{}: dim on surface", t.name);
-            assert!(contrast(t.text, t.surface) >= 6.0, "{}: text on surface", t.name);
+            assert!(contrast(t.surface, t.bg) >= MIN_SURFACE, "{}: the selection fill", t.name);
+            // Dim text is kept readable on the selected row where it is drawn; the text reads there as it is.
+            assert!(contrast(t.readable_on(t.dim, t.surface, MIN_DIM), t.surface) >= MIN_DIM, "{}: dim on surface", t.name);
+            assert!(contrast(t.readable_on(t.subtext, t.surface, MIN_SUBTEXT), t.surface) >= MIN_SUBTEXT, "{}: subtext on surface", t.name);
+            assert!(contrast(t.text, t.surface) >= MIN_SUBTEXT, "{}: text on surface", t.name);
         }
         assert!(contrast(t.on_accent, t.accent) >= 4.5f64.min(reach), "{}: badge text", t.name);
         // (Just under the light limit everything must be near white to read, which leaves no colors to tell apart.)
@@ -803,7 +811,8 @@ mod tests {
             assert!(on(x) >= MIN_ROLE, "{x:?}");
         }
         assert!(luminance(t.warn) < luminance(c(0xd8a820)), "the yellow is darkened until it reads, not lightened");
-        assert!(contrast(t.dim, t.surface) >= 2.5 && contrast(t.text, t.surface) >= 6.0);
+        assert!(contrast(t.surface, t.bg) >= MIN_SURFACE && contrast(t.text, t.surface) >= MIN_SUBTEXT);
+        assert!(contrast(t.readable_on(t.dim, t.surface, MIN_DIM), t.surface) >= MIN_DIM);
         // A light theme with faint text gets darker text, never lighter.
         let faint = build("x".into(), "F".into(), &parse("background = #fafafa\nforeground = #9a9a9a").unwrap());
         assert!(contrast(faint.text, faint.bg) >= MIN_TEXT && luminance(faint.text) < luminance(c(0x9a9a9a)));

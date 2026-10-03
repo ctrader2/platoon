@@ -18,6 +18,17 @@ pub const MIN_TEXT: f64 = 7.0;
 pub const MIN_SUBTEXT: f64 = 4.5;
 pub const MIN_DIM: f64 = 3.0;
 pub const MIN_ROLE: f64 = 4.5;
+/// The least contrast between the selection fill (`surface`: the selected row, the current tab, a hovered button) and
+/// the page, for every theme, dark or light. Before this floor the fill sat at 1.13-1.32:1 (Catppuccin Latte 1.15:1,
+/// Nord 1.26:1, Mocha 1.30:1), which on a light theme is a lightness step (CIE L*) of about 5: easy to miss. 1.4:1 is
+/// a step of about 12 on both sides (Mocha: L* 12.0 to 23.7; Latte: 95.1 to 82.5), the size of Catppuccin's own
+/// surface0 on Latte (1.39:1): it reads as a highlight at a glance without turning into a block of color. It also
+/// keeps the theme's text readable on it without touching the text: text is at least `MIN_TEXT` (7:1) on the page, so
+/// it is at least 7 / 1.4 = 5:1 on a fill at 1.4:1 (more than `MIN_SUBTEXT`); a fill is only lifted to the floor, never
+/// further. Muted text on the fill is kept at its own floor where it is drawn (`Theme::readable_on`).
+pub const MIN_SURFACE: f64 = 1.4;
+/// The least contrast between a border and the selection fill, so a bar or a chip edge on a selected row still shows.
+pub const MIN_BORDER_ON_SURFACE: f64 = 1.1;
 /// The least Lab distance (`delta_e`) between two of accent / busy / ok / warn / err. Set from the closest pair
 /// among the first built-ins (Catppuccin Mocha's lavender accent and mauve busy, 19, whose values are fixed by the
 /// original design; Melange Dark's amber accent and yellow warn, 18.8, are now the closest): every status is told
@@ -656,6 +667,9 @@ impl Spec {
             Some(t) => t.map(rgb),
             None => [0.09, 0.20, 0.46, 0.72].map(|t| mix(bg, text, t)),
         };
+        // The selection fill clearly off the page, and the border still apart from it.
+        let surface = lift_contrast(surface, bg, text, MIN_SURFACE);
+        let border = lift_contrast(border, surface, text, MIN_BORDER_ON_SURFACE);
         Theme {
             id: self.id.into(),
             name: self.name.into(),
@@ -740,6 +754,39 @@ impl Theme {
             return own;
         }
         best(Color::Rgb(0, 0, 0), Color::Rgb(255, 255, 255))
+    }
+
+    /// `fg` as it is drawn on `fill` (the selection fill, normally): itself when it reads there at `min`, otherwise moved
+    /// toward the theme's text (and past it, toward black on a light theme or white on a dark one, if even the text
+    /// falls short) by as little as it takes. Only colors with numbers are moved: a terminal's own color is left as it
+    /// is. The one rule for text on a fill, used by every screen's selected rows (`ui::keep_readable_on_selection`) and
+    /// the attached session's selected text.
+    pub fn readable_on(&self, fg: Color, fill: Color, min: f64) -> Color {
+        if !matches!(fg, Color::Rgb(..)) || !matches!(fill, Color::Rgb(..)) || contrast(fg, fill) >= min {
+            return fg;
+        }
+        let toward_text = lift_contrast(fg, fill, self.text, min);
+        if contrast(toward_text, fill) >= min {
+            return toward_text;
+        }
+        let strongest = if luminance(fill) >= 0.18 { Color::Rgb(0, 0, 0) } else { Color::Rgb(255, 255, 255) };
+        lift_contrast(toward_text, fill, strongest, min)
+    }
+
+    /// The floor a color of this theme has to meet on a fill: `MIN_DIM` for dim text and `MIN_SUBTEXT` for subtext and
+    /// text, the same as on the page. The accent and the status colors are held to `MIN_DIM` there: they are told
+    /// apart by their hue (`MIN_DELTA_E`), and moving them toward the text color would make "working" and "done" look
+    /// alike on the selected row. (In practice they are not moved: a role reads at 4.5:1 on the page, so on a fill at
+    /// `MIN_SURFACE` it is at least 4.5 / 1.4 = 3.2:1; a test checks every built-in.) None for a color that isn't text (the border, a project's color, the
+    /// fill itself), which is left as it is.
+    pub fn floor_of(&self, fg: Color) -> Option<f64> {
+        if fg == self.subtext || fg == self.text {
+            Some(MIN_SUBTEXT)
+        } else if fg == self.dim || [self.accent, self.busy, self.ok, self.warn, self.err].contains(&fg) {
+            Some(MIN_DIM)
+        } else {
+            None
+        }
     }
 
     /// One of the user's own theme files rather than a built-in.
@@ -1074,7 +1121,8 @@ mod tests {
         let t = Theme::default();
         let expect = [
             (t.bg, 0x1e1e2e),
-            (t.surface, 0x313244),
+            // The hand-tuned surface0 (#313244, 1.30:1) lifted to the selection fill's floor (`MIN_SURFACE`).
+            (t.surface, 0x363749),
             (t.border, 0x45475a),
             (t.dim, 0x6c7086),
             (t.subtext, 0xa6adc8),
@@ -1094,7 +1142,7 @@ mod tests {
     #[test]
     fn claude_uses_claude_codes_own_colors() {
         let t = Theme::by_id("claude").unwrap();
-        assert_eq!((t.bg, t.text, t.surface, t.dim), (rgb(0x141413), rgb(0xfaf9f5), rgb(0x2a2926), rgb(0x73726c)));
+        assert_eq!((t.bg, t.text, t.surface, t.dim), (rgb(0x141413), rgb(0xfaf9f5), rgb(0x32312e), rgb(0x73726c)));
         assert_eq!(
             (t.accent, t.busy, t.ok, t.warn, t.err),
             (
@@ -1146,15 +1194,61 @@ mod tests {
     #[test]
     fn surface_and_border_are_visible_but_quiet() {
         for t in fixed() {
-            assert!(contrast(t.surface, t.bg) >= 1.08, "{}: surface vs bg {:.2}", t.id, contrast(t.surface, t.bg));
+            let s = contrast(t.surface, t.bg);
+            assert!((MIN_SURFACE..1.5).contains(&s), "{}: surface vs bg {s:.2}: a highlight, not a block", t.id);
             assert!(contrast(t.border, t.bg) >= 1.25, "{}: border vs bg {:.2}", t.id, contrast(t.border, t.bg));
             // Bars and hover chips draw the border color on a selected row's surface.
-            assert!(contrast(t.border, t.surface) >= 1.1, "{}: border vs surface {:.2}", t.id, contrast(t.border, t.surface));
-            // Dim text must still read on the selected row.
-            assert!(contrast(t.dim, t.surface) >= 2.5, "{}: dim on surface {:.2}", t.id, contrast(t.dim, t.surface));
-            assert!(contrast(t.text, t.surface) >= 6.0, "{}: text on surface {:.2}", t.id, contrast(t.text, t.surface));
+            assert!(
+                contrast(t.border, t.surface) >= MIN_BORDER_ON_SURFACE,
+                "{}: border vs surface {:.2}",
+                t.id,
+                contrast(t.border, t.surface)
+            );
+            // The text itself reads on the selected row as it is (it is never moved there).
+            assert!(contrast(t.text, t.surface) >= MIN_SUBTEXT, "{}: text on surface {:.2}", t.id, contrast(t.text, t.surface));
             assert!(contrast(t.on_accent, t.accent) >= 4.5, "{}: badge text {:.2}", t.id, contrast(t.on_accent, t.accent));
         }
+    }
+
+    /// Every built-in (the `SPECS` themes and the theme files, dark and light), so a new theme can't regress: the
+    /// selection fill stands clear of the page, and every kind of text drawn on it, as `Theme::readable_on` draws it,
+    /// meets the floor it meets on the page; the accent and the status colors keep their own color there.
+    #[test]
+    fn every_built_in_keeps_its_text_readable_on_the_selection_fill() {
+        let all: Vec<Theme> = Theme::all().into_iter().filter(|t| t.ansi.is_some()).collect();
+        assert_eq!(all.len(), 51, "every built-in with colors of its own");
+        for t in &all {
+            let fill = t.surface;
+            assert!(contrast(fill, t.bg) >= MIN_SURFACE, "{}: the selection fill {:.2}", t.id, contrast(fill, t.bg));
+            assert!(contrast(t.border, fill) >= MIN_BORDER_ON_SURFACE, "{}: border on the fill", t.id);
+            for (name, c, min) in [("dim", t.dim, MIN_DIM), ("subtext", t.subtext, MIN_SUBTEXT), ("text", t.text, MIN_SUBTEXT)] {
+                assert_eq!(t.floor_of(c), Some(min), "{}: {name}'s floor", t.id);
+                let drawn = t.readable_on(c, fill, min);
+                assert!(contrast(drawn, fill) >= min, "{}: {name} on the fill {:.2}", t.id, contrast(drawn, fill));
+                assert!(contrast(c, t.bg) >= min, "{}: {name} on the page", t.id);
+            }
+            // The hierarchy survives on the fill: dim stays quieter than text.
+            let on = |c| contrast(t.readable_on(c, fill, t.floor_of(c).unwrap()), fill);
+            assert!(on(t.text) > on(t.dim), "{}: text over dim on the fill", t.id);
+            for (name, c) in [("accent", t.accent), ("busy", t.busy), ("ok", t.ok), ("warn", t.warn), ("err", t.err)] {
+                assert!(contrast(c, fill) >= MIN_DIM, "{}: {name} on the fill {:.2}", t.id, contrast(c, fill));
+                assert_eq!(t.readable_on(c, fill, t.floor_of(c).unwrap()), c, "{}: {name} keeps its own color on the fill", t.id);
+            }
+        }
+    }
+
+    #[test]
+    fn readable_on_moves_a_color_only_as_far_as_it_must_and_leaves_terminal_colors_alone() {
+        let t = Theme::default();
+        assert_eq!(t.readable_on(t.text, t.surface, MIN_SUBTEXT), t.text, "already reads: unchanged");
+        let lifted = t.readable_on(t.dim, t.surface, MIN_DIM);
+        assert!(contrast(lifted, t.surface) >= MIN_DIM && contrast(lifted, t.surface) < MIN_DIM + 0.2, "just enough");
+        assert_eq!(t.readable_on(Color::DarkGray, t.surface, MIN_DIM), Color::DarkGray, "a terminal color has no numbers");
+        // Even a fill the text itself can't reach on gets there, past the text toward black or white.
+        let mid = rgb(0x808080);
+        let c = t.readable_on(rgb(0x7a7a7a), mid, 4.5);
+        assert!(contrast(c, mid) >= 4.5, "{:.2}", contrast(c, mid));
+        assert_eq!(t.floor_of(t.border), None, "the border isn't text");
     }
 
     #[test]
@@ -1240,7 +1334,7 @@ mod tests {
         let lines: Vec<&str> = plain.lines().collect();
         assert_eq!(lines.len(), 2 * Theme::all().len(), "a name line and a roles line each");
         assert_eq!(lines[0], "catppuccin-mocha       Catppuccin Mocha  (default)");
-        assert!(lines[1].starts_with("  bg #1e1e2e  surface #313244") && lines[1].ends_with("err #f38ba8"), "{}", lines[1]);
+        assert!(lines[1].starts_with("  bg #1e1e2e  surface #363749") && lines[1].ends_with("err #f38ba8"), "{}", lines[1]);
         assert!(lines[2].starts_with("catppuccin-macchiato   Catppuccin Macchiato") && !lines[2].contains("default"));
         let last = lines.len() - 1;
         assert!(lines[last - 1].starts_with("terminal") && lines[last - 1].contains("Terminal colors"));

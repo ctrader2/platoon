@@ -646,7 +646,8 @@ fn the_quick_filter_marks_the_words_and_shows_a_hidden_field_that_matched() {
     let bx = (0..100).find(|&x| buf_text(&term, x, y, 6) == "basket").unwrap();
     let buf = term.backend().buffer().clone();
     assert_eq!(buf[(bx, y)].fg, t.accent);
-    assert_eq!(buf[(bx - 2, y)].fg, t.dim, "the rest of it dim");
+    // Dim, kept readable on the selected row's fill.
+    assert_eq!(buf[(bx - 2, y)].fg, t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM), "the rest of it dim");
     // A folder that matches is marked where it is.
     for _ in 0..6 {
         key(&mut app, KeyCode::Backspace);

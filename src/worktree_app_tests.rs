@@ -178,13 +178,13 @@ fn a_worktree_with_changes_not_yet_committed_is_kept_said_on_its_screen_and_w_re
     assert!(f.contains("Kept because it has changes not yet committed."), "{shown}");
     assert!(f.contains("w removes it anyway"), "{shown}");
     assert!(f.contains("w remove worktree"), "the footer too: {shown}");
-    // Its key in the accent, like every key hint.
+    // Its key in the accent and its words in the hint color, like every key hint.
     let t = l.app.effective_theme();
     let buf = term.backend().buffer().clone();
     let (y, x) =
         shown.lines().enumerate().find_map(|(y, line)| line.find("w removes it anyway").map(|b| (y, line[..b].chars().count()))).unwrap();
     assert_eq!(buf[(x as u16, y as u16)].fg, t.accent);
-    assert_eq!(buf[(x as u16 + 2, y as u16)].fg, t.dim);
+    assert_eq!(buf[(x as u16 + 2, y as u16)].fg, crate::ui::hint_fg(t), "its words in the hint color, like the footer's");
     let (ky, kx) =
         shown.lines().enumerate().find_map(|(y, line)| line.find("Kept because").map(|b| (y, line[..b].chars().count()))).unwrap();
     assert_eq!(buf[(kx as u16, ky as u16)].fg, t.warn);

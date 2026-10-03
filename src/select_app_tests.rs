@@ -514,7 +514,10 @@ fn the_highlight_keeps_the_sessions_text_color_where_it_reads_and_changes_it_whe
     let sel = theme.selection_bg().unwrap();
     let cell = |col: u16| r.buffer()[Rig::cell(0, col)].clone();
     assert_eq!((cell(0).fg, cell(0).bg), (Color::Rgb(255, 120, 120), sel), "readable: kept");
-    assert_eq!((cell(4).fg, cell(4).bg), (theme.text, sel), "would vanish: the theme's text color");
+    // Would vanish: moved toward the theme's text just until it reads (the rule for text on platoon's own selection).
+    let dark = Color::Rgb(40, 40, 60);
+    assert_eq!((cell(4).fg, cell(4).bg), (theme.readable_on(dark, sel, 3.0), sel), "would vanish: lifted");
+    assert!(cell(4).fg != dark && crate::theme::contrast(cell(4).fg, sel) >= 3.0);
     assert_eq!((cell(10).fg, cell(10).bg), (theme.text, sel), "default text is the theme's text color anyway");
 }
 

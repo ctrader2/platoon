@@ -117,6 +117,9 @@ fn the_twenty_are_built_ins_after_the_others_dark_then_light_before_terminal_col
 
 /// The colors the Theme pack plugin gave each of its themes, written down from the plugin route before it went: every
 /// role, the sixteen session colors, the badge text and whether it is light, all the same now that they are built in.
+/// One change since, on purpose (2026-10-03): the selection fill is held to `MIN_SURFACE` (it was at 1.08:1 and up),
+/// so `surface`, and where it had to move to stay apart from it `border`, are the floor's; and dim is no longer lifted
+/// for the selected row (that is done where it is drawn), which moved Doom One's dim by one step.
 #[test]
 fn each_built_in_has_exactly_the_colors_the_theme_pack_plugin_gave_it() {
     let hex = |c: Color| match c {
@@ -180,10 +183,14 @@ fn every_theme_file_reads_well_as_it_is_and_after_the_derivation() {
         }
         // The same rules as the built-ins for what is drawn on what.
         assert!(
-            contrast(t.surface, t.bg) >= 1.08 && contrast(t.border, t.bg) >= 1.25 && contrast(t.border, t.surface) >= 1.1,
+            contrast(t.surface, t.bg) >= crate::theme::MIN_SURFACE
+                && contrast(t.border, t.bg) >= 1.25
+                && contrast(t.border, t.surface) >= crate::theme::MIN_BORDER_ON_SURFACE,
             "{name}: surface and border"
         );
-        assert!(contrast(t.dim, t.surface) >= 2.5 && contrast(t.text, t.surface) >= 6.0, "{name}: on a selected row");
+        // The text reads on a selected row as it is; dim and subtext are kept at their floors there where they are drawn.
+        assert!(contrast(t.text, t.surface) >= MIN_SUBTEXT, "{name}: text on a selected row");
+        assert!(contrast(t.readable_on(t.dim, t.surface, MIN_DIM), t.surface) >= MIN_DIM, "{name}: dim on a selected row");
         assert!(contrast(t.on_accent, t.accent) >= 4.5, "{name}: the count badge");
         let sel = t.selection_bg().unwrap();
         assert!(contrast(t.text, sel) >= SELECTION_TEXT_CONTRAST && delta_e(sel, t.bg) >= 15.0, "{name}: selected text");
@@ -207,7 +214,8 @@ fn every_theme_file_still_reads_in_256_colors() {
         // 256 colors are coarse, and a light background becomes the grey ramp's lightest (#eeeeee): a little is
         // lost, as for the built-ins (whose lowest role is 3.7:1 there), but everything still reads.
         assert!(contrast(q(t.text), bg) >= 5.0, "{name}: text {:.2}", contrast(q(t.text), bg));
-        assert!(contrast(q(t.text), q(t.surface)) >= 4.5, "{name}: text on the selected row");
+        // (4.1:1 at the least, Rosé Pine Dawn: the clearer selection fill costs a little here, like selected text.)
+        assert!(contrast(q(t.text), q(t.surface)) >= 4.0, "{name}: text on the selected row");
         assert!(contrast(q(t.text), q(t.selection_bg().unwrap())) >= 4.0, "{name}: text on selected text");
         assert!(contrast(q(t.dim), bg) >= 2.5, "{name}: dim {:.2}", contrast(q(t.dim), bg));
         for c in [t.accent, t.busy, t.ok, t.warn, t.err] {
@@ -433,7 +441,8 @@ fn the_attached_views_footer_and_session_in_a_light_theme() {
     let hint = find(&ls, "back to list").unwrap();
     assert_eq!(hint.0, 23, "the footer is the last line: there is no frame");
     let label = &footer[hint.1];
-    assert_eq!((label.fg, label.bg), (t.dim, t.bg));
+    assert_eq!((label.fg, label.bg), (ui::hint_fg(&t), t.bg), "hint words read like body text");
+    assert!(contrast(label.fg, label.bg) >= MIN_SUBTEXT);
     let back = app.back_label().to_string();
     let k = at(&ls, &back);
     assert_eq!((k.fg, k.bg), (t.accent, t.bg), "the back key in the accent");

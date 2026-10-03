@@ -28,7 +28,8 @@ printf '%s\n' "$line" >> "$f"
 const ACCENT: vt100::Color = vt100::Color::Rgb(0xb4, 0xbe, 0xfe);
 const OK: vt100::Color = vt100::Color::Rgb(0xa6, 0xe3, 0xa1);
 const WARN: vt100::Color = vt100::Color::Rgb(0xf9, 0xe2, 0xaf);
-const SURFACE: vt100::Color = vt100::Color::Rgb(0x31, 0x32, 0x44);
+/// surface0 (#313244) lifted to the selection fill's floor (`theme::MIN_SURFACE`).
+const SURFACE: vt100::Color = vt100::Color::Rgb(0x36, 0x37, 0x49);
 const BG: vt100::Color = vt100::Color::Rgb(0x1e, 0x1e, 0x2e);
 
 struct Lab {
@@ -618,12 +619,12 @@ fn a_done_tickets_worktree_with_uncommitted_changes_is_kept_said_on_its_screen_a
     t.wait_for_flat("w remove worktree");
     assert!(wt.join("draft.txt").exists());
     assert_eq!(lab.tickets()["tickets"][0]["worktrees"][0]["kept_uncommitted"], true);
-    // The words in the warning colour; the key in the accent and its words dimmed, like the footer's.
+    // The words in the warning colour; the key in the accent and its words in the hint colour (subtext), like the footer's.
     let (ky, kx) = find(&mut t, "Kept because");
     t.wait_fg(ky, kx, WARN);
     let (wy, wx) = find(&mut t, "w removes it anyway");
     t.wait_fg(wy, wx, ACCENT);
-    assert_eq!(t.fg_at(wy, wx + 2), vt100::Color::Rgb(0x6c, 0x70, 0x86), "the words in the dim colour");
+    assert_eq!(t.fg_at(wy, wx + 2), vt100::Color::Rgb(0xa6, 0xad, 0xc8), "the words in the hint colour");
     let (fy, fx) = find(&mut t, "w remove worktree");
     assert_eq!(t.fg_at(fy, fx), ACCENT);
     // `w` asks first; `n` keeps it.

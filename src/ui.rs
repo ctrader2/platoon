@@ -7,7 +7,7 @@ use crate::dirs::tilde;
 use crate::model::{NameSource, Session, Status};
 use crate::select::{Selection, Span as Cells};
 use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
-use crate::theme::{Theme, contrast};
+use crate::theme::Theme;
 use crate::tickets::{self, State, Ticket};
 use crate::usage::Usage;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -28,6 +28,13 @@ const BAR_WIDTH: usize = 10;
 const SELECTION_MIN_FG_CONTRAST: f64 = 3.0;
 
 type Hint<'a> = (&'a str, &'a str, Option<Action>);
+
+/// The color of words that say what a key does or how to do something: the footers' and popups' hints, "(esc clears)",
+/// "Press enter to ...". They are how people find the keys, so they are held to `MIN_SUBTEXT` (4.5:1) like any text
+/// meant to be read, never drawn `dim`: `dim` (3:1) is for what can be skipped (ages, counts, faded things).
+pub(crate) fn hint_fg(t: &Theme) -> Color {
+    t.subtext
+}
 
 /// The summary strip needs a terminal this many rows tall (the header, the rule, the column titles and the footer,
 /// the strip, and at least three conversations of the list beside it); on a shorter terminal it is left out.
@@ -57,6 +64,35 @@ fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
 }
 
 pub fn draw(f: &mut Frame, app: &App) {
+    draw_all(f, app);
+    keep_readable_on_selection(f.buffer_mut(), app.effective_theme());
+}
+
+/// Text drawn on the selection fill (`surface`: a selected or hovered row, the current tab, a chip) is held to the
+/// floors it meets on the page, against the fill: dim text 3:1, everything else that is text 4.5:1
+/// (`Theme::floor_of`). Done once over the finished frame, cell by cell, so every screen and popup gets it and none
+/// has to remember to; a color that already reads is left exactly as it is. The round caps of a pill are the pill's
+/// own color, not text, and stay as they are.
+fn keep_readable_on_selection(buf: &mut ratatui::buffer::Buffer, t: &Theme) {
+    if !matches!(t.surface, Color::Rgb(..)) {
+        return;
+    }
+    for cell in buf.content.iter_mut() {
+        if cell.bg != t.surface || cell.modifier.contains(Modifier::REVERSED) || is_cap(cell.symbol()) {
+            continue;
+        }
+        if let Some(min) = t.floor_of(cell.fg) {
+            cell.fg = t.readable_on(cell.fg, t.surface, min);
+        }
+    }
+}
+
+/// A Powerline glyph (a pill's round cap, U+E0B0..U+E0BF): drawn in a fill's color, not text.
+fn is_cap(symbol: &str) -> bool {
+    symbol.chars().next().is_some_and(|c| ('\u{e0b0}'..='\u{e0bf}').contains(&c))
+}
+
+fn draw_all(f: &mut Frame, app: &App) {
     let t = app.effective_theme();
     app.hits.borrow_mut().clear();
     let full = f.area();
@@ -296,7 +332,7 @@ fn draw_too_small(f: &mut Frame, app: &App, area: Rect) {
     let gap = usize::from(a.len() + b.len() < area.height as usize);
     let mut lines: Vec<Line> = a.into_iter().map(|l| Line::styled(l, Style::new().fg(t.text))).collect();
     lines.extend(std::iter::repeat_n(Line::raw(""), gap));
-    lines.extend(b.into_iter().map(|l| Line::styled(l, Style::new().fg(t.dim))));
+    lines.extend(b.into_iter().map(|l| Line::styled(l, Style::new().fg(hint_fg(t)))));
     lines.truncate(area.height as usize);
     let h = lines.len() as u16;
     let at = Rect::new(area.x, area.y + (area.height - h) / 2, area.width, h);
@@ -691,7 +727,7 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     spans.push(Span::styled(format!("   {}", session_counts(&st)), Style::new().fg(t.dim)));
     if !app.filter.is_empty() {
         spans.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
-        spans.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
+        spans.push(Span::styled("  (esc clears)", Style::new().fg(hint_fg(t))));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), title);
     // The description across the top, in full: as many lines as it needs, the panes below it. Until platoon has
@@ -835,7 +871,10 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let all = app.tickets();
     let rows = app.ticket_rows();
     if rows.is_empty() {
-        f.render_widget(Paragraph::new("No tickets yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), area);
+        f.render_widget(
+            Paragraph::new("No tickets yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(hint_fg(t))),
+            area,
+        );
         return;
     }
     let shown: Vec<&Ticket> =
@@ -968,7 +1007,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         head.push(Line::from(vec![
             label("From"),
             Span::styled(fit_end(&app.ticket_source_name(from), room.max(8)), Style::new().fg(t.text)),
-            Span::styled(hint, Style::new().fg(t.dim)),
+            Span::styled(hint, Style::new().fg(hint_fg(t))),
         ]));
     }
     // What the squad said when it stopped: its question, why it is stuck, what it wants to publish.
@@ -1029,7 +1068,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::from(vec![
                 label(""),
                 Span::styled("w", Style::new().fg(t.accent)),
-                Span::styled(what, Style::new().fg(t.dim)),
+                Span::styled(what, Style::new().fg(hint_fg(t))),
             ]));
         }
     }
@@ -1250,7 +1289,8 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         } else {
             "No sessions match the filter"
         };
-        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), area);
+        let color = if app.filter.is_empty() { hint_fg(t) } else { t.dim };
+        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(color)), area);
         return;
     }
     let active = visible.len() - app.archived_rows;
@@ -1454,7 +1494,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         let n = filter.chars().count();
         if n + clears.chars().count() <= room {
             left.push(Span::styled(filter, Style::new().fg(t.accent)));
-            left.push(Span::styled(clears, Style::new().fg(t.dim)));
+            left.push(Span::styled(clears, Style::new().fg(hint_fg(t))));
         } else if n <= room {
             left.push(Span::styled(filter, Style::new().fg(t.accent)));
         }
@@ -1528,8 +1568,8 @@ fn chip_width(key: &str, label: &str, count: usize) -> u16 {
 /// One tab of the header, ` 1 Active 3 `: the current tab is lit, a hovered one half lit, the rest quiet.
 fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, current: bool, hover: bool) -> Vec<Span<'static>> {
     let chip = if current || hover { t.surface } else { t.bg };
-    // The key is a quiet reminder in every state; the label says which tab is current.
-    let k = Style::new().fg(t.dim);
+    // The key is a reminder in every state, read like any hint; the label says which tab is current.
+    let k = Style::new().fg(hint_fg(t));
     let (l, badge) = if current {
         (Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
     } else if hover {
@@ -1947,7 +1987,7 @@ fn draw_footer(f: &mut Frame, app: &App, area: Rect, hints: &[Hint<'_>], right: 
             app.hits.borrow_mut().push((rect, Hit::Action(*a)));
         }
         let bg = if hover { t.surface } else { t.bg };
-        let label = if hover { t.text } else { t.dim };
+        let label = if hover { t.text } else { hint_fg(t) };
         spans.push(Span::styled(*k, Style::new().fg(t.accent).bg(bg)));
         spans.push(Span::styled(format!(" {d}"), Style::new().fg(label).bg(bg)));
         x += w;
@@ -2531,9 +2571,30 @@ pub(crate) fn popup_for_test(f: &mut Frame, t: &Theme, screen: Rect, r: Rect) {
     f.render_widget(modal_block(t, "Test"), r);
 }
 
-/// Everything behind a popup reads as inactive: the same layout in muted colors.
+/// How far a colored background behind a popup moves toward the page (0: not at all, 1: gone).
+const FADE_BG: f64 = 0.7;
+
+/// Everything behind a popup reads as inactive: the same layout in muted colors. The text goes to the border color,
+/// and every background that isn't the page's (the selection fill, a project's badge, the current tab) most of the
+/// way to the page (`FADE_BG`), so nothing behind outshines the popup on top. A terminal's own color, which has no
+/// numbers to mix, becomes the page.
 fn fade_behind(f: &mut Frame, t: &Theme, area: Rect) {
-    f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
+    let buf = f.buffer_mut();
+    buf.set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
+    let area = area.intersection(buf.area);
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let cell = &mut buf[(x, y)];
+            if cell.bg == t.bg || cell.bg == Color::Reset {
+                continue;
+            }
+            let faded = match (cell.bg, t.bg) {
+                (Color::Rgb(..), Color::Rgb(..)) => crate::theme::mix(cell.bg, t.bg, FADE_BG),
+                _ => t.bg,
+            };
+            cell.set_bg(faded);
+        }
+    }
 }
 
 /// The ground every popup is drawn on, at `r` over the `screen`: the screen behind faded (`fade`; the search and the
@@ -3044,17 +3105,16 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
         lines.push((text, t.warn));
     } else {
         match app.find_state() {
-            FindState::Idle if s.text.trim().is_empty() => lines.push((SEARCH_KINDS[FIND_KIND].prompt.to_string(), t.dim)),
-            FindState::Idle => {
-                lines.push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), t.dim))
-            }
+            FindState::Idle if s.text.trim().is_empty() => lines.push((SEARCH_KINDS[FIND_KIND].prompt.to_string(), hint_fg(t))),
+            FindState::Idle => lines
+                .push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), hint_fg(t))),
             FindState::Waiting => {
                 lines.push(("Asking Claude...".to_string(), t.subtext));
-                lines.push(("Waiting for the names being made to finish first. Press esc to cancel.".to_string(), t.dim));
+                lines.push(("Waiting for the names being made to finish first. Press esc to cancel.".to_string(), hint_fg(t)));
             }
             FindState::Asking => {
                 lines.push(("Asking Claude...".to_string(), t.subtext));
-                lines.push(("Press esc to cancel.".to_string(), t.dim));
+                lines.push(("Press esc to cancel.".to_string(), hint_fg(t)));
             }
             FindState::Confirm { estimate, count } => {
                 lines.push((
@@ -3066,7 +3126,7 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
                 ));
             }
             FindState::Done if s.results.is_empty() => {
-                lines.push(("Claude found no likely match. Try other words, or press ctrl+w to search wider.".to_string(), t.dim));
+                lines.push(("Claude found no likely match. Try other words, or press ctrl+w to search wider.".to_string(), hint_fg(t)));
             }
             FindState::Done => return false,
             FindState::Failed(msg) => lines.push((msg.clone(), t.warn)),
@@ -3180,7 +3240,7 @@ fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
     f.set_cursor_position((input.x + 2 + (rn.input.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     f.render_widget(
-        Paragraph::new(fit_end("Leave it empty to go back to the automatic name.", note.width as usize)).style(Style::new().fg(t.dim)),
+        Paragraph::new(fit_end("Leave it empty to go back to the automatic name.", note.width as usize)).style(Style::new().fg(hint_fg(t))),
         note,
     );
     let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
@@ -3330,7 +3390,7 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     } else {
         format!("{} the one you used last: enter opens it again.", app.star())
     };
-    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(t.dim)), note);
+    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(hint_fg(t))), note);
     let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }
@@ -3376,7 +3436,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
     }
     let foot_note = format!("{} your favourite. Choosing another makes it the favourite.", app.star());
-    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(t.dim)), note);
+    f.render_widget(Paragraph::new(fit_end(&foot_note, note.width as usize)).style(Style::new().fg(hint_fg(t))), note);
     let hints: [Hint; 3] = [("enter", "open", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }
@@ -3569,7 +3629,7 @@ fn draw_look(f: &mut Frame, app: &App, area: Rect) {
     }
     f.render_widget(Paragraph::new(Line::from(spans)), swatches);
     let label = crate::projects::SLOTS.get(lk.slot).map_or("", |s| s.1);
-    f.render_widget(Paragraph::new(Span::styled(format!("Color: {label}   (←→ to change)"), Style::new().fg(t.dim))), names);
+    f.render_widget(Paragraph::new(Span::styled(format!("Color: {label}   (←→ to change)"), Style::new().fg(hint_fg(t)))), names);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("Badge ❯ ", Style::new().fg(t.accent)),
@@ -4035,9 +4095,9 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
         Line::raw(""),
         Line::from(vec![
             Span::styled(app.back_label().to_string(), Style::new().fg(t.accent)),
-            Span::styled(" go back, then press ", Style::new().fg(t.dim)),
+            Span::styled(" go back, then press ", Style::new().fg(hint_fg(t))),
             Span::styled("enter", Style::new().fg(t.accent)),
-            Span::styled(" on it to reload", Style::new().fg(t.dim)),
+            Span::styled(" on it to reload", Style::new().fg(hint_fg(t))),
         ]),
     ];
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
@@ -4093,11 +4153,10 @@ fn draw_screen(f: &mut Frame, t: &Theme, screen: &vt100::Screen, area: Rect, sel
                 match selection_bg {
                     Some(sel) => {
                         bg = sel;
-                        // A dim gray or a color close to the highlight would vanish on it. (Only colors with
+                        // A dim gray or a color close to the highlight would vanish on it: moved toward the text
+                        // until it reads, the same rule as text on platoon's own selected rows. (Only colors with
                         // numbers can be measured; the session's 256-color ones are left as they are.)
-                        if matches!(fg, Color::Rgb(..)) && contrast(fg, sel) < SELECTION_MIN_FG_CONTRAST {
-                            fg = t.text;
-                        }
+                        fg = t.readable_on(fg, sel, SELECTION_MIN_FG_CONTRAST);
                     }
                     // Toggled, so a cell that was already reversed (inverse video) changes too.
                     None => m ^= Modifier::REVERSED,

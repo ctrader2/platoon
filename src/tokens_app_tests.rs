@@ -261,7 +261,12 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
             Some(buf[(text[..i].chars().count() as u16, y)].fg)
         })
     };
-    assert_eq!(fg_at(&term, MASTER_LABEL, "Off"), Some(app.theme.dim), "Off is muted");
+    let t = &app.theme;
+    assert_eq!(
+        fg_at(&term, MASTER_LABEL, "Off"),
+        Some(t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM)),
+        "Off is muted (on the selected row)"
+    );
     key(&mut app, KeyCode::Right);
     screen(&mut term, &app);
     assert_eq!(fg_at(&term, MASTER_LABEL, "On"), Some(app.theme.accent), "On stands out");

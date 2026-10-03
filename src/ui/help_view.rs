@@ -2,7 +2,7 @@
 //! with the settings and the search where they work; the keys that work the same all over platoon (with the user's own
 //! back and quit keys from `keys.json`); and a few things worth knowing. It scrolls when it is longer than the screen.
 
-use super::{centered, modal_block, popup_ground, screen_hints, wrap};
+use super::{centered, hint_fg, modal_block, popup_ground, screen_hints, wrap};
 use crate::app::{App, Hit, TOPS};
 use ratatui::{
     Frame,
@@ -125,9 +125,13 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     app.help_top.set(top);
     let shown: Vec<Line> = text.into_iter().skip(top).take(view_h).collect();
     f.render_widget(Paragraph::new(shown), Rect::new(inner.x, inner.y, inner.width, view_h as u16));
-    let mut keys = vec![Span::styled("esc", Style::new().fg(t.accent)), Span::styled(" close", Style::new().fg(t.dim))];
+    let mut keys = vec![Span::styled("esc", Style::new().fg(t.accent)), Span::styled(" close", Style::new().fg(hint_fg(t)))];
     if max_top > 0 {
-        keys.extend([Span::raw("   "), Span::styled("↑↓", Style::new().fg(t.accent)), Span::styled(" scroll", Style::new().fg(t.dim))]);
+        keys.extend([
+            Span::raw("   "),
+            Span::styled("↑↓", Style::new().fg(t.accent)),
+            Span::styled(" scroll", Style::new().fg(hint_fg(t))),
+        ]);
         let more = if top < max_top { format!("   {} more lines below", max_top - top) } else { String::new() };
         keys.push(Span::styled(more, Style::new().fg(t.dim)));
     }

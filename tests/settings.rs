@@ -289,9 +289,9 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
     env.push(("NO_COLOR", String::new())); // the helper sets it, which makes crossterm draw without any color
     let file = base.join("config/settings.json");
     fs::write(&file, r#"{"keep":"me","auto_archive_days":0}"#).unwrap();
-    // Catppuccin Mocha: the raised surface and the text on it for the tab showing; the plain background and the
-    // muted text for the others.
-    let (surface, bg, text, dim) = (Rgb(0x31, 0x32, 0x44), Rgb(0x1e, 0x1e, 0x2e), Rgb(0xcd, 0xd6, 0xf4), Rgb(0x6c, 0x70, 0x86));
+    // Catppuccin Mocha: the raised surface (surface0 lifted to the selection fill's floor) and the text on it for the
+    // tab showing; the plain background and the muted text for the others.
+    let (surface, bg, text, dim) = (Rgb(0x36, 0x37, 0x49), Rgb(0x1e, 0x1e, 0x2e), Rgb(0xcd, 0xd6, 0xf4), Rgb(0x6c, 0x70, 0x86));
     let mut t = Term::spawn(&[], &env, &base, 24, 80);
     t.wait_for("enter open");
     t.send(b"s");

@@ -593,7 +593,7 @@ fn the_dialog_shows_the_chips_the_box_and_results_with_the_words_lit_in_the_acce
     let (fx, fy) = find(&shown, "Full-text");
     assert_eq!((buf[(qx, qy)].fg, buf[(qx, qy)].bg), (t.on_accent, t.accent));
     assert!(buf[(qx, qy)].modifier.contains(Modifier::BOLD));
-    assert_eq!((buf[(fx, fy)].fg, buf[(fx, fy)].bg), (t.dim, t.surface));
+    assert_eq!((buf[(fx, fy)].fg, buf[(fx, fy)].bg), (t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM), t.surface));
     // The box: a prompt mark in the accent color, the text after it.
     type_str(&mut app, "delta");
     let shown = screen(&mut term, &app);

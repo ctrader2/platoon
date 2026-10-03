@@ -1477,7 +1477,9 @@ fn a_generated_name_has_a_dim_mark_at_the_end_of_its_column_and_a_name_you_chose
     let dir_at = made.find("/work/gen").map(|b| made[..b].chars().count()).unwrap();
     assert!(mx as usize + 1 < dir_at, "before the folder column");
     let cell = &term.backend().buffer()[(mx, my)];
-    assert_eq!(cell.fg, app.theme.dim);
+    let t = &app.theme;
+    let dim = if cell.bg == t.surface { t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM) } else { t.dim };
+    assert_eq!(cell.fg, dim);
     // The name itself is drawn as any name is: not dim.
     let (nx, ny) = at(&shown, "Login fix").unwrap();
     assert_eq!(term.backend().buffer()[(nx, ny)].fg, app.theme.text);

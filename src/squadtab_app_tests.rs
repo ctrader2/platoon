@@ -1212,7 +1212,7 @@ fn the_workflow_rail_draws_codings_send_backs_as_nested_loops_in_muted_colours()
     let (mx, _) = find(&term, "││  ●  3 reviewer");
     assert_eq!((bg(&term, (x, y)), fg(&term, (mx + 4, y)), bg(&term, (mx, y))), (t.surface, t.accent, t.surface));
     assert_eq!(fg(&term, (mx - 2, y)), t.accent, "the cursor's bar");
-    assert_eq!(fg(&term, (mx, y)), t.dim, "the loop keeps its colour on the surface");
+    assert_eq!(fg(&term, (mx, y)), t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM), "the loop stays dim on the surface, readable");
     assert_eq!(bg(&term, (x, y + 1)), t.bg, "what it does is a row of its own");
     key(&mut app, KeyCode::Down);
     draw(&mut term, &app);

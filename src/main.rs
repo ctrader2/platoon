@@ -7,6 +7,8 @@ mod client;
 mod clipboard;
 mod colordepth;
 #[cfg(test)]
+mod contrast_app_tests;
+#[cfg(test)]
 mod density_app_tests;
 mod describe;
 mod dirs;
@@ -1299,7 +1301,9 @@ mod tests {
             .find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().contains("hello"))
             .unwrap();
         let name_cell = (0..buf.area.width).map(|x| &buf[(x, row - 1)]).find(|c| c.symbol() == "a").unwrap();
-        assert_eq!(name_cell.fg, app.theme.dim);
+        // Dim, as dim is drawn on the selected row's fill.
+        let t = &app.theme;
+        assert_eq!((name_cell.fg, name_cell.bg), (t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM), t.surface));
     }
 
     #[test]
@@ -2013,7 +2017,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tabs_carry_no_count_and_their_key_is_quiet() {
+    fn the_tabs_carry_no_count_and_their_key_reads_as_a_hint() {
         let (_w, app) = mixed_app("tabs-plain");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         draw(&mut term, &app);
@@ -2024,7 +2028,9 @@ mod tests {
         assert!(header.contains("1 Sessions   2 Projects   3 Squads"), "{header}");
         for (key, name) in [("1", "1 Sessions"), ("2", "2 Projects"), ("3", "3 Squads")] {
             let at = cell_index(&cells, name);
-            assert_eq!((cells[at].symbol(), cells[at].fg), (key, t.dim), "{name}: the key is dim, current or not");
+            let hint = if cells[at].bg == t.surface { t.readable_on(t.subtext, t.surface, crate::theme::MIN_SUBTEXT) } else { t.subtext };
+            assert_eq!((cells[at].symbol(), cells[at].fg), (key, hint), "{name}: the key reads as a hint, current or not");
+            assert!(crate::theme::contrast(cells[at].fg, cells[at].bg) >= crate::theme::MIN_SUBTEXT, "{name}");
         }
         let current = cell_index(&cells, "Sessions");
         assert!(
@@ -2258,7 +2264,8 @@ mod tests {
                 text.find(word).map(|i| buf[(text[..i].chars().count() as u16, y)].fg)
             })
         };
-        assert_eq!(cell_fg("Off"), Some(app.theme.dim), "Off is muted");
+        let t = &app.theme;
+        assert_eq!(cell_fg("Off"), Some(t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM)), "Off is muted (on the selected row)");
         assert_eq!(cell_fg("2 days"), Some(app.theme.accent), "an active value stands out");
         // Every step reads as words a person would say.
         let labels: Vec<Vec<String>> = ITEMS[1..].iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
