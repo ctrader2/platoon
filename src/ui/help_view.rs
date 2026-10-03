@@ -1,9 +1,9 @@
 //! The help popup (`?`): every key of the screen showing, from the same table its footer uses (so the two can't drift),
-//! the keys that work all over platoon (with the user's own back and quit keys from `keys.json`), and two things worth
-//! knowing about the terminal. It scrolls when it is longer than the screen.
+//! with the settings and the search where they work; the keys that work the same all over platoon (with the user's own
+//! back and quit keys from `keys.json`); and a few things worth knowing. It scrolls when it is longer than the screen.
 
-use super::{Hint, centered, modal_block, popup_ground, screen_hints, wrap};
-use crate::app::{App, Hit, Mode, TOPS};
+use super::{centered, modal_block, popup_ground, screen_hints, wrap};
+use crate::app::{App, Hit, TOPS};
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
@@ -21,41 +21,48 @@ pub(super) enum Entry {
     Blank,
 }
 
-/// Hints that are about all of platoon rather than this screen: the help lists them once, under "Everywhere".
-const GLOBAL: &[&str] = &["tabs", "settings", "search", "quit", "help"];
+/// Hints the help lists once, under "Anywhere in platoon", rather than with the screen's own keys: the tabs, quit,
+/// this help, and the screen's own esc "back" (the back key's line says esc does the same).
+const GLOBAL: &[&str] = &["tabs", "quit", "help", "back"];
 
-/// The keys that work on every one of platoon's own screens, as they work on the one showing.
-fn everywhere(app: &App) -> Vec<(String, String)> {
-    let list = matches!(app.mode, Mode::List);
-    let mut out = vec![(format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", ")))];
-    // `s` is not the settings on a ticket (it was its state).
-    if list && !app.ticket_has_keys() {
-        out.push(("s".into(), "settings".into()));
-    }
-    // The search looks for conversations and projects: not on a ticket or the Squads tab.
-    if list && app.tk.open.is_none() && !app.squads_tab_showing() {
-        out.push(("/".into(), "search".into()));
-    }
-    out.push((app.back_label().to_string(), "back one level (esc does the same)".into()));
-    out.push((app.quit_label().to_string(), "quit platoon, on the Sessions, Projects and Squads lists (elsewhere it goes back)".into()));
-    out.push(("?".into(), "this help".into()));
-    out
+/// The keys that work the same on every one of platoon's own screens: the same list wherever the help is opened.
+fn anywhere(app: &App) -> Vec<(String, String)> {
+    vec![
+        (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
+        (app.back_label().to_string(), "back one level (esc does the same)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Projects and Squads lists (elsewhere it goes back)".into()),
+        ("?".into(), "this help".into()),
+    ]
 }
 
 /// Everything the help says for the screen showing.
 pub(super) fn entries(app: &App) -> Vec<Entry> {
     let mut out = vec![Entry::Heading("On this screen")];
-    let screen: Vec<Hint> = screen_hints(app).into_iter().filter(|(_, d, _)| !GLOBAL.contains(d)).collect();
-    out.extend(screen.into_iter().map(|(k, d, _)| Entry::Key(k.to_string(), d.to_string())));
+    let mut screen: Vec<(String, String)> =
+        screen_hints(app).into_iter().filter(|(_, d, _)| !GLOBAL.contains(d)).map(|(k, d, _)| (k.to_string(), d.to_string())).collect();
+    // The settings and the search open from most screens but not all: listed here, on the screens where they work.
+    for (works, k, d) in [(app.slash_searches(), "/", "search"), (app.s_opens_settings(), "s", "settings")] {
+        if works && !screen.iter().any(|(_, have)| have == d) {
+            screen.push((k.into(), d.into()));
+        }
+    }
+    // The footer says only "tab next pane"; the arrows do it too, in the direction of the pane.
+    if let Some(at) = screen.iter().position(|(_, d)| d == "next pane") {
+        screen.insert(at + 1, ("shift+arrows".into(), "the pane that way (ctrl+arrows too)".into()));
+    }
+    out.extend(screen.into_iter().map(|(k, d)| Entry::Key(k, d)));
     out.push(Entry::Blank);
-    out.push(Entry::Heading("Everywhere"));
-    out.extend(everywhere(app).into_iter().map(|(k, d)| Entry::Key(k, d)));
+    out.push(Entry::Heading("Anywhere in platoon"));
+    out.extend(anywhere(app).into_iter().map(|(k, d)| Entry::Key(k, d)));
     out.push(Entry::Blank);
     out.push(Entry::Heading("Good to know"));
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
+    out.push(Entry::Note(
+        "A ~ before a percentage means it is an estimate: platoon worked it out from the conversation. Without it, the figure is Claude Code's own.".into(),
+    ));
     out
 }
 

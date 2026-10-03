@@ -89,7 +89,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
     }
     // With one pane at a time (a narrow terminal) enter and esc go between them: there are no panes to switch.
     if !sqt.one_pane.get() {
-        out.push(("tab shift+arrows", "panes", None));
+        out.push(("tab", "next pane", None));
     }
     out.extend([("1-3", "tabs", None), ("s", "settings", Some(Action::Settings))]);
     // In the details the quit key goes back to the list (said above); only the list itself quits.

@@ -162,7 +162,7 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     let (s, k, n) = (find(&mut t, "╭ Sessions"), find(&mut t, "╭ Tickets"), find(&mut t, "╭ Notes"));
     assert!(s.1 == k.1 && k.0 > s.0 && n.0 == s.0 && n.1 > s.1, "Sessions over Tickets on the left, Notes on the right:\n{}", t.text());
     wait_title(&mut t, "Sessions", ACCENT);
-    t.wait_for_flat("tab shift+arrows panes");
+    t.wait_for_flat("tab next pane");
     t.send(b"\t");
     wait_title(&mut t, "Tickets", ACCENT);
     assert_ne!(t.fg_at(s.0, s.1 + 2), ACCENT, "only the focused pane's title is in the accent");

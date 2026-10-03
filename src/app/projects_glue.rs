@@ -264,10 +264,8 @@ impl App {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         match key.code {
             KeyCode::Char('c') if ctrl => return self.act(Action::Quit),
-            KeyCode::Char('/') if self.tk.open.is_none() && !self.squads_tab_showing() => return self.act(Action::Search),
-            // On a ticket (its screen, or its row in the Tickets pane) `s` does nothing: it was the ticket's state, which
-            // the squad sets now (the user only cancels, with `c`), and settings popping up there would surprise.
-            KeyCode::Char('s') if !ctrl && !self.ticket_has_keys() => return self.act(Action::Settings),
+            KeyCode::Char('/') if self.slash_searches() => return self.act(Action::Search),
+            KeyCode::Char('s') if !ctrl && self.s_opens_settings() => return self.act(Action::Settings),
             // The code editor, from anywhere: on what is selected, or on a folder the picker asks for.
             KeyCode::Char('v') if !ctrl && !alt => return self.act(Action::Editor),
             // 1 is the first top-level tab, 2 the second; a number with no tab does nothing.
@@ -338,6 +336,19 @@ impl App {
             KeyCode::Char('G') | KeyCode::End => self.pselected = self.pview.len().saturating_sub(1),
             _ => {}
         }
+    }
+
+    /// `/` opens the search on the screen showing: everywhere on platoon's own screens but a ticket's and the Squads tab
+    /// (it looks for sessions and projects).
+    pub fn slash_searches(&self) -> bool {
+        matches!(self.mode, Mode::List) && self.tk.open.is_none() && !self.squads_tab_showing()
+    }
+
+    /// `s` opens the settings on the screen showing. On a ticket (its screen, or its row in the Tickets pane) it does
+    /// nothing: it was the ticket's state, which the squad sets now (the user only cancels, with `c`), and settings
+    /// popping up there would surprise.
+    pub fn s_opens_settings(&self) -> bool {
+        matches!(self.mode, Mode::List) && !self.ticket_has_keys()
     }
 
     /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is not the settings.

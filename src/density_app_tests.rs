@@ -175,7 +175,7 @@ fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     let f = flat(&lines);
     assert!(!lines.iter().any(|l| l.contains("╮╭")), "one pane at 60:\n{}", lines.join("\n"));
     assert!(f.contains("▎ Coding 4 agents Research 4 agents Docs 3 agents Summarize 1 agent"), "{f}");
-    assert!(!f.contains("Built in") && !f.contains("Name Coding") && !f.contains("panes"), "{f}");
+    assert!(!f.contains("Built in") && !f.contains("Name Coding") && !f.contains("next pane"), "{f}");
     // Down to Research, enter: its details take the whole width, with room for what they say.
     ch(&mut app, 'j');
     key(&mut app, KeyCode::Enter);

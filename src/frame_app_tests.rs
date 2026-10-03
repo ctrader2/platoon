@@ -201,7 +201,7 @@ fn question_mark_lists_every_key_of_the_screen_even_those_the_footer_dropped() {
         "v editor",
         "←→ active/archived",
         "↑↓ move",
-        "Everywhere",
+        "Anywhere in platoon",
         "1-3 the tabs: Sessions, Projects, Squads",
         "s settings",
         "/ search",

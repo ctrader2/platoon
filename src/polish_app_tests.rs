@@ -219,3 +219,90 @@ fn the_popup_ground_blanks_the_column_outside_each_edge_and_slivers_whole() {
         assert!(l.starts_with("  ") && l.ends_with("  "), "{y}: {l:?}");
     }
 }
+
+// ---- group 5: the help -------------------------------------------------------------------------------------------
+
+/// A project "Web shop" with one session and a ticket, its screen open (the Sessions pane has the keys).
+fn on_a_project(name: &str) -> (World, App, String) {
+    let w = World::new(name);
+    w.transcript("aaa-1", "/srv/shop", "a conversation", 10);
+    let mut app = w.app();
+    app.notice = None;
+    let id = app.projects.create("Web shop").unwrap();
+    app.projects.assign("aaa-1", Some(&id)).unwrap();
+    crate::tickets::Tickets::open(&w.config, &id)
+        .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
+        .unwrap();
+    app.reload_for_test();
+    ch(&mut app, '2');
+    key(&mut app, KeyCode::Enter);
+    assert!(app.open_project().is_some());
+    (w, app, id)
+}
+
+fn section(help: &[(String, String, String)], name: &str) -> Vec<(String, String)> {
+    help.iter().filter(|(s, _, _)| s == name).map(|(_, k, d)| (k.clone(), d.clone())).collect()
+}
+
+#[test]
+fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search_where_they_work() {
+    let (_w, mut app, _) = on_a_project("h-sections");
+    // (where, does `s` open the settings here, does `/` search here)
+    let mut seen: Vec<(String, Vec<(String, String)>)> = Vec::new();
+    let mut check = |app: &App, place: &str, s: bool, slash: bool| {
+        let help = ui::help_for_test(app);
+        let here = section(&help, "On this screen");
+        let anywhere = section(&help, "Anywhere in platoon");
+        assert!(!help.iter().any(|(s, _, _)| s == "Everywhere"), "{place}");
+        let keys: Vec<&str> = anywhere.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["1-3", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
+        assert_eq!(here.iter().any(|(k, d)| k == "s" && d == "settings"), s, "{place}: s {here:?}");
+        assert_eq!(here.iter().any(|(k, d)| k == "/" && d == "search"), slash, "{place}: / {here:?}");
+        // Never one action twice: the back key's line says esc does the same, so the screen's esc back isn't listed.
+        assert!(!here.iter().any(|(k, d)| k == "esc" && d == "back"), "{place}: {here:?}");
+        let mut all: Vec<(String, String)> = here.clone();
+        all.extend(anywhere.iter().cloned());
+        for (i, a) in all.iter().enumerate() {
+            assert!(!all[i + 1..].contains(a), "{place}: {a:?} listed twice");
+        }
+        seen.push((place.to_string(), anywhere));
+    };
+    // The project screen, its Sessions pane, then its Tickets pane.
+    check(&app, "project screen", true, true);
+    key(&mut app, KeyCode::Tab);
+    check(&app, "Tickets pane", false, true);
+    // A ticket's own screen.
+    key(&mut app, KeyCode::Enter);
+    assert!(app.tk.open.is_some());
+    check(&app, "ticket", false, false);
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    assert!(app.open_project.is_none());
+    // The three tabs.
+    ch(&mut app, '1');
+    check(&app, "Sessions", true, true);
+    ch(&mut app, '2');
+    check(&app, "Projects", true, true);
+    ch(&mut app, '3');
+    check(&app, "Squads", true, false);
+    let first = seen[0].1.clone();
+    for (place, anywhere) in &seen {
+        assert_eq!(anywhere, &first, "{place}: the same everywhere");
+    }
+}
+
+#[test]
+fn the_help_explains_the_estimate_mark_and_the_pane_arrows() {
+    let (_w, mut app, _) = on_a_project("h-notes");
+    let help = ui::help_for_test(&app);
+    let here = section(&help, "On this screen");
+    assert!(here.contains(&("tab".into(), "next pane".into())), "{here:?}");
+    assert!(here.iter().any(|(k, _)| k == "shift+arrows"), "the arrows are kept in the help: {here:?}");
+    let notes = section(&help, "Good to know");
+    assert!(notes.iter().any(|(_, n)| n.starts_with("A ~ before a percentage means it is an estimate")), "{notes:?}");
+    // The footer says only "tab next pane".
+    let mut term = sized(&mut app, 120, 30);
+    let lines = draw(&mut term, &app);
+    let footer = lines.last().unwrap();
+    assert!(footer.contains("tab next pane") && !footer.contains("shift+arrows"), "{footer}");
+}

@@ -194,7 +194,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         "editor",
         "hand-off",
         "project",
-        "panes",
+        "next pane",
         "rename",
         "settings",
         "scroll",
@@ -383,7 +383,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     }
     out.extend([
         ("/", "search", Some(Action::Search)),
-        ("tab shift+arrows", "panes", None),
+        ("tab", "next pane", None),
         ("?", "help", Some(Action::Help)),
         ("esc", "back", Some(Action::Leave)),
     ]);
@@ -2457,6 +2457,22 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
 /// A margin this narrow or narrower between a popup and the screen's edge is left blank: a column or two of the
 /// screen behind would only be noise ("p╭ Settings").
 pub(crate) const POPUP_SLIVER: u16 = 2;
+
+/// The help's keys for the screen showing, as (section, key, what it does), and its notes as (section, "", note).
+#[cfg(test)]
+pub(crate) fn help_for_test(app: &App) -> Vec<(String, String, String)> {
+    let mut section = String::new();
+    let mut out = Vec::new();
+    for e in help_view::entries(app) {
+        match e {
+            help_view::Entry::Heading(h) => section = h.to_string(),
+            help_view::Entry::Key(k, d) => out.push((section.clone(), k, d)),
+            help_view::Entry::Note(n) => out.push((section.clone(), String::new(), n)),
+            help_view::Entry::Blank => {}
+        }
+    }
+    out
+}
 
 /// A popup with a border at `r`, on `popup_ground`, for the tests of the ground itself.
 #[cfg(test)]
