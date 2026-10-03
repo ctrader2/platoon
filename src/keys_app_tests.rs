@@ -266,8 +266,15 @@ fn a_bad_entry_is_said_once_and_its_default_used() {
 }
 
 /// Everything the client sent to the session within a moment.
-fn sent(host: &mut std::os::unix::net::UnixStream) -> Vec<u8> {
+/// The session's end of a test client, with a read timeout set while the client is still connected: macOS refuses
+/// the option (EINVAL) on a socket whose other end has closed, as it has once the back key dropped the client.
+fn for_test(rows: u16, cols: u16) -> (Client, std::os::unix::net::UnixStream) {
+    let (client, host) = Client::for_test(rows, cols);
     host.set_read_timeout(Some(Duration::from_millis(150))).unwrap();
+    (client, host)
+}
+
+fn sent(host: &mut std::os::unix::net::UnixStream) -> Vec<u8> {
     let mut out = Vec::new();
     while let Ok((kind, payload)) = read_frame(host) {
         if kind == F_INPUT {
@@ -281,7 +288,7 @@ fn sent(host: &mut std::os::unix::net::UnixStream) -> Vec<u8> {
 fn in_a_session_the_back_key_leaves_and_everything_else_goes_to_claude() {
     let w = World::new("keys-attached");
     let mut app = w.app();
-    let (client, mut host) = Client::for_test(20, 70);
+    let (client, mut host) = for_test(20, 70);
     app.client = Some(client);
     app.mode = Mode::Attached(4242);
     ch(&mut app, 'q');
@@ -294,7 +301,7 @@ fn in_a_session_the_back_key_leaves_and_everything_else_goes_to_claude() {
     // With alt+b as the back key: Ctrl+Space reaches Claude (as NUL), alt+b leaves. Claude Code uses alt+b itself: said.
     keys_file(&w, &mut app, r#"{ "back": "alt+b" }"#);
     assert!(app.active_notice().is_some_and(|n| n.contains("Claude Code uses alt+b")), "{:?}", app.active_notice());
-    let (client, mut host) = Client::for_test(20, 70);
+    let (client, mut host) = for_test(20, 70);
     app.client = Some(client);
     app.mode = Mode::Attached(4242);
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();

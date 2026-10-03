@@ -29,7 +29,7 @@ n=$(( $(ls "$FAKE_DIR/started" | wc -l) + 1 ))
 printf '%s\n' "$@" > "$FAKE_DIR/started/$n"
 sid="new-000$n"
 [ "$1" = "--resume" ] && sid="$2"
-printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s%3N)" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
 echo "STARTED project:${PLATOON_PROJECT:-none} sid:$sid"
 echo "FIRST MESSAGE: $1"
 exec sh

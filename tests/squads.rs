@@ -51,7 +51,7 @@ for a in "$@"; do
   [ "$prev" = "--resume" ] && sid="$a"
   prev="$a"
 done
-printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s%3N)" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
 echo "FAKE LEADER sid:$sid"
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$d/typed"

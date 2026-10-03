@@ -32,7 +32,7 @@ n=$(( $(ls "$FAKE_DIR/started" | wc -l) + 1 ))
 : > "$FAKE_DIR/started/$n"
 sid="new-000$n"
 [ "$1" = "--resume" ] && sid="$2"
-printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s%3N)" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
+printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
 if [ -n "$FAKE_HOOK" ]; then
   printf '{"session_id":"%s","source":"startup","cwd":"%s","hook_event_name":"SessionStart"}' "$sid" "$(pwd)" | "$FAKE_HOOK" hook session-start > "$FAKE_DIR/hook-out-$n"
 fi

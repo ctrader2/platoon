@@ -145,7 +145,9 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.send(b"\r");
     t.wait_for_all(&["╭ Edit the system prompt with", "Editors found on this computer:"]);
     t.send(b"\r");
-    t.wait_for_all(&["FAKE NANO EDITING", "hand-off.md", "the system prompt for the hand-off"]);
+    t.wait_for_all(&["FAKE NANO EDITING", "the system prompt for the hand-off"]);
+    // The editor's line names the file's full path, which wraps where the temp folder's path is long (macOS).
+    t.wait_for_unwrapped("/prompts/hand-off.md");
     let file = lab.prompts().join("hand-off.md");
     let started = fs::read_to_string(&file).unwrap();
     assert!(

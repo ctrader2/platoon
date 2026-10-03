@@ -294,6 +294,23 @@ impl Term {
         panic!("never saw {text:?}; screen was:\n{}", self.text());
     }
 
+    /// The screen with its rows joined end to end (trailing blanks dropped), so a line the terminal wrapped reads
+    /// whole again: for text whose length depends on the machine, such as a temp folder's path.
+    pub fn unwrapped(&mut self) -> String {
+        self.text().lines().map(str::trim_end).collect()
+    }
+
+    pub fn wait_for_unwrapped(&mut self, text: &str) {
+        let start = Instant::now();
+        while start.elapsed() < WAIT {
+            if self.unwrapped().contains(text) {
+                return;
+            }
+            self.drain(Duration::from_millis(50));
+        }
+        panic!("never saw {text:?}, even across wrapped rows; screen was:\n{}", self.text());
+    }
+
     pub fn wait_for(&mut self, text: &str) {
         let start = Instant::now();
         while start.elapsed() < WAIT {

@@ -188,7 +188,9 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     let docs = lab.base.join("docs");
     fs::create_dir_all(&docs).unwrap();
     lab.session(&[s(&docs)]);
-    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
+    // Wide: the notice at the end names two folders by their full paths, and a long temp folder (macOS's) would
+    // otherwise push "Not opened:" past where a notice is cut to fit the footer.
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 220);
     t.wait_for_all(&["make the shop", "? help"]);
     // None chosen yet: the only editor found (Helix), on the conversation's folder (it opens one at a time).
     t.send(b"v");

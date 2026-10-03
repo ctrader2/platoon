@@ -12,14 +12,15 @@ use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
 /// Stands in for nano: draws on its terminal, waits for one line, and puts that line into the file (a line
-/// starting with `s/` is a replacement, as in sed, so a test can take a line away as well as add one).
+/// starting with `s/` is a replacement, as in sed, so a test can take a line away as well as add one). Not `sed -i`,
+/// which macOS's sed reads differently.
 const FAKE_TERMINAL: &str = r#"#!/bin/sh
 f=""
 for a in "$@"; do case "$a" in -*) ;; *) f="$a" ;; esac; done
 echo "FAKE NANO EDITING $f"
 read line
 case "$line" in
-  s/*) sed -i "$line" "$f" ;;
+  s/*) t=$(sed "$line" "$f") && printf '%s\n' "$t" > "$f" ;;
   *) printf '%s\n' "$line" >> "$f" ;;
 esac
 "#;
