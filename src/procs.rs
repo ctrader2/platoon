@@ -1,6 +1,7 @@
 //! Looking at other processes: who a process's parent is, and what is running under it. Linux reads
-//! `/proc`; anywhere else (macOS) it asks `ps`. Both are best effort, so callers get None when the
-//! system couldn't say and must treat that as "unknown".
+//! `/proc`; anywhere else (macOS) it asks `ps`, and on macOS the kernel itself for a process's arguments and
+//! whether it is a zombie. All are best effort, so callers get None when the system couldn't say and must
+//! treat that as "unknown".
 
 use std::{
     collections::{HashMap, hash_map::DefaultHasher},
@@ -115,9 +116,67 @@ pub fn cmdline(pid: u32) -> Option<Vec<String>> {
     if Path::new("/proc/self/stat").exists() {
         return None; // Linux, and this process is gone
     }
+    #[cfg(target_os = "macos")]
+    if let Some(args) = procargs(pid) {
+        return Some(args);
+    }
+    // The kernel wouldn't say (another user's process, say): `ps` can still show the line, as one string.
     let out = Command::new("ps").args(["-ww", "-o", "command=", "-p", &pid.to_string()]).output().ok().filter(|o| o.status.success())?;
     let line = String::from_utf8_lossy(&out.stdout).trim().to_string();
     (!line.is_empty()).then(|| vec![line])
+}
+
+/// macOS: the arguments of `pid`, kept apart, from the kernel (`sysctl` `KERN_PROCARGS2`, what `ps` itself reads).
+/// None if it won't say: gone, a zombie, or not ours.
+#[cfg(target_os = "macos")]
+fn procargs(pid: u32) -> Option<Vec<String>> {
+    let mut argmax: libc::c_int = 0;
+    let mut size = std::mem::size_of::<libc::c_int>();
+    let mut mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
+    let ok = unsafe { libc::sysctl(mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut size, std::ptr::null_mut(), 0) };
+    if ok != 0 || argmax <= 0 {
+        return None;
+    }
+    let mut buf = vec![0u8; argmax as usize];
+    let mut size = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid as libc::c_int];
+    let ok = unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    if ok != 0 {
+        return None;
+    }
+    parse_procargs2(&buf[..size.min(buf.len())])
+}
+
+/// `KERN_PROCARGS2`'s layout: argc (a native-endian int), the executable's path, NULs up to the arguments, then
+/// argc NUL-terminated arguments (the environment follows; it is not read).
+#[cfg(any(target_os = "macos", test))]
+fn parse_procargs2(buf: &[u8]) -> Option<Vec<String>> {
+    let argc = i32::from_ne_bytes(buf.get(..4)?.try_into().ok()?);
+    if argc <= 0 {
+        return None;
+    }
+    let rest = &buf[4..];
+    let rest = &rest[rest.iter().position(|&b| b == 0)?..]; // past the executable's path
+    let rest = &rest[rest.iter().position(|&b| b != 0)?..]; // and the NULs after it
+    let mut args = Vec::new();
+    let mut parts = rest.split(|&b| b == 0);
+    for _ in 0..argc {
+        args.push(String::from_utf8_lossy(parts.next()?).into_owned());
+    }
+    // The last argument must have ended inside what was read, or it was cut short.
+    parts.next()?;
+    Some(args)
+}
+
+/// macOS: whether `pid` is a zombie (it has exited and waits for its parent to reap it), from the kernel's
+/// `proc_pidinfo`. Err with the errno when it won't say: `ESRCH` when there is no such process.
+#[cfg(target_os = "macos")]
+pub fn zombie(pid: u32) -> Result<bool, i32> {
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    let n =
+        unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDTBSDINFO, 0, (&mut info as *mut libc::proc_bsdinfo).cast(), size) };
+    if n == size { Ok(info.pbi_status == libc::SZOMB) } else { Err(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)) }
 }
 
 /// What is running under `pid` right now (None: couldn't tell).
@@ -152,6 +211,27 @@ mod tests {
         );
         assert!(rows.iter().all(|r| r.start != 0));
         assert_eq!((rows[0].start == rows[2].start, rows[0].start == rows[1].start), (true, false), "same start time = same reading");
+    }
+
+    #[test]
+    fn macos_argument_lists_parse_and_a_cut_short_one_is_refused() {
+        // argc 3, "/bin/sleep", padding, then "sleep", "31", "a b", then the environment.
+        let mut buf = 3i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/sleep\0\0\0\0sleep\x0031\0a b\0PATH=/bin\0\0");
+        assert_eq!(parse_procargs2(&buf), Some(vec!["sleep".to_string(), "31".to_string(), "a b".to_string()]));
+        // An empty argument in the middle is kept.
+        let mut buf = 3i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/x\0x\0\0y\0");
+        assert_eq!(parse_procargs2(&buf), Some(vec!["x".to_string(), String::new(), "y".to_string()]));
+        // Fewer arguments than argc says, or the last one not ended: nothing rather than a wrong list.
+        let mut buf = 3i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/sleep\0sleep\x0031\0");
+        assert_eq!(parse_procargs2(&buf), None);
+        let mut buf = 1i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/sleep\0sle");
+        assert_eq!(parse_procargs2(&buf), None);
+        assert_eq!(parse_procargs2(&0i32.to_ne_bytes()), None);
+        assert_eq!(parse_procargs2(b"ab"), None);
     }
 
     #[test]

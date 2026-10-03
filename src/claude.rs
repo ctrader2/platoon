@@ -414,6 +414,7 @@ pub fn pid_alive(pid: u32) -> bool {
 
 /// What reading `/proc/<pid>/stat` came to.
 #[derive(Debug, PartialEq)]
+#[allow(dead_code)] // each platform makes only some of these (macOS only `Zombie`, `Vanished`, `Unreadable`)
 enum StatRead {
     /// No `/proc` on this platform (macOS), or it is not mounted: the file says nothing either way.
     NoProc,
@@ -423,8 +424,20 @@ enum StatRead {
     /// Some other trouble reading (permission, ...).
     Unreadable,
     Text(String),
+    /// No `/proc`, but the kernel said whether it is a zombie (macOS: `procs::zombie`).
+    Zombie(bool),
 }
 
+#[cfg(target_os = "macos")]
+fn read_proc_stat(pid: u32) -> StatRead {
+    match crate::procs::zombie(pid) {
+        Ok(z) => StatRead::Zombie(z),
+        Err(libc::ESRCH) => StatRead::Vanished,
+        Err(_) => StatRead::Unreadable,
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
 fn read_proc_stat(pid: u32) -> StatRead {
     if !cfg!(target_os = "linux") {
         return StatRead::NoProc;
@@ -435,6 +448,7 @@ fn read_proc_stat(pid: u32) -> StatRead {
     }
 }
 
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 fn classify_read_error(e: &std::io::Error, proc_is_there: bool) -> StatRead {
     if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH) {
         // Every pid looks "not found" when /proc is not mounted at all: then we cannot tell.
@@ -449,9 +463,9 @@ fn classify_read_error(e: &std::io::Error, proc_is_there: bool) -> StatRead {
 /// A process that has exited stays a zombie (state `Z`) until its parent reaps it, and a zombie still
 /// answers signal 0, though it is gone as far as anyone using it is concerned. And if the parent reaps it
 /// between our signal 0 and our read of `/proc/<pid>/stat`, the read fails (NotFound or ESRCH): that also
-/// means gone (reading it as "not a zombie, so alive" made a dead process look alive for one call). Any
-/// other read error (say, permission), an unparseable line, or no `/proc` at all (macOS) leaves what the
-/// signal said: it exists.
+/// means gone (reading it as "not a zombie, so alive" made a dead process look alive for one call). macOS has
+/// no `/proc`: there the kernel is asked directly (`StatRead::Zombie`). Any other read error (say, permission),
+/// an unparseable line, or no way to ask at all leaves what the signal said: it exists.
 fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
     if !exists_per_kill {
         return false;
@@ -459,6 +473,7 @@ fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
     match stat {
         StatRead::NoProc | StatRead::Unreadable => true,
         StatRead::Vanished => false,
+        StatRead::Zombie(z) => !z,
         StatRead::Text(s) => {
             let state = s.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_owned));
             !matches!(state.as_deref(), Some("Z" | "X" | "x"))
@@ -1138,6 +1153,9 @@ mod tests {
         assert!(!alive_verdict(true, Vanished));
         // Other read trouble, or a line we cannot read, or no /proc (macOS): the signal stands.
         assert!(alive_verdict(true, Unreadable));
+        // macOS: the kernel's answer about a zombie decides.
+        assert!(alive_verdict(true, StatRead::Zombie(false)) && !alive_verdict(true, StatRead::Zombie(true)));
+        assert!(!alive_verdict(false, StatRead::Zombie(false)));
         assert!(alive_verdict(true, StatRead::Text("garbage".into())));
         assert!(alive_verdict(true, StatRead::Text(String::new())));
         assert!(alive_verdict(true, NoProc));
@@ -1152,6 +1170,21 @@ mod tests {
         assert_eq!(classify_read_error(&Error::from(ErrorKind::NotFound), false), StatRead::NoProc, "no /proc: cannot tell");
         assert_eq!(classify_read_error(&Error::from(ErrorKind::PermissionDenied), true), StatRead::Unreadable);
         assert_eq!(classify_read_error(&Error::from_raw_os_error(libc::EIO), true), StatRead::Unreadable);
+    }
+
+    #[test]
+    fn a_child_that_has_exited_but_was_not_reaped_yet_is_not_alive() {
+        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+        let pid = child.id();
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+        // Not reaped: a zombie. The kill takes a moment to land, so wait for it (generously: a loaded machine).
+        let start = std::time::Instant::now();
+        while pid_alive(pid) {
+            assert!(start.elapsed() < std::time::Duration::from_secs(30), "a killed child nobody reaped still reads as alive");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "it is a zombie, which still answers a signal: only its state tells");
+        child.wait().unwrap();
     }
 
     #[test]
