@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand (Actions tab, or `gh workflow run ci.yml --ref main`): the only way the macOS job runs for now.
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -24,7 +26,7 @@ jobs:
   linux:
     name: Linux (test, release build, fmt, clippy)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,7 +57,7 @@ jobs:
   msrv:
     name: Minimum Rust (1.88) builds
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     env:
       # An older compiler may warn about things newer ones don't: this job checks it builds, not that it is quiet.
       RUSTFLAGS: ""
@@ -74,10 +76,12 @@ jobs:
 
   macos:
     name: macOS (test, release build)
-    # macOS minutes cost 10x while the repo is private: main only. Once public, run it on pull requests too.
-    if: github.event_name == 'push'
+    # macOS minutes cost 10x while the repo is private. Until this job has passed once it runs only when started by
+    # hand (workflow_dispatch); once it is green it goes back to pushes on main (`github.event_name == 'push'`), and
+    # once the repo is public, to pull requests too.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
-    timeout-minutes: 40
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
