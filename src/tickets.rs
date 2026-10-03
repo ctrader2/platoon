@@ -107,6 +107,15 @@ impl State {
         }
     }
 
+    /// The label in a pane too narrow for it: the first words that still say it ("Waiting", "To publish").
+    pub fn short_label(&self) -> &str {
+        match self {
+            State::Waiting => "Waiting",
+            State::Ready => "To publish",
+            s => s.label(),
+        }
+    }
+
     /// Done and Cancelled are listed apart from the rest.
     pub fn closed(&self) -> bool {
         matches!(self, State::Done | State::Cancelled)
@@ -214,6 +223,14 @@ pub const QUEUED_WORDS: &str = "Waiting for a free squad";
 /// What a New ticket with nothing left to wait for says beside its state: it can be handed to a squad now. (Not to be
 /// mixed up with the state Ready to publish.)
 pub const CAN_START: &str = "Can start";
+
+/// `QUEUED_WORDS` where a narrow pane has room for a word or two.
+pub const QUEUED_SHORT: &str = "In line";
+
+/// "Waits #1, #3": `waits_for_words` in a narrow pane.
+pub fn waits_short(wait: &[u32]) -> String {
+    format!("Waits {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+}
 
 /// "Waits for #1, #3": the tickets one still waits for, as a ticket's row says it.
 pub fn waits_for_words(wait: &[u32]) -> String {

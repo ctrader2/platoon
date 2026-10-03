@@ -562,7 +562,7 @@ fn a_ticket_added_from_outside_shows_on_the_next_refresh_and_a_corrupt_file_is_s
 }
 
 #[test]
-fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_the_state_first() {
+fn eighty_columns_keep_the_number_what_matters_most_whole_and_cut_the_title() {
     let (w, mut app, id) = on_the_project("t-80");
     add(&w, &mut app, &id, "A rather long title for a ticket", &[]);
     add(&w, &mut app, &id, "Second", &[1]);
@@ -573,9 +573,9 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_the_state
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("Sessions") && f.contains("Tickets") && f.contains("Notes"), "{shown}");
-    assert!(f.contains("#1 A rather long") && f.contains("… Can start"), "{shown}");
+    assert!(f.contains("#1 A rather long") && f.contains("… Can start"), "the title is cut, not what it says: {shown}");
     assert!(f.contains("#2 Second Waits for #1"), "{shown}");
-    assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state's own column goes first: {shown}");
+    assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state shares one column with the rest: {shown}");
     assert!(f.contains("#3 Third Cancelled"), "a row with nothing else to say says its state: {shown}");
     // No row runs past its pane.
     let (y, x) = find(&term, "#2").unwrap();
@@ -585,20 +585,28 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_the_state
 }
 
 #[test]
-fn ticket_columns_share_the_width_and_drop_the_state_then_the_tail() {
+fn ticket_columns_never_cut_the_state_and_share_one_column_then_short_words_before_the_title_goes() {
+    // (state, tail, the two in one column, the same in short words)
+    let want = ((16, 12), 16, 10);
     for width in 0..200usize {
-        let c = ui::ticket_cols(width, 2, 21, 16);
+        let c = ui::ticket_cols(width, 2, want.0, want.1, want.2);
         let used = 1 + c.num + 1 + c.title + [c.state, c.tail].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
-        assert!(used <= width.max(4) || c.title == 0, "{width}: {c:?}");
-        if c.state > 0 {
-            assert!(c.tail > 0, "the state goes first, then waits for / ready: {width} {c:?}");
-        }
-        if c.state > 0 || c.tail > 0 {
-            assert!(c.title >= 12, "{width}: {c:?}");
+        assert!(used <= width.max(4 + 2 + 6), "{width}: {c:?}");
+        match (c.merged, c.short) {
+            (false, _) => assert!((c.state, c.tail) == want.0 && c.title >= 12, "{width}: {c:?}"),
+            (true, false) => assert!(c.state == want.1 && c.tail == 0 && c.title >= 12, "{width}: {c:?}"),
+            // The short words are cut only when the title would be shorter than six cells.
+            (true, true) => assert!(c.state == want.2 || (width < 4 + 2 + 6 + want.2 && c.title <= 8), "{width}: {c:?}"),
         }
     }
-    let c = ui::ticket_cols(120, 2, 3, 5);
-    assert_eq!((c.state, c.tail, c.title), (3, 5, 120 - 4 - 5 - 7));
+    let c = ui::ticket_cols(120, 2, (3, 5), 5, 5);
+    assert_eq!((c.state, c.tail, c.title, c.merged), (3, 5, 120 - 4 - 5 - 7, false));
+    // The Tickets pane at 80 columns is 35 wide: one column for the state, in full.
+    let c = ui::ticket_cols(35, 2, (16, 12), 16, 10);
+    assert_eq!((c.merged, c.short, c.state, c.title), (true, false, 16, 13));
+    // At 60 columns it is 25 wide: the short words.
+    let c = ui::ticket_cols(25, 2, (16, 12), 16, 10);
+    assert_eq!((c.merged, c.short, c.state, c.title), (true, true, 10, 9));
 }
 
 #[test]

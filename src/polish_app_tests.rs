@@ -397,3 +397,148 @@ fn the_notes_and_the_squads_tab_say_it_plainly() {
     assert!(f.contains("its system prompt and model are in Settings (s) → Projects."), "{f}");
     assert!(!f.contains("on the Projects tab"), "{f}");
 }
+
+// ---- group 2: cut text says so ------------------------------------------------------------------------------------
+
+/// The harness's shop: seven tickets in every state, one waiting for the first.
+fn a_shop(name: &str) -> (World, App) {
+    use crate::tickets::{NewTicket, State, Tickets};
+    let (w, mut app, id) = on_a_project(name);
+    let mut store = Tickets::open(&w.config, &id);
+    for (title, blocked) in [
+        ("Move prices to the server", vec![]),
+        ("Pick a payment provider", vec![]),
+        ("Checkout confirmation page", vec![]),
+        ("Remove the old basket code", vec![1]),
+        ("Ship the shop", vec![]),
+        ("Old idea", vec![]),
+    ] {
+        store.add(NewTicket { title: title.into(), blocked_by: blocked, ..Default::default() }).unwrap();
+    }
+    for (n, s) in [(2, State::Working), (3, State::Waiting), (4, State::Ready), (6, State::Done), (7, State::Cancelled)] {
+        store.set_state(n, &s).unwrap();
+    }
+    app.reload_for_test();
+    app.tk.unfolded = true;
+    (w, app)
+}
+
+/// The Tickets pane's rows: the lines between its top and bottom borders, without them.
+fn tickets_pane(lines: &[String]) -> Vec<String> {
+    let top = lines.iter().position(|l| l.contains("╭ Tickets")).expect("the Tickets pane");
+    let left = lines[top].chars().position(|c| c == '╭').unwrap();
+    let right = left + lines[top].chars().skip(left + 1).position(|c| c == '╮').unwrap() + 1;
+    lines[top + 1..]
+        .iter()
+        .take_while(|l| !l.chars().nth(left).is_some_and(|c| c == '╰'))
+        .map(|l| l.chars().skip(left + 1).take(right - left - 1).collect::<String>())
+        .collect()
+}
+
+#[test]
+fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
+    let (_w, mut app) = a_shop("c-tickets");
+    // (size, the words every row must show whole)
+    let full = ["Can start", "Working", "Waiting on you", "Ready to publish", "Waits for #1", "Done", "Cancelled"];
+    let short = ["Can start", "Working", "Waiting", "To publish", "Waits #1", "Done", "Cancelled"];
+    for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &full), (60, 24, &short)] {
+        let mut term = sized(&mut app, w, h);
+        let lines = draw(&mut term, &app);
+        let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
+        let pane = tickets_pane(&lines);
+        // Every ticket row the pane has room for (a short pane scrolls).
+        let mut seen = 0;
+        for (n, word) in words.iter().enumerate() {
+            let Some(row) = pane.iter().find(|l| l.contains(&format!("#{} ", n + 1))) else { continue };
+            assert!(row.trim_end().ends_with(word), "#{}: {word:?} whole at the end of its row: {row:?}\n{ctx}", n + 1);
+            seen += 1;
+        }
+        assert!(seen >= 5, "{ctx}");
+        // What is cut is the title, and it says so.
+        let first = pane.iter().find(|l| l.contains("#1 ")).unwrap();
+        assert!(first.contains("Coupon totals") || first.contains('…'), "{ctx}");
+        if w < 120 {
+            assert!(pane.iter().any(|l| l.contains("#4 Checkout") && l.contains("…")), "a long title is cut with …: {ctx}");
+        }
+    }
+    // At 120 columns the state has its own column and what a ticket waits for another.
+    let mut term = sized(&mut app, 120, 40);
+    let pane = tickets_pane(&draw(&mut term, &app));
+    let five = pane.iter().find(|l| l.contains("#5 ")).unwrap();
+    assert!(five.contains("New") && five.trim_end().ends_with("Waits for #1"), "{five}");
+}
+
+#[test]
+fn a_long_agent_name_is_cut_and_keeps_its_model_like_every_other_row() {
+    let (_w, mut app) = three("c-agents");
+    ch(&mut app, '3');
+    key(&mut app, KeyCode::Right);
+    for (w, h) in [(80u16, 24u16), (120, 40)] {
+        let mut term = sized(&mut app, w, h);
+        let lines = draw(&mut term, &app);
+        let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
+        // The list's pane, left of the details.
+        let rows: Vec<String> = lines
+            .iter()
+            .map(|l| l.split("││").next().unwrap_or_default().to_string())
+            .filter(|l| l.starts_with(" │") && ["planner", "report-wr", "summarizer"].iter().any(|n| l.contains(n)))
+            .collect();
+        assert_eq!(rows.len(), 3, "{ctx}");
+        // The same things on every row: the model, and at 120 columns how many squads use it.
+        for r in &rows {
+            assert!(["Opus", "Sonnet", "Haiku"].iter().any(|m| r.contains(m)), "{r}\n{ctx}");
+            assert_eq!(r.contains("· 1 squad"), w >= 120, "{r}\n{ctx}");
+        }
+    }
+}
+
+#[test]
+fn a_pane_cut_at_its_bottom_says_how_much_more_is_below() {
+    let (w, mut app, id) = on_a_project("c-more");
+    let notes: String = (1..=40).map(|i| format!("- point number {i}\n")).collect();
+    std::fs::write(app.projects.notes_path(&id), format!("# Overview\n{notes}")).unwrap();
+    let _ = w;
+    let mut term = sized(&mut app, 80, 24);
+    let lines = draw(&mut term, &app);
+    let ctx = lines.join("\n");
+    let notes_bottom = lines.iter().rposition(|l| l.contains("more lines below")).expect(&ctx);
+    assert!(lines[notes_bottom + 1].contains('╰'), "on the notes pane's last row: {ctx}");
+    // In the dim color.
+    let t = app.effective_theme().clone();
+    let buf = term.backend().buffer().clone();
+    let x = (0..80).find(|&x| buf[(x, notes_bottom as u16)].symbol() == "↓").unwrap();
+    assert_eq!(buf[(x, notes_bottom as u16)].fg, t.dim);
+    // Scrolled to the end, nothing more is below.
+    app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert_eq!(app.pane, crate::app::Pane::Notes);
+    for _ in 0..60 {
+        key(&mut app, KeyCode::Down);
+    }
+    let lines = draw(&mut term, &app);
+    assert!(!lines.iter().any(|l| l.contains("more lines below")), "{}", lines.join("\n"));
+    assert!(lines.iter().any(|l| l.contains("point number 40")), "{}", lines.join("\n"));
+    // The Squads tab's workflow, at 80x24, is longer than its pane.
+    key(&mut app, KeyCode::Esc);
+    ch(&mut app, '3');
+    let lines = draw(&mut term, &app);
+    assert!(lines.iter().any(|l| l.contains("Workflow")), "{}", lines.join("\n"));
+    let more = lines.iter().position(|l| l.contains("more lines below")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
+    assert!(lines[more + 1].contains('╰'), "{}", lines.join("\n"));
+}
+
+#[test]
+fn a_session_folder_in_the_project_pane_is_cut_where_a_folder_starts() {
+    let w = World::new("c-path");
+    w.transcript("aaa-1", "/srv/clients/acme-corporation/shop", "a conversation", 10);
+    let mut app = w.app();
+    app.notice = None;
+    let id = app.projects.create("Web shop").unwrap();
+    app.projects.assign("aaa-1", Some(&id)).unwrap();
+    app.reload_for_test();
+    ch(&mut app, '2');
+    key(&mut app, KeyCode::Enter);
+    let mut term = sized(&mut app, 80, 24);
+    let lines = draw(&mut term, &app);
+    let row = lines.iter().find(|l| l.contains("…/")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
+    assert!(row.contains("/shop") && !row.contains("…c") && !row.contains("…o"), "{row}");
+}

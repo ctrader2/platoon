@@ -760,56 +760,68 @@ pub fn state_color(t: &Theme, s: &State) -> Color {
 pub(crate) struct TCols {
     pub num: usize,
     pub title: usize,
+    /// The state, or (when `merged`) what the row says most: what it waits for, "Can start", else its state.
     pub state: usize,
+    /// What it waits for or "Can start", and the tokens its squads spent; only beside a state column of its own.
     pub tail: usize,
+    /// One column for the state and what the row waits for (a pane too narrow for two).
+    pub merged: bool,
+    /// The words in that one column are their short forms (`Waiting`, `To publish`, `Waits #1`).
+    pub short: bool,
 }
 
-/// The title never gets fewer cells than this while another column is still shown.
+/// The title gets at least this many cells before the state and what it waits for share one column.
 const TICKET_TITLE_MIN: usize = 12;
+/// ... and at least this many in the narrowest pane, where that column says its short words; only below this is that
+/// column cut.
+const TICKET_TITLE_FLOOR: usize = 6;
 
-/// How the Tickets pane's `width` is shared: the number, then the title (whatever is left), then the state and
-/// "waits for / ready", each as wide as its longest value (`want`). When the title would get fewer than
-/// `TICKET_TITLE_MIN` cells, the state goes first (its words then move into the last column on the rows that have
-/// nothing else to say there, see `ticket_tail`), then the last column.
-pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_tail: usize) -> TCols {
+/// How the Tickets pane's `width` is shared: the number, the title (whatever is left), then the state and what the
+/// ticket waits for, each as wide as its longest value, never cut. `want_state`/`want_tail`: the longest state and tail;
+/// `want_merged`/`want_short`: the longest of the one column that holds both, in full and in short words. Where the
+/// title would get fewer than `TICKET_TITLE_MIN` cells, the two share one column; still too narrow, it says its short
+/// words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
+pub(crate) fn ticket_cols(width: usize, num: usize, want: (usize, usize), want_merged: usize, want_short: usize) -> TCols {
+    let (want_state, want_tail) = want;
     let fixed = 1 + num + 1;
-    let (mut state, mut tail) = (want_state.min(21), want_tail.min(24));
-    let used = |s: usize, t: usize| fixed + [s, t].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
-    if width < used(state, tail) + TICKET_TITLE_MIN {
-        state = 0;
+    let gap = |w: usize| if w > 0 { w + 2 } else { 0 };
+    let title = |cols: usize| width.saturating_sub(fixed + cols);
+    if title(gap(want_state) + gap(want_tail)) >= TICKET_TITLE_MIN {
+        let t = title(gap(want_state) + gap(want_tail));
+        return TCols { num, title: t, state: want_state, tail: want_tail, merged: false, short: false };
     }
-    if width < used(state, tail) + TICKET_TITLE_MIN {
-        // The last column is cut (with `…`) before it goes: "waits for #2, …" still says the most.
-        let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_MIN);
-        tail = if room >= 8 { tail.min(room) } else { 0 };
+    if title(gap(want_merged)) >= TICKET_TITLE_MIN {
+        return TCols { num, title: title(gap(want_merged)), state: want_merged, tail: 0, merged: true, short: false };
     }
-    let title = width.saturating_sub(used(state, tail));
-    TCols { num, title, state, tail }
+    let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_FLOOR);
+    let state = want_short.min(room);
+    TCols { num, title: title(gap(state)), state, tail: 0, merged: true, short: true }
 }
 
-/// What a ticket's row says after its state: the tickets it still waits for, or "Can start". `with_state`: the
-/// state has no column of its own (a narrow pane), so a row with nothing else to say there says its state, unless
-/// that is plain New.
-fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
+/// What a ticket's row says after its state: what is happening to it, what it waits for, or "Can start".
+/// `merged`: the state has no column of its own (a narrow pane), so a row with nothing else to say there says its state.
+/// `short`: the words of the narrowest pane.
+fn ticket_tail(t: &Ticket, all: &[Ticket], merged: bool, short: bool) -> (String, bool) {
     // Being handed to a squad: what is happening says the most.
     if let Some(busy) = &t.busy {
-        return (busy.clone(), false);
+        return (if short { "Working…".to_string() } else { busy.clone() }, false);
     }
     if t.queued.is_some() {
-        return (tickets::QUEUED_WORDS.to_string(), false);
+        return ((if short { tickets::QUEUED_SHORT } else { tickets::QUEUED_WORDS }).to_string(), false);
     }
+    let state = || if short { t.state.short_label() } else { t.state.label() }.to_string();
     if t.state.closed() {
-        return (if with_state { t.state.label().to_string() } else { String::new() }, false);
+        return (if merged { state() } else { String::new() }, false);
     }
     let wait = tickets::waiting_for(t, all);
     if !wait.is_empty() {
-        return (tickets::waits_for_words(&wait), false);
+        return (if short { tickets::waits_short(&wait) } else { tickets::waits_for_words(&wait) }, false);
     }
     if tickets::is_ready(t, all) {
         return (tickets::CAN_START.into(), true);
     }
-    if with_state && t.state != State::New {
-        return (t.state.label().to_string(), false);
+    if merged && t.state != State::New {
+        return (state(), false);
     }
     (String::new(), false)
 }
@@ -833,25 +845,23 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let shown: Vec<&Ticket> =
         rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
     let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
-    let want_state = shown.iter().map(|x| x.state.label().chars().count()).max().unwrap_or(0);
+    let want_state = shown.iter().map(|x| x.state.label().width()).max().unwrap_or(0);
     // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
     let tokens: std::collections::HashMap<u32, String> =
         shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
-    let tail_of = |x: &Ticket, with_state: bool| -> (String, bool) {
-        let (tail, ready) = ticket_tail(x, all, with_state);
+    // Beside a state column of its own: what it waits for, and the tokens. In one column with the state: only what it
+    // says most, so it keeps its room.
+    let tail_of = |x: &Ticket, merged: bool, short: bool| -> (String, bool) {
+        let (tail, ready) = ticket_tail(x, all, merged, short);
         match tokens.get(&x.number) {
+            _ if merged => (tail, ready),
             Some(n) if tail.is_empty() => (n.clone(), ready),
             Some(n) => (format!("{tail} · {n}"), ready),
             None => (tail, ready),
         }
     };
-    let want_tail = |with_state: bool| shown.iter().map(|x| tail_of(x, with_state).0.chars().count()).max().unwrap_or(0);
-    let mut c = ticket_cols(area.width as usize, num, want_state, want_tail(false));
-    // No room for the state's own column: the rows that have nothing else to say at the end say their state there.
-    let merged = c.state == 0 && want_state > 0;
-    if merged {
-        c = ticket_cols(area.width as usize, num, 0, want_tail(true));
-    }
+    let longest = |merged: bool, short: bool| shown.iter().map(|x| tail_of(x, merged, short).0.width()).max().unwrap_or(0);
+    let c = ticket_cols(area.width as usize, num, (want_state, longest(false, false)), longest(true, false), longest(true, true));
     let selected = app.ticket_selected();
     let height = area.height as usize;
     app.pages.tickets.set(height.max(1));
@@ -889,21 +899,26 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(format!("{:<w$} ", format!("#{}", x.number), w = c.num), base.fg(t.dim)),
                     Span::styled(fit(&x.title, c.title), base.fg(if closed { t.dim } else { t.text })),
                 ];
-                if c.state > 0 {
-                    spans.push(Span::styled(format!("  {}", fit(x.state.label(), c.state)), base.fg(state_color(t, &x.state))));
-                }
-                if c.tail > 0 {
-                    let (tail, ready) = tail_of(x, merged);
-                    let color = if ready {
+                let tail_color = |tail: &str, ready: bool| {
+                    if ready {
                         t.ok
-                    } else if tail.starts_with("Waits for") {
+                    } else if tail.starts_with("Waits") {
                         t.warn
-                    } else if tokens.get(&x.number) == Some(&tail) {
+                    } else if tokens.get(&x.number).is_some_and(|n| n == tail) {
                         t.subtext
                     } else {
                         state_color(t, &x.state)
-                    };
-                    spans.push(Span::styled(format!("  {}", fit(&tail, c.tail)), base.fg(color)));
+                    }
+                };
+                if c.merged {
+                    let (says, ready) = tail_of(x, true, c.short);
+                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(tail_color(&says, ready))));
+                } else {
+                    spans.push(Span::styled(format!("  {}", fit(x.state.label(), c.state)), base.fg(state_color(t, &x.state))));
+                    if c.tail > 0 {
+                        let (tail, ready) = tail_of(x, false, false);
+                        spans.push(Span::styled(format!("  {}", fit(&tail, c.tail)), base.fg(tail_color(&tail, ready))));
+                    }
                 }
                 Line::from(spans)
             }
@@ -941,7 +956,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     head.push(Line::raw(""));
     const LABEL: usize = 12;
     let label = |s: &str| Span::styled(format!("{s:<LABEL$}"), Style::new().fg(t.dim));
-    let (tail, ready) = ticket_tail(x, all, false);
+    let (tail, ready) = ticket_tail(x, all, false, false);
     let mut state = vec![
         label("State"),
         Span::styled(x.state.label().to_string(), Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)),
@@ -1076,12 +1091,12 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         return;
     }
     let lines = crate::mdview::render(&text, w, t, app.plain_marker);
-    let rows = body.height as usize;
-    let top = app.tk.body_top.get().min(lines.len().saturating_sub(rows));
+    let (top, rows, below) = scroll_view(lines.len(), app.tk.body_top.get(), body.height as usize);
     app.tk.body_top.set(top);
     for (n, l) in lines.into_iter().skip(top).take(rows).enumerate() {
         f.render_widget(Paragraph::new(l), Rect::new(body.x, body.y + n as u16, body.width, 1));
     }
+    draw_more_below(f, t, Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1), below);
 }
 
 /// The ticket screen's two parts about its squads' work: the tokens they used (in all, what that counts, and a line per
@@ -1359,12 +1374,30 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     // The file stays plain Markdown; the pane shows it the way a Markdown viewer would, scrolled in drawn lines.
     // A line platoon once wrote at the top saying who writes what is left out: the line above says it now.
     let lines = crate::mdview::render(crate::notes::without_preamble(&text), area.width as usize, t, app.plain_marker);
-    let rows = area.height as usize;
-    let top = app.notes_top.get().min(lines.len().saturating_sub(rows));
+    let (top, rows, below) = scroll_view(lines.len(), app.notes_top.get(), area.height as usize);
     app.notes_top.set(top);
     for (n, l) in lines.into_iter().skip(top).take(rows).enumerate() {
         f.render_widget(Paragraph::new(l), Rect::new(area.x, area.y + n as u16, area.width, 1));
     }
+    draw_more_below(f, t, Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1), below);
+}
+
+/// How a scrolling pane `height` rows tall shows `total` lines scrolled to `top` (kept in range): the top line, the rows
+/// the text gets, and how many lines are below them. When the text is longer than the pane, its last row is kept for
+/// the "more lines below" line (`draw_more_below`), so the text never just stops at the pane's edge.
+pub(crate) fn scroll_view(total: usize, top: usize, height: usize) -> (usize, usize, usize) {
+    let rows = if total > height { height.saturating_sub(1) } else { height };
+    let top = top.min(total.saturating_sub(rows));
+    (top, rows, total.saturating_sub(top + rows))
+}
+
+/// "↓ 3 more lines below", dim, on the row `at` (the last of a pane that `scroll_view` says is cut).
+pub(crate) fn draw_more_below(f: &mut Frame, t: &Theme, at: Rect, below: usize) {
+    if below == 0 || at.height == 0 {
+        return;
+    }
+    let text = format!("↓ {below} more line{} below", if below == 1 { "" } else { "s" });
+    f.render_widget(Paragraph::new(Span::styled(fit_end(&text, at.width as usize), Style::new().fg(t.dim))), at);
 }
 
 /// Where a tab was drawn: (x, width, is the current tab). The rule under the header follows these.
@@ -1970,8 +2003,8 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// Keep the end of `s` (the file name of a path), with an ellipsis in front, when it is longer than `n`.
-/// Widths are terminal cells throughout: a Chinese or Japanese character or an emoji takes two.
+/// Keep the end of `s` (the file name of a path), with an ellipsis in front, when it is longer than `n`; a path is cut
+/// where one of its folders starts, so no folder's name shows half. Widths are terminal cells throughout: a Chinese or Japanese character or an emoji takes two.
 fn fit_start(s: &str, n: usize) -> String {
     if s.width() <= n {
         return s.to_string();
@@ -1990,7 +2023,12 @@ fn fit_start(s: &str, n: usize) -> String {
         room -= w;
         tail.push(c);
     }
-    format!("…{}", tail.into_iter().rev().collect::<String>())
+    let tail: String = tail.into_iter().rev().collect();
+    // A path is cut where a folder starts (`…/u/shop`, not `…me/u/shop`), as long as a folder's name is left after it.
+    match tail.find('/') {
+        Some(at) if at > 0 && tail.len() - at > 1 => format!("…{}", &tail[at..]),
+        _ => format!("…{tail}"),
+    }
 }
 
 /// The longest start of `s` that takes at most `n` cells.
@@ -4083,7 +4121,7 @@ mod tests {
         let two = vec!["~/notes".to_string(), "/srv/data".to_string()];
         // No added folders: just `fit_tail`.
         assert_eq!(fit_dirs("~/repos/platoon", &[], 20), fit_tail("~/repos/platoon", 20));
-        assert_eq!(fit_dirs("~/repos/platoon", &[], 10), "…s/platoon");
+        assert_eq!(fit_dirs("~/repos/platoon", &[], 10), "…/platoon ");
         // All of them, padded, where they fit (exactly, too).
         assert_eq!(fit_dirs("~/repos/platoon", &one, 20), "~/repos/platoon, /  ");
         assert_eq!(fit_dirs("~/repos/platoon", &one, 18), "~/repos/platoon, /");
@@ -4093,8 +4131,8 @@ mod tests {
         assert_eq!(fit_dirs("~/repos/platoon", &long, 20), "~/repos/platoon, +1 ");
         assert_eq!(fit_dirs("~/repos/platoon", &two, 30), format!("{:<30}", "~/repos/platoon, +2"));
         // ... or cut at the front like `fit_tail`, keeping its last folder.
-        assert_eq!(fit_dirs("~/repos/platoon", &two, 14), "…s/platoon, +2");
-        assert_eq!(fit_dirs("~/repos/platoon", &one, 17), "…epos/platoon, +1");
+        assert_eq!(fit_dirs("~/repos/platoon", &two, 14), "…/platoon, +2 ");
+        assert_eq!(fit_dirs("~/repos/platoon", &one, 17), "…/platoon, +1    ");
         assert_eq!(fit_dirs("~/repos/platoon", &one, 8), "…oon, +1");
         // Too narrow even for that: the main folder alone, as before.
         assert_eq!(fit_dirs("~/repos/platoon", &one, 7), "…latoon");
@@ -4103,6 +4141,21 @@ mod tests {
             assert_eq!(fit_dirs("~/repos/platoon", &two, n).chars().count(), n, "always exactly the column's width");
         }
         assert_eq!(dirs_text("~/a", &two), "~/a, ~/notes, /srv/data");
+    }
+
+    #[test]
+    fn a_cut_path_starts_at_a_folder_not_in_the_middle_of_a_name() {
+        assert_eq!(fit_start("/home/u/shop", 10), "…/u/shop");
+        assert_eq!(fit_start("/home/u/shop", 12), "/home/u/shop", "whole where it fits");
+        assert_eq!(fit_start("~/repos/platoon", 12), "…/platoon");
+        // A last folder longer than the room is cut as before: its end is what says the most.
+        assert_eq!(fit_start("~/repos/platoon", 5), "…toon");
+        assert_eq!(fit_start("/srv/東京/data", 8), "…/data");
+        assert_eq!(fit_start("/srv/東京/data", 11), "…/東京/data");
+        assert_eq!(fit_start("plain words here", 8), "…ds here", "no folders: the end, as before");
+        for n in 0..20 {
+            assert!(fit_start("/home/u/shop/api", n).width() <= n, "{n}");
+        }
     }
 
     #[test]

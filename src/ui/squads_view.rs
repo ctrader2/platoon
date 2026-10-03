@@ -284,18 +284,38 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
     let heading = |text: &str| Line::styled(text.to_string(), Style::new().fg(t.dim).add_modifier(Modifier::BOLD));
     let w = li.width as usize;
     let sel_bg = |i: usize| if i == sqt.agent_selected { t.surface } else { t.bg };
+    // What goes beside each name: "Opus · 2 squads", or only "Opus" when that doesn't fit on every row with the names
+    // keeping `AGENT_NAME_MIN` cells (a longer name is cut with "…", never the data beside it), or nothing.
+    let entries: Vec<(String, String)> = sqt
+        .agents
+        .iter()
+        .map(|l| (l.name().to_string(), agent_right(l, &used).0))
+        .chain(sqt.agent_draft.as_ref().map(|d| (d.name.clone(), squadfile::model_label(&d.model).to_string())))
+        .collect();
+    let inner = w.saturating_sub(2);
+    let fits = |part: &dyn Fn(&str) -> String| {
+        entries.iter().all(|(n, r)| n.width().min(AGENT_NAME_MIN) + 1 + part(r).width() <= inner || part(r).is_empty())
+    };
+    let whole = |r: &str| r.to_string();
+    let first = |r: &str| r.split(" · ").next().unwrap_or_default().to_string();
+    let level = if fits(&whole) {
+        0
+    } else if fits(&first) {
+        1
+    } else {
+        2
+    };
     let row = |i: usize, name: String, right: String, warn: bool| -> Line<'static> {
         let base = Style::new().bg(sel_bg(i));
-        let inner = w.saturating_sub(2);
-        // What goes beside the name, as much of it as fits: "Opus · 2 squads", "Opus", nothing.
-        let right = [right.clone(), right.split(" · ").next().unwrap_or_default().to_string()]
-            .into_iter()
-            .find(|r| name.chars().count() + 2 + r.chars().count() <= inner)
-            .unwrap_or_default();
-        let right_w = right.chars().count();
-        let name_w = if right.is_empty() { inner } else { inner - right_w - 1 };
+        let right = match level {
+            0 => right,
+            1 => first(&right),
+            _ => String::new(),
+        };
+        let right_w = right.width();
+        let name_w = if right.is_empty() { inner } else { inner.saturating_sub(right_w + 1) };
         let name = fit_end(&name, name_w);
-        let gap = inner.saturating_sub(name.chars().count() + right.chars().count());
+        let gap = inner.saturating_sub(name.width() + right_w);
         Line::from(vec![
             Span::styled(if i == sqt.agent_selected { "▎ " } else { "  " }, base.fg(t.accent)),
             Span::styled(name, base.fg(t.text)),
@@ -316,15 +336,7 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
             group = Some(l.label());
             lines.push((None, heading(&l.label())));
         }
-        let (right, warn) = match &l.agent {
-            None => ("can't be read".to_string(), true),
-            Some(a) if !crate::agentfile::problems(a).is_empty() => ("needs fixing".to_string(), true),
-            Some(a) => {
-                let n = used.get(&a.id).copied().unwrap_or(0);
-                let usage = if n == 0 { "not used".to_string() } else { count_words(n, "squad") };
-                (format!("{} · {usage}", squadfile::model_label(&a.model)), false)
-            }
-        };
+        let (right, warn) = agent_right(l, &used);
         lines.push((Some(i), row(i, l.name().to_string(), right, warn)));
     }
     if let Some(d) = sqt.agent_draft.as_ref() {
@@ -364,6 +376,22 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
         y += 1;
     }
     drafting_line(f, app, li, y);
+}
+
+/// An agent's name keeps at least this many cells beside its model and squads (a longer one is cut with "…").
+const AGENT_NAME_MIN: usize = 8;
+
+/// What the Agents list says beside an agent's name: "Opus · 2 squads", "Opus · not used", or what is wrong with it.
+fn agent_right(l: &crate::agentfile::Listed, used: &HashMap<String, usize>) -> (String, bool) {
+    match &l.agent {
+        None => ("can't be read".to_string(), true),
+        Some(a) if !crate::agentfile::problems(a).is_empty() => ("needs fixing".to_string(), true),
+        Some(a) => {
+            let n = used.get(&a.id).copied().unwrap_or(0);
+            let usage = if n == 0 { "not used".to_string() } else { count_words(n, "squad") };
+            (format!("{} · {usage}", squadfile::model_label(&a.model)), false)
+        }
+    }
 }
 
 const LABEL: usize = 19;
@@ -429,7 +457,8 @@ fn draw_scrolled(
     top_cell: &std::cell::Cell<usize>,
     focused: bool,
 ) {
-    let height = area.height as usize;
+    // Text longer than the pane keeps its last row for "more lines below".
+    let (_, height, _) = scroll_view(lines.len(), 0, area.height as usize);
     let first = lines.iter().position(|(r, _)| *r == Some(row)).unwrap_or(0);
     let last = lines.iter().rposition(|(r, _)| *r == Some(row)).unwrap_or(0);
     let mut top = top_cell.get().min(lines.len().saturating_sub(height));
@@ -446,6 +475,7 @@ fn draw_scrolled(
         }
     }
     top_cell.set(top);
+    let below = lines.len().saturating_sub(top + height);
     for (k, (r, line)) in lines.into_iter().skip(top).take(height).enumerate() {
         let rect = Rect::new(area.x, area.y + k as u16, area.width, 1);
         if let Some(r) = r {
@@ -453,6 +483,7 @@ fn draw_scrolled(
         }
         f.render_widget(Paragraph::new(line), rect);
     }
+    draw_more_below(f, app.effective_theme(), Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1), below);
 }
 
 fn unreadable(f: &mut Frame, app: &App, area: Rect, path: std::path::PathBuf, why: &str) {

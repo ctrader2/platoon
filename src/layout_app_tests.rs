@@ -139,11 +139,13 @@ fn a_name_or_a_path_longer_than_the_cap_is_cut_and_a_path_keeps_its_end() {
     assert_eq!(shown_name, format!("{}… ", "n".repeat(58)), "the name is cut with an ellipsis, a blank cell after it\n{name_row}");
     assert!(!name_row.contains(&long_name), "the whole 70-character name does not fit");
     // The long path: cut at the front, so the folder itself still reads.
-    let dir_row = lines.iter().find(|l| l.contains("xxxx")).expect("the long-path row");
+    let dir_row = lines.iter().find(|l| l.contains("/repos/platoon")).expect("the long-path row");
     assert_eq!(dir_row.chars().nth(dir_x), Some('…'), "the path is cut at its start\n{dir_row}");
     let shown: String = dir_row.chars().skip(dir_x).take(60).collect();
-    assert!(shown.ends_with("/repos/platoon "), "the end of the path is kept, then the column's blank cell: {shown:?}");
+    assert!(shown.trim_end().ends_with("/repos/platoon") && shown.ends_with(' '), "the end of the path is kept: {shown:?}");
     assert!(!shown.contains("/srv/"), "its start is gone: {shown:?}");
+    // Cut where a folder starts: no half of the long folder's name.
+    assert!(shown.starts_with("…/repos/platoon"), "{shown:?}");
 }
 
 #[test]

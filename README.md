@@ -884,8 +884,9 @@ The **Tickets** pane sits under Sessions on a project's screen. Open tickets com
 kept apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the
 number, the title, the state and, for an open ticket, what it is still waiting for ("Waits for #2, #4")
 or **Can start** when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones
-waiting for it: only Done lets them go). On a narrow terminal the state's own column goes first (a Done, Cancelled or
-otherwise not-New ticket then says its state at the end of its row).
+waiting for it: only Done lets them go). These words are never cut: on a narrow terminal the title is. Narrower still,
+the state and what it waits for share one column (a row says what it waits for or **Can start**, else its state), and
+on the narrowest that column uses short words (**Waiting**, **To publish**, **Waits #1**, **In line**).
 
 | Key (Tickets pane) | Does |
 | --- | --- |
