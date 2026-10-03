@@ -433,7 +433,9 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     );
     // Coding's leader starts with them: preloaded skills, servers by name, and the tools that let the planner use them.
     t.send(b"\x1b");
-    t.wait_gone("esc back to the list");
+    // Wait for the list's own footer, not for "esc back to the list" to go: the notice about linear can be hiding that
+    // hint already, and a `2` sent before the esc is read arrives with it as alt+2.
+    t.wait_for("enter details");
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
