@@ -97,7 +97,96 @@ platoon-tui`, the install script again, or else a link to the releases page. Whe
 version is said once; the line goes at your next key or click. "Check for a newer platoon" on the General tab of the
 [settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off both checks.
 
-## Undoing it
+## Uninstall
 
-[What platoon changes on your computer](what-platoon-changes.md#removing-platoon) lists everything setup added and how to
-take it out again.
+One command removes platoon completely, however you installed it:
+
+```
+curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
+```
+
+To add a flag, put `-s --` before it: `curl -LsSf <the same address> | sh -s -- --all`. If you would rather not pipe a
+script into your shell, download it, read it, then run `sh uninstall.sh`.
+
+It first runs `platoon uninstall` (below), then removes the program the way it was installed:
+
+- **Homebrew**: `brew uninstall platoon`.
+- **cargo** (crates.io, or from source with `cargo install --path .`): `cargo uninstall platoon-tui`.
+- **The install script**: the program where its note in `~/.config/platoon-tui/` says it put it, that folder, and the
+  line it added to your shell's startup files (`.profile`, `.bashrc`, `.bash_profile`, `.bash_login`, `.zshrc`,
+  `.zshenv`, and fish's `conf.d/platoon-tui.env.fish`). Only that line goes: a line another tool added stays.
+- **Anything else** (Nix, a copy you put somewhere yourself): it says where the program is and how to delete it.
+
+If `platoon uninstall` stops (you said no, or something couldn't be done), the script stops too and leaves the program
+where it is, so you can run it again.
+
+### `platoon uninstall`
+
+`platoon uninstall` does everything but remove the program. It looks first, asks, and only then changes anything, so a
+"no" leaves everything as it was.
+
+1. **Sessions platoon is running.** If there are any, it lists them (name or folder, and process id) and asks:
+
+   ```
+   platoon is running 1 session:
+     - a session in /home/you/app (pid 41235): `claude --resume 0f6a2c1e-7b4d-4c1a-9e55-3d2b8f1a6c90` opens it again
+   Their conversations are saved: `claude --resume <id>` opens them again.
+   Stop it and go on? [y/N]
+   ```
+
+   "No" (or just Enter) stops the uninstall with nothing changed. "Yes" stops them the way platoon itself does: Claude
+   Code is asked to exit and shuts down cleanly.
+2. **Your own data.** If the config folder is there, it asks:
+
+   ```
+   Also delete your projects, notes, tickets and settings? [y/N]
+   ```
+
+   The answer is "no" unless you say yes: the folder is kept, and the end says how to delete it later.
+3. **Claude Code's settings.** It takes out of `settings.json` exactly what `platoon setup` added: the status line (if
+   it is platoon's), and the session guard, project notes and notes updates hooks. It writes a backup first, as
+   `settings.json.platoon-bak` beside it, and leaves everything else in the file as it was, your own hooks included. A
+   hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
+   hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
+   If `settings.json` can't be read, it stops before changing anything.
+4. **The `/to-tickets` skill.** It removes `skills/to-tickets/SKILL.md` from Claude Code's folder (and the folder, if
+   nothing else is in it). If you changed the file, your copy is kept beside it as `SKILL.md.platoon-bak` (or
+   `SKILL.md.platoon-bak.2` if that name is taken), so Claude Code no longer offers the skill but nothing of yours is
+   lost.
+5. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
+   said yes. Folders older platoons made are removed too, if they are there: `~/.local/share/platoon` and
+   `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment
+   variables as everywhere else decide where these are (`PLATOON_CONFIG_DIR`, `PLATOON_CACHE_DIR`, `XDG_CONFIG_HOME`,
+   `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`).
+6. **Ticket worktrees and branches** are never deleted: they may hold work you want. Each one still there is listed
+   with the commands that remove it once you no longer need it, for example:
+
+   ```
+   Ticket worktrees and branches (never deleted: remove each once you no longer need its work):
+     #3 (app):
+       git -C /home/you/app worktree remove /home/you/app-worktrees/ticket-3
+       git -C /home/you/app branch -D ticket/3
+   ```
+
+   `git worktree remove` refuses a worktree with changes not yet committed, so nothing is lost by accident.
+
+It ends with what was removed and what was kept. Your conversations are never touched: they are Claude Code's, and
+`claude --resume` opens any of them. Run on its own (not by the script), its last line says how to remove the program.
+Running it again is harmless: it says "Nothing of platoon's was left to remove."
+
+| Flag | What it does |
+| --- | --- |
+| `--all` | Also deletes your projects, notes, tickets and settings, without asking |
+| `--stop-sessions` | Stops the sessions platoon is running without asking. `--all` doesn't do this: it has to be said |
+| `--help` | Says what it does and its flags |
+
+Both the script and `platoon uninstall` take these flags. The questions are asked in your terminal even when the script
+is piped into `sh`. With no terminal at all (a script, CI), nothing is asked: the config folder is kept, and if
+sessions are running the uninstall stops with nothing changed unless you add `--stop-sessions`.
+
+### Without platoon
+
+If the `platoon` program is already gone (or is too old to have `uninstall`), the script still asks the same two
+questions, stops the sessions and deletes the folders. It can't safely edit Claude Code's settings without platoon, so
+it tells you what to take out by hand, as described in
+[Removing platoon by hand](what-platoon-changes.md#removing-platoon-by-hand).

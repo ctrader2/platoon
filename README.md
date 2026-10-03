@@ -68,6 +68,18 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 platoon reads Claude Code's own files, which aren't a documented format, so a Claude Code update can break something.
 It was last checked with Claude Code 2.1.288. → [What platoon changes](guide/what-platoon-changes.md)
 
+## Uninstall
+
+```
+curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
+```
+
+It takes platoon's status line, hooks and `/to-tickets` skill out of Claude Code (backing `settings.json` up first),
+deletes platoon's cache, asks before deleting your projects, notes, tickets and settings (`| sh -s -- --all` deletes
+them without asking) and before stopping any session platoon is running, then removes the program however you
+installed it. Your conversations are Claude Code's and are never touched; ticket worktrees are listed, not deleted.
+→ [Uninstall](guide/install-and-setup.md#uninstall)
+
 ## Learn more
 
 The [guide](guide/README.md) covers everything:

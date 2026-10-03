@@ -143,10 +143,19 @@ When your Claude Code is newer than that, platoon says so once (it runs `claude 
 
 ## Removing platoon
 
-1. **The settings.** There is no command that takes the hooks out: open Claude Code's `settings.json` and delete the
-   `statusLine` entry (if its command ends in `platoon statusline`) and each hook whose command ends in `platoon hook guard`,
-   `platoon hook session-start` or `platoon hook stop`. `settings.json.platoon-bak` is the file as it was before the last
-   run of setup that changed it; copy it back only if nothing else has changed the file since.
+`curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh` removes everything above
+but your conversations, after asking about your own data and any running sessions; ticket worktrees are listed, not
+deleted. [Uninstall](install-and-setup.md#uninstall) says exactly what it does, and `platoon uninstall` does the same
+but for removing the program.
+
+### Removing platoon by hand
+
+If you'd rather do it yourself, or the uninstaller can't:
+
+1. **The settings.** Open Claude Code's `settings.json` and delete the `statusLine` entry (if its command ends in
+   `platoon statusline`) and each hook whose command ends in `platoon hook guard`, `platoon hook session-start` or
+   `platoon hook stop`. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
+   copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
 2. **The skill.** `platoon setup --remove to-tickets`, or delete `~/.claude/skills/to-tickets/`.
 3. **platoon's own folders.** Delete `~/.config/platoon` and `~/.cache/platoon`. The config folder holds your projects'
@@ -155,8 +164,9 @@ When your Claude Code is newer than that, platoon says so once (it runs `claude 
    `git worktree remove <path>`, and the `ticket/<N>` branches with `git branch -D ticket/<N>`, once you no longer need the
    work on them.
 5. **The program**, the way you installed it: `brew uninstall platoon`; `cargo uninstall platoon-tui`; for the install
-   script, delete `~/.local/bin/platoon` (or where it put it) and `~/.config/platoon-tui/`, and the lines it added to
-   your shell's startup files, if any; with Nix, remove it from your profile or configuration.
+   script, delete `~/.local/bin/platoon` (or where it put it), `~/.config/platoon-tui/`, and the line it added to your
+   shell's startup files (`. "$HOME/.config/platoon-tui/env.sh"`); with Nix, remove it from your profile or
+   configuration.
 
 Sessions platoon was running keep running until they stop on their own or you end them; your conversations themselves
 are Claude Code's and stay where they are.
