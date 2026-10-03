@@ -18,6 +18,7 @@ scrolls, and on a small terminal only the selected entry is explained.
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
 | Archive sessions after | A session nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see [Automatic clean-up](sessions.md#automatic-clean-up)). | Ignore MCP servers (default), Count MCP servers |
+| Check for a newer platoon | Once a day at most, platoon asks GitHub for the number of its latest version and says once when a newer one is out (see [One network request](what-platoon-changes.md#one-network-request-no-telemetry)). Off: platoon makes no network request at all. Applies from the next start. | Once a day (default), Off |
 
 Choose Count MCP servers if you'd rather a session with any program running under it, MCP servers included, was never
 stopped: that is how idle stop worked before this choice existed.
@@ -109,7 +110,7 @@ shows the exact path). platoon doesn't create it until you change something, and
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
  "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "", "files_editor_ask": false, "notes_quiet_minutes": 3,
- "notes_reply_chars": 1500, "squads_at_once": 3, "squad_leader_model": "sonnet"}
+ "notes_reply_chars": 1500, "squads_at_once": 3, "squad_leader_model": "sonnet", "update_check": true}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that setting, when
@@ -129,6 +130,7 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `squads_at_once` is 1 to 10; `squad_leader_model` is `opus`, `sonnet` or `haiku` (anything else means `sonnet`).
+- `update_check` is `true` or `false`; anything else there means the default (`true`).
 - `ai_archived` is `"off"` or `"background"`; `ai_quiet_seconds` is 0 to 3600, `ai_prompts_per_session` 1 to 30,
   `ai_prompt_chars` 50 to 2000, `ai_archived_share` 5 to 100 percent, and the three description-search numbers 10 to 300,
   3 to 20 and 50 to 1000.
@@ -210,3 +212,4 @@ Each is explained where it matters; this is the list.
 | `PLATOON_CLIPBOARD` | `system`, `osc52` or `none`: see [Copying text from a session](sessions.md#copying-text-from-a-session) |
 | `VISUAL`, `EDITOR` | looked at first for the [notes editor](projects.md#editing-the-notes) |
 | `NO_COLOR` | set to anything, platoon draws without colors |
+| `PLATOON_NO_UPDATE_CHECK` | `1` (anything but empty or `0`): no [version checks](install-and-setup.md#when-claude-code-or-platoon-is-newer) at all, whatever the setting says: no request to GitHub, and `claude --version` is not run |

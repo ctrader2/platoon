@@ -28,17 +28,25 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 
 ## Install
 
-You need Linux or macOS, Claude Code installed as `claude` and signed in, Rust 1.88 or newer, and a terminal of at least
-60 by 14.
+You need Linux or macOS, Claude Code installed as `claude` and signed in, and a terminal of at least 60 by 14. Any one
+of these:
 
 ```
-cargo install --git https://github.com/ctrader2/platoon
+brew install ctrader2/tap/platoon                    # Homebrew (macOS, Linux)
+curl -LsSf https://github.com/ctrader2/platoon/releases/latest/download/platoon-tui-installer.sh | sh
+cargo install platoon-tui                            # Rust 1.88 or newer
+nix run github:ctrader2/platoon                      # Nix
+```
+
+Then, once:
+
+```
 platoon setup
 platoon
 ```
 
-`platoon setup` runs once. It shows what it will add to Claude Code's settings, backs the file up first, and is safe to
-run again. → [Install and set up](guide/install-and-setup.md)
+`platoon setup` shows what it will add to Claude Code's settings, backs the file up first, and is safe to run again.
+→ [Install and set up](guide/install-and-setup.md)
 
 Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quits from the main lists.
 
@@ -54,8 +62,8 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
 - **Squads edit files without asking** (Claude Code's "accept edits" mode), inside the ticket's worktree. They still ask
   before a push, a pull request or a release.
-- **No network requests and no telemetry.** platoon itself never connects to anything; Claude Code does its own talking
-  to Anthropic.
+- **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
+  (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 
 platoon reads Claude Code's own files, which aren't a documented format, so a Claude Code update can break something.
 It was last checked with Claude Code 2.1.288. → [What platoon changes](guide/what-platoon-changes.md)

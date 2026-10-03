@@ -16,7 +16,9 @@ run `platoon statusline`. See [Set it up](install-and-setup.md#set-it-up-platoon
 
 **Claude Code was updated and something looks wrong** (sessions missing, wrong status, no context figure). platoon reads
 Claude Code's files, which are not a documented interface; a new version can change them. It was last checked with Claude
-Code 2.1.288. See [It reads Claude Code's own files](what-platoon-changes.md#it-reads-claude-codes-own-files).
+Code 2.1.288 (platoon says so once when yours is newer). Update platoon (a newer one may be checked with your Claude Code:
+see [Install](install-and-setup.md#install) for the command), and if that doesn't help, see
+[It reads Claude Code's own files](what-platoon-changes.md#it-reads-claude-codes-own-files).
 
 ## The list and search
 

@@ -90,6 +90,8 @@ small marks its parts leave for each other.
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
 - `deleted-projects/`: one backup of each project you deleted
+- `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon and
+  Claude Code versions it has already told you about (see [below](#one-network-request-no-telemetry))
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tickets, described [above](#squads).
 
@@ -108,12 +110,27 @@ saved by Claude Code like any other.
   process.
 - The project notes helper runs in the background, one per project, for at most half an hour.
 
-## No network, no telemetry
+## One network request, no telemetry
 
-platoon itself makes **no network requests** and has **no telemetry**: it sends nothing about you or your use anywhere.
-It talks only to the programs it starts on your computer (`claude`, `git`, your editors) and, over sockets in its cache
-folder, to its own session hosts. `claude` itself talks to Anthropic, as it always does, and so do the `claude -p` calls
-of the features you switch on.
+platoon has **no telemetry**: it sends nothing about you or your use anywhere. It makes **one network request**, to see
+whether a newer platoon is out:
+
+- **What**: an HTTPS `GET` of `https://api.github.com/repos/ctrader2/platoon/releases/latest`, made with your `curl`
+  (if there is none, nothing is asked). All it says about itself is platoon's version, in the `User-Agent` header
+  (`platoon/1.0.0`), which GitHub requires: no account, no token, nothing about your computer, your sessions or your
+  use. Like any request, it shows GitHub your IP address.
+- **How often**: once a day at most, when platoon starts, off to the side (the list never waits for it), and it gives
+  up after five seconds. The time of the last try is kept in `version-check.json` in the cache folder.
+- **What comes of it**: if GitHub names a newer version, platoon says so once, with the command that updates it (see
+  [When Claude Code or platoon is newer](install-and-setup.md#when-claude-code-or-platoon-is-newer)). If the request
+  fails for any reason, nothing is said.
+- **Switching it off**: "Check for a newer platoon" on the General tab of the settings (`"update_check": false` in
+  `settings.json`), or `PLATOON_NO_UPDATE_CHECK=1` in the environment, which also stops platoon asking `claude` for its
+  version. With either, platoon makes no network request at all.
+
+Otherwise platoon talks only to the programs it starts on your computer (`claude`, `git`, `curl` for the check above,
+your editors) and, over sockets in its cache folder, to its own session hosts. `claude` itself talks to Anthropic, as
+it always does, and so do the `claude -p` calls of the features you switch on.
 
 ## It reads Claude Code's own files
 
@@ -121,6 +138,8 @@ To list your conversations, platoon reads Claude Code's files: the transcripts u
 running sessions in `~/.claude/sessions`, the skills under `~/.claude/skills`, and your MCP servers in `~/.claude.json`
 (for idle stop it matches their commands to running processes; the Squads tab shows only their names). These files are
 not a documented interface, so **a Claude Code update can break platoon**. It was last checked with Claude Code 2.1.288.
+When your Claude Code is newer than that, platoon says so once (it runs `claude --version` when it starts), and
+`platoon setup` says so each time it runs.
 
 ## Removing platoon
 
@@ -135,7 +154,9 @@ not a documented interface, so **a Claude Code update can break platoon**. It wa
 4. **Ticket worktrees and branches.** Any `<repo>-worktrees/ticket-<N>` still there can go with
    `git worktree remove <path>`, and the `ticket/<N>` branches with `git branch -D ticket/<N>`, once you no longer need the
    work on them.
-5. **The program.** `cargo uninstall platoon-tui`.
+5. **The program**, the way you installed it: `brew uninstall platoon`; `cargo uninstall platoon-tui`; for the install
+   script, delete `~/.local/bin/platoon` (or where it put it) and `~/.config/platoon-tui/`, and the lines it added to
+   your shell's startup files, if any; with Nix, remove it from your profile or configuration.
 
 Sessions platoon was running keep running until they stop on their own or you end them; your conversations themselves
 are Claude Code's and stay where they are.

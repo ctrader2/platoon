@@ -47,7 +47,8 @@ cargo clippy --all-targets -- -D warnings  # no clippy warnings, tests included
 
 Test environment knobs: `PLATOON_CLAUDE_BIN` (a stand-in for `claude`), `PLATOON_SKIP_SETUP_CHECK=1`, `PLATOON_BADGES`,
 `PLATOON_COLORS`, `PLATOON_IDLE_SECS_PER_MINUTE`, `PLATOON_CLIPBOARD`, `PLATOON_NOTES_QUIET_SECS`, `PLATOON_NOTES_MAX_LIFE_SECS`,
-`PLATOON_NOTES_HELPER=off`, `PLATOON_EDITOR_PATH` (the only place the notes editors and `v`'s editors are looked for; `v`'s
+`PLATOON_NOTES_HELPER=off`, `PLATOON_NO_UPDATE_CHECK=1` (no version checks: no request to GitHub, no `claude --version`;
+every test that starts the binary sets it, and a unit test's `App` never starts them), `PLATOON_EDITOR_PATH` (the only place the notes editors and `v`'s editors are looked for; `v`'s
 tests put stand-in `code`/`hx` there: `tests/editor.rs`'s `hx` records what it was started with), `PLATOON_EDITOR_BIN`, and
 `PLATOON_FORBID_REAL_EDITOR` (set by `Term::spawn`: no real editor, VS Code included, can start). A unit test's app finds no
 `v` editors at all (`App::set_file_editors_for_test` gives it stand-ins). Run the whole suite twice before trusting it and fix races instead of retrying. In a terminal test, a frame arrives
@@ -69,9 +70,14 @@ names, and a temp folder that may be under the home folder (paths there are show
 `codeql.yml` runs CodeQL (Rust and the workflows, no build) on pushes to `main`, pull requests and weekly; while the
 repo is private it skips itself (code scanning needs a public repo or GitHub Code Security). Dependabot (`dependabot.yml`)
 opens weekly grouped minor/patch updates for cargo and the actions.
-`checked-with/claude-code` is the Claude Code version platoon was last checked with: README.md and the guide must name
-the same one (the script fails CI otherwise), so change them in one commit. `claude-code-watch.yml` checks npm daily and
+`checked-with/claude-code` is the Claude Code version platoon was last checked with (compiled in: the notice when a user's
+is newer): README.md and the guide must name the same one (the script fails CI otherwise), so change them in one commit. `claude-code-watch.yml` checks npm daily and
 opens an issue "Check support for Claude Code X" for a newer version; no workflow commits, pushes or edits anything.
+`release.yml` runs only on a pushed version tag (never on `main` or pull requests): written by `dist` from
+`dist-workspace.toml` (`dist generate`, then put back its one hand edit, the permissions; see the file's top), it builds
+the release binaries, the install script and the Homebrew formula (tap `ctrader2/homebrew-tap`, secret
+`HOMEBREW_TAP_TOKEN`) and calls `publish-crate.yml` (crates.io trusted publishing; skipped until the repository variable
+`CRATES_IO_TRUSTED_PUBLISHING` is `true`). Release notes come from `CHANGELOG.md`.
 
 ## Where things live (`src/`)
 
@@ -105,7 +111,9 @@ opens an issue "Check support for Claude Code X" for a newer version; no workflo
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
-| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
+| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code), `release.yml` (written by `dist`: a tagged release) and `publish-crate.yml` (crates.io, called by it) |
+| `versions.rs` | the two version notices: Claude Code newer than `checked-with/claude-code` (compiled in; `claude --version`), and a newer platoon from GitHub's latest release (`curl`, once a day at most: platoon's only network request), each said once per version, with the update command for how platoon was installed (`install_kind`); `<cache>/version-check.json`; the `update_check` setting and `PLATOON_NO_UPDATE_CHECK`; run off the UI thread when the app starts (`App::start_version_checks`), shown above the footer of the top-level lists (`App::news_showing`, tests in `versions_app_tests.rs`); `setup_line` for `platoon setup` |
+| `CHANGELOG.md`, `dist-workspace.toml`, `flake.nix`, `flake.lock` | the changelog (Keep a Changelog; each release's notes); `dist`'s config for releases; the Nix flake (`nix run github:ctrader2/platoon`) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally) |
 | `.github/workflows/codeql.yml`, `.github/dependabot.yml` | CodeQL for Rust and the workflows (actions pinned by commit, skipped while the repo is private), Dependabot weekly for cargo and github-actions (minor and patch grouped, at most 3 open each) |
 | `.github/ISSUE_TEMPLATE/`, `.github/pull_request_template.md`, `.github/CODEOWNERS` | the issue forms (bug: versions, OS, terminal, theme; feature: the problem first), `config.yml` (no blank issues; questions to Discussions, vulnerabilities to private reporting), the pull request checklist, `* @ctrader2` |

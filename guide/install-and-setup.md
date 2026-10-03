@@ -5,7 +5,7 @@
 - Linux or macOS.
 - Claude Code, installed as `claude` and signed in. platoon runs
   your sessions with it and reads its files (see [What platoon changes](what-platoon-changes.md)).
-- Rust 1.88 or newer, with `cargo`, to build platoon.
+- Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
 - `git`, for [tickets handed to squads](tickets-and-squads.md#handing-a-ticket-to-a-squad) (they work in git
   worktrees) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
@@ -13,15 +13,28 @@
 
 ## Install
 
-For now platoon is installed from source:
+Any one of these. Each puts the `platoon` command on your path (the package is called `platoon-tui`); then run
+[`platoon setup`](#set-it-up-platoon-setup) once.
 
-```
-cargo install --git https://github.com/ctrader2/platoon
-platoon setup
-platoon
-```
+| How | Install | Update |
+| --- | --- | --- |
+| Homebrew (macOS, Linux) | `brew install ctrader2/tap/platoon` | `brew upgrade platoon` |
+| The install script (macOS, Linux) | `curl -LsSf https://github.com/ctrader2/platoon/releases/latest/download/platoon-tui-installer.sh \| sh` | the same command again |
+| crates.io | `cargo install platoon-tui` | the same command again |
+| Nix | `nix run github:ctrader2/platoon` (or add the flake to your configuration) | `nix run --refresh github:ctrader2/platoon` |
+| From source | `git clone https://github.com/ctrader2/platoon && cd platoon && cargo install --path .` | `git pull`, then `cargo install --path .` |
 
-The command is `platoon` (the package is called `platoon-tui`).
+- **The install script** downloads the release for your computer (Linux and macOS, Intel and ARM), checks its checksum
+  when your system has the `sha256sum` command, and puts `platoon` in `~/.local/bin` (or `$XDG_BIN_HOME`), adding that
+  folder to your path if it isn't there. It keeps a note of where it put platoon (and the lines that add the folder to
+  your path) in `~/.config/platoon-tui/`. Each release on [GitHub](https://github.com/ctrader2/platoon/releases) also
+  has the files themselves, with their checksums.
+- The Linux builds are static: one file that runs on any distribution.
+- `cargo install` and building from source need Rust 1.88 or newer.
+
+Whichever you choose, platoon was last checked with the Claude Code version named in
+[What platoon changes](what-platoon-changes.md#it-reads-claude-codes-own-files), and it
+[tells you](#when-claude-code-or-platoon-is-newer) when your Claude Code is newer, or when a newer platoon is out.
 
 ## Set it up: `platoon setup`
 
@@ -64,6 +77,24 @@ The Tickets skill step writes `skills/to-tickets/SKILL.md` in Claude Code's fold
   platoon's copy in (yours is kept as `SKILL.md.platoon-bak`).
 - `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says
   "removed by you"). `platoon setup --add to-tickets` puts it back.
+
+## When Claude Code or platoon is newer
+
+platoon knows the Claude Code version it was last checked with. When it starts, it asks your `claude` for its version
+(`claude --version`), and if yours is newer it says so once, in a line above the key hints:
+
+```
+Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). If something looks wrong, update platoon.
+```
+
+`platoon setup` prints the same line each time it runs.
+
+Once a day at most, platoon also asks GitHub whether a newer platoon is out (see
+[What platoon changes](what-platoon-changes.md#one-network-request-no-telemetry) for exactly what that sends). When one
+is, it says so once, with the command that updates the way you installed it: `brew upgrade platoon`, `cargo install
+platoon-tui`, the install script again, or else a link to the releases page. When both apply, it is one line. Each new
+version is said once; the line goes at your next key or click. "Check for a newer platoon" on the General tab of the
+[settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off both checks.
 
 ## Undoing it
 

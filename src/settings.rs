@@ -724,8 +724,9 @@ fn general_items() -> Vec<Item> {
         },
         Item {
             name: "Check for a newer platoon",
-            explain: "Once a day at most, platoon asks GitHub for the number of its latest version (nothing about you is sent) and \
-                      says once when a newer one is out. Off: platoon makes no network request at all. Applies from the next start.",
+            explain: "Once a day at most, platoon asks GitHub for the number of its latest version (it sends only its own version \
+                      number) and says once when a newer one is out. Off: platoon makes no network request at all. Applies from the \
+                      next start.",
             kind: Kind::Steps,
             choices: &[0, 1],
             get: |s| u64::from(s.update_check),

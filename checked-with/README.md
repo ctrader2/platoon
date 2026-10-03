@@ -4,7 +4,8 @@ The version of each coding agent platoon was last checked with, one file per too
 
 - `claude-code`: Claude Code. README.md and the guide say the same version ("It was last checked with Claude Code
   X"); `scripts/check-claude-version.sh` fails CI when they don't. The daily watch
-  (`.github/workflows/claude-code-watch.yml`) opens an issue when npm has a newer Claude Code.
+  (`.github/workflows/claude-code-watch.yml`) opens an issue when npm has a newer Claude Code. The file is compiled into
+  platoon (`src/versions.rs`): when a user's Claude Code is newer, the app says so once and `platoon setup` each time.
 
 Other tools (Codex, Gemini) get a file of their own here when platoon supports them.
 
