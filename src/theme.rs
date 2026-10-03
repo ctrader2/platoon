@@ -1,7 +1,8 @@
-//! Themes. Every color the UI draws comes from a `Theme`, so a theme is one entry in `SPECS` (or a user's theme
-//! file, or a plugin's). The built-ins are dark, compiled in, and always in the order the picker will show them. A
-//! plugin's theme may be light (`Theme::light`): the contrast rules are symmetric (WCAG's ratio doesn't care which
-//! side is lighter), and everything that is lifted to read goes toward black on a light theme instead of white.
+//! Themes. Every color the UI draws comes from a `Theme`, so a theme is one entry in `SPECS`, one of the theme files
+//! compiled in (`FILES`, in `src/themes/`), or a user's theme file. The built-ins are compiled in and always in the
+//! order the picker will show them. A theme may be light (`Theme::light`; eight of the files are): the contrast rules
+//! are symmetric (WCAG's ratio doesn't care which side is lighter), and everything that is lifted to read goes toward
+//! black on a light theme instead of white.
 //!
 //! A fixed theme is a `bg`/`text` pair plus a 16-color palette; the eleven UI roles are picked from the
 //! palette (or given as a hex), and whatever is derived (surface, border, dim, subtext) or too faint to read
@@ -48,14 +49,14 @@ pub struct Theme {
     /// The theme's 16 terminal colors, used to recolor sessions shown inside platoon. `None`: leave the
     /// emulator's colors as they are (Terminal colors, where the terminal does the coloring).
     pub ansi: Option<[Color; 16]>,
-    /// Drawn on a light background (dark text): only plugins' themes so far. False for every built-in and for
-    /// Terminal colors, whose background platoon can't know. Anything that needs "lighter" or "darker than the text"
-    /// asks this (the code editor's `background`, the text on a project's colored badge).
+    /// Drawn on a light background (dark text): the light built-in theme files and the user's own light themes. False
+    /// for every `SPECS` theme and for Terminal colors, whose background platoon can't know. Anything that needs
+    /// "lighter" or "darker than the text" asks this (the code editor's `background`, the text on a project's colored badge).
     pub light: bool,
 }
 
-/// A background at least this bright (WCAG luminance) makes a light theme; below it, a dark one. The built-ins are
-/// all well below it.
+/// A background at least this bright (WCAG luminance) makes a light theme; below it, a dark one. The `SPECS` themes
+/// are all well below it.
 pub const LIGHT_LUMINANCE: f64 = 0.2;
 
 /// Whether `bg` is a light theme's background.
@@ -676,10 +677,53 @@ impl Spec {
     }
 }
 
+/// The built-in themes kept as theme files (the format of the user's own and of Ghostty's), in display order: twelve
+/// dark, then eight light. Each file says where its colors come from and what platoon picked by hand
+/// (THIRD_PARTY_NOTICES.md credits them). They are built the way a user's theme file is (`usertheme::build`), and each
+/// reads as it is (a test checks), so nothing is lifted; the id is the name's slug (`Rosé Pine Dawn` is
+/// `rose-pine-dawn`).
+const FILES: [(&str, &str); 20] = [
+    ("Harbor Night", include_str!("themes/Harbor Night")),
+    ("Moss Lantern", include_str!("themes/Moss Lantern")),
+    ("Ayu Dark", include_str!("themes/Ayu Dark")),
+    ("Doom One", include_str!("themes/Doom One")),
+    ("Embark", include_str!("themes/Embark")),
+    ("Everblush", include_str!("themes/Everblush")),
+    ("GitHub Dark Dimmed", include_str!("themes/GitHub Dark Dimmed")),
+    ("Iceberg Dark", include_str!("themes/Iceberg Dark")),
+    ("Jellybeans", include_str!("themes/Jellybeans")),
+    ("Srcery", include_str!("themes/Srcery")),
+    ("Tomorrow Night", include_str!("themes/Tomorrow Night")),
+    ("Zenbones Dark", include_str!("themes/Zenbones Dark")),
+    ("Catppuccin Latte", include_str!("themes/Catppuccin Latte")),
+    ("Dayfox", include_str!("themes/Dayfox")),
+    ("Flexoki Light", include_str!("themes/Flexoki Light")),
+    ("GitHub Light", include_str!("themes/GitHub Light")),
+    ("Gruvbox Light", include_str!("themes/Gruvbox Light")),
+    ("One Half Light", include_str!("themes/One Half Light")),
+    ("Rosé Pine Dawn", include_str!("themes/Rosé Pine Dawn")),
+    ("Solarized Light", include_str!("themes/Solarized Light")),
+];
+
+/// The themes of `FILES`, read once.
+fn from_files() -> &'static [Theme] {
+    static BUILT: std::sync::OnceLock<Vec<Theme>> = std::sync::OnceLock::new();
+    BUILT.get_or_init(|| {
+        FILES
+            .iter()
+            .filter_map(|(name, text)| {
+                let parsed = crate::usertheme::parse(text).ok()?;
+                Some(crate::usertheme::build(crate::usertheme::slug(name), (*name).to_string(), &parsed))
+            })
+            .collect()
+    })
+}
+
 impl Theme {
-    /// Every built-in, in display order: the default first, Terminal colors last.
+    /// Every built-in, in display order: the default first, then the rest of `SPECS`, then the theme files compiled
+    /// in (`FILES`: twelve dark, then eight light), Terminal colors last.
     pub fn all() -> Vec<Theme> {
-        SPECS.iter().map(Spec::build).chain([Self::terminal()]).collect()
+        SPECS.iter().map(Spec::build).chain(from_files().iter().cloned()).chain([Self::terminal()]).collect()
     }
 
     /// A built-in by id. The user's own themes are found through `Registry::by_id`.
@@ -939,8 +983,9 @@ pub fn delta_e(a: Color, b: Color) -> f64 {
 mod tests {
     use super::*;
 
+    /// The `SPECS` themes (the ones kept as theme files have their own tests, in `light_theme_tests.rs`).
     fn fixed() -> Vec<Theme> {
-        Theme::all().into_iter().filter(|t| t.ansi.is_some()).collect()
+        SPECS.iter().map(Spec::build).collect()
     }
 
     #[test]
@@ -980,6 +1025,26 @@ mod tests {
                 "horizon",
                 "synthwave",
                 "claude",
+                "harbor-night",
+                "moss-lantern",
+                "ayu-dark",
+                "doom-one",
+                "embark",
+                "everblush",
+                "github-dark-dimmed",
+                "iceberg-dark",
+                "jellybeans",
+                "srcery",
+                "tomorrow-night",
+                "zenbones-dark",
+                "catppuccin-latte",
+                "dayfox",
+                "flexoki-light",
+                "github-light",
+                "gruvbox-light",
+                "one-half-light",
+                "rose-pine-dawn",
+                "solarized-light",
                 "terminal"
             ]
         );
@@ -995,7 +1060,7 @@ mod tests {
         assert_eq!(Theme::default().name, "Catppuccin Mocha");
         assert_eq!(Theme::all().last().map(|t| t.name.as_str()), Some("Terminal colors"));
         assert!(Theme::all().iter().all(|t| !t.name.is_empty()));
-        // The ids are written out, never made from the names; the accented names still give the same id as a slug.
+        // The `SPECS` ids are written out and the theme files' are their names' slugs: an accented name gives its slug either way.
         for t in Theme::all().iter().filter(|t| !t.name.is_ascii()) {
             assert_eq!(crate::usertheme::slug(&t.name), t.id, "{}", t.name);
         }

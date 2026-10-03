@@ -1,15 +1,15 @@
-//! The Theme pack plugin (`plugins/theme-pack`) and light themes at the level of the app: every theme of the pack
-//! loads and reads well as it is, in 24-bit and in 256 colors; the screens drawn in a light theme have the colors
-//! they should, cell by cell (the Sessions list with a selected row and a project badge, a popup, the settings, a
-//! project's notes, the attached view's footer, a squad's workflow rail); the code editor is told the theme is light;
-//! a saved theme id nobody has any more falls back to the default. Every folder is a temp one (`World`); the pack is
-//! installed from the repository's own folder into the test's data folder.
+//! The built-in themes kept as theme files (`src/themes/`, once the Theme pack plugin) and light themes at the level of
+//! the app: each of the twenty is exactly what the plugin made of it (`testdata/theme_pack_colors.tsv`, written by
+//! the plugin route before it was removed), and reads well as it is, in 24-bit and in 256 colors; the screens drawn
+//! in a light theme have the colors they should, cell by cell (the Sessions list with a selected row and a project
+//! badge, a popup, the settings, a project's notes, the attached view's footer, a squad's workflow rail); the code
+//! editor is told the theme is light; a saved theme id nobody has any more falls back to the default. Every folder is
+//! a temp one (`World`).
 
 use crate::app::{Mode, Pane};
 use crate::client::Client;
 use crate::colordepth::rgb_to_256;
 use crate::editor::{ColorMode, colors_json};
-use crate::plugins::{self, Origin};
 use crate::testkit::World;
 use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, SELECTION_TEXT_CONTRAST, Theme, contrast, delta_e};
 use crate::{ui, usertheme};
@@ -22,25 +22,46 @@ use ratatui::{
 };
 use std::path::{Path, PathBuf};
 
-const PACK: &str = "theme-pack";
+/// The twenty, in the order the picker shows them.
+const FILES: [&str; 20] = [
+    "Harbor Night",
+    "Moss Lantern",
+    "Ayu Dark",
+    "Doom One",
+    "Embark",
+    "Everblush",
+    "GitHub Dark Dimmed",
+    "Iceberg Dark",
+    "Jellybeans",
+    "Srcery",
+    "Tomorrow Night",
+    "Zenbones Dark",
+    "Catppuccin Latte",
+    "Dayfox",
+    "Flexoki Light",
+    "GitHub Light",
+    "Gruvbox Light",
+    "One Half Light",
+    "Rosé Pine Dawn",
+    "Solarized Light",
+];
 const LIGHT: [&str; 8] =
     ["Catppuccin Latte", "Dayfox", "Flexoki Light", "GitHub Light", "Gruvbox Light", "One Half Light", "Rosé Pine Dawn", "Solarized Light"];
 
-fn pack_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins").join(PACK)
+fn themes_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/themes")
 }
 
-/// Every theme of the pack, built the way an installed plugin's are: (file name, what the file says, the theme).
-fn pack_themes() -> Vec<(String, usertheme::Parsed, Theme)> {
-    let m = plugins::check(&pack_dir()).manifest.unwrap();
-    m.themes()
+/// Every theme kept as a file, as platoon has it: (name, what the file says, the theme).
+fn file_themes() -> Vec<(String, usertheme::Parsed, Theme)> {
+    FILES
         .iter()
-        .map(|file| {
-            let name = file.rsplit('/').next().unwrap().to_string();
-            let text = std::fs::read_to_string(pack_dir().join(file)).unwrap();
+        .map(|name| {
+            let text = std::fs::read_to_string(themes_dir().join(name)).unwrap();
             let parsed = usertheme::parse(&text).unwrap_or_else(|e| panic!("{name}: {e}"));
-            let theme = usertheme::build(format!("plugin:{PACK}/{}", usertheme::slug(&name)), name.clone(), &parsed);
-            (name, parsed, theme)
+            let theme = Theme::by_id(&usertheme::slug(name)).unwrap_or_else(|| panic!("{name} is a built-in"));
+            assert_eq!(theme.name, *name);
+            (name.to_string(), parsed, theme)
         })
         .collect()
 }
@@ -65,44 +86,83 @@ fn in_256(c: Color) -> Color {
 }
 
 #[test]
-fn the_pack_is_the_theme_pack_with_its_twenty_themes_dark_and_light() {
-    let m = plugins::check(&pack_dir()).manifest.unwrap();
-    assert_eq!((m.id.as_str(), m.name.as_str(), m.author.as_str()), (PACK, "Theme pack", "platoon"));
-    let r = plugins::check(&pack_dir());
-    assert!(r.ok() && r.notes.is_empty(), "{:?} {:?}", r.problems, r.notes);
-    let all = pack_themes();
-    assert_eq!(all.len(), 20);
+fn the_twenty_are_built_ins_after_the_others_dark_then_light_before_terminal_colors() {
+    let ids: Vec<String> = Theme::all().into_iter().map(|t| t.id).collect();
+    let want: Vec<String> = FILES.iter().map(|n| usertheme::slug(n)).collect();
+    let at = ids.iter().position(|i| *i == want[0]).unwrap();
+    assert_eq!(ids[at..at + 20], want[..], "together, in order");
+    assert_eq!(ids[at + 20], "terminal", "Terminal colors stays last");
+    assert!(ids.contains(&"catppuccin-latte".to_string()) && ids.contains(&"rose-pine-dawn".to_string()));
+    let all = file_themes();
     let light: Vec<&str> = all.iter().filter(|(_, _, t)| t.light).map(|(n, _, _)| n.as_str()).collect();
-    let mut want = LIGHT.to_vec();
-    want.sort();
-    let mut got = light.clone();
-    got.sort();
-    assert_eq!(got, want, "the light ones");
-    for keep in ["Harbor Night", "Moss Lantern"] {
-        assert!(all.iter().any(|(n, _, t)| n == keep && !t.light), "{keep} stays, dark");
-    }
-    // None is a built-in by name, and none looks like one under another name: the background, the text and the five
-    // colors platoon uses (Lab distances added up) are apart from every built-in's: Tokyo Night Moon, left out, is 48
-    // from Tokyo Night Storm; the closest kept, Everblush and Doom One to One Dark, about 70.
-    let builtins: Vec<Theme> = Theme::all().into_iter().filter(|b| b.ansi.is_some()).collect();
+    assert_eq!(light, LIGHT.to_vec(), "the light ones, after the dark ones");
+    // None looks like one of the other built-ins under another name: the background, the text and the five colors
+    // platoon uses (Lab distances added up) are apart from every one's: Tokyo Night Moon, left out, is 48 from Tokyo
+    // Night Storm; the closest kept, Everblush and Doom One to One Dark, about 70.
+    let others: Vec<Theme> = Theme::all().into_iter().filter(|b| b.ansi.is_some() && !FILES.contains(&b.name.as_str())).collect();
     let looks = |t: &Theme| [t.bg, t.text, t.accent, t.busy, t.ok, t.warn, t.err];
     for (name, _, t) in &all {
-        assert!(builtins.iter().all(|b| b.name.to_lowercase() != name.to_lowercase()), "{name} is a built-in's name");
-        for b in &builtins {
+        assert!(others.iter().all(|b| b.name.to_lowercase() != name.to_lowercase()), "{name} is another built-in's name");
+        for b in &others {
             let apart: f64 = looks(t).iter().zip(looks(b)).map(|(x, y)| delta_e(*x, y)).sum();
             assert!(apart >= 60.0, "{name} looks like {} ({apart:.0})", b.name);
         }
     }
     // Where the colors come from is said in every file.
-    for file in m.themes() {
-        let text = std::fs::read_to_string(pack_dir().join(file)).unwrap();
-        assert!(text.starts_with("# ") && text.lines().next().unwrap().contains("License: "), "{file} names its origin and license");
+    for name in FILES {
+        let text = std::fs::read_to_string(themes_dir().join(name)).unwrap();
+        assert!(text.starts_with("# ") && text.lines().next().unwrap().contains("License: "), "{name} names its origin and license");
     }
+    let on_disk = std::fs::read_dir(themes_dir()).unwrap().count();
+    assert_eq!(on_disk, 20, "every file in src/themes is built in");
+}
+
+/// The colors the Theme pack plugin gave each of its themes, written down from the plugin route before it went: every
+/// role, the sixteen session colors, the badge text and whether it is light, all the same now that they are built in.
+#[test]
+fn each_built_in_has_exactly_the_colors_the_theme_pack_plugin_gave_it() {
+    let hex = |c: Color| match c {
+        Color::Rgb(r, g, b) => format!("{r:02x}{g:02x}{b:02x}"),
+        other => format!("{other:?}"),
+    };
+    let fixture = include_str!("testdata/theme_pack_colors.tsv");
+    let mut seen = Vec::new();
+    for line in fixture.lines() {
+        let f: Vec<&str> = line.split('\t').collect();
+        assert_eq!(f.len(), 6, "{line}");
+        let old_id = f[0];
+        let id = old_id.strip_prefix("plugin:theme-pack/").unwrap();
+        let t = Theme::by_id(id).unwrap_or_else(|| panic!("{id} is a built-in"));
+        let roles: Vec<String> = t.roles().iter().map(|(_, c)| hex(*c)).collect();
+        let ansi: Vec<String> = t.ansi.unwrap().iter().map(|c| hex(*c)).collect();
+        assert_eq!(
+            (t.name.as_str(), t.light.to_string(), hex(t.on_accent), roles.join(" "), ansi.join(" ")),
+            (f[1], f[2].to_string(), f[3].to_string(), f[4].to_string(), f[5].to_string()),
+            "{id}"
+        );
+        seen.push(id.to_string());
+    }
+    let want: Vec<String> = FILES.iter().map(|n| usertheme::slug(n)).collect();
+    assert_eq!(seen, want, "all twenty, in the plugin's order");
 }
 
 #[test]
-fn every_theme_of_the_pack_reads_well_as_it_is_and_after_the_derivation() {
-    for (name, parsed, t) in pack_themes() {
+fn a_saved_theme_pack_id_is_the_built_in_now() {
+    let w = World::new("light-pack-id");
+    w.transcript("aaa", "/srv/alpha", "refactor the parser", 40);
+    let settings = w.config.join("settings.json");
+    std::fs::write(&settings, r#"{"theme": "plugin:theme-pack/rose-pine-dawn", "idle_stop_minutes": 30}"#).unwrap();
+    assert_eq!(crate::settings::load(&w.config).0.theme, "rose-pine-dawn");
+    let app = w.app();
+    assert_eq!((app.theme.id.as_str(), app.theme.name.as_str()), ("rose-pine-dawn", "Rosé Pine Dawn"));
+    // Another plugin's theme, or a pack id that never was, is left as it was written (and shows as the default).
+    std::fs::write(&settings, r#"{"theme": "plugin:other/rose-pine-dawn"}"#).unwrap();
+    assert_eq!(crate::settings::load(&w.config).0.theme, "plugin:other/rose-pine-dawn");
+}
+
+#[test]
+fn every_theme_file_reads_well_as_it_is_and_after_the_derivation() {
+    for (name, parsed, t) in file_themes() {
         assert!(usertheme::problems(&parsed).is_empty(), "{name}: {:?}", usertheme::problems(&parsed));
         // What the file says is what platoon uses: nothing needed lifting.
         let picks = parsed.role_picks();
@@ -143,8 +203,8 @@ fn every_theme_of_the_pack_reads_well_as_it_is_and_after_the_derivation() {
 }
 
 #[test]
-fn every_theme_of_the_pack_still_reads_in_256_colors() {
-    for (name, _, t) in pack_themes() {
+fn every_theme_file_still_reads_in_256_colors() {
+    for (name, _, t) in file_themes() {
         let q = |c: Color| in_256(c);
         let bg = q(t.bg);
         assert_ne!(q(t.surface), bg, "{name}: the selected row stands out");
@@ -241,7 +301,7 @@ fn assert_legible(term: &Terminal<TestBackend>, t: &Theme, what: &str) {
     }
 }
 
-/// A world with the Theme pack installed and `theme` chosen, three conversations (one working) and the first in a
+/// A world with the built-in `theme` chosen, three conversations (one working) and the first in a
 /// project.
 fn light_world(name: &str, theme: &str) -> (World, crate::app::App, String) {
     let mut w = World::new(name);
@@ -249,12 +309,10 @@ fn light_world(name: &str, theme: &str) -> (World, crate::app::App, String) {
     w.transcript("bbb", "/srv/beta", "add a login page", 30);
     w.transcript("ccc", "/srv/gamma", "write the docs", 3);
     w.live("bbb", "/srv/beta", 1, "busy");
-    let store = plugins::store_for(&w.config);
-    store.install(&pack_dir(), Origin::Folder { path: pack_dir().to_string_lossy().into_owned() }).unwrap();
-    let id = format!("plugin:{PACK}/{}", usertheme::slug(theme));
+    let id = usertheme::slug(theme);
     crate::settings::save(&w.config, &crate::settings::Settings { theme: id.clone(), ..crate::settings::load(&w.config).0 }).unwrap();
     let mut app = w.app();
-    assert_eq!(app.theme.id, id, "the pack's theme is in effect");
+    assert_eq!(app.theme.id, id, "the theme is in effect");
     assert!(app.theme.light);
     let project = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa", Some(&project)).unwrap();
@@ -412,13 +470,13 @@ fn a_squads_workflow_rail_in_a_light_theme() {
 }
 
 #[test]
-fn every_light_theme_of_the_pack_draws_every_main_screen_legibly() {
+fn every_light_built_in_draws_every_main_screen_legibly() {
     let (w, mut app, project) = light_world("light-sweep", "Catppuccin Latte");
     let path = crate::projects::notes_path(&w.config, &project);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "## Summary\n\nThe **shop** takes `orders` now.\n\n- a point\n").unwrap();
     for name in LIGHT {
-        let id = format!("plugin:{PACK}/{}", usertheme::slug(name));
+        let id = usertheme::slug(name);
         crate::settings::save(&w.config, &crate::settings::Settings { theme: id.clone(), ..crate::settings::load(&w.config).0 }).unwrap();
         app.refresh_for_test();
         assert_eq!(app.theme.id, id);
@@ -433,11 +491,9 @@ fn every_light_theme_of_the_pack_draws_every_main_screen_legibly() {
         }
         let c = KeyCode::Char;
         // (the keys from the Sessions tab, what it is, something only that screen shows)
-        let screens: [(&[KeyCode], &str, &str); 12] = [
+        let screens: [(&[KeyCode], &str, &str); 10] = [
             (&[c('s')], "settings", "╭ Settings"),
             (&[c('s'), KeyCode::Enter], "the theme list", "╭ Theme"),
-            (&[c('s'), KeyCode::BackTab], "the settings' Plugins tab", "Theme pack"),
-            (&[c('s'), KeyCode::BackTab, KeyCode::Enter], "the plugin screen", "Harbor Night"),
             (&[c('n')], "the folder picker", "pick a directory"),
             (&[c('m')], "the project picker", "╭ project"),
             (&[c('r')], "rename", "╭ rename conversation"),
@@ -483,7 +539,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
     // The user's own copy of a light theme, under a name with an accent: `user:creme-brulee`.
     let dir = w.config.join("themes");
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::copy(pack_dir().join("themes/Catppuccin Latte"), dir.join("Crème Brûlée")).unwrap();
+    std::fs::copy(themes_dir().join("Catppuccin Latte"), dir.join("Crème Brûlée")).unwrap();
     std::fs::write(dir.join("Too Pale"), "background = #ffffff\nforeground = #cccccc\n").unwrap();
     crate::settings::save(
         &w.config,
@@ -526,20 +582,16 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
 }
 
 #[test]
-fn the_pack_s_rose_pine_dawn_is_rose_pine_dawn() {
-    let all = pack_themes();
+fn rose_pine_dawn_is_rose_pine_dawn() {
+    let all = file_themes();
     let dawn = &all.iter().find(|(n, _, _)| n == "Rosé Pine Dawn").unwrap().2;
-    assert_eq!(dawn.id, "plugin:theme-pack/rose-pine-dawn");
-    let w = World::new("light-dawn-id");
-    plugins::store_for(&w.config).install(&pack_dir(), Origin::Folder { path: pack_dir().to_string_lossy().into_owned() }).unwrap();
-    let reg = usertheme::Registry::open_with_plugins(&w.config, &plugins::store_for(&w.config).dir);
-    assert_eq!(reg.by_id("plugin:theme-pack/rose-pine-dawn").map(|t| t.name), Some("Rosé Pine Dawn".to_string()));
-    assert!(reg.by_id("plugin:theme-pack/ros-pine-dawn").is_none(), "the old id is gone (a saved one falls back to the default)");
+    assert_eq!(dawn.id, "rose-pine-dawn");
+    assert!(Theme::by_id("ros-pine-dawn").is_none(), "the accented letter is its plain letter, not dropped");
 }
 
 #[test]
 fn the_code_editor_is_told_a_light_theme_is_light() {
-    let all = pack_themes();
+    let all = file_themes();
     let latte = &all.iter().find(|(n, _, _)| n == "Catppuccin Latte").unwrap().2;
     let harbor = &all.iter().find(|(n, _, _)| n == "Harbor Night").unwrap().2;
     for mode in [ColorMode::TrueColor, ColorMode::Indexed256] {
@@ -567,14 +619,12 @@ fn the_code_editor_is_told_a_light_theme_is_light() {
 fn a_saved_theme_id_nobody_has_any_more_shows_the_default_and_is_kept() {
     let w = World::new("light-gone");
     w.transcript("aaa", "/srv/alpha", "refactor the parser", 40);
-    plugins::store_for(&w.config).install(&pack_dir(), Origin::Folder { path: pack_dir().to_string_lossy().into_owned() }).unwrap();
-    // The example plugin's old id: the pack is installed, but its themes have new ids.
+    // The example plugin's old id: its Harbor Night is a built-in now, under another id.
     let gone = "plugin:example-themes/harbor-night";
     crate::settings::save(&w.config, &crate::settings::Settings { theme: gone.into(), ..crate::settings::load(&w.config).0 }).unwrap();
     let mut app = w.app();
     assert_eq!(app.theme.id, crate::theme::DEFAULT_ID);
-    let reg = usertheme::Registry::open_with_plugins(&w.config, &plugins::store_for(&w.config).dir);
-    assert!(reg.by_id("plugin:theme-pack/harbor-night").is_some(), "the pack's own Harbor Night is there");
+    assert!(Theme::by_id("harbor-night").is_some(), "the built-in Harbor Night is there");
     let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
     draw(&mut term, &app);
     assert_eq!(term.backend().buffer()[(1, 1)].bg, Theme::default().bg);

@@ -1,15 +1,18 @@
 # Third-party notices
 
-platoon's built-in color themes are the color palettes of well-known editor and terminal themes. Only color
-values are used (a handful of hex numbers per theme, compiled into the binary); no theme code, images or files
-are copied. Each theme belongs to its original authors and is named here so it can be found and credited.
+platoon's built-in color themes, dark and light, are the color palettes of well-known editor and terminal themes
+(and two of platoon's own). Only color values are used (a handful of hex numbers per theme, compiled into the
+binary); no theme code, images or files are copied. Each theme belongs to its original authors and is named here so
+it can be found and credited.
 
 ## Where the palettes come from
 
 The 16-color palettes, backgrounds and foregrounds are the ones bundled with [Ghostty](https://ghostty.org)
 (`share/ghostty/themes`), which in turn takes them from
 [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes). platoon reads them once, at
-development time, and stores the numbers in `src/theme.rs`; it has no runtime dependency on Ghostty.
+development time, and stores the numbers in `src/theme.rs`, or, for the themes in "More themes, dark and light"
+below, in a small theme file each in `src/themes/` (Ghostty's format, naming the Ghostty file it came from and what
+platoon changed); it has no runtime dependency on Ghostty.
 
 The Debian package of Ghostty lists the bundled iTerm2-Color-Schemes collection as `public-domain` with no
 copyright holder in its `copyright` file. That describes the collection as packaged there; it is not a
@@ -49,6 +52,48 @@ places where a role uses a color that is not in the palette to stay readable, ar
 | Synthwave | contributed straight to [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (brettstil, 2017), with no separate upstream project | MIT (the iTerm2-Color-Schemes collection) |
 | Claude | The colors of Claude Code's own terminal interface (Anthropic) | not a third-party theme: only color values, no code or files |
 | Terminal colors | uses your terminal's own colors | none |
+
+### More themes, dark and light
+
+These were once platoon's "Theme pack" plugin and are now built in. The palettes, backgrounds and foregrounds are
+Ghostty's, as above. The choice of which color plays which part in platoon (accent, working, good news, warnings,
+errors) and the hand-picked colors (`platoon-accent`, `platoon-busy`, `platoon-ok`, `platoon-warn`, `platoon-err`, and
+a changed `foreground`) are platoon's own; each theme file says what was changed and why.
+
+Dark:
+
+| Theme | Original author / project | License | Changed for platoon |
+| --- | --- | --- | --- |
+| Harbor Night, Moss Lantern | made for platoon | MIT | (their own colors) |
+| Ayu Dark | [ayu](https://github.com/ayu-theme/ayu-colors) (Ike Ku) | MIT | nothing |
+| Doom One | [doom-themes](https://github.com/doomemacs/themes) (Henrik Lissner) | MIT | nothing |
+| Embark | [Embark](https://github.com/embark-theme/vim) (embark-theme contributors) | MIT | working and errors: its normal purple and red |
+| Everblush | [Everblush](https://github.com/Everblush/everblush) (mangeshrex and contributors) | MIT | nothing |
+| GitHub Dark Dimmed | [github-vscode-theme](https://github.com/primer/github-vscode-theme) (GitHub) | MIT | nothing |
+| Iceberg Dark | [iceberg.vim](https://github.com/cocopon/iceberg.vim) (cocopon) | MIT | accent: its light blue |
+| Jellybeans | [jellybeans.vim](https://github.com/nanotech/jellybeans.vim) (NanoTech) | MIT | nothing |
+| Srcery | [srcery-vim](https://github.com/srcery-colors/srcery-vim) (Daniel Berg and contributors) | MIT | nothing |
+| Tomorrow Night | [tomorrow-theme](https://github.com/chriskempson/tomorrow-theme) (Chris Kempson) | MIT | errors: its red a shade lighter |
+| Zenbones Dark | [zenbones.nvim](https://github.com/zenbones-theme/zenbones.nvim) (Michael Chris Lopez) | MIT | nothing |
+
+Light:
+
+| Theme | Original author / project | License | Changed for platoon |
+| --- | --- | --- | --- |
+| Catppuccin Latte | [Catppuccin](https://github.com/catppuccin/catppuccin) | MIT | accent, working, good news, warnings: its blue, mauve, green and yellow, darker |
+| Dayfox | [nightfox.nvim](https://github.com/EdenEast/nightfox.nvim) (EdenEast) | MIT | nothing |
+| Flexoki Light | [Flexoki](https://github.com/kepano/flexoki) (Steph Ango) | MIT | good news, warnings: its green and yellow, darker |
+| GitHub Light | [github-vscode-theme](https://github.com/primer/github-vscode-theme) (GitHub) | MIT | warnings: GitHub's own attention color |
+| Gruvbox Light | [gruvbox](https://github.com/morhetz/gruvbox) (Pavel Pertsev) | MIT | good news, warnings: its faded green and yellow, darker |
+| One Half Light | [onehalf](https://github.com/sonph/onehalf) (Son A. Pham) | MIT | accent, good news, warnings, errors: its blue, green, yellow and red, darker |
+| Rosé Pine Dawn | [Rosé Pine](https://github.com/rose-pine/rose-pine-theme) | MIT | text a shade darker; accent (iris), warnings (gold) and errors (love) darker; working is its pine; good news a green of platoon's own |
+| Solarized Light | [Solarized](https://github.com/altercation/solarized) (Ethan Schoonover) | MIT | text darker (like platoon's Solarized Dark, lifted); accent (violet), working (cyan), green, yellow and red darker |
+
+Left out: commercial themes; themes too close to another built-in (Tokyo Night Moon,
+Duskfox, Carbonfox, Snazzy); licenses that don't fit, or none to check (Modus Operandi and Vivendi, GPL-3.0; Bluloco,
+LGPL-3.0; the Xcode themes, Apple's; Oceanic Next, whose original repository has no license); and light themes whose
+text and nearly every color would have to change to read on their background (Tokyo Night Day, Everforest Light, Ayu
+Light, Kanagawa Lotus).
 
 "MIT" is the license the upstream project publishes; where the table says to see the upstream license, check
 the repository linked before redistributing anything beyond the color values. Catppuccin Mocha's roles are

@@ -11,7 +11,6 @@ use common::*;
 use serde_json::{Value, json};
 use std::{
     fs,
-    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
@@ -457,21 +456,6 @@ fn the_command_line_shows_a_plugin_with_instructions_refuses_it_without_a_termin
 }
 
 impl Lab {
-    /// `platoon <args>` with the lab's folders and these variables on top.
-    fn cli_with(&self, extra: &[(&str, String)], args: &[&str]) -> (i32, String, String) {
-        let mut c = Command::new(BIN);
-        c.args(args).current_dir(&self.base).stdin(Stdio::null());
-        for (k, v) in self.env().into_iter().chain(extra.iter().map(|(k, v)| (*k, v.clone()))) {
-            c.env(k, v);
-        }
-        let out = c.output().unwrap();
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    }
-
     /// The version installed of plugin `id`, as `installed.json` has it.
     fn version(&self, id: &str) -> String {
         self.installed()["plugins"][id]["version"].as_str().unwrap_or_default().to_string()
@@ -491,76 +475,6 @@ impl Lab {
         }
         fs::write(self.cat.join("index.json"), index.to_string()).unwrap();
     }
-}
-
-/// A `git` that only writes down that it was run, first on PATH (then the usual system folders): platoon must never run
-/// git for plugins. The PATH, and the file it writes.
-fn git_that_tells(lab: &Lab) -> (String, PathBuf) {
-    let bin = lab.base.join("fake-bin");
-    fs::create_dir_all(&bin).unwrap();
-    let said = lab.base.join("git-was-run");
-    fs::write(bin.join("git"), format!("#!/bin/sh\necho \"$@\" >> '{}'\nexit 1\n", said.display())).unwrap();
-    fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
-    (format!("{}:/usr/bin:/bin", bin.display()), said)
-}
-
-/// A plugin of the catalog built into platoon that adds themes only (whatever it is called now): its id and name.
-fn a_built_in_theme_plugin() -> (String, String) {
-    let cat = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins");
-    let index: Value = serde_json::from_str(&fs::read_to_string(cat.join("index.json")).unwrap()).unwrap();
-    for p in index["plugins"].as_array().unwrap() {
-        let id = p["id"].as_str().unwrap();
-        let m: Value = serde_json::from_str(&fs::read_to_string(cat.join(id).join("plugin.json")).unwrap()).unwrap();
-        let o = m.as_object().unwrap();
-        if o.contains_key("themes") && !["editor", "skills", "squads", "agents"].iter().any(|k| o.contains_key(*k)) {
-            return (id.to_string(), m["name"].as_str().unwrap().to_string());
-        }
-    }
-    panic!("the built-in catalog has a theme plugin");
-}
-
-#[test]
-fn the_catalog_built_into_platoon_lists_and_installs_with_no_network_and_no_git() {
-    let lab = Lab::new("plug-built-in");
-    let (path, git_ran) = git_that_tells(&lab);
-    let (id, name) = a_built_in_theme_plugin();
-    // An empty PLATOON_PLUGIN_CATALOG: the catalog built in. A proxy that answers nothing: no network either.
-    let extra = [
-        ("PLATOON_PLUGIN_CATALOG", String::new()),
-        ("PATH", path.clone()),
-        ("https_proxy", "http://127.0.0.1:9".into()),
-        ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
-    ];
-    let (code, out, err) = lab.cli_with(&extra, &["plugin", "list"]);
-    assert_eq!(code, 0, "{err}");
-    assert!(out.starts_with("In the catalog:\n") && out.contains("Code editor (Neovim)") && out.contains(&name), "{out}");
-    assert!(!out.contains("Harbor themes"), "not the lab's catalog: {out}");
-    let (code, out, err) = lab.cli_with(&extra, &["plugin", "add", &id]);
-    assert_eq!(code, 0, "{err}");
-    assert!(out.contains(&format!("Installed {name} ")), "{out}");
-    assert_eq!(lab.installed()["plugins"][id.as_str()]["origin"], "catalog");
-    assert!(lab.data.join("plugins").join(&id).join("plugin.json").is_file());
-    let (code, out, _) = lab.cli_with(&extra, &["plugin", "update"]);
-    assert!(code == 0 && out.contains(&format!("{name} is up to date.")), "{out}");
-    // The UI lists the same plugins, the selected one's description under them.
-    let mut env = lab.env();
-    env.extend(extra.iter().map(|(k, v)| (*k, v.clone())));
-    let mut t = Term::spawn(&[], &env, &lab.work, 34, 120);
-    t.wait_for_all(&["make the shop", "3 Squads"]);
-    settings_plugins(&mut t, "Code editor (Neovim)");
-    t.wait_for_all(&[&name, "Neovim"]);
-    t.send(b"\x1b");
-    t.wait_gone("Settings file:");
-    t.send(b"q");
-    assert_eq!(t.wait_exit(), 0);
-    assert!(!git_ran.exists(), "git was run: {}", fs::read_to_string(&git_ran).unwrap_or_default());
-    // The copy an older platoon fetched with git goes, and nothing else of the data folder.
-    fs::create_dir_all(lab.data.join("plugins/.catalog/editor")).unwrap();
-    fs::write(lab.data.join("plugins/.catalog.json"), "{}").unwrap();
-    let (code, _, _) = lab.cli_with(&extra, &["plugin", "list"]);
-    assert_eq!(code, 0);
-    assert!(!lab.data.join("plugins/.catalog").exists() && !lab.data.join("plugins/.catalog.json").exists());
-    assert!(lab.data.join("plugins").join(&id).is_dir() && lab.data.join("plugins/installed.json").is_file());
 }
 
 #[test]

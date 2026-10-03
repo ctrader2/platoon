@@ -286,7 +286,7 @@ fn parse(text: &str) -> Option<Settings> {
     };
     // Only a real true/false counts: anything else (a number, text) is not a choice, so the default stays.
     let ignores_mcp = o.get("idle_stop_ignores_mcp").and_then(Value::as_bool).unwrap_or(d.idle_stop_ignores_mcp);
-    let theme = o.get("theme").and_then(Value::as_str).map_or(d.theme.clone(), str::to_string);
+    let theme = o.get("theme").and_then(Value::as_str).map_or(d.theme.clone(), |id| built_in_pack_id(id).to_string());
     Some(
         Settings {
             idle_stop_minutes: number("idle_stop_minutes", d.idle_stop_minutes),
@@ -343,6 +343,12 @@ fn parse(text: &str) -> Option<Settings> {
 
 pub fn path_in(dir: &Path) -> PathBuf {
     dir.join("settings.json")
+}
+
+/// A theme of the Theme pack plugin platoon once had (`plugin:theme-pack/<slug>`) is now the built-in `<slug>`, so
+/// anyone who picked one keeps it. Any other id as it is.
+fn built_in_pack_id(id: &str) -> &str {
+    id.strip_prefix("plugin:theme-pack/").unwrap_or(id)
 }
 
 /// The settings on disk. Never fails: whatever can't be read is the defaults. The second value says the

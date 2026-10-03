@@ -772,12 +772,12 @@ mod tests {
 
     #[test]
     fn a_light_theme_that_reads_as_it_is_loads_and_one_that_doesnt_says_why() {
-        // The Theme pack's Solarized Light, as a file in the user's folder: it reads on its background as it is.
-        let good = include_str!("../plugins/theme-pack/themes/Solarized Light");
+        // The built-in Solarized Light, as a file in the user's folder: it reads on its background as it is.
+        let good = include_str!("themes/Solarized Light");
         let p = parse(good).unwrap();
         assert!(p.light() && problems(&p).is_empty(), "{:?}", problems(&p));
         let t = theme_from("user:sol".into(), "Sol".into(), &p).unwrap();
-        assert_eq!(t, build("user:sol".into(), "Sol".into(), &p), "built the way a plugin's theme is");
+        assert_eq!(t, build("user:sol".into(), "Sol".into(), &p), "built the way a built-in theme file is");
         assert!(t.light && t.strongest() == c(0));
         assert_eq!((t.text, t.accent, t.ok, t.warn), (c(0x47565c), c(0x6268b8), c(0x687700), c(0x8b6900)), "used as it is");
         assert_readable(&t);

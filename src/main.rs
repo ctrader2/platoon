@@ -33,6 +33,8 @@ mod keys_app_tests;
 #[cfg(test)]
 mod layout_app_tests;
 mod ledger;
+#[cfg(test)]
+mod light_theme_tests;
 mod mcp;
 mod mdview;
 mod model;
@@ -86,8 +88,6 @@ mod summaries;
 mod testkit;
 mod textbox;
 mod theme;
-#[cfg(test)]
-mod theme_pack_tests;
 mod tickets;
 #[cfg(test)]
 mod tickets_app_tests;
@@ -3417,7 +3417,7 @@ mod tests {
         let mut app = w.app();
         open_themes(&mut app);
         // Tall enough for every built-in, the user's themes and the note at once.
-        let mut term = Terminal::new(TestBackend::new(140, 60)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(140, 80)).unwrap();
         let shown = draw(&mut term, &app);
         let buf = snapshot(&term);
         for t in Theme::all() {
