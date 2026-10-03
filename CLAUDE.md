@@ -59,8 +59,8 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request, on Linux: the checks above (warnings are
 errors: `RUSTFLAGS=-D warnings`), `scripts/check-claude-version.sh`, and a build on the minimum Rust (1.88,
-`rust-version`). macOS (arm64: test and release build) runs only when started by hand (`workflow_dispatch`:
-`gh workflow run ci.yml --ref main`) until it has passed once, then on pushes to `main` while the repo is private. Every
+`rust-version`). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
+--ref main`), not on pull requests while the repo is private (10x minutes); once public, on pull requests too. Every
 job has a `timeout-minutes` (Linux 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat the free minutes.
 The macOS tests run with `--no-fail-fast -- --nocapture`, so a failure's message is in the log even if a later test hangs.
 Tests must hold on macOS too: no `/proc`, no GNU-only flags (`sed -i`, `date -d`), no `/bin/true`, no case-sensitive file
@@ -102,7 +102,7 @@ opens an issue "Check support for Claude Code X" for a newer version; no workflo
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
-| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS by hand), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
+| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally) |
 | `demo/` (repo root) | the README animation: `make-world.sh` (a made-up world in a temp folder: conversations, projects, notes, tickets, stand-in `claude` and `code`, running sessions as shell loops), `demo.tape` (the vhs recording, to the ignored `raw.mp4`), `render.sh` (ffmpeg: title card, captions, eased zooms; `platoon.gif`, the headline cut under 10 MB, and `platoon-tour.mp4`, the whole tour); how to re-record in `demo/README.md` |
 

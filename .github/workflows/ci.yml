@@ -76,10 +76,9 @@ jobs:
 
   macos:
     name: macOS (test, release build)
-    # macOS minutes cost 10x while the repo is private. Until this job has passed once it runs only when started by
-    # hand (workflow_dispatch); once it is green it goes back to pushes on main (`github.event_name == 'push'`), and
-    # once the repo is public, to pull requests too.
-    if: github.event_name == 'workflow_dispatch'
+    # macOS minutes cost 10x while the repo is private: pushes to main and runs started by hand only. Once the repo is
+    # public, drop this line so pull requests run it too.
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 25
     steps:
