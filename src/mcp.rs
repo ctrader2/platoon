@@ -1131,19 +1131,53 @@ mod tests {
     }
 
     // --- signalling leftovers ------------------------------------------------------------------------------
+    //
+    // Every wait here is for something to happen, with a deadline far longer than it ever takes, so a loaded
+    // machine is slow but never fails; only "nothing happened" (`still_running`) has to be a fixed pause.
 
-    fn spawn(secs: &str) -> Child {
-        Command::new("sleep").arg(secs).spawn().unwrap()
+    /// Longer than anything here takes even on a loaded machine, so only a real failure reaches it.
+    const PATIENCE: Duration = Duration::from_secs(60);
+
+    /// A `sleep` of the test's own, killed and reaped when it goes out of scope (a failing test leaves none behind).
+    struct Kid(Child);
+
+    impl Kid {
+        fn id(&self) -> u32 {
+            self.0.id()
+        }
     }
 
+    impl Drop for Kid {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// Long enough never to end by itself while a test runs, however slow the machine.
+    fn spawn(secs: &str) -> Kid {
+        Kid(Command::new("sleep").arg(secs).spawn().unwrap())
+    }
+
+    /// What `Tracked` records for `pid`. Its command line is waited for: right after a spawn returns, the new
+    /// program's arguments can still be unset for a moment, which reads as no command line at all.
     fn tracked(pid: u32) -> Tracked {
         let start = procs::table().unwrap().into_iter().find(|r| r.pid == pid).unwrap().start;
-        Tracked { pid, start, argv: procs::cmdline(pid) }
+        let since = Instant::now();
+        let argv = loop {
+            match procs::cmdline(pid) {
+                Some(a) => break a,
+                None => assert!(since.elapsed() < PATIENCE, "pid {pid} never showed its command line"),
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        Tracked { pid, start, argv: Some(argv) }
     }
 
-    fn wait_gone(c: &mut Child) -> bool {
-        for _ in 0..100 {
-            if c.try_wait().unwrap().is_some() {
+    fn wait_gone(c: &mut Kid) -> bool {
+        let since = Instant::now();
+        while since.elapsed() < PATIENCE {
+            if c.0.try_wait().unwrap().is_some() {
                 return true;
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -1151,27 +1185,26 @@ mod tests {
         false
     }
 
-    fn still_running(c: &mut Child) -> bool {
+    /// Still there after a pause: what "not signalled" looks like (it would have ended within the pause).
+    fn still_running(c: &mut Kid) -> bool {
         std::thread::sleep(Duration::from_millis(300));
-        c.try_wait().unwrap().is_none()
+        c.0.try_wait().unwrap().is_none()
     }
 
     #[test]
     fn only_the_recorded_process_is_signalled() {
-        let (mut mine, mut bystander) = (spawn("41"), spawn("41"));
+        let (mut mine, mut bystander) = (spawn("641"), spawn("641"));
         let t = tracked(mine.id());
         assert!(terminate_if_same(&t));
         assert!(wait_gone(&mut mine));
         assert!(still_running(&mut bystander), "same command line, different process: untouched");
         // The process is gone: signalling it again does nothing (its pid could be anybody's by now).
         assert!(!terminate_if_same(&t));
-        let _ = bystander.kill();
-        let _ = bystander.wait();
     }
 
     #[test]
     fn a_pid_that_now_belongs_to_another_process_is_left_alone() {
-        let mut other = spawn("42");
+        let mut other = spawn("642");
         let good = tracked(other.id());
         // Same pid, but a different start time: what a reused pid looks like.
         let reused = Tracked { start: good.start + 1, ..good.clone() };
@@ -1191,22 +1224,18 @@ mod tests {
 
     #[test]
     fn leftovers_get_a_grace_period_then_only_the_recorded_ones_are_ended() {
-        let (mut a, mut b, mut bystander, mut reused) = (spawn("43"), spawn("43"), spawn("43"), spawn("43"));
+        let (mut a, mut b, mut bystander, mut reused) = (spawn("643"), spawn("643"), spawn("643"), spawn("643"));
         let list = vec![tracked(a.id()), tracked(b.id()), Tracked { start: tracked(reused.id()).start + 7, ..tracked(reused.id()) }];
         let t = Instant::now();
         end_leftovers(&list, Duration::from_millis(300));
         assert!(t.elapsed() >= Duration::from_millis(300), "waited for them to leave by themselves first");
         assert!(wait_gone(&mut a) && wait_gone(&mut b));
         assert!(still_running(&mut bystander) && still_running(&mut reused));
-        for c in [&mut bystander, &mut reused] {
-            let _ = c.kill();
-            let _ = c.wait();
-        }
     }
 
     #[test]
     fn nothing_is_signalled_while_claude_is_still_running_and_leftovers_are_ended_once_it_is_gone() {
-        let (mut claude, mut server) = (spawn("44"), spawn("44"));
+        let (mut claude, mut server) = (spawn("644"), spawn("644"));
         let list = vec![tracked(server.id())];
         end_leftovers_after(claude.id(), &list, Duration::from_millis(400), Duration::from_millis(50));
         assert!(still_running(&mut server), "claude is still there, so its server is still in use");
@@ -1215,20 +1244,22 @@ mod tests {
             std::thread::sleep(Duration::from_millis(300));
             unsafe { libc::kill(id as i32, libc::SIGKILL) };
         });
-        end_leftovers_after(claude.id(), &list, Duration::from_secs(5), Duration::from_millis(50));
+        // It returns as soon as claude is gone (a zombie counts): the long wait only matters on a loaded machine.
+        end_leftovers_after(claude.id(), &list, PATIENCE, Duration::from_millis(50));
         killer.join().unwrap();
         assert!(wait_gone(&mut server), "claude exited (a zombie counts), so the server was asked to");
-        let _ = claude.wait();
+        let _ = claude.0.wait();
     }
 
     #[test]
     fn leftovers_that_leave_by_themselves_are_not_waited_for() {
-        let mut gone = spawn("43");
+        let mut gone = spawn("643");
         let list = vec![tracked(gone.id())];
-        let _ = gone.kill();
-        let _ = gone.wait();
+        let _ = gone.0.kill();
+        let _ = gone.0.wait();
+        // The grace is far longer than the check may take even on a loaded machine: not waiting it out is the point.
         let t = Instant::now();
-        end_leftovers(&list, Duration::from_secs(5));
-        assert!(t.elapsed() < Duration::from_secs(2), "took {:?}", t.elapsed());
+        end_leftovers(&list, 2 * PATIENCE);
+        assert!(t.elapsed() < PATIENCE, "took {:?}", t.elapsed());
     }
 }

@@ -1154,8 +1154,12 @@ pub(crate) mod tests {
         pid.trim().parse::<u32>().is_ok_and(crate::claude::pid_alive)
     }
 
+    /// Longer than a process ever takes to end or start even on a loaded machine: waits return as soon as it has.
+    const PATIENCE: Duration = Duration::from_secs(60);
+
     fn wait_dead(pidfile: &Path) {
-        for _ in 0..200 {
+        let since = std::time::Instant::now();
+        while since.elapsed() < PATIENCE {
             if !alive(&fs::read_to_string(pidfile).unwrap_or_default()) {
                 return;
             }
@@ -1775,7 +1779,8 @@ pub(crate) mod tests {
         let cancel = r.cancel.clone();
         let (runner, settings) = (f.runner(), on());
         let handle = thread::spawn(move || runner.run(&settings, &r));
-        for _ in 0..200 {
+        let since = std::time::Instant::now();
+        while since.elapsed() < PATIENCE {
             if f.dir.join("sleep").exists() && !fs::read_to_string(f.dir.join("sleep")).unwrap().trim().is_empty() {
                 break;
             }

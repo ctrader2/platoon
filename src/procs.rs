@@ -184,14 +184,21 @@ mod tests {
 
     #[test]
     fn a_live_process_shows_its_arguments_and_a_start_time_that_does_not_change() {
-        let mut child = Command::new("sleep").arg("31").spawn().unwrap();
+        let mut child = Command::new("sleep").arg("631").spawn().unwrap();
         let rows = table().unwrap();
         let mine = rows.iter().find(|r| r.pid == child.id()).copied().unwrap();
-        let args = cmdline(child.id());
+        // Right after the spawn returns the new program's arguments can be unset for a moment (Linux reads that as
+        // no command line): wait for them, generously, so a loaded machine is slow rather than wrong.
+        let since = std::time::Instant::now();
+        let mut args = cmdline(child.id());
+        while args.is_none() && since.elapsed() < std::time::Duration::from_secs(60) {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            args = cmdline(child.id());
+        }
         let again = table().unwrap().into_iter().find(|r| r.pid == child.id()).unwrap();
         let _ = child.kill();
         let _ = child.wait();
-        assert_eq!(args, Some(vec!["sleep".to_string(), "31".to_string()]));
+        assert_eq!(args, Some(vec!["sleep".to_string(), "631".to_string()]));
         assert!(mine.start != 0 && mine.start == again.start, "{mine:?} {again:?}");
         assert_eq!(mine.ppid, std::process::id());
     }
