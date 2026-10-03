@@ -26,3 +26,8 @@ ratatui = "0.30.2"
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 unicode-width = "0.2.2"
 vt100 = "0.16.2"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

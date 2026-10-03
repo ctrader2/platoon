@@ -216,6 +216,8 @@ fn is_day(k: &str) -> bool {
 /// The local calendar day of a moment (seconds since the epoch), `YYYY-MM-DD`. "Today" for the daily limit is
 /// this, so the count starts over at the user's midnight. (Falls back to UTC if the system can't say.)
 pub fn local_day(epoch: u64) -> String {
+    // libc marks `time_t` deprecated on musl (its width there follows musl's), but it is what `localtime_r` takes.
+    #[allow(deprecated)]
     let t = epoch as libc::time_t;
     // SAFETY: `localtime_r` writes only into the `tm` we hand it.
     let tm = unsafe {

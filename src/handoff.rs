@@ -337,6 +337,8 @@ pub struct Facts {
 
 /// A moment in the user's own time zone: `2026-09-25 14:03`. None if the system can't say (then it is left out).
 pub fn local_time(epoch: u64) -> Option<String> {
+    // libc marks `time_t` deprecated on musl (its width there follows musl's), but it is what `localtime_r` takes.
+    #[allow(deprecated)]
     let t = epoch as libc::time_t;
     // SAFETY: `localtime_r` writes only into the `tm` we hand it.
     let tm = unsafe {

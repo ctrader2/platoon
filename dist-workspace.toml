@@ -1,0 +1,42 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist' (https://axodotdev.github.io/cargo-dist/), which writes .github/workflows/release.yml.
+# After changing anything here, run `dist generate` (the version below) and commit both files.
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.33.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# Linux and macOS only. The Linux builds are musl (static): one binary runs on any distribution, old glibc ones and
+# Alpine included. platoon links no C library of its own, so nothing is lost.
+targets = ["aarch64-apple-darwin", "x86_64-apple-darwin", "aarch64-unknown-linux-musl", "x86_64-unknown-linux-musl"]
+# The install script puts platoon in ~/.local/bin (or $XDG_BIN_HOME), not in ~/.cargo/bin: that folder is cargo's,
+# and platoon tells how it was installed by the folder it runs from (`cargo install` there, the script here).
+install-path = ["$XDG_BIN_HOME/", "$XDG_DATA_HOME/../bin", "~/.local/bin"]
+# Where to host releases
+hosting = "github"
+# Whether to install an updater program
+install-updater = false
+# The Homebrew tap the formula is published to (the workflow needs the HOMEBREW_TAP_TOKEN secret for it)
+tap = "ctrader2/homebrew-tap"
+# The formula is called platoon (the command), not platoon-tui (the crate): `brew install ctrader2/tap/platoon`
+formula = "platoon"
+# The theme credits go in every archive beside the license
+include = ["THIRD_PARTY_NOTICES.md"]
+# Publish jobs to run in CI: the Homebrew formula, and crates.io (.github/workflows/publish-crate.yml, which does
+# nothing until trusted publishing is set up and the CRATES_IO_TRUSTED_PUBLISHING variable is true)
+publish-jobs = ["homebrew", "./publish-crate"]
+# The workflow runs only for a pushed version tag: nothing on pull requests
+pr-run-mode = "skip"
+# release.yml has one change made by hand (least-privilege permissions, explained at its top), so dist must not
+# insist it is exactly what `dist generate` writes. After running `dist generate`, put that change back.
+allow-dirty = ["ci"]
+# Every action the workflow uses, pinned to a commit: checkout v6.1.0, upload-artifact v7.0.1, download-artifact v8.0.1.
+github-action-commits = { "actions/checkout" = "d23441a48e516b6c34aea4fa41551a30e30af803", "actions/upload-artifact" = "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a", "actions/download-artifact" = "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" }
+
+# crates.io trusted publishing: the publish-crate job may ask GitHub for an identity token, and nothing more.
+[dist.github-custom-job-permissions]
+"publish-crate" = { contents = "read", id-token = "write" }

@@ -1,0 +1,42 @@
+name: Publish to crates.io
+
+# Called by release.yml (a dist "custom publish job") after a tagged release is on GitHub. It publishes the crate
+# with crates.io trusted publishing: no token is stored anywhere; GitHub vouches for this workflow and crates.io hands
+# back a short-lived token. It does nothing at all (the job is skipped) until the repository variable
+# CRATES_IO_TRUSTED_PUBLISHING is "true", which is set only once trusted publishing is configured on crates.io for
+# this repository and release.yml. The first publish (1.0.0) is done by hand.
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  publish:
+    name: cargo publish
+    if: vars.CRATES_IO_TRUSTED_PUBLISHING == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      - name: Get a short-lived crates.io token
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
