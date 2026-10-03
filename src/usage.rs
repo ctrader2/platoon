@@ -28,7 +28,21 @@ pub fn now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
 }
 
+/// The user's real folders (`cache_dir`, `archive::config_dir`, `claude::claude_root`, `claude::claude_json_path`)
+/// are for the running program only. A unit test that reaches one is a bug that would read, write or clean up the
+/// real thing (the live sessions' sockets are in `<cache>/hosts`), so in a unit test it panics, whatever the
+/// environment says. Code a test runs takes its folders as arguments instead.
+pub fn forbid_real_dir(what: &str) {
+    #[cfg(test)]
+    panic!("a unit test reached the user's real folder ({what}): pass the test's own folder instead");
+    #[cfg(not(test))]
+    let _ = what;
+}
+
+/// `$PLATOON_CACHE_DIR`, else `$XDG_CACHE_HOME/platoon`, else `~/.cache/platoon`: the user's real one. Code that a unit
+/// test runs takes the cache folder as an argument instead (an `App` has its own, `testkit::World` a temporary one).
 pub fn cache_dir() -> PathBuf {
+    forbid_real_dir("cache_dir");
     if let Some(d) = std::env::var_os("PLATOON_CACHE_DIR") {
         return PathBuf::from(d);
     }

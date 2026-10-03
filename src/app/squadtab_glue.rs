@@ -312,8 +312,9 @@ impl SquadTab {
             drafting: None,
             last_description: String::new(),
             last_agent_description: String::new(),
-            claude_root: crate::claude::claude_root(),
-            claude_json: crate::claude::claude_json_path(),
+            // Set by `App::build`, where this window reads Claude's state.
+            claude_root: PathBuf::new(),
+            claude_json: PathBuf::new(),
             installed: RefCell::new(None),
         }
     }

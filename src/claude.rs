@@ -19,7 +19,9 @@ const LARGE_WINDOW: u64 = 1_000_000;
 const TEXT_MAX: usize = 300;
 
 /// Where Claude Code keeps its state (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
+/// The user's real one: code that a unit test runs reads a temporary root instead (`Reader::with_root`).
 pub fn claude_root() -> PathBuf {
+    crate::usage::forbid_real_dir("claude_root");
     std::env::var_os("CLAUDE_CONFIG_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(&std::env::var("HOME").unwrap_or_default()).join(".claude"))
@@ -29,6 +31,7 @@ pub fn claude_root() -> PathBuf {
 /// `claude mcp add`: `.claude.json` inside `CLAUDE_CONFIG_DIR` when that is set, else `~/.claude.json`
 /// (next to `~/.claude`, not inside it).
 pub fn claude_json_path() -> PathBuf {
+    crate::usage::forbid_real_dir("claude_json_path");
     claude_json_in(std::env::var_os("CLAUDE_CONFIG_DIR"), &std::env::var("HOME").unwrap_or_default())
 }
 

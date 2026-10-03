@@ -691,7 +691,7 @@ impl App {
                 self.sq.split = Some(number);
             }
             let (rows, cols) = self.pty_size();
-            match host::launch(&self.program, &dir, &refs, &[], rows, cols) {
+            match host::launch(&self.host_dirs(), &self.program, &dir, &refs, &[], rows, cols) {
                 Ok((info, child)) => {
                     let pid = info.claude_pid;
                     self.spawned.push(child);

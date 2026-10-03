@@ -32,7 +32,9 @@ pub fn keep_backup(path: &Path) -> io::Result<()> {
 }
 
 /// `$PLATOON_CONFIG_DIR`, else `$XDG_CONFIG_HOME/platoon`, else `~/.config/platoon`.
+/// The user's real one: code that a unit test runs takes the config folder as an argument instead.
 pub fn config_dir() -> PathBuf {
+    crate::usage::forbid_real_dir("config_dir");
     config_dir_from(&|k| std::env::var(k).ok())
 }
 

@@ -27,6 +27,10 @@ Whoever runs the tests probably uses Claude Code and platoon on the same machine
   replace an installed `platoon` (Claude Code settings may point at it). Use `target/`.
 - Never signal or kill a process you did not start: live `platoon host ... claude --resume ...` sessions and Claude Code
   itself may be running. Use `ps`; never broad `pkill -f`/`pgrep -f` patterns (they match your own shell).
+- In a unit test the real folders cannot be reached: `usage::cache_dir`, `archive::config_dir`, `claude::claude_root` and
+  `claude::claude_json_path` panic (`usage::forbid_real_dir`). Code a test runs takes its folders as arguments: an `App`
+  has its own (`App::host_dirs`), and looks for and starts hosts in them (`host::discover_in`, `host::launch`), never in
+  the real `~/.cache/platoon/hosts` where the live sessions' sockets are.
 - serde_json: mutable indexing (`v["a"]["b"]`) silently creates null keys. Use `get_mut`.
 
 ## Build and test
@@ -74,7 +78,7 @@ opens an issue "Check support for Claude Code X" for a newer version; no workflo
 | `app.rs` | app state and all input handling (modes: list, filter, picker, confirm, attached, settings, theme picker); tabs Sessions, Projects, Squads (`1` `2` `3`); a notice belongs to the screen it was given on (`settle_notice`, `ScreenId`) |
 | `ui.rs` | all drawing (header and tabs, rows (two lines each, `ROW_H`; the columns and the order they go in as the table narrows, `cols`), footer, popups (every one drawn on `popup_ground`: the screen behind faded, no sliver at its sides, titles in sentence case), scrolling panes that say what is below them (`scroll_view`), attached view, the message below the smallest size `app::MIN_WIDTH` x `MIN_HEIGHT`; no frame around the screens; the `?` help popup, built from the footers' own hint tables, in `ui/help_view.rs`; the Squads tab in `ui/squads_view.rs` (one pane under `TWO_PANES_FROM`)); `model.rs` the row types |
 | `claude.rs`, `index.rs` | read Claude Code's undocumented on-disk state (also the installed skills, `skills/*/SKILL.md`, and the names only of the user's MCP servers in `.claude.json`); the persistent incremental index of conversations |
-| `host.rs`, `client.rs`, `open.rs` | the detached per-session host (owns claude's pty, serves many windows), the client, `platoon open` |
+| `host.rs`, `client.rs`, `open.rs` | the detached per-session host (owns claude's pty, serves many windows; its files in `<cache>/hosts` of the window that started it: `Dirs`, passed on to the host only when they are not the environment's), the client, `platoon open` |
 | `editor.rs`, `app/editor_glue.rs` | `v`, opening a ticket's or a session's folders in an editor the user has: which folders it opens (a session's with its `/add-dir` folders, a ticket's worktrees, its plain folders and work folder, a picked folder: `Request`/`Root`), running a terminal editor in the foreground on platoon's terminal (`Launch`, `run`; `main.rs` hands the terminal over and back), marks of open folders (`<cache>/editor-open`) that keep the worktree clean-up away (`editor.rs`); the app side: what `v` opens from where, the favourite (none chosen: the first found), "Always ask", the squad-working question, bringing a removed worktree back first, `NO_EDITOR` when this computer has none (`app/editor_glue.rs`). platoon installs no editor |
 | `guard.rs`, `setup.rs`, `usage.rs` | one-writer-per-conversation hook (which also carries a project's notes into a running session), the `platoon setup` checklist and gate, statusline plan usage |
 | `archive.rs`, `settings.rs`, `dirs.rs` | archive list, settings file and the settings screen catalog, directory picker sources |

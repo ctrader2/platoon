@@ -861,6 +861,10 @@ impl App {
         // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
         // `.claude.json` in that same (temporary) folder, never the user's own.
         app.sqt.claude_root = app.reader.root().to_path_buf();
+        #[cfg(not(test))]
+        {
+            app.sqt.claude_json = crate::claude::claude_json_path();
+        }
         #[cfg(test)]
         {
             app.sqt.claude_json = app.sqt.claude_root.join(".claude.json");
@@ -873,6 +877,11 @@ impl App {
 
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// This window's own folders, which the hosts it looks for and starts use too (a unit test's are temporary).
+    pub fn host_dirs(&self) -> host::Dirs {
+        host::Dirs { cache: self.cache.clone(), config: self.config.clone() }
     }
 
     /// The mark of a generated name.
@@ -1151,7 +1160,7 @@ impl App {
     pub fn refresh(&mut self) {
         self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
         let guard_on = setup::guard_installed(self.reader.root());
-        self.refresh_with(host::discover(), guard_on);
+        self.refresh_with(host::discover_in(&self.cache), guard_on);
         self.settle_notice();
     }
 
@@ -2448,7 +2457,7 @@ impl App {
         let (rows, cols) = self.pty_size();
         let env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
         let at_ms = usage::now().saturating_sub(2) * 1000;
-        match host::launch(&self.program, &dir, args, &env, rows, cols) {
+        match host::launch(&self.host_dirs(), &self.program, &dir, args, &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 if let (Some(p), true) = (project, place)

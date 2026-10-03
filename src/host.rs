@@ -27,7 +27,7 @@ use std::{
         net::{UnixListener, UnixStream},
         process::CommandExt,
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex, MutexGuard,
@@ -81,8 +81,42 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Where platoon keeps its own state: the cache (hosts live in `<cache>/hosts`) and the config. A platoon window has
+/// its own (`App`'s; in a unit test, temporary ones), and the hosts it starts are given the same.
+#[derive(Clone, Debug)]
+pub struct Dirs {
+    pub cache: PathBuf,
+    pub config: PathBuf,
+}
+
+impl Dirs {
+    /// The real ones, from the environment (`usage::cache_dir`, `archive::config_dir`).
+    pub fn from_env() -> Self {
+        Self { cache: cache_dir(), config: config_dir() }
+    }
+
+    /// What a host started with these folders adds to its environment, so it (and the hooks of the claude inside)
+    /// uses them too: nothing when they are the ones the environment already names, so a real user's sessions start
+    /// exactly as before; the overrides when they differ (a unit test's temporary ones).
+    fn child_env(&self, from_env: &Dirs) -> Vec<(&'static str, PathBuf)> {
+        let mut env = Vec::new();
+        if self.cache != from_env.cache {
+            env.push(("PLATOON_CACHE_DIR", self.cache.clone()));
+        }
+        if self.config != from_env.config {
+            env.push(("PLATOON_CONFIG_DIR", self.config.clone()));
+        }
+        env
+    }
+}
+
+/// The real `<cache>/hosts` (for `platoon host`, `platoon open` and the hooks). A window uses its own `hosts_dir_in`.
 pub fn hosts_dir() -> io::Result<PathBuf> {
-    let d = cache_dir().join("hosts");
+    hosts_dir_in(&cache_dir())
+}
+
+pub fn hosts_dir_in(cache: &Path) -> io::Result<PathBuf> {
+    let d = cache.join("hosts");
     // Anyone who can open the socket can type into claude, so the directory is owner-only.
     fs::DirBuilder::new().recursive(true).mode(0o700).create(&d)?;
     fs::set_permissions(&d, fs::Permissions::from_mode(0o700))?;
@@ -108,9 +142,14 @@ impl HostInfo {
     }
 }
 
-/// Live hosts. Entries whose claude has gone are cleaned up.
+/// Live hosts in the real cache folder. Entries whose claude has gone are cleaned up.
 pub fn discover() -> Vec<HostInfo> {
-    let Ok(dir) = hosts_dir() else { return Vec::new() };
+    discover_in(&cache_dir())
+}
+
+/// Live hosts in `<cache>/hosts`. Entries whose claude has gone are cleaned up.
+pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
+    let Ok(dir) = hosts_dir_in(cache) else { return Vec::new() };
     let mut out = Vec::new();
     for e in fs::read_dir(&dir).into_iter().flatten().flatten() {
         let path = e.path();
@@ -141,10 +180,27 @@ pub fn discover() -> Vec<HostInfo> {
 /// The returned `Child` should be polled with `try_wait` so it is reaped when the host exits.
 /// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT` is only ever
 /// what `env` says: one platoon itself inherited (say, started from inside a project's session) is not passed on.
-pub fn launch(program: &str, dir: &str, args: &[&str], env: &[(&str, &str)], rows: u16, cols: u16) -> Result<(HostInfo, Child), String> {
+/// The host keeps its files in `dirs.cache`, and is told so when that is not the one its environment names.
+pub fn launch(
+    dirs: &Dirs,
+    program: &str,
+    dir: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    rows: u16,
+    cols: u16,
+) -> Result<(HostInfo, Child), String> {
+    // Known before anything starts, so a window whose folders can't be made starts nothing.
+    let hdir = hosts_dir_in(&dirs.cache).map_err(|e| e.to_string())?;
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let mut cmd = Command::new(exe);
     cmd.env_remove("PLATOON_PROJECT");
+    // A unit test's folders are never the real ones (and a test must not look the real ones up).
+    #[cfg(not(test))]
+    let real = Dirs::from_env();
+    #[cfg(test)]
+    let real = Dirs { cache: PathBuf::new(), config: PathBuf::new() };
+    cmd.envs(dirs.child_env(&real));
     cmd.envs(env.iter().copied());
     cmd.args(["host", "--program", program, "--dir", dir, "--rows", &rows.to_string(), "--cols", &cols.to_string(), "--"])
         .args(args)
@@ -159,10 +215,9 @@ pub fn launch(program: &str, dir: &str, args: &[&str], env: &[(&str, &str)], row
         });
     }
     let mut child = cmd.spawn().map_err(|e| format!("couldn't start host: {e}"))?;
-    let hdir = hosts_dir().map_err(|e| e.to_string())?;
     let err_file = hdir.join(format!("{}.err", child.id()));
     for _ in 0..100 {
-        if let Some(info) = discover().into_iter().find(|h| h.host_pid == child.id()) {
+        if let Some(info) = discover_in(&dirs.cache).into_iter().find(|h| h.host_pid == child.id()) {
             return Ok((info, child));
         }
         if let Ok(Some(_)) = child.try_wait() {
@@ -1090,5 +1145,56 @@ mod tests {
         for bad in [0u32, 1] {
             assert_eq!(end_processes_within(&[bad], Duration::from_millis(200)), Err(format!("couldn't stop pid {bad}")));
         }
+    }
+
+    /// The user's live sessions keep their sockets in the real `<cache>/hosts`, and `discover` deletes the entries it
+    /// takes for gone: no unit test may ever reach it. Every way to the real folders panics in a unit test, before
+    /// anything is made, read or removed.
+    #[test]
+    fn a_unit_test_cannot_reach_the_real_folders() {
+        let reached: Vec<(&str, bool)> = vec![
+            ("cache_dir", std::panic::catch_unwind(cache_dir).is_ok()),
+            ("config_dir", std::panic::catch_unwind(config_dir).is_ok()),
+            ("claude_root", std::panic::catch_unwind(claude_root).is_ok()),
+            ("claude_json_path", std::panic::catch_unwind(crate::claude::claude_json_path).is_ok()),
+            ("hosts_dir", std::panic::catch_unwind(hosts_dir).is_ok()),
+            ("discover", std::panic::catch_unwind(discover).is_ok()),
+            ("Dirs::from_env", std::panic::catch_unwind(Dirs::from_env).is_ok()),
+        ];
+        assert_eq!(reached.iter().filter(|(_, ok)| *ok).collect::<Vec<_>>(), Vec::<&(&str, bool)>::new());
+    }
+
+    /// A window looks for its hosts in its own cache folder (a unit test's is temporary), owner-only, as before.
+    #[test]
+    fn a_window_finds_its_hosts_in_its_own_cache_folder() {
+        let w = crate::testkit::World::new("own-hosts");
+        let mut app = w.app();
+        let me = std::process::id(); // alive, standing in for a claude
+        let hosts = w.cache.join("hosts");
+        fs::create_dir_all(&hosts).unwrap();
+        fs::write(hosts.join(format!("{me}.json")), json!({"claude_pid": me, "host_pid": me, "dir": "/tmp"}).to_string()).unwrap();
+        fs::write(hosts.join("4000000123.json"), json!({"claude_pid": 4_000_000_123u32, "host_pid": 1}).to_string()).unwrap();
+        app.refresh();
+        assert_eq!(app.hosts.iter().map(|h| h.claude_pid).collect::<Vec<_>>(), vec![me]);
+        assert_eq!(app.hosts[0].sock, hosts.join(format!("{me}.sock")));
+        assert!(!hosts.join("4000000123.json").exists(), "a gone host's entry is cleaned up, in the window's own folder");
+        assert_eq!(fs::metadata(&hosts).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(app.host_dirs().cache, w.cache);
+        assert_eq!(app.host_dirs().config, w.config);
+    }
+
+    /// A host started by a window uses the window's folders: told only when they differ from what the environment
+    /// names, so a real user's sessions start with exactly the environment they always had.
+    #[test]
+    fn a_host_is_told_the_windows_folders_only_when_they_differ() {
+        let real = Dirs { cache: "/home/u/.cache/platoon".into(), config: "/home/u/.config/platoon".into() };
+        assert_eq!(real.child_env(&real), Vec::new());
+        let test = Dirs { cache: "/tmp/w/cache".into(), config: "/tmp/w/config".into() };
+        assert_eq!(
+            test.child_env(&real),
+            vec![("PLATOON_CACHE_DIR", PathBuf::from("/tmp/w/cache")), ("PLATOON_CONFIG_DIR", PathBuf::from("/tmp/w/config"))]
+        );
+        let own_cache = Dirs { cache: "/tmp/w/cache".into(), config: real.config.clone() };
+        assert_eq!(own_cache.child_env(&real), vec![("PLATOON_CACHE_DIR", PathBuf::from("/tmp/w/cache"))]);
     }
 }
