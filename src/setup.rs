@@ -316,6 +316,97 @@ fn remove_hook(v: &mut Value, event: &str, is_ours: fn(&str) -> bool) {
     }
 }
 
+// ---- platoon uninstall: taking setup's entries out again ---------------------------------------------------------
+
+/// One entry setup adds to settings.json, as `platoon uninstall` names it, in `STEPS` order (the status line first).
+pub const ENTRIES: [(&str, &str); 4] = [
+    ("statusLine", "the status line"),
+    ("UserPromptSubmit", "the session guard hook"),
+    ("SessionStart", "the project notes hook"),
+    ("Stop", "the notes updates hook"),
+];
+
+/// The part of a command after its program: `'/a b/platoon' hook guard` -> `hook guard`.
+fn args_of(command: &str) -> &str {
+    let c = command.trim_start();
+    let rest = match c.strip_prefix('\'') {
+        Some(rest) => rest.split_once('\'').map_or("", |(_, after)| after),
+        None => c.split_once(char::is_whitespace).map_or("", |(_, after)| after),
+    };
+    rest.trim()
+}
+
+/// Exactly what setup writes: a program called `platoon` (by any path), then `args` and nothing else. Uninstall takes
+/// out only these; a command that only mentions platoon (the user's own status line that also runs `platoon
+/// statusline`) is the user's.
+fn exactly(command: &str, args: &str) -> bool {
+    Path::new(program_of(command)).file_name().is_some_and(|n| n == "platoon") && args_of(command) == args
+}
+
+/// What `take_out` did to settings.json, and what it left that mentions platoon.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TakenOut {
+    /// The `ENTRIES` labels of what was taken out, in that order.
+    pub removed: Vec<&'static str>,
+    /// Commands left in place that mention platoon but aren't exactly what setup writes (the user's own).
+    pub left: Vec<String>,
+}
+
+/// Take platoon's own entries out of Claude Code's settings: the status line when it is exactly setup's, and setup's
+/// hook commands. A hook group left empty goes, an event left with no group goes, and `hooks` goes when nothing is left
+/// in it, but only when platoon's entry was what emptied it. Every other key stays where it was.
+pub fn take_out(v: &mut Value) -> TakenOut {
+    let mut out = TakenOut::default();
+    if let Some(c) = v.get("statusLine").and_then(|s| s.get("command")).and_then(Value::as_str) {
+        if exactly(c, "statusline") {
+            if let Some(o) = v.as_object_mut() {
+                o.remove("statusLine");
+            }
+            out.removed.push(ENTRIES[0].1);
+        } else if c.contains("platoon") {
+            out.left.push(c.to_string());
+        }
+    }
+    let ours: [(&str, &str); 3] = [("UserPromptSubmit", "hook guard"), ("SessionStart", "hook session-start"), ("Stop", "hook stop")];
+    for ((event, args), (_, label)) in ours.iter().zip(&ENTRIES[1..]) {
+        let all: Vec<String> = hook_commands(v, event, |c| c.contains("platoon")).into_iter().map(String::from).collect();
+        let (mine, theirs): (Vec<String>, Vec<String>) = all.into_iter().partition(|c| exactly(c, args));
+        out.left.extend(theirs);
+        if mine.is_empty() {
+            continue;
+        }
+        let Some(hooks) = v.get_mut("hooks").and_then(Value::as_object_mut) else { continue };
+        if let Some(groups) = hooks.get_mut(*event).and_then(Value::as_array_mut) {
+            let mut emptied = Vec::new();
+            for (i, g) in groups.iter_mut().enumerate() {
+                if let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) {
+                    let before = hs.len();
+                    hs.retain(|h| !h.get("command").and_then(Value::as_str).is_some_and(|c| exactly(c, args)));
+                    if hs.len() < before && hs.is_empty() {
+                        emptied.push(i);
+                    }
+                }
+            }
+            // Only the groups this emptied: a group of the user's that was already empty stays as it was.
+            let mut i = 0;
+            groups.retain(|_| {
+                i += 1;
+                !emptied.contains(&(i - 1))
+            });
+            if groups.is_empty() {
+                hooks.remove(*event);
+            }
+        }
+        if hooks.is_empty()
+            && let Some(o) = v.as_object_mut()
+        {
+            o.remove("hooks");
+        }
+        out.removed.push(label);
+    }
+    out
+}
+
 /// Add one hook command to `event`, in a group of its own.
 fn add_hook(v: &mut Value, event: &str, command: String) -> Result<(), String> {
     let list = v

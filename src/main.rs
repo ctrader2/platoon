@@ -92,6 +92,7 @@ mod tickets_app_tests;
 mod tokens_app_tests;
 mod totickets;
 mod ui;
+mod uninstall;
 mod usage;
 mod usertheme;
 mod versions;
@@ -158,6 +159,10 @@ fn main() -> io::Result<()> {
         Some("host") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(host::run(&args));
+        }
+        Some("uninstall") => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            std::process::exit(uninstall_cli(&args));
         }
         Some("ticket") => {
             use std::io::IsTerminal;
@@ -227,6 +232,9 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
+  uninstall [--all] [--stop-sessions]   take platoon out of Claude Code and delete its cache;
+                  asks before deleting your projects, notes, tickets and settings (--all: without
+                  asking) and before stopping the sessions it runs (--stop-sessions: without asking)
   --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
@@ -323,6 +331,38 @@ fn setup_with(args: &[String]) -> i32 {
             1
         }
     }
+}
+
+/// `platoon uninstall [--all] [--stop-sessions]`: see `uninstall.rs`. Answers come from the terminal itself
+/// (`/dev/tty`), so it can still ask when the uninstall script was piped into `sh`.
+fn uninstall_cli(args: &[String]) -> i32 {
+    let opts = match uninstall::parse_args(args) {
+        Ok(Some(o)) => o,
+        Ok(None) => {
+            println!("{}", uninstall::USAGE);
+            return 0;
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            return 2;
+        }
+    };
+    let places = uninstall::Places::from_env();
+    let test_home = std::env::var_os(uninstall::TEST_HOME_ENV).filter(|v| !v.is_empty()).map(std::path::PathBuf::from);
+    if let Err(e) = uninstall::check_test_home(&places, test_home.as_deref()) {
+        eprintln!("{e}");
+        return 1;
+    }
+    let tty = std::env::var_os(uninstall::TTY_ENV).map_or_else(|| std::path::PathBuf::from("/dev/tty"), std::path::PathBuf::from);
+    let mut input = std::fs::File::open(tty).ok().map(io::BufReader::new);
+    let program = if std::env::var_os(uninstall::FROM_SCRIPT_ENV).is_some() {
+        None
+    } else {
+        let exe = std::env::current_exe().ok().and_then(|e| std::fs::canonicalize(e).ok()).unwrap_or_default();
+        Some(uninstall::program_line(&versions::install_here(), &exe))
+    };
+    let mut stop = |pids: &[u32]| host::end_processes(pids);
+    uninstall::run(&places, &opts, input.as_mut().map(|i| i as &mut dyn io::BufRead), &mut io::stdout(), &mut stop, "git", program)
 }
 
 /// Runs the UI. Returns how many platoon-hosted sessions are still running when it exits.
