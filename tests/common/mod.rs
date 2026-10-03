@@ -133,6 +133,7 @@ impl Term {
     pub fn spawn(args: &[&str], env: &[(&str, String)], cwd: &Path, rows: u16, cols: u16) -> Self {
         let pair = native_pty_system().openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }).unwrap();
         let mut cmd = CommandBuilder::new(BIN);
+        cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
         cmd.args(args);
         cmd.cwd(cwd);
         cmd.env("TERM", "xterm-256color");

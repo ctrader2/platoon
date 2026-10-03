@@ -91,6 +91,7 @@ impl Rig {
     /// Start a host running `program args` and return claude's pid (the program's own pid).
     fn start(&mut self, program: &str, args: &[&str]) -> u32 {
         let mut cmd = Command::new(BIN);
+        cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
         cmd.args(["host", "--program", program, "--dir"])
             .arg(&self.work)
             .args(["--rows", "24", "--cols", "80", "--"])

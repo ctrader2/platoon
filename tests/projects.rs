@@ -366,6 +366,7 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
 
 fn hook(lab: &Lab, input: &str, project: Option<&str>) -> (i32, String) {
     let mut cmd = Command::new(BIN);
+    cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
     cmd.args(["hook", "session-start"])
         .env("CLAUDE_CONFIG_DIR", &lab.claude)
         .env("PLATOON_CACHE_DIR", &lab.cache)

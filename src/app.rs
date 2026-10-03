@@ -21,6 +21,7 @@ use crate::summaries::Summaries;
 use crate::theme::Theme;
 use crate::usage::{self, Usage};
 use crate::usertheme::Registry;
+use crate::versions;
 use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -509,6 +510,15 @@ pub struct ThemePick {
     pub top: Cell<usize>,
 }
 
+/// A version notice (`versions.rs`) waiting to show, or showing.
+struct News {
+    text: String,
+    /// What to remember once it has shown: the versions it announced.
+    state: versions::State,
+    /// It has been on screen, and its versions are remembered as announced.
+    shown: bool,
+}
+
 pub struct App {
     /// Every conversation, newest activity first, across all tabs.
     pub sessions: Vec<Session>,
@@ -538,6 +548,10 @@ pub struct App {
     spawned: Vec<std::process::Child>,
     /// What happened, when, for how long it shows, and the screen it belongs to (`settle_notice`).
     pub notice: Option<(String, Instant, Duration, Option<ScreenId>)>,
+    /// A newer Claude Code or platoon (`versions.rs`): shown above the footer of the top-level lists until a key or a click.
+    news: Option<News>,
+    /// The version checks started with the app, until they answer.
+    news_rx: Option<Receiver<Option<versions::Outcome>>>,
     pub mouse: (u16, u16),
     /// Text being selected with the mouse in the attached view: highlighted as it grows, copied when the button
     /// is released. Cleared by anything that could make it stale (a key, a paste, a resize, the wheel, leaving).
@@ -702,6 +716,7 @@ impl App {
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
+        app.start_version_checks();
         // Know the running hosts before the first frame: until then every session platoon hosts looks like a copy
         // running in another terminal, and Enter on it would offer to take it over instead of opening it.
         app.refresh();
@@ -766,6 +781,8 @@ impl App {
             client: None,
             spawned: Vec::new(),
             notice: None,
+            news: None,
+            news_rx: None,
             mouse: (0, 0),
             selection: None,
             dragging: false,
@@ -1011,6 +1028,69 @@ impl App {
         }
     }
 
+    /// Start the version checks off the UI thread (`versions.rs`). Nothing at all with `PLATOON_NO_UPDATE_CHECK` set.
+    fn start_version_checks(&mut self) {
+        if versions::off_by_env() {
+            return;
+        }
+        self.news_rx = Some(versions::spawn(versions::Checks {
+            cache: self.cache.clone(),
+            claude: versions::claude_program(),
+            curl: "curl".into(),
+            url: versions::RELEASES_API.into(),
+            update_check: self.settings.get().update_check,
+            off: false,
+            now: usage::now(),
+            install: versions::install_here(),
+        }));
+    }
+
+    /// Pick up the checks' answer, and put a notice on screen once one of the top-level lists shows: only then are its
+    /// versions remembered as announced (so one that never showed is said next time).
+    fn poll_news(&mut self) {
+        if let Some(rx) = &self.news_rx {
+            match rx.try_recv() {
+                Ok(found) => {
+                    self.news_rx = None;
+                    if let Some(o) = found {
+                        self.news = Some(News { text: o.text, state: o.state, shown: false });
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.news_rx = None,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if self.news_place()
+            && let Some(n) = self.news.as_mut().filter(|n| !n.shown)
+        {
+            n.shown = true;
+            let _ = n.state.save(&self.cache);
+        }
+    }
+
+    /// Where a version notice shows: the Sessions and Projects lists, with nothing over them.
+    fn news_place(&self) -> bool {
+        matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.squads_tab_showing()
+    }
+
+    /// The version notice on screen now, if any.
+    pub fn news_showing(&self) -> Option<&str> {
+        self.news.as_ref().filter(|n| n.shown && self.news_place()).map(|n| n.text.as_str())
+    }
+
+    /// A key or a click while the version notice shows puts it away (the key still does what it does).
+    fn dismiss_news(&mut self) {
+        if self.news_showing().is_some() {
+            self.news = None;
+        }
+    }
+
+    /// A version notice as the checks would give it, on screen at the next refresh.
+    #[cfg(test)]
+    pub fn set_news_for_test(&mut self, text: &str) {
+        self.news = Some(News { text: text.into(), state: versions::State::default(), shown: false });
+    }
+
     /// The notice to show now: given lately, and on this screen (or given since the last event, not yet placed).
     pub fn active_notice(&self) -> Option<&str> {
         self.notice
@@ -1158,6 +1238,7 @@ impl App {
 
     /// Re-read Claude Code's state, carrying unread flags and the selection across.
     pub fn refresh(&mut self) {
+        self.poll_news();
         self.spawned.retain_mut(|c| c.try_wait().ok().flatten().is_none());
         let guard_on = setup::guard_installed(self.reader.root());
         self.refresh_with(host::discover_in(&self.cache), guard_on);
@@ -2562,6 +2643,7 @@ impl App {
             return self.too_small_key(key, own_screen);
         }
         self.dismiss_long_notice();
+        self.dismiss_news();
         // Something else took the screen while the help was open: it doesn't come back with the screen later.
         if self.help_open && !self.help_showing() {
             self.help_open = false;
@@ -2863,6 +2945,7 @@ impl App {
         }
         if matches!(m.kind, MouseEventKind::Down(_)) {
             self.dismiss_long_notice();
+            self.dismiss_news();
         }
         if self.help_showing() {
             return self.help_mouse(m);

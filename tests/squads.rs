@@ -230,6 +230,7 @@ impl Lab {
     /// `platoon hook <which>` with this lab's directories and `input` on stdin: (exit code, stderr).
     fn hook(&self, which: &str, input: &Value) -> (i32, String) {
         let mut c = Command::new(BIN);
+        c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
         c.args(["hook", which]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for (k, v) in self.env() {
             c.env(k, v);
@@ -577,6 +578,7 @@ fn the_hooks_read_real_shaped_input_and_leave_everything_else_alone() {
     assert!(lab.ticket_now().get("reason").is_none(), "Working says nothing more");
     // Garbage in: still 0.
     let mut c = Command::new(BIN);
+    c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
     c.args(["hook", "squad-stop"]).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null());
     for (k, v) in lab.env() {
         c.env(k, v);

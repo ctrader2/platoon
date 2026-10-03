@@ -94,6 +94,9 @@ mod totickets;
 mod ui;
 mod usage;
 mod usertheme;
+mod versions;
+#[cfg(test)]
+mod versions_app_tests;
 #[cfg(test)]
 mod wheel_app_tests;
 #[cfg(test)]
@@ -256,7 +259,9 @@ fn themes() -> io::Result<()> {
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
     match setup::run(&root, &archive::config_dir()) {
-        Ok(report) => {
+        Ok(mut report) => {
+            // A Claude Code newer than the one this platoon was checked with is said here every time.
+            report.notes.extend(versions::setup_line(versions::claude_program().as_deref(), versions::off_by_env()));
             println!("{}", setup::render_report(&report, &root, use_color(false)));
         }
         Err(e) => {
@@ -1915,7 +1920,7 @@ mod tests {
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 4, "the General tab: the theme and three numbers");
+        assert_eq!(ITEMS.len(), 5, "the General tab: the theme, three numbers and the check for a newer platoon");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -2664,10 +2669,10 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
         assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 17.
+        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 18.
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 17)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 18)).unwrap();
         let third = draw(&mut term, &app);
         assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
         // Too cramped to explain it (the smallest size platoon draws in): the entries and the way back are still whole.

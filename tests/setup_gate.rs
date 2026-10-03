@@ -26,6 +26,7 @@ fn dirs(name: &str) -> (PathBuf, PathBuf) {
 
 fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Output {
     Command::new(BIN)
+        .env("PLATOON_NO_UPDATE_CHECK", "1")
         .args(args)
         .env("CLAUDE_CONFIG_DIR", claude)
         .env("PLATOON_CACHE_DIR", cache)
@@ -229,6 +230,7 @@ fn fnv(text: &str) -> String {
 fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String {
     let pair = native_pty_system().openpty(PtySize { rows: 24, cols: 90, pixel_width: 0, pixel_height: 0 }).unwrap();
     let mut cmd = CommandBuilder::new(BIN);
+    cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
     cmd.env("CLAUDE_CONFIG_DIR", claude);
     cmd.env("PLATOON_CACHE_DIR", cache);
     cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
@@ -318,6 +320,7 @@ fn the_stop_hook_that_keeps_notes_up_to_date_is_added_beside_any_other_stop_hook
     assert!(groups[1]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook stop"), "{v}");
     // Running the hook by hand with nothing to do is instant, silent and fine.
     let out = std::process::Command::new(BIN)
+        .env("PLATOON_NO_UPDATE_CHECK", "1")
         .args(["hook", "stop"])
         .env("CLAUDE_CONFIG_DIR", &claude)
         .env("PLATOON_CACHE_DIR", &cache)

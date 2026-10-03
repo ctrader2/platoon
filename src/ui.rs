@@ -63,6 +63,19 @@ fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
     }
 }
 
+/// A version notice wrapped to the width: at most four lines (two on a short terminal), the last cut with "…" if it
+/// still doesn't fit.
+fn news_lines(text: &str, width: usize, height: u16) -> Vec<String> {
+    let most = if height >= 20 { 4 } else { 2 };
+    let mut lines = wrap(text, width);
+    if lines.len() > most {
+        lines.truncate(most);
+        let last = lines.pop().unwrap_or_default();
+        lines.push(fit_end(&format!("{last}…"), width));
+    }
+    lines
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     draw_all(f, app);
     keep_readable_on_selection(f.buffer_mut(), app.effective_theme());
@@ -149,18 +162,28 @@ fn draw_all(f: &mut Frame, app: &App) {
         .selected_session()
         .map(|s| s.summary.as_str())
         .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing());
-    let strip_h = if summary.is_some() && full.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
+    // A newer Claude Code or platoon (`versions.rs`): its own lines above the footer, in the summary's place.
+    let news = app.news_showing().map(|text| news_lines(text, rest.width as usize, full.height));
+    let news_h = news.as_ref().map_or(0, |l| l.len() as u16);
+    let strip_h = if news.is_none() && summary.is_some() && full.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = full.width;
-    let [shelf, titles, list, strip, footer] = Layout::vertical([
+    let [shelf, titles, list, strip, news_area, footer] = Layout::vertical([
         Constraint::Length(u16::from(shelf_on_rule.is_none())),
         Constraint::Length(1),
         Constraint::Min(1),
         Constraint::Length(strip_h),
+        Constraint::Length(news_h),
         Constraint::Length(1),
     ])
     .areas(rest);
     if let (Some(text), true) = (summary, strip_h > 0) {
         draw_summary_strip(f, app, text, strip);
+    }
+    if let Some(lines) = &news {
+        for (i, line) in lines.iter().enumerate() {
+            let at = Rect::new(news_area.x, news_area.y + i as u16, news_area.width, 1);
+            f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(t.warn))), at);
+        }
     }
 
     // Everything between the rule and the footer: a screen that isn't a list with column titles takes all of it.

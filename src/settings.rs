@@ -168,6 +168,8 @@ pub struct Settings {
     pub squads_at_once: u64,
     /// The model every squad's leader runs on: one of `squadfile::MODELS` ("opus", "sonnet", "haiku").
     pub squad_leader_model: String,
+    /// Once a day at most, ask GitHub whether a newer platoon is out (`versions.rs`): platoon's only network request.
+    pub update_check: bool,
 }
 
 impl Default for Settings {
@@ -204,6 +206,7 @@ impl Default for Settings {
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
             squads_at_once: DEFAULT_SQUADS_AT_ONCE,
             squad_leader_model: crate::squads::LEADER_MODEL.into(),
+            update_check: true,
         }
     }
 }
@@ -337,6 +340,7 @@ fn parse(text: &str) -> Option<Settings> {
                 .get("squad_leader_model")
                 .and_then(Value::as_str)
                 .map_or(d.squad_leader_model.clone(), |m| m.trim().to_lowercase()),
+            update_check: o.get("update_check").and_then(Value::as_bool).unwrap_or(d.update_check),
         }
         .clamped(),
     )
@@ -419,6 +423,7 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
     object.insert("squads_at_once".into(), json!(s.squads_at_once));
     object.insert("squad_leader_model".into(), json!(s.squad_leader_model));
+    object.insert("update_check".into(), json!(s.update_check));
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
     let mut features = match object.get("token_features") {
@@ -669,7 +674,7 @@ fn instructions_item(id: &'static str) -> Item {
     }
 }
 
-/// Everyday behaviour: the colors and the two automatic clean-ups.
+/// Everyday behaviour: the colors, the two automatic clean-ups and the check for a newer platoon.
 fn general_items() -> Vec<Item> {
     vec![
         Item {
@@ -716,6 +721,17 @@ fn general_items() -> Vec<Item> {
             set: |s, v| s.idle_stop_ignores_mcp = v != 0,
             label: |v| if v == 0 { "Count MCP servers".into() } else { "Ignore MCP servers".into() },
             off: None,
+        },
+        Item {
+            name: "Check for a newer platoon",
+            explain: "Once a day at most, platoon asks GitHub for the number of its latest version (nothing about you is sent) and \
+                      says once when a newer one is out. Off: platoon makes no network request at all. Applies from the next start.",
+            kind: Kind::Steps,
+            choices: &[0, 1],
+            get: |s| u64::from(s.update_check),
+            set: |s, v| s.update_check = v != 0,
+            label: |v| if v == 0 { "Off".into() } else { "Once a day".into() },
+            off: Some(0),
         },
     ]
 }
@@ -1301,6 +1317,7 @@ mod tests {
                 "ai_find_wide_candidates",
                 "squads_at_once",
                 "squad_leader_model",
+                "update_check",
                 "token_features",
                 "theme"
             ],
@@ -1531,7 +1548,10 @@ mod tests {
         );
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
-        assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive sessions after", "Idle stop and MCP servers"]);
+        assert_eq!(
+            names("General"),
+            ["Theme", "Stop idle sessions after", "Archive sessions after", "Idle stop and MCP servers", "Check for a newer platoon"]
+        );
         assert_eq!(
             names("Search"),
             [
@@ -2053,5 +2073,29 @@ mod tests {
         assert_eq!(load(&d).0.squad_leader_model, "sonnet");
         fs::write(path_in(&d), r#"{"squad_leader_model":7}"#).unwrap();
         assert_eq!(load(&d).0.squad_leader_model, "sonnet");
+    }
+
+    #[test]
+    fn the_check_for_a_newer_platoon_is_on_by_default_switched_off_on_general_and_saved() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-update-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        assert!(Settings::default().update_check);
+        let (tab, at) = find_item("Check for a newer platoon").expect("on the settings screen");
+        assert_eq!(TABS[tab].title, "General");
+        let item = &TABS[tab].items[at];
+        assert_eq!(item.choices.iter().map(|&c| (item.label)(c)).collect::<Vec<_>>(), ["Off", "Once a day"]);
+        assert_eq!(item.off, Some(0));
+        let mut s = Settings::default();
+        assert_eq!((item.label)(item.value(&s)), "Once a day");
+        item.assign(&mut s, 0);
+        assert!(!s.update_check);
+        save(&d, &s).unwrap();
+        assert!(!load(&d).0.update_check);
+        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
+        assert_eq!(v["update_check"], false);
+        // Only a real true/false counts.
+        fs::write(path_in(&d), r#"{"update_check":"no"}"#).unwrap();
+        assert!(load(&d).0.update_check);
     }
 }

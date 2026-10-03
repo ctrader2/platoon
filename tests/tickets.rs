@@ -111,6 +111,7 @@ impl Lab {
     /// `platoon ticket ...` with this lab's directories, and what it printed.
     fn cli(&self, args: &[&str], stdin: &str) -> (i32, String, String) {
         let mut c = Command::new(BIN);
+        c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
         c.arg("ticket").args(args).current_dir(&self.work).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for (k, v) in self.env() {
             c.env(k, v);
@@ -489,7 +490,7 @@ fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_se
     );
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
     assert_eq!(lab.tickets()["tickets"][0]["from"], json!({"session": "s-1", "project": "pweb"}));
-    let kinds = Command::new(BIN).args(["squads", "--kinds"]).envs(lab.env()).output().unwrap();
+    let kinds = Command::new(BIN).env("PLATOON_NO_UPDATE_CHECK", "1").args(["squads", "--kinds"]).envs(lab.env()).output().unwrap();
     assert!(String::from_utf8_lossy(&kinds.stdout).starts_with("Coding\n  Makes a change to code"), "{kinds:?}");
 
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
