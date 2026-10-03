@@ -1341,7 +1341,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.selected;
         let bg = if (sel && app.pane == Pane::Sessions) || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
-        let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, s.running(), app.tick);
+        let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, app.session_running(s), app.tick);
         let text = if s.archived { t.dim } else { t.text };
         let spans = vec![
             Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
@@ -1863,7 +1863,7 @@ struct Look {
     status_color: Color,
 }
 
-/// `running`: a process runs the conversation now (`Session::running`). An idle one that runs says `● idle`; one that
+/// `running`: something runs the conversation now (`App::session_running`). An idle one that runs says `● idle`; one that
 /// nothing runs (only its saved history is there) shows a hollow `○` and no word, so the few that run stand out
 /// from the many that don't, by mark and word, not by color alone.
 fn row_look(t: &Theme, status: Status, unread: bool, running: bool, tick: u64) -> Look {
@@ -1894,7 +1894,8 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     let text = if s.archived { t.dim } else { t.text };
     let subtext = if s.archived { t.dim } else { t.subtext };
 
-    let Look { marker, marker_color, status: status_text, status_color } = row_look(t, s.status, s.unread, s.running(), app.tick);
+    let Look { marker, marker_color, status: status_text, status_color } =
+        row_look(t, s.status, s.unread, app.session_running(s), app.tick);
     let name_style = if s.unread { base.fg(t.ok).add_modifier(Modifier::BOLD) } else { base.fg(text) };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };

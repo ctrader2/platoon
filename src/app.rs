@@ -957,6 +957,12 @@ impl App {
         self.keys.get().quit_label()
     }
 
+    /// Is something running this session now: a Claude Code process seen for it (`Session::running`), or a platoon
+    /// host started on it (`--resume`/`--session-id`) that is still alive, whether or not its claude has said so yet.
+    pub fn session_running(&self, s: &Session) -> bool {
+        s.running() || self.hosts.iter().any(|h| host::session_of_args(&h.args).as_deref() == Some(s.id.as_str()))
+    }
+
     pub fn notify(&mut self, msg: impl Into<String>) {
         self.notice = Some((msg.into(), Instant::now(), NOTICE_FOR, None));
     }

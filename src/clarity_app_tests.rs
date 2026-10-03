@@ -104,6 +104,17 @@ fn a_running_idle_session_says_idle_with_a_filled_mark_and_one_nothing_runs_says
     let (running, saved) = (row("/srv/alpha"), row("/srv/beta"));
     assert!(running.contains("● alpha") && running.contains(" idle "), "{running}\n{ctx}");
     assert!(saved.contains("○ beta") && !saved.contains("idle"), "{saved}\n{ctx}");
+    // A platoon host started on it runs it too, before its claude has said so.
+    app.hosts.push(crate::host::HostInfo {
+        claude_pid: 1,
+        host_pid: 1,
+        dir: "/srv/beta".into(),
+        args: vec!["--resume".into(), "saved".into()],
+        sock: w.base.join("sock"),
+    });
+    let lines = draw(&mut term, &app);
+    let saved = lines.iter().find(|l| l.contains("/srv/beta")).unwrap();
+    assert!(saved.contains("● beta") && saved.contains(" idle "), "{saved}");
     // The help says what the two marks mean, where sessions are listed.
     let help = ui::help_for_test(&app);
     assert!(help.iter().any(|(s, _, n)| s == "Good to know" && n.starts_with("● idle: the session is running")), "{help:?}");
