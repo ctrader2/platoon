@@ -993,7 +993,7 @@ mod tests {
                 thread::spawn(move || {
                     while !stop.load(std::sync::atomic::Ordering::SeqCst) {
                         // Ours, started here and waited for here; nothing else is ever signalled.
-                        let _ = Command::new("/bin/true").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+                        let _ = Command::new("true").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
                     }
                 })
             })

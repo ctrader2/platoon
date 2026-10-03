@@ -216,6 +216,16 @@ pub fn alive(pid: u32) -> bool {
     crate::claude::pid_alive(pid)
 }
 
+/// Wait for `pid` (a process of the test's own) to have ended, for as long as a loaded machine could need, and fail
+/// the test rather than wait for ever.
+pub fn wait_ended(pid: u32) {
+    let since = std::time::Instant::now();
+    while alive(pid) {
+        assert!(since.elapsed() < std::time::Duration::from_secs(60), "pid {pid} never ended");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// A stand-in for `claude -p` that records every call (`calls/N.argv`, `.cwd`, `.env`, `.stdin`, N from 1) and
 /// answers from files the test writes: `reply.N` (the text the model says, for call N) or else `reply.default`, or,
 /// when neither exists, a naming answer built from the numbers it finds in the request (`[1]`, `[2]`, ...) or a

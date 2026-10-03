@@ -776,9 +776,7 @@ mod tests {
         let gone = crate::host::HostInfo { sock: w.cache.join("hosts/gone.sock"), ..hosted(pid) };
         app.refresh_with(vec![gone], true); // platoon still believes in the host...
         unsafe { libc::kill(pid as i32, libc::SIGKILL) }; // ...but it has just ended (our own stand-in process)
-        while alive(pid) {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        crate::testkit::wait_ended(pid);
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::List));
         assert_eq!(app.active_notice(), Some("That session just stopped. Press enter to open it again."));

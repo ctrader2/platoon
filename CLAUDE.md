@@ -58,6 +58,9 @@ errors: `RUSTFLAGS=-D warnings`), `scripts/check-claude-version.sh`, and a build
 `rust-version`). macOS (arm64: test and release build) runs only when started by hand (`workflow_dispatch`:
 `gh workflow run ci.yml --ref main`) until it has passed once, then on pushes to `main` while the repo is private. Every
 job has a `timeout-minutes` (Linux 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat the free minutes.
+The macOS tests run with `--no-fail-fast -- --nocapture`, so a failure's message is in the log even if a later test hangs.
+Tests must hold on macOS too: no `/proc`, no GNU-only flags (`sed -i`, `date -d`), no `/bin/true`, no case-sensitive file
+names, and a temp folder that may be under the home folder (paths there are shown from `~`).
 `deny.yml` runs `cargo deny check` (`deny.toml`: licenses, advisories, crates.io only) with CI and weekly.
 `checked-with/claude-code` is the Claude Code version platoon was last checked with: README.md and the guide must name
 the same one (the script fails CI otherwise), so change them in one commit. `claude-code-watch.yml` checks npm daily and

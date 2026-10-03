@@ -487,7 +487,10 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     assert!(f.contains("#2 Basket page"), "{shown}");
     assert!(f.contains("State New · Waits for #1"), "{shown}");
     assert!(!f.contains("How far") && !f.contains("merge request"), "no how-far line: {shown}");
-    assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
+    assert!(
+        f.contains(&format!("Folders {}", crate::dirs::tilde(&folder.to_string_lossy(), &home))) && f.contains("~/somewhere"),
+        "home-abbreviated: {shown}"
+    );
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
     assert!(
         f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"),

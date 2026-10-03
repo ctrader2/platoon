@@ -342,9 +342,7 @@ fn auto_archive_leaves_a_conversation_that_is_being_stopped_to_the_stop() {
     let mut app = w.app();
     app.refresh_with(vec![hosted(pid)], true);
     ch(&mut app, 'a');
-    while alive(pid) {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    crate::testkit::wait_ended(pid);
     // Its process is gone but the stop has not been taken in yet: auto-archive must not act on it.
     app.reload_for_test();
     app.auto_archive_at_for_test(crate::usage::now() + 60);

@@ -931,6 +931,13 @@ mod tests {
         put(&d, "Night?", "background = #131313\nforeground = #eeeeee\n");
         let scan = scan(&d.join("themes"));
         let shown: Vec<(&str, &str)> = scan.themes.iter().map(|t| (t.id.as_str(), t.name.as_str())).collect();
+        if fs::read_dir(d.join("themes")).unwrap().count() == 3 {
+            // A file system that ignores case (macOS's, as it comes) kept one file for the three spellings, under
+            // the first name it was given: there is nothing to skip, and the slugs still get their numbers.
+            assert_eq!(shown, [("user:night", "Night"), ("user:night-2", "Night!"), ("user:night-3", "Night?")]);
+            assert!(scan.skipped.is_empty(), "{:?}", scan.skipped);
+            return;
+        }
         // Bytewise: NIGHT, Night, Night!, Night?, night. The first of a case-insensitive name wins.
         assert_eq!(shown, [("user:night", "NIGHT"), ("user:night-2", "Night!"), ("user:night-3", "Night?")]);
         assert_eq!(scan.skipped.len(), 2);

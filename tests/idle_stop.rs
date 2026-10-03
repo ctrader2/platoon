@@ -395,7 +395,7 @@ fn old_conversations_are_archived_on_first_run_with_a_notice_and_restoring_one_s
 
 /// Gone, or a zombie waiting to be reaped: either way it is not running.
 fn gone(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |s| s.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'))
+    !running(pid)
 }
 
 fn wait_gone(what: &str, pid: u32) {

@@ -252,7 +252,8 @@ fn an_editor_with_its_own_window_says_so_and_platoon_carries_on() {
 fn c_shows_what_changed_with_marks_that_read_without_color_and_u_puts_it_back() {
     let (w, mut app, id) = on_the_notes("notes-changes");
     set_notes(&w, &id, "# Overview\nSell socks.\n# Status\nStarted.\n");
-    let ed = fake_editor(&w, "fakeed", true, "sed -i 's/Sell socks./Sell socks and hats./' \"$1\"");
+    // Not `sed -i`: macOS's sed reads the next word as a backup suffix. Rewritten in place, as an editor saves.
+    let ed = fake_editor(&w, "fakeed", true, "t=$(sed 's/Sell socks./Sell socks and hats./' \"$1\") && printf '%s\\n' \"$t\" > \"$1\"");
     choose(&w, &mut app, vec![ed], "fakeed");
     edit(&mut app);
     wait_for_editor(&mut app);

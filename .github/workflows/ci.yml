@@ -105,4 +105,6 @@ jobs:
           git config --global user.name platoon-ci
           git config --global user.email ci@example.invalid
       - name: cargo test
-        run: cargo test --locked
+        # Every test program runs even after one fails, and a failing test's message is printed as it happens
+        # (--nocapture): if something hangs and the job times out, what failed before it is still in the log.
+        run: cargo test --locked --no-fail-fast -- --nocapture

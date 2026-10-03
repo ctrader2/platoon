@@ -235,7 +235,14 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
         args.contains("\n- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"),
         "the new session is given the old one's id: {args}"
     );
-    assert!(args.contains(&format!("\n- Project notes: {}\n", lab.config.join("projects/pweb/project.md").display())), "{args}");
+    // Shown from ~ when it is under the home folder (macOS's temp folder can be).
+    let notes = lab.config.join("projects/pweb/project.md").to_string_lossy().into_owned();
+    let home = std::env::var("HOME").unwrap_or_default();
+    let notes = match notes.strip_prefix(&home) {
+        Some(rest) if !home.is_empty() && rest.starts_with('/') => format!("~{rest}"),
+        _ => notes,
+    };
+    assert!(args.contains(&format!("\n- Project notes: {notes}\n")), "{args}");
     assert!(args.trim_end().ends_with("1. Take card payments.\nSizes matter too."), "{args}");
 
     // The new session is put in the project as soon as platoon sees its id; the old one is untouched.

@@ -35,12 +35,7 @@ impl Lab {
         let cwd = self.base.join("work").join(id);
         fs::create_dir_all(&cwd).unwrap();
         let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - mins_ago * 60;
-        let ts = |s: u64| {
-            // 2026-09-20 is far enough from any month boundary that a plain conversion by hand is not needed: use the
-            // seconds of the day on today's date via `date`.
-            let out = Command::new("date").args(["-u", "-d", &format!("@{s}"), "+%Y-%m-%dT%H:%M:%S.000Z"]).output().unwrap();
-            String::from_utf8(out.stdout).unwrap().trim().to_string()
-        };
+        let ts = |s: u64| iso(s * 1000);
         let user = format!(
             r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{}","message":{{"role":"user","content":"{}"}}}}"#,
             cwd.display(),

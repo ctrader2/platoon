@@ -41,6 +41,24 @@ extern "C" fn remove_at_exit() {
     }
 }
 
+/// Milliseconds since the epoch, as Claude Code writes them: `2026-09-19T03:53:40.091Z`. (The same as
+/// `testkit::iso` in the unit tests; not `date -d`, which only GNU's `date` has.)
+pub fn iso(ms: u64) -> String {
+    let (secs, frac) = ((ms / 1000) as i64, ms % 1000);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // civil-from-days (Howard Hinnant)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}.{frac:03}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+}
+
 pub fn tmp(name: &str) -> PathBuf {
     let d = removed_at_exit(std::env::temp_dir().join(format!("platoon-it-{name}-{}", std::process::id())));
     let _ = std::fs::remove_dir_all(&d);
@@ -48,8 +66,33 @@ pub fn tmp(name: &str) -> PathBuf {
     d
 }
 
+/// The pid exists (a zombie, which has exited but not been reaped yet, counts: see `running`).
 pub fn alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+/// The process exists and has not exited: not gone, and not a zombie waiting for its parent to reap it.
+pub fn running(pid: u32) -> bool {
+    alive(pid) && !zombie_or_gone(pid)
+}
+
+/// Linux reads `/proc/<pid>/stat`; where there is no `/proc` (macOS) `ps` says, its STAT starting with Z for a
+/// zombie, and printing nothing for a pid that is gone.
+fn zombie_or_gone(pid: u32) -> bool {
+    let state = if Path::new("/proc/self/stat").exists() {
+        match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+            Ok(s) => s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(str::to_string)),
+            Err(_) => None,
+        }
+    } else {
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .ok()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    state.is_none_or(|st| st.starts_with('Z'))
 }
 
 pub fn until(what: &str, mut cond: impl FnMut() -> bool) {
@@ -475,15 +518,8 @@ impl AiFake {
 
     /// True while any of them still runs. (A zombie is not running.)
     pub fn any_alive(&self) -> bool {
-        self.pids().into_iter().any(|p| alive(p) && !zombie(p))
+        self.pids().into_iter().any(running)
     }
-}
-
-fn zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|s| s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(|st| st == "Z")))
-        .unwrap_or(false)
 }
 
 impl Drop for AiFake {

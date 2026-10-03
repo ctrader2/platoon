@@ -24,7 +24,7 @@ fn env(base: &std::path::Path) -> Vec<(&'static str, String)> {
         ("PLATOON_CACHE_DIR", base.join("cache").to_string_lossy().into()),
         ("PLATOON_CONFIG_DIR", base.join("config").to_string_lossy().into()),
         // Nothing here may start a session: a stand-in that isn't claude, in case a key slipped through.
-        ("PLATOON_CLAUDE_BIN", "/bin/false".into()),
+        ("PLATOON_CLAUDE_BIN", "/usr/bin/false".into()), // where macOS has it too
         ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
     ]
 }

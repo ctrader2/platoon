@@ -37,6 +37,11 @@ fn shop(w: &World) -> String {
     w.base.join("shop").to_string_lossy().into_owned()
 }
 
+/// `path` as the app shows it: from ~ when it is under the home folder.
+fn tilde(app: &App, path: &str) -> String {
+    crate::dirs::tilde(path, &app.home)
+}
+
 fn other(w: &World) -> String {
     w.base.join("other").to_string_lossy().into_owned()
 }
@@ -91,11 +96,12 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     let text = app.handoff.text.clone();
     assert!(text.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "{text}");
     assert!(text.contains("- Project: Web shop\n"), "{text}");
-    assert!(text.contains(&format!("- Previous session: shop, in {} (not running)\n", shop(&w))), "{text}");
+    // Paths are shown from ~ when they are under the home folder (macOS's temp folder can be).
+    assert!(text.contains(&format!("- Previous session: shop, in {} (not running)\n", tilde(&app, &shop(&w)))), "{text}");
     // The id, so the new session can look back at the old one; where the project's notes are; what it spent.
     assert!(text.contains("- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"), "{text}");
     let notes = Projects::open(&w.config).notes_path(&project_id(&w));
-    assert!(text.contains(&format!("- Project notes: {}\n", notes.display())), "{text}");
+    assert!(text.contains(&format!("- Project notes: {}\n", tilde(&app, &notes.to_string_lossy()))), "{text}");
     assert!(text.contains("- Tokens the previous session used: 50,000 sent to Claude and 0 written by Claude\n"), "{text}");
     assert!(text.contains("- Started: ") && text.contains(" between)\n"), "{text}");
     assert!(text.contains("- Model: Sonnet 5, context "), "{text}");
@@ -505,7 +511,7 @@ fn a_session_still_running_says_so_and_its_spend_counts_its_subagents_and_each_a
     key(&mut app, KeyCode::Char('h'));
     wait_ready(&mut app);
     let text = app.handoff.text.clone();
-    assert!(text.contains(&format!("- Previous session: shop, in {} (still running)\n", shop(&w))), "{text}");
+    assert!(text.contains(&format!("- Previous session: shop, in {} (still running)\n", tilde(&app, &shop(&w)))), "{text}");
     assert!(
         text.contains("- Tokens the previous session used: 52,010 sent to Claude and 1,000 written by Claude, plus 30,000 read again from Claude's cache (its subagents included)\n"),
         "{text}"
