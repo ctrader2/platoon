@@ -1,0 +1,4 @@
+# git blame skips these commits (git config blame.ignoreRevsFile .git-blame-ignore-revs; GitHub reads it by itself)
+
+# One-time rustfmt reformat of the whole codebase before going public (formatting only)
+143ae7a8a5387342906564116fbad99f2e1e1c93
