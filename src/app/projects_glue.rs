@@ -542,7 +542,7 @@ impl App {
 
     pub(super) fn open_assign(&mut self) {
         let Some(s) = self.selected_session() else {
-            self.notify("No conversation selected");
+            self.notify("No session selected");
             return;
         };
         let (session, session_name) = (s.id.clone(), s.name.clone());

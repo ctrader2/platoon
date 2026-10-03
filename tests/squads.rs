@@ -492,7 +492,7 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
         (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()),
         (Some("ready"), Some("Wants to publish: push ticket/1"))
     );
-    t.wait_for_all(&["Ready to push/publish", "Wants to publish: push ticket/1"]);
+    t.wait_for_all(&["Ready to publish", "Wants to publish: push ticket/1"]);
 
     // Back on the project's screen, p on the ticket: the go-ahead, Working, and the words typed into the session.
     t.send(&[0]);
@@ -670,7 +670,7 @@ fn cancelling_a_ticket_whose_squad_runs_asks_and_stops_only_that_session() {
     t.send(b"c");
     t.wait_for("Cancel ticket #1?");
     t.send(b"y");
-    t.wait_for_flat("#1 is Cancelled. Stopping its squad's session; its conversation is kept.");
+    t.wait_for_flat("#1 is Cancelled. Stopping its squad's session (the session itself is kept).");
     assert_eq!(lab.ticket_now()["state"], "cancelled");
     until("the squad's session to stop", || !alive(leader));
     assert!(alive(bystander.id()), "nothing else is signalled");
@@ -1012,9 +1012,9 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
         t.wait_gone("enter hand it over");
         until("the ticket to join the line", || ticket_n(&lab, k)["queued"]["squad"] == "coding");
     }
-    t.wait_for_all(&["#2 Part 2", "#3 Part 3", "waiting for a free squad"]);
+    t.wait_for_all(&["#2 Part 2", "#3 Part 3", "Waiting for a free squad"]);
     let screen = t.stable();
-    assert_eq!(screen.matches("waiting for a free squad").count(), 2, "{screen}");
+    assert_eq!(screen.matches("Waiting for a free squad").count(), 2, "{screen}");
     assert_eq!((lab.started(), lab.checks()), (1, 3), "one squad started; each ticket was checked");
     assert_eq!(ticket_n(&lab, 2)["state"], "working");
     assert!(!lab.base.join("shop-worktrees/ticket-2").exists(), "worktrees are made when it starts, not when it joins the line");

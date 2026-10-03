@@ -134,7 +134,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     let Mode::Confirm(Confirm::DeleteProject { sessions, .. }) = app.mode.clone() else { panic!("asks first") };
     assert_eq!(sessions, 1);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("Its notes are deleted too") && shown.contains("no conversation is deleted"), "{shown}");
+    assert!(shown.contains("Its notes are deleted too") && shown.contains("no session is deleted"), "{shown}");
     key(&mut app, KeyCode::Char('n')); // no
     assert!(app.projects.get(&id).is_some());
     key(&mut app, KeyCode::Char('d'));
@@ -775,7 +775,7 @@ fn n_on_a_projects_screen_offers_the_projects_folders_first() {
     let first: Vec<String> = app.picker.results.iter().take(2).cloned().collect();
     assert_eq!(first, [d2.to_string_lossy().into_owned(), d1.to_string_lossy().into_owned()], "the project's folders, most recent first");
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(draw(&mut term, &app).contains("new session in Two folders"));
+    assert!(draw(&mut term, &app).contains("New session in Two folders"));
 }
 
 #[test]
@@ -1051,13 +1051,13 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
     app.restat_for_test();
     let lines = draw(&mut term, &app);
     let row = row_of(&lines);
-    assert!(row.contains("2 open · 1 ready") && !row.contains("no tickets"), "the second waits for the first: {row}");
-    assert!(colors_of(&term, &lines, " Fruit ", "2 open · 1 ready").iter().all(|c| *c == t.subtext), "{row}");
+    assert!(row.contains("2 open · 1 can start") && !row.contains("no tickets"), "the second waits for the first: {row}");
+    assert!(colors_of(&term, &lines, " Fruit ", "2 open · 1 can start").iter().all(|c| *c == t.subtext), "{row}");
     // None ready: just the open count.
     store.set_state(one, &State::Working).unwrap();
     app.restat_for_test();
     let row = row_of(&draw(&mut term, &app));
-    assert!(row.contains("2 open ") && !row.contains("ready"), "{row}");
+    assert!(row.contains("2 open ") && !row.contains("can start"), "{row}");
     // Only closed ones: none open.
     store.set_state(one, &State::Done).unwrap();
     store.set_state(one + 1, &State::Cancelled).unwrap();
@@ -1090,7 +1090,13 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     let hint = "Press n to start one, or m on a session in the Sessions tab.";
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains(one) && f.contains(hint) && f.contains("No tickets yet"), "{f}");
-    for gone in ["notes are added as context", "No notes yet", "Press e", "They live in", "No sessions in this project yet"] {
+    for gone in [
+        "Every session in this project starts with these notes",
+        "No notes yet",
+        "Press e",
+        "They live in",
+        "No sessions in this project yet",
+    ] {
         assert!(!f.contains(gone), "{gone}: {f}");
     }
 
@@ -1100,13 +1106,13 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     fs::write(&notes, "# Overview\nA shop for fruit.\n").unwrap();
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("A shop for fruit.") && f.contains("notes are added as context to each session in a project") && !f.contains(one),
+        f.contains("A shop for fruit.") && f.contains("Every session in this project starts with these notes.") && !f.contains(one),
         "{f}"
     );
     // A blank file is no notes.
     fs::write(&notes, " \n\n").unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains(one) && !f.contains("notes are added as context"), "{f}");
+    assert!(f.contains(one) && !f.contains("Every session in this project starts with these notes"), "{f}");
 
     // With a session in it (even an archived one would do), no notes reads as it always did.
     key(&mut app, KeyCode::Esc);
@@ -1119,7 +1125,7 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
         f.contains("No notes yet")
             && f.contains("Press e to start them")
             && f.contains("They live in")
-            && f.contains("notes are added as context"),
+            && f.contains("Every session in this project starts with these notes"),
         "{f}"
     );
     assert!(!f.contains(one) && !f.contains(hint), "{f}");

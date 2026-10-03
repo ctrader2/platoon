@@ -51,7 +51,7 @@ fn below_sixty_by_fourteen_a_message_shows_keys_do_nothing_and_resizing_back_bri
     let screen = t.stable();
     assert!(!screen.contains("platoon needs"), "{screen}");
     assert!(
-        !screen.contains("pick a directory")
+        !screen.contains("pick a folder")
             && !screen.contains("Settings file")
             && !screen.contains("On this screen")
             && !screen.contains("No projects yet"),

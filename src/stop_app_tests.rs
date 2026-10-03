@@ -219,7 +219,7 @@ fn a_lone_row_that_is_stopping_cannot_be_acted_on_again() {
     ch(&mut app, 'a');
     assert!(ids(&app).is_empty());
     ch(&mut app, 'a');
-    assert_eq!(app.active_notice(), Some("No conversation selected"));
+    assert_eq!(app.active_notice(), Some("No session selected"));
     assert_eq!(app.stops_pending(), 1);
     assert!(app.settle_stops_for_test(LONG));
     assert_eq!(archived_ids(&w), ["alpha-1"]);

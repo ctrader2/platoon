@@ -849,7 +849,7 @@ fn rename_on_an_empty_list_says_so_and_the_confirm_dialogs_use_the_new_name() {
     let w = World::new("s-rename-empty");
     let mut app = w.app();
     key(&mut app, KeyCode::Char('r'));
-    assert!(matches!(app.mode, Mode::List) && app.active_notice() == Some("No conversation selected"));
+    assert!(matches!(app.mode, Mode::List) && app.active_notice() == Some("No session selected"));
     conv(&w, "aaaaaaaa-0000", "/srv/alpha", &["hi"], 5);
     app.refresh_for_test();
     key(&mut app, KeyCode::Char('r'));
@@ -866,7 +866,7 @@ fn the_rename_box_draws_the_name_the_hints_and_can_be_clicked() {
     key(&mut app, KeyCode::Char('r'));
     let shown = screen(&mut term, &app);
     assert!(
-        shown.contains("rename conversation") && shown.contains("❯ alpha") && shown.contains("enter save") && shown.contains("esc cancel"),
+        shown.contains("Rename session") && shown.contains("❯ alpha") && shown.contains("enter save") && shown.contains("esc cancel"),
         "{shown}"
     );
     assert!(shown.contains("Leave it empty to go back to the automatic name."), "{shown}");

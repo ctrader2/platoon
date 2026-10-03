@@ -41,7 +41,7 @@ impl Drop for EndHost {
     }
 }
 
-/// Starts a new session in a temp directory and attaches to it.
+/// Starts a New session in a temp directory and attaches to it.
 fn attach(name: &str) -> (Term, EndHost) {
     let base = tmp(name);
     let env = env(&base);
@@ -51,7 +51,7 @@ fn attach(name: &str) -> (Term, EndHost) {
     let mut t = Term::spawn(&[], &env, &work, 30, 100);
     t.wait_for("enter open");
     t.send(b"n");
-    t.wait_for("pick a directory");
+    t.wait_for("pick a folder");
     t.send(work.to_string_lossy().as_bytes());
     t.send(b"\r");
     t.wait_for("back to list");

@@ -934,7 +934,7 @@ mod tests {
         );
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let text = flat(&draw(&mut term, &app));
-        for phrase in ["outside platoon", "Archiving ends that copy.", "The conversation is kept", "y archive", "n cancel"] {
+        for phrase in ["outside platoon", "Archiving ends that copy.", "The session is kept", "y archive", "n cancel"] {
             assert!(text.contains(phrase), "{phrase:?} cut off in:\n{text}");
         }
         assert!(!text.contains("working right now"), "it's idle: {text}");
@@ -1003,7 +1003,7 @@ mod tests {
 
     /// The one-time notice, as it must read.
     fn notice_of(n: usize) -> String {
-        format!("Auto-archived {n} conversations idle for 2+ days. Find them under Archived.")
+        format!("Auto-archived {n} sessions idle for 2+ days. Find them under Archived.")
     }
 
     #[test]
@@ -1059,7 +1059,7 @@ mod tests {
         w.settings(120, 1);
         w.transcript("old", "/srv/old", "old work", 25 * 60);
         let app = w.app();
-        assert_eq!(app.active_notice(), Some("Auto-archived 1 conversation idle for 1+ day. Find it under Archived."));
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 1+ day. Find it under Archived."));
     }
 
     #[test]
@@ -1088,7 +1088,7 @@ mod tests {
         w.settings(120, 2);
         app.refresh_for_test();
         assert_eq!(app.counts, [0, 1], "the edited file is picked up on the next refresh");
-        assert_eq!(app.active_notice(), Some("Auto-archived 1 conversation idle for 2+ days. Find it under Archived."));
+        assert_eq!(app.active_notice(), Some("Auto-archived 1 session idle for 2+ days. Find it under Archived."));
 
         // A longer age puts nothing back (archiving is not undone by settings), but archives nothing more.
         w.settings(120, 30);
@@ -1233,7 +1233,7 @@ mod tests {
         click_action(&mut app, Action::New);
         assert!(matches!(app.mode, Mode::Picker));
         let text = draw(&mut term, &app);
-        assert!(text.contains("new session"), "{text}");
+        assert!(text.contains("New session"), "{text}");
         click_action(&mut app, Action::Cancel);
         assert!(matches!(app.mode, Mode::List));
 
@@ -1322,7 +1322,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         term.draw(|f| ui::draw_paused_banner(f, &app, f.area())).unwrap();
         let text = screen_text(&term);
-        assert!(text.contains("session paused") && text.contains("not sent") && text.contains("reload"), "{text}");
+        assert!(text.contains("Session paused") && text.contains("not sent") && text.contains("reload"), "{text}");
         // The other copy isn't paused.
         app.mode = Mode::Attached(b);
         assert!(!app.attached_paused());
@@ -2417,7 +2417,7 @@ mod tests {
         assert_eq!(app.counts, [1, 1]);
         assert!(!app.settling());
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("Auto-archived 1 conversation idle for 1+ day. Find it under Archived."), "{shown}");
+        assert!(flat(&shown).contains("Auto-archived 1 session idle for 1+ day. Find it under Archived."), "{shown}");
         key(&mut app, KeyCode::Esc);
         key(&mut app, KeyCode::Right);
         assert_eq!(ids(&app), ["old"]);
@@ -2635,7 +2635,7 @@ mod tests {
                 assert!(text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
             }
             if rows >= 12 {
-                assert!(text.contains("Archive conversations after"), "60x{rows}\n{text}");
+                assert!(text.contains("Archive sessions after"), "60x{rows}\n{text}");
             }
         }
         // With little room only the selected setting explains itself, and moving on moves the explanation.
@@ -3319,7 +3319,7 @@ mod tests {
         // On the real screen behind it, an empty list previews nothing, which is why the sample exists.
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(shown.contains("No conversations yet"), "{shown}");
+        assert!(shown.contains("No sessions yet"), "{shown}");
     }
 
     #[test]

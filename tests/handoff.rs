@@ -180,13 +180,13 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     t.send(b"H");
     std::thread::sleep(std::time::Duration::from_millis(400));
     let screen = t.stable();
-    assert!(!screen.contains("hand this work on"), "H is no longer the hand-off:\n{screen}");
+    assert!(!screen.contains("Hand this work on"), "H is no longer the hand-off:\n{screen}");
 
     // h: the box opens and Claude is asked. The brief fills one frame from the title down to the keys, and half
     // a frame can be read, so every line of it is waited for together.
     t.send(b"h");
     t.wait_for_all(&[
-        "hand this work on",
+        "Hand this work on",
         "project Web",
         "# Session hand-off: shop",
         "- Project: Web",
@@ -219,7 +219,7 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     t.send(b"Sizes matter too.");
     t.wait_for("Sizes matter too.");
     t.send(b"\x13");
-    t.wait_gone("hand this work on");
+    t.wait_gone("Hand this work on");
 
     // A new session started, in the same folder, in the same project, with the brief as its first message.
     t.wait_for_all(&[
@@ -255,9 +255,9 @@ fn esc_leaves_the_hand_off_and_everything_else_exactly_as_it_was() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 110);
     t.wait_for("Add a basket page to the shop");
     t.send(b"h");
-    t.wait_for_all(&["hand this work on", "## Executive summary", "esc cancel"]);
+    t.wait_for_all(&["Hand this work on", "## Executive summary", "esc cancel"]);
     t.send(b"\x1b");
-    t.wait_gone("hand this work on");
+    t.wait_gone("Hand this work on");
     t.wait_for("Add a basket page to the shop");
 
     // No session was started, nothing joined or left the project, and nothing was archived.
@@ -303,7 +303,7 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 20, 68);
     t.wait_for("Add a basket page to the shop");
     t.send(b"h");
-    t.wait_for_all(&["hand this work on", "# Session hand-off: shop", "more lines below", "esc cancel"]);
+    t.wait_for_all(&["Hand this work on", "# Session hand-off: shop", "more lines below", "esc cancel"]);
     let screen = t.stable();
     assert!(!screen.contains("more lines above") && !screen.contains("more line above"), "{screen}");
     // Nothing is cut at the box's edge: every row of text ends inside the box, with its border after it.
@@ -332,7 +332,7 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
 
     // ctrl+s: the new session gets the whole document, not just what was on screen.
     t.send(b"\x13");
-    t.wait_gone("hand this work on");
+    t.wait_gone("Hand this work on");
     // (The stand-in prints the whole document, so its first line scrolls off this small screen: read its record.)
     until("the new session's arguments to be written", || lab.started(1).contains("## Next steps"));
     let args = lab.started(1);

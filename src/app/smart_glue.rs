@@ -575,7 +575,7 @@ impl App {
         }
         let (ids, texts) = self.find_texts(&settings, wide);
         if ids.is_empty() {
-            self.search.find.state = FindState::Failed("There are no conversations to search yet.".into());
+            self.search.find.state = FindState::Failed("There are no sessions to search yet.".into());
             return;
         }
         let mut req = Request::new(

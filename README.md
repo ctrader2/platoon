@@ -120,7 +120,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | Key | Does |
 | --- | --- |
 | `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
-| `n` | new session (pick a directory) |
+| `n` | new session (pick a folder) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](#projects), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
@@ -260,7 +260,7 @@ same size on every tab; a tab with more entries than fit scrolls, and on a small
 | --- | --- | --- |
 | Theme | The colors platoon is drawn in. `enter` on it opens a list that previews each theme on your real screen (see [Themes](#themes)). | The [built-in themes](#themes) (Catppuccin Mocha by default) and your own |
 | Stop idle sessions after | A session platoon is running that nobody has looked at, and that isn't working, is stopped to free memory. Nothing is lost: opening it again resumes it from its saved history. | Off, 30 minutes, 1 hour, 2 hours (default), 4 hours, 8 hours, 1 day |
-| Archive conversations after | A conversation nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
+| Archive sessions after | A session nobody has used for this long, with nothing running, moves to the Archived tab. You can restore it from there. | Off, 1 day, 2 days (default), 7 days, 14 days, 30 days |
 | Idle stop and MCP servers | Whether the MCP servers of a session count as something running when deciding to stop it (see above). | Ignore MCP servers (default), Count MCP servers |
 
 **Search**
@@ -271,7 +271,7 @@ same size on every tab; a tab with more entries than fit scrolls, and on a small
 | Search results shown | The most conversations a full-text search lists. | 10, 20, 50 (default), 100, 200 |
 | Search preview length | The most of a matching message a result shows around your words (it is also cut to fit the window). | 40, 80, 120 (default), 200, 400 characters |
 | Longest message kept | How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. Changing it makes platoon read your conversations again in the background. | 300, 1000, 2000 (default), 5000, 20000 characters |
-| Description search: conversations sent / results / wider search | How many conversations a search by description ([Describe it](#search)) sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
+| Description search: sessions sent / results / wider search | How many conversations a search by description ([Describe it](#search)) sends, how many results it lists, how many the wider search sends. | 20-150 (50), 5-20 (10), 100-500 (200) |
 | System prompt for Describe it | What platoon asks Claude for when you search by describing a conversation (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 **Smart features**: whether your Claude plan is used at all, and how much. Under the entries: `Used today: N of M tokens`, and,
@@ -290,12 +290,12 @@ when naming is held up, why (`Naming is waiting: ...`).
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
-| Conversations per call | How many conversations one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
+| Sessions per call | How many sessions one request to Claude covers. | 5, 10, 20, 30 (default), 50, 100 |
 | Refresh a summary after | How many new substantive messages from you a conversation gets before its name and summary are made again. | 1, 3, 5 (default), 10, 20, 50 messages |
 | Wait for quiet before refreshing | A conversation is refreshed only once nothing has been written to it for this long. | 15, 30 seconds, 1 (default), 2, 5, 10 minutes |
 | Recent messages sent | How many of a conversation's latest messages go into its summary, besides the first one. | 3, 5, 8 (default), 12, 20 messages |
 | Longest message sent | Each message is cut to this many characters before it is sent. | 100, 200, 300 (default), 500, 1000 characters |
-| Archived conversations | Whether archived conversations are named too, slowly in the background. | Skip (default), In the background |
+| Archived sessions | Whether archived sessions are named too, slowly in the background. | Skip (default), In the background |
 | Share for archived | Naming archived conversations may use at most this much of what is left of the day's limit. | 10, 25, 50 (default), 75, 100% |
 | System prompt for naming | What platoon asks Claude for when it names and summarizes your conversations (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
@@ -882,8 +882,8 @@ the work), the folder or folders it works in, the tickets it **waits for**, and 
 
 The **Tickets** pane sits under Sessions on a project's screen. Open tickets come first; the Done and Cancelled ones are
 kept apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the
-number, the title, the state and, for an open ticket, what it is still waiting for ("waits for #2, #4")
-or a quiet **ready** when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones
+number, the title, the state and, for an open ticket, what it is still waiting for ("Waits for #2, #4")
+or **Can start** when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones
 waiting for it: only Done lets them go). On a narrow terminal the state's own column goes first (a Done, Cancelled or
 otherwise not-New ticket then says its state at the end of its row).
 
@@ -919,13 +919,13 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
 | `S` (shift+s) | hand it to a squad (see below). `a` does nothing on a ticket: it says `S` does this |
-| `p` | let its squad publish, when it is Ready to push/publish |
+| `p` | let its squad publish, when it is Ready to publish |
 | `w` | remove its worktree anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a ticket a squad has: its squad's session, beside the ticket. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
 | `o` | the session the ticket was made from (the **From** line), also when `enter` is the squad's |
 | `ctrl+space`, `esc` or `q` | back to the project, on the same ticket (the [back key](#keys-back-and-quit)) |
 
-The states are **New, Working, Waiting on you, Ready to push/publish, Done, Cancelled**. You never set one by hand except
+The states are **New, Working, Waiting on you, Ready to publish, Done, Cancelled**. You never set one by hand except
 **Cancelled** (`c`): handing a ticket to a squad makes it Working, the squad sets the others, and writing to the squad in
 its session makes the ticket Working again (see below). A ticket no squad has had can only be cancelled, and then it
 stays cancelled.
@@ -1082,7 +1082,7 @@ seconds, only for the open project's tickets that have had a squad.
 The ticket's state follows the squad: at the end of each of its turns the leader says in one last line whether it is
 done, still working (members running), has a question, is stuck, or is ready to publish, and platoon sets **Working**,
 **Done**, **Waiting on you** (with its question or why it is stuck; a turn that ends without that line counts as "the
-squad stopped without saying why") or **Ready to push/publish**. **The squad never closes a ticket unasked**: when the
+squad stopped without saying why") or **Ready to publish**. **The squad never closes a ticket unasked**: when the
 work is finished it writes its short result (what was done, where, what was not checked) and asks "Shall I close this
 ticket?", so the ticket shows Waiting on you with that question; only after you say yes does it end with done and the
 ticket goes Done. When it is Done, the leader's result shows at the top of
@@ -1096,14 +1096,14 @@ Ready, Done or Cancelled, it is stopped like any idle session.
 
 **Anything other people can see asks you first**, even when the ticket asks for it: pushing, opening or merging
 a merge request, publishing a package or a page. platoon refuses those commands in the squad's session until you say so,
-and the squad stops at **Ready to push/publish**, saying what it wants to publish. Press `p` on the ticket to let it: the
+and the squad stops at **Ready to publish**, saying what it wants to publish. Press `p` on the ticket to let it: the
 ticket goes back to Working and platoon types "Go ahead and publish." into the squad's session. That go-ahead lasts while
 the ticket is Working or Ready; once it is Done, Cancelled, New or waiting on you, the next push asks again. Local
 changes and local commits never ask.
 
 **Writing to the squad puts the ticket back to Working.** Whatever you send in the squad's session (an answer to its
 question, "yes" to closing, more work after Done, the go-ahead `p` types) makes a ticket that is Waiting on you, Ready to
-push/publish, Done or Cancelled Working again, with the same squad session: that is how a Done or Cancelled ticket is
+publish, Done or Cancelled Working again, with the same squad session: that is how a Done or Cancelled ticket is
 opened again (`enter` continues its session when it isn't running, then write to it). A reopened ticket counts toward
 the squads at work at once like any Working one, even when that makes one more than the number allowed for a while;
 tickets in the line just wait longer. A New ticket and one waiting in the line are left alone. `c` cancels a ticket

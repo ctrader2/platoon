@@ -143,7 +143,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     // Enter: the same list of editors as the notes, over the settings; enter again opens the stand-in with the file,
     // which starts as platoon's default.
     t.send(b"\r");
-    t.wait_for_all(&["╭ edit the system prompt with", "Editors found on this computer:"]);
+    t.wait_for_all(&["╭ Edit the system prompt with", "Editors found on this computer:"]);
     t.send(b"\r");
     t.wait_for_all(&["FAKE NANO EDITING", "hand-off.md", "the system prompt for the hand-off"]);
     let file = lab.prompts().join("hand-off.md");
@@ -164,7 +164,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
 
     // A real change: saved, "User Modified", and now the footer offers restore.
     t.send(b"\r");
-    t.wait_for("╭ edit the system prompt with");
+    t.wait_for("╭ Edit the system prompt with");
     t.send(b"\r");
     t.wait_for("FAKE NANO EDITING");
     t.send(b"Keep it to one screen.\r");
@@ -178,7 +178,7 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.send(b"c");
     round_trip(&mut t);
     let screen = t.stable();
-    assert!(!screen.contains("yours") && !screen.contains("╭ what changed") && footer(&screen).contains("r restore"), "{screen}");
+    assert!(!screen.contains("yours") && !screen.contains("╭ What changed") && footer(&screen).contains("r restore"), "{screen}");
 
     // r asks first; n keeps the user's version and goes back to the settings.
     t.send(b"r");

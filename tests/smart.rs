@@ -208,8 +208,8 @@ fn the_wider_search_asks_first_and_sends_more_candidates_only_after_enter() {
     t.wait_for("found");
     assert_eq!(fake.stdin(1).lines().filter(|l| l.starts_with('[')).count(), 10);
     t.send(b"\x17"); // ctrl+w
-    t.wait_for_flat("Search wider? This sends 30 conversations to Claude");
-    t.wait_for_flat("(an estimate)"); // all thirty there are: the limit of 50 is more than they are
+    t.wait_for_flat("Search wider? This sends 30 sessions to Claude");
+    t.wait_for_flat("estimate). Press enter to go ahead"); // all thirty there are: the limit of 50 is more than they are
     assert_eq!(fake.calls(), 1, "a question, not a call");
     t.send(b"\r");
     until("the second call", || fake.calls() == 2);

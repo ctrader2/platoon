@@ -260,7 +260,7 @@ impl App {
     /// gone, there is nothing in it yet, or the gate says no.
     pub(super) fn start_handoff(&mut self) {
         let Some(s) = self.selected_session() else {
-            self.notify("No conversation selected");
+            self.notify("No session selected");
             return;
         };
         let (session, session_name, cwd) = (s.id.clone(), s.name.clone(), s.cwd.clone());

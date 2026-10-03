@@ -133,8 +133,8 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     assert!(!claude.join("skills/to-tickets").exists());
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings);
     // Without it platoon still starts.
-    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
-    assert!(screen.contains("No conversations yet"), "{screen}");
+    let screen = run_in_terminal(&claude, &cache, "No sessions yet");
+    assert!(screen.contains("No sessions yet"), "{screen}");
     let out = platoon(&claude, &cache, &["setup", "--remove", "everything"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("can remove: to-tickets"));
@@ -204,8 +204,8 @@ fn setup_remembers_a_removal_and_leaves_a_skill_the_user_changed_alone() {
         assert!(line.contains("changed by you") && line.contains("`platoon setup --replace to-tickets`"), "{line}");
         assert!(fs::read_to_string(&skill).unwrap().ends_with("My own line.\n"));
     }
-    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
-    assert!(screen.contains("No conversations yet"), "{screen}");
+    let screen = run_in_terminal(&claude, &cache, "No sessions yet");
+    assert!(screen.contains("No sessions yet"), "{screen}");
     // Replaced on request: theirs kept beside it.
     let out = platoon(&claude, &cache, &["setup", "--replace", "to-tickets"]);
     assert!(out.status.success() && text(&out.stdout).contains("yours is kept as"), "{out:?}");
@@ -269,8 +269,8 @@ fn once_setup_is_done_platoon_starts_and_undoing_a_step_blocks_it_again() {
     let (claude, cache) = dirs("start");
     assert!(platoon(&claude, &cache, &["setup"]).status.success());
 
-    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
-    assert!(screen.contains("No conversations yet"), "the UI should have started:\n{screen}");
+    let screen = run_in_terminal(&claude, &cache, "No sessions yet");
+    assert!(screen.contains("No sessions yet"), "the UI should have started:\n{screen}");
 
     // Someone removes the guard hook: platoon notices and refuses again.
     let path = claude.join("settings.json");
@@ -292,8 +292,8 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
     let mut v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     v["hooks"].as_object_mut().unwrap().remove("SessionStart");
     fs::write(&path, v.to_string()).unwrap();
-    let screen = run_in_terminal(&claude, &cache, "No conversations yet");
-    assert!(screen.contains("No conversations yet"), "the missing notes hook must not block starting:\n{screen}");
+    let screen = run_in_terminal(&claude, &cache, "No sessions yet");
+    assert!(screen.contains("No sessions yet"), "the missing notes hook must not block starting:\n{screen}");
     let out = platoon(&claude, &cache, &["setup"]);
     let shown = text(&out.stdout);
     assert_eq!(shown.matches("already done").count(), 4, "{shown}");

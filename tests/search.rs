@@ -230,12 +230,12 @@ fn r_renames_a_conversation_and_the_name_is_kept_in_platoons_own_file_and_found_
 
     // Esc cancels: nothing is written.
     t.send(b"r");
-    t.wait_for("rename conversation");
+    t.wait_for("Rename session");
     t.wait_for("❯ alpha"); // the newest is first
     t.send(b"zzz");
     t.wait_for("❯ alphazzz");
     t.send(b"\x1b");
-    t.wait_gone("rename conversation");
+    t.wait_gone("Rename session");
     assert!(!w.base.join("config/names.json").exists());
 
     // Enter saves: the box starts with the current name; ctrl+u empties it.
@@ -244,7 +244,7 @@ fn r_renames_a_conversation_and_the_name_is_kept_in_platoons_own_file_and_found_
     t.send(b"\x15Payments work");
     t.wait_for("❯ Payments work");
     t.send(b"\r");
-    t.wait_gone("rename conversation");
+    t.wait_gone("Rename session");
     t.wait_for("Payments work");
     until("names.json", || w.base.join("config/names.json").exists());
     assert_eq!(w.names(), serde_json::json!({"aaaaaaaa-1111": "Payments work"}));
@@ -262,7 +262,7 @@ fn r_renames_a_conversation_and_the_name_is_kept_in_platoons_own_file_and_found_
     t.send(b"r");
     t.wait_for("❯ Payments work");
     t.send(b"\x15\r");
-    t.wait_gone("rename conversation");
+    t.wait_gone("Rename session");
     t.wait_for("Name cleared");
     until("the name to leave the file", || w.names() == serde_json::json!({}));
     t.send(b"q");

@@ -106,8 +106,8 @@ pub struct Tab {
 }
 
 pub const TABS: &[Tab] = &[
-    Tab { label: "Active", empty: "No conversations yet. Press n to start one.", shows: |s| !s.archived },
-    Tab { label: "Archived", empty: "Nothing archived. Press a on a conversation to archive it.", shows: |s| s.archived },
+    Tab { label: "Active", empty: "No sessions yet. Press n to start one.", shows: |s| !s.archived },
+    Tab { label: "Archived", empty: "Nothing archived. Press a on a session to archive it.", shows: |s| s.archived },
 ];
 
 /// Round badge caps are Powerline/Nerd Font glyphs. Terminals that bring their own symbol fallback (Ghostty, Kitty,
@@ -431,7 +431,7 @@ pub const SEARCH_KINDS: &[SearchKind] = &[
     },
     SearchKind {
         label: "Full-text",
-        explain: "Finds conversations by the words you typed in them, archived ones too.",
+        explain: "Finds sessions by the words you typed in them, archived ones too.",
         prompt: "Type words you asked Claude about, in any order.",
         narrows_list: false,
         feature: None,
@@ -1353,7 +1353,7 @@ impl App {
                 let (n, plural) = (ids.len(), if ids.len() == 1 { "" } else { "s" });
                 let (them, day) = (if n == 1 { "it" } else { "them" }, if days == 1 { "day" } else { "days" });
                 self.notice = Some((
-                    format!("Auto-archived {n} conversation{plural} idle for {days}+ {day}. Find {them} under Archived."),
+                    format!("Auto-archived {n} session{plural} idle for {days}+ {day}. Find {them} under Archived."),
                     Instant::now(),
                     AUTO_ARCHIVE_NOTICE_FOR,
                 ));
@@ -1786,7 +1786,7 @@ impl App {
     /// Open the box for renaming the selected conversation, with the name it shows now.
     fn open_rename(&mut self) {
         let Some(s) = self.selected_session() else {
-            self.notify("No conversation selected");
+            self.notify("No session selected");
             return;
         };
         self.rename = Rename { id: s.id.clone(), input: s.name.clone(), original: s.name.clone() };
@@ -2205,7 +2205,7 @@ impl App {
 
     fn toggle_archive(&mut self) {
         let Some(s) = self.selected_session() else {
-            self.notify("No conversation selected");
+            self.notify("No session selected");
             return;
         };
         let (id, name) = (s.id.clone(), s.name.clone());

@@ -182,22 +182,22 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     t.send(b"2");
     t.wait_for("No projects yet. Press n to make one.");
     t.send(b"n");
-    t.wait_for("╭ new project");
+    t.wait_for("╭ New project");
     t.send(b"Web shop");
     t.wait_for("❯ Web shop");
     t.send(b"\r");
-    t.wait_gone("╭ new project");
+    t.wait_gone("╭ New project");
     t.wait_for_flat("WS Web shop");
     t.wait_for_flat("Active 1 Archived 0");
     let id = lab.projects()["projects"].as_object().unwrap().keys().next().unwrap().clone();
 
     // r renames it.
     t.send(b"r");
-    t.wait_for("╭ rename project");
+    t.wait_for("╭ Rename project");
     t.send(b"\x15Shop");
     t.wait_for("❯ Shop");
     t.send(b"\r");
-    t.wait_gone("╭ rename project");
+    t.wait_gone("╭ Rename project");
     t.wait_for_flat("WS Shop");
     assert_eq!(lab.projects()["projects"][&id]["name"], "Shop");
 
@@ -233,7 +233,7 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
 
     // d deletes it, after asking; the session stays, in no project.
     t.send(b"d");
-    t.wait_for("╭ delete project");
+    t.wait_for("╭ Delete project");
     t.wait_for_flat("y delete");
     t.send(b"y");
     t.wait_for("No projects yet");
@@ -275,7 +275,7 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
     t.wait_for_flat("1 shown");
     // Full-text: "docs" is only in the other session, so nothing is found here.
     t.send(b"\t");
-    t.wait_for("Finds conversations by the words you typed");
+    t.wait_for("Finds sessions by the words you typed");
     t.send(b"\x15docs");
     t.wait_for("Nothing found");
     t.send(b"\x15docker");
@@ -285,7 +285,7 @@ fn a_projects_screen_shows_its_sessions_and_notes_searches_only_them_and_a_new_s
 
     // n: the folder picker, the project's folder first; the new session carries the project and is put in it.
     t.send(b"n");
-    t.wait_for("new session in Web");
+    t.wait_for("New session in Web");
     t.send(b"\r");
     t.wait_for("project:pweb sid:new-0001");
     until("the new session to be put in the project", || lab.projects()["sessions"]["new-0001"] == "pweb");
@@ -319,7 +319,7 @@ fn archiving_a_project_stops_its_live_session_and_restoring_brings_back_exactly_
     t.wait_for_flat("2 active · 1 archived");
     // The live one runs in a terminal outside platoon: asked first.
     t.send(b"a");
-    t.wait_for("╭ archive project");
+    t.wait_for("╭ Archive project");
     t.wait_for_flat("1 of its sessions is running");
     assert!(!lab.exited(pid) && lab.archived() == ["cccc-0003"], "asking changes nothing");
     t.send(b"y");

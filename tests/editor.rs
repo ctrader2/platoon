@@ -285,7 +285,7 @@ fn v_on_a_ticket_whose_squad_is_working_asks_first() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     to_tickets(&mut t);
     t.send(b"v");
-    t.wait_for_all(&["squad at work", "Open #1 Basket in the editor anyway?", "open anyway"]);
+    t.wait_for_all(&["Squad at work", "Open #1 Basket in the editor anyway?", "open anyway"]);
     t.wait_for_all(&["The squad is still working in these files; what you change may clash", "with it."]);
     t.send(b"n");
     t.wait_gone("anyway?");
@@ -317,7 +317,7 @@ fn v_typed_into_a_box_is_a_letter() {
     t.wait_gone("Quick filter");
     // The new session's folder picker.
     t.send(b"n");
-    t.wait_for("pick a directory");
+    t.wait_for("pick a folder");
     t.send(b"v");
     t.wait_for("❯ v");
     std::thread::sleep(Duration::from_millis(300));
@@ -355,7 +355,7 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for_all(&["╭ open with", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
+    t.wait_for_all(&["╭ Open with", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
     let shown = t.stable();
     let rows: Vec<&str> = shown.lines().filter(|l| l.contains("VS Code") || l.contains("Helix")).collect();
     assert_eq!(rows.len(), 2, "{shown}");
@@ -370,7 +370,7 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     assert_eq!(t.fg_at(row, col), vt100::Color::Rgb(0xb4, 0xbe, 0xfe));
     // Enter: VS Code (a stand-in) starts beside platoon with both folders in one window; platoon stays on screen.
     t.send(b"\r");
-    t.wait_gone("╭ open with");
+    t.wait_gone("╭ Open with");
     let argv = wait_file(&lab.out.join("code.argv"));
     assert_eq!(argv.lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&lab.work), s(&docs)]);
     assert_eq!(fs::read_to_string(lab.out.join("code.cwd")).unwrap().trim(), s(&lab.work));

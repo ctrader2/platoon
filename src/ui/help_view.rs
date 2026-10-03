@@ -61,7 +61,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     ));
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     out.push(Entry::Note(
-        "A ~ before a percentage means it is an estimate: platoon worked it out from the conversation. Without it, the figure is Claude Code's own.".into(),
+        "A ~ before a percentage means it is an estimate: platoon worked it out from the session's messages. Without it, the figure is Claude Code's own.".into(),
     ));
     out
 }

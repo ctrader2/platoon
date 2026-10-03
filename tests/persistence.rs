@@ -190,7 +190,7 @@ fn quitting_the_ui_leaves_the_session_running() {
 
     wait_for("platoon");
     writer.write_all(b"n").unwrap(); // new session
-    wait_for("pick a directory");
+    wait_for("pick a folder");
     writer.write_all(b"\r").unwrap(); // first suggestion
     wait_for("back to list"); // attached to the hosted shell
     writer.write_all(b"echo ui-$((6*7))\r").unwrap();

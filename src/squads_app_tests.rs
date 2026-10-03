@@ -180,7 +180,7 @@ fn s_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
     assert!(
-        shown.contains("hand to a squad")
+        shown.contains("Hand to a squad")
             && shown.contains("#1 First")
             && shown.contains("Coding")
             && shown.contains("Makes a change to code"),
@@ -321,7 +321,7 @@ fn cancelling_a_ticket_whose_squad_runs_says_so_and_yes_stops_only_that_session(
     );
     key(&mut app, KeyCode::Char('y'));
     assert_eq!(app.ticket(n).unwrap().state, State::Cancelled);
-    assert_eq!(app.active_notice(), Some("#1 is Cancelled. Stopping its squad's session; its conversation is kept."));
+    assert_eq!(app.active_notice(), Some("#1 is Cancelled. Stopping its squad's session (the session itself is kept)."));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while leader.try_wait().unwrap().is_none() {
         assert!(std::time::Instant::now() < deadline, "the leader's stand-in was not stopped");

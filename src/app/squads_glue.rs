@@ -770,7 +770,7 @@ impl App {
 
     // ---- letting it publish -----------------------------------------------------------------------------------
 
-    /// `p` on a ticket that is Ready to push/publish: the user's go-ahead is written on the ticket (Working again) and
+    /// `p` on a ticket that is Ready to publish: the user's go-ahead is written on the ticket (Working again) and
     /// the leader is told to go on.
     pub(super) fn let_it_publish(&mut self, number: u32) {
         let Some(t) = self.ticket(number) else { return };

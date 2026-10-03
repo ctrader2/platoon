@@ -141,7 +141,7 @@ pub struct Settings {
     pub ai_prompt_chars: u64,
     /// A conversation is refreshed only once its transcript has been quiet this many seconds.
     pub ai_quiet_seconds: u64,
-    /// Archived conversations are named slowly in the background (`"ai_archived": "background"` in the file) instead of not at all.
+    /// Archived sessions are named slowly in the background (`"ai_archived": "background"` in the file) instead of not at all.
     pub ai_archived: bool,
     /// The most of the day's remaining limit archived conversations may use, in percent.
     pub ai_archived_share: u64,
@@ -550,7 +550,7 @@ pub fn messages_label(n: u64) -> String {
 }
 
 pub fn conversations_label(n: u64) -> String {
-    plural(n, "conversation")
+    plural(n, "session")
 }
 
 /// 1234567 -> "1,234,567".
@@ -693,8 +693,8 @@ fn general_items() -> Vec<Item> {
             off: Some(0),
         },
         Item {
-            name: "Archive conversations after",
-            explain: "A conversation nobody has used for this long, with nothing running, moves to the Archived tab. \
+            name: "Archive sessions after",
+            explain: "A session nobody has used for this long, with nothing running, moves to the Archived tab. \
                       You can restore it from there.",
             kind: Kind::Steps,
             choices: &[0, 1, 2, 7, 14, 30],
@@ -723,7 +723,7 @@ fn search_items() -> Vec<Item> {
     vec![
         Item {
             name: "Search archived",
-            explain: "Whether searching by the words you typed (press / then tab) also looks in conversations on the Archived tab. \
+            explain: "Whether searching by the words you typed (press / then tab) also looks in sessions on the Archived tab. \
                       Choosing one from the results opens the Archived tab for you.",
             kind: Kind::Steps,
             choices: &[0, 1],
@@ -734,7 +734,7 @@ fn search_items() -> Vec<Item> {
         },
         Item {
             name: "Search results shown",
-            explain: "The most conversations a word search lists. A narrower search finds what you want among fewer.",
+            explain: "The most sessions a word search lists. A narrower search finds what you want among fewer.",
             kind: Kind::Steps,
             choices: &[10, 20, 50, 100, 200],
             get: |s| s.search_results,
@@ -756,7 +756,7 @@ fn search_items() -> Vec<Item> {
         Item {
             name: "Longest message kept",
             explain: "How much of each message you sent is remembered for searching, so a huge paste doesn't fill the memory. \
-                      Changing it makes platoon read your conversations again in the background.",
+                      Changing it makes platoon read your sessions again in the background.",
             kind: Kind::Steps,
             choices: &[300, 1000, 2000, 5000, 20_000],
             get: |s| s.search_prompt_chars,
@@ -765,8 +765,8 @@ fn search_items() -> Vec<Item> {
             off: None,
         },
         Item {
-            name: "Description search: conversations sent",
-            explain: "How many conversations a search by description sends to Claude to pick from. More finds the odd one but uses more of your plan.",
+            name: "Description search: sessions sent",
+            explain: "How many sessions a search by description sends to Claude to pick from. More finds the odd one but uses more of your plan.",
             kind: Kind::Steps,
             choices: &[20, 30, 50, 100, 150],
             get: |s| s.ai_find_candidates,
@@ -776,7 +776,7 @@ fn search_items() -> Vec<Item> {
         },
         Item {
             name: "Description search: results",
-            explain: "The most conversations a search by description lists.",
+            explain: "The most sessions a search by description lists.",
             kind: Kind::Steps,
             choices: &[5, 10, 15, 20],
             get: |s| s.ai_find_results,
@@ -786,7 +786,7 @@ fn search_items() -> Vec<Item> {
         },
         Item {
             name: "Description search: wider search",
-            explain: "How many conversations the wider search sends. It asks you first and says roughly how many tokens that is.",
+            explain: "How many sessions the wider search sends. It asks you first and says roughly how many tokens that is.",
             kind: Kind::Steps,
             choices: &[100, 200, 300, 500],
             get: |s| s.ai_find_wide_candidates,
@@ -866,8 +866,8 @@ fn smart_items() -> Vec<Item> {
 fn sessions_items() -> Vec<Item> {
     vec![
         Item {
-            name: "Conversations per call",
-            explain: "How many conversations one request to Claude covers. Larger batches use less of your plan overall.",
+            name: "Sessions per call",
+            explain: "How many sessions one request to Claude covers. Larger batches use less of your plan overall.",
             kind: Kind::Steps,
             choices: &[5, 10, 20, 30, 50, 100],
             get: |s| s.ai_batch_size,
@@ -877,7 +877,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Refresh a summary after",
-            explain: "How many new messages from you a conversation gets before its name and summary are made again.",
+            explain: "How many new messages from you a session gets before its name and summary are made again.",
             kind: Kind::Steps,
             choices: &[1, 3, 5, 10, 20, 50],
             get: |s| s.ai_refresh_messages,
@@ -887,7 +887,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Wait for quiet before refreshing",
-            explain: "A conversation is only refreshed once nothing has been written to it for this long, so a chat you are in the middle of isn't sent again and again.",
+            explain: "A session is only refreshed once nothing has been written to it for this long, so a chat you are in the middle of isn't sent again and again.",
             kind: Kind::Steps,
             choices: &[15, 30, 60, 120, 300, 600],
             get: |s| s.ai_quiet_seconds,
@@ -897,7 +897,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Recent messages sent",
-            explain: "How many of a conversation's latest messages from you go into its summary, besides the first one. More of them names it better and uses more of your plan.",
+            explain: "How many of a session's latest messages from you go into its summary, besides the first one. More of them names it better and uses more of your plan.",
             kind: Kind::Steps,
             choices: &[3, 5, 8, 12, 20],
             get: |s| s.ai_prompts_per_session,
@@ -916,8 +916,8 @@ fn sessions_items() -> Vec<Item> {
             off: None,
         },
         Item {
-            name: "Archived conversations",
-            explain: "Whether conversations on the Archived tab get names and summaries too, slowly in the background. One that you restore or open is done at once either way.",
+            name: "Archived sessions",
+            explain: "Whether sessions on the Archived tab get names and summaries too, slowly in the background. One that you restore or open is done at once either way.",
             kind: Kind::Steps,
             choices: &[0, 1],
             get: |s| u64::from(s.ai_archived),
@@ -927,7 +927,7 @@ fn sessions_items() -> Vec<Item> {
         },
         Item {
             name: "Share for archived",
-            explain: "Naming archived conversations may use at most this much of what is left of the day's limit, so the conversations you are using always have room.",
+            explain: "Naming archived sessions may use at most this much of what is left of the day's limit, so the sessions you are using always have room.",
             kind: Kind::Steps,
             choices: &[10, 25, 50, 75, 100],
             get: |s| s.ai_archived_share,
@@ -1529,7 +1529,7 @@ mod tests {
         );
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
-        assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive conversations after", "Idle stop and MCP servers"]);
+        assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive sessions after", "Idle stop and MCP servers"]);
         assert_eq!(
             names("Search"),
             [
@@ -1537,7 +1537,7 @@ mod tests {
                 "Search results shown",
                 "Search preview length",
                 "Longest message kept",
-                "Description search: conversations sent",
+                "Description search: sessions sent",
                 "Description search: results",
                 "Description search: wider search",
                 "System prompt for Describe it"
@@ -1559,12 +1559,12 @@ mod tests {
         assert_eq!(
             names("Sessions"),
             [
-                "Conversations per call",
+                "Sessions per call",
                 "Refresh a summary after",
                 "Wait for quiet before refreshing",
                 "Recent messages sent",
                 "Longest message sent",
-                "Archived conversations",
+                "Archived sessions",
                 "Share for archived",
                 "System prompt for naming"
             ]
@@ -1903,7 +1903,7 @@ mod tests {
                 "500K tokens",
                 "80%",
                 "Haiku",
-                "30 conversations",
+                "30 sessions",
                 "5 messages",
                 "1 minute",
                 "8 messages",
@@ -1922,9 +1922,9 @@ mod tests {
                 "Sonnet",
                 "",
                 "",
-                "50 conversations",
+                "50 sessions",
                 "10 results",
-                "200 conversations",
+                "200 sessions",
                 ""
             ]
         );

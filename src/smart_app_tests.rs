@@ -924,7 +924,7 @@ fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
             assert!(shown.contains("esc back") && shown.contains("Projects"), "{}:\n{shown}", item.name);
             // The day's use is on the smart features tab; the archived estimate with the archived entries on Sessions.
             assert_eq!(shown.contains("Used today: 0 of 500,000 tokens"), ti == settings::TAB_SMART, "{}:\n{shown}", item.name);
-            let estimate = flat.contains("Archived: 2 conversations, about ") && flat.contains(" tokens to index (an estimate)");
+            let estimate = flat.contains("Archived: 2 sessions, about ") && flat.contains(" tokens to index (an estimate)");
             assert_eq!(estimate, ti == settings::TAB_SESSIONS, "{}:\n{shown}", item.name);
             for line in shown.lines().filter(|l| l.starts_with('│')) {
                 assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border: {line}");
@@ -938,7 +938,7 @@ fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
     // With nothing archived, it says so.
     let w2 = World::new("sm-screen-none");
     let mut app2 = w2.app();
-    go(&mut app2, "Archived conversations");
+    go(&mut app2, "Archived sessions");
     assert!(screen(&mut term, &app2).contains("Archived: none waiting to be named"));
 }
 
@@ -946,7 +946,7 @@ fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
 fn the_smart_features_screen_changes_the_new_settings_and_saves_them() {
     let w = World::new("sm-screen-keys");
     let mut app = w.app();
-    go(&mut app, "Archived conversations");
+    go(&mut app, "Archived sessions");
     key(&mut app, KeyCode::Right);
     assert!(settings::load(&w.config).0.ai_archived);
     assert_eq!(
@@ -1296,7 +1296,7 @@ fn a_wider_search_says_what_it_costs_waits_for_enter_and_sends_more_candidates()
     let shown = screen(&mut term, &app);
     let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ").replace("│ ", "").replace(" │", "");
     assert!(
-        flat.contains("Search wider? This sends 60 conversations to Claude, about ")
+        flat.contains("Search wider? This sends 60 sessions to Claude, about ")
             && flat.contains("tokens (an estimate)")
             && flat.contains("enter to go ahead")
             || flat.contains("Press enter to go ahead"),
@@ -1841,7 +1841,7 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.instructions == Some(crate::instructions::NOTES));
     let shown = screen(&mut term, &app);
     assert!(
-        shown.contains("edit the system prompt with") && shown.contains("System prompt for project notes"),
+        shown.contains("Edit the system prompt with") && shown.contains("System prompt for project notes"),
         "the settings stay behind it:\n{shown}"
     );
     key(&mut app, KeyCode::Esc);

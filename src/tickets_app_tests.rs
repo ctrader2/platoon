@@ -238,7 +238,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // Then the editor list, for the ticket; enter runs the (stand-in) editor on the body.
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.ticket == Some(1));
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("edit ticket #1 with"));
+    assert!(flat(&draw(&mut term, &app)).contains("Edit ticket #1 with"));
     key(&mut app, KeyCode::Enter);
     let start = Instant::now();
     while app.editing.is_some() && start.elapsed() < Duration::from_secs(10) {
@@ -252,7 +252,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // The row is picked, in the Tickets pane.
     assert_eq!((app.pane, app.selected_ticket().map(|t| t.number)), (Pane::Tickets, Some(1)));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#1 Log in with a link New ready"), "{shown}");
+    assert!(shown.contains("#1 Log in with a link New Can start"), "{shown}");
 }
 
 #[test]
@@ -380,13 +380,13 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     key(&mut app, KeyCode::Tab);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#2 Middle New ready"), "{shown}");
-    assert!(shown.contains("#3 Top New waits for #2"), "only the unfinished blocker: {shown}");
+    assert!(shown.contains("#2 Middle New Can start"), "{shown}");
+    assert!(shown.contains("#3 Top New Waits for #2"), "only the unfinished blocker: {shown}");
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
-    let (ry, rx) = find(&term, "ready").unwrap();
+    let (ry, rx) = find(&term, "Can start").unwrap();
     assert_eq!(buf[(rx, ry)].fg, t.ok, "ready is quiet green");
-    let (by, bx) = find(&term, "waits for #2").unwrap();
+    let (by, bx) = find(&term, "Waits for #2").unwrap();
     assert_eq!(buf[(bx, by)].fg, t.warn);
     // The picked row (the first) has the highlight and the bar; the other rows don't.
     let (my, mx) = find(&term, "#2 ").unwrap();
@@ -424,7 +424,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     // Once #2 is Done too, #3 is ready.
     set_state(&w, &mut app, &id, 2, State::Done);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#3 Top New ready"), "{shown}");
+    assert!(shown.contains("#3 Top New Can start"), "{shown}");
 }
 
 #[test]
@@ -485,7 +485,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("#2 Basket page"), "{shown}");
-    assert!(f.contains("State New · waits for #1"), "{shown}");
+    assert!(f.contains("State New · Waits for #1"), "{shown}");
     assert!(!f.contains("How far") && !f.contains("merge request"), "no how-far line: {shown}");
     assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
@@ -525,7 +525,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     key(&mut app, KeyCode::Char('G'));
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.ticket == Some(2));
-    assert!(flat(&draw(&mut term, &app)).contains("a folder for ticket #2"));
+    assert!(flat(&draw(&mut term, &app)).contains("A folder for ticket #2"));
     typed(&mut app, &folder.to_string_lossy());
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::TicketPick), "back in the folders");
@@ -573,8 +573,8 @@ fn eighty_columns_keep_the_number_title_and_what_matters_most_and_drop_the_state
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("Sessions") && f.contains("Tickets") && f.contains("Notes"), "{shown}");
-    assert!(f.contains("#1 A rather long") && f.contains("… ready"), "{shown}");
-    assert!(f.contains("#2 Second waits for #1"), "{shown}");
+    assert!(f.contains("#1 A rather long") && f.contains("… Can start"), "{shown}");
+    assert!(f.contains("#2 Second Waits for #1"), "{shown}");
     assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state's own column goes first: {shown}");
     assert!(f.contains("#3 Third Cancelled"), "a row with nothing else to say says its state: {shown}");
     // No row runs past its pane.

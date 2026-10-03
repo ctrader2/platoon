@@ -112,7 +112,7 @@ fn the_limits_step_through_their_choices_and_are_saved() {
     select(&mut app, "Model for smart features");
     key(&mut app, KeyCode::Right);
     assert_eq!(on_disk(&w).ai_model, "sonnet");
-    select(&mut app, "Conversations per call");
+    select(&mut app, "Sessions per call");
     key(&mut app, KeyCode::Right);
     assert_eq!(on_disk(&w).ai_batch_size, 50);
     select(&mut app, "Refresh a summary after");

@@ -56,7 +56,7 @@ const STATE_NAMES: [(&str, &str); 6] = [
     ("new", "New"),
     ("working", "Working"),
     ("waiting", "Waiting on you"),
-    ("ready", "Ready to push/publish"),
+    ("ready", "Ready to publish"),
     ("done", "Done"),
     ("cancelled", "Cancelled"),
 ];
@@ -209,7 +209,16 @@ pub struct Handover {
 pub const PERMISSION_REASON: &str = "Waiting for your OK on a command";
 
 /// What a ticket in the line for a free squad says (the file too, beside Working).
-pub const QUEUED_WORDS: &str = "waiting for a free squad";
+pub const QUEUED_WORDS: &str = "Waiting for a free squad";
+
+/// What a New ticket with nothing left to wait for says beside its state: it can be handed to a squad now. (Not to be
+/// mixed up with the state Ready to publish.)
+pub const CAN_START: &str = "Can start";
+
+/// "Waits for #1, #3": the tickets one still waits for, as a ticket's row says it.
+pub fn waits_for_words(wait: &[u32]) -> String {
+    format!("Waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+}
 
 /// A ticket in the line for a free squad: handed over (the commander said it fits, or the user said "hand it anyway")
 /// while as many squads as the limit allows were at work. It is Working in the file, with this on it, so the line
@@ -1521,9 +1530,9 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
             let tail = if t.queued.is_some() {
                 format!("  {QUEUED_WORDS}")
             } else if !wait.is_empty() && !t.state.closed() {
-                format!("  waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+                format!("  {}", waits_for_words(&wait))
             } else if is_ready(t, all) {
-                "  ready".to_string()
+                format!("  {CAN_START}")
             } else {
                 String::new()
             };
@@ -1838,7 +1847,7 @@ mod tests {
     fn states_have_the_words_of_the_screen() {
         let words: Vec<String> =
             ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
-        assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to push/publish", "Done", "Cancelled"]);
+        assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to publish", "Done", "Cancelled"]);
         assert!(State::Done.closed() && State::Cancelled.closed() && !State::Working.closed());
     }
 
@@ -1914,9 +1923,9 @@ mod tests {
         assert_eq!(code, 0);
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "Web shop");
-        assert!(lines[1].contains("#2") && lines[1].contains("ready"), "{out}");
-        assert_eq!(lines[2], "  #3   Own  ·  New  ready", "{out}");
-        assert!(lines[1].starts_with("  #2   Basket  ·  New  ready"), "number, title, state, then what it waits for: {out}");
+        assert!(lines[1].contains("#2") && lines[1].contains("Can start"), "{out}");
+        assert_eq!(lines[2], "  #3   Own  ·  New  Can start", "{out}");
+        assert!(lines[1].starts_with("  #2   Basket  ·  New  Can start"), "number, title, state, then what it waits for: {out}");
         assert_eq!(lines[3], "  Done and cancelled · 1");
         assert!(lines[4].contains("#1") && lines[4].contains("Done"), "{out}");
         let (_, out, _) = run(&d, &["list", "--json"], "", true);
@@ -1948,7 +1957,7 @@ mod tests {
         run(&d, &["add", "--project", "Web", "--title", "After", "--waits-for", "1"], "", true);
         Tickets::open(&d, &id).set_state(1, &State::Cancelled).unwrap();
         let (_, out, _) = run(&d, &["list", "--project", "Web"], "", true);
-        assert!(out.lines().nth(1).unwrap().contains("#2") && out.lines().nth(1).unwrap().ends_with("waits for #1"), "{out}");
+        assert!(out.lines().nth(1).unwrap().contains("#2") && out.lines().nth(1).unwrap().ends_with("Waits for #1"), "{out}");
     }
 
     #[test]

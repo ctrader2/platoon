@@ -47,7 +47,7 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
     t.wait_for("Stop idle sessions after");
     t.wait_for("Changes are saved and apply immediately."); // the whole screen, not a half-drawn one
     let text = t.text();
-    assert!(text.contains("2 hours") && text.contains("Off") && text.contains("Archive conversations after"), "{text}");
+    assert!(text.contains("2 hours") && text.contains("Off") && text.contains("Archive sessions after"), "{text}");
     assert!(text.contains("Changes are saved and apply immediately."), "{text}");
     assert!(text.contains("settings.json"), "the file's location is shown:\n{text}");
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "opening the screen writes nothing");
@@ -64,7 +64,7 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
     // The mouse: click the `›` on the second setting (Off -> 1 day). Terminal coordinates are 1-based.
     let screen = t.text();
     let (col, row) = {
-        let (_, second) = find(&screen, "Archive conversations after");
+        let (_, second) = find(&screen, "Archive sessions after");
         let line: Vec<&str> = screen.lines().collect();
         (line[second].chars().position(|c| c == '›').expect("a next button"), second)
     };

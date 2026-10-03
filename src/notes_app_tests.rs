@@ -324,7 +324,7 @@ fn long_notes_are_not_warned_about_at_all_and_nothing_is_cut() {
 #[test]
 fn the_pane_says_in_one_line_when_platoon_last_updated_the_notes_and_where_they_go() {
     let (w, mut app, id) = on_the_notes("notes-reach");
-    let reach = "notes are added as context to each session in a project";
+    let reach = "Every session in this project starts with these notes.";
     // platoon's own old line at the top of the file is left out; the one line above the notes says it now.
     set_notes(&w, &id, &format!("{}\n\n# Overview\nSell socks.\n", notes::OLD_PREAMBLES[0]));
     app.reload_for_test();
@@ -358,7 +358,7 @@ fn the_pane_says_in_one_line_when_platoon_last_updated_the_notes_and_where_they_
         buf[(col, row)].fg
     };
     assert_eq!(at("currently updating"), t.warn);
-    assert_eq!(at("notes are added"), t.dim);
+    assert_eq!(at("Every session in this"), t.dim);
 }
 
 #[test]

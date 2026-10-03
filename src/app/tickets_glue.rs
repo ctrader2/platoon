@@ -273,7 +273,7 @@ impl App {
             self.jump_to(&from.session);
         } else {
             self.notify(format!(
-                "The conversation #{number} came from ({}) isn't in platoon's list any more.",
+                "The session #{number} came from ({}) isn't in platoon's list any more.",
                 crate::claude::short_id(&from.session)
             ));
         }
@@ -478,7 +478,7 @@ impl App {
         self.tk.selected = Some(TRow::Ticket(number));
         match pid {
             Some(pid) if self.stop_squad(number, pid) => {
-                self.notify(format!("#{number} is Cancelled. Stopping its squad's session; its conversation is kept."))
+                self.notify(format!("#{number} is Cancelled. Stopping its squad's session (the session itself is kept)."))
             }
             _ => self.notify(format!("#{number} is Cancelled now. It is listed under Done and cancelled.")),
         }

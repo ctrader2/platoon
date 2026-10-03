@@ -201,7 +201,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
         "About",
         "Name Coding",
         "What it can do Makes a change to code",
-        "Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.",
+        "Every squad has the same leader: its system prompt and model are in Settings (s) → Projects.",
         "Workflow",
     ] {
         assert!(r.contains(s), "{s}: {shown}");
@@ -441,7 +441,7 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     key(&mut app, KeyCode::Enter);
     choose(&mut app, "+ New agent");
     assert!(matches!(app.mode, Mode::ProjectName));
-    assert!(flat(&draw(&mut term, &app)).contains("new agent"));
+    assert!(flat(&draw(&mut term, &app)).contains("New agent"));
     typed(&mut app, "Test runner");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List));
@@ -515,11 +515,11 @@ fn a_new_step_can_be_given_a_new_agent_made_there() {
     assert!(matches!(app.mode, Mode::SquadText));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("a new step for a new agent") && f.contains("You name the new agent next."), "{f}");
+    assert!(f.contains("A new step for a new agent") && f.contains("You name the new agent next."), "{f}");
     typed(&mut app, "Writes the release notes.");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::ProjectName), "its name next");
-    assert!(flat(&draw(&mut term, &app)).contains("new agent"));
+    assert!(flat(&draw(&mut term, &app)).contains("New agent"));
     assert_eq!(squadfile::get(&w.config, "coding").unwrap().workflow.len(), 4, "nothing made before it has a name");
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.active_notice(), Some("An agent needs a name."));
@@ -658,7 +658,7 @@ fn n_asks_whether_to_describe_a_squad_or_an_agent_and_an_agent_is_drafted_on_its
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadText));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("describe a new agent") && f.contains("enter ask Claude to draft it"), "{f}");
+    assert!(f.contains("Describe a new agent") && f.contains("enter ask Claude to draft it"), "{f}");
     typed(&mut app, "writes failing tests first");
     key(&mut app, KeyCode::Enter);
     assert!(app.squad_drafting());
@@ -870,7 +870,7 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
     choose(&mut app, "reviewer ·");
     assert!(matches!(app.mode, Mode::SquadText));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("a new step for reviewer"));
+    assert!(flat(&draw(&mut term, &app)).contains("A new step for reviewer"));
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadText), "an empty step isn't added");
     typed(&mut app, "Reads the whole change once more.");
@@ -1334,7 +1334,7 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     choose(&mut app, "[ ] sentry");
     choose(&mut app, "Type the name");
     assert!(matches!(app.mode, Mode::ProjectName));
-    assert!(flat(&draw(&mut term, &app)).contains("an MCP server"));
+    assert!(flat(&draw(&mut term, &app)).contains("An MCP server"));
     typed(&mut app, "my server");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::ProjectName), "a space can't be in the name");

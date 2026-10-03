@@ -66,7 +66,7 @@ fn dragging_over_a_line_of_the_session_highlights_it_and_copies_it_once_and_a_do
     let mut t = Term::spawn(&[], &env, &work, 30, 100);
     t.wait_for("enter open");
     t.send(b"n");
-    t.wait_for("pick a directory");
+    t.wait_for("pick a folder");
     t.send(work.to_string_lossy().as_bytes());
     t.send(b"\r");
     t.wait_for("back to list");

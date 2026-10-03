@@ -306,3 +306,94 @@ fn the_help_explains_the_estimate_mark_and_the_pane_arrows() {
     let footer = lines.last().unwrap();
     assert!(footer.contains("tab next pane") && !footer.contains("shift+arrows"), "{footer}");
 }
+
+// ---- group 6: the words -------------------------------------------------------------------------------------------
+
+fn flat(lines: &[String]) -> String {
+    lines.join(" ").replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[test]
+fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_sentence_case() {
+    use crate::tickets::State;
+    let words: Vec<&str> =
+        [State::New, State::Working, State::Waiting, State::Ready, State::Done, State::Cancelled].iter().map(|s| s.label()).collect();
+    assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to publish", "Done", "Cancelled"]);
+    for w in &words {
+        assert!(w.chars().next().unwrap().is_uppercase(), "{w}");
+    }
+    assert_eq!(crate::tickets::waits_for_words(&[1, 3]), "Waits for #1, #3");
+    assert!(crate::tickets::QUEUED_WORDS.starts_with('W'));
+    let (w, mut app, id) = on_a_project("w-states");
+    crate::tickets::Tickets::open(&w.config, &id)
+        .add(crate::tickets::NewTicket { title: "After it".into(), blocked_by: vec![1], ..Default::default() })
+        .unwrap();
+    app.reload_for_test();
+    let mut term = sized(&mut app, 120, 30);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("#1 Coupon totals New Can start"), "{f}");
+    assert!(f.contains("#2 After it New Waits for #1"), "{f}");
+    assert!(!f.contains("ready"), "the old word is gone: {f}");
+    // On the Projects tab: how many can start.
+    key(&mut app, KeyCode::Esc);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("2 open · 1 can start"), "{f}");
+    // On the ticket's own screen.
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("State New · Can start"), "{f}");
+}
+
+#[test]
+fn the_screens_say_session_and_every_popup_title_starts_with_a_capital() {
+    let (_w, mut app) = three("w-words");
+    let mut term = sized(&mut app, 120, 40);
+    // The rename box.
+    ch(&mut app, 'r');
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Rename session") && !f.contains("onversation"), "{f}");
+    key(&mut app, KeyCode::Esc);
+    // The settings: every entry's name and explanation on the General tab.
+    ch(&mut app, 's');
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Archive sessions after") && !f.contains("onversation"), "{f}");
+    key(&mut app, KeyCode::Esc);
+    // The folder picker: for a new session, enter starts it; for the code editor, enter opens it.
+    ch(&mut app, 'n');
+    let f = flat(&draw(&mut term, &app));
+    let n = app.picker.results.len();
+    assert!(f.contains("New session: pick a folder") && f.contains("enter start"), "{f}");
+    assert!(f.contains(&format!("{n} folder")) && !f.contains(" dirs"), "{f}");
+    app.picker.editor = true;
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Code editor: pick a folder to open") && f.contains("enter open") && !f.contains("enter start"), "{f}");
+    key(&mut app, KeyCode::Esc);
+    // Every popup's title has a capital first letter, whatever it is.
+    for k in ['r', 'm', 'n', 's', '?'] {
+        ch(&mut app, k);
+        let lines = draw(&mut term, &app);
+        let top = lines.iter().find(|l| l.contains('╭')).unwrap().clone();
+        let title = top.split('╭').nth(1).unwrap().trim_start_matches(['─', ' ']).chars().next().unwrap();
+        assert!(title.is_uppercase(), "{k}: {top}");
+        key(&mut app, KeyCode::Esc);
+    }
+}
+
+#[test]
+fn the_notes_and_the_squads_tab_say_it_plainly() {
+    let (w, mut app, id) = on_a_project("w-notes");
+    let _ = w;
+    std::fs::write(app.projects.notes_path(&id), "# Overview\nSell socks.\n").unwrap();
+    let mut term = sized(&mut app, 120, 30);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("Every session in this project starts with these notes."), "{f}");
+    assert!(!f.contains("context"), "{f}");
+    key(&mut app, KeyCode::Esc);
+    ch(&mut app, '3');
+    key(&mut app, KeyCode::Enter);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("its system prompt and model are in Settings (s) → Projects."), "{f}");
+    assert!(!f.contains("on the Projects tab"), "{f}");
+}

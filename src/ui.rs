@@ -168,7 +168,7 @@ pub fn draw(f: &mut Frame, app: &App) {
             let msg = if app.counts[app.tab.min(TABS.len() - 1)] > 0 {
                 "No sessions match the filter"
             } else if app.indexing().is_some() {
-                "Reading your conversations…"
+                "Reading your sessions…"
             } else {
                 tab.empty
             };
@@ -517,12 +517,12 @@ fn session_cell(st: &PStat, room: usize) -> (String, String) {
     if full.chars().count() + unread.chars().count() <= room { (full, unread) } else { (format!("{} active · ", st.active), unread) }
 }
 
-/// A Projects row's TICKETS cell: `4 open · 1 ready`, `4 open` when none is ready, `no tickets` when none is open.
+/// A Projects row's TICKETS cell: `4 open · 1 can start`, `4 open` when none can start, `no tickets` when none is open.
 fn ticket_counts(st: &PStat) -> String {
     match (st.open_tickets, st.ready_tickets) {
         (0, _) => "no tickets".into(),
         (o, 0) => format!("{o} open"),
-        (o, r) => format!("{o} open · {r} ready"),
+        (o, r) => format!("{o} open · {r} can start"),
     }
 }
 
@@ -564,7 +564,8 @@ fn project_name_width(app: &App) -> usize {
 fn project_cols(width: u16, want: usize) -> PCols {
     let w = width as usize;
     let fixed = 3 + LAST_W;
-    let tickets = if w >= 70 { 18 } else { 0 };
+    // "12 open · 3 can start" and a gap.
+    let tickets = if w >= 70 { 22 } else { 0 };
     let sessions = if w >= 50 { 24 } else { 0 };
     let name = want.min(w.saturating_sub(fixed + tickets + sessions));
     let spare = w.saturating_sub(fixed + tickets + sessions + name);
@@ -786,7 +787,7 @@ pub(crate) fn ticket_cols(width: usize, num: usize, want_state: usize, want_tail
     TCols { num, title, state, tail }
 }
 
-/// What a ticket's row says after its state: the tickets it still waits for, or a quiet "ready". `with_state`: the
+/// What a ticket's row says after its state: the tickets it still waits for, or "Can start". `with_state`: the
 /// state has no column of its own (a narrow pane), so a row with nothing else to say there says its state, unless
 /// that is plain New.
 fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
@@ -802,10 +803,10 @@ fn ticket_tail(t: &Ticket, all: &[Ticket], with_state: bool) -> (String, bool) {
     }
     let wait = tickets::waiting_for(t, all);
     if !wait.is_empty() {
-        return (format!("waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")), false);
+        return (tickets::waits_for_words(&wait), false);
     }
     if tickets::is_ready(t, all) {
-        return ("ready".into(), true);
+        return (tickets::CAN_START.into(), true);
     }
     if with_state && t.state != State::New {
         return (t.state.label().to_string(), false);
@@ -895,7 +896,7 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     let (tail, ready) = tail_of(x, merged);
                     let color = if ready {
                         t.ok
-                    } else if tail.starts_with("waits for") {
+                    } else if tail.starts_with("Waits for") {
                         t.warn
                     } else if tokens.get(&x.number) == Some(&tail) {
                         t.subtext
@@ -1170,11 +1171,11 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let (title, head, hints): (String, String, Vec<Hint>) = match pick.kind {
         PickKind::BlockedBy => (
             format!("#{} waits for", x.number),
-            format!("#{} is ready once these are Done:", x.number),
+            format!("#{} can start once these are Done:", x.number),
             vec![("enter", "tick/untick", Some(Action::Confirm)), ("esc", "done", Some(Action::Cancel)), ("↑↓", "move", None)],
         ),
         PickKind::Folders => (
-            format!("folders of #{}", x.number),
+            format!("Folders of #{}", x.number),
             if x.folders.is_empty() { "No folder yet.".into() } else { format!("#{} works in:", x.number) },
             vec![
                 ("enter", "add", Some(Action::Confirm)),
@@ -1306,7 +1307,7 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         let when = when.map(|w| if w == "now" { "just now".to_string() } else { format!("{w} ago") });
         (when.map(|w| format!("platoon last updated these {w}.")), t.dim)
     };
-    let reach = "notes are added as context to each session in a project";
+    let reach = "Every session in this project starts with these notes.";
     let width = area.width as usize;
     match first {
         Some(first) if first.chars().count() + 1 + reach.chars().count() <= width => {
@@ -2209,7 +2210,7 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
             "Archived: none waiting to be named".to_string()
         } else {
             format!(
-                "Archived: {} conversation{}, about {} tokens to index (an estimate)",
+                "Archived: {} session{}, about {} tokens to index (an estimate)",
                 e.conversations,
                 if e.conversations == 1 { "" } else { "s" },
                 crate::settings::thousands(e.tokens)
@@ -2510,13 +2511,23 @@ fn popup_ground(f: &mut Frame, t: &Theme, screen: Rect, r: Rect, fade: bool) {
     f.render_widget(Clear, r);
 }
 
+/// A popup's border and its title, in sentence case: the first letter capital, whatever the caller passed.
 fn modal_block<'a>(t: &Theme, title: &'a str) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.accent))
-        .title(Span::styled(format!(" {title} "), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(format!(" {} ", sentence_case(title)), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)))
         .style(Style::new().bg(t.bg))
+}
+
+/// `s` with its first letter a capital: "rename session" -> "Rename session". Nothing else changes.
+fn sentence_case(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(first) => first.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
 }
 
 /// The theme list: a panel docked to the right of the screen, so the header, the tabs and the left of the list
@@ -2916,7 +2927,7 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
             FindState::Confirm { estimate, count } => {
                 lines.push((
                     format!(
-                        "Search wider? This sends {count} conversations to Claude, about {} tokens (an estimate). Press enter to go ahead or esc to go back.",
+                        "Search wider? This sends {count} sessions to Claude, about {} tokens (an estimate). Press enter to go ahead or esc to go back.",
                         crate::settings::thousands(estimate.tokens)
                     ),
                     t.text,
@@ -2955,7 +2966,7 @@ fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
         let msg = if s.text.trim().is_empty() {
             SEARCH_KINDS[s.kind].prompt
         } else if app.search_catching_up() {
-            "Still reading your conversations…"
+            "Still reading your sessions…"
         } else {
             "Nothing found"
         };
@@ -3021,7 +3032,7 @@ fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 7);
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "rename conversation");
+    let block = modal_block(t, "Rename session");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [input, sep, note, _, foot] =
@@ -3053,23 +3064,23 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
     popup_ground(f, t, area, r, true);
     let (title, note) = match nb.purpose {
-        NamePurpose::Rename(_) => ("rename project", "The project's notes and sessions stay as they are."),
-        NamePurpose::NewFor(_) => ("new project", "The session goes into it. Its color and badge can be changed later (c)."),
-        NamePurpose::New => ("new project", "Give it a name. Its color and badge can be changed later (c)."),
-        NamePurpose::NewTicket => ("new ticket", "Its title. The body opens in your editor next."),
-        NamePurpose::TicketTitle(_) => ("rename ticket", "The body and its file stay as they are."),
+        NamePurpose::Rename(_) => ("Rename project", "The project's notes and sessions stay as they are."),
+        NamePurpose::NewFor(_) => ("New project", "The session goes into it. Its color and badge can be changed later (c)."),
+        NamePurpose::New => ("New project", "Give it a name. Its color and badge can be changed later (c)."),
+        NamePurpose::NewTicket => ("New ticket", "Its title. The body opens in your editor next."),
+        NamePurpose::TicketTitle(_) => ("Rename ticket", "The body and its file stay as they are."),
         NamePurpose::Squad(ref p) => match p {
-            crate::app::SquadName::Name => ("squad name", "What the squad is called. Its agents keep their names."),
-            crate::app::SquadName::Copy => ("copy squad", "The copy is yours to change; the squad you copied stays as it is."),
-            crate::app::SquadName::AgentName => ("agent name", "What the agent is called. Every squad that uses it keeps it."),
-            crate::app::SquadName::AgentCopy => ("copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
+            crate::app::SquadName::Name => ("Squad name", "What the squad is called. Its agents keep their names."),
+            crate::app::SquadName::Copy => ("Copy squad", "The copy is yours to change; the squad you copied stays as it is."),
+            crate::app::SquadName::AgentName => ("Agent name", "What the agent is called. Every squad that uses it keeps it."),
+            crate::app::SquadName::AgentCopy => ("Copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
             crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => {
-                ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next.")
+                ("New agent", "Its name, for the job it does (say, test writer). You write its system prompt next.")
             }
             crate::app::SquadName::AgentSkill => {
-                ("a skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works.")
+                ("A skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works.")
             }
-            crate::app::SquadName::AgentMcp => ("an MCP server", "Its name, as it is configured where the squad works."),
+            crate::app::SquadName::AgentMcp => ("An MCP server", "Its name, as it is configured where the squad works."),
         },
     };
     let block = modal_block(t, title);
@@ -3101,7 +3112,7 @@ fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
     let h = (a.options.len() as u16 + 5).min(area.height.saturating_sub(2)).max(6);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 60), h);
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "project");
+    let block = modal_block(t, "Project");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, list, foot] =
@@ -3151,9 +3162,9 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 62), h);
     popup_ground(f, t, area, r, true);
     let what = match (pick.instructions, pick.ticket) {
-        (Some(_), _) => "edit the system prompt with".to_string(),
-        (None, Some(n)) => format!("edit ticket #{n} with"),
-        (None, None) => "edit the notes with".to_string(),
+        (Some(_), _) => "Edit the system prompt with".to_string(),
+        (None, Some(n)) => format!("Edit ticket #{n} with"),
+        (None, None) => "Edit the notes with".to_string(),
     };
     let block = modal_block(t, &what);
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -3202,7 +3213,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 66), h);
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "open with");
+    let block = modal_block(t, "Open with");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, list, note, foot] =
@@ -3246,7 +3257,7 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(6).max(30), area.height.saturating_sub(2).max(8));
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "what changed last");
+    let block = modal_block(t, "What changed last");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, body, foot] =
@@ -3288,7 +3299,7 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(6).clamp(40, 100), area.height.saturating_sub(2).clamp(10, 40));
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "hand this work on");
+    let block = modal_block(t, "Hand this work on");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, body, sep2, note, foot] = Layout::vertical([
@@ -3399,7 +3410,7 @@ fn draw_look(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 10);
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "color and badge");
+    let block = modal_block(t, "Color and badge");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [swatches, names, _, badge, preview, _, foot] = Layout::vertical([
@@ -3456,10 +3467,10 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     popup_ground(f, t, area, r, true);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
-        _ if p.editor => "code editor: pick a folder to open".to_string(),
-        (Some(n), _) => format!("a folder for ticket #{n}"),
-        (None, Some(pr)) => format!("new session in {}: pick a directory", pr.name),
-        (None, None) => "new session: pick a directory".to_string(),
+        _ if p.editor => "Code editor: pick a folder to open".to_string(),
+        (Some(n), _) => format!("A folder for ticket #{n}"),
+        (None, Some(pr)) => format!("New session in {}: pick a folder", pr.name),
+        (None, None) => "New session: pick a folder".to_string(),
     };
     let block = modal_block(t, &title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -3478,7 +3489,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
 
     if p.results.is_empty() {
-        f.render_widget(Paragraph::new("No matching directories").style(Style::new().fg(t.dim)), list);
+        f.render_widget(Paragraph::new("No matching folders").style(Style::new().fg(t.dim)), list);
     }
     let rows = list.height as usize;
     let start = p.selected.saturating_sub(rows.saturating_sub(1));
@@ -3497,11 +3508,22 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
     }
     let hints: [Hint; 3] = [
-        ("enter", if p.ticket.is_some() { "add" } else { "start" }, Some(Action::Confirm)),
+        (
+            "enter",
+            if p.ticket.is_some() {
+                "add"
+            } else if p.editor {
+                "open"
+            } else {
+                "start"
+            },
+            Some(Action::Confirm),
+        ),
         ("esc", "cancel", Some(Action::Cancel)),
         ("↑↓", "choose", None),
     ];
-    draw_footer(f, app, foot, &hints, Some((format!("{} dirs", p.results.len()), t.dim)));
+    let n = p.results.len();
+    draw_footer(f, app, foot, &hints, Some((format!("{n} folder{}", if n == 1 { "" } else { "s" }), t.dim)));
 }
 
 fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
@@ -3516,9 +3538,9 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 _ => "It is working right now. Archiving stops it, which interrupts what it is doing.",
             };
             (
-                "archive conversation",
+                "Archive session",
                 format!("Archive \"{name}\"?"),
-                format!("{what} The conversation is kept: find it under Archived and press enter to pick it up again."),
+                format!("{what} The session is kept: find it under Archived and press enter to pick it up again."),
                 "archive",
             )
         }
@@ -3531,7 +3553,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 _ => "Some of them are working right now: archiving stops them, which interrupts what they are doing.",
             };
             (
-                "archive project",
+                "Archive project",
                 format!("Archive the project \"{name}\" and its active sessions?"),
                 format!(
                     "{running} of its sessions {} running. {what} Nothing is lost: restoring the project brings its sessions back.",
@@ -3541,28 +3563,28 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             )
         }
         Confirm::DeleteProject { name, sessions, .. } => (
-            "delete project",
+            "Delete project",
             format!("Delete the project \"{name}\"?"),
             format!(
-                "Its notes are deleted too (a backup copy is kept). Its {sessions} session{} stay in the Sessions tab, in no project; no conversation is deleted.",
+                "Its notes are deleted too (a backup copy is kept). Its {sessions} session{} stay in the Sessions tab, in no project; no session is deleted.",
                 if *sessions == 1 { "" } else { "s" }
             ),
             "delete",
         ),
         Confirm::EditorWhileWorking { number, title } => (
-            "squad at work",
+            "Squad at work",
             format!("Open #{number} {title} in the editor anyway?"),
             "The squad is still working in these files; what you change may clash with it.".to_string(),
             "open anyway",
         ),
         Confirm::DeleteSquad { id, name } => (
-            "delete squad",
+            "Delete squad",
             format!("Delete the squad \"{name}\"?"),
             format!("Tickets it already has keep it, as it was when they started. Its file is kept as {id}.json.bak in the squads folder."),
             "delete",
         ),
         Confirm::RestoreSquad { id, name } => (
-            "restore squad",
+            "Restore squad",
             format!("Put {name} back as platoon has it?"),
             format!(
                 "Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tickets it already has keep what they started with."
@@ -3570,13 +3592,13 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "restore",
         ),
         Confirm::DiscardDraft { name } => (
-            "discard draft",
+            "Discard draft",
             format!("Throw away the draft \"{name}\"?"),
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
         ),
         Confirm::DeleteAgent { id, name } => (
-            "delete agent",
+            "Delete agent",
             format!("Delete the agent \"{name}\"?"),
             format!(
                 "No squad uses it. Tickets already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."
@@ -3584,7 +3606,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "delete",
         ),
         Confirm::RestoreAgent { id, name } => (
-            "restore agent",
+            "Restore agent",
             format!("Put {name} back as platoon has it?"),
             format!(
                 "Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tickets already started keep what they started with."
@@ -3592,24 +3614,24 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "restore",
         ),
         Confirm::DiscardAgentDraft { name } => (
-            "discard draft",
+            "Discard draft",
             format!("Throw away the draft agent \"{name}\"?"),
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
         ),
         Confirm::HandAnyway { number, title, says, .. } => (
-            "hand it anyway",
+            "Hand it anyway",
             "The commander said this squad doesn't fit. Hand it anyway?".to_string(),
             format!("#{number} {title}. The commander said: {says}"),
             "hand it over",
         ),
         Confirm::CancelTicket { number, title, squad, pid, uncommitted } => (
-            "cancel ticket",
+            "Cancel ticket",
             format!("Cancel ticket #{number}?"),
             {
                 let mut says = match (pid, squad) {
                     (Some(_), _) => format!(
-                        "#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."
+                        "#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. The session itself is kept: talking to the squad again opens the ticket again."
                     ),
                     (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
                     (None, false) => {
@@ -3624,7 +3646,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "cancel it",
         ),
         Confirm::RemoveWorktree { number, branch, uncommitted, opened_in } => (
-            "remove worktree",
+            "Remove worktree",
             if *uncommitted { format!("Remove #{number}'s worktree anyway?") } else { format!("Remove #{number}'s worktree?") },
             {
                 let mut says = String::new();
@@ -3642,7 +3664,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::ResetInstructions { id } => {
             let a = crate::instructions::action(id);
             (
-                "restore default",
+                "Restore default",
                 format!("Restore platoon's default system prompt for {}?", a.what),
                 format!(
                     "Your version stops being used. It is kept as {}.bak in the prompts folder, until the next time you restore.",
@@ -3658,13 +3680,13 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             let interrupt = if *busy { " It is working now, so this interrupts it." } else { "" };
             match kind {
                 AdoptKind::TakeOver => (
-                    "take over session",
+                    "Take over session",
                     format!("Take over \"{name}\"?"),
                     format!("Ends the claude in its terminal (pid {}) and resumes it here.{interrupt}", pids[0]),
                     "take over",
                 ),
                 AdoptKind::Reload => (
-                    "reload session",
+                    "Reload session",
                     format!("Reload \"{name}\" from its saved history?"),
                     format!(
                         "It is open in {} place{}, or has fallen out of sync. platoon ends every copy and reopens it here, \
@@ -3796,7 +3818,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let list_h: u16 = rows.iter().map(|r| r.len() as u16 + 2).sum();
     let r = centered(area, w, (list_h + 6).min(area.height.saturating_sub(2)).max(8));
     popup_ground(f, t, area, r, true);
-    let block = modal_block(t, "hand to a squad");
+    let block = modal_block(t, "Hand to a squad");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head, sep, list, _, foot] =
@@ -3868,14 +3890,14 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(t.warn))
-        .title(Span::styled(" session paused ", Style::new().fg(t.warn).add_modifier(Modifier::BOLD)))
+        .title(Span::styled(" Session paused ", Style::new().fg(t.warn).add_modifier(Modifier::BOLD)))
         .style(Style::new().bg(t.bg));
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let lines = vec![
         Line::styled("This session was opened somewhere else too.", Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
         Line::styled(
-            "To keep the conversation in sync and nothing overwritten, this copy is paused: what you type is not sent.",
+            "To keep the session in sync and nothing overwritten, this copy is paused: what you type is not sent.",
             Style::new().fg(t.subtext),
         ),
         Line::raw(""),

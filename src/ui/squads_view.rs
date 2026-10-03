@@ -507,7 +507,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         };
         detail_line(&mut lines, t, w, ri, sel_row == Some(*row), "", label, &value, Style::new().fg(t.dim), Style::new().fg(t.text), wraps);
     }
-    for l in wrap("Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.", w) {
+    for l in wrap("Every squad has the same leader: its system prompt and model are in Settings (s) → Projects.", w) {
         lines.push((None, Line::styled(l, Style::new().fg(t.dim))));
     }
     lines.push((None, Line::raw("")));
@@ -963,12 +963,12 @@ pub(super) fn draw_squad_choice(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 76), h);
     popup_ground(f, t, area, r, true);
     let title = match c.purpose {
-        ChoiceFor::AgentModel => "model",
-        ChoiceFor::AgentSkills => "skills",
+        ChoiceFor::AgentModel => "Model",
+        ChoiceFor::AgentSkills => "Skills",
         ChoiceFor::AgentMcp => "MCP servers",
-        ChoiceFor::StepAgent(_) | ChoiceFor::NewStepAgent => "agent",
-        ChoiceFor::BackTo(_) | ChoiceFor::BackTimes(..) => "send back",
-        ChoiceFor::Describe => "describe",
+        ChoiceFor::StepAgent(_) | ChoiceFor::NewStepAgent => "Agent",
+        ChoiceFor::BackTo(_) | ChoiceFor::BackTimes(..) => "Send back",
+        ChoiceFor::Describe => "Describe",
     };
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -1003,19 +1003,19 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let (title, note) = match &app.sqt.text_for {
         TextFor::Describe => (
-            "describe a new squad".to_string(),
+            "Describe a new squad".to_string(),
             "What it is for and the work it does. Claude drafts it on Sonnet, using your agents where they fit; you change what you like before it is saved.",
         ),
         TextFor::DescribeAgent => (
-            "describe a new agent".to_string(),
+            "Describe a new agent".to_string(),
             "The one job it does. Claude drafts it on Sonnet; you change what you like before it is saved.",
         ),
-        TextFor::CanDo => ("what it can do".to_string(), "The commander reads this before a ticket is handed to the squad."),
-        TextFor::StepDoes(i) => (format!("step {}", i + 1), "One line: what this step does. The leader reads it."),
+        TextFor::CanDo => ("What it can do".to_string(), "The commander reads this before a ticket is handed to the squad."),
+        TextFor::StepDoes(i) => (format!("Step {}", i + 1), "One line: what this step does. The leader reads it."),
         TextFor::NewStep(m) if m == crate::app::NEW_AGENT => {
-            ("a new step for a new agent".to_string(), "One line: what this step does. The leader reads it. You name the new agent next.")
+            ("A new step for a new agent".to_string(), "One line: what this step does. The leader reads it. You name the new agent next.")
         }
-        TextFor::NewStep(m) => (format!("a new step for {m}"), "One line: what this step does. The leader reads it."),
+        TextFor::NewStep(m) => (format!("A new step for {m}"), "One line: what this step does. The leader reads it."),
     };
     let describing = matches!(app.sqt.text_for, TextFor::Describe | TextFor::DescribeAgent);
     let body_h: u16 = if describing { 6 } else { 4 };

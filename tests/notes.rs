@@ -213,7 +213,7 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     // No editor used yet, so e offers the ones that were found, with where each of them runs. (All of it lands
     // in one frame, and half a frame can be read, so it is waited for together rather than snapshotted.)
     t.send(b"e");
-    t.wait_for_all(&["╭ edit the notes with", "nano", "VS Code", "here in platoon", "in its own window"]);
+    t.wait_for_all(&["╭ Edit the notes with", "nano", "VS Code", "here in platoon", "in its own window"]);
     t.send(b"\r"); // nano, the first
 
     // The file was started from the template, and the editor is running inside platoon's own window.
@@ -248,7 +248,7 @@ fn c_shows_what_changed_with_plain_marks_and_u_puts_the_notes_back() {
     t.wait_for("Sell socks.");
 
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
+    t.wait_for("╭ Edit the notes with");
     t.send(b"\r");
     t.wait_for("FAKE NANO EDITING");
     t.send(b"s/Sell socks./Sell socks and hats./\r");
@@ -259,11 +259,11 @@ fn c_shows_what_changed_with_plain_marks_and_u_puts_the_notes_back() {
     // c: the before/after view. The marks are what carry the meaning.
     t.send(b"c");
     // The whole popup arrives as one frame: the legend, the line that went and the line that came.
-    t.wait_for_all(&["╭ what changed last", "was there before", "is there now", "- Sell socks.", "+ Sell socks and hats."]);
+    t.wait_for_all(&["╭ What changed last", "was there before", "is there now", "- Sell socks.", "+ Sell socks and hats."]);
     let screen = t.stable();
     assert!(screen.contains("  # Status"), "unchanged lines carry no mark:\n{screen}");
     t.send(b"\x1b");
-    t.wait_gone("what changed last");
+    t.wait_gone("What changed last");
 
     // u: back as it was, and u again brings the edit back.
     t.send(b"u");
@@ -288,9 +288,9 @@ fn an_editor_with_its_own_window_says_so_platoon_carries_on_and_the_notes_come_b
 
     // e lists them; pick VS Code, the second.
     t.send(b"e");
-    t.wait_for("╭ edit the notes with");
+    t.wait_for("╭ Edit the notes with");
     t.send(b"\x1b[B\r");
-    t.wait_gone("edit the notes with");
+    t.wait_gone("Edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
     // platoon is not blocked: the panes still answer, and the project's screen is still drawn.
     t.send(b"\x1b[1;5D"); // ctrl+left: the sessions
@@ -332,13 +332,13 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
 
     // Nothing used yet: the editors in the order they were found, nothing starred, the first one picked.
     t.send(b"e");
-    t.wait_for_all(&["╭ edit the notes with", "nano", "VS Code", "starred here next time"]);
+    t.wait_for_all(&["╭ Edit the notes with", "nano", "VS Code", "starred here next time"]);
     // "nothing is starred" is a claim about the whole frame, so it waits for one that has settled.
     let shown = t.stable();
     assert!(!shown.contains("★"), "nothing to star yet:\n{shown}");
     // The second one, VS Code, in a window of its own.
     t.send(b"\x1b[B\r");
-    t.wait_gone("edit the notes with");
+    t.wait_gone("Edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
     until("the other window to write", || lab.notes().contains("written in the other window"));
     t.wait_gone("Open in VS Code");
@@ -347,7 +347,7 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     // Now it is starred, first and picked, so enter alone opens it again. Which row the star is on, and which
     // row comes first, are claims about the whole popup: wait for all of it, then for it to settle.
     t.send(b"e");
-    t.wait_for_all(&["╭ edit the notes with", "★ VS Code", "nano", "the one you used last: enter opens it again"]);
+    t.wait_for_all(&["╭ Edit the notes with", "★ VS Code", "nano", "the one you used last: enter opens it again"]);
     let shown = t.stable();
     let starred = shown.lines().find(|l| l.contains("VS Code")).unwrap_or("");
     assert!(starred.contains("★"), "the one used last carries the star: {starred}");
@@ -355,7 +355,7 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     let rows: Vec<&str> = shown.lines().filter(|l| l.contains("here in platoon") || l.contains("in its own window")).collect();
     assert!(rows[0].contains("VS Code"), "and it is first: {rows:?}");
     t.send(b"\r");
-    t.wait_gone("edit the notes with");
+    t.wait_gone("Edit the notes with");
     t.wait_for("Open in VS Code, in a window of its own.");
     until("the second write", || lab.notes().matches("written in the other window").count() == 2);
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
@@ -366,11 +366,11 @@ fn e_lists_the_editors_and_the_one_used_last_is_starred_first_and_opened_by_ente
     t.wait_for("enter open");
     lab.open_notes(&mut t);
     t.send(b"e");
-    t.wait_for_all(&["╭ edit the notes with", "★ VS Code"]);
+    t.wait_for_all(&["╭ Edit the notes with", "★ VS Code"]);
     let shown = t.stable();
     assert!(shown.lines().find(|l| l.contains("VS Code")).unwrap_or("").contains("★"), "{shown}");
     t.send(b"\x1b");
-    t.wait_gone("edit the notes with");
+    t.wait_gone("Edit the notes with");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
@@ -422,7 +422,7 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     lab.clear_the_plan();
     wait_pane_gone(&mut t, "not updating right now");
     t.wait_gone("smart features paused");
-    wait_pane(&mut t, "notes are added as context to each session in a project");
+    wait_pane(&mut t, "Every session in this project starts with these notes.");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

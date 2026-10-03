@@ -282,7 +282,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.send(b"\x1b[1;2D");
     t.wait_for_all(&["enter details", "╭ Careful coding"]);
     t.send(b"\rg\x1b[B\r");
-    t.wait_for("what it can do");
+    t.wait_for("What it can do");
     t.send(b"\x15Makes big, bold changes.\r");
     t.wait_for_flat("Saved what the squad can do.");
     assert_eq!(lab.squad_file("careful-coding")["can_do"], "Makes big, bold changes.");
@@ -354,7 +354,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"\x1b[A");
     t.wait_for_all(&["How platoon asks Claude to lead a squad through a ticket", "enter edit"]);
     t.send(b"\r");
-    t.wait_for("╭ edit the system prompt with");
+    t.wait_for("╭ Edit the system prompt with");
     t.send(b"\r");
     t.wait_for_all(&["FAKE NANO EDITING", "squad-leader.md"]);
     t.send(b"Keep the reports to five lines.\r");
@@ -411,7 +411,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     t.wait_for("enter pick");
     t.send(b"\r");
-    t.wait_for_all(&["╭ skills", "[ ] pdf", "Type the name of a skill…"]);
+    t.wait_for_all(&["╭ Skills", "[ ] pdf", "Type the name of a skill…"]);
     t.send(b"\r");
     t.wait_for_all(&["[x] pdf", "planner has the skill pdf now"]);
     t.send(b"\x1b");
@@ -424,7 +424,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     t.send(b"\r");
     t.wait_for("[x] sentry");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["an MCP server", "as it is configured"]);
+    t.wait_for_all(&["An MCP server", "as it is configured"]);
     t.send(b"linear\r");
     t.wait_for_flat("planner has the MCP server linear now (not found here");
     t.wait_for_all(&["sentry, linear (not found here)"]);
@@ -474,7 +474,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     t.send(b"3");
     t.wait_for_all(&["[Squads]", "╭ Coding", "← → agents"]);
     t.send(b"c");
-    t.wait_for("copy squad");
+    t.wait_for("Copy squad");
     t.send(b"\x15Careful coding\r");
     t.wait_for_flat("it uses the same agents");
     // The switch: the label of the list it shows in brackets and in another colour than the other.

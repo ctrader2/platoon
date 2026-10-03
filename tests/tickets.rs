@@ -199,9 +199,9 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     wait_title(&mut t, "Notes", ACCENT);
     // Notes: ← then `e` is still the editor list for the notes (in the Tickets pane `e` would do nothing here).
     t.send(b"\x1b[De");
-    t.wait_for("╭ edit the notes with");
+    t.wait_for("╭ Edit the notes with");
     t.send(b"\x1b");
-    t.wait_gone("edit the notes with");
+    t.wait_gone("Edit the notes with");
     wait_title(&mut t, "Notes", ACCENT);
     // The Sessions pane's keys: n is still a new session (the folder picker).
     t.send(b"\x1b[1;5D"); // ctrl+left: Tickets, the one of the left column used last
@@ -209,9 +209,9 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     t.send(b"\x1b[1;5A"); // ctrl+up: Sessions
     wait_title(&mut t, "Sessions", ACCENT);
     t.send(b"n");
-    t.wait_for("pick a directory");
+    t.wait_for("pick a folder");
     t.send(b"\x1b");
-    t.wait_gone("pick a directory");
+    t.wait_gone("pick a folder");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }
@@ -225,22 +225,22 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
     t.wait_for_flat("n new ticket");
     // Esc in the name box makes nothing.
     t.send(b"n");
-    t.wait_for("╭ new ticket");
+    t.wait_for("╭ New ticket");
     t.send(b"Never mind");
     t.wait_for("Never mind");
     t.send(b"\x1b");
-    t.wait_gone("╭ new ticket");
+    t.wait_gone("╭ New ticket");
     assert!(!lab.tickets_path().exists());
     t.send(b"n");
-    t.wait_for("╭ new ticket");
+    t.wait_for("╭ New ticket");
     t.send(b"Log in with a link\r");
-    t.wait_for_all(&["╭ edit ticket #1 with", "nano"]);
+    t.wait_for_all(&["╭ Edit ticket #1 with", "nano"]);
     t.send(b"\r");
     t.wait_for("FAKE NANO EDITING");
     t.wait_for("nano · ticket #1");
     t.send(b"A link by email logs you in.\r");
     t.wait_for("Saved the body of #1.");
-    t.wait_for_flat("#1 Log in with a link New ready");
+    t.wait_for_flat("#1 Log in with a link New Can start");
     let v = lab.tickets();
     let one = &v["tickets"][0];
     assert_eq!(
@@ -270,15 +270,15 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_with_c_after_ask
     let screen = t.stable();
     assert!(!screen.contains("#1 Base"), "folded:\n{screen}");
     let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("#2 Middle New ready") && flat.contains("#3 Top New waits for #2"), "{screen}");
+    assert!(flat.contains("#2 Middle New Can start") && flat.contains("#3 Top New Waits for #2"), "{screen}");
     // Colors, by cell: the picked row has the highlight, ready is green, waits for is yellow.
     let (r2, c2) = find(&mut t, "#2 Middle");
     let (r3, c3) = find(&mut t, "#3 Top");
     t.wait_bg(r2, c2, SURFACE);
     assert_eq!(t.bg_at(r3, c3), BG, "another row");
-    let (ry, rx) = find(&mut t, "ready");
+    let (ry, rx) = find(&mut t, "Can start");
     assert_eq!(t.fg_at(ry, rx), OK);
-    let (by, bx) = find(&mut t, "waits for #2");
+    let (by, bx) = find(&mut t, "Waits for #2");
     assert_eq!(t.fg_at(by, bx), WARN);
     // Enter on the divider unfolds it.
     t.send(b"G\r");
@@ -328,7 +328,7 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     t.wait_for_all(&[
         "#2 Basket page",
         "State",
-        "New · waits for #1",
+        "New · Waits for #1",
         "Folders",
         "None: a squad works in its work folder",
         "Waits for",
@@ -349,15 +349,15 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     }
     t.wait_for("step 60");
     t.wait_gone("The basket keeps its items.");
-    assert!(t.text().contains("New · waits for #1"), "the fields stay where they are");
+    assert!(t.text().contains("New · Waits for #1"), "the fields stay where they are");
     t.send(b"g");
     t.wait_for("The basket keeps its items.");
     // `h` was how far: it opens nothing now (the rename box after it proves the key was read).
     t.send(b"hr");
-    t.wait_for("╭ rename ticket");
+    t.wait_for("╭ Rename ticket");
     assert!(!t.text().contains("how far"), "{}", t.text());
     t.send(b"\x1b");
-    t.wait_gone("╭ rename ticket");
+    t.wait_gone("╭ Rename ticket");
     assert_eq!(lab.tickets()["tickets"][1]["how_far"], "Local changes only", "an old value stays in the file");
     // Esc: the project's screen, the same ticket picked.
     t.send(b"\x1b");
@@ -390,10 +390,10 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
         "## Body\npiped in\n\nHow far: a local commit.\n",
     );
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
-    t.wait_for_flat("#1 From the command line New ready");
+    t.wait_for_flat("#1 From the command line New Can start");
     let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--waits-for", "1"], "");
     assert_eq!((code, out.as_str()), (0, "#2\n"));
-    t.wait_for_flat("#2 Second New waits for #1");
+    t.wait_for_flat("#2 Second New Waits for #1");
     // Refusals say one plain line and make nothing.
     let (code, out, err) = lab.cli(&["add", "--project", "Nope", "--title", "x"], "");
     assert!(code != 0 && out.is_empty() && err.trim() == "platoon ticket add: there is no project called \"Nope\"", "{err}");
@@ -412,7 +412,7 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     assert_eq!((v[1]["ready"].as_bool(), v[1]["blocked_by"].clone()), (Some(false), json!([1])));
     assert!(v[0].get("how_far").is_none() && v[1].get("how_far").is_none(), "{out}");
     let (_, out, _) = lab.cli(&["list"], "");
-    assert!(out.contains("#1   From the command line  ·  New  ready") && !out.contains("Local"), "{out}");
+    assert!(out.contains("#1   From the command line  ·  New  Can start") && !out.contains("Local"), "{out}");
     assert_eq!(v[1]["folders"], json!([lab.work.canonicalize().unwrap().to_str().unwrap()]), "no --folder: the folder it was run in");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
@@ -425,7 +425,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 24, 80);
     lab.open_project(&mut t);
     t.send(b"\t");
-    t.wait_for_all(&["#1 A rather", "ready", "#2 Second", "waits for #1", "Done and cancelled · 1"]);
+    t.wait_for_all(&["#1 A rather", "Can start", "#2 Second", "Waits for #1", "Done and cancelled · 1"]);
     t.send(b"G\r");
     t.wait_for("#3 Third");
     let screen = t.stable();
@@ -438,7 +438,7 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let (row, _) = find(&mut t, "#2 Second");
     let line = screen.lines().nth(row as usize).unwrap();
     let pane = line.split('│').nth(1).unwrap_or("");
-    assert!(pane.contains("waits for #1"), "inside its own pane: {line}");
+    assert!(pane.contains("Waits for #1"), "inside its own pane: {line}");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

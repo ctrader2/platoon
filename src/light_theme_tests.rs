@@ -489,13 +489,13 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
         let screens: [(&[KeyCode], &str, &str); 10] = [
             (&[c('s')], "settings", "╭ Settings"),
             (&[c('s'), KeyCode::Enter], "the theme list", "╭ Theme"),
-            (&[c('n')], "the folder picker", "pick a directory"),
-            (&[c('m')], "the project picker", "╭ project"),
-            (&[c('r')], "rename", "╭ rename conversation"),
+            (&[c('n')], "the folder picker", "pick a folder"),
+            (&[c('m')], "the project picker", "╭ Project"),
+            (&[c('r')], "rename", "╭ Rename session"),
             (&[c('/')], "search", "╭ Search"),
             (&[c('2')], "projects", "Web shop"),
-            (&[c('2'), c('c')], "a project's color", "╭ color and badge"),
-            (&[c('2'), c('d')], "deleting a project", "╭ delete project"),
+            (&[c('2'), c('c')], "a project's color", "╭ Color and badge"),
+            (&[c('2'), c('d')], "deleting a project", "╭ Delete project"),
             (&[c('3')], "squads", "[Squads]"),
         ];
         for (keys, what, sign) in screens {
@@ -553,7 +553,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
         (&[], "the Sessions list", "refactor the parser"),
         (&[c('s')], "settings", "╭ Settings"),
         (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
-        (&[c('n')], "the folder picker", "pick a directory"),
+        (&[c('n')], "the folder picker", "pick a folder"),
         (&[c('3')], "squads", "[Squads]"),
     ];
     for (keys, what, sign) in screens {
