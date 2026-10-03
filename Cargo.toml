@@ -10,6 +10,9 @@ homepage = "https://github.com/ctrader2/platoon"
 readme = "README.md"
 keywords = ["tui", "terminal", "ai", "agents", "sessions"]
 categories = ["command-line-utilities", "development-tools"]
+# What the crate on crates.io leaves out: the README animation and video (16 MB, over crates.io's limit), CI, and
+# the release and Nix files, which only the repository uses.
+exclude = ["/demo", "/.github", "/flake.nix", "/flake.lock", "/dist-workspace.toml"]
 
 # The package is platoon-tui (crates.io's "platoon" is someone else's); the command is still platoon.
 [[bin]]
