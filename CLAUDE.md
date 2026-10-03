@@ -51,6 +51,16 @@ as a stream and `wait_for` can return halfway through one: wait for every line y
 snapshot only from `Term::stable()` when the claim is about the whole frame (what is missing, what order, how many). A real `claude` cannot be
 used in tests (trust-folder prompt): use `sh` or a fake script.
 
+## CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, on Linux: the checks above (warnings are
+errors: `RUSTFLAGS=-D warnings`), `scripts/check-claude-version.sh`, and a build on the minimum Rust (1.88,
+`rust-version`). macOS (arm64: test and release build) runs on pushes to `main` only while the repo is private.
+`deny.yml` runs `cargo deny check` (`deny.toml`: licenses, advisories, crates.io only) with CI and weekly.
+`checked-with/claude-code` is the Claude Code version platoon was last checked with: README.md and the guide must name
+the same one (the script fails CI otherwise), so change them in one commit. `claude-code-watch.yml` checks npm daily and
+opens an issue "Check support for Claude Code X" for a newer version; no workflow commits, pushes or edits anything.
+
 ## Where things live (`src/`)
 
 | File | What it does |
@@ -83,6 +93,8 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
+| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
+| `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally) |
 
 Notes that matter: rows are conversations keyed by session id (several live processes can share one); all knowledge of
 Claude's file formats stays in `claude.rs`; the settings file preserves keys it does not know.

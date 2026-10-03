@@ -1,0 +1,36 @@
+# cargo-deny: what the dependency tree may contain. CI runs `cargo deny --locked check` on every push to main and pull
+# request, and once a week (.github/workflows/deny.yml), so a new advisory against a pinned crate shows up on its own.
+
+[graph]
+# Every platform platoon builds for: Linux and macOS (the tree differs, e.g. the clipboard crate's backends).
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+version = 2
+# Every advisory (vulnerable, unmaintained, unsound) fails the check; a yanked crate too.
+yanked = "deny"
+# An advisory we have looked at and accept goes here with the reason, e.g. { id = "RUSTSEC-...", reason = "..." }.
+ignore = []
+
+[licenses]
+version = 2
+# Exactly what the tree needs today. A new license on a new or updated crate fails the check: look at it, then add it.
+allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0"]
+confidence-threshold = 0.93
+
+[bans]
+# Two versions of one crate cost build time, not correctness: report them, don't fail.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io only: no git dependencies, no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

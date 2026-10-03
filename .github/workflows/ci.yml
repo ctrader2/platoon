@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # A new push to a pull request replaces the run in progress; runs on main all finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Warnings fail the build (dependencies' own warnings are capped by cargo and don't count).
+  RUSTFLAGS: -D warnings
+  LANG: C.UTF-8
+
+jobs:
+  linux:
+    name: Linux (test, release build, fmt, clippy)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust (stable, with rustfmt and clippy)
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Docs name the same Claude Code version as checked-with/claude-code
+        run: scripts/check-claude-version.sh
+      - name: cargo fmt --check
+        run: cargo fmt --check
+      - name: cargo clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo build --release
+        run: cargo build --locked --release
+      - name: Git identity for the tests
+        # The tests make repos and commits in temp folders. Set in the global config (not GIT_* variables, which
+        # would override the names the tests give git themselves).
+        run: |
+          git config --global user.name platoon-ci
+          git config --global user.email ci@example.invalid
+      - name: cargo test
+        run: cargo test --locked
+
+  msrv:
+    name: Minimum Rust (1.88) builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # An older compiler may warn about things newer ones don't: this job checks it builds, not that it is quiet.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust 1.88 (Cargo.toml's rust-version)
+        run: |
+          rustup toolchain install 1.88 --profile minimal
+          rustup default 1.88
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo build (every target, tests included)
+        run: cargo build --locked --all-targets
+
+  macos:
+    name: macOS (test, release build)
+    # macOS minutes cost 10x while the repo is private: main only. Once public, run it on pull requests too.
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Use the runner's short temp folder
+        # macOS's own (/var/folders/.../T/) is long, and a Unix socket's path may be at most 104 bytes there: the
+        # tests' session hosts put their sockets in temp folders.
+        run: echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: cargo build --release
+        run: cargo build --locked --release
+      - name: Git identity for the tests
+        # The tests make repos and commits in temp folders. Set in the global config (not GIT_* variables, which
+        # would override the names the tests give git themselves).
+        run: |
+          git config --global user.name platoon-ci
+          git config --global user.email ci@example.invalid
+      - name: cargo test
+        run: cargo test --locked
