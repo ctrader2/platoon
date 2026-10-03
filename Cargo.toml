@@ -1,7 +1,20 @@
 [package]
-name = "platoon"
+name = "platoon-tui"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.88"
+description = "A terminal app for running and managing AI coding agent sessions: every conversation in one list, projects with notes, tickets and agent squads"
+license = "MIT"
+repository = "https://github.com/ctrader2/platoon"
+homepage = "https://github.com/ctrader2/platoon"
+readme = "README.md"
+keywords = ["tui", "terminal", "ai", "agents", "sessions"]
+categories = ["command-line-utilities", "development-tools"]
+
+# The package is platoon-tui (crates.io's "platoon" is someone else's); the command is still platoon.
+[[bin]]
+name = "platoon"
+path = "src/main.rs"
 
 [dependencies]
 arboard = { version = "3.6.1", default-features = false, features = ["wayland-data-control"] }
