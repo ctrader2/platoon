@@ -961,7 +961,7 @@ pub(super) fn draw_squad_choice(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let h = (c.options.len() as u16 + 5).min(area.height.saturating_sub(2)).max(6);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 76), h);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let title = match c.purpose {
         ChoiceFor::AgentModel => "model",
         ChoiceFor::AgentSkills => "skills",
@@ -1020,7 +1020,7 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
     let describing = matches!(app.sqt.text_for, TextFor::Describe | TextFor::DescribeAgent);
     let body_h: u16 = if describing { 6 } else { 4 };
     let r = centered(area, area.width.saturating_sub(8).clamp(40, 84), body_h + 7);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, &title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);

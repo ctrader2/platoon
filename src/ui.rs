@@ -1186,7 +1186,7 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     };
     let h = (opts.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 72), h);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, &title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -2247,8 +2247,6 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
 /// and a click outside it closes it.
 fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
-    // Everything behind reads as inactive: same layout, muted colors.
-    f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
     app.hits.borrow_mut().clear();
 
     // Floating with room around it on ordinary terminals; nearly the full width on a narrow one, where every column counts.
@@ -2260,7 +2258,7 @@ fn draw_settings_modal(f: &mut Frame, app: &App, area: Rect) {
     // A row of air above and below when the terminal can spare it; on a short one the popup uses every row it can.
     let vpad = u16::from(need + 2 <= area.height);
     let r = centered(area, w, (need + 2 * vpad).min(area.height).max(1));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "Settings");
     let inner = block.inner(r).inner(Margin::new(hpad, vpad));
     f.render_widget(block, r);
@@ -2456,6 +2454,46 @@ fn centered(area: Rect, w: u16, h: u16) -> Rect {
     Rect::new(area.x + (area.width - w) / 2, area.y + (area.height - h) / 2, w, h)
 }
 
+/// A margin this narrow or narrower between a popup and the screen's edge is left blank: a column or two of the
+/// screen behind would only be noise ("p╭ Settings").
+pub(crate) const POPUP_SLIVER: u16 = 2;
+
+/// A popup with a border at `r`, on `popup_ground`, for the tests of the ground itself.
+#[cfg(test)]
+pub(crate) fn popup_for_test(f: &mut Frame, t: &Theme, screen: Rect, r: Rect) {
+    popup_ground(f, t, screen, r, true);
+    f.render_widget(modal_block(t, "Test"), r);
+}
+
+/// Everything behind a popup reads as inactive: the same layout in muted colors.
+fn fade_behind(f: &mut Frame, t: &Theme, area: Rect) {
+    f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
+}
+
+/// The ground every popup is drawn on, at `r` over the `screen`: the screen behind faded (`fade`; the search and the
+/// theme list keep it as it is on purpose), the popup's own cells cleared, and on each side either the whole margin
+/// blanked, when it is `POPUP_SLIVER` columns or fewer, or the one column against the border. That column matters: a
+/// wide character (CJK, emoji) that starts just outside the border would otherwise cover it.
+fn popup_ground(f: &mut Frame, t: &Theme, screen: Rect, r: Rect, fade: bool) {
+    if fade {
+        fade_behind(f, t, screen);
+    }
+    let r = r.intersection(screen);
+    if r.is_empty() {
+        return;
+    }
+    let left = if r.x - screen.x <= POPUP_SLIVER { screen.x } else { r.x - 1 };
+    let right = if screen.right() - r.right() <= POPUP_SLIVER { screen.right() } else { r.right() + 1 };
+    let buf = f.buffer_mut();
+    for y in r.y..r.bottom() {
+        for x in (left..r.x).chain(r.right()..right) {
+            buf[(x, y)].reset();
+            buf[(x, y)].set_symbol(" ").set_bg(t.bg);
+        }
+    }
+    f.render_widget(Clear, r);
+}
+
 fn modal_block<'a>(t: &Theme, title: &'a str) -> Block<'a> {
     Block::default()
         .borders(Borders::ALL)
@@ -2479,7 +2517,7 @@ fn draw_theme_list(f: &mut Frame, app: &App, area: Rect) {
     let pw = (area.width * 47 / 100).clamp(34, 42).min(area.width);
     let gap = u16::from(area.width > pw + 12);
     let panel = Rect::new(area.right() - pw - gap, area.y, pw, area.height);
-    f.render_widget(Clear, panel);
+    popup_ground(f, t, area, panel, false);
     let block = modal_block(t, "Theme");
     let inner = block.inner(panel).inner(Margin::new(1, 0));
     f.render_widget(block, panel);
@@ -2673,7 +2711,7 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let w = if area.width < 70 { area.width.saturating_sub(2) } else { (area.width - 4).min(76) };
     let r = centered(area, w, area.height.saturating_sub(2).clamp(10, 22));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, false);
     let block = modal_block(t, "Search");
     let hpad = if w < 64 { 1 } else { 2 };
     let inner = block.inner(r).inner(Margin::new(hpad, 0));
@@ -2966,7 +3004,7 @@ fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
     let rn = &app.rename;
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 7);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "rename conversation");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -2997,7 +3035,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_));
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let (title, note) = match nb.purpose {
         NamePurpose::Rename(_) => ("rename project", "The project's notes and sessions stay as they are."),
         NamePurpose::NewFor(_) => ("new project", "The session goes into it. Its color and badge can be changed later (c)."),
@@ -3046,7 +3084,7 @@ fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let h = (a.options.len() as u16 + 5).min(area.height.saturating_sub(2)).max(6);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 60), h);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "project");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3095,7 +3133,7 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 62), h);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let what = match (pick.instructions, pick.ticket) {
         (Some(_), _) => "edit the system prompt with".to_string(),
         (None, Some(n)) => format!("edit ticket #{n} with"),
@@ -3147,7 +3185,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     app.hits.borrow_mut().clear();
     let h = (pick.options.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 66), h);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "open with");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3191,7 +3229,7 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
     let ch = &app.changes;
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(6).max(30), area.height.saturating_sub(2).max(8));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "what changed last");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3233,7 +3271,7 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
     let h = &app.handoff;
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(6).clamp(40, 100), area.height.saturating_sub(2).clamp(10, 40));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "hand this work on");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3344,7 +3382,7 @@ fn draw_look(f: &mut Frame, app: &App, area: Rect) {
     let lk = &app.look;
     app.hits.borrow_mut().clear();
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 64), 10);
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "color and badge");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3400,7 +3438,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     let r = centered(area, area.width.saturating_sub(8).clamp(24, 84), area.height.saturating_sub(4).clamp(8, 20));
     // The modal owns all clicks while it's open.
     app.hits.borrow_mut().clear();
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
         _ if p.editor => "code editor: pick a folder to open".to_string(),
         (Some(n), _) => format!("a folder for ticket #{n}"),
@@ -3629,7 +3667,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let body_lines = (l2.chars().count().div_ceil(inner_w) + 1) as u16;
     let r = centered(area, w, body_lines + 5);
     app.hits.borrow_mut().clear();
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3741,7 +3779,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         .collect();
     let list_h: u16 = rows.iter().map(|r| r.len() as u16 + 2).sum();
     let r = centered(area, w, (list_h + 6).min(area.height.saturating_sub(2)).max(8));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "hand to a squad");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -3809,7 +3847,7 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, extra: &[
 pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let r = centered(area, area.width.saturating_sub(6).clamp(20, 72), 9.min(area.height));
-    f.render_widget(Clear, r);
+    popup_ground(f, t, area, r, false);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)

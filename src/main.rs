@@ -45,6 +45,8 @@ mod notesupdate;
 mod open;
 #[cfg(test)]
 mod perf;
+#[cfg(test)]
+mod polish_app_tests;
 mod procs;
 mod projects;
 #[cfg(test)]

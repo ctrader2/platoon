@@ -2,14 +2,14 @@
 //! the keys that work all over platoon (with the user's own back and quit keys from `keys.json`), and two things worth
 //! knowing about the terminal. It scrolls when it is longer than the screen.
 
-use super::{Hint, centered, modal_block, screen_hints, wrap};
+use super::{Hint, centered, modal_block, popup_ground, screen_hints, wrap};
 use crate::app::{App, Hit, Mode, TOPS};
 use ratatui::{
     Frame,
     layout::{Margin, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Clear, Paragraph},
+    widgets::Paragraph,
 };
 
 /// One line of the help before it is wrapped to the popup's width.
@@ -99,8 +99,6 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     // Nothing behind it is clicked while it is open: a click outside closes it (`App::help_mouse`).
     app.hits.borrow_mut().clear();
-    // The screen it is about stays in view behind it, faded as it is behind the settings.
-    f.buffer_mut().set_style(area, Style::new().fg(t.border).remove_modifier(Modifier::BOLD | Modifier::UNDERLINED));
     let w = area.width.saturating_sub(4).min(76);
     // Borders, a column of air each side.
     let text_w = w.saturating_sub(4) as usize;
@@ -108,7 +106,8 @@ pub(super) fn draw_help(f: &mut Frame, app: &App, area: Rect) {
     // The text, a blank line and the keys of the popup itself, inside the borders.
     let want = text.len() as u16 + 4;
     let r = centered(area, w, want.min(area.height.saturating_sub(2)));
-    f.render_widget(Clear, r);
+    // The screen it is about stays in view behind it, faded as it is behind every popup.
+    popup_ground(f, t, area, r, true);
     let block = modal_block(t, "Keys");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
