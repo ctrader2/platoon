@@ -95,6 +95,7 @@ opens an issue "Check support for Claude Code X" for a newer version; no workflo
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
 | `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally) |
+| `demo/` (repo root) | the README animation: `make-world.sh` (a made-up world in a temp folder: conversations, projects, notes, tickets, stand-in `claude` and `code`, running sessions as shell loops), `demo.tape` (the vhs recording, to the ignored `raw.mp4`), `render.sh` (ffmpeg: title card, captions, eased zooms; `platoon.gif`, the headline cut under 10 MB, and `platoon-tour.mp4`, the whole tour); how to re-record in `demo/README.md` |
 
 Notes that matter: rows are conversations keyed by session id (several live processes can share one); all knowledge of
 Claude's file formats stays in `claude.rs`; the settings file preserves keys it does not know.

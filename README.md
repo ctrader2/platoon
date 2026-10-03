@@ -3,6 +3,10 @@
 Every AI coding session you have, in one terminal app. See them all at a glance, pick up any one where you left it,
 group them into projects with shared notes, and hand tickets to squads of agents.
 
+![platoon: the Sessions list with running and finished sessions, a project's notes, a ticket handed to a squad of agents, a squad's workflow, and a switch to a light theme](demo/platoon.gif)
+
+[Full tour (MP4)](demo/platoon-tour.mp4)
+
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) today, on Linux and macOS.
 
 ## What it does
