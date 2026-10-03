@@ -10,15 +10,15 @@
 //!   `PLATOON_EDITOR_BIN`   run this program instead of whichever editor was chosen
 //! With neither set, `PLATOON_FORBID_REAL_EDITOR` makes starting an editor fail instead.
 
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
     os::unix::{fs::PermissionsExt, process::CommandExt},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -84,7 +84,13 @@ pub struct Editor {
 
 impl Editor {
     fn of(k: &Known, program: String) -> Self {
-        Self { id: k.command.into(), name: k.name.into(), program, args: k.args.iter().map(|a| (*a).to_string()).collect(), terminal: k.terminal }
+        Self {
+            id: k.command.into(),
+            name: k.name.into(),
+            program,
+            args: k.args.iter().map(|a| (*a).to_string()).collect(),
+            terminal: k.terminal,
+        }
     }
 }
 
@@ -136,7 +142,9 @@ pub fn detect_with(env: &dyn Fn(&str) -> Option<String>) -> Vec<Editor> {
                 args: if args.is_empty() { k.args.iter().map(|a| (*a).to_string()).collect() } else { args },
             },
             // Something platoon doesn't know: it is what the person chose, and $EDITOR means a terminal editor.
-            None => Editor { id: basename(&program).to_string(), name: basename(&program).to_string(), program: found, args, terminal: true },
+            None => {
+                Editor { id: basename(&program).to_string(), name: basename(&program).to_string(), program: found, args, terminal: true }
+            }
         };
         if !out.iter().any(|e| e.id == editor.id) {
             out.push(editor);
@@ -448,7 +456,8 @@ mod tests {
         let script = dir.join("ed");
         fs::write(&script, "#!/bin/sh\necho READY\nread line\nprintf '%s\\n' \"$line\" >> \"$1\"\n").unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        let e = Editor { id: "ed".into(), name: "ed".into(), program: script.to_string_lossy().into_owned(), args: Vec::new(), terminal: true };
+        let e =
+            Editor { id: "ed".into(), name: "ed".into(), program: script.to_string_lossy().into_owned(), args: Vec::new(), terminal: true };
         let mut run = Running::spawn_with(&e, &file, 10, 40, &|_| None).unwrap();
         let start = Instant::now();
         while !run.parser().lock().unwrap().screen().contents().contains("READY") {
@@ -464,4 +473,3 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 }
-

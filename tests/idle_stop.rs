@@ -119,7 +119,11 @@ impl Rig {
     /// What a real claude's registry entry says about its process. Missing until this is called.
     fn register(&self, pid: u32, status: &str) {
         let tmp = self.claude.join("sessions").join(format!("{pid}.tmp"));
-        fs::write(&tmp, format!(r#"{{"pid":{pid},"sessionId":"s-{pid}","cwd":"/tmp","kind":"interactive","startedAt":1,"status":"{status}"}}"#)).unwrap();
+        fs::write(
+            &tmp,
+            format!(r#"{{"pid":{pid},"sessionId":"s-{pid}","cwd":"/tmp","kind":"interactive","startedAt":1,"status":"{status}"}}"#),
+        )
+        .unwrap();
         fs::rename(&tmp, self.claude.join("sessions").join(format!("{pid}.json"))).unwrap();
     }
 
@@ -260,7 +264,11 @@ fn output_from_claude_counts_as_activity() {
         thread::sleep(Duration::from_millis(100));
     }
     r.wait_stopped(pid);
-    assert!(start.elapsed() >= Duration::from_millis(5500), "stopped {:?} in, less than the threshold after the last output", start.elapsed());
+    assert!(
+        start.elapsed() >= Duration::from_millis(5500),
+        "stopped {:?} in, less than the threshold after the last output",
+        start.elapsed()
+    );
 }
 
 #[test]
@@ -297,7 +305,10 @@ fn save(r: &Rig, id: &str, prompt: &str, old: bool) {
     let dir = r.claude.join("projects").join("-work");
     fs::create_dir_all(&dir).unwrap();
     let ts = if old { "2020-01-01T00:00:00.000Z".to_string() } else { "2099-01-01T00:00:00.000Z".to_string() };
-    let line = format!(r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{ts}","message":{{"role":"user","content":"{prompt}"}}}}"#, r.work.display());
+    let line = format!(
+        r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{ts}","message":{{"role":"user","content":"{prompt}"}}}}"#,
+        r.work.display()
+    );
     fs::write(dir.join(format!("{id}.jsonl")), line + "\n").unwrap();
 }
 
@@ -406,7 +417,11 @@ fn mcp_servers_do_not_keep_a_session_alive_and_the_ones_that_outlive_claude_are_
     // Not under claude, and with exactly the configured server's command line: none of platoon's business.
     let mut bystander = Command::new("sleep").arg("611").spawn().unwrap();
     // Servers that ignore the hang-up a closing terminal sends (as anything that detaches itself does).
-    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; sh -c '{wrapper}' & echo $! > {}; read x", a.display(), r.cache.join("mcp-wrapper.pid").display());
+    let script = format!(
+        "trap '' HUP; sleep 611 & echo $! > {}; sh -c '{wrapper}' & echo $! > {}; read x",
+        a.display(),
+        r.cache.join("mcp-wrapper.pid").display()
+    );
     let pid = r.start("sh", &["-c", &script]);
     r.register(pid, "idle");
     let (plain, sh, deep) = (r.pid_file("mcp-a.pid"), r.pid_file("mcp-wrapper.pid"), r.pid_file("mcp-wrapped.pid"));
@@ -429,7 +444,11 @@ fn mcp_servers_do_not_keep_a_session_alive_and_the_ones_that_outlive_claude_are_
 fn a_server_that_is_not_configured_keeps_the_session_alive_even_beside_configured_ones() {
     let mut r = Rig::new("mcp-other", 1);
     r.mcp_servers(serde_json::json!({"plain": {"command": "sleep", "args": ["611"]}}));
-    let script = format!("trap '' HUP; sleep 611 & echo $! > {}; sleep 612 & echo $! > {}; read x", r.cache.join("mcp.pid").display(), r.cache.join("job.pid").display());
+    let script = format!(
+        "trap '' HUP; sleep 611 & echo $! > {}; sleep 612 & echo $! > {}; read x",
+        r.cache.join("mcp.pid").display(),
+        r.cache.join("job.pid").display()
+    );
     let pid = r.start("sh", &["-c", &script]);
     r.register(pid, "idle");
     let (_mcp, job) = (r.pid_file("mcp.pid"), r.pid_file("job.pid")); // job: a dev server, say
@@ -504,7 +523,8 @@ fn a_squads_leader_is_not_stopped_while_its_ticket_is_working_and_is_once_it_wai
     let script = r.work.join("leader.sh");
     fs::write(&script, "#!/bin/sh\nexec sleep 600\n").unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    let pid = r.start(&script.to_string_lossy(), &["--add-dir", "/tmp", "--session-id", "lead-idle-1", "-n", "#1 Basket", "--agent", "leader"]);
+    let pid =
+        r.start(&script.to_string_lossy(), &["--add-dir", "/tmp", "--session-id", "lead-idle-1", "-n", "#1 Basket", "--agent", "leader"]);
     r.register(pid, "idle");
     // Idle, quiet, nobody watching, way past the 2s threshold: kept, because its members may be at work.
     r.stays_up(pid, STAY);

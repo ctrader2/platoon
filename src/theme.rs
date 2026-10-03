@@ -325,7 +325,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(5), // iris
-        busy: P(6), // rose
+        busy: P(6),   // rose
         ok: X(0x9ccfa0),
         warn: P(3),
         err: P(1),
@@ -356,7 +356,7 @@ const SPECS: &[Spec] = &[
             0x7fb4ca, 0x938aa9, 0x7aa89f, 0xc5c9c5,
         ],
         tuned: None,
-        accent: P(4), // dragon blue
+        accent: P(4),      // dragon blue
         busy: X(0xb6927b), // dragon orange
         ok: P(10),
         warn: P(11),
@@ -421,7 +421,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: X(0x8488cd), // violet, lightened
-        busy: P(6), // cyan
+        busy: P(6),          // cyan
         ok: P(2),
         warn: P(3),
         err: X(0xe56563), // red, lightened
@@ -469,7 +469,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(4), // blue
-        busy: P(5), // purple
+        busy: P(5),   // purple
         ok: P(2),
         warn: P(3),
         err: P(1),
@@ -501,7 +501,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(4), // blue
-        busy: P(5), // purple
+        busy: P(5),   // purple
         ok: P(2),
         warn: P(3),
         err: P(1),
@@ -517,7 +517,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(4), // blue
-        busy: P(5), // violet
+        busy: P(5),   // violet
         ok: P(2),
         warn: P(3),
         err: P(1),
@@ -548,7 +548,7 @@ const SPECS: &[Spec] = &[
             0x205ea6, 0xa02f6f, 0x24837b, 0xcecdc3,
         ],
         tuned: None,
-        accent: P(6), // cyan
+        accent: P(6),      // cyan
         busy: X(0x8b7ec8), // purple
         ok: P(2),
         warn: P(3),
@@ -564,11 +564,11 @@ const SPECS: &[Spec] = &[
             0x00c15a, 0xc693ff, 0xff74b8, 0xf2f4f8,
         ],
         tuned: None,
-        accent: P(2), // blue
-        busy: P(5), // purple
-        ok: P(4), // green
+        accent: P(2),      // blue
+        busy: P(5),        // purple
+        ok: P(4),          // green
         warn: X(0xf1c21b), // IBM Carbon yellow
-        err: X(0xfa4d56), // IBM Carbon red
+        err: X(0xfa4d56),  // IBM Carbon red
     },
     Spec {
         id: "poimandres",
@@ -581,8 +581,8 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(6), // light blue
-        busy: P(5), // pink
-        ok: P(2), // mint
+        busy: P(5),   // pink
+        ok: P(2),     // mint
         warn: P(3),
         err: P(1),
     },
@@ -597,7 +597,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(4), // cyan
-        busy: P(5), // pink
+        busy: P(5),   // pink
         ok: P(2),
         warn: X(0xf9c46b),
         err: P(1),
@@ -613,7 +613,7 @@ const SPECS: &[Spec] = &[
         ],
         tuned: None,
         accent: P(14), // cyan
-        busy: P(9), // hot pink
+        busy: P(9),    // hot pink
         ok: P(10),
         warn: P(11),
         err: P(5), // red-orange
@@ -949,10 +949,38 @@ mod tests {
         assert_eq!(
             ids,
             [
-                "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "tokyo-night", "tokyo-night-storm", "dracula", "one-dark",
-                "nord", "gruvbox-dark", "gruvbox-material-dark", "rose-pine", "rose-pine-moon", "kanagawa-wave", "kanagawa-dragon",
-                "night-owl", "ayu-mirage", "vesper", "solarized-dark", "github-dark", "material-ocean", "everforest-dark-hard", "nightfox",
-                "sonokai", "moonfly", "melange-dark", "flexoki-dark", "oxocarbon", "poimandres", "horizon", "synthwave", "claude", "terminal"
+                "catppuccin-mocha",
+                "catppuccin-macchiato",
+                "catppuccin-frappe",
+                "tokyo-night",
+                "tokyo-night-storm",
+                "dracula",
+                "one-dark",
+                "nord",
+                "gruvbox-dark",
+                "gruvbox-material-dark",
+                "rose-pine",
+                "rose-pine-moon",
+                "kanagawa-wave",
+                "kanagawa-dragon",
+                "night-owl",
+                "ayu-mirage",
+                "vesper",
+                "solarized-dark",
+                "github-dark",
+                "material-ocean",
+                "everforest-dark-hard",
+                "nightfox",
+                "sonokai",
+                "moonfly",
+                "melange-dark",
+                "flexoki-dark",
+                "oxocarbon",
+                "poimandres",
+                "horizon",
+                "synthwave",
+                "claude",
+                "terminal"
             ]
         );
         let mut sorted = ids.clone();
@@ -1009,7 +1037,16 @@ mod tests {
     fn claude_uses_claude_codes_own_colors() {
         let t = Theme::by_id("claude").unwrap();
         assert_eq!((t.bg, t.text, t.surface, t.dim), (rgb(0x141413), rgb(0xfaf9f5), rgb(0x2a2926), rgb(0x73726c)));
-        assert_eq!((t.accent, t.busy, t.ok, t.warn, t.err), (Color::Rgb(215, 119, 87), Color::Rgb(175, 135, 255), Color::Rgb(78, 186, 101), Color::Rgb(255, 193, 7), Color::Rgb(255, 107, 128)));
+        assert_eq!(
+            (t.accent, t.busy, t.ok, t.warn, t.err),
+            (
+                Color::Rgb(215, 119, 87),
+                Color::Rgb(175, 135, 255),
+                Color::Rgb(78, 186, 101),
+                Color::Rgb(255, 193, 7),
+                Color::Rgb(255, 107, 128)
+            )
+        );
         let a = t.ansi.unwrap();
         let hue = |i: usize| channels(a[i]).unwrap();
         // Recognizable hues where programs expect them, in both the normal and the bright row.
@@ -1149,12 +1186,21 @@ mod tests {
         assert!(lines[2].starts_with("catppuccin-macchiato   Catppuccin Macchiato") && !lines[2].contains("default"));
         let last = lines.len() - 1;
         assert!(lines[last - 1].starts_with("terminal") && lines[last - 1].contains("Terminal colors"));
-        assert_eq!(lines[last], "  bg default  surface ansi 0  border ansi 8  dim ansi 8  subtext ansi 7  text default  accent ansi 12  busy ansi 13  ok ansi 10  warn ansi 11  err ansi 9");
+        assert_eq!(
+            lines[last],
+            "  bg default  surface ansi 0  border ansi 8  dim ansi 8  subtext ansi 7  text default  accent ansi 12  busy ansi 13  ok ansi 10  warn ansi 11  err ansi 9"
+        );
 
         let color = render_list(Some(Depth::TrueColor), &none);
-        assert!(color.contains("\x1b[48;2;30;30;46m") && color.contains("\x1b[38;2;180;190;254m\u{2588}"), "truecolor escapes for a fixed theme");
+        assert!(
+            color.contains("\x1b[48;2;30;30;46m") && color.contains("\x1b[38;2;180;190;254m\u{2588}"),
+            "truecolor escapes for a fixed theme"
+        );
         assert!(color.contains("\x1b[49m") && color.contains("\x1b[94m"), "the terminal's own colors by name");
-        assert!(color.lines().all(|l| l.is_empty() || l.starts_with(char::is_alphabetic) || l.ends_with("\x1b[0m")), "every swatch line resets");
+        assert!(
+            color.lines().all(|l| l.is_empty() || l.starts_with(char::is_alphabetic) || l.ends_with("\x1b[0m")),
+            "every swatch line resets"
+        );
         let limited = render_list(Some(Depth::Indexed256), &none);
         assert!(!limited.contains(";2;") && limited.contains("48;5;"), "no truecolor escapes on a 256-color terminal");
     }
@@ -1182,13 +1228,23 @@ mod tests {
         let plain = render_list(None, &reg);
         let lines: Vec<&str> = plain.lines().collect();
         let n = Theme::all().len();
-        assert_eq!(&lines[..2 * n], render_list(None, &Registry::default()).lines().collect::<Vec<_>>(), "the built-ins come first, exactly as before");
+        assert_eq!(
+            &lines[..2 * n],
+            render_list(None, &Registry::default()).lines().collect::<Vec<_>>(),
+            "the built-ins come first, exactly as before"
+        );
         assert_eq!(lines[2 * n], "user:deep-sea          Deep Sea  (yours)");
         assert!(lines[2 * n + 1].starts_with("  bg #0a1622  surface #"), "{}", lines[2 * n + 1]);
         assert_eq!(lines[2 * n + 2], "user:dracula           Dracula (yours)", "a built-in's name is marked in the name, and not twice");
         assert_eq!(lines[2 * n + 4], "");
         assert!(lines[2 * n + 5].starts_with("1 theme file skipped in ") && lines[2 * n + 5].ends_with("themes:"), "{}", lines[2 * n + 5]);
-        assert!(lines[2 * n + 6].starts_with("  Sunny: a light theme has to read as it is: the text is hard to read on the background (1.9:1; it needs 7:1)"), "{}", lines[2 * n + 6]);
+        assert!(
+            lines[2 * n + 6].starts_with(
+                "  Sunny: a light theme has to read as it is: the text is hard to read on the background (1.9:1; it needs 7:1)"
+            ),
+            "{}",
+            lines[2 * n + 6]
+        );
         assert_eq!(lines.len(), 2 * n + 7);
         let color = render_list(Some(Depth::TrueColor), &reg);
         assert!(color.contains("48;2;10;22;34m"), "the user theme's swatch is on its own background");
@@ -1202,7 +1258,12 @@ mod tests {
             // (Session text that reads worse than 3:1 on the selection is swapped for `text` when drawn.)
             assert!(contrast(t.subtext, sel) >= 2.5, "{}: the muted text is still there on it ({:.2})", t.id, contrast(t.subtext, sel));
             assert!(contrast(sel, t.bg) >= 1.5, "{}: the selection stands out from the background ({:.2})", t.id, contrast(sel, t.bg));
-            assert!(delta_e(sel, t.bg) >= 15.0, "{}: and is a different color, not just a different lightness ({:.1})", t.id, delta_e(sel, t.bg));
+            assert!(
+                delta_e(sel, t.bg) >= 15.0,
+                "{}: and is a different color, not just a different lightness ({:.1})",
+                t.id,
+                delta_e(sel, t.bg)
+            );
             assert_ne!(sel, t.bg);
         }
     }
@@ -1213,7 +1274,9 @@ mod tests {
         let xterm = |i: u8| -> Color {
             let cube = [0u8, 95, 135, 175, 215, 255];
             match i {
-                16..=231 => Color::Rgb(cube[usize::from((i - 16) / 36)], cube[usize::from((i - 16) / 6 % 6)], cube[usize::from((i - 16) % 6)]),
+                16..=231 => {
+                    Color::Rgb(cube[usize::from((i - 16) / 36)], cube[usize::from((i - 16) / 6 % 6)], cube[usize::from((i - 16) % 6)])
+                }
                 _ => Color::Rgb(8 + 10 * (i - 232), 8 + 10 * (i - 232), 8 + 10 * (i - 232)),
             }
         };

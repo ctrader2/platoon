@@ -25,7 +25,7 @@
 // Step C is the first caller of most of this.
 #![allow(dead_code)]
 
-use crate::ledger::{local_day, Backoff, FailKind, Ledger, Usage};
+use crate::ledger::{Backoff, FailKind, Ledger, Usage, local_day};
 use crate::settings::Settings;
 use crate::usage;
 use serde_json::Value;
@@ -36,8 +36,9 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
@@ -88,7 +89,13 @@ pub const FEATURES: &[Feature] = &[
 /// Work that has no switch of its own, with what `platoon tokens` calls it. It only ever runs because the person
 /// asked for it then and there, so there is nothing to switch off; it obeys every other gate (the master switch,
 /// the daily limit, a back-off) and its spend is in the ledger like everything else.
-pub const SWITCHLESS: &[(&str, &str)] = &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off"), (crate::squads::COMMANDER_FEATURE, "Squad commander"), (crate::squadfile::DRAFT_FEATURE, "Drafting a squad"), (crate::agentfile::DRAFT_FEATURE, "Drafting an agent")];
+pub const SWITCHLESS: &[(&str, &str)] = &[
+    (TEST_FEATURE, "Token test"),
+    (crate::handoff::FEATURE, "Hand-off"),
+    (crate::squads::COMMANDER_FEATURE, "Squad commander"),
+    (crate::squadfile::DRAFT_FEATURE, "Drafting a squad"),
+    (crate::agentfile::DRAFT_FEATURE, "Drafting an agent"),
+];
 
 /// Is this a feature id with no switch of its own?
 pub fn switchless(id: &str) -> bool {
@@ -130,7 +137,9 @@ pub fn enable_hint(settings_path: &Path) -> String {
 
 /// The one line non-interactive setup prints.
 pub fn setup_hint() -> String {
-    format!("Smart features that use your Claude tokens are off. To turn them on, run `platoon setup` in a terminal, or press s in platoon and switch on \"{MASTER_LABEL}\".")
+    format!(
+        "Smart features that use your Claude tokens are off. To turn them on, run `platoon setup` in a terminal, or press s in platoon and switch on \"{MASTER_LABEL}\"."
+    )
 }
 
 /// The question `platoon setup` asks (default: no).
@@ -189,13 +198,23 @@ impl Refusal {
             Refusal::FeatureOff(label) => format!("\"{label}\" is switched off."),
             Refusal::UnknownFeature(id) => format!("There is no smart feature called \"{id}\"."),
             Refusal::BackedOff { kind, until, now } => {
-                format!("Smart features are paused after a failure ({}); trying again in {}.", kind.plain(), wait_text(until.saturating_sub(*now)))
+                format!(
+                    "Smart features are paused after a failure ({}); trying again in {}.",
+                    kind.plain(),
+                    wait_text(until.saturating_sub(*now))
+                )
             }
             Refusal::OverBudget { used, cap } => {
-                format!("Today's token limit is used up ({} of {} tokens). It starts over tomorrow, or you can raise it in settings.", thousands(*used), thousands(*cap))
+                format!(
+                    "Today's token limit is used up ({} of {} tokens). It starts over tomorrow, or you can raise it in settings.",
+                    thousands(*used),
+                    thousands(*cap)
+                )
             }
             Refusal::PlanBusy { pct, limit, window } => {
-                format!("Your Claude plan is {pct}% used ({window}), above the pause point of {limit}%. Smart features wait until it drops.")
+                format!(
+                    "Your Claude plan is {pct}% used ({window}), above the pause point of {limit}%. Smart features wait until it drops."
+                )
             }
         }
     }
@@ -373,7 +392,15 @@ pub struct Request {
 
 impl Request {
     pub fn new(feature: &'static str, system: impl Into<String>, prompt: impl Into<String>) -> Self {
-        Request { feature, system: system.into(), prompt: prompt.into(), timeout: DEFAULT_TIMEOUT, cancel: Cancel::new(), user_initiated: false, model: None }
+        Request {
+            feature,
+            system: system.into(),
+            prompt: prompt.into(),
+            timeout: DEFAULT_TIMEOUT,
+            cancel: Cancel::new(),
+            user_initiated: false,
+            model: None,
+        }
     }
 }
 
@@ -427,7 +454,8 @@ impl Switchboard {
     /// Cancel every call whose feature is no longer allowed to run under these settings.
     pub fn apply(&self, settings: &Settings) {
         let mut flags = self.flags.lock().unwrap();
-        let off: Vec<String> = flags.keys().filter(|id| !(settings.feature_on(id) || (switchless(id) && settings.tokens_enabled))).cloned().collect();
+        let off: Vec<String> =
+            flags.keys().filter(|id| !(settings.feature_on(id) || (switchless(id) && settings.tokens_enabled))).cloned().collect();
         for id in off {
             if let Some(c) = flags.remove(&id) {
                 c.cancel();
@@ -484,13 +512,49 @@ pub fn classify(text: &str) -> FailKind {
             before && after
         })
     };
-    if any(&["not logged in", "not signed in", "/login", "invalid api key", "authentication", "unauthorized", "oauth token", "token has expired", "sign in"]) || status("401") {
+    if any(&[
+        "not logged in",
+        "not signed in",
+        "/login",
+        "invalid api key",
+        "authentication",
+        "unauthorized",
+        "oauth token",
+        "token has expired",
+        "sign in",
+    ]) || status("401")
+    {
         FailKind::NotSignedIn
-    } else if any(&["usage limit", "hit your limit", "limit reached", "rate limit", "rate_limit", "too many requests", "quota", "credit balance", "resets at"]) || status("429") {
+    } else if any(&[
+        "usage limit",
+        "hit your limit",
+        "limit reached",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "quota",
+        "credit balance",
+        "resets at",
+    ]) || status("429")
+    {
         FailKind::RateLimited
     } else if any(&[
-        "enotfound", "econnrefused", "econnreset", "etimedout", "eai_again", "network", "could not resolve", "connection error", "connection refused",
-        "connection reset", "unable to connect", "fetch failed", "socket hang up", "getaddrinfo", "offline", "dns",
+        "enotfound",
+        "econnrefused",
+        "econnreset",
+        "etimedout",
+        "eai_again",
+        "network",
+        "could not resolve",
+        "connection error",
+        "connection refused",
+        "connection reset",
+        "unable to connect",
+        "fetch failed",
+        "socket hang up",
+        "getaddrinfo",
+        "offline",
+        "dns",
     ]) {
         FailKind::Network
     } else {
@@ -600,7 +664,9 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         _ => {
             let both = format!("{} {}", text.unwrap_or(""), err);
             let mut kind = classify(&both);
-            if kind == FailKind::Other && v.get("subtype").and_then(Value::as_str).is_some_and(|s| s.contains("rate") || s.contains("limit")) {
+            if kind == FailKind::Other
+                && v.get("subtype").and_then(Value::as_str).is_some_and(|s| s.contains("rate") || s.contains("limit"))
+            {
                 kind = FailKind::RateLimited;
             }
             let detail = match (text.filter(|t| !t.trim().is_empty()), exited_ok) {
@@ -664,7 +730,10 @@ impl Runner {
             panic!("a test tried to run the real `claude`: set PLATOON_CLAUDE_BIN or use Runner::with_program with a fake");
         }
         if std::env::var_os("PLATOON_FORBID_REAL_CLAUDE").is_some() {
-            return Err(AiError::Failed { kind: FailKind::Other, detail: "PLATOON_FORBID_REAL_CLAUDE is set and PLATOON_CLAUDE_BIN is not: refusing to run the real claude".into() });
+            return Err(AiError::Failed {
+                kind: FailKind::Other,
+                detail: "PLATOON_FORBID_REAL_CLAUDE is set and PLATOON_CLAUDE_BIN is not: refusing to run the real claude".into(),
+            });
         }
         Ok(())
     }
@@ -703,7 +772,11 @@ impl Runner {
         let mut child = match spawn_retrying(&mut cmd) {
             Ok(c) => c,
             Err(e) => {
-                let why = if e.kind() == io::ErrorKind::NotFound { format!("couldn't find `{}` to run", self.program) } else { format!("couldn't start `{}`: {e}", self.program) };
+                let why = if e.kind() == io::ErrorKind::NotFound {
+                    format!("couldn't find `{}` to run", self.program)
+                } else {
+                    format!("couldn't start `{}`: {e}", self.program)
+                };
                 let _ = ledger.note_failure(self.now(), FailKind::Other);
                 return Err(other(why));
             }
@@ -748,7 +821,10 @@ impl Runner {
         }
         if timed_out {
             let _ = ledger.note_failure(now, FailKind::TimedOut);
-            return Err(AiError::Failed { kind: FailKind::TimedOut, detail: format!("no answer within {} seconds", req.timeout.as_secs()) });
+            return Err(AiError::Failed {
+                kind: FailKind::TimedOut,
+                detail: format!("no answer within {} seconds", req.timeout.as_secs()),
+            });
         }
         let outcome = interpret(&stdout, &stderr, status.is_some_and(|s| s.success()));
         let ok = outcome.result.is_ok();
@@ -756,7 +832,14 @@ impl Runner {
         // figure still counts, so the daily limit can't be silently bypassed.
         let (used, estimated) = match (outcome.usage, &outcome.result) {
             (Some(u), _) => (Some(u), false),
-            (None, Ok(text)) => (Some(Usage { input: ((req.system.len() + req.prompt.len()) / 4) as u64, output: (text.len() / 4) as u64, ..Usage::default() }), true),
+            (None, Ok(text)) => (
+                Some(Usage {
+                    input: ((req.system.len() + req.prompt.len()) / 4) as u64,
+                    output: (text.len() / 4) as u64,
+                    ..Usage::default()
+                }),
+                true,
+            ),
             (None, Err(_)) => (None, false),
         };
         if let Some(u) = &used {
@@ -864,16 +947,27 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
                 let _ = writeln!(out, "  {}: {}", f.label, onoff(*on));
             }
             let _ = writeln!(out, "Model: {}", settings.ai_model);
-            let _ = writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(s.used_today), crate::settings::thousands(s.cap));
+            let _ =
+                writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(s.used_today), crate::settings::thousands(s.cap));
             // What each feature spent today, so it is clear where the tokens went.
             let day = Ledger::open(cache).today(now);
             for (id, used) in &day.features {
                 let label = feature_label(id);
-                let _ = writeln!(out, "  {label}: {} tokens in {} call{}", crate::settings::thousands(used.tokens), used.calls, if used.calls == 1 { "" } else { "s" });
+                let _ = writeln!(
+                    out,
+                    "  {label}: {} tokens in {} call{}",
+                    crate::settings::thousands(used.tokens),
+                    used.calls,
+                    if used.calls == 1 { "" } else { "s" }
+                );
             }
             match s.plan {
                 Some((pct, w)) => {
-                    let _ = writeln!(out, "Plan usage: {pct}% ({w}); pause above {}", crate::settings::percent_label(settings.ai_pause_percent));
+                    let _ = writeln!(
+                        out,
+                        "Plan usage: {pct}% ({w}); pause above {}",
+                        crate::settings::percent_label(settings.ai_pause_percent)
+                    );
                 }
                 None => {
                     let _ = writeln!(out, "Plan usage: no figure reported yet (nothing pauses on it)");
@@ -887,7 +981,10 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
         }
         Some("test") if args.len() == 1 => tokens_test(&settings, &store, cache, out, err),
         Some(_) => {
-            let _ = writeln!(err, "usage: platoon tokens [status | test]\n  status  show whether the features are on and how many tokens were used today\n  test    make one tiny call to Claude through the same gates the features use");
+            let _ = writeln!(
+                err,
+                "usage: platoon tokens [status | test]\n  status  show whether the features are on and how many tokens were used today\n  test    make one tiny call to Claude through the same gates the features use"
+            );
             2
         }
     }
@@ -903,7 +1000,8 @@ fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cach
     }
     let _ = writeln!(out, "Asking Claude ({}) to reply with one word...", settings.ai_model);
     let _ = out.flush();
-    let mut req = Request::new(TEST_FEATURE, "You are a test. Reply with exactly the word asked for, nothing else.", "Reply with the single word ok");
+    let mut req =
+        Request::new(TEST_FEATURE, "You are a test. Reply with exactly the word asked for, nothing else.", "Reply with the single word ok");
     req.timeout = Duration::from_secs(60);
     // Ctrl+C reaches us but not Claude (it has its own process group), so stop it ourselves.
     INTERRUPTED.store(false, Ordering::SeqCst);
@@ -928,7 +1026,12 @@ fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cach
     let _ = watcher.join();
     let today = |out: &mut dyn Write| {
         let used = Ledger::open(cache).today(usage::now()).tokens();
-        let _ = writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(settings.ai_daily_tokens));
+        let _ = writeln!(
+            out,
+            "Used today: {} of {} tokens",
+            crate::settings::thousands(used),
+            crate::settings::thousands(settings.ai_daily_tokens)
+        );
     };
     match result {
         Ok(reply) => {
@@ -985,7 +1088,11 @@ pub(crate) mod tests {
         /// A stand-in for `claude`: records its arguments (one per line, NUL-free), folder, environment and stdin under
         /// `dir/rec.*`, then runs `body` (a shell snippet).
         pub fn new(name: &str, body: &str) -> Fake {
-            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-ai-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
+            let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!(
+                "platoon-ai-{name}-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::SeqCst)
+            )));
             let _ = fs::remove_dir_all(&dir);
             fs::create_dir_all(&dir).unwrap();
             let cache = dir.join("cache");
@@ -1067,8 +1174,13 @@ pub(crate) mod tests {
             assert_ne!(f.id, TEST_FEATURE);
         }
         // The newer rows are on as soon as the master switch is: the first two were there before anyone was asked.
-        assert_eq!(FEATURES.iter().filter(|f| f.on_unless_switched_off).map(|f| f.id).collect::<Vec<_>>(), ["project_notes", "project_description"]);
-        assert!(on_by_default("project_notes") && on_by_default("project_description") && !on_by_default("names") && !on_by_default("nonsense"));
+        assert_eq!(
+            FEATURES.iter().filter(|f| f.on_unless_switched_off).map(|f| f.id).collect::<Vec<_>>(),
+            ["project_notes", "project_description"]
+        );
+        assert!(
+            on_by_default("project_notes") && on_by_default("project_description") && !on_by_default("names") && !on_by_default("nonsense")
+        );
         // Work with no switch of its own is not in the table, has a name of its own, and is not a feature id twice over.
         assert!(SWITCHLESS.iter().all(|(id, _)| !ids.contains(id)));
         assert_eq!((feature_label("project_notes"), feature_label(crate::handoff::FEATURE)), ("Project notes", "Hand-off"));
@@ -1121,7 +1233,11 @@ pub(crate) mod tests {
         l.record_call(now, "names", &Usage { input: 5000, cache_creation: 5000, cache_read: 5000, output: 4999 }, 0.0, true).unwrap();
         assert_eq!(gate(&s, "names", &f.cache, now), Ok(()), "one under the limit still runs");
         l.record_call(now, "names", &Usage { output: 1, ..Usage::default() }, 0.0, true).unwrap();
-        assert_eq!(gate(&s, "names", &f.cache, now), Err(Refusal::OverBudget { used: 20_000, cap: 20_000 }), "all four numbers count, and at the limit is refused");
+        assert_eq!(
+            gate(&s, "names", &f.cache, now),
+            Err(Refusal::OverBudget { used: 20_000, cap: 20_000 }),
+            "all four numbers count, and at the limit is refused"
+        );
         assert_eq!(gate(&s, "names", &f.cache, now + 3 * 86_400), Ok(()), "another day is a fresh count");
         let msg = Refusal::OverBudget { used: 20_000, cap: 20_000 }.plain();
         assert!(msg.contains("20,000 of 20,000") && msg.contains("tomorrow"), "{msg}");
@@ -1163,7 +1279,10 @@ pub(crate) mod tests {
              Press s for the settings to change the pause point."
         );
         // These two say it in their own words already, so nothing is added.
-        assert_eq!(Refusal::OverBudget { used: 25_000, cap: 20_000 }.on_screen(), Refusal::OverBudget { used: 25_000, cap: 20_000 }.plain());
+        assert_eq!(
+            Refusal::OverBudget { used: 25_000, cap: 20_000 }.on_screen(),
+            Refusal::OverBudget { used: 25_000, cap: 20_000 }.plain()
+        );
         let backed = Refusal::BackedOff { kind: crate::ledger::FailKind::Network, until: now + 300, now };
         assert_eq!(backed.on_screen(), backed.plain());
         assert!(backed.on_screen().contains("trying again in 5 minutes"), "{}", backed.on_screen());
@@ -1192,7 +1311,9 @@ pub(crate) mod tests {
         s.set_feature(crate::notesrun::FEATURE, true);
         assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now), None, "nothing in the way: nothing to say");
         // The daily limit, spent.
-        Ledger::open(&f.cache).record_call(now, crate::notesrun::FEATURE, &Usage { input: 600_000, ..Usage::default() }, 0.0, true).unwrap();
+        Ledger::open(&f.cache)
+            .record_call(now, crate::notesrun::FEATURE, &Usage { input: 600_000, ..Usage::default() }, 0.0, true)
+            .unwrap();
         let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).unwrap();
         assert!(said.contains("Today's token limit is used up (600,000 of 500,000 tokens)"), "{said}");
     }
@@ -1238,7 +1359,11 @@ pub(crate) mod tests {
         plan_report(&f.cache, 81, Some(10), now + 3600, now - 10);
         assert_eq!(gate(&s, "names", &f.cache, now), Err(Refusal::PlanBusy { pct: 81, limit: 80, window: "5-hour limit" }));
         plan_report(&f.cache, 10, Some(95), now + 3600, now - 10);
-        assert_eq!(gate(&s, "names", &f.cache, now), Err(Refusal::PlanBusy { pct: 95, limit: 80, window: "weekly limit" }), "the higher window decides");
+        assert_eq!(
+            gate(&s, "names", &f.cache, now),
+            Err(Refusal::PlanBusy { pct: 95, limit: 80, window: "weekly limit" }),
+            "the higher window decides"
+        );
         // A window that has reset says nothing any more.
         assert_eq!(gate(&s, "names", &f.cache, now + 7200), Ok(()));
         // A different pause point, and "never".
@@ -1311,7 +1436,10 @@ pub(crate) mod tests {
         let s = on();
         let now = 1_800_000_000;
         Ledger::open(&f.cache).note_failure(now, FailKind::RateLimited).unwrap();
-        assert_eq!(gate(&s, "names", &f.cache, now + 10), Err(Refusal::BackedOff { kind: FailKind::RateLimited, until: now + 900, now: now + 10 }));
+        assert_eq!(
+            gate(&s, "names", &f.cache, now + 10),
+            Err(Refusal::BackedOff { kind: FailKind::RateLimited, until: now + 900, now: now + 10 })
+        );
         assert_eq!(gate(&s, "names", &f.cache, now + 900), Ok(()), "the wait is over");
         let plain = Refusal::BackedOff { kind: FailKind::RateLimited, until: now + 900, now: now + 10 }.plain();
         assert!(plain.contains("plan limit") && plain.contains("15 minutes"), "{plain}");
@@ -1324,7 +1452,10 @@ pub(crate) mod tests {
         let now = 1_800_000_000;
         let st = status(&s, &f.cache, now);
         assert!(st.master && st.paused.is_none() && st.used_today == 0 && st.cap == 500_000 && st.plan.is_none() && st.backoff.is_none());
-        assert_eq!(st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(), [("names", true), ("find", true), ("project_notes", true), ("project_description", true)]);
+        assert_eq!(
+            st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(),
+            [("names", true), ("find", true), ("project_notes", true), ("project_description", true)]
+        );
         Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 1234, ..Usage::default() }, 0.0, true).unwrap();
         Ledger::open(&f.cache).note_failure(now, FailKind::Network).unwrap();
         let st = status(&s, &f.cache, now + 1);
@@ -1385,7 +1516,10 @@ pub(crate) mod tests {
         assert_eq!(kind(o), FailKind::NotSignedIn);
         assert_eq!(kind(interpret(br#"{"is_error":true,"result":"You've hit your limit"}"#, b"", true)), FailKind::RateLimited);
         assert_eq!(kind(interpret(br#"{"is_error":true,"result":"API Error: 429 rate limited"}"#, b"", true)), FailKind::RateLimited);
-        assert_eq!(kind(interpret(br#"{"is_error":true,"result":"API Error: Unable to connect: ENOTFOUND api.anthropic.com"}"#, b"", true)), FailKind::Network);
+        assert_eq!(
+            kind(interpret(br#"{"is_error":true,"result":"API Error: Unable to connect: ENOTFOUND api.anthropic.com"}"#, b"", true)),
+            FailKind::Network
+        );
         assert_eq!(kind(interpret(br#"{"is_error":true,"result":"something odd"}"#, b"", true)), FailKind::Other);
         // is_error false but a non-zero exit is still a failure
         assert!(interpret(ok_json("ok", 1, 0, 0, 1).as_bytes(), b"", false).result.is_err());
@@ -1452,7 +1586,24 @@ pub(crate) mod tests {
         let argv: Vec<String> = f.rec("argv").lines().map(String::from).collect();
         assert_eq!(
             argv,
-            ["-p", "--model", "haiku", "--tools", "", "--setting-sources", "", "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--system-prompt", "Be brief.", "--effort", "low", "--output-format", "json"]
+            [
+                "-p",
+                "--model",
+                "haiku",
+                "--tools",
+                "",
+                "--setting-sources",
+                "",
+                "--no-session-persistence",
+                "--disable-slash-commands",
+                "--strict-mcp-config",
+                "--system-prompt",
+                "Be brief.",
+                "--effort",
+                "low",
+                "--output-format",
+                "json"
+            ]
         );
         assert!(!argv.iter().any(|a| a == "--bare"), "--bare needs an API key");
         assert!(!argv.iter().any(|a| a.contains("Name these")), "the prompt is not in the arguments");
@@ -1523,9 +1674,27 @@ pub(crate) mod tests {
     #[test]
     fn each_failure_class_gets_its_plain_message_records_usage_when_reported_and_backs_off() {
         let cases: [(&str, String, i32, FailKind, &str); 5] = [
-            ("signed-out", r#"{"is_error":true,"result":"Not logged in · Please run /login","usage":{"input_tokens":9,"output_tokens":1}}"#.into(), 1, FailKind::NotSignedIn, "Claude isn't signed in."),
-            ("limit", r#"{"is_error":true,"result":"Claude AI usage limit reached|1760000000"}"#.into(), 1, FailKind::RateLimited, "Your Claude plan limit was reached."),
-            ("network", r#"{"is_error":true,"result":"Unable to connect to API (ENOTFOUND)"}"#.into(), 1, FailKind::Network, "Claude can't be reached (is the internet down?)."),
+            (
+                "signed-out",
+                r#"{"is_error":true,"result":"Not logged in · Please run /login","usage":{"input_tokens":9,"output_tokens":1}}"#.into(),
+                1,
+                FailKind::NotSignedIn,
+                "Claude isn't signed in.",
+            ),
+            (
+                "limit",
+                r#"{"is_error":true,"result":"Claude AI usage limit reached|1760000000"}"#.into(),
+                1,
+                FailKind::RateLimited,
+                "Your Claude plan limit was reached.",
+            ),
+            (
+                "network",
+                r#"{"is_error":true,"result":"Unable to connect to API (ENOTFOUND)"}"#.into(),
+                1,
+                FailKind::Network,
+                "Claude can't be reached (is the internet down?).",
+            ),
             ("other", r#"{"is_error":true,"result":"Something else went wrong"}"#.into(), 0, FailKind::Other, "Claude returned an error."),
             ("garbage", "this is not json".into(), 0, FailKind::Other, "Claude returned an error."),
         ];
@@ -1552,7 +1721,10 @@ pub(crate) mod tests {
         let f = Fake::new("empty", "exit 0");
         assert!(matches!(f.runner().run(&on(), &req()), Err(AiError::Failed { kind: FailKind::Other, .. })));
         let f = Fake::new("exit3", &format!("printf '%s' '{}'\nexit 3", ok_json("ok", 1, 0, 0, 1)));
-        assert!(matches!(f.runner().run(&on(), &req()), Err(AiError::Failed { .. })), "a non-zero exit is a failure even with a good-looking answer");
+        assert!(
+            matches!(f.runner().run(&on(), &req()), Err(AiError::Failed { .. })),
+            "a non-zero exit is a failure even with a good-looking answer"
+        );
         let f = Fake::ok("missing");
         let r = Runner::with_program(&f.cache, "/nonexistent/claude-fake").run(&on(), &req());
         match r {
@@ -1673,7 +1845,12 @@ pub(crate) mod tests {
         let config = f.dir.join("config");
         let (code, out, _) = cli(&[], &f, &config);
         assert_eq!(code, 0);
-        assert!(out.contains("Features that use tokens: off") && out.contains("Used today: 0 of 500,000 tokens") && out.contains("no figure reported"), "{out}");
+        assert!(
+            out.contains("Features that use tokens: off")
+                && out.contains("Used today: 0 of 500,000 tokens")
+                && out.contains("no figure reported"),
+            "{out}"
+        );
         assert!(!config.exists() && !f.cache.exists());
         assert_eq!(cli(&["nonsense"], &f, &config).0, 2);
         assert_eq!(cli(&["test", "extra"], &f, &config).0, 2);

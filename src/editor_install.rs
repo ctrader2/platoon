@@ -33,7 +33,7 @@
 //! `PLATOON_EDITOR_MIRROR=<dir>` (every download is read from `<dir>/<last part of its URL>`, never the network),
 //! `PLATOON_SKIP_FC_CACHE=1` (don't refresh the font cache).
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::{BTreeMap, VecDeque},
     fs, io,
@@ -200,7 +200,11 @@ pub fn table_json(m: &Manifest) -> Value {
             json!({"id": t.id, "version": t.version, "min_yours": t.min_yours.map(version_text), "names": t.names, "exe": t.exe, "single_gz": t.single_gz, "downloads": downloads})
         })
         .collect();
-    let plugins: Vec<Value> = m.plugins.iter().map(|p| json!({"name": p.name, "repo": p.repo, "rev": p.rev, "url": p.url, "sha256": p.sha256, "size": p.size})).collect();
+    let plugins: Vec<Value> = m
+        .plugins
+        .iter()
+        .map(|p| json!({"name": p.name, "repo": p.repo, "rev": p.rev, "url": p.url, "sha256": p.sha256, "size": p.size}))
+        .collect();
     let parsers: Vec<Value> = m
         .parsers
         .iter()
@@ -237,7 +241,9 @@ pub fn parse_table(text: &str) -> Result<Manifest, String> {
     fn texts(v: &Value, k: &str, what: &str) -> Result<Vec<String>, String> {
         match v.get(k) {
             None | Some(Value::Null) => Ok(Vec::new()),
-            Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from).ok_or_else(|| format!("{what}: \"{k}\" must be a list of text"))).collect(),
+            Some(Value::Array(a)) => {
+                a.iter().map(|x| x.as_str().map(String::from).ok_or_else(|| format!("{what}: \"{k}\" must be a list of text"))).collect()
+            }
             Some(_) => Err(format!("{what}: \"{k}\" must be a list of text")),
         }
     }
@@ -270,7 +276,9 @@ pub fn parse_table(text: &str) -> Result<Manifest, String> {
         match t.get("downloads") {
             Some(Value::Object(d)) => {
                 for (k, dv) in d {
-                    let p = Platform::from_key(k).ok_or_else(|| format!("{what}: \"{k}\" isn't a computer platoon knows (linux-x64, linux-arm64, macos-arm64, macos-x64)"))?;
+                    let p = Platform::from_key(k).ok_or_else(|| {
+                        format!("{what}: \"{k}\" isn't a computer platoon knows (linux-x64, linux-arm64, macos-arm64, macos-x64)")
+                    })?;
                     assets.push((p, download(dv, &format!("{what} for {k}"))?));
                 }
             }
@@ -290,7 +298,14 @@ pub fn parse_table(text: &str) -> Result<Manifest, String> {
     for (i, p) in list(obj, "plugins")?.iter().enumerate() {
         let what = format!("plugin {}", p.get("name").and_then(Value::as_str).map_or_else(|| format!("#{}", i + 1), String::from));
         let d = download(p, &what)?;
-        plugins.push(PluginPin { name: s(p, "name", &what)?, repo: opt_s(p, "repo", &what)?, rev: s(p, "rev", &what)?, url: d.url, sha256: d.sha256, size: d.size });
+        plugins.push(PluginPin {
+            name: s(p, "name", &what)?,
+            repo: opt_s(p, "repo", &what)?,
+            rev: s(p, "rev", &what)?,
+            url: d.url,
+            sha256: d.sha256,
+            size: d.size,
+        });
     }
     let mut parsers = Vec::new();
     for (i, p) in list(obj, "parsers")?.iter().enumerate() {
@@ -308,7 +323,12 @@ pub fn parse_table(text: &str) -> Result<Manifest, String> {
         });
     }
     let f = obj.get("font").ok_or("the download table has no \"font\"")?;
-    let font = FontPin { family: s(f, "family", "the font")?, version: s(f, "version", "the font")?, download: download(f, "the font")?, files: texts(f, "files", "the font")? };
+    let font = FontPin {
+        family: s(f, "family", "the font")?,
+        version: s(f, "version", "the font")?,
+        download: download(f, "the font")?,
+        files: texts(f, "files", "the font")?,
+    };
     Ok(Manifest { tools, plugins, parsers, font })
 }
 
@@ -320,7 +340,10 @@ fn plain_name(s: &str) -> bool {
 
 /// A path inside an unpacked download: relative, no `..`, no hidden parts.
 fn inside(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 200 && !s.starts_with('/') && s.split('/').all(|p| !p.is_empty() && p != "." && p != ".." && !p.starts_with('.') && !p.contains('\\'))
+    !s.is_empty()
+        && s.len() <= 200
+        && !s.starts_with('/')
+        && s.split('/').all(|p| !p.is_empty() && p != "." && p != ".." && !p.starts_with('.') && !p.contains('\\'))
 }
 
 fn hex64(s: &str) -> bool {
@@ -380,10 +403,16 @@ pub fn table_problems(m: &Manifest) -> Vec<String> {
         }
     }
     for p in &m.plugins {
-        out.extend(download_problems(&format!("plugin {}", p.name), &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size }));
+        out.extend(download_problems(
+            &format!("plugin {}", p.name),
+            &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size },
+        ));
     }
     for p in &m.parsers {
-        out.extend(download_problems(&format!("parser {}", p.lang), &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size }));
+        out.extend(download_problems(
+            &format!("parser {}", p.lang),
+            &Download { url: p.url.clone(), sha256: p.sha256.clone(), size: p.size },
+        ));
     }
     out.extend(download_problems("the font", &m.font.download));
     for t in &m.tools {
@@ -416,7 +445,13 @@ pub fn table_problems(m: &Manifest) -> Vec<String> {
     if m.font.files.is_empty() || m.font.files.iter().any(|f| !plain_name(f)) {
         out.push("the font: \"files\" must be plain file names in its archive".into());
     }
-    let mut ids: Vec<String> = m.tools.iter().map(|t| format!("tool {}", t.id)).chain(m.plugins.iter().map(|p| format!("plugin {}", p.name))).chain(m.parsers.iter().map(|p| format!("parser {}", p.lang))).collect();
+    let mut ids: Vec<String> = m
+        .tools
+        .iter()
+        .map(|t| format!("tool {}", t.id))
+        .chain(m.plugins.iter().map(|p| format!("plugin {}", p.name)))
+        .chain(m.parsers.iter().map(|p| format!("parser {}", p.lang)))
+        .collect();
     ids.sort();
     for w in ids.windows(2) {
         if w[0] == w[1] {
@@ -426,7 +461,12 @@ pub fn table_problems(m: &Manifest) -> Vec<String> {
     for p in [Platform::LinuxX64, Platform::LinuxArm64, Platform::MacArm64, Platform::MacX64] {
         let total = download_bytes(m, p);
         if total > MAX_TABLE_BYTES {
-            out.push(format!("on {} it downloads {}, more than the {} a plugin may", p.key(), megabytes(total), megabytes(MAX_TABLE_BYTES)));
+            out.push(format!(
+                "on {} it downloads {}, more than the {} a plugin may",
+                p.key(),
+                megabytes(total),
+                megabytes(MAX_TABLE_BYTES)
+            ));
         }
     }
     out.dedup();
@@ -688,7 +728,11 @@ impl Status {
     /// What is missing or out of date, by name.
     #[cfg(test)]
     pub fn needs(&self) -> Vec<&str> {
-        self.items.iter().filter(|i| i.state != ItemState::Ok && !(self.no_compiler && i.part == Part::Highlighting)).map(|i| i.name.as_str()).collect()
+        self.items
+            .iter()
+            .filter(|i| i.state != ItemState::Ok && !(self.no_compiler && i.part == Part::Highlighting))
+            .map(|i| i.name.as_str())
+            .collect()
     }
 }
 
@@ -701,7 +745,11 @@ fn tool_ok(dirs: &Dirs, tool: &ToolPin, rec: &Value, platform: Platform) -> Item
         "yours" => ItemState::Ok,
         "download" => {
             let want = tool.assets.iter().find(|(p, _)| *p == platform).map(|(_, d)| d.sha256.as_str()).unwrap_or("");
-            if str_of(rec, "sha256") == want && runnable(&dirs.tools().join(&tool.id).join(&tool.exe)) { ItemState::Ok } else { ItemState::OutOfDate }
+            if str_of(rec, "sha256") == want && runnable(&dirs.tools().join(&tool.id).join(&tool.exe)) {
+                ItemState::Ok
+            } else {
+                ItemState::OutOfDate
+            }
         }
         _ => ItemState::Missing,
     }
@@ -744,7 +792,11 @@ pub fn status(dirs: &Dirs, m: &Manifest) -> Status {
     let font_state = match get("font") {
         Some(r) => {
             let dir = PathBuf::from(str_of(&r, "dir"));
-            let files: Vec<String> = r.get("files").and_then(Value::as_array).map(|a| a.iter().filter_map(|f| f.as_str().map(String::from)).collect()).unwrap_or_default();
+            let files: Vec<String> = r
+                .get("files")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|f| f.as_str().map(String::from)).collect())
+                .unwrap_or_default();
             let there = !files.is_empty() && files.iter().all(|f| dir.join(f).is_file());
             if !there {
                 ItemState::Missing
@@ -770,7 +822,9 @@ fn nerd_font_present_with(dirs: &Dirs, system: &dyn Fn() -> bool) -> bool {
     let rec = load_record(dirs);
     let ours = rec.get("font").is_some_and(|r| {
         let dir = PathBuf::from(str_of(r, "dir"));
-        r.get("files").and_then(Value::as_array).is_some_and(|a| a.iter().filter_map(Value::as_str).any(|f| f.ends_with(".ttf") && dir.join(f).is_file()))
+        r.get("files")
+            .and_then(Value::as_array)
+            .is_some_and(|a| a.iter().filter_map(Value::as_str).any(|f| f.ends_with(".ttf") && dir.join(f).is_file()))
     });
     ours || system()
 }
@@ -779,10 +833,12 @@ fn system_has_nerd_font() -> bool {
     if cfg!(target_os = "macos") {
         let home = PathBuf::from(std::env::var_os("HOME").unwrap_or_default());
         return [home.join("Library/Fonts"), PathBuf::from("/Library/Fonts")].iter().any(|d| {
-            fs::read_dir(d).is_ok_and(|rd| rd.flatten().any(|e| {
-                let n = e.file_name().to_string_lossy().to_lowercase();
-                n.contains("nerdfont") || n.contains("nerd font")
-            }))
+            fs::read_dir(d).is_ok_and(|rd| {
+                rd.flatten().any(|e| {
+                    let n = e.file_name().to_string_lossy().to_lowercase();
+                    n.contains("nerdfont") || n.contains("nerd font")
+                })
+            })
         });
     }
     Command::new("fc-list")
@@ -853,7 +909,12 @@ struct Lock(#[allow(dead_code)] fs::File);
 
 fn lock(dirs: &Dirs) -> Result<Lock, String> {
     fs::create_dir_all(&dirs.editor).map_err(|e| format!("couldn't make {}: {e}", dirs.editor.display()))?;
-    let f = fs::OpenOptions::new().create(true).truncate(false).write(true).open(dirs.editor.join("install.lock")).map_err(|e| e.to_string())?;
+    let f = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(dirs.editor.join("install.lock"))
+        .map_err(|e| e.to_string())?;
     // A lock just let go can look held for an instant: an flock stays until every copy of the descriptor is closed,
     // and a process another thread is starting holds a copy until its `exec`. So "held" only after a short wait; a
     // real install elsewhere holds it for many seconds.
@@ -864,7 +925,9 @@ fn lock(dirs: &Dirs) -> Result<Lock, String> {
             return Ok(Lock(f));
         }
         if start.elapsed() > Duration::from_millis(1500) {
-            return Err("The code editor is being installed or removed by another platoon right now; try again when it has finished.".into());
+            return Err(
+                "The code editor is being installed or removed by another platoon right now; try again when it has finished.".into()
+            );
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -873,7 +936,10 @@ fn lock(dirs: &Dirs) -> Result<Lock, String> {
 pub fn install(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sync)) -> Result<Report, String> {
     let start = Instant::now();
     let Some(platform) = dirs.platform else {
-        return Err("The code editor can't be installed on this computer: platoon only has downloads for Linux and macOS, on x86_64 and ARM.".into());
+        return Err(
+            "The code editor can't be installed on this computer: platoon only has downloads for Linux and macOS, on x86_64 and ARM."
+                .into(),
+        );
     };
     let _lock = lock(dirs)?;
     // Whatever an interrupted install left half done goes; nothing in it was ever recorded.
@@ -938,7 +1004,11 @@ pub fn install(dirs: &Dirs, m: &Manifest, progress: &(dyn Fn(Progress) + Sync)) 
                     let p = {
                         let mut c = counts.lock().unwrap_or_else(|e| e.into_inner());
                         let e = c.entry(part).or_default();
-                        if failed { e.1 += 1 } else { e.0 += 1 }
+                        if failed {
+                            e.1 += 1
+                        } else {
+                            e.0 += 1
+                        }
                         Progress { part, done: e.0, total: totals.get(&part).copied().unwrap_or(0), failed: e.1 }
                     };
                     progress(p);
@@ -1205,7 +1275,8 @@ fn install_font(dirs: &Dirs, f: &FontPin, work: &Path) -> Result<Done, String> {
     }
     if dirs.refresh_fonts {
         // Only platoon's own folder, so the terminal's font list has the new family.
-        let _ = Command::new("fc-cache").arg("-f").arg(&dirs.fonts).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
+        let _ =
+            Command::new("fc-cache").arg("-f").arg(&dirs.fonts).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
     Ok(Done {
         key: "font".into(),
@@ -1225,7 +1296,21 @@ fn fetch(dirs: &Dirs, d: &Download, work: &Path) -> Result<PathBuf, String> {
         }
         None => {
             let o = Command::new("curl")
-                .args(["-fsSL", "--proto", "=https", "--proto-redir", "=https", "--retry", "2", "--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "30"])
+                .args([
+                    "-fsSL",
+                    "--proto",
+                    "=https",
+                    "--proto-redir",
+                    "=https",
+                    "--retry",
+                    "2",
+                    "--connect-timeout",
+                    "20",
+                    "--speed-limit",
+                    "1024",
+                    "--speed-time",
+                    "30",
+                ])
                 // A download bigger than its pin says is stopped rather than fetched in full.
                 .arg("--max-filesize")
                 .arg(d.size.to_string())
@@ -1246,7 +1331,10 @@ fn fetch(dirs: &Dirs, d: &Download, work: &Path) -> Result<PathBuf, String> {
     let len = fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
     if len != d.size {
         let _ = fs::remove_file(&file);
-        return Err(format!("the download of {base} isn't the file platoon expects (it is {len} bytes, not {}), so it wasn't used", d.size));
+        return Err(format!(
+            "the download of {base} isn't the file platoon expects (it is {len} bytes, not {}), so it wasn't used",
+            d.size
+        ));
     }
     let got = sha256_file(&file).map_err(|e| e.to_string())?;
     if got != d.sha256 {
@@ -1394,7 +1482,8 @@ impl Printer {
     pub fn update(&self, p: Progress) {
         use std::io::Write;
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-        let finished_now = p.done + p.failed == p.total && st.get(&p.part).is_none_or(|old| old.done + old.failed != old.total || old.total == 0);
+        let finished_now =
+            p.done + p.failed == p.total && st.get(&p.part).is_none_or(|old| old.done + old.failed != old.total || old.total == 0);
         st.insert(p.part, p);
         if self.quiet {
             return;
@@ -1430,12 +1519,12 @@ fn terminal_width() -> usize {
 // ---- sha256 ---------------------------------------------------------------------------------------------------------
 
 const K: [u32; 64] = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be,
+    0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa,
+    0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85,
+    0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f,
+    0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
 struct Sha256 {
@@ -1446,7 +1535,11 @@ struct Sha256 {
 
 impl Sha256 {
     fn new() -> Self {
-        Sha256 { h: [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19], buf: Vec::with_capacity(64), len: 0 }
+        Sha256 {
+            h: [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19],
+            buf: Vec::with_capacity(64),
+            len: 0,
+        }
     }
 
     fn block(&mut self, b: &[u8]) {
@@ -1581,12 +1674,25 @@ pub mod testing {
     pub fn fake(mirror: &Path) -> Manifest {
         fs::create_dir_all(mirror).unwrap();
         let mut tools = Vec::new();
-        for (id, min, names, exe) in [("nvim", Some([0, 12, 0]), vec!["nvim"], "bin/nvim"), ("rg", None, vec!["rg"], "rg"), ("fd", None, vec!["fd", "fdfind"], "fd")] {
+        for (id, min, names, exe) in
+            [("nvim", Some([0, 12, 0]), vec!["nvim"], "bin/nvim"), ("rg", None, vec!["rg"], "rg"), ("fd", None, vec!["fd", "fdfind"], "fd")]
+        {
             let name = format!("{id}-fake.tar.gz");
             let sha = pack(mirror, &name, &format!("{id}-dist"), &[(exe, "#!/bin/sh\necho fake\n"), ("README", "x")]);
             let size = fs::metadata(mirror.join(&name)).unwrap().len();
-            let assets = Platform::ALL.iter().map(|p| (*p, Download { url: format!("https://example.invalid/{name}"), sha256: sha.clone(), size })).collect();
-            tools.push(ToolPin { id: id.into(), version: "1.0.0".into(), min_yours: min, names: names.into_iter().map(String::from).collect(), exe: exe.into(), single_gz: false, assets });
+            let assets = Platform::ALL
+                .iter()
+                .map(|p| (*p, Download { url: format!("https://example.invalid/{name}"), sha256: sha.clone(), size }))
+                .collect();
+            tools.push(ToolPin {
+                id: id.into(),
+                version: "1.0.0".into(),
+                min_yours: min,
+                names: names.into_iter().map(String::from).collect(),
+                exe: exe.into(),
+                single_gz: false,
+                assets,
+            });
         }
         // The fourth, a single gzipped program like tree-sitter's.
         let gz = mirror.join("ts-fake.gz");
@@ -1604,21 +1710,49 @@ pub mod testing {
             names: vec!["tree-sitter".into()],
             exe: "tree-sitter".into(),
             single_gz: true,
-            assets: Platform::ALL.iter().map(|p| (*p, Download { url: "https://example.invalid/ts-fake.gz".into(), sha256: sha.clone(), size })).collect(),
+            assets: Platform::ALL
+                .iter()
+                .map(|p| (*p, Download { url: "https://example.invalid/ts-fake.gz".into(), sha256: sha.clone(), size }))
+                .collect(),
         });
         let mut plugins = Vec::new();
         for name in ["alpha.nvim", "nvim-treesitter"] {
             let rev = format!("rev-{name}");
-            let sha = pack(mirror, &rev, &format!("{name}-{rev}"), &[("lua/x.lua", "return 1"), ("runtime/queries/lang1/highlights.scm", "; q"), ("runtime/queries/dep/highlights.scm", "; d")]);
+            let sha = pack(
+                mirror,
+                &rev,
+                &format!("{name}-{rev}"),
+                &[
+                    ("lua/x.lua", "return 1"),
+                    ("runtime/queries/lang1/highlights.scm", "; q"),
+                    ("runtime/queries/dep/highlights.scm", "; d"),
+                ],
+            );
             let size = fs::metadata(mirror.join(&rev)).unwrap().len();
-            plugins.push(PluginPin { name: name.into(), repo: format!("o/{name}"), url: format!("https://example.invalid/{rev}"), rev, sha256: sha, size });
+            plugins.push(PluginPin {
+                name: name.into(),
+                repo: format!("o/{name}"),
+                url: format!("https://example.invalid/{rev}"),
+                rev,
+                sha256: sha,
+                size,
+            });
         }
         let mut parsers = Vec::new();
         for (lang, requires) in [("lang1", vec!["dep".to_string()]), ("lang2", vec![])] {
             let rev = format!("prev-{lang}");
             let sha = pack(mirror, &rev, &format!("tree-sitter-{lang}"), &[("src/parser.c", "int x;"), ("src/scanner.c", "int y;")]);
             let size = fs::metadata(mirror.join(&rev)).unwrap().len();
-            parsers.push(ParserPin { lang: lang.into(), repo: format!("o/{lang}"), url: format!("https://example.invalid/{rev}"), rev, location: String::new(), sha256: sha, size, requires });
+            parsers.push(ParserPin {
+                lang: lang.into(),
+                repo: format!("o/{lang}"),
+                url: format!("https://example.invalid/{rev}"),
+                rev,
+                location: String::new(),
+                sha256: sha,
+                size,
+                requires,
+            });
         }
         let files = vec!["FakeNerdFont-Regular.ttf".to_string(), "OFL.txt".to_string()];
         let fstage = mirror.join(".font");
@@ -1627,14 +1761,25 @@ pub mod testing {
             fs::write(fstage.join(f), "font").unwrap();
         }
         fs::write(fstage.join("FakeNerdFontMono-Regular.ttf"), "not taken").unwrap();
-        let st = Command::new("tar").arg("-czf").arg(mirror.join("Font.tar.xz")).arg("-C").arg(&fstage).args(["FakeNerdFont-Regular.ttf", "OFL.txt", "FakeNerdFontMono-Regular.ttf"]).status().unwrap();
+        let st = Command::new("tar")
+            .arg("-czf")
+            .arg(mirror.join("Font.tar.xz"))
+            .arg("-C")
+            .arg(&fstage)
+            .args(["FakeNerdFont-Regular.ttf", "OFL.txt", "FakeNerdFontMono-Regular.ttf"])
+            .status()
+            .unwrap();
         assert!(st.success());
         fs::remove_dir_all(&fstage).unwrap();
         let font_file = mirror.join("Font.tar.xz");
         let font = FontPin {
             family: "Fake Nerd Font".into(),
             version: "9".into(),
-            download: Download { url: "https://example.invalid/Font.tar.xz".into(), sha256: sha256_file(&font_file).unwrap(), size: fs::metadata(&font_file).unwrap().len() },
+            download: Download {
+                url: "https://example.invalid/Font.tar.xz".into(),
+                sha256: sha256_file(&font_file).unwrap(),
+                size: fs::metadata(&font_file).unwrap().len(),
+            },
             files,
         };
         Manifest { tools, plugins, parsers, font }
@@ -1643,7 +1788,13 @@ pub mod testing {
     /// A fake C compiler that writes what it was asked to build into the `-o` file, and logs each call.
     pub fn fake_cc(dir: &Path) -> PathBuf {
         let bin = dir.join("ccbin");
-        write_exe(&bin.join("cc"), &format!("out=''; prev=''; for a in \"$@\"; do [ \"$prev\" = -o ] && out=$a; prev=$a; done; echo \"$*\" >> '{}'; echo built > \"$out\"", dir.join("cc.log").display()));
+        write_exe(
+            &bin.join("cc"),
+            &format!(
+                "out=''; prev=''; for a in \"$@\"; do [ \"$prev\" = -o ] && out=$a; prev=$a; done; echo \"$*\" >> '{}'; echo built > \"$out\"",
+                dir.join("cc.log").display()
+            ),
+        );
         bin
     }
 
@@ -1702,7 +1853,19 @@ mod tests {
         assert_eq!(m.tools[0].min_yours, Some([0, 12, 0]));
         assert_eq!(m.tools[3].min_yours, Some([0, 26, 1]));
         let names: Vec<&str> = m.plugins.iter().map(|p| p.name.as_str()).collect();
-        for want in ["neo-tree.nvim", "plenary.nvim", "nui.nvim", "diffview.nvim", "gitsigns.nvim", "snacks.nvim", "nvim-treesitter", "which-key.nvim", "lualine.nvim", "blink.cmp", "mini.nvim"] {
+        for want in [
+            "neo-tree.nvim",
+            "plenary.nvim",
+            "nui.nvim",
+            "diffview.nvim",
+            "gitsigns.nvim",
+            "snacks.nvim",
+            "nvim-treesitter",
+            "which-key.nvim",
+            "lualine.nvim",
+            "blink.cmp",
+            "mini.nvim",
+        ] {
             assert!(names.contains(&want), "{want}");
         }
         for p in &m.plugins {
@@ -1713,7 +1876,27 @@ mod tests {
             assert!(p.size > 0, "{}", p.name);
         }
         let langs: Vec<&str> = m.parsers.iter().map(|p| p.lang.as_str()).collect();
-        for want in ["lua", "vim", "vimdoc", "query", "markdown", "markdown_inline", "rust", "python", "javascript", "typescript", "tsx", "json", "yaml", "toml", "bash", "html", "css", "go", "c"] {
+        for want in [
+            "lua",
+            "vim",
+            "vimdoc",
+            "query",
+            "markdown",
+            "markdown_inline",
+            "rust",
+            "python",
+            "javascript",
+            "typescript",
+            "tsx",
+            "json",
+            "yaml",
+            "toml",
+            "bash",
+            "html",
+            "css",
+            "go",
+            "c",
+        ] {
             assert!(langs.contains(&want), "{want}");
         }
         for p in &m.parsers {
@@ -1727,7 +1910,8 @@ mod tests {
         assert!(m.font.download.url.ends_with("JetBrainsMono.tar.xz") && hex(&m.font.download.sha256));
         assert!(m.font.files.contains(&"JetBrainsMonoNerdFont-Regular.ttf".to_string()) && m.font.files.contains(&"OFL.txt".to_string()));
         // Every download has its own last part, which is what the mirror folder is keyed by.
-        let mut bases: Vec<String> = m.tools.iter().flat_map(|t| t.assets.iter().map(|(_, d)| d.url.rsplit('/').next().unwrap().to_string())).collect();
+        let mut bases: Vec<String> =
+            m.tools.iter().flat_map(|t| t.assets.iter().map(|(_, d)| d.url.rsplit('/').next().unwrap().to_string())).collect();
         bases.sort();
         let n = bases.len();
         bases.dedup();
@@ -1745,7 +1929,8 @@ mod tests {
 
     #[test]
     fn data_and_font_folders_follow_their_knobs() {
-        let env = |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(a, _)| *a == k).map(|(_, v)| v.to_string());
+        let env =
+            |pairs: &'static [(&'static str, &'static str)]| move |k: &str| pairs.iter().find(|(a, _)| *a == k).map(|(_, v)| v.to_string());
         assert_eq!(data_dir_from(&env(&[("PLATOON_DATA_DIR", "/d"), ("XDG_DATA_HOME", "/x"), ("HOME", "/h")]), false), PathBuf::from("/d"));
         assert_eq!(data_dir_from(&env(&[("XDG_DATA_HOME", "/x"), ("HOME", "/h")]), false), PathBuf::from("/x/platoon"));
         assert_eq!(data_dir_from(&env(&[("HOME", "/h")]), false), PathBuf::from("/h/.local/share/platoon"));
@@ -1772,7 +1957,12 @@ mod tests {
         assert!(r.disk_bytes > 0);
         // The layout phase 3 relies on.
         let e = &d.editor;
-        for (bin, target) in [("nvim", "tools/nvim/bin/nvim"), ("rg", "tools/rg/rg"), ("fd", "tools/fd/fd"), ("tree-sitter", "tools/tree-sitter/tree-sitter")] {
+        for (bin, target) in [
+            ("nvim", "tools/nvim/bin/nvim"),
+            ("rg", "tools/rg/rg"),
+            ("fd", "tools/fd/fd"),
+            ("tree-sitter", "tools/tree-sitter/tree-sitter"),
+        ] {
             assert_eq!(fs::read_link(e.join("bin").join(bin)).unwrap(), e.join(target), "{bin}");
             assert!(runnable(&e.join("bin").join(bin)), "{bin}");
         }
@@ -1783,7 +1973,10 @@ mod tests {
         assert!(e.join("site/pack/platoon/start/nvim-treesitter/runtime/queries/lang1").is_dir());
         assert_eq!(fs::read_to_string(e.join("site/parser/lang1.so")).unwrap(), "built\n");
         assert_eq!(fs::read_to_string(e.join("site/parser-info/lang1.revision")).unwrap(), "prev-lang1");
-        assert_eq!(fs::read_link(e.join("site/queries/lang1")).unwrap(), PathBuf::from("../pack/platoon/start/nvim-treesitter/runtime/queries/lang1"));
+        assert_eq!(
+            fs::read_link(e.join("site/queries/lang1")).unwrap(),
+            PathBuf::from("../pack/platoon/start/nvim-treesitter/runtime/queries/lang1")
+        );
         assert!(e.join("site/queries/lang1/highlights.scm").is_file(), "the link resolves");
         assert!(e.join("site/queries/dep/highlights.scm").is_file(), "the queries it builds on are linked too");
         let log = fs::read_to_string(base.join("cc.log")).unwrap();
@@ -1886,7 +2079,14 @@ mod tests {
         // Too old for nvim-treesitter's build step: platoon's own.
         assert_eq!(fs::read_link(d.bin().join("tree-sitter")).unwrap(), d.editor.join("tools/tree-sitter/tree-sitter"));
         assert!(!d.editor.join("tools/nvim").exists() && !d.editor.join("tools/rg").exists());
-        assert_eq!(r.yours, [format!("fd ({})", own.join("fdfind").display()), format!("nvim ({})", own.join("nvim").display()), format!("rg ({})", own.join("rg").display())]);
+        assert_eq!(
+            r.yours,
+            [
+                format!("fd ({})", own.join("fdfind").display()),
+                format!("nvim ({})", own.join("nvim").display()),
+                format!("rg ({})", own.join("rg").display())
+            ]
+        );
         assert_eq!(record(&d)["items"]["tool:nvim"], json!({"source": "yours", "path": own.join("nvim").to_string_lossy()}));
         assert!(status(&d, &m).complete());
         // Their nvim goes away: the link is broken, so it is missing, and the next run downloads one.
@@ -2008,10 +2208,21 @@ mod tests {
     #[test]
     fn the_words_are_plain() {
         let d = dirs(Path::new("/x"), vec![]);
-        let r = Report { took: Duration::from_millis(41_600), disk_bytes: 151_400_000, fetched: 3, yours: vec!["rg (/usr/bin/rg)".into()], notes: vec![], font: true, font_family: "JetBrainsMono Nerd Font".into() };
+        let r = Report {
+            took: Duration::from_millis(41_600),
+            disk_bytes: 151_400_000,
+            fetched: 3,
+            yours: vec!["rg (/usr/bin/rg)".into()],
+            notes: vec![],
+            font: true,
+            font_family: "JetBrainsMono Nerd Font".into(),
+        };
         let text = render_report(&r, &d);
         assert!(text.starts_with("The code editor is ready: 151 MB in /x/data/editor, took 42 s."), "{text}");
-        assert!(text.contains("Used your own: rg (/usr/bin/rg).") && text.contains("Xfce Terminal: Edit > Preferences > Appearance > Font"), "{text}");
+        assert!(
+            text.contains("Used your own: rg (/usr/bin/rg).") && text.contains("Xfce Terminal: Edit > Preferences > Appearance > Font"),
+            "{text}"
+        );
         assert!(text.contains("font-family = \"JetBrainsMono Nerd Font\""), "{text}");
         assert!(font_advice("F", true).contains("iTerm2") && !font_advice("F", true).contains("Xfce"));
         let p = |done, total, failed| Printer::cell(&Progress { part: Part::Plugins, done, total, failed });
@@ -2035,27 +2246,34 @@ mod tests {
             f(&mut t);
             table_problems(&t).join("\n")
         };
-        assert!(problems(&|t| t.plugins[0].url = "http://example.invalid/x".into()).contains("plugin alpha.nvim: its address must be an https:// link"));
+        assert!(
+            problems(&|t| t.plugins[0].url = "http://example.invalid/x".into())
+                .contains("plugin alpha.nvim: its address must be an https:// link")
+        );
         assert!(problems(&|t| t.tools[1].assets[0].1.sha256 = String::new()).contains("tool rg for linux-x64: it needs its sha256"));
         assert!(problems(&|t| t.font.download.size = 0).contains("the font: it needs its size in bytes"));
         assert!(problems(&|t| t.parsers[0].size = 400_000_000).contains("more than one download may be"));
-        assert!(problems(&|t| {
-            for p in &mut t.plugins {
-                p.size = 250_000_000;
-                p.sha256 = sha256_hex(p.name.as_bytes());
-            }
-            t.parsers.iter_mut().for_each(|p| p.size = 250_000_000);
-        })
-        .contains("more than the"));
+        assert!(
+            problems(&|t| {
+                for p in &mut t.plugins {
+                    p.size = 250_000_000;
+                    p.sha256 = sha256_hex(p.name.as_bytes());
+                }
+                t.parsers.iter_mut().for_each(|p| p.size = 250_000_000);
+            })
+            .contains("more than the")
+        );
         assert!(problems(&|t| t.plugins[0].name = "../escape".into()).contains("isn't a plain name"));
         assert!(problems(&|t| t.tools[0].exe = "../../bin/sh".into()).contains("\"exe\" must be a path inside its download"));
         assert!(problems(&|t| t.font.files[0] = "../x.ttf".into()).contains("plain file names"));
         assert!(problems(&|t| t.tools.retain(|x| x.id != "nvim")).contains("no tool \"nvim\""));
-        assert!(problems(&|t| {
-            let again = t.plugins[0].clone();
-            t.plugins.push(again);
-        })
-        .contains("plugin alpha.nvim is listed twice"));
+        assert!(
+            problems(&|t| {
+                let again = t.plugins[0].clone();
+                t.plugins.push(again);
+            })
+            .contains("plugin alpha.nvim is listed twice")
+        );
         // The shape: plain words too.
         assert!(parse_table("[]").unwrap_err().contains("must be a JSON object"));
         assert!(parse_table(r#"{"format": 2}"#).unwrap_err().contains("format this platoon doesn't know"));

@@ -16,7 +16,7 @@ use crate::gitfacts::{self, GitFacts};
 use crate::handoff::{self, Brief, Facts};
 use crate::instructions;
 use crate::textbox;
-use std::sync::mpsc::{channel, TryRecvError};
+use std::sync::mpsc::{TryRecvError, channel};
 
 /// How long a hand-off call may take before it is given up on. It is one small call, but it is the user's own
 /// key press, so it gets a little longer than a background one.
@@ -295,7 +295,11 @@ impl App {
         facts.notes = notes.is_file().then(|| crate::dirs::tilde(&notes.to_string_lossy(), &self.home));
         let material = self.handoff_material(&session, &session_name, &cwd, &project.name);
         let transcript = (self.reader.root().to_path_buf(), session.clone());
-        let mut req = Request::new(handoff::FEATURE, handoff::system_with(&instructions::guidance(&self.config, instructions::HANDOFF)), String::new());
+        let mut req = Request::new(
+            handoff::FEATURE,
+            handoff::system_with(&instructions::guidance(&self.config, instructions::HANDOFF)),
+            String::new(),
+        );
         req.user_initiated = true;
         req.timeout = HANDOFF_TIMEOUT;
         req.cancel = self.switchboard.token(handoff::FEATURE);
@@ -318,7 +322,14 @@ impl App {
     /// a network folder); git goes before the call so the files it names can be given to Claude.
     ///
     /// `transcript` is Claude's config folder and the session id: even finding the file is left to the thread.
-    fn spawn_handoff(&self, settings: Settings, mut req: Request, mut material: handoff::Material, cwd: String, transcript: (PathBuf, String)) -> Receiver<HandoffAnswer> {
+    fn spawn_handoff(
+        &self,
+        settings: Settings,
+        mut req: Request,
+        mut material: handoff::Material,
+        cwd: String,
+        transcript: (PathBuf, String),
+    ) -> Receiver<HandoffAnswer> {
         let (tx, rx) = channel();
         let program = self.ai_program();
         let git_program = self.git_program.clone();
@@ -336,7 +347,11 @@ impl App {
                 return;
             }
             let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(crate::claude::spent) };
-            let git = if req.cancel.is_cancelled() { None } else { gitfacts::gather(&git_program, Path::new(&cwd), started_ms, gitfacts::BUDGET) };
+            let git = if req.cancel.is_cancelled() {
+                None
+            } else {
+                gitfacts::gather(&git_program, Path::new(&cwd), started_ms, gitfacts::BUDGET)
+            };
             req.prompt = handoff::prompt(&material, git.as_ref());
             let answer = if never || req.cancel.is_cancelled() { Err(AiError::Cancelled) } else { runner.run(&settings, &req) };
             let _ = tx.send(HandoffAnswer::Done { started_ms, messages, git, spent, answer });
@@ -390,7 +405,10 @@ impl App {
         match answer {
             Ok(reply) => match handoff::parse(&reply.text, !handoff::git_lists_files(git.as_ref())) {
                 Some(brief) => self.show_brief(&brief, git, spent),
-                None => self.handoff.state = HandoffState::Failed("Claude's answer couldn't be understood, so there is no brief. Nothing has changed.".into()),
+                None => {
+                    self.handoff.state =
+                        HandoffState::Failed("Claude's answer couldn't be understood, so there is no brief. Nothing has changed.".into())
+                }
             },
             Err(AiError::Cancelled) => self.mode = Mode::List,
             Err(e) => self.handoff.state = HandoffState::Failed(format!("{} Nothing has changed.", e.plain())),

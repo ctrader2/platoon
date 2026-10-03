@@ -9,10 +9,10 @@ use crate::testkit::World;
 use crate::tickets::{self, NewTicket, State, Tickets};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     buffer::Buffer,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
-    Terminal,
 };
 use std::{
     fs,
@@ -39,7 +39,10 @@ fn typed(app: &mut App, text: &str) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn buffer(term: &Terminal<TestBackend>) -> Buffer {
@@ -88,7 +91,8 @@ fn on_the_project(name: &str) -> (World, App, String) {
 
 /// Add tickets behind the app's back (as `platoon ticket add` would) and let it see them.
 fn add(w: &World, app: &mut App, id: &str, title: &str, blocked_by: &[u32]) -> u32 {
-    let n = Tickets::open(&w.config, id).add(NewTicket { title: title.into(), blocked_by: blocked_by.to_vec(), ..Default::default() }).unwrap();
+    let n =
+        Tickets::open(&w.config, id).add(NewTicket { title: title.into(), blocked_by: blocked_by.to_vec(), ..Default::default() }).unwrap();
     app.reload_for_test();
     n
 }
@@ -172,7 +176,12 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     assert_ne!(buf[(s.1 + 3, s.0)].fg, t.accent);
     // Clicking a pane focuses it.
     let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Pane(Pane::Sessions))).map(|(r, _)| *r).unwrap();
-    app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 1, row: r.y + r.height - 1, modifiers: KeyModifiers::NONE });
+    app.on_mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: r.x + 1,
+        row: r.y + r.height - 1,
+        modifiers: KeyModifiers::NONE,
+    });
     assert_eq!(app.pane, Pane::Sessions);
 }
 
@@ -267,7 +276,11 @@ fn a_new_tickets_folder_is_the_projects_most_recent_sessions_folder() {
     key(&mut app, KeyCode::Char('n'));
     typed(&mut app, "Basket");
     key(&mut app, KeyCode::Enter);
-    assert_eq!(app.ticket(1).unwrap().folders, [new.to_string_lossy().into_owned()], "the project's most recent session's, not another project's");
+    assert_eq!(
+        app.ticket(1).unwrap().folders,
+        [new.to_string_lossy().into_owned()],
+        "the project's most recent session's, not another project's"
+    );
 }
 
 #[test]
@@ -324,7 +337,13 @@ fn done_and_cancelled_are_folded_under_a_divider_and_come_back_up_when_new_again
     key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 3, squad: false, pid: None, .. })));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("Cancel ticket #3?") && shown.contains("No squad has had it, so it stays cancelled.") && shown.contains("y cancel it") && shown.contains("n keep it"), "{shown}");
+    assert!(
+        shown.contains("Cancel ticket #3?")
+            && shown.contains("No squad has had it, so it stays cancelled.")
+            && shown.contains("y cancel it")
+            && shown.contains("n keep it"),
+        "{shown}"
+    );
     // No: nothing changes.
     key(&mut app, KeyCode::Char('n'));
     assert!(matches!(app.mode, Mode::List));
@@ -384,7 +403,12 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     // A click on a row picks it; a click on the picked row opens it.
     let click = |app: &mut App, i: usize| {
         let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::TicketRow(x) if *x == i)).map(|(r, _)| *r).expect("drawn");
-        app.on_mouse(MouseEvent { kind: MouseEventKind::Down(MouseButton::Left), column: r.x + 2, row: r.y, modifiers: KeyModifiers::NONE });
+        app.on_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: r.x + 2,
+            row: r.y,
+            modifiers: KeyModifiers::NONE,
+        });
     };
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
@@ -464,7 +488,10 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     assert!(!f.contains("How far") && !f.contains("merge request"), "no how-far line: {shown}");
     assert!(f.contains(&format!("Folders {}", folder.to_string_lossy())) && f.contains("~/somewhere"), "home-abbreviated: {shown}");
     assert!(f.contains("Waits for #1 Base · New"), "{shown}");
-    assert!(f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"), "the Markdown drawn: {shown}");
+    assert!(
+        f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"),
+        "the Markdown drawn: {shown}"
+    );
     assert!(f.contains("e edit") && f.contains("c cancel") && !f.contains("s state") && f.contains("ctrl+space back"), "the keys: {shown}");
     assert!(!f.contains("h how far") && !f.contains("how far"), "no how-far key: {shown}");
     assert!(!f.contains("step 60"));
@@ -604,7 +631,9 @@ fn a_ticket_made_from_a_session_says_where_it_came_from_and_enter_opens_that_ses
     w.transcript("src-1", "/nonexistent/platoon-test-from", "plan the basket work", 5);
     app.projects.assign("src-1", Some(&id)).unwrap();
     let from = tickets::Source { session: "src-1".into(), project: id.clone() };
-    let n = Tickets::open(&w.config, &id).add(NewTicket { title: "Basket page".into(), from: Some(from.clone()), ..Default::default() }).unwrap();
+    let n = Tickets::open(&w.config, &id)
+        .add(NewTicket { title: "Basket page".into(), from: Some(from.clone()), ..Default::default() })
+        .unwrap();
     add(&w, &mut app, &id, "Plain", &[]);
     app.reload_for_test();
     // No name yet: its first prompt.

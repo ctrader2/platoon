@@ -114,7 +114,11 @@ fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
         let base = Style::new().bg(bg);
         let w = li.width.saturating_sub(2) as usize;
         let version = r.manifest.version.clone();
-        let (name_w, version) = if r.manifest.name.chars().count() + 2 + version.chars().count() <= w { (w - version.chars().count() - 1, version) } else { (w, String::new()) };
+        let (name_w, version) = if r.manifest.name.chars().count() + 2 + version.chars().count() <= w {
+            (w - version.chars().count() - 1, version)
+        } else {
+            (w, String::new())
+        };
         let name = fit_end(&r.manifest.name, name_w);
         let gap = w.saturating_sub(name.chars().count() + version.chars().count());
         let state_color = match r.state {
@@ -148,7 +152,11 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
         let room = w.saturating_sub(LABEL + 1).max(8);
         for (k, part) in wrap(&value, room).into_iter().enumerate() {
             let lead = if k == 0 { format!("{label:<LABEL$}") } else { " ".repeat(LABEL) };
-            lines.push(Line::from(vec![Span::styled(lead, Style::new().fg(t.dim)), Span::raw(" "), Span::styled(part, Style::new().fg(color))]));
+            lines.push(Line::from(vec![
+                Span::styled(lead, Style::new().fg(t.dim)),
+                Span::raw(" "),
+                Span::styled(part, Style::new().fg(color)),
+            ]));
         }
     };
     field("By", m.author.clone(), t.subtext);
@@ -161,7 +169,11 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
         .theme_names()
         .into_iter()
         .chain(m.files(crate::skillplugin::KIND).iter().map(|f| format!("/{}", f.trim_end_matches('/').rsplit('/').next().unwrap_or(f))))
-        .chain([crate::squadplugin::SQUADS, crate::squadplugin::AGENTS].iter().flat_map(|k| m.files(k).iter().map(|f| f.rsplit('/').next().unwrap_or(f).trim_end_matches(".json").to_string())))
+        .chain(
+            [crate::squadplugin::SQUADS, crate::squadplugin::AGENTS]
+                .iter()
+                .flat_map(|k| m.files(k).iter().map(|f| f.rsplit('/').next().unwrap_or(f).trim_end_matches(".json").to_string())),
+        )
         .collect();
     let adds = if m.editor.is_some() {
         let size = r.download_bytes.map_or(String::new(), |b| format!("; it downloads {}", crate::editorplugin::size_words(b)));
@@ -179,18 +191,30 @@ fn draw_plugin_detail(f: &mut Frame, app: &App, area: Rect, r: &PlugRow) {
     lines.push(Line::raw(""));
     let editor = m.editor.is_some();
     let (what, color) = match &r.state {
-        _ if editor_unfinished(app, r) => ("Installed, but not everything it downloads is there yet: enter finishes it (only what is missing is fetched). d removes it.".to_string(), t.warn),
-        PlugState::Available if editor => ("Not installed. Enter installs it and its downloads; then v on a session or a ticket opens it.".to_string(), t.dim),
+        _ if editor_unfinished(app, r) => (
+            "Installed, but not everything it downloads is there yet: enter finishes it (only what is missing is fetched). d removes it."
+                .to_string(),
+            t.warn,
+        ),
+        PlugState::Available if editor => {
+            ("Not installed. Enter installs it and its downloads; then v on a session or a ticket opens it.".to_string(), t.dim)
+        }
         PlugState::Installed | PlugState::FromFolder | PlugState::NotInCatalog if editor => {
             ("Installed. v on a session or a ticket opens it. d removes it with everything it downloaded.".to_string(), t.ok)
         }
-        PlugState::Available if m.has_instructions() => ("Not installed. Enter shows each skill, squad and agent it adds, with what it may do, to read before you install it.".to_string(), t.dim),
+        PlugState::Available if m.has_instructions() => (
+            "Not installed. Enter shows each skill, squad and agent it adds, with what it may do, to read before you install it."
+                .to_string(),
+            t.dim,
+        ),
         PlugState::Available => ("Not installed. Enter installs it.".to_string(), t.dim),
         PlugState::Installed if m.themes().is_empty() => (format!("Installed. {} d removes it.", crate::plugins::next_words(m)), t.ok),
         PlugState::Installed => ("Installed. Its themes are in the settings (s, then Theme). d removes it.".to_string(), t.ok),
         PlugState::Update => ("An update is ready: enter installs it. d removes the plugin.".to_string(), t.warn),
         PlugState::FromFolder => ("Installed from a folder on this computer. d removes it.".to_string(), t.ok),
-        PlugState::NotInCatalog => ("Installed, but the catalog doesn't have it any more. It keeps working; d removes it.".to_string(), t.subtext),
+        PlugState::NotInCatalog => {
+            ("Installed, but the catalog doesn't have it any more. It keeps working; d removes it.".to_string(), t.subtext)
+        }
         PlugState::Unavailable(why) => (format!("It can't be installed here: {why}"), t.warn),
     };
     for l in wrap(&what, w) {
@@ -224,7 +248,10 @@ pub(super) fn draw_plugin_settings(f: &mut Frame, app: &App, area: Rect) -> u16 
     let rows = app.pl.rows();
     if rows.is_empty() {
         let msg = "No plugins installed, and none from the catalog to show.";
-        f.render_widget(Paragraph::new(Span::styled(fit_end(msg, area.width as usize), Style::new().fg(t.dim))), Rect::new(area.x, area.y, area.width, 1));
+        f.render_widget(
+            Paragraph::new(Span::styled(fit_end(msg, area.width as usize), Style::new().fg(t.dim))),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
         return area.y + 1;
     }
     let room = (area.height as usize).max(1);
@@ -355,7 +382,8 @@ pub(super) fn draw_plugin_review(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(l), Rect::new(list.x, list.y + k as u16, list.width, 1));
     }
     let verb = if r.update.is_some() { "update" } else { "install" };
-    let hints: [Hint; 4] = [("enter", "read it", None), ("y", verb, Some(Action::Confirm)), ("n", "not now", Some(Action::Cancel)), ("↑↓", "choose", None)];
+    let hints: [Hint; 4] =
+        [("enter", "read it", None), ("y", verb, Some(Action::Confirm)), ("n", "not now", Some(Action::Cancel)), ("↑↓", "choose", None)];
     let foot = Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1);
     draw_footer(f, app, foot, &hints, None);
 }
@@ -389,7 +417,8 @@ fn draw_review_item(f: &mut Frame, app: &App, r: &crate::app::Review, i: usize, 
     for (k, l) in lines.into_iter().skip(top).take(rows).enumerate() {
         f.render_widget(Paragraph::new(l), Rect::new(body.x, body.y + k as u16, body.width, 1));
     }
-    let shown = if total <= rows { "all of it shown".to_string() } else { format!("lines {}-{} of {total}", top + 1, (top + rows).min(total)) };
+    let shown =
+        if total <= rows { "all of it shown".to_string() } else { format!("lines {}-{} of {total}", top + 1, (top + rows).min(total)) };
     let hints: [Hint; 2] = [("↑↓ pgup pgdn", "scroll", None), (app.back_label(), "back to the list", None)];
     draw_footer(f, app, Rect::new(inner.x, inner.bottom() - 1, inner.width, 1), &hints, Some((shown, t.dim)));
 }

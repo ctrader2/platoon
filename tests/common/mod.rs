@@ -1,12 +1,12 @@
 //! Shared helpers for the black-box tests: a scripted terminal, and a raw client of the host protocol.
 #![allow(dead_code)]
 
-use portable_pty::{native_pty_system, Child, CommandBuilder, PtySize};
+use portable_pty::{Child, CommandBuilder, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::mpsc::{channel, Receiver},
+    sync::mpsc::{Receiver, channel},
     thread,
     time::{Duration, Instant},
 };
@@ -232,7 +232,10 @@ impl Term {
     pub fn exit_without_editor_question(&mut self) -> u32 {
         let code = self.wait_exit();
         let shown = self.flat();
-        assert!(!shown.contains("Install the code editor") && !shown.contains("Code editor"), "setup asked about the code editor:\n{shown}");
+        assert!(
+            !shown.contains("Install the code editor") && !shown.contains("Code editor"),
+            "setup asked about the code editor:\n{shown}"
+        );
         code
     }
 
@@ -434,7 +437,9 @@ impl AiFake {
     }
 
     pub fn calls(&self) -> usize {
-        std::fs::read_dir(self.dir.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+        std::fs::read_dir(self.dir.join("calls"))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count())
+            .unwrap_or(0)
     }
 
     pub fn stdin(&self, k: usize) -> String {
@@ -455,7 +460,11 @@ impl AiFake {
     }
 
     pub fn usage(&self, input: u64, output: u64) {
-        std::fs::write(self.dir.join("usage"), format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#)).unwrap();
+        std::fs::write(
+            self.dir.join("usage"),
+            format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#),
+        )
+        .unwrap();
     }
 
     /// The pids of the hanging fake and of the `sleep` it started.
@@ -470,7 +479,10 @@ impl AiFake {
 }
 
 fn zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).ok().and_then(|s| s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(|st| st == "Z"))).unwrap_or(false)
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| s.rsplit_once(')').and_then(|(_, r)| r.split_whitespace().next().map(|st| st == "Z")))
+        .unwrap_or(false)
 }
 
 impl Drop for AiFake {

@@ -4,7 +4,7 @@
 //! request the event loop would take is looked at instead).
 
 use crate::app::{App, Confirm, EdTarget, Mode};
-use crate::editor_install::{testing as fake, Dirs};
+use crate::editor_install::{Dirs, testing as fake};
 use crate::host::HostInfo;
 use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
@@ -54,7 +54,9 @@ fn s(p: &Path) -> String {
 
 /// The folders the request the event loop would take opens.
 fn opened(app: &mut App) -> Vec<String> {
-    app.take_editor_request().map(|r| r.dirs()).unwrap_or_else(|| panic!("nothing to open; mode {:?}, notice {:?}", matches!(app.mode, Mode::List), app.notice))
+    app.take_editor_request()
+        .map(|r| r.dirs())
+        .unwrap_or_else(|| panic!("nothing to open; mode {:?}, notice {:?}", matches!(app.mode, Mode::List), app.notice))
 }
 
 /// A conversation in `cwd` with `added` folders beside it (Claude Code's environment snapshot).
@@ -190,7 +192,13 @@ impl Lab {
 
     /// The leader's session runs in a platoon host.
     fn leader_hosted(&mut self) {
-        let host = HostInfo { claude_pid: 4242, host_pid: 0, dir: s(&self.wt), args: vec!["--resume".into(), "lead-1".into()], sock: PathBuf::new() };
+        let host = HostInfo {
+            claude_pid: 4242,
+            host_pid: 0,
+            dir: s(&self.wt),
+            args: vec!["--resume".into(), "lead-1".into()],
+            sock: PathBuf::new(),
+        };
         self.app.refresh_with(vec![host], false);
     }
 
@@ -335,9 +343,19 @@ fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_op
     v(&mut app);
     assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
     key(&mut app, KeyCode::Char('n'));
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.")), "{:?}", app.notice);
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|(n, ..)| n
+                .contains("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.")),
+        "{:?}",
+        app.notice
+    );
     assert!(app.take_editor_request().is_none());
-    assert!(!dirs.editor.join("installed.json").exists() && crate::editorplugin::installed(&app.pl.store).is_none(), "nothing installed on a no");
+    assert!(
+        !dirs.editor.join("installed.json").exists() && crate::editorplugin::installed(&app.pl.store).is_none(),
+        "nothing installed on a no"
+    );
 
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
@@ -375,7 +393,13 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
     app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("didn't finish installing") && n.contains("`platoon plugin add editor`, tries again")), "{:?}", app.notice);
+    assert!(
+        app.notice
+            .as_ref()
+            .is_some_and(|(n, ..)| n.contains("didn't finish installing") && n.contains("`platoon plugin add editor`, tries again")),
+        "{:?}",
+        app.notice
+    );
     assert!(app.take_editor_request().is_none());
     // A catalog without the editor plugin: said plainly too.
     let w2 = World::new("ed-install-nocat");
@@ -386,7 +410,11 @@ fn an_install_that_fails_says_so_and_opens_nothing() {
     v(&mut app);
     key(&mut app, KeyCode::Char('y'));
     app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("platoon's plugin catalog has no code editor plugin")), "{:?}", app.notice);
+    assert!(
+        app.notice.as_ref().is_some_and(|(n, ..)| n.contains("platoon's plugin catalog has no code editor plugin")),
+        "{:?}",
+        app.notice
+    );
 }
 
 /// An editor installed before it was a plugin: `v` opens it at once (no question), and the app took it over as the
@@ -450,11 +478,25 @@ fn window_stand_in(dir: &Path, id: &str, name: &str, args: &[&str], several: Sev
     fs::write(&script, format!("#!/bin/sh\necho \"$*\" >> '{}'\n", s(&calls))).unwrap();
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    FileEditor { id: id.into(), name: name.into(), program: s(&script), args: args.iter().map(|a| a.to_string()).collect(), runs: Runs::Window, several }
+    FileEditor {
+        id: id.into(),
+        name: name.into(),
+        program: s(&script),
+        args: args.iter().map(|a| a.to_string()).collect(),
+        runs: Runs::Window,
+        several,
+    }
 }
 
 fn helix(dir: &Path) -> FileEditor {
-    FileEditor { id: "helix".into(), name: "Helix".into(), program: s(&dir.join("hx")), args: vec![], runs: Runs::Terminal, several: Several::First }
+    FileEditor {
+        id: "helix".into(),
+        name: "Helix".into(),
+        program: s(&dir.join("hx")),
+        args: vec![],
+        runs: Runs::Terminal,
+        several: Several::First,
+    }
 }
 
 /// What the stand-in `id` was started with, once it has been (it runs beside the app).
@@ -518,7 +560,11 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
     assert_eq!((e.id.as_str(), dirs), ("helix", vec![s(&main), s(&docs)]));
     assert!(app.take_editor_request().is_none());
     app.editor_closed(Ok(()));
-    assert!(notice(&app).starts_with("Helix opened ") && notice(&app).contains("only: it opens one folder at a time. Not opened:"), "{}", notice(&app));
+    assert!(
+        notice(&app).starts_with("Helix opened ") && notice(&app).contains("only: it opens one folder at a time. Not opened:"),
+        "{}",
+        notice(&app)
+    );
 }
 
 #[test]
@@ -593,7 +639,8 @@ fn jetbrains_opens_each_folder_in_a_window_of_its_own_at_most_three() {
     let w = World::new("fe-jb");
     let main = w.base.join("repos/app");
     repo(&main);
-    let added: Vec<String> = (1..=4).map(|i| w.base.join(format!("more-{i}"))).inspect(|d| fs::create_dir_all(d).unwrap()).map(|d| s(&d)).collect();
+    let added: Vec<String> =
+        (1..=4).map(|i| w.base.join(format!("more-{i}"))).inspect(|d| fs::create_dir_all(d).unwrap()).map(|d| s(&d)).collect();
     with_added(&w, "s-1", &s(&main), &added);
     let bin = w.base.join("bin");
     let idea = window_stand_in(&bin, "idea", "IntelliJ IDEA", &[], Several::EachWindow);

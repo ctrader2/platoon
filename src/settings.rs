@@ -11,10 +11,17 @@
 
 use crate::ai::{FEATURES, MASTER_LABEL};
 use crate::archive::keep_backup;
-use crate::theme::{Theme, DEFAULT_ID};
+use crate::theme::{DEFAULT_ID, Theme};
 use crate::usertheme::Registry;
-use serde_json::{json, Map, Value};
-use std::{collections::BTreeMap, fs, io, os::unix::fs::MetadataExt, path::{Path, PathBuf}, sync::LazyLock, time::{Duration, SystemTime}};
+use serde_json::{Map, Value, json};
+use std::{
+    collections::BTreeMap,
+    fs, io,
+    os::unix::fs::MetadataExt,
+    path::{Path, PathBuf},
+    sync::LazyLock,
+    time::{Duration, SystemTime},
+};
 
 /// A session nobody is looking at is stopped after this long, at most. A week is far past any sane use.
 pub const MAX_IDLE_STOP_MINUTES: u64 = 7 * 24 * 60;
@@ -211,7 +218,11 @@ impl Settings {
             ai_refresh_messages: self.ai_refresh_messages.clamp(MIN_REFRESH_MESSAGES, MAX_REFRESH_MESSAGES),
             ai_batch_size: self.ai_batch_size.clamp(MIN_BATCH, MAX_BATCH),
             ai_daily_tokens: self.ai_daily_tokens.clamp(MIN_DAILY_TOKENS, MAX_DAILY_TOKENS),
-            ai_pause_percent: if self.ai_pause_percent == 0 { 0 } else { self.ai_pause_percent.clamp(MIN_PAUSE_PERCENT, MAX_PAUSE_PERCENT) },
+            ai_pause_percent: if self.ai_pause_percent == 0 {
+                0
+            } else {
+                self.ai_pause_percent.clamp(MIN_PAUSE_PERCENT, MAX_PAUSE_PERCENT)
+            },
             ai_model: if MODELS.contains(&self.ai_model.as_str()) { self.ai_model } else { MODELS[0].into() },
             ai_prompts_per_session: self.ai_prompts_per_session.clamp(MIN_PROMPTS_PER_SESSION, MAX_PROMPTS_PER_SESSION),
             ai_prompt_chars: self.ai_prompt_chars.clamp(MIN_PROMPT_SEND_CHARS, MAX_PROMPT_SEND_CHARS),
@@ -223,7 +234,11 @@ impl Settings {
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
             squads_at_once: self.squads_at_once.clamp(MIN_SQUADS_AT_ONCE, MAX_SQUADS_AT_ONCE),
-            squad_leader_model: if crate::squadfile::known_model(&self.squad_leader_model) { self.squad_leader_model } else { crate::squads::LEADER_MODEL.into() },
+            squad_leader_model: if crate::squadfile::known_model(&self.squad_leader_model) {
+                self.squad_leader_model
+            } else {
+                crate::squads::LEADER_MODEL.into()
+            },
             ..self
         }
     }
@@ -305,7 +320,11 @@ fn parse(text: &str) -> Option<Settings> {
             },
             ai_archived_share: number("ai_archived_share", d.ai_archived_share),
             notes_editor: o.get("notes_editor").and_then(Value::as_str).map_or(d.notes_editor.clone(), str::to_string),
-            files_editor: o.get("files_editor").and_then(Value::as_str).filter(|v| !v.trim().is_empty()).map_or(d.files_editor.clone(), str::to_string),
+            files_editor: o
+                .get("files_editor")
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
+                .map_or(d.files_editor.clone(), str::to_string),
             files_editor_ask: o.get("files_editor_ask").and_then(Value::as_bool).unwrap_or(d.files_editor_ask),
             notes_quiet_minutes: number("notes_quiet_minutes", d.notes_quiet_minutes),
             notes_reply_chars: number("notes_reply_chars", d.notes_reply_chars),
@@ -313,7 +332,10 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
             squads_at_once: number("squads_at_once", d.squads_at_once),
-            squad_leader_model: o.get("squad_leader_model").and_then(Value::as_str).map_or(d.squad_leader_model.clone(), |m| m.trim().to_lowercase()),
+            squad_leader_model: o
+                .get("squad_leader_model")
+                .and_then(Value::as_str)
+                .map_or(d.squad_leader_model.clone(), |m| m.trim().to_lowercase()),
         }
         .clamped(),
     )
@@ -588,7 +610,16 @@ fn tabs() -> Vec<Tab> {
 /// Which editors open what: platoon's own text (notes, ticket bodies, system prompts), and a ticket's or a session's
 /// files (`v`).
 fn editors_items() -> Vec<Item> {
-    let editor = |name, explain, which| Item { name, explain, kind: Kind::Editor(which), choices: &[], get: |_| 0, set: |_, _| {}, label: |_| String::new(), off: None };
+    let editor = |name, explain, which| Item {
+        name,
+        explain,
+        kind: Kind::Editor(which),
+        choices: &[],
+        get: |_| 0,
+        set: |_, _| {},
+        label: |_| String::new(),
+        off: None,
+    };
     vec![
         editor(
             "Editor for notes and tickets",
@@ -618,7 +649,16 @@ fn editors_items() -> Vec<Item> {
 /// The entry that edits the instructions of one AI action.
 fn instructions_item(id: &'static str) -> Item {
     let a = crate::instructions::action(id);
-    Item { name: a.entry, explain: a.explain, kind: Kind::Instructions(id), choices: &[], get: |_| 0, set: |_, _| {}, label: |_| String::new(), off: None }
+    Item {
+        name: a.entry,
+        explain: a.explain,
+        kind: Kind::Instructions(id),
+        choices: &[],
+        get: |_| 0,
+        set: |_, _| {},
+        label: |_| String::new(),
+        off: None,
+    }
 }
 
 /// Everyday behaviour: the colors and the two automatic clean-ups.
@@ -1104,7 +1144,10 @@ mod tests {
     fn silly_values_are_clamped_or_ignored() {
         let d = dir("clamp");
         write(&d, r#"{"idle_stop_minutes": 99999999999, "auto_archive_days": 1e30}"#);
-        assert_eq!(load(&d).0, Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: MAX_AUTO_ARCHIVE_DAYS, ..Settings::default() });
+        assert_eq!(
+            load(&d).0,
+            Settings { idle_stop_minutes: MAX_IDLE_STOP_MINUTES, auto_archive_days: MAX_AUTO_ARCHIVE_DAYS, ..Settings::default() }
+        );
         write(&d, r#"{"idle_stop_minutes": -5, "auto_archive_days": "soon"}"#);
         assert_eq!(load(&d).0, Settings::default(), "negative numbers and text are nonsense, not 'off'");
         write(&d, r#"{"idle_stop_minutes": 45.9, "auto_archive_days": null}"#);
@@ -1164,7 +1207,8 @@ mod tests {
         let d = dir("editors");
         let s = load(&d).0;
         assert_eq!((s.notes_editor.as_str(), s.files_editor.as_str(), s.files_editor_ask), (crate::editors::ASK, "platoon", false));
-        save(&d, &Settings { notes_editor: "nano".into(), files_editor: "code".into(), files_editor_ask: true, ..Settings::default() }).unwrap();
+        save(&d, &Settings { notes_editor: "nano".into(), files_editor: "code".into(), files_editor_ask: true, ..Settings::default() })
+            .unwrap();
         let back = load(&d).0;
         assert_eq!((back.notes_editor.as_str(), back.files_editor.as_str(), back.files_editor_ask), ("nano", "code", true));
         let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
@@ -1211,7 +1255,46 @@ mod tests {
         assert_eq!(v["version"], 7, "a version written by something else is not rewritten");
         assert_eq!((v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some(60), Some(9)));
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["note", "idle_stop_minutes", "nested", "version", "auto_archive_days", "idle_stop_ignores_mcp", "search_prompt_chars", "search_snippet_chars", "search_results", "search_archived", "tokens_enabled", "tokens_asked", "ai_refresh_messages", "ai_batch_size", "ai_daily_tokens", "ai_pause_percent", "ai_model", "ai_prompts_per_session", "ai_prompt_chars", "ai_quiet_seconds", "ai_archived", "ai_archived_share", "notes_editor", "files_editor", "files_editor_ask", "notes_quiet_minutes", "notes_reply_chars", "ai_find_candidates", "ai_find_results", "ai_find_wide_candidates", "squads_at_once", "squad_leader_model", "token_features", "theme"], "the file keeps its shape");
+        assert_eq!(
+            keys,
+            [
+                "note",
+                "idle_stop_minutes",
+                "nested",
+                "version",
+                "auto_archive_days",
+                "idle_stop_ignores_mcp",
+                "search_prompt_chars",
+                "search_snippet_chars",
+                "search_results",
+                "search_archived",
+                "tokens_enabled",
+                "tokens_asked",
+                "ai_refresh_messages",
+                "ai_batch_size",
+                "ai_daily_tokens",
+                "ai_pause_percent",
+                "ai_model",
+                "ai_prompts_per_session",
+                "ai_prompt_chars",
+                "ai_quiet_seconds",
+                "ai_archived",
+                "ai_archived_share",
+                "notes_editor",
+                "files_editor",
+                "files_editor_ask",
+                "notes_quiet_minutes",
+                "notes_reply_chars",
+                "ai_find_candidates",
+                "ai_find_results",
+                "ai_find_wide_candidates",
+                "squads_at_once",
+                "squad_leader_model",
+                "token_features",
+                "theme"
+            ],
+            "the file keeps its shape"
+        );
         assert!(!d.join("settings.json.bak").exists(), "a healthy file needs no backup");
     }
 
@@ -1418,7 +1501,10 @@ mod tests {
         assert_eq!(items[0].kind, Kind::Theme);
         assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
         assert!(!all_items().any(|i| i.name == "Edit notes with"), "the old name of the notes editor's setting is gone");
-        assert!(all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_))), "the theme is the only one of its kind");
+        assert!(
+            all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_))),
+            "the theme is the only one of its kind"
+        );
         assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
         // Stepping the numbers is by choices; the theme has none, so it never moves by them.
         assert_eq!((items[0].step(0, Step::Next), items[0].step(0, Step::Prev), items[0].step(0, Step::Cycle)), (0, 0, 0));
@@ -1430,7 +1516,10 @@ mod tests {
         assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"]);
         assert!(tab("Plugins").is_empty(), "its rows are the plugins, drawn by the app");
         assert_eq!(TABS[TAB_PLUGINS].title, "Plugins");
-        assert_eq!(tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(), ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]);
+        assert_eq!(
+            tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(),
+            ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]
+        );
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(names("General"), ["Theme", "Stop idle sessions after", "Archive conversations after", "Idle stop and MCP servers"]);
@@ -1449,7 +1538,16 @@ mod tests {
         );
         assert_eq!(
             names("Smart features"),
-            [MASTER_LABEL, "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit", "Pause above plan usage", "Model for smart features"]
+            [
+                MASTER_LABEL,
+                "Smart names and summaries",
+                "Find a session by description",
+                "Project notes",
+                "Project descriptions",
+                "Daily token limit",
+                "Pause above plan usage",
+                "Model for smart features"
+            ]
         );
         assert_eq!(
             names("Sessions"),
@@ -1481,8 +1579,11 @@ mod tests {
             ]
         );
         // Every AI action's instructions are an entry, on the tab it belongs to, and nothing else is of that kind.
-        let kinds: Vec<(usize, Kind)> =
-            TABS.iter().enumerate().flat_map(|(t, tab)| tab.items.iter().filter(|i| matches!(i.kind, Kind::Instructions(_))).map(move |i| (t, i.kind))).collect();
+        let kinds: Vec<(usize, Kind)> = TABS
+            .iter()
+            .enumerate()
+            .flat_map(|(t, tab)| tab.items.iter().filter(|i| matches!(i.kind, Kind::Instructions(_))).map(move |i| (t, i.kind)))
+            .collect();
         assert_eq!(
             kinds,
             [
@@ -1504,7 +1605,11 @@ mod tests {
             for key_help in ["enter", "press", " c ", " r ", "(h)", "editor", "kept by platoon", "built-in", "instructions", "restore"] {
                 assert!(!lower.contains(key_help), "{}: {:?} in {:?}", item.name, key_help, item.explain);
             }
-            assert!(item.explain.starts_with("What platoon asks Claude for") || item.explain.starts_with("How platoon asks Claude to"), "{}", item.explain);
+            assert!(
+                item.explain.starts_with("What platoon asks Claude for") || item.explain.starts_with("How platoon asks Claude to"),
+                "{}",
+                item.explain
+            );
         }
         // No entry is on two tabs, and every one can be found by name.
         let all: Vec<&str> = all_items().map(|i| i.name).collect();
@@ -1548,13 +1653,22 @@ mod tests {
         // Silly numbers are clamped to what makes sense, not turned into "off".
         write(&d, r#"{"search_prompt_chars": 1, "search_snippet_chars": 0, "search_results": 99999999}"#);
         let s = load(&d).0;
-        assert_eq!((s.search_prompt_chars, s.search_snippet_chars, s.search_results), (MIN_PROMPT_CHARS, MIN_SNIPPET_CHARS, MAX_SEARCH_RESULTS));
+        assert_eq!(
+            (s.search_prompt_chars, s.search_snippet_chars, s.search_results),
+            (MIN_PROMPT_CHARS, MIN_SNIPPET_CHARS, MAX_SEARCH_RESULTS)
+        );
         write(&d, r#"{"search_prompt_chars": 1e30, "search_snippet_chars": 1e30, "search_results": 0}"#);
         let s = load(&d).0;
-        assert_eq!((s.search_prompt_chars, s.search_snippet_chars, s.search_results), (MAX_PROMPT_CHARS, MAX_SNIPPET_CHARS, MIN_SEARCH_RESULTS));
+        assert_eq!(
+            (s.search_prompt_chars, s.search_snippet_chars, s.search_results),
+            (MAX_PROMPT_CHARS, MAX_SNIPPET_CHARS, MIN_SEARCH_RESULTS)
+        );
         // Wrong types keep the default, and the rest of the file is still read.
         for odd in ["\"lots\"", "-5", "null", "[]", "true"] {
-            write(&d, &format!(r#"{{"search_prompt_chars": {odd}, "search_results": {odd}, "search_archived": {odd}, "auto_archive_days": 9}}"#));
+            write(
+                &d,
+                &format!(r#"{{"search_prompt_chars": {odd}, "search_results": {odd}, "search_archived": {odd}, "auto_archive_days": 9}}"#),
+            );
             let s = load(&d).0;
             assert_eq!((s.search_prompt_chars, s.search_results, s.auto_archive_days), (2000, 50, 9), "{odd}");
             assert!(s.search_archived, "{odd}: only a real true or false is a choice, and the default is true");
@@ -1565,7 +1679,10 @@ mod tests {
         write(&d, r#"{"mine": [1, 2]}"#);
         save(&d, &Settings { search_prompt_chars: 1, search_results: 10_000, search_archived: false, ..Settings::default() }).unwrap();
         let v = saved(&d);
-        assert_eq!((v["search_prompt_chars"].as_u64(), v["search_results"].as_u64(), v["search_archived"].as_bool()), (Some(MIN_PROMPT_CHARS), Some(MAX_SEARCH_RESULTS), Some(false)));
+        assert_eq!(
+            (v["search_prompt_chars"].as_u64(), v["search_results"].as_u64(), v["search_archived"].as_bool()),
+            (Some(MIN_PROMPT_CHARS), Some(MAX_SEARCH_RESULTS), Some(false))
+        );
         assert_eq!(v["mine"], json!([1, 2]));
     }
 
@@ -1599,7 +1716,10 @@ mod tests {
     fn the_token_settings_default_to_off_with_a_daily_limit_that_is_never_unlimited() {
         let d = Settings::default();
         assert!(!d.tokens_enabled && d.token_features.is_empty() && !d.tokens_asked);
-        assert_eq!((d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent, d.ai_model.as_str()), (5, 30, 500_000, 80, "haiku"));
+        assert_eq!(
+            (d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent, d.ai_model.as_str()),
+            (5, 30, 500_000, 80, "haiku")
+        );
         for f in FEATURES {
             // The master switch is off, so nothing may spend anything; a feature added later is on once it is on.
             assert!(!d.feature_on(f.id), "{}", f.id);
@@ -1614,17 +1734,29 @@ mod tests {
     #[test]
     fn the_token_settings_are_read_clamped_and_wrong_types_keep_the_default() {
         let d = dir("tokens-read");
-        write(&d, r#"{"tokens_enabled":true,"tokens_asked":true,"token_features":{"names":true,"find":false},"ai_refresh_messages":10,"ai_batch_size":50,"ai_daily_tokens":1000000,"ai_pause_percent":90,"ai_model":"sonnet"}"#);
+        write(
+            &d,
+            r#"{"tokens_enabled":true,"tokens_asked":true,"token_features":{"names":true,"find":false},"ai_refresh_messages":10,"ai_batch_size":50,"ai_daily_tokens":1000000,"ai_pause_percent":90,"ai_model":"sonnet"}"#,
+        );
         let s = load(&d).0;
         assert!(s.tokens_enabled && s.tokens_asked && s.feature_on("names") && !s.feature_on("find"));
-        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent, s.ai_model.as_str()), (10, 50, 1_000_000, 90, "sonnet"));
+        assert_eq!(
+            (s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent, s.ai_model.as_str()),
+            (10, 50, 1_000_000, 90, "sonnet")
+        );
         // Silly numbers are clamped: never zero messages or conversations, and never an unlimited day.
         write(&d, r#"{"ai_refresh_messages":0,"ai_batch_size":0,"ai_daily_tokens":0,"ai_pause_percent":3}"#);
         let s = load(&d).0;
-        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent), (MIN_REFRESH_MESSAGES, MIN_BATCH, MIN_DAILY_TOKENS, MIN_PAUSE_PERCENT));
+        assert_eq!(
+            (s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent),
+            (MIN_REFRESH_MESSAGES, MIN_BATCH, MIN_DAILY_TOKENS, MIN_PAUSE_PERCENT)
+        );
         write(&d, r#"{"ai_refresh_messages":1e30,"ai_batch_size":99999,"ai_daily_tokens":1e30,"ai_pause_percent":500}"#);
         let s = load(&d).0;
-        assert_eq!((s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent), (MAX_REFRESH_MESSAGES, MAX_BATCH, MAX_DAILY_TOKENS, MAX_PAUSE_PERCENT));
+        assert_eq!(
+            (s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent),
+            (MAX_REFRESH_MESSAGES, MAX_BATCH, MAX_DAILY_TOKENS, MAX_PAUSE_PERCENT)
+        );
         // 0 for the pause point means "never pause" and stays 0.
         write(&d, r#"{"ai_pause_percent":0}"#);
         assert_eq!(load(&d).0.ai_pause_percent, 0);
@@ -1632,13 +1764,26 @@ mod tests {
         write(&d, r#"{"ai_model":"gpt-9"}"#);
         assert_eq!(load(&d).0.ai_model, "haiku");
         for odd in ["\"yes\"", "1", "null", "[]", "{}"] {
-            write(&d, &format!(r#"{{"tokens_enabled":{odd},"tokens_asked":{odd},"token_features":{odd},"ai_model":{odd},"ai_batch_size":{odd},"auto_archive_days":9}}"#));
+            write(
+                &d,
+                &format!(
+                    r#"{{"tokens_enabled":{odd},"tokens_asked":{odd},"token_features":{odd},"ai_model":{odd},"ai_batch_size":{odd},"auto_archive_days":9}}"#
+                ),
+            );
             let s = load(&d).0;
-            assert_eq!((s.tokens_enabled, s.tokens_asked, s.token_features.len(), s.ai_model.as_str(), s.auto_archive_days), (false, false, 0, "haiku", 9), "{odd}");
+            assert_eq!(
+                (s.tokens_enabled, s.tokens_asked, s.token_features.len(), s.ai_model.as_str(), s.auto_archive_days),
+                (false, false, 0, "haiku", 9),
+                "{odd}"
+            );
         }
         write(&d, r#"{"token_features":{"names":"yes","find":true,"future":true}}"#);
         let s = load(&d).0;
-        assert_eq!(s.token_features.into_iter().collect::<Vec<_>>(), [("find".to_string(), true), ("future".to_string(), true)], "only real booleans count");
+        assert_eq!(
+            s.token_features.into_iter().collect::<Vec<_>>(),
+            [("find".to_string(), true), ("future".to_string(), true)],
+            "only real booleans count"
+        );
     }
 
     #[test]
@@ -1672,7 +1817,11 @@ mod tests {
         s.ai_model = "sonnet".into();
         save(&d, &s).unwrap();
         let v = saved(&d);
-        assert_eq!(v["token_features"], json!({"future": true, "names": true, "note": "x"}), "a newer version's feature and a non-boolean entry stay");
+        assert_eq!(
+            v["token_features"],
+            json!({"future": true, "names": true, "note": "x"}),
+            "a newer version's feature and a non-boolean entry stay"
+        );
         assert_eq!((v["tokens_enabled"].clone(), v["ai_model"].clone(), v["mine"].clone()), (json!(true), json!("sonnet"), json!([1])));
         // Clamped on the way out.
         save(&d, &Settings { ai_daily_tokens: 5, ai_batch_size: 0, ..s }).unwrap();
@@ -1684,7 +1833,17 @@ mod tests {
     fn a_feature_gets_a_switch_on_the_smart_features_tab_from_the_table_alone() {
         let smart = tab("Smart features");
         let names: Vec<&str> = smart.iter().map(|i| i.name).collect();
-        assert_eq!(names[..6], ["Enable features which require tokens", "Smart names and summaries", "Find a session by description", "Project notes", "Project descriptions", "Daily token limit"]);
+        assert_eq!(
+            names[..6],
+            [
+                "Enable features which require tokens",
+                "Smart names and summaries",
+                "Find a session by description",
+                "Project notes",
+                "Project descriptions",
+                "Daily token limit"
+            ]
+        );
         assert_eq!(names.len(), 1 + FEATURES.len() + 3, "the master switch, one per feature, and the three limits on the day's use");
         for (f, item) in FEATURES.iter().zip(&smart[1..]) {
             assert_eq!((item.name, item.explain, item.kind), (f.label, f.description, Kind::Feature(f.id)));
@@ -1728,14 +1887,52 @@ mod tests {
         assert_eq!(tab("Smart features")[0].name, MASTER_LABEL);
         assert_eq!(
             token_items().map(|i| (i.label)(i.value(&d))).collect::<Vec<_>>(),
-            ["Off", "Off", "Off", "On", "On", "500K tokens", "80%", "Haiku", "30 conversations", "5 messages", "1 minute", "8 messages", "300 characters", "Skip", "50%", "", "3 minutes", "1500 characters", "3 squads", "", "", "", "", "", "Sonnet", "", "", "50 conversations", "10 results", "200 conversations", ""]
+            [
+                "Off",
+                "Off",
+                "Off",
+                "On",
+                "On",
+                "500K tokens",
+                "80%",
+                "Haiku",
+                "30 conversations",
+                "5 messages",
+                "1 minute",
+                "8 messages",
+                "300 characters",
+                "Skip",
+                "50%",
+                "",
+                "3 minutes",
+                "1500 characters",
+                "3 squads",
+                "",
+                "",
+                "",
+                "",
+                "",
+                "Sonnet",
+                "",
+                "",
+                "50 conversations",
+                "10 results",
+                "200 conversations",
+                ""
+            ]
         );
         let by_name = |name: &str| all_items().find(|i| i.name == name).unwrap_or_else(|| panic!("no entry called {name}"));
         assert_eq!(by_name("Pause above plan usage").step(0, Step::Cycle), 50, "Never is the first step");
         assert_eq!(percent_label(0), "Never");
-        assert_eq!([tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)], ["1M tokens", "250K tokens", "1234 tokens", "1 token"]);
+        assert_eq!(
+            [tokens_label(1_000_000), tokens_label(250_000), tokens_label(1234), tokens_label(1)],
+            ["1M tokens", "250K tokens", "1234 tokens", "1 token"]
+        );
         assert_eq!([thousands(0), thousands(999), thousands(1000), thousands(1_234_567)], ["0", "999", "1,000", "1,234,567"]);
-        assert_eq!([0, 15, 45, 60, 90, 120, 600].map(seconds_label), ["No wait", "15 seconds", "45 seconds", "1 minute", "90 seconds", "2 minutes", "10 minutes"]);
+        assert_eq!(
+            [0, 15, 45, 60, 90, 120, 600].map(seconds_label),
+            ["No wait", "15 seconds", "45 seconds", "1 minute", "90 seconds", "2 minutes", "10 minutes"]
+        );
         // The model entry goes both ways.
         let mut s = Settings::default();
         let model = by_name("Model for smart features");
@@ -1751,25 +1948,58 @@ mod tests {
     fn the_new_numbers_have_defaults_limits_and_survive_a_round_trip() {
         let d = Settings::default();
         assert_eq!(
-            (d.ai_prompts_per_session, d.ai_prompt_chars, d.ai_quiet_seconds, d.ai_archived, d.ai_archived_share, d.ai_find_candidates, d.ai_find_results, d.ai_find_wide_candidates),
+            (
+                d.ai_prompts_per_session,
+                d.ai_prompt_chars,
+                d.ai_quiet_seconds,
+                d.ai_archived,
+                d.ai_archived_share,
+                d.ai_find_candidates,
+                d.ai_find_results,
+                d.ai_find_wide_candidates
+            ),
             (8, 300, 60, false, 50, 50, 10, 200)
         );
         let dir = dir("new-numbers");
-        write(&dir, r#"{"ai_prompts_per_session":0,"ai_prompt_chars":1,"ai_quiet_seconds":999999,"ai_archived_share":0,"ai_find_candidates":1,"ai_find_results":99,"ai_find_wide_candidates":1}"#);
+        write(
+            &dir,
+            r#"{"ai_prompts_per_session":0,"ai_prompt_chars":1,"ai_quiet_seconds":999999,"ai_archived_share":0,"ai_find_candidates":1,"ai_find_results":99,"ai_find_wide_candidates":1}"#,
+        );
         let s = load(&dir).0;
         assert_eq!(
-            (s.ai_prompts_per_session, s.ai_prompt_chars, s.ai_quiet_seconds, s.ai_archived_share, s.ai_find_candidates, s.ai_find_results, s.ai_find_wide_candidates),
-            (MIN_PROMPTS_PER_SESSION, MIN_PROMPT_SEND_CHARS, MAX_QUIET_SECONDS, MIN_ARCHIVED_SHARE, MIN_FIND_CANDIDATES, MAX_FIND_RESULTS, MIN_FIND_WIDE)
+            (
+                s.ai_prompts_per_session,
+                s.ai_prompt_chars,
+                s.ai_quiet_seconds,
+                s.ai_archived_share,
+                s.ai_find_candidates,
+                s.ai_find_results,
+                s.ai_find_wide_candidates
+            ),
+            (
+                MIN_PROMPTS_PER_SESSION,
+                MIN_PROMPT_SEND_CHARS,
+                MAX_QUIET_SECONDS,
+                MIN_ARCHIVED_SHARE,
+                MIN_FIND_CANDIDATES,
+                MAX_FIND_RESULTS,
+                MIN_FIND_WIDE
+            )
         );
         // "ai_archived" is "off" or "background" in the file; a hand-written true or false is understood, anything else is off.
-        for (text, want) in [(r#""background""#, true), (r#""off""#, false), ("true", true), ("false", false), (r#""sometimes""#, false), ("7", false)] {
+        for (text, want) in
+            [(r#""background""#, true), (r#""off""#, false), ("true", true), ("false", false), (r#""sometimes""#, false), ("7", false)]
+        {
             write(&dir, &format!(r#"{{"ai_archived":{text}}}"#));
             assert_eq!(load(&dir).0.ai_archived, want, "{text}");
         }
         let s = Settings { ai_archived: true, ai_quiet_seconds: 0, ai_find_results: 7, ..Settings::default() };
         save(&dir, &s).unwrap();
         let v = saved(&dir);
-        assert_eq!((v["ai_archived"].clone(), v["ai_quiet_seconds"].clone(), v["ai_find_results"].clone()), (json!("background"), json!(0), json!(7)));
+        assert_eq!(
+            (v["ai_archived"].clone(), v["ai_quiet_seconds"].clone(), v["ai_find_results"].clone()),
+            (json!("background"), json!(0), json!(7))
+        );
         assert_eq!(load(&dir).0, s);
         save(&dir, &Settings::default()).unwrap();
         assert_eq!(saved(&dir)["ai_archived"], "off");

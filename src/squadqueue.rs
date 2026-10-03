@@ -16,7 +16,9 @@ pub const STARTING_SECS: u64 = 60;
 
 /// Does ticket `t`'s squad hold one of the places? `running`: is this session running now.
 pub fn holds_place(t: &Ticket, running: &dyn Fn(&str) -> bool, now: u64) -> bool {
-    t.state == State::Working && t.queued.is_none() && t.leader().is_some_and(|l| running(&l.session) || now.saturating_sub(l.started) < STARTING_SECS)
+    t.state == State::Working
+        && t.queued.is_none()
+        && t.leader().is_some_and(|l| running(&l.session) || now.saturating_sub(l.started) < STARTING_SECS)
 }
 
 /// How many places are taken, across every project's tickets.
@@ -39,7 +41,8 @@ pub fn line(all: &[(String, Ticket)]) -> Vec<(String, u32, Queued)> {
 
 /// What the user is told when a ticket joins the line.
 pub fn queued_notice(number: u32, squad: &str, limit: u64) -> String {
-    let places = if limit == 1 { "The one squad allowed at once is".to_string() } else { format!("All {limit} squads allowed at once are") };
+    let places =
+        if limit == 1 { "The one squad allowed at once is".to_string() } else { format!("All {limit} squads allowed at once are") };
     format!("{places} at work: #{number} waits for a free squad, and goes to the {squad} squad by itself when one is free.")
 }
 
@@ -58,7 +61,16 @@ mod tests {
             blocked_by: vec![],
             created: 0,
             updated: 0,
-            leaders: leader.map(|(s, started)| Leader { squad: "coding".into(), session: s.into(), started, names: Default::default(), snapshot: None }).into_iter().collect(),
+            leaders: leader
+                .map(|(s, started)| Leader {
+                    squad: "coding".into(),
+                    session: s.into(),
+                    started,
+                    names: Default::default(),
+                    snapshot: None,
+                })
+                .into_iter()
+                .collect(),
             worktrees: vec![],
             reason: String::new(),
             go_ahead: false,
@@ -122,7 +134,13 @@ mod tests {
 
     #[test]
     fn the_notice_says_how_many_are_allowed() {
-        assert_eq!(queued_notice(4, "Coding", 3), "All 3 squads allowed at once are at work: #4 waits for a free squad, and goes to the Coding squad by itself when one is free.");
-        assert_eq!(queued_notice(2, "Docs", 1), "The one squad allowed at once is at work: #2 waits for a free squad, and goes to the Docs squad by itself when one is free.");
+        assert_eq!(
+            queued_notice(4, "Coding", 3),
+            "All 3 squads allowed at once are at work: #4 waits for a free squad, and goes to the Coding squad by itself when one is free."
+        );
+        assert_eq!(
+            queued_notice(2, "Docs", 1),
+            "The one squad allowed at once is at work: #2 waits for a free squad, and goes to the Docs squad by itself when one is free."
+        );
     }
 }

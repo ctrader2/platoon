@@ -26,7 +26,14 @@ struct Lab {
 impl Lab {
     fn new(name: &str) -> Self {
         let base = tmp(name);
-        let lab = Self { base: base.clone(), claude: base.join("claude"), cache: base.join("cache"), config: base.join("config"), work: base.join("work"), procs: Vec::new() };
+        let lab = Self {
+            base: base.clone(),
+            claude: base.join("claude"),
+            cache: base.join("cache"),
+            config: base.join("config"),
+            work: base.join("work"),
+            procs: Vec::new(),
+        };
         for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.work] {
             fs::create_dir_all(d).unwrap();
         }
@@ -62,7 +69,8 @@ impl Lab {
         let pid = child.id();
         self.procs.push(child);
         until("the stand-in to be ready", || ready.exists());
-        let reg = serde_json::json!({"pid": pid, "sessionId": id, "cwd": self.work, "kind": "interactive", "startedAt": 1, "status": "idle"});
+        let reg =
+            serde_json::json!({"pid": pid, "sessionId": id, "cwd": self.work, "kind": "interactive", "startedAt": 1, "status": "idle"});
         fs::write(self.claude.join("sessions").join(format!("{pid}.json")), reg.to_string()).unwrap();
         pid
     }

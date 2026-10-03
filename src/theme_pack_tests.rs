@@ -8,22 +8,23 @@
 use crate::app::{Mode, Pane};
 use crate::client::Client;
 use crate::colordepth::rgb_to_256;
-use crate::editor::{colors_json, ColorMode};
+use crate::editor::{ColorMode, colors_json};
 use crate::plugins::{self, Origin};
 use crate::testkit::World;
-use crate::theme::{contrast, delta_e, Theme, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, SELECTION_TEXT_CONTRAST};
+use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, SELECTION_TEXT_CONTRAST, Theme, contrast, delta_e};
 use crate::{ui, usertheme};
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     buffer::Cell,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     style::Color,
-    Terminal,
 };
 use std::path::{Path, PathBuf};
 
 const PACK: &str = "theme-pack";
-const LIGHT: [&str; 8] = ["Catppuccin Latte", "Dayfox", "Flexoki Light", "GitHub Light", "Gruvbox Light", "One Half Light", "Rosé Pine Dawn", "Solarized Light"];
+const LIGHT: [&str; 8] =
+    ["Catppuccin Latte", "Dayfox", "Flexoki Light", "GitHub Light", "Gruvbox Light", "One Half Light", "Rosé Pine Dawn", "Solarized Light"];
 
 fn pack_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins").join(PACK)
@@ -120,14 +121,20 @@ fn every_theme_of_the_pack_reads_well_as_it_is_and_after_the_derivation() {
             }
         }
         // The same rules as the built-ins for what is drawn on what.
-        assert!(contrast(t.surface, t.bg) >= 1.08 && contrast(t.border, t.bg) >= 1.25 && contrast(t.border, t.surface) >= 1.1, "{name}: surface and border");
+        assert!(
+            contrast(t.surface, t.bg) >= 1.08 && contrast(t.border, t.bg) >= 1.25 && contrast(t.border, t.surface) >= 1.1,
+            "{name}: surface and border"
+        );
         assert!(contrast(t.dim, t.surface) >= 2.5 && contrast(t.text, t.surface) >= 6.0, "{name}: on a selected row");
         assert!(contrast(t.on_accent, t.accent) >= 4.5, "{name}: the count badge");
         let sel = t.selection_bg().unwrap();
         assert!(contrast(t.text, sel) >= SELECTION_TEXT_CONTRAST && delta_e(sel, t.bg) >= 15.0, "{name}: selected text");
         // Light or dark, the way round everything goes follows the background.
         if t.light {
-            assert!(crate::theme::luminance(t.surface) < crate::theme::luminance(t.bg), "{name}: a light theme's selected row is a little darker");
+            assert!(
+                crate::theme::luminance(t.surface) < crate::theme::luminance(t.bg),
+                "{name}: a light theme's selected row is a little darker"
+            );
             assert_eq!(t.strongest(), Color::Rgb(0, 0, 0));
         } else {
             assert_eq!(t.strongest(), Color::Rgb(255, 255, 255));
@@ -172,7 +179,10 @@ fn shift(app: &mut crate::app::App, code: KeyCode) {
 fn draw(term: &mut Terminal<TestBackend>, app: &crate::app::App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn lines(term: &Terminal<TestBackend>) -> Vec<Vec<Cell>> {
@@ -194,7 +204,8 @@ fn find(ls: &[Vec<Cell>], word: &str) -> Option<(usize, usize)> {
 }
 
 fn at<'a>(ls: &'a [Vec<Cell>], word: &str) -> &'a Cell {
-    let (y, x) = find(ls, word).unwrap_or_else(|| panic!("{word} is not on the screen:\n{}", ls.iter().map(|l| text_of(l)).collect::<Vec<_>>().join("\n")));
+    let (y, x) = find(ls, word)
+        .unwrap_or_else(|| panic!("{word} is not on the screen:\n{}", ls.iter().map(|l| text_of(l)).collect::<Vec<_>>().join("\n")));
     &ls[y][x]
 }
 
@@ -208,9 +219,22 @@ fn assert_legible(term: &Terminal<TestBackend>, t: &Theme, what: &str) {
             if !c.symbol().chars().any(char::is_alphanumeric) || c.fg == t.border {
                 continue;
             }
-            assert!(matches!(c.fg, Color::Rgb(..)) && matches!(c.bg, Color::Rgb(..)), "{what}: {:?} at {x},{y} is not in the theme's colors ({:?} on {:?})", c.symbol(), c.fg, c.bg);
+            assert!(
+                matches!(c.fg, Color::Rgb(..)) && matches!(c.bg, Color::Rgb(..)),
+                "{what}: {:?} at {x},{y} is not in the theme's colors ({:?} on {:?})",
+                c.symbol(),
+                c.fg,
+                c.bg
+            );
             let ratio = contrast(c.fg, c.bg);
-            assert!(ratio >= 2.5, "{what}: {:?} at {x},{y} is {ratio:.2}:1 ({:?} on {:?}) in the row: {}", c.symbol(), c.fg, c.bg, text_of(l));
+            assert!(
+                ratio >= 2.5,
+                "{what}: {:?} at {x},{y} is {ratio:.2}:1 ({:?} on {:?}) in the row: {}",
+                c.symbol(),
+                c.fg,
+                c.bg,
+                text_of(l)
+            );
             let ratio = contrast(in_256(c.fg), in_256(c.bg));
             assert!(ratio >= 2.0, "{what}: {:?} at {x},{y} is {ratio:.2}:1 in 256 colors, in the row: {}", c.symbol(), text_of(l));
         }
@@ -257,7 +281,10 @@ fn the_sessions_list_in_a_light_theme_selected_row_badges_and_statuses() {
     assert_eq!((mark.fg, mark.bg), (t.accent, t.surface));
     // The working session, the current tab's count badge, and the project's pill.
     assert!(ls.iter().flatten().any(|c| c.fg == t.busy && c.symbol() == "w"), "working in the busy color");
-    assert!(ls.iter().flatten().any(|c| c.bg == t.accent && c.fg == t.on_accent && c.symbol().chars().all(|ch| ch.is_ascii_digit())), "the count badge");
+    assert!(
+        ls.iter().flatten().any(|c| c.bg == t.accent && c.fg == t.on_accent && c.symbol().chars().all(|ch| ch.is_ascii_digit())),
+        "the count badge"
+    );
     let fill = crate::projects::slot_color(&t, &app.projects.get(&project).unwrap().color);
     let pill = at(&ls, "Web shop");
     assert_eq!(pill.bg, fill);
@@ -285,7 +312,12 @@ fn a_popup_and_the_settings_in_a_light_theme() {
     assert!(matches!(app.mode, Mode::Picker));
     let shown = draw(&mut term, &app);
     let ls = lines(&term);
-    let corner = ls.iter().enumerate().skip(1).find_map(|(y, l)| l.iter().skip(1).position(|c| c.symbol() == "╭").map(|x| (y, x + 1))).unwrap_or_else(|| panic!("{shown}"));
+    let corner = ls
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find_map(|(y, l)| l.iter().skip(1).position(|c| c.symbol() == "╭").map(|x| (y, x + 1)))
+        .unwrap_or_else(|| panic!("{shown}"));
     let c = &ls[corner.0][corner.1];
     assert_eq!(c.bg, t.bg, "the popup is on the background");
     assert!(c.fg == t.border || c.fg == t.accent, "its frame: {:?}", c.fg);
@@ -300,7 +332,10 @@ fn a_popup_and_the_settings_in_a_light_theme() {
     let ls = lines(&term);
     let row = at(&ls, "Solarized Light");
     assert_eq!(row.bg, t.surface, "the selected Theme row");
-    assert!(ls.iter().flatten().any(|c| c.fg == t.accent && c.symbol().chars().any(char::is_alphabetic)), "the current settings tab or title in the accent");
+    assert!(
+        ls.iter().flatten().any(|c| c.fg == t.accent && c.symbol().chars().any(char::is_alphabetic)),
+        "the current settings tab or title in the accent"
+    );
     assert_legible(&term, &app.theme, "the settings");
 }
 
@@ -450,7 +485,11 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::copy(pack_dir().join("themes/Catppuccin Latte"), dir.join("Crème Brûlée")).unwrap();
     std::fs::write(dir.join("Too Pale"), "background = #ffffff\nforeground = #cccccc\n").unwrap();
-    crate::settings::save(&w.config, &crate::settings::Settings { theme: "user:creme-brulee".into(), ..crate::settings::load(&w.config).0 }).unwrap();
+    crate::settings::save(
+        &w.config,
+        &crate::settings::Settings { theme: "user:creme-brulee".into(), ..crate::settings::load(&w.config).0 },
+    )
+    .unwrap();
     let mut app = w.app();
     assert_eq!(app.theme.id, "user:creme-brulee", "the user's light theme is in effect");
     assert!(app.theme.light && app.theme.name == "Crème Brûlée");

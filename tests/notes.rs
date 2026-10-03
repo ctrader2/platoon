@@ -8,7 +8,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
 
 /// Stands in for nano: draws on its terminal, waits for one line, and puts that line into the file (a line
@@ -386,13 +386,19 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 177); // four tabs and the whole note
     t.wait_for("enter open");
     lab.open_notes(&mut t);
-    wait_pane(&mut t, "These notes are not updating right now: \"Project notes\" is switched off. Press s for the settings to switch it back on.");
+    wait_pane(
+        &mut t,
+        "These notes are not updating right now: \"Project notes\" is switched off. Press s for the settings to switch it back on.",
+    );
     assert!(!t.flat().contains("smart features paused"), "one switch is not the whole header's business:\n{}", t.flat());
 
     // The daily limit spent: said in the pane in full, and in the header for every tab to see.
     lab.write_settings(json!({"auto_archive_days": 0, "tokens_enabled": true, "ai_daily_tokens": 20000}));
     lab.spend_the_day(25_000);
-    wait_pane(&mut t, "These notes are not updating right now: Today's token limit is used up (25,000 of 20,000 tokens). It starts over tomorrow, or you can raise it in settings.");
+    wait_pane(
+        &mut t,
+        "These notes are not updating right now: Today's token limit is used up (25,000 of 20,000 tokens). It starts over tomorrow, or you can raise it in settings.",
+    );
     t.wait_for_flat("smart features paused · today's 20,000 limit is used up · press s for the settings");
     // The header says it on the Sessions tab as well: that is the point of it being there.
     t.send(b"1");
@@ -406,7 +412,10 @@ fn the_pane_and_the_header_say_when_the_notes_are_not_updating_and_why_and_stop_
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for("╭ Notes");
-    wait_pane(&mut t, "These notes are not updating right now: Your Claude plan is 82% used (5-hour limit), above the pause point of 80%. Smart features wait until it drops. Press s for the settings to change the pause point.");
+    wait_pane(
+        &mut t,
+        "These notes are not updating right now: Your Claude plan is 82% used (5-hour limit), above the pause point of 80%. Smart features wait until it drops. Press s for the settings to change the pause point.",
+    );
 
     // The reason goes: so does the line, in the pane and in the header.
     lab.clear_the_plan();

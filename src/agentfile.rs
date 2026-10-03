@@ -13,8 +13,8 @@
 //! over; writes are atomic, under a lock (`agents/agents.lock`).
 
 use crate::projects::{lock, write_atomic};
-use crate::squadfile::{bool_of, cap, known_model, one_line, rest, slug_problem, slugify, str_of, Kind, LEADER_ROLE, NAME_MAX, SLUG_MAX};
-use serde_json::{json, Map, Value};
+use crate::squadfile::{Kind, LEADER_ROLE, NAME_MAX, SLUG_MAX, bool_of, cap, known_model, one_line, rest, slug_problem, slugify, str_of};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -131,7 +131,18 @@ impl Agent {
 // ---- the built-in agents -------------------------------------------------------------------------------------------
 
 fn agent(id: &str, model: &str, guidance: &str, files: bool, commands: bool, web: bool) -> Agent {
-    Agent { id: id.into(), name: id.into(), model: model.into(), guidance: guidance.into(), files, commands, web, skills: Vec::new(), mcp: Vec::new(), extra: Map::new() }
+    Agent {
+        id: id.into(),
+        name: id.into(),
+        model: model.into(),
+        guidance: guidance.into(),
+        files,
+        commands,
+        web,
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        extra: Map::new(),
+    }
 }
 
 /// The agents platoon comes with: the members of its built-in squads, in the order of those squads' workflows.
@@ -195,7 +206,9 @@ pub fn problems(a: &Agent) -> Vec<String> {
     }
     for (what, names) in [("skill", &a.skills), ("MCP server", &a.mcp)] {
         if let Some(bad) = names.iter().find(|n| !name_ok(n)) {
-            out.push(format!("{who}'s {what} \"{bad}\" isn't a name platoon can pass on (letters, digits, dashes, dots, colons and underscores)."));
+            out.push(format!(
+                "{who}'s {what} \"{bad}\" isn't a name platoon can pass on (letters, digits, dashes, dots, colons and underscores)."
+            ));
         }
     }
     out
@@ -239,7 +252,19 @@ fn lock_path(config: &Path) -> PathBuf {
     dir(config).join("agents")
 }
 
-const KEYS: &[&str] = &["version", "id", "builtin", "name", "model", "guidance", "can_change_files", "can_run_commands", "can_use_web", "skills", "mcp_servers"];
+const KEYS: &[&str] = &[
+    "version",
+    "id",
+    "builtin",
+    "name",
+    "model",
+    "guidance",
+    "can_change_files",
+    "can_run_commands",
+    "can_use_web",
+    "skills",
+    "mcp_servers",
+];
 
 /// A list of names: missing is none; each is trimmed, and an empty one or one said twice is left out.
 fn names_of(o: &Map<String, Value>, k: &str) -> Result<Vec<String>, String> {
@@ -382,7 +407,13 @@ pub fn load_all(config: &Path) -> Vec<Listed> {
     for p in crate::squadplugin::installed(&crate::plugins::store_for(config)) {
         let mut theirs = p.agents;
         theirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
-        plain.extend(theirs.into_iter().map(|a| Listed { id: a.id.clone(), kind: Kind::Plugin, agent: Some(a), corrupt: None, plugin: Some(p.name.clone()) }));
+        plain.extend(theirs.into_iter().map(|a| Listed {
+            id: a.id.clone(),
+            kind: Kind::Plugin,
+            agent: Some(a),
+            corrupt: None,
+            plugin: Some(p.name.clone()),
+        }));
     }
     plain
 }
@@ -396,7 +427,12 @@ pub fn all(config: &Path) -> Vec<Agent> {
 pub fn get(config: &Path, id: &str) -> Option<Agent> {
     if crate::squadplugin::is_plugin(id) {
         let (plugin, _) = crate::squadplugin::split(id)?;
-        return crate::squadplugin::installed(&crate::plugins::store_for(config)).into_iter().find(|p| p.plugin == plugin)?.agents.into_iter().find(|a| a.id == id);
+        return crate::squadplugin::installed(&crate::plugins::store_for(config))
+            .into_iter()
+            .find(|p| p.plugin == plugin)?
+            .agents
+            .into_iter()
+            .find(|a| a.id == id);
     }
     match load(config, id) {
         Ok(Some(a)) => Some(a),
@@ -417,7 +453,12 @@ pub fn save(config: &Path, a: &Agent) -> io::Result<()> {
     match fs::read_to_string(&p) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(o)) => keep = rest(&o, KEYS),
-            _ => return Err(io::Error::other(format!("{} can't be read, so platoon leaves it alone. Fix or move the file to go on.", p.display()))),
+            _ => {
+                return Err(io::Error::other(format!(
+                    "{} can't be read, so platoon leaves it alone. Fix or move the file to go on.",
+                    p.display()
+                )));
+            }
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
@@ -488,7 +529,11 @@ pub fn delete(config: &Path, id: &str) -> Result<(), String> {
 pub fn new_id(config: &Path, name: &str, taken: &[String]) -> String {
     let base = slugify(name, "agent");
     let used = |id: &str| {
-        id == LEADER_ROLE || is_builtin(id) || path(config, id).exists() || path(config, id).with_extension("json.bak").exists() || taken.iter().any(|t| t == id)
+        id == LEADER_ROLE
+            || is_builtin(id)
+            || path(config, id).exists()
+            || path(config, id).with_extension("json.bak").exists()
+            || taken.iter().any(|t| t == id)
     };
     if !used(&base) {
         return base;
@@ -515,7 +560,18 @@ pub fn copy_of(config: &Path, a: &Agent, name: &str, taken: &[String]) -> Agent 
 /// written.
 pub fn blank(config: &Path, name: &str, taken: &[String]) -> Agent {
     let name = one_line(name);
-    Agent { id: new_id(config, &name, taken), name, model: "sonnet".into(), guidance: String::new(), files: false, commands: false, web: false, skills: Vec::new(), mcp: Vec::new(), extra: Map::new() }
+    Agent {
+        id: new_id(config, &name, taken),
+        name,
+        model: "sonnet".into(),
+        guidance: String::new(),
+        files: false,
+        commands: false,
+        web: false,
+        skills: Vec::new(),
+        mcp: Vec::new(),
+        extra: Map::new(),
+    }
 }
 
 // ---- drafting an agent -----------------------------------------------------------------------------------------------
@@ -569,7 +625,11 @@ pub fn draft_system(guidance: &str) -> String {
 
 /// The request: what is installed, then the user's description, as data.
 pub fn draft_prompt(description: &str, installed: &Installed) -> String {
-    format!("{}\nThe agent the user wants, in their words:\n{}\n", installed_text(installed), cap(description.trim(), crate::squadfile::DESCRIPTION_MAX))
+    format!(
+        "{}\nThe agent the user wants, in their words:\n{}\n",
+        installed_text(installed),
+        cap(description.trim(), crate::squadfile::DESCRIPTION_MAX)
+    )
 }
 
 /// Read the drafting call's reply: the agent it drafts, with an id of its own (`taken`: ids a draft may not have), or
@@ -614,7 +674,20 @@ mod tests {
         let ids: Vec<String> = builtins().iter().map(|a| a.id.clone()).collect();
         assert_eq!(
             ids,
-            ["planner", "builder", "reviewer", "verifier", "questioner", "researcher", "report-writer", "checker", "outliner", "tech-writer", "editor", "summarizer"]
+            [
+                "planner",
+                "builder",
+                "reviewer",
+                "verifier",
+                "questioner",
+                "researcher",
+                "report-writer",
+                "checker",
+                "outliner",
+                "tech-writer",
+                "editor",
+                "summarizer"
+            ]
         );
         for a in builtins() {
             assert!(problems(&a).is_empty(), "{}: {:?}", a.id, problems(&a));
@@ -653,7 +726,10 @@ mod tests {
         back.model = "haiku".into();
         save(&c, &back).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
-        assert_eq!((v["colour"].as_str(), v["model"].as_str(), v["can_use_web"].as_bool(), v.get("builtin")), (Some("red"), Some("haiku"), Some(true), None));
+        assert_eq!(
+            (v["colour"].as_str(), v["model"].as_str(), v["can_use_web"].as_bool(), v.get("builtin")),
+            (Some("red"), Some("haiku"), Some(true), None)
+        );
         // A key added while platoon had it open is kept too.
         let mut v2 = v.clone();
         v2.as_object_mut().unwrap().insert("added_later".into(), json!(1));
@@ -699,9 +775,16 @@ mod tests {
         a.model = "sonnet".into();
         save(&c, &a).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(path(&c, "verifier")).unwrap()).unwrap();
-        assert_eq!((v["builtin"].as_str(), v["guidance"].as_str()), (Some("verifier"), Some(crate::squads::VERIFIER_GUIDANCE)), "the whole definition");
+        assert_eq!(
+            (v["builtin"].as_str(), v["guidance"].as_str()),
+            (Some("verifier"), Some(crate::squads::VERIFIER_GUIDANCE)),
+            "the whole definition"
+        );
         let listed = load_all(&c);
-        assert_eq!(listed.iter().map(|l| (l.id.as_str(), l.kind)).filter(|(_, k)| *k == Kind::Modified).collect::<Vec<_>>(), [("verifier", Kind::Modified)]);
+        assert_eq!(
+            listed.iter().map(|l| (l.id.as_str(), l.kind)).filter(|(_, k)| *k == Kind::Modified).collect::<Vec<_>>(),
+            [("verifier", Kind::Modified)]
+        );
         assert_eq!(listed[11].id, "verifier", "changed ones come after the built-ins as platoon has them");
         assert_eq!(get(&c, "verifier").unwrap().model, "sonnet");
         remove(&c, "verifier").unwrap();
@@ -736,7 +819,10 @@ mod tests {
         assert_eq!(delete(&c, "planner").unwrap_err(), "planner is built into platoon, so it can't be deleted.");
         // One squad: named alone.
         squadfile::remove(&c, "docs-plus").unwrap();
-        assert_eq!(delete(&c, "test-writer").unwrap_err(), "Test writer is used in the Careful coding (steps 2 and 4) squad, so it can't be deleted. Give those steps another agent first.");
+        assert_eq!(
+            delete(&c, "test-writer").unwrap_err(),
+            "Test writer is used in the Careful coding (steps 2 and 4) squad, so it can't be deleted. Give those steps another agent first."
+        );
         // Unused: deleted, kept as a .bak.
         squadfile::remove(&c, "careful-coding").unwrap();
         delete(&c, "test-writer").unwrap();
@@ -752,7 +838,12 @@ mod tests {
             f(&mut a);
             problems(&a)
         };
-        assert_eq!(with(&|a| a.id = "Bad Id".into()), ["\"Bad Id\" can't be an agent's id: use lowercase letters, digits and dashes, starting with a letter (at most 24 characters)."]);
+        assert_eq!(
+            with(&|a| a.id = "Bad Id".into()),
+            [
+                "\"Bad Id\" can't be an agent's id: use lowercase letters, digits and dashes, starting with a letter (at most 24 characters)."
+            ]
+        );
         assert_eq!(with(&|a| a.id = "leader".into()), ["An agent can't be called \"leader\": that is a squad leader's own name."]);
         assert_eq!(with(&|a| a.name = " ".into()), ["The agent has no name."]);
         assert_eq!(with(&|a| a.model = "gpt-4".into()), ["planner's model \"gpt-4\" isn't one platoon offers (Opus, Sonnet or Haiku)."]);
@@ -771,15 +862,27 @@ mod tests {
         let none = Installed::default();
         let reply = "Here:\n```json\n{\"name\":\"test-writer\",\"model\":\"sonnet\",\"can_change_files\":true,\"can_run_commands\":true,\"can_use_web\":false,\"guidance\":\"You are the test writer. Write failing tests first.\",\"colour\":\"x\"}\n```";
         let a = parse_draft(reply, &c, &[], &none).unwrap();
-        assert_eq!((a.id.as_str(), a.name.as_str(), a.model.as_str(), a.files, a.commands, a.web), ("test-writer", "test-writer", "sonnet", true, true, false));
+        assert_eq!(
+            (a.id.as_str(), a.name.as_str(), a.model.as_str(), a.files, a.commands, a.web),
+            ("test-writer", "test-writer", "sonnet", true, true, false)
+        );
         assert!(a.extra.is_empty(), "keys it made up are not kept");
         assert_eq!(parse_draft(reply, &c, &["test-writer".into()], &none).unwrap().id, "test-writer-2");
-        assert_eq!(parse_draft(&reply.replace("\"sonnet\"", "\"gpt-5\""), &c, &[], &none).unwrap_err(), "test-writer's model \"gpt-5\" isn't one platoon offers (Opus, Sonnet or Haiku).");
-        assert_eq!(parse_draft(&reply.replace("You are the test writer. Write failing tests first.", " "), &c, &[], &none).unwrap_err(), "test-writer has no system prompt yet.");
+        assert_eq!(
+            parse_draft(&reply.replace("\"sonnet\"", "\"gpt-5\""), &c, &[], &none).unwrap_err(),
+            "test-writer's model \"gpt-5\" isn't one platoon offers (Opus, Sonnet or Haiku)."
+        );
+        assert_eq!(
+            parse_draft(&reply.replace("You are the test writer. Write failing tests first.", " "), &c, &[], &none).unwrap_err(),
+            "test-writer has no system prompt yet."
+        );
         assert_eq!(parse_draft(&reply.replace("\"name\":\"test-writer\",", ""), &c, &[], &none).unwrap_err(), "The agent has no name.");
         assert_eq!(parse_draft("nothing", &c, &[], &none).unwrap_err(), "its answer wasn't an agent (no JSON in it)");
         assert_eq!(parse_draft("[1]", &c, &[], &none).unwrap_err(), "its answer wasn't an agent (not a JSON object)");
-        assert_eq!(parse_draft(r#"{"name":"x","can_use_web":1}"#, &c, &[], &none).unwrap_err(), "its answer wasn't an agent (\"can_use_web\" isn't true or false)");
+        assert_eq!(
+            parse_draft(r#"{"name":"x","can_use_web":1}"#, &c, &[], &none).unwrap_err(),
+            "its answer wasn't an agent (\"can_use_web\" isn't true or false)"
+        );
         let fixed = draft_fixed();
         assert!(fixed.contains("DATA") && fixed.contains("JSON only") && !DRAFT_GUIDANCE.contains("JSON"));
         assert!(draft_system(DRAFT_GUIDANCE).starts_with(DRAFT_GUIDANCE) && draft_system(DRAFT_GUIDANCE).ends_with(fixed.trim()));
@@ -788,7 +891,10 @@ mod tests {
         // Skills and MCP servers: only the installed ones are kept from a draft.
         let installed = Installed { skills: vec!["pdf".into(), "release".into()], mcp: vec!["sentry".into()] };
         assert!(draft_prompt("x", &installed).starts_with("Skills installed: pdf, release\nMCP servers installed: sentry\n"));
-        let with = reply.replace("\"can_use_web\":false,", "\"can_use_web\":false,\"skills\":[\"pdf\",\"made-up\"],\"mcp_servers\":[\"sentry\",\"github\"],");
+        let with = reply.replace(
+            "\"can_use_web\":false,",
+            "\"can_use_web\":false,\"skills\":[\"pdf\",\"made-up\"],\"mcp_servers\":[\"sentry\",\"github\"],",
+        );
         let a = parse_draft(&with, &c, &[], &installed).unwrap();
         assert_eq!((a.skills.clone(), a.mcp.clone()), (vec!["pdf".to_string()], vec!["sentry".to_string()]));
         let a = parse_draft(&with, &c, &[], &none).unwrap();
@@ -812,7 +918,8 @@ mod tests {
         assert_eq!(get(&c, &a.id).unwrap(), a);
         assert!(problems(&a).is_empty());
         // Hand-written: blanks and repeats dropped; the wrong type is a file that can't be read.
-        fs::write(path(&c, "mine"), r#"{"name":"mine","model":"sonnet","guidance":"x","skills":[" pdf ","","pdf"],"mcp_servers":null}"#).unwrap();
+        fs::write(path(&c, "mine"), r#"{"name":"mine","model":"sonnet","guidance":"x","skills":[" pdf ","","pdf"],"mcp_servers":null}"#)
+            .unwrap();
         let m = get(&c, "mine").unwrap();
         assert_eq!((m.skills, m.mcp), (vec!["pdf".to_string()], vec![]));
         fs::write(path(&c, "mine"), r#"{"name":"mine","skills":"pdf"}"#).unwrap();
@@ -822,7 +929,12 @@ mod tests {
         // A name Claude Code couldn't be given is a problem, said plainly.
         let mut bad = a.clone();
         bad.mcp = vec!["my server".into()];
-        assert_eq!(problems(&bad), ["Sentry reader's MCP server \"my server\" isn't a name platoon can pass on (letters, digits, dashes, dots, colons and underscores)."]);
+        assert_eq!(
+            problems(&bad),
+            [
+                "Sentry reader's MCP server \"my server\" isn't a name platoon can pass on (letters, digits, dashes, dots, colons and underscores)."
+            ]
+        );
         assert!(name_ok("plugin:skill") && name_ok("a.b_c-1") && !name_ok("") && !name_ok("a/b") && !name_ok(&"x".repeat(65)));
         // Same work: the lists count.
         let mut other = a.clone();

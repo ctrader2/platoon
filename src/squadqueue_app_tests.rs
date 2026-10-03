@@ -7,12 +7,12 @@
 use crate::app::{App, Mode, Pane};
 use crate::claude::MemberRun;
 use crate::testkit::World;
-use crate::tickets::{AgentNames, Leader, NewTicket, State, Tickets, QUEUED_WORDS};
+use crate::tickets::{AgentNames, Leader, NewTicket, QUEUED_WORDS, State, Tickets};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use serde_json::json;
 
@@ -23,7 +23,10 @@ fn key(app: &mut App, code: KeyCode) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -35,7 +38,13 @@ fn flat(text: &str) -> String {
 fn world(name: &str, tickets: u32, at_once: u64) -> (World, App, String, crate::testkit::AiFake) {
     let w = World::new(name);
     w.transcript("user-1", "/tmp", "make a basket page", 10);
-    let s = crate::settings::Settings { tokens_enabled: true, tokens_asked: true, auto_archive_days: 0, squads_at_once: at_once, ..Default::default() };
+    let s = crate::settings::Settings {
+        tokens_enabled: true,
+        tokens_asked: true,
+        auto_archive_days: 0,
+        squads_at_once: at_once,
+        ..Default::default()
+    };
     crate::settings::save(&w.config, &s).unwrap();
     let mut app = w.app();
     let fake = crate::testkit::AiFake::new(name);
@@ -91,7 +100,10 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     assert_eq!(app.sq.launched, [1], "no second squad while the place is taken");
     assert_eq!(fake.calls(), 2, "the commander checked it first");
     let t = on_disk(&w, &id, 2);
-    assert_eq!((t.state, t.leaders.len(), t.queued.as_ref().map(|q| (q.squad.as_str(), q.anyway))), (State::Working, 0, Some(("summarize", false))));
+    assert_eq!(
+        (t.state, t.leaders.len(), t.queued.as_ref().map(|q| (q.squad.as_str(), q.anyway))),
+        (State::Working, 0, Some(("summarize", false)))
+    );
     assert_eq!(app.active_notice(), Some(crate::squadqueue::queued_notice(2, "Summarize", 1).as_str()));
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let f = flat(&draw(&mut term, &app));
@@ -242,12 +254,18 @@ fn a_running_leader_holds_its_place_long_after_it_started_and_one_that_ended_doe
 /// A leader transcript for session `id` as a real one is shaped: its agent, one answer of its own, runs of the
 /// planner (finished) and the builder (sent back once: two runs, the second still out), and the members' own files.
 fn leader_transcript(w: &World, id: &str, leader_tokens: u64) {
-    let answer = |m: &str, n: u64| json!({"type":"assistant","message":{"id":m,"usage":{"input_tokens":n,"output_tokens":0,"cache_read_input_tokens":0}}}).to_string();
+    let answer = |m: &str, n: u64| {
+        json!({"type":"assistant","message":{"id":m,"usage":{"input_tokens":n,"output_tokens":0,"cache_read_input_tokens":0}}}).to_string()
+    };
     let call = |m: &str, c: &str, agent: &str, what: &str| {
         json!({"type":"assistant","message":{"id":m,"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":agent,"description":what,"prompt":"go"}}],"usage":{"input_tokens":0,"output_tokens":0}}}).to_string()
     };
-    let launched = |c: &str, a: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"status":"async_launched","agentId":a}}).to_string();
-    let notice = |c: &str| json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string();
+    let launched = |c: &str, a: &str| {
+        json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"status":"async_launched","agentId":a}}).to_string()
+    };
+    let notice = |c: &str| {
+        json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string()
+    };
     // An answer that mostly read the conversation again from the cache: counted apart from the rest.
     let cached = json!({"type":"assistant","message":{"id":format!("{id}-k"),"usage":{"input_tokens":0,"output_tokens":5_000,"cache_read_input_tokens":900_000}}}).to_string();
     let lines = vec![
@@ -263,7 +281,8 @@ fn leader_transcript(w: &World, id: &str, leader_tokens: u64) {
     let path = w.transcript_lines(id, &lines);
     let sub = path.with_extension("").join("subagents");
     std::fs::create_dir_all(&sub).unwrap();
-    for (agent_id, agent, n) in [(format!("{id}p"), "summarize-summarizer", 1_000_000u64), (format!("{id}q"), "summarize-checker", 200_000)] {
+    for (agent_id, agent, n) in [(format!("{id}p"), "summarize-summarizer", 1_000_000u64), (format!("{id}q"), "summarize-checker", 200_000)]
+    {
         std::fs::write(sub.join(format!("agent-{agent_id}.jsonl")), answer(&format!("{agent_id}-x"), n) + "\n").unwrap();
         std::fs::write(sub.join(format!("agent-{agent_id}.meta.json")), json!({"agentType":agent}).to_string()).unwrap();
     }
@@ -277,14 +296,24 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
         if k > 0 {
             t.set_state(1, &State::New).unwrap();
         }
-        t.start_leader(1, &Leader { squad: "summarize".into(), session: session.to_string(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            1,
+            &Leader { squad: "summarize".into(), session: session.to_string(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+            &[],
+        )
+        .unwrap();
     }
     leader_transcript(&w, "lead-a", 30_000);
     leader_transcript(&w, "lead-b", 20_000);
-    app.refresh_until_for_test(20, "the transcripts to be read", |a| a.ticket(1).and_then(|t| a.ticket_tokens(t)).is_some_and(|t| t.agents.len() == 3));
+    app.refresh_until_for_test(20, "the transcripts to be read", |a| {
+        a.ticket(1).and_then(|t| a.ticket_tokens(t)).is_some_and(|t| t.agents.len() == 3)
+    });
     let tk = app.ticket(1).map(|t| app.ticket_tokens(t).unwrap()).unwrap();
     let agents: Vec<(&str, u64)> = tk.agents.iter().map(|(n, s)| (n.as_str(), s.total())).collect();
-    assert_eq!(agents, [("summarize-leader", 50_000 + 10_000 + 1_800_000), ("summarize-summarizer", 2_000_000), ("summarize-checker", 400_000)]);
+    assert_eq!(
+        agents,
+        [("summarize-leader", 50_000 + 10_000 + 1_800_000), ("summarize-summarizer", 2_000_000), ("summarize-checker", 400_000)]
+    );
     // The pane: the short total on the row that has one (sent and written: 2.46M, no cache reads, which would make
     // it 4.3M), and nothing on the one that hasn't.
     let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
@@ -300,7 +329,11 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     // The screen: the pane's number, said as what it is, and the cache reads beside it.
     assert!(f.contains("Tokens used 2.5M sent and written, plus 1.8M read again from Claude's cache"), "{f}");
     // (The note about the session sits beside the explanation's first line, so it is checked in two pieces.)
-    assert!(f.contains("2.5M sent to Claude and 10K written by Claude:") && f.contains("the number the Tickets list shows. Read again from the cache"), "{f}");
+    assert!(
+        f.contains("2.5M sent to Claude and 10K written by Claude:")
+            && f.contains("the number the Tickets list shows. Read again from the cache"),
+        "{f}"
+    );
     assert!(!f.contains("in all"), "{f}");
     assert!(f.contains("summarize-leader 60K + 1.8M from cache summarize-summarizer 2M summarize-checker 400K"), "{f}");
     assert!(
@@ -324,7 +357,12 @@ fn the_ticket_screen_shows_the_last_eight_runs_and_how_many_came_before() {
     }
     w.transcript_lines("lead-r", &lines);
     let mut t = Tickets::open(&w.config, &id);
-    t.start_leader(1, &Leader { squad: "summarize".into(), session: "lead-r".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+    t.start_leader(
+        1,
+        &Leader { squad: "summarize".into(), session: "lead-r".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+        &[],
+    )
+    .unwrap();
     app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-r").is_some_and(|l| l.runs.len() == 12));
     pick(&mut app, 1);
     key(&mut app, KeyCode::Enter);
@@ -346,7 +384,12 @@ fn eight_runs_or_fewer_are_all_shown_with_no_earlier_line() {
     let (w, mut app, id, _fake) = world("sqq-runs8", 1, 3);
     leader_transcript(&w, "lead-e", 5);
     let mut t = Tickets::open(&w.config, &id);
-    t.start_leader(1, &Leader { squad: "summarize".into(), session: "lead-e".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+    t.start_leader(
+        1,
+        &Leader { squad: "summarize".into(), session: "lead-e".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+        &[],
+    )
+    .unwrap();
     app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-e").is_some_and(|l| l.runs.len() == 2));
     pick(&mut app, 1);
     key(&mut app, KeyCode::Enter);
@@ -360,7 +403,12 @@ fn while_the_leader_runs_its_open_run_is_running_and_now_names_the_member() {
     let (w, mut app, id, _fake) = world("sqq-now", 1, 3);
     leader_transcript(&w, "lead-n", 5);
     let mut t = Tickets::open(&w.config, &id);
-    t.start_leader(1, &Leader { squad: "summarize".into(), session: "lead-n".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+    t.start_leader(
+        1,
+        &Leader { squad: "summarize".into(), session: "lead-n".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+        &[],
+    )
+    .unwrap();
     let mut w = w;
     w.live("lead-n", "/tmp", 1, "busy");
     app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-n").is_some_and(|l| l.runs.len() == 2));
@@ -370,5 +418,8 @@ fn while_the_leader_runs_its_open_run_is_running_and_now_names_the_member() {
     app.tk.open = Some(1);
     let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("[x] summarize-summarizer · Sum up the thread [>] summarize-checker · Check the summary Now: summarize-checker"), "{f}");
+    assert!(
+        f.contains("[x] summarize-summarizer · Sum up the thread [>] summarize-checker · Check the summary Now: summarize-checker"),
+        "{f}"
+    );
 }

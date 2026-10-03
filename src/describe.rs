@@ -180,7 +180,10 @@ mod tests {
 
     #[test]
     fn a_good_answer_is_read_and_a_bad_one_changes_nothing() {
-        assert_eq!(parse(r#"{"description":"A sock shop with a basket and card payments."}"#).as_deref(), Some("A sock shop with a basket and card payments."));
+        assert_eq!(
+            parse(r#"{"description":"A sock shop with a basket and card payments."}"#).as_deref(),
+            Some("A sock shop with a basket and card payments.")
+        );
         // Wrapped in words, or in a list of one, is still an answer.
         assert_eq!(parse("Sure!\n```json\n{\"description\":\"Selling socks online.\"}\n```").as_deref(), Some("Selling socks online."));
         assert_eq!(parse(r#"[{"description":"Selling socks online."}]"#).as_deref(), Some("Selling socks online."));
@@ -231,8 +234,18 @@ mod tests {
     #[test]
     fn nothing_to_go_on_is_told_apart_from_something() {
         assert!(Material::default().is_empty());
-        assert!(Material { project: "A".into(), notes: "  \n ".into(), sessions: vec![SessionLine { name: " ".into(), summary: "".into() }] }.is_empty());
+        assert!(
+            Material { project: "A".into(), notes: "  \n ".into(), sessions: vec![SessionLine { name: " ".into(), summary: "".into() }] }
+                .is_empty()
+        );
         assert!(!material().is_empty());
-        assert!(!Material { project: "A".into(), notes: String::new(), sessions: vec![SessionLine { name: "Basket".into(), summary: String::new() }] }.is_empty());
+        assert!(
+            !Material {
+                project: "A".into(),
+                notes: String::new(),
+                sessions: vec![SessionLine { name: "Basket".into(), summary: String::new() }]
+            }
+            .is_empty()
+        );
     }
 }

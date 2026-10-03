@@ -11,7 +11,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::Write,
@@ -97,7 +97,16 @@ impl Lab {
             fake: base.join("fake"),
             base,
         };
-        for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.work, &lab.shop, &lab.docs, &lab.fake] {
+        for d in [
+            &lab.claude.join("sessions"),
+            &lab.claude.join("projects/-work"),
+            &lab.cache,
+            &lab.config,
+            &lab.work,
+            &lab.shop,
+            &lab.docs,
+            &lab.fake,
+        ] {
             fs::create_dir_all(d).unwrap();
         }
         let script = lab.base.join("fake-claude.sh");
@@ -145,7 +154,9 @@ impl Lab {
 
     /// The commander's calls so far.
     fn checks(&self) -> usize {
-        fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+        fs::read_dir(self.fake.join("calls"))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count())
+            .unwrap_or(0)
     }
 
     fn check_file(&self, k: usize, what: &str) -> String {
@@ -306,18 +317,32 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert_eq!(value_after(&args, "--permission-mode"), "acceptEdits");
     assert_eq!(value_after(&args, "--add-dir"), lab.docs.to_string_lossy(), "the other folder, as it is");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
-    let models: Vec<(String, String)> = agents.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string())).collect();
+    let models: Vec<(String, String)> =
+        agents.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string())).collect();
     assert_eq!(
         models,
-        [("coding-leader", "sonnet"), ("coding-planner", "opus"), ("coding-builder", "sonnet"), ("coding-reviewer", "opus"), ("coding-verifier", "haiku")].map(|(a, b)| (a.to_string(), b.to_string()))
+        [
+            ("coding-leader", "sonnet"),
+            ("coding-planner", "opus"),
+            ("coding-builder", "sonnet"),
+            ("coding-reviewer", "opus"),
+            ("coding-verifier", "haiku")
+        ]
+        .map(|(a, b)| (a.to_string(), b.to_string()))
     );
     let leader_prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
-    assert!(leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("\n1. coding-planner: Reads the ticket"), "{leader_prompt}");
+    assert!(
+        leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("\n1. coding-planner: Reads the ticket"),
+        "{leader_prompt}"
+    );
     // What it started with is kept beside the ticket, for continuing it later with the squad as it was.
     assert_eq!(tk["leaders"][0]["snapshot"], "01-squad-1.json", "{tk}");
     let snap: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tickets/01-squad-1.json")).unwrap()).unwrap();
     assert_eq!(snap["agents"], agents, "the very same agents");
-    assert_eq!((snap["agent"].as_str(), snap["model"].as_str(), snap["name"].as_str()), (Some("coding-leader"), Some("sonnet"), Some("Coding")));
+    assert_eq!(
+        (snap["agent"].as_str(), snap["model"].as_str(), snap["name"].as_str()),
+        (Some("coding-leader"), Some("sonnet"), Some("Coding"))
+    );
     assert!(leader_prompt.contains("When it doesn't say how far, stop at local changes"), "{leader_prompt}");
     let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
     let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap();
@@ -326,20 +351,39 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(stop.ends_with(" hook squad-stop") && gate.ends_with(" hook squad-gate"), "{settings}");
     assert!(settings["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-notify"), "{settings}");
     assert!(settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-tool"), "{settings}");
-    assert!(settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-prompt"), "{settings}");
+    assert!(
+        settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-prompt"),
+        "{settings}"
+    );
     assert!(leader_prompt.contains("`SQUAD: question - Shall I close this ticket?`"), "{leader_prompt}");
     assert!(stop.starts_with(BIN) || stop.starts_with(&format!("'{BIN}")), "the platoon that is running: {stop}");
     let first = args.last().unwrap();
     assert!(first.starts_with("Ticket #1: Basket\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket page."), "{first}");
-    assert!(first.contains("## How far to take it\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes"), "{first}");
+    assert!(
+        first.contains(
+            "## How far to take it\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes"
+        ),
+        "{first}"
+    );
     assert!(!first.contains("Local commit"), "an old how_far in the file is not read: {first}");
     assert!(!first.contains("Sell socks"), "the notes arrive separately");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let env = lab.rec(1, "env");
-    for marker in ["CLAUDE_CODE_CHILD_SESSION", "CLAUDECODE=", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_SOCKET", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PID", "AI_AGENT"] {
+    for marker in [
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDECODE=",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_PID",
+        "AI_AGENT",
+    ] {
         assert!(!env.contains(marker), "the calling session's {marker} is never passed on: {env}");
     }
-    assert!(env.lines().any(|l| l == "CLAUDE_CODE_USE_BEDROCK=0") && env.lines().any(|l| l.starts_with("CLAUDE_CONFIG_DIR=")), "the user's own settings are: {env}");
+    assert!(
+        env.lines().any(|l| l == "CLAUDE_CODE_USE_BEDROCK=0") && env.lines().any(|l| l.starts_with("CLAUDE_CONFIG_DIR=")),
+        "the user's own settings are: {env}"
+    );
     // The leader may hand work on, read and run things; it never edits a file itself.
     assert_eq!(agents["coding-leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]));
     // The commander was asked first: one `claude -p` call on Haiku, with the ticket and the squad, and the same
@@ -348,11 +392,23 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let argv = lab.check_file(1, "argv");
     assert!(argv.contains("\n--model\nhaiku\n"), "{argv}");
     let asked = lab.check_file(1, "stdin");
-    assert!(asked.starts_with("The squad: Coding\n") && asked.contains("The ticket: #1 Basket") && asked.contains("A basket page."), "{asked}");
+    assert!(
+        asked.starts_with("The squad: Coding\n") && asked.contains("The ticket: #1 Basket") && asked.contains("A basket page."),
+        "{asked}"
+    );
     assert!(!asked.contains("How far"), "{asked}");
-    assert!(asked.contains(&format!("- {} (in a git repository)", lab.shop.display())) && asked.contains(&format!("- {} (not in a git repository)", lab.docs.display())), "{asked}");
+    assert!(
+        asked.contains(&format!("- {} (in a git repository)", lab.shop.display()))
+            && asked.contains(&format!("- {} (not in a git repository)", lab.docs.display())),
+        "{asked}"
+    );
     let check_env = lab.check_file(1, "env");
-    assert!(!check_env.contains("CLAUDE_CODE_SESSION_ID") && !check_env.contains("CLAUDE_CODE_CHILD_SESSION") && check_env.contains("CLAUDE_CODE_USE_BEDROCK=0"), "{check_env}");
+    assert!(
+        !check_env.contains("CLAUDE_CODE_SESSION_ID")
+            && !check_env.contains("CLAUDE_CODE_CHILD_SESSION")
+            && check_env.contains("CLAUDE_CODE_USE_BEDROCK=0"),
+        "{check_env}"
+    );
     assert!(!env.lines().any(|l| l.starts_with("PLATOON_PROJECT=")), "a leader never joins the project: {env}");
     assert_eq!(fs::read(lab.config.join("projects.json")).unwrap(), projects_before, "projects.json is untouched");
 
@@ -415,7 +471,10 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     let tool = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
     let notice = json!({"session_id": sid, "hook_event_name": "Notification", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash", "cwd": "/tmp", "transcript_path": "/x.jsonl"});
     assert_eq!(lab.run_hook_command(&notify, &notice), 0);
-    assert_eq!((lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()), (Some("waiting"), Some("Waiting for your OK on a command")));
+    assert_eq!(
+        (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()),
+        (Some("waiting"), Some("Waiting for your OK on a command"))
+    );
     t.wait_for_all(&["Waiting on you", "Waiting for your OK on a command"]);
     let idle = json!({"session_id": sid, "hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
     assert_eq!(lab.run_hook_command(&notify, &idle), 0);
@@ -429,7 +488,10 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     assert_eq!(lab.ticket_now()["state"], "working");
     // Then it wants to push.
     assert_eq!(lab.run_hook_command(&stop, &stop_input("Committed on ticket/1.\nSQUAD: ready to publish - push ticket/1", json!([]))), 0);
-    assert_eq!((lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()), (Some("ready"), Some("Wants to publish: push ticket/1")));
+    assert_eq!(
+        (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()),
+        (Some("ready"), Some("Wants to publish: push ticket/1"))
+    );
     t.wait_for_all(&["Ready to push/publish", "Wants to publish: push ticket/1"]);
 
     // Back on the project's screen, p on the ticket: the go-ahead, Working, and the words typed into the session.
@@ -450,7 +512,11 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     // Finished: the leader asks before closing, and the ticket shows its question beside the session.
     assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed ticket/1.\nSQUAD: question - Shall I close this ticket?", json!([]))), 0);
     let tk = lab.ticket_now();
-    assert_eq!((tk["state"].as_str(), tk["reason"].as_str(), tk.get("go_ahead")), (Some("waiting"), Some("Asks: Shall I close this ticket?"), None), "{tk}");
+    assert_eq!(
+        (tk["state"].as_str(), tk["reason"].as_str(), tk.get("go_ahead")),
+        (Some("waiting"), Some("Asks: Shall I close this ticket?"), None),
+        "{tk}"
+    );
     assert!(!lab.config.join("projects/pweb/tickets/01-result.md").exists(), "not Done yet");
     t.send(b"\r");
     t.wait_for_all(&["Asks: Shall I close this ticket?", "ctrl+space back to the project"]);
@@ -465,7 +531,11 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     let mut child = c.spawn().unwrap();
     child.stdin.take().unwrap().write_all(said("yes").to_string().as_bytes()).unwrap();
     let out = child.wait_with_output().unwrap();
-    assert_eq!((out.status.code(), out.stdout.as_slice(), out.stderr.as_slice()), (Some(0), &b""[..], &b""[..]), "never blocks, never adds to the prompt");
+    assert_eq!(
+        (out.status.code(), out.stdout.as_slice(), out.stderr.as_slice()),
+        (Some(0), &b""[..], &b""[..]),
+        "never blocks, never adds to the prompt"
+    );
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk.get("reason")), (Some("working"), None), "{tk}");
     t.wait_gone("Asks: Shall I close this ticket?");
@@ -515,10 +585,14 @@ fn the_hooks_read_real_shaped_input_and_leave_everything_else_alone() {
     child.stdin.take().unwrap().write_all(b"{ not json").unwrap();
     assert_eq!(child.wait().unwrap().code(), Some(0));
     // The gate: the refusal is said on stderr with exit 2.
-    let bash = |cmd: &str| json!({"session_id": "lead-1", "tool_name": "Bash", "tool_input": {"command": cmd}, "hook_event_name": "PreToolUse"});
+    let bash =
+        |cmd: &str| json!({"session_id": "lead-1", "tool_name": "Bash", "tool_input": {"command": cmd}, "hook_event_name": "PreToolUse"});
     let (code, err) = lab.hook("squad-gate", &bash("sh -c 'gh pr create --fill'"));
     assert_eq!(code, 2);
-    assert_eq!(err.trim(), "platoon: other people would see this. Stop and end your turn with `SQUAD: ready to publish - <what>`; the user will tell you when to go on.");
+    assert_eq!(
+        err.trim(),
+        "platoon: other people would see this. Stop and end your turn with `SQUAD: ready to publish - <what>`; the user will tell you when to go on."
+    );
     assert_eq!(lab.hook("squad-gate", &bash("echo \"git push\" && git log")), (0, String::new()));
     let read = json!({"session_id": "lead-1", "tool_name": "Write", "tool_input": {"file_path": "/tmp/x", "content": "git push"}});
     assert_eq!(lab.hook("squad-gate", &read).0, 0, "only shell commands are looked at");
@@ -546,14 +620,21 @@ fn a_ticket_whose_squad_isnt_running_continues_it_with_the_same_flags_and_narrow
     // A leader started before its agents carried the squad's name (no "names" on it) keeps the names it began with.
     assert_eq!(value_after(&args, "--agent"), "leader");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
-    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
+    assert_eq!(
+        agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+        ["leader", "planner", "builder", "reviewer", "verifier"]
+    );
     assert_eq!(agents["verifier"]["model"], "haiku");
     assert!(!agents["leader"]["prompt"].as_str().unwrap().contains("coding-"), "its prompt calls them by those names too");
     let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
     assert!(settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().ends_with("hook squad-stop"));
     assert_eq!(args.last().unwrap(), &settings.to_string(), "no first message this time");
     assert_eq!(value_after(&args, "--add-dir"), lab.docs.to_string_lossy());
-    assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&lab.shop).unwrap(), "no worktree recorded: the folder itself");
+    assert_eq!(
+        fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(),
+        fs::canonicalize(&lab.shop).unwrap(),
+        "no worktree recorded: the folder itself"
+    );
     // Narrow (90 columns): the session has the width, the ticket one line above it.
     let screen = t.stable();
     let lines: Vec<&str> = screen.lines().collect();
@@ -611,7 +692,11 @@ fn when_the_commander_says_no_the_ticket_stays_new_with_why_and_a_second_a_can_h
     t.send(b"\r");
     t.wait_for_flat("The commander says the Coding squad doesn't fit #1: This is docs work");
     let tk = lab.ticket_now();
-    assert_eq!((tk["state"].as_str(), tk["handover"]["says"].as_str(), tk["handover"]["kind"].as_str()), (Some("new"), Some("This is docs work; the Coding squad writes code."), Some("refused")), "{tk}");
+    assert_eq!(
+        (tk["state"].as_str(), tk["handover"]["says"].as_str(), tk["handover"]["kind"].as_str()),
+        (Some("new"), Some("This is docs work; the Coding squad writes code."), Some("refused")),
+        "{tk}"
+    );
     assert!(tk.get("leaders").is_none(), "{tk}");
     assert_eq!(lab.started(), 0);
     assert!(!lab.base.join("shop-worktrees").exists(), "nothing made");
@@ -665,7 +750,14 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     let bin = lab.base.join("bin");
     fs::create_dir_all(&bin).unwrap();
     let real = String::from_utf8(Command::new("sh").args(["-c", "command -v git"]).output().unwrap().stdout).unwrap().trim().to_string();
-    fs::write(bin.join("git"), format!("#!/bin/sh\ncase \"$*\" in *'worktree add'*) touch '{}'; sleep 3;; esac\nexec '{real}' \"$@\"\n", lab.fake.join("git-slow").display())).unwrap();
+    fs::write(
+        bin.join("git"),
+        format!(
+            "#!/bin/sh\ncase \"$*\" in *'worktree add'*) touch '{}'; sleep 3;; esac\nexec '{real}' \"$@\"\n",
+            lab.fake.join("git-slow").display()
+        ),
+    )
+    .unwrap();
     fs::set_permissions(bin.join("git"), fs::Permissions::from_mode(0o755)).unwrap();
     let mut env = lab.env();
     env.push(("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())));
@@ -733,7 +825,12 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
     assert_eq!(value_after(&args, "-n"), "Research squad · #1 Basket");
     assert_eq!(value_after(&args, "--model"), "sonnet");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
-    let got: Vec<(String, String, Value)> = agents.as_object().unwrap().iter().map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string(), v["tools"].clone())).collect();
+    let got: Vec<(String, String, Value)> = agents
+        .as_object()
+        .unwrap()
+        .iter()
+        .map(|(k, v)| (k.clone(), v["model"].as_str().unwrap().to_string(), v["tools"].clone()))
+        .collect();
     let web = json!(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]);
     assert_eq!(
         got,
@@ -746,12 +843,23 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
         ]
     );
     let prompt = agents["research-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder") && !prompt.contains("worktree"), "{prompt}");
+    assert!(
+        prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder")
+            && !prompt.contains("worktree"),
+        "{prompt}"
+    );
     let first = args.last().unwrap();
-    assert!(first.contains("the ticket's private work folder; the session starts here") && first.contains("The ticket has no folder of its own."), "{first}");
+    assert!(
+        first.contains("the ticket's private work folder; the session starts here")
+            && first.contains("The ticket has no folder of its own."),
+        "{first}"
+    );
     assert!(first.contains("stop once the result is written in your work folder"), "{first}");
     // The commander was told there is no folder of its own; nothing else was made.
-    assert!(lab.check_file(1, "stdin").starts_with("The squad: Research\n") && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder of its own;"));
+    assert!(
+        lab.check_file(1, "stdin").starts_with("The squad: Research\n")
+            && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder of its own;")
+    );
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["leaders"][0]["squad"].as_str()), (Some("working"), Some("research")), "{tk}");
     assert_eq!(tk["worktrees"], json!([]));
@@ -775,14 +883,29 @@ fn summarize_works_in_a_worktree_of_a_git_folder_with_the_work_folder_beside_it(
     assert!(wt.join("README").exists(), "a worktree of the git folder, like every squad");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let args = lab.args(1);
-    assert_eq!(add_dirs(&args), [lab.docs.to_string_lossy().into_owned(), work.to_string_lossy().into_owned()], "the other folder as it is, then the work folder");
+    assert_eq!(
+        add_dirs(&args),
+        [lab.docs.to_string_lossy().into_owned(), work.to_string_lossy().into_owned()],
+        "the other folder as it is, then the work folder"
+    );
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["summarize-leader", "summarize-summarizer"]);
     assert_eq!(agents["summarize-summarizer"]["tools"], json!(["Read", "Grep", "Glob", "WebSearch", "WebFetch"]));
     let prompt = agents["summarize-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("The result is that summary itself: put it just above your last line") && prompt.contains("goes in the ticket's private work folder"), "{prompt}");
+    assert!(
+        prompt.contains("The result is that summary itself: put it just above your last line")
+            && prompt.contains("goes in the ticket's private work folder"),
+        "{prompt}"
+    );
     let first = args.last().unwrap();
-    assert!(first.contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())), "{first}");
+    assert!(
+        first.contains(&format!(
+            "- {} (a git worktree of {}, on the branch ticket/1; the session starts here)",
+            wt.display(),
+            lab.shop.display()
+        )),
+        "{first}"
+    );
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
@@ -799,15 +922,27 @@ fn docs_works_in_a_worktree_of_a_git_folder() {
     assert!(wt.join("README").exists(), "a real worktree of the temp repository");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let tk = lab.ticket_now();
-    assert_eq!((tk["worktrees"][0]["path"].as_str(), tk["worktrees"][0]["branch"].as_str()), (Some(wt.to_string_lossy().as_ref()), Some("ticket/1")), "{tk}");
+    assert_eq!(
+        (tk["worktrees"][0]["path"].as_str(), tk["worktrees"][0]["branch"].as_str()),
+        (Some(wt.to_string_lossy().as_ref()), Some("ticket/1")),
+        "{tk}"
+    );
     let args = lab.args(1);
-    assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()], "only its work folder besides");
+    assert_eq!(
+        add_dirs(&args),
+        [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()],
+        "only its work folder besides"
+    );
     assert_eq!(value_after(&args, "--agent"), "docs-leader");
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     assert_eq!(agents["docs-tech-writer"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write"]));
     assert_eq!(agents["docs-editor"]["model"], "opus");
     assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays in the worktree, uncommitted"));
-    assert!(args.last().unwrap().contains(&format!("- {} (a git worktree of {}, on the branch ticket/1; the session starts here)", wt.display(), lab.shop.display())));
+    assert!(args.last().unwrap().contains(&format!(
+        "- {} (a git worktree of {}, on the branch ticket/1; the session starts here)",
+        wt.display(),
+        lab.shop.display()
+    )));
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
@@ -828,7 +963,9 @@ fn docs_works_in_a_folder_outside_git_as_it_is() {
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     let prompt = agents["docs-leader"]["prompt"].as_str().unwrap();
     assert!(prompt.contains("the change stays in the ticket's folder, uncommitted") && !prompt.contains("worktree"), "{prompt}");
-    assert!(args.last().unwrap().contains(&format!("- {} (used as it is, not a git worktree; the session starts here)", lab.docs.display())));
+    assert!(
+        args.last().unwrap().contains(&format!("- {} (used as it is, not a git worktree; the session starts here)", lab.docs.display()))
+    );
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
@@ -926,10 +1063,19 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     lab.ticket(json!({"state": "waiting", "reason": "Asks: which colour?", "leaders": [{"squad": "coding", "session": sid, "started": 1, "names": "squad-role"}], "worktrees": []}));
     // The leader's transcript, shaped like a real one: its agent, its answers, three member runs (the reviewer's
     // result is not back), and the members' own transcripts beside it.
-    let answer = |m: &str, input: u64, output: u64, read: u64| json!({"type":"assistant","message":{"id":m,"usage":{"input_tokens":input,"output_tokens":output,"cache_read_input_tokens":read}}}).to_string();
-    let call = |m: &str, c: &str, agent: &str, what: &str| json!({"type":"assistant","message":{"id":m,"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":agent,"description":what,"prompt":"go"}}]}}).to_string();
-    let launched = |c: &str, a: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":a}}).to_string();
-    let back = |c: &str| json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string();
+    let answer = |m: &str, input: u64, output: u64, read: u64| {
+        json!({"type":"assistant","message":{"id":m,"usage":{"input_tokens":input,"output_tokens":output,"cache_read_input_tokens":read}}})
+            .to_string()
+    };
+    let call = |m: &str, c: &str, agent: &str, what: &str| {
+        json!({"type":"assistant","message":{"id":m,"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":agent,"description":what,"prompt":"go"}}]}}).to_string()
+    };
+    let launched = |c: &str, a: &str| {
+        json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"Async agent launched successfully."}]},"toolUseResult":{"isAsync":true,"status":"async_launched","agentId":a}}).to_string()
+    };
+    let back = |c: &str| {
+        json!({"type":"user","message":{"content":format!("<task-notification>\n<tool-use-id>{c}</tool-use-id>\n<status>completed</status>\n</task-notification>")}}).to_string()
+    };
     let lines = [
         json!({"type":"agent-setting","agentSetting":"coding-leader"}).to_string(),
         answer("l1", 20_000, 5_000, 300_000),
@@ -961,15 +1107,28 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     // Its screen: the total, what it counts, a line per agent, and the members' runs in order. Its session isn't
     // running, so the reviewer's run that never came back says it didn't finish, and nothing is "Now".
     t.send(b"\r");
-    t.wait_for_all(&["Tokens used", "915K sent and written", "What the squad has done", "[x] coding-planner · Plan the basket page", "[x] coding-builder · Build the basket page", "[-] coding-reviewer"]);
+    t.wait_for_all(&[
+        "Tokens used",
+        "915K sent and written",
+        "What the squad has done",
+        "[x] coding-planner · Plan the basket page",
+        "[x] coding-builder · Build the basket page",
+        "[-] coding-reviewer",
+    ]);
     let screen = t.stable();
     // The ticket's side only (the session's place is on the right).
-    let left: Vec<String> = screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
+    let left: Vec<String> =
+        screen.lines().map(|l| l.split('│').nth(1).unwrap_or("").split_whitespace().collect::<Vec<_>>().join(" ")).collect();
     let at = |needle: &str| left.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("no {needle}:\n{screen}"));
-    for (agent, n) in [("coding-leader", "25K + 300K from cache"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")] {
+    for (agent, n) in
+        [("coding-leader", "25K + 300K from cache"), ("coding-planner", "400K"), ("coding-builder", "480K"), ("coding-reviewer", "10K")]
+    {
         assert_eq!(left[at(&format!("{agent} "))], format!("{agent} {n}"), "{screen}");
     }
-    assert!(at("coding-leader ") < at("coding-planner ") && at("coding-builder ") < at("coding-reviewer "), "in the order they worked:\n{screen}");
+    assert!(
+        at("coding-leader ") < at("coding-planner ") && at("coding-builder ") < at("coding-reviewer "),
+        "in the order they worked:\n{screen}"
+    );
     let said = left[at("Tokens used")..at("coding-leader ")].join(" ");
     // The same number as the pane, said as what it is, with the cache reads beside it and the parts explained.
     assert!(said.starts_with("Tokens used 915K sent and written, plus 300K read again from Claude's cache"), "{said}");

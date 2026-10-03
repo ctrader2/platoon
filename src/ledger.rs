@@ -7,7 +7,7 @@
 //! lose each other's numbers. A file that can't be understood is treated as empty: the counting starts over
 //! rather than the app failing. Days older than `KEEP_DAYS` are dropped on every write.
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::BTreeMap,
     fs, io,

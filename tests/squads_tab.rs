@@ -11,7 +11,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -110,7 +110,16 @@ impl Lab {
             bin: base.join("bin"),
             base,
         };
-        for d in [&lab.claude.join("sessions"), &lab.claude.join("projects"), &lab.base.join("cache"), &lab.config, &lab.work, &lab.shop, &lab.fake, &lab.bin] {
+        for d in [
+            &lab.claude.join("sessions"),
+            &lab.claude.join("projects"),
+            &lab.base.join("cache"),
+            &lab.config,
+            &lab.work,
+            &lab.shop,
+            &lab.fake,
+            &lab.bin,
+        ] {
             fs::create_dir_all(d).unwrap();
         }
         for (path, text) in [(lab.base.join("fake-claude.sh"), FAKE), (lab.bin.join("nano"), FAKE_NANO)] {
@@ -240,13 +249,20 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     // Coding, Research, Docs and Summarize come first.
     t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
-    assert!(lab.call(2, "stdin").starts_with("The squad: Careful coding\nWhat it can do: Makes small, careful changes"), "{}", lab.call(2, "stdin"));
+    assert!(
+        lab.call(2, "stdin").starts_with("The squad: Careful coding\nWhat it can do: Makes small, careful changes"),
+        "{}",
+        lab.call(2, "stdin")
+    );
     let first = lab.args(1);
     assert_eq!(value_after(&first, "--agent"), "careful-coding-leader");
     assert_eq!(value_after(&first, "--model"), "sonnet");
     assert_eq!(value_after(&first, "-n"), "Careful coding squad · #1 Basket");
     let agents: Value = serde_json::from_str(value_after(&first, "--agents")).unwrap();
-    assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["careful-coding-leader", "careful-coding-planner", "careful-coding-quick-builder"]);
+    assert_eq!(
+        agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+        ["careful-coding-leader", "careful-coding-planner", "careful-coding-quick-builder"]
+    );
     assert_eq!(agents["careful-coding-quick-builder"]["model"], "haiku");
     assert_eq!(agents["careful-coding-quick-builder"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash"]));
     assert_eq!(agents["careful-coding-planner"]["model"], "opus", "the built-in planner");
@@ -323,13 +339,20 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"\x1b[Z");
     t.wait_for("Editing files");
     t.send(b"\x1b[Z");
-    t.wait_for_all(&["System prompt for the squad commander", "System prompt for squad leaders", "Model for squad leaders", "System prompt for drafting a squad"]);
+    t.wait_for_all(&[
+        "System prompt for the squad commander",
+        "System prompt for squad leaders",
+        "Model for squad leaders",
+        "System prompt for drafting a squad",
+    ]);
     t.send(b"G");
     t.wait_for("How platoon asks Claude to draft one agent");
     t.send(b"\x1b[A\x1b[A");
     t.wait_for("The model every squad's leader runs on.");
     t.send(b"\x1b[D");
-    until("the leaders' model to be saved", || fs::read_to_string(lab.config.join("settings.json")).unwrap_or_default().contains("\"squad_leader_model\": \"opus\""));
+    until("the leaders' model to be saved", || {
+        fs::read_to_string(lab.config.join("settings.json")).unwrap_or_default().contains("\"squad_leader_model\": \"opus\"")
+    });
     t.send(b"\x1b[A");
     t.wait_for_all(&["How platoon asks Claude to lead a squad through a ticket", "enter edit"]);
     t.send(b"\r");
@@ -339,7 +362,10 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"Keep the reports to five lines.\r");
     t.wait_for_all(&["Saved: platoon uses your system prompt for squad leaders", "Settings file:"]);
     let g = fs::read_to_string(lab.config.join("prompts/squad-leader.md")).unwrap();
-    assert!(g.starts_with("You are given one ticket: a piece of work in a project.") && g.ends_with("Keep the reports to five lines.\n"), "{g}");
+    assert!(
+        g.starts_with("You are given one ticket: a piece of work in a project.") && g.ends_with("Keep the reports to five lines.\n"),
+        "{g}"
+    );
     t.send(b"\x1b");
     t.wait_gone("Settings file:");
     // Handed a ticket, Coding's leader has both.
@@ -407,7 +433,10 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     let screen = t.stable();
     assert!(!screen.contains("tok-123"), "what a server is, is never shown: {screen}");
     let a: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("agents/planner.json")).unwrap()).unwrap();
-    assert_eq!((a["skills"].clone(), a["mcp_servers"].clone(), a["builtin"].as_str()), (json!(["pdf"]), json!(["sentry", "linear"]), Some("planner")));
+    assert_eq!(
+        (a["skills"].clone(), a["mcp_servers"].clone(), a["builtin"].as_str()),
+        (json!(["pdf"]), json!(["sentry", "linear"]), Some("planner"))
+    );
     // Coding's leader starts with them: preloaded skills, servers by name, and the tools that let the planner use them.
     t.send(b"\x1b");
     t.wait_gone("ctrl+space back to the list");

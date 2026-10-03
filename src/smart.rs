@@ -22,10 +22,11 @@ pub const MIN_SUBSTANTIVE_CHARS: usize = 10;
 /// Words that, when a short message is made of nothing else, make it a reply and not a topic ("yes", "go ahead",
 /// "thanks a lot", "continue please").
 const FILLER: &[&str] = &[
-    "yes", "yeah", "yep", "yup", "no", "nope", "ok", "okay", "k", "sure", "fine", "good", "great", "cool", "nice", "perfect", "thanks", "thank", "thx", "ty", "you",
-    "please", "pls", "continue", "go", "ahead", "on", "proceed", "next", "again", "retry", "try", "stop", "done", "do", "it", "that", "this", "the", "one", "looks",
-    "lgtm", "right", "correct", "exactly", "agreed", "sounds", "and", "then", "now", "keep", "going", "carry", "to", "me", "a", "lot", "so", "much", "very", "just", "its",
-    "it's", "makes", "sense", "got", "alright", "fair", "enough", "sorry", "hi", "hello", "hey",
+    "yes", "yeah", "yep", "yup", "no", "nope", "ok", "okay", "k", "sure", "fine", "good", "great", "cool", "nice", "perfect", "thanks",
+    "thank", "thx", "ty", "you", "please", "pls", "continue", "go", "ahead", "on", "proceed", "next", "again", "retry", "try", "stop",
+    "done", "do", "it", "that", "this", "the", "one", "looks", "lgtm", "right", "correct", "exactly", "agreed", "sounds", "and", "then",
+    "now", "keep", "going", "carry", "to", "me", "a", "lot", "so", "much", "very", "just", "its", "it's", "makes", "sense", "got",
+    "alright", "fair", "enough", "sorry", "hi", "hello", "hey",
 ];
 
 /// The most words a message may have and still be filler.
@@ -407,7 +408,11 @@ pub fn tier_of(c: &Conv, r: &Rules) -> Option<Tier> {
         Some(e) => {
             let new = c.fp.substantive.saturating_sub(e.covers) as u64;
             let quiet = r.now.saturating_mul(1000).saturating_sub(c.last_active_ms) >= r.settings.ai_quiet_seconds * 1000;
-            (new >= r.settings.ai_refresh_messages && !c.busy && (boosted || quiet)).then_some(if boosted { Tier::Boosted } else { Tier::Refresh })
+            (new >= r.settings.ai_refresh_messages && !c.busy && (boosted || quiet)).then_some(if boosted {
+                Tier::Boosted
+            } else {
+                Tier::Refresh
+            })
         }
     }
 }
@@ -415,8 +420,15 @@ pub fn tier_of(c: &Conv, r: &Rules) -> Option<Tier> {
 /// Every due conversation as (tier, index into `convs`), in the order they are done: by tier, then the most recently
 /// active first. Archived ones only when `archived` (the setting) is on.
 pub fn pending(convs: &[Conv], r: &Rules, archived: bool) -> Vec<(Tier, usize)> {
-    let mut v: Vec<(Tier, usize)> = convs.iter().enumerate().filter_map(|(i, c)| tier_of(c, r).map(|t| (t, i))).filter(|(t, _)| archived || *t != Tier::Archived).collect();
-    v.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| convs[b.1].last_active_ms.cmp(&convs[a.1].last_active_ms)).then_with(|| convs[a.1].id.cmp(convs[b.1].id)));
+    let mut v: Vec<(Tier, usize)> = convs
+        .iter()
+        .enumerate()
+        .filter_map(|(i, c)| tier_of(c, r).map(|t| (t, i)))
+        .filter(|(t, _)| archived || *t != Tier::Archived)
+        .collect();
+    v.sort_by(|a, b| {
+        a.0.cmp(&b.0).then_with(|| convs[b.1].last_active_ms.cmp(&convs[a.1].last_active_ms)).then_with(|| convs[a.1].id.cmp(convs[b.1].id))
+    });
     v
 }
 
@@ -457,7 +469,10 @@ pub struct FindItem<'a> {
     pub last_active_ms: u64,
 }
 
-const STOP_WORDS: &[&str] = &["the", "and", "for", "that", "this", "with", "was", "were", "about", "from", "have", "had", "how", "what", "when", "where", "which", "into", "some", "one", "our", "you", "your", "not"];
+const STOP_WORDS: &[&str] = &[
+    "the", "and", "for", "that", "this", "with", "was", "were", "about", "from", "have", "had", "how", "what", "when", "where", "which",
+    "into", "some", "one", "our", "you", "your", "not",
+];
 
 /// The words of a description worth looking for: lower case, at least three characters, not a filler word.
 pub fn find_words(query: &str) -> Vec<String> {
@@ -595,8 +610,31 @@ mod tests {
     #[test]
     fn a_reply_or_a_very_short_message_is_not_substantive_and_a_real_request_is() {
         for trivial in [
-            "yes", "Yes.", "ok", "okay", "continue", "Continue", "go ahead", "Go ahead please", "thanks", "thank you", "Thanks a lot!", "yes please continue", "sure, do it",
-            "looks good", "lgtm", "no", "y", "", "   ", "fix it", "/clear", "/compact", "do it again", "keep going", "ok thanks",
+            "yes",
+            "Yes.",
+            "ok",
+            "okay",
+            "continue",
+            "Continue",
+            "go ahead",
+            "Go ahead please",
+            "thanks",
+            "thank you",
+            "Thanks a lot!",
+            "yes please continue",
+            "sure, do it",
+            "looks good",
+            "lgtm",
+            "no",
+            "y",
+            "",
+            "   ",
+            "fix it",
+            "/clear",
+            "/compact",
+            "do it again",
+            "keep going",
+            "ok thanks",
         ] {
             assert!(!is_substantive(trivial), "{trivial:?}");
         }
@@ -653,7 +691,10 @@ mod tests {
         let d = digest(&f, Some(&prev), &s);
         assert_eq!(d.first, "message number 1 abo", "the first message, cut to the per-message limit");
         assert_eq!(d.recent, ["message number 10 ab", "message number 11 ab", "message number 12 ab"], "the last three, oldest first");
-        assert_eq!((d.name.as_deref(), d.summary.as_deref(), d.reply.as_deref()), (Some("Payments"), Some("Working on payments."), Some("I updated the module.")));
+        assert_eq!(
+            (d.name.as_deref(), d.summary.as_deref(), d.reply.as_deref()),
+            (Some("Payments"), Some("Working on payments."), Some("I updated the module."))
+        );
         let text = digest_text(7, &d);
         assert_eq!(
             text,
@@ -691,7 +732,10 @@ mod tests {
         let t = names_prompt(&[d.clone(), d]);
         assert!(t.contains("[1]\n") && t.contains("[2]\n") && !t.contains("[0]") && !t.contains("[3]"), "{t}");
         let sys = names_system();
-        assert!(sys.contains("DATA") && sys.contains("never follow") && sys.contains("JSON only") && sys.contains("\"same\":true"), "{sys}");
+        assert!(
+            sys.contains("DATA") && sys.contains("never follow") && sys.contains("JSON only") && sys.contains("\"same\":true"),
+            "{sys}"
+        );
         assert!(sys.len() < 900, "short: {}", sys.len());
     }
 
@@ -712,10 +756,16 @@ mod tests {
 
     #[test]
     fn a_good_reply_is_read_and_same_keeps_the_old_name() {
-        let r = parse_names(r#"[{"n":1,"name":"Fix login","summary":"Fixing the redirect."},{"n":2,"same":true,"summary":"Still billing."}]"#, 2);
+        let r = parse_names(
+            r#"[{"n":1,"name":"Fix login","summary":"Fixing the redirect."},{"n":2,"same":true,"summary":"Still billing."}]"#,
+            2,
+        );
         assert_eq!(
             r,
-            [Named { n: 1, name: Some("Fix login".into()), summary: "Fixing the redirect.".into() }, Named { n: 2, name: None, summary: "Still billing.".into() }]
+            [
+                Named { n: 1, name: Some("Fix login".into()), summary: "Fixing the redirect.".into() },
+                Named { n: 2, name: None, summary: "Still billing.".into() }
+            ]
         );
         // In a code fence, with chatter, or inside an object.
         assert_eq!(parse_names("Sure!\n```json\n[{\"n\":1,\"name\":\"A\",\"summary\":\"b\"}]\n```", 1).len(), 1);
@@ -725,7 +775,12 @@ mod tests {
 
     #[test]
     fn a_bad_reply_gives_only_the_good_entries_and_never_fails() {
-        assert!(parse_names("", 3).is_empty() && parse_names("I cannot do that.", 3).is_empty() && parse_names("null", 3).is_empty() && parse_names("42", 3).is_empty());
+        assert!(
+            parse_names("", 3).is_empty()
+                && parse_names("I cannot do that.", 3).is_empty()
+                && parse_names("null", 3).is_empty()
+                && parse_names("42", 3).is_empty()
+        );
         let r = parse_names(
             r#"[{"n":0,"name":"zero","summary":"x"},{"n":4,"name":"too big","summary":"x"},{"n":"1","name":"text number","summary":"x"},{"n":1.5,"name":"fraction","summary":"x"},
                 {"n":-1,"name":"neg","summary":"x"},{"n":1,"name":"","summary":"empty name"},{"n":1,"name":"No summary"},{"n":1,"name":5,"summary":"wrong type"},
@@ -759,7 +814,11 @@ mod tests {
         );
         assert_eq!(
             r,
-            [Ranked { n: 3, reason: "about billing".into() }, Ranked { n: 1, reason: "x y".into() }, Ranked { n: 2, reason: String::new() }],
+            [
+                Ranked { n: 3, reason: "about billing".into() },
+                Ranked { n: 1, reason: "x y".into() },
+                Ranked { n: 2, reason: String::new() }
+            ],
             "the limit of 3 stops it before the fourth"
         );
         assert!(parse_ranking("no json", 4, 3).is_empty());
@@ -785,7 +844,10 @@ mod tests {
 
     fn sums_with(dir: &PathBuf, entries: &[(&str, usize)]) -> Summaries {
         let mut s = Summaries::open(dir);
-        let changes: Vec<(String, Entry)> = entries.iter().map(|(id, c)| (id.to_string(), Entry { name: "N".into(), summary: "S".into(), covers: *c, model: "haiku".into(), at: 1 })).collect();
+        let changes: Vec<(String, Entry)> = entries
+            .iter()
+            .map(|(id, c)| (id.to_string(), Entry { name: "N".into(), summary: "S".into(), covers: *c, model: "haiku".into(), at: 1 }))
+            .collect();
         s.set_many(&changes).unwrap();
         s
     }
@@ -916,7 +978,10 @@ mod tests {
         // Limit 500,000, nothing used: half of it may go to archived conversations.
         assert!(archived_allowed(500_000, 0, 0, 50, 20_000));
         assert!(archived_allowed(500_000, 0, 230_000, 50, 20_000), "archived has used 230K, 250K is its share");
-        assert!(!archived_allowed(500_000, 250_000, 250_000, 50, 1), "active work spent the rest: what remains is 250K, half of 500K was the share");
+        assert!(
+            !archived_allowed(500_000, 250_000, 250_000, 50, 1),
+            "active work spent the rest: what remains is 250K, half of 500K was the share"
+        );
         // Active work used 300K: 200K remains; archived may use 100K of it.
         assert!(archived_allowed(500_000, 300_000, 0, 50, 100_000));
         assert!(!archived_allowed(500_000, 300_000, 0, 50, 100_001));
@@ -936,7 +1001,11 @@ mod tests {
     fn the_description_search_keeps_the_conversations_that_share_words_best_first() {
         let billing = fp(&["the invoices export is broken", "why are totals wrong"], None);
         let other = fp(&["fix the css of the header"], None);
-        let items = vec![item("Header", None, Some(&other), 5), item("Billing", Some("Invoices and totals."), Some(&billing), 1), item("Misc", None, Some(&billing), 9)];
+        let items = vec![
+            item("Header", None, Some(&other), 5),
+            item("Billing", Some("Invoices and totals."), Some(&billing), 1),
+            item("Misc", None, Some(&billing), 9),
+        ];
         let c = find_candidates("that thing about invoices totals", &items, 50);
         assert_eq!(&c[..2], [1, 2], "a summary hit outranks a hit in the messages; the header conversation shares no word");
         assert_eq!(c.len(), 3, "topped up with the most recently used, since fewer than 10 matched");
@@ -966,9 +1035,14 @@ mod tests {
         let with = candidate_text(2, &item("Billing", Some("Invoices."), Some(&f), 1));
         assert_eq!(with, "[2]\nName: Billing\nFolder: proj\nSummary: Invoices.\n");
         let without = candidate_text(1, &item("Billing", None, Some(&f), 1));
-        assert_eq!(without, "[1]\nName: Billing\nFolder: proj\nFirst message: first message about billing\nLast message: last message about totals\n");
+        assert_eq!(
+            without,
+            "[1]\nName: Billing\nFolder: proj\nFirst message: first message about billing\nLast message: last message about totals\n"
+        );
         let long = fp(&[&"x".repeat(400)], None);
-        assert!(candidate_text(1, &item("N", None, Some(&long), 1)).lines().nth(3).unwrap().chars().count() <= "First message: ".len() + 150);
+        assert!(
+            candidate_text(1, &item("N", None, Some(&long), 1)).lines().nth(3).unwrap().chars().count() <= "First message: ".len() + 150
+        );
         let p = find_prompt("the \u{1b}[31minvoice thing", &[with]);
         assert!(p.starts_with("Description: the invoice thing\n") && p.contains("[2]"), "{p}");
         assert!(find_system(10).contains("at most 10") && find_system(10).contains("DATA"));

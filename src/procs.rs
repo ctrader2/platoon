@@ -3,7 +3,7 @@
 //! system couldn't say and must treat that as "unknown".
 
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap},
+    collections::{HashMap, hash_map::DefaultHasher},
     fs,
     hash::{Hash, Hasher},
     path::Path,
@@ -147,7 +147,9 @@ mod tests {
     #[test]
     fn ps_output_parses() {
         assert_eq!(parse_ps("  1     0 Ss\n 20     1 Z+\nbad line\n"), vec![row(1, 0, false), row(20, 1, true)]);
-        let rows = parse_ps("  5     1 S    Sat Sep 19 11:44:41 2026\n  6     1 S    Sat Sep 19 11:44:42 2026\n  7     1 S    Sat Sep 19 11:44:41 2026\n");
+        let rows = parse_ps(
+            "  5     1 S    Sat Sep 19 11:44:41 2026\n  6     1 S    Sat Sep 19 11:44:42 2026\n  7     1 S    Sat Sep 19 11:44:41 2026\n",
+        );
         assert!(rows.iter().all(|r| r.start != 0));
         assert_eq!((rows[0].start == rows[2].start, rows[0].start == rows[1].start), (true, false), "same start time = same reading");
     }

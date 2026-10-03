@@ -3,7 +3,10 @@
 
 mod common;
 use common::*;
-use std::{fs, path::{Path, PathBuf}};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 struct World {
     base: PathBuf,
@@ -54,12 +57,14 @@ impl World {
     }
 
     fn names(&self) -> serde_json::Value {
-        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(self.base.join("config/names.json")).unwrap()).unwrap()["names"].clone()
+        serde_json::from_str::<serde_json::Value>(&fs::read_to_string(self.base.join("config/names.json")).unwrap()).unwrap()["names"]
+            .clone()
     }
 }
 
 fn listing(dir: &Path) -> Vec<String> {
-    let mut v: Vec<String> = fs::read_dir(dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    let mut v: Vec<String> =
+        fs::read_dir(dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
     v.sort();
     v
 }
@@ -91,7 +96,10 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     let foot = (sep..lines.len()).find(|&r| lines[r].contains("esc clear")).expect("footer");
     for r in sep + 1..foot {
         let row = inside(lines[r]);
-        assert!(!row.contains("alpha") && !row.contains("beta") && !row.contains("/work/") && !row.contains("ago"), "row text in the empty results area: {row:?}\n{text}");
+        assert!(
+            !row.contains("alpha") && !row.contains("beta") && !row.contains("/work/") && !row.contains("ago"),
+            "row text in the empty results area: {row:?}\n{text}"
+        );
     }
     assert!(!text.contains(" shown"), "{text}");
     // Typing right away narrows the list at once (the words are ones that are keys elsewhere, too).

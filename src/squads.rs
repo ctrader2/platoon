@@ -28,7 +28,7 @@
 
 use crate::instructions;
 use crate::tickets::{self, AgentNames, State, Ticket, Tickets, Worktree};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs,
     io::Read,
@@ -38,8 +38,8 @@ use std::{
 
 // ---- names and tools ----------------------------------------------------------------------------------------------
 
-pub use crate::squadfile::{Crew, Squad, LEADER_ROLE};
 use crate::agentfile::Agent;
+pub use crate::squadfile::{Crew, LEADER_ROLE, Squad};
 
 /// The name an agent of squad `id` has in the session (`--agents`, `--agent`, and what Claude Code shows in its lines
 /// and status bar): `coding-leader`, `coding-planner`, ... A leader started before the names carried the squad
@@ -382,7 +382,8 @@ pub fn member_prompt(m: &Agent) -> String {
 
 /// What the leader reads to pick a member: what the agent does in this squad's workflow.
 pub fn member_description(s: &Squad, id: &str) -> String {
-    let steps: Vec<(usize, &str)> = s.workflow.iter().enumerate().filter(|(_, st)| st.agent == id).map(|(i, st)| (i + 1, st.does.trim())).collect();
+    let steps: Vec<(usize, &str)> =
+        s.workflow.iter().enumerate().filter(|(_, st)| st.agent == id).map(|(i, st)| (i + 1, st.does.trim())).collect();
     match steps.as_slice() {
         [] => format!("A member of the {} squad.", s.name),
         [(_, does)] => does.to_string(),
@@ -401,7 +402,8 @@ pub fn agents_json(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Pla
         json!({"description": format!("Leads the {} squad through one ticket.", s.name), "prompt": leader_prompt(c, leader, names, place), "model": leader.model, "tools": LEADER_TOOLS}),
     );
     for m in &c.agents {
-        let mut a = json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)});
+        let mut a =
+            json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)});
         if let Some(o) = a.as_object_mut() {
             if !m.skills.is_empty() {
                 o.insert("skills".into(), json!(m.skills));
@@ -461,7 +463,14 @@ impl Launch {
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         let agents = v.get("agents").filter(|a| a.is_object())?.to_string();
         let work_folder = s("starts_in").as_deref() == Some("work-folder");
-        Some(Launch { squad: s("squad")?, name: s("name").unwrap_or_default(), agents, agent: s("agent")?, model: s("model")?, work_folder })
+        Some(Launch {
+            squad: s("squad")?,
+            name: s("name").unwrap_or_default(),
+            agents,
+            agent: s("agent")?,
+            model: s("model")?,
+            work_folder,
+        })
     }
 }
 
@@ -537,7 +546,9 @@ pub fn commander_prompt(squad: &Squad, t: &Ticket, body: &str, folders: &[Folder
     let mut out = format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do);
     out.push_str(&format!("The ticket: #{} {}\n", t.number, t.title));
     if folders.is_empty() {
-        out.push_str("Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n");
+        out.push_str(
+            "Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n",
+        );
     } else {
         out.push_str("Where it works:\n");
         for f in folders {
@@ -636,11 +647,17 @@ pub fn after_check(number: u32, squad: &str, check: &Check) -> AfterCheck {
         Check::DoesNotFit(why) => AfterCheck::BackToNew {
             says: why.clone(),
             kind: HandoverKind::Refused,
-            notice: format!("The commander says the {squad} squad doesn't fit #{number}: {why} Press a and pick it again to hand it over anyway."),
+            notice: format!(
+                "The commander says the {squad} squad doesn't fit #{number}: {why} Press a and pick it again to hand it over anyway."
+            ),
         },
         Check::Refused(r) => {
             let words = refusal_words(r);
-            AfterCheck::BackToNew { says: words.to_string(), kind: HandoverKind::NoCheck, notice: format!("{words}. #{number} wasn't handed over. {}", r.on_screen()) }
+            AfterCheck::BackToNew {
+                says: words.to_string(),
+                kind: HandoverKind::NoCheck,
+                notice: format!("{words}. #{number} wasn't handed over. {}", r.on_screen()),
+            }
         }
         Check::Failed(why) => AfterCheck::BackToNew {
             says: format!("The commander's check failed ({why}), so nothing was handed over."),
@@ -666,7 +683,9 @@ pub fn how_far(place: Place) -> String {
             };
             format!("{lead} When it doesn't say, stop at local changes: leave the change {at}, uncommitted. No commit, no push.")
         }
-        Place::WorkFolder => format!("{lead} When it doesn't say, stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere."),
+        Place::WorkFolder => format!(
+            "{lead} When it doesn't say, stop once the result is written in your work folder: nothing is committed, pushed or sent anywhere."
+        ),
     }
 }
 
@@ -984,7 +1003,11 @@ fn base(word: &str) -> &str {
 
 fn is_assignment(w: &str) -> bool {
     match w.split_once('=') {
-        Some((name, _)) => !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !name.starts_with(|c: char| c.is_ascii_digit()),
+        Some((name, _)) => {
+            !name.is_empty()
+                && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                && !name.starts_with(|c: char| c.is_ascii_digit())
+        }
         None => false,
     }
 }
@@ -1027,7 +1050,8 @@ fn publish_words(words: &[String], depth: usize) -> Option<String> {
             "timeout" => &["-s", "-k", "--signal", "--kill-after"],
             "xargs" => &["-I", "-n", "-L", "-P", "-d", "-E", "-s", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"],
             "stdbuf" => &["-i", "-o", "-e"],
-            "command" | "exec" | "nohup" | "time" | "builtin" | "setsid" | "then" | "do" | "else" | "elif" | "if" | "while" | "until" | "!" | "{" | "}" | "watch" => &[],
+            "command" | "exec" | "nohup" | "time" | "builtin" | "setsid" | "then" | "do" | "else" | "elif" | "if" | "while" | "until"
+            | "!" | "{" | "}" | "watch" => &[],
             _ => break,
         };
         let wrapper = base(w).to_string();
@@ -1102,7 +1126,9 @@ fn publish_words(words: &[String], depth: usize) -> Option<String> {
         },
         "cargo" | "npm" | "pnpm" | "yarn" | "poetry" => (pos(&[]).first() == Some(&"publish")).then(|| format!("{prog} publish")),
         "twine" => (pos(&[]).first() == Some(&"upload")).then(|| "twine upload".to_string()),
-        "gem" | "docker" | "podman" => (pos(&["-H", "--host", "--config", "--context"]).first() == Some(&"push")).then(|| format!("{prog} push")),
+        "gem" | "docker" | "podman" => {
+            (pos(&["-H", "--host", "--config", "--context"]).first() == Some(&"push")).then(|| format!("{prog} push"))
+        }
         _ => None,
     }
 }
@@ -1204,7 +1230,10 @@ pub fn prepare_worktrees(program: &str, folders: &[String], number: u32, recorde
         let folder = Path::new(f);
         let Ok(top) = git(program, folder, &["rev-parse", "--show-toplevel"]) else { continue };
         let root = PathBuf::from(top.trim());
-        let sub = fs::canonicalize(folder).ok().and_then(|c| c.strip_prefix(fs::canonicalize(&root).ok()?).ok().map(Path::to_path_buf)).unwrap_or_default();
+        let sub = fs::canonicalize(folder)
+            .ok()
+            .and_then(|c| c.strip_prefix(fs::canonicalize(&root).ok()?).ok().map(Path::to_path_buf))
+            .unwrap_or_default();
         let dir = worktree_dir(&root, number);
         let listed = worktrees_of(program, &root);
         let shown = dir.display();
@@ -1216,21 +1245,29 @@ pub fn prepare_worktrees(program: &str, folders: &[String], number: u32, recorde
                 fs::create_dir_all(parent).map_err(|e| format!("couldn't make {}: {e}", parent.display()))?;
             }
             let d = dir.to_string_lossy().into_owned();
-            git(program, &root, &["worktree", "add", &d, &branch]).map(|_| ()).map_err(|e| format!("couldn't make the worktree of {} again {why}: {e}", root.display()))
+            git(program, &root, &["worktree", "add", &d, &branch])
+                .map(|_| ())
+                .map_err(|e| format!("couldn't make the worktree of {} again {why}: {e}", root.display()))
         };
         match listed.iter().find(|(p, _)| same_place(p, &dir)) {
             Some((_, b)) if *b == full && dir.is_dir() => {}
             // Git still lists it but its folder is gone (removed by hand): forget that, and make it again.
             Some((_, b)) if *b == full && !dir.exists() => {
-                git(program, &root, &["worktree", "prune"]).map_err(|e| format!("couldn't tidy the worktrees of {}: {e}", root.display()))?;
+                git(program, &root, &["worktree", "prune"])
+                    .map_err(|e| format!("couldn't tidy the worktrees of {}: {e}", root.display()))?;
                 from_branch("from its branch")?;
             }
             Some(_) => return Err(format!("{shown} is already a worktree on another branch; move it away, then try again")),
-            None if dir.exists() => return Err(format!("{shown} is already there and isn't this ticket's worktree; move it away, then try again")),
+            None if dir.exists() => {
+                return Err(format!("{shown} is already there and isn't this ticket's worktree; move it away, then try again"));
+            }
             None => {
                 if git(program, &root, &["rev-parse", "--verify", "--quiet", &full]).is_ok() {
                     if before.is_none() {
-                        return Err(format!("the branch name {branch} is already taken in {}; rename that branch, then try again", root.display()));
+                        return Err(format!(
+                            "the branch name {branch} is already taken in {}; rename that branch, then try again",
+                            root.display()
+                        ));
                     }
                     // This ticket's own branch, its worktree removed after the work: made again from it.
                     from_branch("from its branch")?;
@@ -1240,7 +1277,10 @@ pub fn prepare_worktrees(program: &str, folders: &[String], number: u32, recorde
                     }
                     let d = dir.to_string_lossy().into_owned();
                     // Made from the commit written down, so the base is exactly where the branch starts.
-                    let head = git(program, &root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]).ok().map(|h| h.trim().to_string()).filter(|h| !h.is_empty());
+                    let head = git(program, &root, &["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])
+                        .ok()
+                        .map(|h| h.trim().to_string())
+                        .filter(|h| !h.is_empty());
                     let mut args = vec!["worktree", "add", d.as_str(), "-b", branch.as_str()];
                     if let Some(h) = &head {
                         args.push(h);
@@ -1255,7 +1295,13 @@ pub fn prepare_worktrees(program: &str, folders: &[String], number: u32, recorde
         if !path.is_dir() {
             fs::create_dir_all(&path).map_err(|e| format!("couldn't make {}: {e}", path.display()))?;
         }
-        out.push(Worktree { folder: f.clone(), path: path.to_string_lossy().into_owned(), branch: branch.clone(), base, ..Default::default() });
+        out.push(Worktree {
+            folder: f.clone(),
+            path: path.to_string_lossy().into_owned(),
+            branch: branch.clone(),
+            base,
+            ..Default::default()
+        });
     }
     Ok(out)
 }
@@ -1269,7 +1315,8 @@ pub fn new_session_id() -> String {
     let read = fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut b));
     if read.is_err() {
         // No /dev/urandom: the time and the process id, spread over the bytes. Unique enough for one computer.
-        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0) ^ u128::from(std::process::id()) << 64;
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+            ^ u128::from(std::process::id()) << 64;
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for (i, x) in b.iter_mut().enumerate() {
             h = (h ^ (seed >> ((i % 16) * 8)) as u64 & 0xff).wrapping_mul(0x0100_0000_01b3);
@@ -1526,7 +1573,8 @@ pub fn run_tool_hook() -> i32 {
 
 /// `platoon hook squad-gate`: 2 with the reason on stderr to refuse the command, else 0.
 pub fn run_gate_hook() -> i32 {
-    let refused = std::panic::catch_unwind(|| read_stdin().and_then(|input| squad_gate(&input, &crate::archive::config_dir()))).ok().flatten();
+    let refused =
+        std::panic::catch_unwind(|| read_stdin().and_then(|input| squad_gate(&input, &crate::archive::config_dir()))).ok().flatten();
     match refused {
         Some(why) => {
             eprintln!("{why}");
@@ -1581,7 +1629,13 @@ mod tests {
         builder.skills = vec!["pdf".into(), "release-notes".into()];
         builder.mcp = vec!["sentry".into(), "github".into()];
         assert_eq!(tools_for(builder), ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry", "mcp__github"]);
-        let v: Value = serde_json::from_str(&agents_json(&Crew::of(&coding(), &agents), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value = serde_json::from_str(&agents_json(
+            &Crew::of(&coding(), &agents),
+            &LeaderSetup::builtin(),
+            AgentNames::SquadRole,
+            Place::WORKTREE,
+        ))
+        .unwrap();
         let b = &v["coding-builder"];
         assert_eq!(b["skills"], json!(["pdf", "release-notes"]), "preloaded");
         assert_eq!(b["mcpServers"], json!(["sentry", "github"]), "by name");
@@ -1602,13 +1656,18 @@ mod tests {
 
     #[test]
     fn the_agents_json_carries_every_member_with_its_model_its_tools_and_its_prompt() {
-        let v: Value = serde_json::from_str(&agents_json(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value =
+            serde_json::from_str(&agents_json(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         let o = v.as_object().unwrap();
         let names = ["coding-leader", "coding-planner", "coding-builder", "coding-reviewer", "coding-verifier"];
         assert_eq!(o.keys().map(String::as_str).collect::<Vec<_>>(), names, "named after the squad, so Claude Code shows whose they are");
         let models: Vec<&str> = names.iter().map(|n| v[n]["model"].as_str().unwrap()).collect();
         assert_eq!(models, ["sonnet", "opus", "sonnet", "opus", "haiku"]);
-        assert_eq!(v["coding-leader"]["tools"], json!(["Agent", "Read", "Grep", "Glob", "Bash"]), "the leader hands work on, reads and runs; it never edits");
+        assert_eq!(
+            v["coding-leader"]["tools"],
+            json!(["Agent", "Read", "Grep", "Glob", "Bash"]),
+            "the leader hands work on, reads and runs; it never edits"
+        );
         assert_eq!(v["coding-planner"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
         assert_eq!(v["coding-builder"]["tools"], json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash"]));
         assert_eq!(v["coding-reviewer"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
@@ -1644,7 +1703,8 @@ mod tests {
         assert!(v.get("coding-docs").is_none(), "in no step");
         // An own squad: its own id in every name.
         let own = crate::squadfile::copy_of(Path::new("/nonexistent"), &coding(), "Careful coding", &[]);
-        let v: Value = serde_json::from_str(&agents_json(&crew(&own), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        let v: Value =
+            serde_json::from_str(&agents_json(&crew(&own), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
         assert_eq!(v.as_object().unwrap().keys().next().map(String::as_str), Some("careful-coding-leader"));
         assert!(v.get("careful-coding-verifier").is_some());
         let leader = v["careful-coding-leader"]["prompt"].as_str().unwrap();
@@ -1657,13 +1717,23 @@ mod tests {
         let mut s = coding();
         // A workflow that repeats a member and has send-backs: Plan, Build, Review (back to Build twice), Verify
         // (back to Build once), Review again.
-        s.workflow.push(crate::squadfile::Step { agent: "reviewer".into(), does: "Reads the whole change once more.".into(), back: None, extra: Map::new() });
+        s.workflow.push(crate::squadfile::Step {
+            agent: "reviewer".into(),
+            does: "Reads the whole change once more.".into(),
+            back: None,
+            extra: Map::new(),
+        });
         let p = leader_prompt(&crew(&s), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
         let wf = workflow_text(&crew(&s), AgentNames::SquadRole);
-        assert_eq!(p, format!("{}\n\n{wf}\n\n{}", LEADER_GUIDANCE.trim(), leader_fixed(Place::WORKTREE).as_str()), "between the guidance and the rules");
+        assert_eq!(
+            p,
+            format!("{}\n\n{wf}\n\n{}", LEADER_GUIDANCE.trim(), leader_fixed(Place::WORKTREE).as_str()),
+            "between the guidance and the rules"
+        );
         assert_eq!(
             wf,
-            format!("You lead the Coding squad. Your members are coding-planner, coding-builder, coding-reviewer and coding-verifier.\n\
+            format!(
+                "You lead the Coding squad. Your members are coding-planner, coding-builder, coding-reviewer and coding-verifier.\n\
              What the squad can do: {CODING_CAN_DO}\n\n\
              The workflow. Hand each step to the member it names, in this order:\n\
              1. coding-planner: Reads the ticket and the code it touches and writes a short plan that restates the acceptance checks.\n\
@@ -1671,12 +1741,19 @@ mod tests {
              3. coding-reviewer: Reads the change against the ticket and the plan, and checks that each acceptance check could have failed before the change. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most twice; after that, stop and tell the user what is still wrong.\n\
              4. coding-verifier: Runs the tests and the build and reports plainly what passed and what failed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most once; after that, stop and tell the user what is still wrong.\n\
              5. coding-reviewer: Reads the whole change once more.\n\
-             When the last step is done, take the work as far as the ticket's text says, and no further.")
+             When the last step is done, take the work as far as the ticket's text says, and no further."
+            )
         );
         // The reviewer does two steps: its description says both.
-        assert!(member_description(&s, "reviewer").starts_with("Step 3: Reads the change") && member_description(&s, "reviewer").contains(" Step 5: Reads the whole change once more."));
+        assert!(
+            member_description(&s, "reviewer").starts_with("Step 3: Reads the change")
+                && member_description(&s, "reviewer").contains(" Step 5: Reads the whole change once more.")
+        );
         // The guidance no longer lists the steps: that is the workflow's job. It speaks of no squad in particular.
-        assert!(!LEADER_GUIDANCE.contains("1. Plan") && !LEADER_GUIDANCE.contains("coding") && !LEADER_GUIDANCE.contains("Coding"), "{LEADER_GUIDANCE}");
+        assert!(
+            !LEADER_GUIDANCE.contains("1. Plan") && !LEADER_GUIDANCE.contains("coding") && !LEADER_GUIDANCE.contains("Coding"),
+            "{LEADER_GUIDANCE}"
+        );
         // A user's own "System prompt for squad leaders" takes the guidance's place; the rest is the same.
         let c = dir("leader-own");
         fs::create_dir_all(c.join("prompts")).unwrap();
@@ -1703,9 +1780,18 @@ mod tests {
         let s = coding();
         let lead = LeaderSetup { guidance: "Always ask coding-planner first.".into(), ..LeaderSetup::builtin() };
         let v: Value = serde_json::from_str(&agents_json(&crew(&s), &lead, AgentNames::Plain, Place::WORKTREE)).unwrap();
-        assert_eq!(v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
+        assert_eq!(
+            v.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+            ["leader", "planner", "builder", "reviewer", "verifier"]
+        );
         let leader = v["leader"]["prompt"].as_str().unwrap();
-        assert!(!leader.contains("coding-") && leader.contains("Always ask planner first.") && leader.contains("1. planner: ") && leader.contains("reasons to builder"), "{leader}");
+        assert!(
+            !leader.contains("coding-")
+                && leader.contains("Always ask planner first.")
+                && leader.contains("1. planner: ")
+                && leader.contains("reasons to builder"),
+            "{leader}"
+        );
         assert!(leader.ends_with(leader_fixed(Place::WORKTREE).as_str()), "the fixed part is the same");
         assert_eq!(v["planner"]["model"], "opus");
         assert_eq!(agent_name("coding", LEADER_ROLE, AgentNames::SquadRole), "coding-leader");
@@ -1731,7 +1817,9 @@ mod tests {
             let now: Value = serde_json::from_str(&agents_json(&crew(&squad), &LeaderSetup::builtin(), names, place)).unwrap();
             // Since these were captured: Research's "writer" became the report-writer, Docs' the tech-writer.
             let before = match id {
-                "research" => before.replace("research-writer", "research-report-writer").replace("You are the writer.", "You are the report writer."),
+                "research" => {
+                    before.replace("research-writer", "research-report-writer").replace("You are the writer.", "You are the report writer.")
+                }
                 "docs" => before
                     .replace("docs-writer", "docs-tech-writer")
                     .replace("You are the writer.", "You are the tech writer.")
@@ -1776,7 +1864,10 @@ mod tests {
     #[test]
     fn a_snapshot_reads_back_as_the_same_launch() {
         let l = Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
-        assert_eq!((l.squad.as_str(), l.name.as_str(), l.agent.as_str(), l.model.as_str()), ("coding", "Coding", "coding-leader", "sonnet"));
+        assert_eq!(
+            (l.squad.as_str(), l.name.as_str(), l.agent.as_str(), l.model.as_str()),
+            ("coding", "Coding", "coding-leader", "sonnet")
+        );
         let text = l.to_json();
         assert!(text.contains("\"agents\": {"), "readable, not a string in a string: {text}");
         assert_eq!(Launch::from_json(&text), Some(l.clone()));
@@ -1793,13 +1884,19 @@ mod tests {
             assert!(fixed.contains(line), "{line}");
         }
         assert!(fixed.contains("go-ahead") && fixed.contains("push"));
-        assert!(MEMBER_FIXED.contains("member of a squad") && MEMBER_FIXED.contains("report back to the leader") && MEMBER_FIXED.contains("Never push"));
+        assert!(
+            MEMBER_FIXED.contains("member of a squad")
+                && MEMBER_FIXED.contains("report back to the leader")
+                && MEMBER_FIXED.contains("Never push")
+        );
         for g in [LEADER_GUIDANCE, PLANNER_GUIDANCE, BUILDER_GUIDANCE, REVIEWER_GUIDANCE, VERIFIER_GUIDANCE] {
             assert!(!g.contains("SQUAD:"), "the line's shape is platoon's, not the user's to change");
         }
         assert!(REVIEWER_GUIDANCE.contains("could have failed before the change"));
         assert!(LEADER_GUIDANCE.contains("wait for it to finish") && LEADER_GUIDANCE.contains("never write or edit files"));
-        let default = fixed.find("When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.").expect(&fixed);
+        let default = fixed
+            .find("When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.")
+            .expect(&fixed);
         let others = fixed.find("Anything other people can see needs the user's go-ahead first").unwrap();
         assert!(default < others && fixed[default..others].lines().count() <= 3, "side by side, the work folder's rule between: {fixed}");
         assert!(!fixed.contains("\"how far\"") && fixed.contains("Even when the ticket asks for it, stop"), "{fixed}");
@@ -1839,7 +1936,10 @@ mod tests {
             created: 1,
             updated: 1,
             leaders: vec![],
-            worktrees: worktrees.iter().map(|(f, p)| Worktree { folder: f.to_string(), path: p.to_string(), branch: "ticket/7".into(), ..Default::default() }).collect(),
+            worktrees: worktrees
+                .iter()
+                .map(|(f, p)| Worktree { folder: f.to_string(), path: p.to_string(), branch: "ticket/7".into(), ..Default::default() })
+                .collect(),
             reason: String::new(),
             go_ahead: false,
             handover: None,
@@ -1853,7 +1953,13 @@ mod tests {
     #[test]
     fn the_first_message_says_the_ticket_how_far_goes_by_its_text_and_where_to_work() {
         let t = ticket(&["/w/shop", "/w/notes"], &[("/w/shop", "/w/shop-worktrees/ticket-7")]);
-        let m = first_message(&t, "Web", "## What it should do\n\nA basket.\n\nHow far: a local commit.\n", Place::of(&t), "/c/tickets/07-work");
+        let m = first_message(
+            &t,
+            "Web",
+            "## What it should do\n\nA basket.\n\nHow far: a local commit.\n",
+            Place::of(&t),
+            "/c/tickets/07-work",
+        );
         assert!(m.starts_with("Ticket #7: Add a basket page\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket.\n\nHow far: a local commit.\n\n## How far to take it\n\n"), "{m}");
         assert!(
             m.contains("\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes: leave the change where you made it, uncommitted. No commit, no push.\n\n## Where to work"),
@@ -1862,11 +1968,15 @@ mod tests {
         for preset in ["Local commit:", "merge request", "In the user's own words", "Publish a document"] {
             assert!(!m.contains(preset), "no how-far preset spelled out any more ({preset}): {m}");
         }
-        assert!(m.contains("- /w/shop-worktrees/ticket-7 (a git worktree of /w/shop, on the branch ticket/7; the session starts here)\n"), "{m}");
+        assert!(
+            m.contains("- /w/shop-worktrees/ticket-7 (a git worktree of /w/shop, on the branch ticket/7; the session starts here)\n"),
+            "{m}"
+        );
         assert!(m.contains("- /w/notes (used as it is, not a git worktree)\n- /c/tickets/07-work (the ticket's private work folder, kept by platoon: for what the squad writes for the ticket rather than the project, such as a report, notes or drafts)\n"), "{m}");
         assert!(m.trim_end().ends_with("The project's notes, if it has any, arrive separately."), "{m}");
         assert!(m.len() < 1400, "no more than needed: {}", m.len());
-        let empty = first_message(&ticket(&["/w"], &[]), "Web", "  \n", Place::Folders { worktrees: false, as_is: true }, "/c/tickets/07-work");
+        let empty =
+            first_message(&ticket(&["/w"], &[]), "Web", "  \n", Place::Folders { worktrees: false, as_is: true }, "/c/tickets/07-work");
         assert!(empty.contains("(The ticket has no description beyond its title.)"));
     }
 
@@ -1887,16 +1997,25 @@ mod tests {
         // Where the session starts and what it is given with --add-dir: the work folder always, for output.
         let work = "/c/projects/p/tickets/07-work";
         assert_eq!(start_dirs(&git, false, work), Some(("/w/shop-worktrees/ticket-7".into(), vec![work.to_string()])));
-        assert_eq!(start_dirs(&both, false, work), Some(("/w/shop-worktrees/ticket-7".into(), vec!["/w/notes".to_string(), work.to_string()])));
+        assert_eq!(
+            start_dirs(&both, false, work),
+            Some(("/w/shop-worktrees/ticket-7".into(), vec!["/w/notes".to_string(), work.to_string()]))
+        );
         assert_eq!(start_dirs(&plain, false, work), Some(("/w/notes".into(), vec![work.to_string()])));
         assert_eq!(start_dirs(&none, true, work), Some((work.to_string(), vec![])));
         assert_eq!(start_dirs(&none, false, work), None);
         // A leader started before every ticket worked in its folders (its snapshot says it starts in the work folder)
         // is continued as it began: there, with the folders themselves.
         assert_eq!(start_dirs(&both, true, work), Some((work.to_string(), vec!["/w/shop".to_string(), "/w/notes".to_string()])));
-        let old = Launch::from_json(&Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder).to_json()).unwrap();
+        let old = Launch::from_json(
+            &Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder).to_json(),
+        )
+        .unwrap();
         assert!(old.work_folder);
-        assert!(!Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::of(&plain)).work_folder, "Research works in the folder now");
+        assert!(
+            !Launch::of(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::of(&plain)).work_folder,
+            "Research works in the folder now"
+        );
     }
 
     #[test]
@@ -1904,15 +2023,29 @@ mod tests {
         let rules = LEADER_RULES;
         assert!(rules.contains("Never close a ticket unasked."), "{rules}");
         let ask = rules.find("above the line `SQUAD: question - Shall I close this ticket?`").expect(rules);
-        assert!(rules[..ask].contains("put a short result (what was done, where it is: branch, folder, file, merge request link, and what was not checked)"), "{rules}");
-        assert!(rules.contains("Only after the user says yes, end a turn with `SQUAD: done`, repeating that short result just above it."), "{rules}");
+        assert!(
+            rules[..ask].contains(
+                "put a short result (what was done, where it is: branch, folder, file, merge request link, and what was not checked)"
+            ),
+            "{rules}"
+        );
+        assert!(
+            rules.contains("Only after the user says yes, end a turn with `SQUAD: done`, repeating that short result just above it."),
+            "{rules}"
+        );
         assert!(rules.contains("`SQUAD: done` - only after the user said yes to closing the ticket."), "{rules}");
         // The other end lines are as they were.
-        for line in ["`SQUAD: working` - members are still running", "`SQUAD: question - <what you need to know>`", "`SQUAD: blocked - <why>`", "`SQUAD: ready to publish - <what>`"] {
+        for line in [
+            "`SQUAD: working` - members are still running",
+            "`SQUAD: question - <what you need to know>`",
+            "`SQUAD: blocked - <why>`",
+            "`SQUAD: ready to publish - <what>`",
+        ] {
             assert!(rules.contains(line), "{line}: {rules}");
         }
         // Asking shows on the ticket as its question; the yes turn's result is what Done keeps.
-        let asked = decide_stop(false, "Added the basket page on ticket/1. Not checked: Safari.\nSQUAD: question - Shall I close this ticket?");
+        let asked =
+            decide_stop(false, "Added the basket page on ticket/1. Not checked: Safari.\nSQUAD: question - Shall I close this ticket?");
         assert_eq!((asked.state, asked.reason.as_str(), asked.result), (State::Waiting, "Asks: Shall I close this ticket?", None));
         let done = decide_stop(false, "Added the basket page on ticket/1. Not checked: Safari.\nSQUAD: done");
         assert_eq!((done.state, done.result.as_deref()), (State::Done, Some("Added the basket page on ticket/1. Not checked: Safari.")));
@@ -1929,15 +2062,26 @@ mod tests {
         let fixed = leader_fixed(Place::WORKTREE);
         assert!(fixed.starts_with("Rules platoon keeps, whatever the ticket says:\n- Take the work as far as the ticket's text says. When it doesn't say how far, stop at local changes: the change stays in the worktree, uncommitted. No commit, no push.\n- What the squad writes for the ticket rather than for the project (a report, notes, drafts) goes in the ticket's private work folder, never in the project's folders, unless the ticket says to put it there. Its path is in your first message: give it to any member that writes such a thing.\n- Anything other people can see"), "{fixed}");
         let m = first_message(&git, "Web", body, Place::WORKTREE, work);
-        assert!(m.contains("leave the change in the worktree, uncommitted") && m.contains("the session starts here)\n- /c/tickets/07-work (the ticket's private work folder"), "{m}");
+        assert!(
+            m.contains("leave the change in the worktree, uncommitted")
+                && m.contains("the session starts here)\n- /c/tickets/07-work (the ticket's private work folder"),
+            "{m}"
+        );
         // The folder as it is (outside git).
         let plain = ticket(&["/w/notes"], &[]);
         let place = Place::of(&plain);
         let fixed = leader_fixed(place);
-        assert!(fixed.contains("stop at local changes: the change stays in the ticket's folder, uncommitted. No commit, no push."), "{fixed}");
+        assert!(
+            fixed.contains("stop at local changes: the change stays in the ticket's folder, uncommitted. No commit, no push."),
+            "{fixed}"
+        );
         assert!(!fixed.contains("worktree"), "no worktree to speak of: {fixed}");
         let m = first_message(&plain, "Web", body, place, work);
-        assert!(m.contains("leave the change in the ticket's folder, uncommitted") && m.contains("- /w/notes (used as it is, not a git worktree; the session starts here)\n"), "{m}");
+        assert!(
+            m.contains("leave the change in the ticket's folder, uncommitted")
+                && m.contains("- /w/notes (used as it is, not a git worktree; the session starts here)\n"),
+            "{m}"
+        );
         assert!(!m.contains("in the worktree") && !m.contains("For reading only"), "{m}");
         // No folder of its own: the work folder is its folder.
         let none = ticket(&[], &[]);
@@ -1950,7 +2094,12 @@ mod tests {
         assert!(m.contains("the session starts here. Write what the squad makes here, unless the ticket says otherwise)\n\nThe ticket has no folder of its own.\n"), "{m}");
         assert!(m.contains("stop once the result is written in your work folder") && !m.contains("For reading only"), "{m}");
         // Every place keeps the rules for every squad.
-        for place in [Place::WORKTREE, Place::Folders { worktrees: true, as_is: true }, Place::Folders { worktrees: false, as_is: true }, Place::WorkFolder] {
+        for place in [
+            Place::WORKTREE,
+            Place::Folders { worktrees: true, as_is: true },
+            Place::Folders { worktrees: false, as_is: true },
+            Place::WorkFolder,
+        ] {
             let fixed = leader_fixed(place);
             assert!(fixed.ends_with(LEADER_RULES.trim()) && fixed.contains("SQUAD: ready to publish"), "{fixed}");
             let prompt = leader_prompt(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, place);
@@ -1961,7 +2110,9 @@ mod tests {
     #[test]
     fn the_new_squads_give_their_members_the_tools_their_switches_say() {
         let tools = |id: &str| -> Vec<(String, Value)> {
-            let v: Value = serde_json::from_str(&agents_json(&builtin(id), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder)).unwrap();
+            let v: Value =
+                serde_json::from_str(&agents_json(&builtin(id), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder))
+                    .unwrap();
             v.as_object().unwrap().iter().map(|(k, a)| (k.clone(), a["tools"].clone())).collect()
         };
         let read = json!(["Read", "Grep", "Glob"]);
@@ -1971,32 +2122,68 @@ mod tests {
         let t = |k: &str, v: &Value| (k.to_string(), v.clone());
         assert_eq!(
             tools("research"),
-            [t("research-leader", &leader), t("research-questioner", &read), t("research-researcher", &web), t("research-report-writer", &files), t("research-checker", &web)]
+            [
+                t("research-leader", &leader),
+                t("research-questioner", &read),
+                t("research-researcher", &web),
+                t("research-report-writer", &files),
+                t("research-checker", &web)
+            ]
         );
-        assert_eq!(tools("docs"), [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-tech-writer", &files), t("docs-editor", &read)]);
+        assert_eq!(
+            tools("docs"),
+            [t("docs-leader", &leader), t("docs-outliner", &read), t("docs-tech-writer", &files), t("docs-editor", &read)]
+        );
         assert_eq!(tools("summarize"), [t("summarize-leader", &leader), t("summarize-summarizer", &web)]);
         // Models, and the workflow written into the leader's prompt.
-        let v: Value = serde_json::from_str(&agents_json(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder)).unwrap();
+        let v: Value =
+            serde_json::from_str(&agents_json(&builtin("research"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder))
+                .unwrap();
         assert_eq!(v["research-checker"]["model"], "opus");
         assert_eq!(v["research-leader"]["model"], "sonnet");
         let p = v["research-leader"]["prompt"].as_str().unwrap();
         assert!(p.starts_with(LEADER_GUIDANCE.trim()), "the shared leader: {p}");
-        assert!(p.contains("1. research-questioner: ") && p.contains("4. research-checker: ") && p.contains("give its reasons to research-researcher and go on again from step 2. At most once"), "{p}");
-        let v: Value = serde_json::from_str(&agents_json(&builtin("docs"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
-        assert!(v["docs-leader"]["prompt"].as_str().unwrap().contains("give its reasons to docs-tech-writer and go on again from step 2. At most twice"));
+        assert!(
+            p.contains("1. research-questioner: ")
+                && p.contains("4. research-checker: ")
+                && p.contains("give its reasons to research-researcher and go on again from step 2. At most once"),
+            "{p}"
+        );
+        let v: Value =
+            serde_json::from_str(&agents_json(&builtin("docs"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)).unwrap();
+        assert!(
+            v["docs-leader"]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("give its reasons to docs-tech-writer and go on again from step 2. At most twice")
+        );
         assert_eq!(v["docs-editor"]["model"], "opus");
         // The words: every member reports to its leader under platoon's rules; nobody's guidance speaks the end line.
         for g in [
-            LEADER_GUIDANCE, QUESTIONER_GUIDANCE, RESEARCHER_GUIDANCE, RESEARCH_WRITER_GUIDANCE, CHECKER_GUIDANCE, OUTLINER_GUIDANCE,
-            DOCS_WRITER_GUIDANCE, EDITOR_GUIDANCE, SUMMARIZER_GUIDANCE,
+            LEADER_GUIDANCE,
+            QUESTIONER_GUIDANCE,
+            RESEARCHER_GUIDANCE,
+            RESEARCH_WRITER_GUIDANCE,
+            CHECKER_GUIDANCE,
+            OUTLINER_GUIDANCE,
+            DOCS_WRITER_GUIDANCE,
+            EDITOR_GUIDANCE,
+            SUMMARIZER_GUIDANCE,
         ] {
             assert!(!g.contains("SQUAD:") && !g.trim().is_empty(), "{g}");
         }
-        assert!(RESEARCH_WRITER_GUIDANCE.contains("report.md in the ticket's private work folder") && RESEARCH_WRITER_GUIDANCE.contains("never in the project's folders"));
+        assert!(
+            RESEARCH_WRITER_GUIDANCE.contains("report.md in the ticket's private work folder")
+                && RESEARCH_WRITER_GUIDANCE.contains("never in the project's folders")
+        );
         assert!(DOCS_WRITER_GUIDANCE.contains("in the ticket's folder") && DOCS_WRITER_GUIDANCE.contains("Markdown"));
         assert!(SUMMARIZER_GUIDANCE.contains("don't write any files") && SUMMARIZE_DOES.contains("The result is that summary itself"));
         let p = agents_json(&builtin("summarize"), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WorkFolder);
-        assert!(p.contains("1. summarize-summarizer: Reads what the ticket points at") && p.contains("The result is that summary itself: put it just above your last line"), "the leader reads Summarize's rule in its workflow: {p}");
+        assert!(
+            p.contains("1. summarize-summarizer: Reads what the ticket points at")
+                && p.contains("The result is that summary itself: put it just above your last line"),
+            "the leader reads Summarize's rule in its workflow: {p}"
+        );
     }
 
     #[test]
@@ -2016,7 +2203,12 @@ mod tests {
             for w in words {
                 assert!(squad.can_do.contains(w), "{id}: {w} in {}", squad.can_do);
             }
-            assert!(got.contains("Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"), "{got}");
+            assert!(
+                got.contains(
+                    "Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"
+                ),
+                "{got}"
+            );
             assert!(squad.can_do.chars().count() <= crate::squadfile::CAN_DO_MAX);
         }
         // No two say the same kind of work.
@@ -2038,7 +2230,10 @@ mod tests {
         assert_eq!(parse_end_line("SQUAD: question: Which colour?"), EndLine::Question("Which colour?".into()));
         assert_eq!(parse_end_line("SQUAD: question"), EndLine::Question(String::new()));
         assert_eq!(parse_end_line("SQUAD: blocked - the tests need a database"), EndLine::Blocked("the tests need a database".into()));
-        assert_eq!(parse_end_line("SQUAD: ready to publish - push ticket/7 and open a merge request"), EndLine::ReadyToPublish("push ticket/7 and open a merge request".into()));
+        assert_eq!(
+            parse_end_line("SQUAD: ready to publish - push ticket/7 and open a merge request"),
+            EndLine::ReadyToPublish("push ticket/7 and open a merge request".into())
+        );
         assert_eq!(parse_end_line("SQUAD: Ready To Publish – the page"), EndLine::ReadyToPublish("the page".into()));
     }
 
@@ -2062,7 +2257,10 @@ mod tests {
         }
         assert_eq!(w(false, "Waiting for the planner.\nSQUAD: working").state, State::Working);
         let done = w(false, "Added the page on ticket/7.\nTests pass.\n\nSQUAD: done");
-        assert_eq!(done, StopOutcome { state: State::Done, reason: String::new(), result: Some("Added the page on ticket/7.\nTests pass.".into()) });
+        assert_eq!(
+            done,
+            StopOutcome { state: State::Done, reason: String::new(), result: Some("Added the page on ticket/7.\nTests pass.".into()) }
+        );
         assert_eq!(w(false, "SQUAD: done").result, None, "nothing above the line: no result");
         let ready = w(false, "Committed.\nSQUAD: ready to publish - push ticket/7");
         assert_eq!((ready.state, ready.reason.as_str()), (State::Ready, "Wants to publish: push ticket/7"));
@@ -2075,7 +2273,12 @@ mod tests {
         assert_eq!(NO_LINE, "The squad stopped without saying why.");
         let long = w(false, &format!("SQUAD: question - {}", "a".repeat(1000)));
         assert!(long.reason.chars().count() <= REASON_MAX);
-        assert!(members_running(Some(&json!([{"id": "x"}]))) && !members_running(Some(&json!([]))) && !members_running(None) && !members_running(Some(&Value::Null)));
+        assert!(
+            members_running(Some(&json!([{"id": "x"}])))
+                && !members_running(Some(&json!([])))
+                && !members_running(None)
+                && !members_running(Some(&Value::Null))
+        );
     }
 
     // ---- the publish matcher ----
@@ -2169,7 +2372,13 @@ mod tests {
     fn with_leader(c: &Path, state: State) -> (String, u32) {
         let mut store = Tickets::open(c, "p1");
         let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-        store.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 5, names: Default::default(), snapshot: None }, &[]).unwrap();
+        store
+            .start_leader(
+                n,
+                &Leader { squad: "coding".into(), session: "lead-1".into(), started: 5, names: Default::default(), snapshot: None },
+                &[],
+            )
+            .unwrap();
         if state != State::Working {
             store.set_state(n, &state).unwrap();
         }
@@ -2222,7 +2431,13 @@ mod tests {
         assert_eq!(squad_prompt(&prompt_input(&s), &c), None);
         assert_eq!(fs::read_to_string(&path).unwrap(), before);
         // Waiting on you (its question, or stuck, or a permission), Ready, Done, Cancelled: Working, and what it said goes.
-        for (state, reason) in [(State::Waiting, "Asks: Shall I close this ticket?"), (State::Waiting, "Stuck: no database"), (State::Ready, "Wants to publish: push"), (State::Done, ""), (State::Cancelled, "")] {
+        for (state, reason) in [
+            (State::Waiting, "Asks: Shall I close this ticket?"),
+            (State::Waiting, "Stuck: no database"),
+            (State::Ready, "Wants to publish: push"),
+            (State::Done, ""),
+            (State::Cancelled, ""),
+        ] {
             Tickets::open(&c, "p1").squad_says(n, &state, reason, None).unwrap();
             if state == State::Cancelled {
                 Tickets::open(&c, "p1").set_state(n, &State::Cancelled).unwrap();
@@ -2230,7 +2445,11 @@ mod tests {
             assert_eq!(now(&c).state, state);
             assert_eq!(squad_prompt(&prompt_input(&s), &c), Some(("p1".into(), n)), "{state:?}");
             let t = now(&c);
-            assert_eq!((&t.state, t.reason.as_str(), t.permission, t.leaders.len()), (&State::Working, "", false, 1), "{state:?}: the same leader");
+            assert_eq!(
+                (&t.state, t.reason.as_str(), t.permission, t.leaders.len()),
+                (&State::Working, "", false, 1),
+                "{state:?}: the same leader"
+            );
         }
         Tickets::open(&c, "p1").squad_says(n, &State::Working, "", None).unwrap();
         assert!(Tickets::open(&c, "p1").permission_wait(n).unwrap());
@@ -2277,7 +2496,13 @@ mod tests {
         // The ticket is handed to another squad after Done: the first leader no longer moves it.
         let mut store = Tickets::open(&c, "p1");
         store.squad_says(n, &State::Done, "", None).unwrap();
-        store.start_leader(n, &Leader { squad: "docs".into(), session: "lead-2".into(), started: 9, names: Default::default(), snapshot: None }, &[]).unwrap();
+        store
+            .start_leader(
+                n,
+                &Leader { squad: "docs".into(), session: "lead-2".into(), started: 9, names: Default::default(), snapshot: None },
+                &[],
+            )
+            .unwrap();
         store.squad_says(n, &State::Waiting, "Asks: Shall I close this ticket?", None).unwrap();
         assert_eq!(squad_prompt(&prompt_input(&s), &c), None, "an earlier leader");
         assert_eq!(Tickets::open(&c, "p1").get(n).unwrap().state, State::Waiting);
@@ -2296,10 +2521,15 @@ mod tests {
     fn squad_gate_refuses_publishing_until_the_go_ahead_and_the_go_ahead_ends_with_working() {
         let c = dir("gate");
         let (s, n) = with_leader(&c, State::Working);
-        let bash = |cmd: &str| json!({"session_id": s, "tool_name": "Bash", "tool_input": {"command": cmd}, "hook_event_name": "PreToolUse"}).to_string();
+        let bash = |cmd: &str| {
+            json!({"session_id": s, "tool_name": "Bash", "tool_input": {"command": cmd}, "hook_event_name": "PreToolUse"}).to_string()
+        };
         assert_eq!(squad_gate(&bash("git status"), &c), None);
         assert_eq!(squad_gate(&bash("git push"), &c), Some(REFUSAL));
-        assert_eq!(squad_gate(&json!({"session_id": s, "tool_name": "Read", "tool_input": {"file_path": "git push"}}).to_string(), &c), None);
+        assert_eq!(
+            squad_gate(&json!({"session_id": s, "tool_name": "Read", "tool_input": {"file_path": "git push"}}).to_string(), &c),
+            None
+        );
         Tickets::open(&c, "p1").give_go_ahead(n).unwrap();
         assert_eq!(squad_gate(&bash("git push"), &c), None, "the user said go ahead");
         Tickets::open(&c, "p1").squad_says(n, &State::Ready, "Wants to publish: the MR", None).unwrap();
@@ -2319,13 +2549,26 @@ mod tests {
         let t = ticket(&["/w/a"], &[]);
         assert_eq!(session_name("Coding", &t), "Coding squad · #7 Add a basket page");
         let launch = Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE);
-        let a = leader_args(&launch, "/opt/my tools/platoon", "sid-1", &session_name("Coding", &t), &["/w/b".into(), "/w/c".into()], Some("Ticket #7"));
+        let a = leader_args(
+            &launch,
+            "/opt/my tools/platoon",
+            "sid-1",
+            &session_name("Coding", &t),
+            &["/w/b".into(), "/w/c".into()],
+            Some("Ticket #7"),
+        );
         let at = |k: &str| a.iter().position(|x| x == k).unwrap();
         assert_eq!(&a[..4], ["--add-dir", "/w/b", "--add-dir", "/w/c"]);
         assert_eq!((a[at("--session-id") + 1].as_str(), a[at("-n") + 1].as_str()), ("sid-1", "Coding squad · #7 Add a basket page"));
-        assert_eq!((a[at("--agent") + 1].as_str(), a[at("--model") + 1].as_str(), a[at("--permission-mode") + 1].as_str()), ("coding-leader", "sonnet", "acceptEdits"));
+        assert_eq!(
+            (a[at("--agent") + 1].as_str(), a[at("--model") + 1].as_str(), a[at("--permission-mode") + 1].as_str()),
+            ("coding-leader", "sonnet", "acceptEdits")
+        );
         let agents: Value = serde_json::from_str(&a[at("--agents") + 1]).unwrap();
-        assert!(agents.get("coding-leader").is_some() && agents.get("coding-verifier").is_some() && agents.get("leader").is_none(), "{agents}");
+        assert!(
+            agents.get("coding-leader").is_some() && agents.get("coding-verifier").is_some() && agents.get("leader").is_none(),
+            "{agents}"
+        );
         let settings: Value = serde_json::from_str(&a[at("--settings") + 1]).unwrap();
         assert_eq!(settings["hooks"]["Stop"][0]["hooks"][0]["command"], "'/opt/my tools/platoon' hook squad-stop");
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
@@ -2346,13 +2589,28 @@ mod tests {
         let rs: Value = serde_json::from_str(&r[r.len() - 1]).unwrap();
         assert_eq!(rs, serde_json::from_str::<Value>(&hook_settings("/bin/platoon")).unwrap());
         assert_eq!(rs["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"], "/bin/platoon hook squad-prompt");
-        assert!(!Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE).to_json().contains("hook squad-"), "not in the snapshot");
+        assert!(
+            !Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE)
+                .to_json()
+                .contains("hook squad-"),
+            "not in the snapshot"
+        );
         // A leader started before the agents carried the squad's name is resumed with the names it began with.
-        let old = leader_args(&Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::Plain, Place::WORKTREE), "/bin/platoon", "sid-0", "ignored", &[], None);
+        let old = leader_args(
+            &Launch::of(&crew(&coding()), &LeaderSetup::builtin(), AgentNames::Plain, Place::WORKTREE),
+            "/bin/platoon",
+            "sid-0",
+            "ignored",
+            &[],
+            None,
+        );
         let pos = |k: &str| old.iter().position(|x| x == k).unwrap();
         assert_eq!((old[0].as_str(), old[1].as_str(), old[pos("--agent") + 1].as_str()), ("--resume", "sid-0", "leader"));
         let agents: Value = serde_json::from_str(&old[pos("--agents") + 1]).unwrap();
-        assert_eq!(agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(), ["leader", "planner", "builder", "reviewer", "verifier"]);
+        assert_eq!(
+            agents.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>(),
+            ["leader", "planner", "builder", "reviewer", "verifier"]
+        );
         assert_eq!(shell_word("/usr/bin/platoon"), "/usr/bin/platoon");
         assert_eq!(shell_word("/a/it's"), "'/a/it'\\''s'");
         let id = new_session_id();
@@ -2369,7 +2627,16 @@ mod tests {
         fs::write(r.join("README"), "hi\n").unwrap();
         fs::write(r.join("src/main.rs"), "fn main() {}\n").unwrap();
         let run = |args: &[&str]| {
-            let ok = Command::new("git").arg("-C").arg(&r).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"]).args(args).stdout(Stdio::null()).stderr(Stdio::null()).status().unwrap().success();
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(&r)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap()
+                .success();
             assert!(ok, "git {args:?}");
         };
         run(&["init", "-q"]);
@@ -2388,10 +2655,22 @@ mod tests {
         let got = prepare_worktrees("git", &folders, 7, &[]).unwrap();
         assert_eq!(got.len(), 1, "the plain folder is used as it is");
         let wt = base.join("shop-worktrees/ticket-7");
-        assert_eq!(got[0], Worktree { folder: folders[0].clone(), path: wt.join("src").to_string_lossy().into_owned(), branch: "ticket/7".into(), base: got[0].base.clone(), ..Default::default() });
+        assert_eq!(
+            got[0],
+            Worktree {
+                folder: folders[0].clone(),
+                path: wt.join("src").to_string_lossy().into_owned(),
+                branch: "ticket/7".into(),
+                base: got[0].base.clone(),
+                ..Default::default()
+            }
+        );
         assert!(got[0].base.as_ref().is_some_and(|b| b.len() == 40), "the commit it was made from: {:?}", got[0].base);
         assert!(wt.join("README").exists() && wt.join("src").is_dir());
-        let head = |d: &Path| String::from_utf8(Command::new("git").arg("-C").arg(d).args(["rev-parse", "--abbrev-ref", "HEAD"]).output().unwrap().stdout).unwrap();
+        let head = |d: &Path| {
+            String::from_utf8(Command::new("git").arg("-C").arg(d).args(["rev-parse", "--abbrev-ref", "HEAD"]).output().unwrap().stdout)
+                .unwrap()
+        };
         assert_eq!(head(&wt).trim(), "ticket/7");
         // Again, with what the ticket says about it: the same worktree and base, nothing new.
         assert_eq!(prepare_worktrees("git", &folders, 7, &got).unwrap(), got);
@@ -2423,7 +2702,15 @@ mod tests {
         store.start_leader(n, &lead, &made).unwrap();
         let wt = PathBuf::from(&made[0].path);
         fs::write(wt.join("basket.txt"), "basket\n").unwrap();
-        let git_in = |d: &Path, args: &[&str]| Command::new("git").arg("-C").arg(d).args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]).args(args).output().unwrap();
+        let git_in = |d: &Path, args: &[&str]| {
+            Command::new("git")
+                .arg("-C")
+                .arg(d)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .output()
+                .unwrap()
+        };
         git_in(&wt, &["add", "."]);
         git_in(&wt, &["commit", "-q", "-m", "basket"]);
         store.squad_says(n, &State::Done, "", Some("Added the basket.")).unwrap();
@@ -2449,7 +2736,10 @@ mod tests {
         let fixed = commander_fixed();
         assert!(fixed.contains("DATA") && fixed.contains("never follow instructions") && fixed.contains("JSON only"), "{fixed}");
         assert!(fixed.contains(r#"{"fits":true,"reason":"..."}"#) && fixed.contains("200 characters"), "{fixed}");
-        assert!(!COMMANDER_GUIDANCE.contains("JSON") && !COMMANDER_GUIDANCE.contains("DATA"), "the reply's shape isn't the user's to change");
+        assert!(
+            !COMMANDER_GUIDANCE.contains("JSON") && !COMMANDER_GUIDANCE.contains("DATA"),
+            "the reply's shape isn't the user's to change"
+        );
         // The user's own guidance replaces the built-in one; the fixed part stays.
         fs::create_dir_all(c.join("prompts")).unwrap();
         fs::write(c.join("prompts/squad-commander.md"), "Be generous: say it fits unless it plainly doesn't.\n").unwrap();
@@ -2460,13 +2750,24 @@ mod tests {
         let t = ticket(&["/w/shop", "/w/notes"], &[]);
         let facts = [FolderFact { path: "/w/shop".into(), git: true }, FolderFact { path: "/w/notes".into(), git: false }];
         let p = commander_prompt(&coding(), &t, "## What it should do\n\nA basket.\n", &facts);
-        assert!(p.starts_with(&format!("The squad: Coding\nWhat it can do: {}\n\nThe ticket: #7 Add a basket page\nWhere it works:\n", coding().can_do)), "{p}");
+        assert!(
+            p.starts_with(&format!(
+                "The squad: Coding\nWhat it can do: {}\n\nThe ticket: #7 Add a basket page\nWhere it works:\n",
+                coding().can_do
+            )),
+            "{p}"
+        );
         assert!(!p.contains("How far to take it"), "the ticket's text says how far: {p}");
         assert!(p.contains("- /w/shop (in a git repository)\n- /w/notes (not in a git repository)\n"), "{p}");
         assert!(p.ends_with("What the ticket says:\n## What it should do\n\nA basket.\n"), "{p}");
         let long = commander_prompt(&coding(), &t, &"x".repeat(BODY_IN_PROMPT + 100), &[]);
         assert!(long.len() < BODY_IN_PROMPT + 400 && long.contains('…'), "{}", long.len());
-        assert!(long.contains("\nWhere it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"), "a ticket without a folder says so: {long}");
+        assert!(
+            long.contains(
+                "\nWhere it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"
+            ),
+            "a ticket without a folder says so: {long}"
+        );
         assert!(commander_prompt(&coding(), &t, "  ", &[]).contains("(nothing beyond its title)"));
         assert!(in_git(Path::new(env!("CARGO_MANIFEST_DIR"))) || !Path::new(env!("CARGO_MANIFEST_DIR")).join(".git").exists());
         assert!(!in_git(&c), "a temp folder is in no repository");
@@ -2474,14 +2775,29 @@ mod tests {
 
     #[test]
     fn the_commanders_answer_is_read_strictly() {
-        assert_eq!(parse_verdict(r#"{"fits":true,"reason":"Coding work in a git repository."}"#), Some(Verdict { fits: true, reason: "Coding work in a git repository.".into() }));
-        assert_eq!(parse_verdict("Sure!\n```json\n{\"fits\": false, \"reason\": \"This is docs work.\"}\n```"), Some(Verdict { fits: false, reason: "This is docs work.".into() }));
+        assert_eq!(
+            parse_verdict(r#"{"fits":true,"reason":"Coding work in a git repository."}"#),
+            Some(Verdict { fits: true, reason: "Coding work in a git repository.".into() })
+        );
+        assert_eq!(
+            parse_verdict("Sure!\n```json\n{\"fits\": false, \"reason\": \"This is docs work.\"}\n```"),
+            Some(Verdict { fits: false, reason: "This is docs work.".into() })
+        );
         // A yes needs no reason; a no must say why.
         assert_eq!(parse_verdict(r#"{"fits":true}"#), Some(Verdict { fits: true, reason: String::new() }));
         assert_eq!(parse_verdict(r#"{"fits":false}"#), None);
         assert_eq!(parse_verdict(r#"{"fits":false,"reason":"   "}"#), None);
         // Not JSON, no fits, fits that isn't true/false, a reason that isn't text.
-        for bad in ["", "yes", "{", r#"{"reason":"x"}"#, r#"{"fits":"true","reason":"x"}"#, r#"{"fits":1,"reason":"x"}"#, r#"{"fits":false,"reason":["x"]}"#, "[true]"] {
+        for bad in [
+            "",
+            "yes",
+            "{",
+            r#"{"reason":"x"}"#,
+            r#"{"fits":"true","reason":"x"}"#,
+            r#"{"fits":1,"reason":"x"}"#,
+            r#"{"fits":false,"reason":["x"]}"#,
+            "[true]",
+        ] {
             assert_eq!(parse_verdict(bad), None, "{bad}");
         }
         // One line, no control characters, cut at the cap.
@@ -2497,7 +2813,9 @@ mod tests {
         use crate::ai::{AiError, Refusal, Reply};
         use crate::ledger::FailKind;
         use tickets::HandoverKind;
-        let reply = |text: &str| Ok(Reply { text: text.into(), usage: Default::default(), usage_estimated: false, cost_usd: 0.0, model: "haiku".into() });
+        let reply = |text: &str| {
+            Ok(Reply { text: text.into(), usage: Default::default(), usage_estimated: false, cost_usd: 0.0, model: "haiku".into() })
+        };
         // Fits: start, nothing else.
         let fits = Check::from_answer(reply(r#"{"fits":true,"reason":"Coding work."}"#));
         assert_eq!(fits, Check::Fits("Coding work.".into()));
@@ -2506,7 +2824,10 @@ mod tests {
         let no = Check::from_answer(reply(r#"{"fits":false,"reason":"This is docs work; the Coding squad writes code."}"#));
         let AfterCheck::BackToNew { says, kind, notice } = after_check(3, "Coding", &no) else { panic!() };
         assert_eq!((says.as_str(), kind), ("This is docs work; the Coding squad writes code.", HandoverKind::Refused));
-        assert!(notice.starts_with("The commander says the Coding squad doesn't fit #3: This is docs work") && notice.contains("anyway"), "{notice}");
+        assert!(
+            notice.starts_with("The commander says the Coding squad doesn't fit #3: This is docs work") && notice.contains("anyway"),
+            "{notice}"
+        );
         // The gate said no, for each reason: nothing handed over, and the session limit (or the switch) said.
         let limit = |r: Refusal| after_check(3, "Coding", &Check::from_answer(Err(AiError::Refused(r))));
         for r in [
@@ -2542,24 +2863,33 @@ mod tests {
         let c = dir("notify");
         let (s, n) = with_leader(&c, State::Working);
         let note = |kind: Option<&str>, msg: &str| {
-            let mut v = json!({"session_id": s, "hook_event_name": "Notification", "message": msg, "cwd": "/tmp", "transcript_path": "/x.jsonl"});
+            let mut v =
+                json!({"session_id": s, "hook_event_name": "Notification", "message": msg, "cwd": "/tmp", "transcript_path": "/x.jsonl"});
             if let (Some(k), Some(o)) = (kind, v.as_object_mut()) {
                 o.insert("notification_type".into(), json!(k));
             }
             v.to_string()
         };
-        let tool = |sid: &str| json!({"session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {}}).to_string();
+        let tool = |sid: &str| {
+            json!({"session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "ls"}, "tool_response": {}}).to_string()
+        };
         let state = || Tickets::open(&c, "p1").get(n).cloned().unwrap();
         // Which notifications count.
         assert!(is_permission_notice(&json!({"notification_type": "permission_prompt", "message": "x"})));
         assert!(is_permission_notice(&json!({"message": "Claude needs your permission to use Bash"})));
         assert!(!is_permission_notice(&json!({"notification_type": "idle_prompt", "message": "Claude is waiting for your input"})));
-        assert!(!is_permission_notice(&json!({"notification_type": "idle_prompt", "message": "about permission"})), "the type decides when there is one");
+        assert!(
+            !is_permission_notice(&json!({"notification_type": "idle_prompt", "message": "about permission"})),
+            "the type decides when there is one"
+        );
         assert!(!is_permission_notice(&json!({"message": "Claude is waiting for your input"})));
         assert!(!is_permission_notice(&json!({"hook_event_name": "Stop", "message": "permission"})));
         // An idle reminder, another session, or a PostToolUse while nothing waits: nothing changes.
         assert_eq!(squad_notify(&note(Some("idle_prompt"), "Claude is waiting for your input"), &c), None);
-        assert_eq!(squad_notify(&json!({"session_id": "someone", "notification_type": "permission_prompt", "message": "m"}).to_string(), &c), None);
+        assert_eq!(
+            squad_notify(&json!({"session_id": "someone", "notification_type": "permission_prompt", "message": "m"}).to_string(), &c),
+            None
+        );
         assert_eq!(squad_tool(&tool(&s), &c), None);
         assert_eq!(state().state, State::Working);
         // The permission prompt: Waiting on you, "Waiting for your OK on a command".

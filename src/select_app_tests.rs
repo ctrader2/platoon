@@ -4,17 +4,17 @@
 
 use crate::app::{Action, App, Hit, Mode};
 use crate::client::Client;
-use crate::clipboard::fake::{osc52_texts, Fake, Record};
+use crate::clipboard::fake::{Fake, Record, osc52_texts};
 use crate::clipboard::{Clipboard, Target};
 use crate::select::{Point, Unit};
 use crate::testkit::World;
 use crate::theme::Theme;
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     style::{Color, Modifier},
-    Terminal,
 };
 use std::{
     io::Read,
@@ -254,7 +254,8 @@ fn the_back_hint_still_goes_back_and_leaves_no_selection_behind() {
     let mut r = rig(TEXT);
     r.select((0, 0), (0, 4));
     r.draw();
-    let hint = r.app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Action(Action::Back))).map(|(rect, _)| *rect).expect("the hint is drawn");
+    let hint =
+        r.app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::Action(Action::Back))).map(|(rect, _)| *rect).expect("the hint is drawn");
     r.mouse(MouseEventKind::Down(MouseButton::Left), hint.x + 1, hint.y);
     assert!(matches!(r.app.mode, Mode::List), "clicked the hint");
     assert!(r.app.selection.is_none() && r.app.client.is_none());

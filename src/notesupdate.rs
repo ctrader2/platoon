@@ -27,7 +27,7 @@
 //! characters and escape sequences, cut to a sane size, and never allowed to start a section of its own.
 
 use crate::smart::clean_text;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -514,7 +514,12 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
         t.push_str("New in this project's conversations since the last update:\n\n");
     }
     for (i, s) in m.sessions.iter().enumerate() {
-        t.push_str(&format!("[{}] folder: {}{}\n", i + 1, s.folder, if s.first_read { " (new to the project: read in full this once)" } else { "" }));
+        t.push_str(&format!(
+            "[{}] folder: {}{}\n",
+            i + 1,
+            s.folder,
+            if s.first_read { " (new to the project: read in full this once)" } else { "" }
+        ));
         if !s.messages.is_empty() {
             t.push_str("Messages from the user:\n");
             for msg in &s.messages {
@@ -641,11 +646,13 @@ fn open_block(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => Some(clean_block(s)),
         Value::Array(a) => {
-            let items: Vec<String> = a.iter().filter_map(Value::as_str).map(|s| clean_text(s, DECISION_MAX)).filter(|s| !s.is_empty()).collect();
+            let items: Vec<String> =
+                a.iter().filter_map(Value::as_str).map(|s| clean_text(s, DECISION_MAX)).filter(|s| !s.is_empty()).collect();
             if items.is_empty() && !a.is_empty() {
                 return None; // a list of things that aren't text says nothing
             }
-            let lines: Vec<String> = items.iter().map(|i| if i.starts_with("- ") || i.starts_with("## ") { i.clone() } else { format!("- {i}") }).collect();
+            let lines: Vec<String> =
+                items.iter().map(|i| if i.starts_with("- ") || i.starts_with("## ") { i.clone() } else { format!("- {i}") }).collect();
             Some(clean_block(&lines.join("\n")))
         }
         _ => None,
@@ -797,7 +804,12 @@ pub fn parse_update(reply: &str) -> Option<Update> {
             for item in a {
                 let text = match item {
                     Value::String(s) => clean_text(s, DECISION_MAX),
-                    Value::Object(m) => m.get("text").or_else(|| m.get("decision")).and_then(Value::as_str).map(|s| clean_text(s, DECISION_MAX)).unwrap_or_default(),
+                    Value::Object(m) => m
+                        .get("text")
+                        .or_else(|| m.get("decision"))
+                        .and_then(Value::as_str)
+                        .map(|s| clean_text(s, DECISION_MAX))
+                        .unwrap_or_default(),
                     _ => String::new(),
                 };
                 let text = strip_leading_date(&text);
@@ -1128,7 +1140,8 @@ mod tests {
     use crate::notes::TEMPLATE;
 
     /// A project's notes in the shape platoon wrote before P4b: five fixed headings.
-    const OLD: &str = "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
+    const OLD: &str =
+        "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
 
 # Overview
 
@@ -1178,7 +1191,11 @@ My own notes, in my own words.
         assert_eq!(doc.preamble, "a line before anything\n\n");
         assert_eq!(headings(text), ["Summary", "Symptoms", "Ruled out", "Decisions"]);
         assert_eq!(doc.middle().len(), 2, "the summary and Decisions are the fixed ones");
-        assert_eq!(doc.body("Symptoms"), Some("\nThe list takes 8s.\n## Only on Fridays\nand only for big accounts\n\n"), "a heading inside a section belongs to it");
+        assert_eq!(
+            doc.body("Symptoms"),
+            Some("\nThe list takes 8s.\n## Only on Fridays\nand only for big accounts\n\n"),
+            "a heading inside a section belongs to it"
+        );
         // Headings are matched however they are written.
         for written in ["# Ruled out", "#  RULED OUT:", "ruled out."] {
             assert_eq!(doc.index(written), Some(2), "{written}");
@@ -1210,7 +1227,14 @@ My own notes, in my own words.
         let m = merge(OLD, &state, &up, NOW);
         assert!(m.changed);
         // Every word that was in the file is still in it.
-        for kept in ["Sell socks online.", "The user's own line.", "A basket page.", "Started.", "- 2026-01-01: Use Postgres.", "My own notes, in my own words."] {
+        for kept in [
+            "Sell socks online.",
+            "The user's own line.",
+            "A basket page.",
+            "Started.",
+            "- 2026-01-01: Use Postgres.",
+            "My own notes, in my own words.",
+        ] {
             assert!(m.text.contains(kept), "{kept:?} lost:\n{}", m.text);
         }
         // The summary went in at the top; every old heading is still there, in its old order.
@@ -1238,7 +1262,10 @@ My own notes, in my own words.
         let before = "# Summary\n\nA shop.\n\n# Progress\n\nThe basket is in.\nI want VAT included.\n\n# Decisions\n\n";
         let state = state_of(&[("Progress", "The basket is in.")]);
         // "Progress" becomes "Status": the user's line has to come with it.
-        let up = Update { sections: vec![sec("Status", "The basket and the checkout are in.\nI want VAT included.", &["Progress"])], ..Update::default() };
+        let up = Update {
+            sections: vec![sec("Status", "The basket and the checkout are in.\nI want VAT included.", &["Progress"])],
+            ..Update::default()
+        };
         let m = merge(before, &state, &up, NOW);
         assert_eq!(headings(&m.text), ["Summary", "Status", "Decisions"], "renamed in place: {}", m.text);
         assert!(m.text.contains("I want VAT included."), "the user's line came with it: {}", m.text);
@@ -1271,7 +1298,10 @@ My own notes, in my own words.
         assert!(m.text.contains("New words.") && !m.text.contains("Old words."), "{}", m.text);
         assert_eq!(m.wrote, ["Status"]);
         // A section that is new goes in after the one it followed in the answer, and Decisions stays last.
-        let up = Update { sections: vec![sec("Status", "Newer words.", &[]), sec("Findings", "- The cache is cold on Fridays.", &[])], ..Update::default() };
+        let up = Update {
+            sections: vec![sec("Status", "Newer words.", &[]), sec("Findings", "- The cache is cold on Fridays.", &[])],
+            ..Update::default()
+        };
         let m = merge(&m.text, &state, &up, NOW);
         assert_eq!(headings(&m.text), ["Summary", "Leads", "Status", "Findings", "Decisions"], "{}", m.text);
         assert!(m.text.contains("# Findings\n\n- The cache is cold on Fridays."), "{}", m.text);
@@ -1279,7 +1309,8 @@ My own notes, in my own words.
 
     #[test]
     fn sections_can_be_folded_into_one_or_put_in_another_order_and_nothing_is_lost() {
-        let before = "# Summary\n\nA shop.\n\n# Requirements\n\nA basket.\nThe user wants VAT.\n\n# Status\n\nThe basket is in.\n\n# Decisions\n\n";
+        let before =
+            "# Summary\n\nA shop.\n\n# Requirements\n\nA basket.\nThe user wants VAT.\n\n# Status\n\nThe basket is in.\n\n# Decisions\n\n";
         let state = state_of(&[("Requirements", "A basket."), ("Status", "The basket is in.")]);
         // Two sections folded into one: every line of the user's from both has to be in the body.
         let up = Update {
@@ -1291,13 +1322,17 @@ My own notes, in my own words.
         assert!(m.text.contains("The user wants VAT."), "{}", m.text);
         assert_eq!(m.mine.keys().collect::<Vec<_>>(), ["where it stands"], "the two old headings are out of the record");
         // Folding that drops one section's user line is refused, and both sections stay exactly as they were.
-        let up = Update { sections: vec![sec("Where it stands", "A basket, and it is in.", &["Requirements", "Status"])], ..Update::default() };
+        let up =
+            Update { sections: vec![sec("Where it stands", "A basket, and it is in.", &["Requirements", "Status"])], ..Update::default() };
         let m = merge(before, &state, &up, NOW);
         assert_eq!(m.text, before);
         assert_eq!(m.refused.len(), 1);
         // An answer that accounts for every section in between puts them in the order it lists them.
         let up = Update {
-            sections: vec![sec("Status", "The basket is in, and the checkout.", &[]), sec("Requirements", "A basket.\nThe user wants VAT.", &[])],
+            sections: vec![
+                sec("Status", "The basket is in, and the checkout.", &[]),
+                sec("Requirements", "A basket.\nThe user wants VAT.", &[]),
+            ],
             ..Update::default()
         };
         let m = merge(before, &state, &up, NOW);
@@ -1308,7 +1343,8 @@ My own notes, in my own words.
     #[test]
     fn the_summary_is_kept_short_and_is_added_to_a_file_that_has_none() {
         // Whatever comes back, the top of the file stays something you can read in ten seconds.
-        let long = (1..=40).map(|n| format!("Line {n} of a summary that goes on and on and on and on and on.")).collect::<Vec<_>>().join("\n");
+        let long =
+            (1..=40).map(|n| format!("Line {n} of a summary that goes on and on and on and on and on.")).collect::<Vec<_>>().join("\n");
         let up = Update { summary: Some(clean_summary(&long)), ..Update::default() };
         assert!(up.summary.as_ref().unwrap().lines().count() <= SUMMARY_MAX_LINES);
         assert!(up.summary.as_ref().unwrap().chars().count() <= SUMMARY_MAX_CHARS);
@@ -1326,7 +1362,10 @@ My own notes, in my own words.
 
     #[test]
     fn open_questions_are_a_plain_list_with_no_session_names_on_them() {
-        let up = parse_update(r#"{"sections":[{"heading":"Open questions","body":"- Does VAT go in the basket total?\n- Which card provider?"}]}"#).unwrap();
+        let up = parse_update(
+            r#"{"sections":[{"heading":"Open questions","body":"- Does VAT go in the basket total?\n- Which card provider?"}]}"#,
+        )
+        .unwrap();
         let m = merge("# Summary\n\nA shop.\n\n# Decisions\n\n", &State::default(), &up, NOW);
         assert_eq!(Doc::parse(&m.text).body("Open questions"), Some("\n- Does VAT go in the basket total?\n- Which card provider?\n\n"));
         assert!(!m.text.contains('['), "nothing is tagged with where it came from: {}", m.text);
@@ -1392,17 +1431,37 @@ My own notes, in my own words.
         let up = parse_update(r#"{"sections":[{"title":"Where it stands","text":"Here.","replaces":["Requirements","Status"]}]}"#).unwrap();
         assert_eq!(up.sections, [sec("Where it stands", "Here.", &["Requirements", "Status"])]);
         // The two fixed parts are not reachable through the list of sections, and neither is a nameless one.
-        for sneaky in [r#"{"sections":[{"heading":"Decisions","body":"- everything I fancy"}]}"#, r#"{"sections":[{"heading":"Summary","body":"mine now"}]}"#, r#"{"sections":[{"heading":"","body":"x"}]}"#] {
+        for sneaky in [
+            r#"{"sections":[{"heading":"Decisions","body":"- everything I fancy"}]}"#,
+            r#"{"sections":[{"heading":"Summary","body":"mine now"}]}"#,
+            r#"{"sections":[{"heading":"","body":"x"}]}"#,
+        ] {
             assert_eq!(parse_update(sneaky), None, "{sneaky}");
         }
         // Wrong shapes give nothing at all.
-        for bad in ["", "not json", "[]", "42", "{}", r#"{"summary":5}"#, r#"{"summary":"   "}"#, r#"{"other":"x"}"#, r#"{"decisions":[]}"#, r#"{"decisions":[1,2]}"#, r#"{"sections":[{"heading":"Status"}]}"#, r#"{"sections":"Status"}"#] {
+        for bad in [
+            "",
+            "not json",
+            "[]",
+            "42",
+            "{}",
+            r#"{"summary":5}"#,
+            r#"{"summary":"   "}"#,
+            r#"{"other":"x"}"#,
+            r#"{"decisions":[]}"#,
+            r#"{"decisions":[1,2]}"#,
+            r#"{"sections":[{"heading":"Status"}]}"#,
+            r#"{"sections":"Status"}"#,
+        ] {
             assert_eq!(parse_update(bad), None, "{bad}");
         }
         // At most five decisions and ten sections, each decision one line.
         let many = format!(r#"{{"decisions":[{}]}}"#, (1..=9).map(|n| format!("\"decision {n}\"")).collect::<Vec<_>>().join(","));
         assert_eq!(parse_update(&many).unwrap().decisions.len(), MAX_DECISIONS);
-        let many = format!(r#"{{"sections":[{}]}}"#, (1..=15).map(|n| format!(r#"{{"heading":"H{n}","body":"b"}}"#)).collect::<Vec<_>>().join(","));
+        let many = format!(
+            r#"{{"sections":[{}]}}"#,
+            (1..=15).map(|n| format!(r#"{{"heading":"H{n}","body":"b"}}"#)).collect::<Vec<_>>().join(",")
+        );
         assert_eq!(parse_update(&many).unwrap().sections.len(), SECTIONS_IN_REPLY);
         assert_eq!(parse_update(r#"{"decisions":["one\ntwo"]}"#).unwrap().decisions, ["one two"]);
         // A body never starts a section of its own.
@@ -1488,7 +1547,12 @@ My own notes, in my own words.
         let m = Material {
             project: "Web shop".into(),
             sessions: vec![
-                SessionMaterial { folder: "shop".into(), messages: vec!["Add a basket page".into()], reply: Some("I added it.".into()), first_read: false },
+                SessionMaterial {
+                    folder: "shop".into(),
+                    messages: vec!["Add a basket page".into()],
+                    reply: Some("I added it.".into()),
+                    first_read: false,
+                },
                 SessionMaterial { folder: "api".into(), messages: vec!["Write the orders endpoint".into()], reply: None, first_read: true },
             ],
             results: vec![],
@@ -1537,7 +1601,11 @@ My own notes, in my own words.
         let m = merge(before, &State::default(), &oq(body), NOW);
         assert_eq!(headings(&m.text), ["Summary", "Open questions", "Status", "Decisions"], "{}", m.text);
         assert_eq!(Doc::parse(&m.text).body(OPEN_QUESTIONS), Some(format!("\n{body}\n\n").as_str()));
-        assert_eq!(m.mine.get("open questions").map(String::as_str), Some(text_lines(body).join("\n").as_str()), "every line of it is platoon's");
+        assert_eq!(
+            m.mine.get("open questions").map(String::as_str),
+            Some(text_lines(body).join("\n").as_str()),
+            "every line of it is platoon's"
+        );
         // No summary yet: at the top.
         let m = merge("# Status\n\nStarted.\n", &State::default(), &oq("- Which card provider?"), NOW);
         assert_eq!(headings(&m.text), ["Open questions", "Status"]);
@@ -1551,11 +1619,21 @@ My own notes, in my own words.
     fn an_open_questions_section_in_the_middle_becomes_the_fixed_one_and_moves_up_with_the_next_real_change() {
         // The shape of the user's real file: Open questions as one of the sections in between.
         let before = "# Summary\n\nA shop.\n\n# Requirements\n\nA basket.\n\n# Open questions\n\n- Does VAT go in the total?\nMy own question?\n\n# Status\n\nStarted.\n\n# Decisions\n\n";
-        let state = state_of(&[("Summary", "A shop."), ("Requirements", "A basket."), ("Open questions", "- Does VAT go in the total?"), ("Status", "Started.")]);
+        let state = state_of(&[
+            ("Summary", "A shop."),
+            ("Requirements", "A basket."),
+            ("Open questions", "- Does VAT go in the total?"),
+            ("Status", "Started."),
+        ]);
         let doc = Doc::parse(before);
-        assert_eq!(doc.middle().iter().map(|i| doc.parts[*i].title.as_str()).collect::<Vec<_>>(), ["Requirements", "Status"], "it is not one of the reshapeable ones");
+        assert_eq!(
+            doc.middle().iter().map(|i| doc.parts[*i].title.as_str()).collect::<Vec<_>>(),
+            ["Requirements", "Status"],
+            "it is not one of the reshapeable ones"
+        );
         // An answer that changes nothing moves nothing.
-        let m = merge(before, &state, &Update { decisions: vec![], sections: vec![sec("Status", "Started.", &[])], ..Update::default() }, NOW);
+        let m =
+            merge(before, &state, &Update { decisions: vec![], sections: vec![sec("Status", "Started.", &[])], ..Update::default() }, NOW);
         assert!(!m.changed, "{}", m.text);
         // Any real change moves it, word for word.
         let m = merge(before, &state, &Update { sections: vec![sec("Status", "Halfway.", &[])], ..Update::default() }, NOW);
@@ -1578,28 +1656,49 @@ My own notes, in my own words.
         let before = "# Summary\n\nA shop.\n\n# Open questions\n\n## Pricing\n- Does VAT go in the total?\n- My own: free shipping?\n\n# Decisions\n\n- 2026-01-01: Use Postgres.\n";
         let state = state_of(&[("Open questions", "## Pricing\n- Does VAT go in the total?")]);
         // platoon's own item, answered: it goes, and the answer is a decision.
-        let up = Update { open_questions: Some("## Pricing\n- My own: free shipping?".into()), decisions: vec!["VAT is in the total.".into()], ..Update::default() };
+        let up = Update {
+            open_questions: Some("## Pricing\n- My own: free shipping?".into()),
+            decisions: vec!["VAT is in the total.".into()],
+            ..Update::default()
+        };
         let m = merge(before, &state, &up, NOW);
-        assert!(!m.text.contains("Does VAT go in the total?") && m.text.contains(&format!("- {}: VAT is in the total.", day(NOW))), "{}", m.text);
+        assert!(
+            !m.text.contains("Does VAT go in the total?") && m.text.contains(&format!("- {}: VAT is in the total.", day(NOW))),
+            "{}",
+            m.text
+        );
         // The user's own item left out with no decision: refused, nothing written.
         let up = oq("## Pricing\n- Does VAT go in the total?");
         let m = merge(before, &state, &up, NOW);
         assert_eq!(m.text, before);
         assert_eq!(m.refused, [("Open questions".to_string(), UNANSWERED)]);
         // A "decision" that is already in Decisions is not a new answer.
-        let up = Update { open_questions: Some("## Pricing\n- Does VAT go in the total?".into()), decisions: vec!["Use Postgres.".into()], ..Update::default() };
+        let up = Update {
+            open_questions: Some("## Pricing\n- Does VAT go in the total?".into()),
+            decisions: vec!["Use Postgres.".into()],
+            ..Update::default()
+        };
         assert_eq!(merge(before, &state, &up, NOW).text, before);
         // With its answer in the same reply, the user's item may go.
-        let up = Update { open_questions: Some("## Pricing\n- Does VAT go in the total?".into()), decisions: vec!["Shipping is free over 50.".into()], ..Update::default() };
+        let up = Update {
+            open_questions: Some("## Pricing\n- Does VAT go in the total?".into()),
+            decisions: vec!["Shipping is free over 50.".into()],
+            ..Update::default()
+        };
         let m = merge(before, &state, &up, NOW);
         assert!(!m.text.contains("My own: free shipping?") && m.text.contains("Shipping is free over 50."), "{}", m.text);
         // The user's item may move to another subheading, with no decision needed.
         let up = oq("## Pricing\n- Does VAT go in the total?\n\n## Waiting on the user\n- My own: free shipping?");
         let m = merge(before, &state, &up, NOW);
         assert!(m.refused.is_empty() && m.text.contains("## Waiting on the user\n- My own: free shipping?"), "{}", m.text);
-        assert_eq!(m.mine.get("open questions").map(String::as_str), Some("## Pricing\n- Does VAT go in the total?\n## Waiting on the user"), "the user's line stays theirs");
+        assert_eq!(
+            m.mine.get("open questions").map(String::as_str),
+            Some("## Pricing\n- Does VAT go in the total?\n## Waiting on the user"),
+            "the user's line stays theirs"
+        );
         // Everything answered: the section goes (it comes back when something is open again).
-        let up = Update { open_questions: Some(String::new()), decisions: vec!["VAT is in; shipping is free.".into()], ..Update::default() };
+        let up =
+            Update { open_questions: Some(String::new()), decisions: vec!["VAT is in; shipping is free.".into()], ..Update::default() };
         let m = merge(before, &state, &up, NOW);
         assert_eq!(headings(&m.text), ["Summary", "Decisions"], "{}", m.text);
         assert!(!m.mine.contains_key("open questions"));
@@ -1630,7 +1729,11 @@ My own notes, in my own words.
         let doc = Doc::parse("# Summary\n\nA shop.\n\n# Open questions\n\n- Mine?\n\n# Decisions\n\n");
         // What the request says, with the instructions in front of it: with the built-in guidance they are the same
         // words as before they moved into the system prompt.
-        let p = format!("{}\n\n{}", system(), prompt(&doc, &State::default(), &Material { project: "P".into(), sessions: vec![], results: vec![] }));
+        let p = format!(
+            "{}\n\n{}",
+            system(),
+            prompt(&doc, &State::default(), &Material { project: "P".into(), sessions: vec![], results: vec![] })
+        );
         for want in [
             "It is not a to-do list",
             "## subheadings",
@@ -1650,7 +1753,11 @@ My own notes, in my own words.
             assert!(p.contains(want), "{want:?} missing from:\n{p}");
         }
         assert!(!p.contains("in whole sentences"), "the old wall-of-prose rule is gone");
-        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &State::default(), &Material { project: "P".into(), sessions: vec![], results: vec![] });
+        let p = prompt(
+            &Doc::parse("# Summary\n\nA shop.\n"),
+            &State::default(),
+            &Material { project: "P".into(), sessions: vec![], results: vec![] },
+        );
         assert!(p.contains("# Open questions (as it reads now)\n(there is none yet"), "{p}");
         assert!(system().contains("\"open_questions\""));
     }
@@ -1661,7 +1768,11 @@ My own notes, in my own words.
         for n in 0..30 {
             big.push_str(&format!("# Section {n}\n\n{}\n\n", "y".repeat(20_000)));
         }
-        let m = Material { project: "P".into(), sessions: vec![SessionMaterial { folder: "f".into(), messages: vec![], reply: None, first_read: false }], results: vec![] };
+        let m = Material {
+            project: "P".into(),
+            sessions: vec![SessionMaterial { folder: "f".into(), messages: vec![], reply: None, first_read: false }],
+            results: vec![],
+        };
         let p = prompt(&Doc::parse(&big), &State::default(), &m);
         assert!(p.len() < 25_000, "the prompt is bounded: {}", p.len());
         assert!(p.contains('…'));
@@ -1751,7 +1862,10 @@ My own notes, in my own words.
         let done = |n: u32, text: &str| DoneTicket { number: n, squad: "Coding".into(), result: text.into() };
         let mut state = State::default();
         let (due, sent) = results_due(&state, &[done(3, "Added the basket page on ticket/3.\nTests pass."), done(4, "  \n")]);
-        assert_eq!(due, [TicketResult { label: "Ticket #3 (Coding squad)".into(), text: "Added the basket page on ticket/3.\nTests pass.".into() }]);
+        assert_eq!(
+            due,
+            [TicketResult { label: "Ticket #3 (Coding squad)".into(), text: "Added the basket page on ticket/3.\nTests pass.".into() }]
+        );
         assert_eq!(sent.keys().collect::<Vec<_>>(), ["3"], "an empty result is nothing to send");
         let m = Material { project: "Web".into(), sessions: vec![], results: due.clone() };
         assert!(!m.is_empty(), "a result alone is worth an update");
@@ -1764,7 +1878,11 @@ My own notes, in my own words.
         assert_eq!(results_due(&state, &[done(3, "Reworked: now with a total.")]).0.len(), 1);
         // A result can't pass for a heading of the notes, and a long one is cut.
         let (due, _) = results_due(&State::default(), &[done(5, &format!("# Not a heading\n{}", "x".repeat(RESULT_IN_PROMPT + 50)))]);
-        let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &State::default(), &Material { project: "Web".into(), sessions: vec![], results: due });
+        let p = prompt(
+            &Doc::parse("# Summary\n\nA shop.\n"),
+            &State::default(),
+            &Material { project: "Web".into(), sessions: vec![], results: due },
+        );
         assert!(p.contains("\n  # Not a heading\n") && !p.contains("\n# Not a heading"), "{p}");
         assert!(p.contains('…'));
         // The state keeps what was sent, and keeps it across a save.

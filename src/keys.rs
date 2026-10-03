@@ -291,13 +291,17 @@ pub fn check_back(c: &Chord) -> Result<Option<String>, String> {
                 Err(format!("is the same as {same} to a terminal"))
             }
             Name::Char('[') => Err("is the same as esc to a terminal".into()),
-            Name::Char(ch) if ch.is_ascii_lowercase() && CLAUDE_CTRL.contains(ch) => Ok(Some(format!("Claude Code uses ctrl+{ch} itself: in a session it now goes back instead"))),
+            Name::Char(ch) if ch.is_ascii_lowercase() && CLAUDE_CTRL.contains(ch) => {
+                Ok(Some(format!("Claude Code uses ctrl+{ch} itself: in a session it now goes back instead")))
+            }
             Name::Space | Name::Char('a'..='z') => Ok(None),
             _ => Err("can't be told apart from other keys everywhere it is needed (use ctrl with space or a letter)".into()),
         };
     }
     match c.key {
-        Name::Char(ch) if CLAUDE_ALT.contains(ch) => Ok(Some(format!("Claude Code uses alt+{ch} itself: in a session it now goes back instead"))),
+        Name::Char(ch) if CLAUDE_ALT.contains(ch) => {
+            Ok(Some(format!("Claude Code uses alt+{ch} itself: in a session it now goes back instead")))
+        }
         Name::Space | Name::Char('a'..='z' | '0'..='9') => Ok(None),
         _ => Err("can't be told apart from other keys everywhere it is needed (use alt with space, a letter or a digit)".into()),
     }
@@ -320,10 +324,8 @@ pub struct Def {
 }
 
 /// Every action with a key of its own, in the order notices are given. Another action joins here (and in `Keys`).
-pub const ACTIONS: &[Def] = &[
-    Def { name: "back", default: "ctrl+space", rule: Rule::Chord },
-    Def { name: "quit", default: "q", rule: Rule::Any },
-];
+pub const ACTIONS: &[Def] =
+    &[Def { name: "back", default: "ctrl+space", rule: Rule::Chord }, Def { name: "quit", default: "q", rule: Rule::Any }];
 
 fn default_of(name: &str) -> Chord {
     let d = ACTIONS.iter().find(|d| d.name == name).map_or("", |d| d.default);
@@ -362,7 +364,12 @@ impl Keys {
     pub fn parse(text: &str) -> (Keys, Vec<String>) {
         let object = match serde_json::from_str::<Value>(text) {
             Ok(Value::Object(o)) => o,
-            Ok(_) => return (Keys::default(), vec!["keys.json isn't a list of keys like { \"back\": \"ctrl+space\" }: using the default keys.".into()]),
+            Ok(_) => {
+                return (
+                    Keys::default(),
+                    vec!["keys.json isn't a list of keys like { \"back\": \"ctrl+space\" }: using the default keys.".into()],
+                );
+            }
             Err(_) => return (Keys::default(), vec!["keys.json can't be read as JSON: using the default keys.".into()]),
         };
         let mut notes = Vec::new();
@@ -469,7 +476,11 @@ impl KeysStore {
 
 /// Where the back key is in bytes read from a terminal: (start, length) of the first one. For `platoon open`.
 pub fn find_back(buf: &[u8], forms: &[Vec<u8>]) -> Option<(usize, usize)> {
-    forms.iter().filter(|f| !f.is_empty()).filter_map(|f| buf.windows(f.len()).position(|w| w == f.as_slice()).map(|at| (at, f.len()))).min_by_key(|&(at, len)| (at, std::cmp::Reverse(len)))
+    forms
+        .iter()
+        .filter(|f| !f.is_empty())
+        .filter_map(|f| buf.windows(f.len()).position(|w| w == f.as_slice()).map(|at| (at, f.len())))
+        .min_by_key(|&(at, len)| (at, std::cmp::Reverse(len)))
 }
 
 #[cfg(test)]
@@ -625,7 +636,13 @@ mod tests {
         // A bad entry: its default, and one notice naming the entry and the default.
         let (k, n) = Keys::parse(r#"{ "back": "x", "quit": "w" }"#);
         assert_eq!((k.back, k.quit), (p("ctrl+space"), p("w")));
-        assert_eq!(n, vec!["keys.json: \"back\" is \"x\", which would be typed rather than go back (it needs ctrl or alt). Using ctrl+space.".to_string()]);
+        assert_eq!(
+            n,
+            vec![
+                "keys.json: \"back\" is \"x\", which would be typed rather than go back (it needs ctrl or alt). Using ctrl+space."
+                    .to_string()
+            ]
+        );
         let (k, n) = Keys::parse(r#"{ "back": 7 }"#);
         assert_eq!((k.back, n.len()), (p("ctrl+space"), 1));
         assert!(n[0].contains("\"back\"") && n[0].contains("ctrl+space"));

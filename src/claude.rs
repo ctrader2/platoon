@@ -467,11 +467,7 @@ fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
 }
 
 pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
-    fs::read_dir(root.join("projects"))
-        .ok()?
-        .flatten()
-        .map(|d| d.path().join(format!("{id}.jsonl")))
-        .find(|p| p.exists())
+    fs::read_dir(root.join("projects")).ok()?.flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.exists())
 }
 
 /// What platoon knows about one saved conversation, read from its transcript.
@@ -726,14 +722,21 @@ pub fn read_leader(path: &Path) -> Option<LeaderLog> {
                     match block.get("type").and_then(Value::as_str) {
                         Some("tool_use") if kind == "assistant" => {
                             let name = block.get("name").and_then(Value::as_str).unwrap_or("");
-                            let (Some(call), true) = (block.get("id").and_then(Value::as_str), name == "Agent" || name == "Task") else { continue };
+                            let (Some(call), true) = (block.get("id").and_then(Value::as_str), name == "Agent" || name == "Task") else {
+                                continue;
+                            };
                             if log.runs.iter().any(|r| r.call == call) {
                                 continue; // the same call written again
                             }
                             let input = block.get("input");
                             let s = |k: &str| input.and_then(|i| i.get(k)).and_then(Value::as_str).unwrap_or("").trim().to_string();
                             let agent = s("subagent_type");
-                            log.runs.push(MemberRun { call: call.to_string(), agent: if agent.is_empty() { "general-purpose".into() } else { agent }, description: s("description"), ended: None });
+                            log.runs.push(MemberRun {
+                                call: call.to_string(),
+                                agent: if agent.is_empty() { "general-purpose".into() } else { agent },
+                                description: s("description"),
+                                ended: None,
+                            });
                         }
                         Some("tool_result") => {
                             let Some(call) = block.get("tool_use_id").and_then(Value::as_str) else { continue };
@@ -742,7 +745,10 @@ pub fn read_leader(path: &Path) -> Option<LeaderLog> {
                             if let Some(id) = result.and_then(|r| r.get("agentId")).and_then(Value::as_str) {
                                 started_by.insert(id.to_string(), call.to_string());
                             }
-                            let launched = result.is_some_and(|r| r.get("status").and_then(Value::as_str) == Some("async_launched") || r.get("isAsync").and_then(Value::as_bool) == Some(true));
+                            let launched = result.is_some_and(|r| {
+                                r.get("status").and_then(Value::as_str) == Some("async_launched")
+                                    || r.get("isAsync").and_then(Value::as_bool) == Some(true)
+                            });
                             if !launched && run.ended.is_none() {
                                 let failed = block.get("is_error").and_then(Value::as_bool) == Some(true);
                                 run.ended = Some(if failed { "failed" } else { "completed" }.to_string());
@@ -758,7 +764,13 @@ pub fn read_leader(path: &Path) -> Option<LeaderLog> {
     log.leader = sum(&seen);
     // The members' own transcripts, each under its agent's name.
     let dir = path.with_extension("").join("subagents");
-    let mut files: Vec<PathBuf> = fs::read_dir(&dir).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "jsonl")).collect();
+    let mut files: Vec<PathBuf> = fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "jsonl"))
+        .collect();
     files.sort();
     let mut by_agent: Vec<(String, Usages)> = Vec::new();
     for f in files {
@@ -1006,7 +1018,9 @@ pub fn reply_in_line(line: &str, cap: usize) -> Option<String> {
     let content = &v["message"]["content"];
     let text = match content {
         Value::String(s) => one_line(s),
-        Value::Array(a) => one_line(&a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" ")),
+        Value::Array(a) => one_line(
+            &a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join(" "),
+        ),
         _ => return None,
     };
     (!text.is_empty()).then(|| truncate_to(text, cap))
@@ -1024,7 +1038,9 @@ pub fn reply_text_in_line(line: &str, cap: usize) -> Option<String> {
     }
     let raw = match &v["message"]["content"] {
         Value::String(s) => s.clone(),
-        Value::Array(a) => a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n\n"),
+        Value::Array(a) => {
+            a.iter().filter(|b| b["type"].as_str() == Some("text")).filter_map(|b| b["text"].as_str()).collect::<Vec<_>>().join("\n\n")
+        }
         _ => return None,
     };
     // A reply can be enormous: far more than could ever be kept is not even looked at.
@@ -1172,7 +1188,11 @@ mod tests {
         fs::create_dir_all(d.join("skills/empty-folder")).unwrap();
         fs::create_dir_all(d.join("skills/.hidden")).unwrap();
         fs::write(d.join("skills/.hidden/SKILL.md"), "---\nname: hidden\n---\n").unwrap();
-        assert_eq!(installed_skills(&d), ["pdf", "plain", "release"], "the front matter's name, else the folder; a folder without SKILL.md is none");
+        assert_eq!(
+            installed_skills(&d),
+            ["pdf", "plain", "release"],
+            "the front matter's name, else the folder; a folder without SKILL.md is none"
+        );
         // MCP servers: the names at the top only, never what is inside them.
         let j = d.join(".claude.json");
         assert!(mcp_server_names(&j).is_empty(), "no file: none");
@@ -1238,7 +1258,14 @@ mod tests {
                 "CLAUDE_CODE_CALLER_PID",
             ]
         );
-        for kept in ["CLAUDE_CONFIG_DIR", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_EXECPATH", "ANTHROPIC_API_KEY", "CLAUDE_CODE_MAX_OUTPUT_TOKENS"] {
+        for kept in [
+            "CLAUDE_CONFIG_DIR",
+            "CLAUDE_CODE_USE_BEDROCK",
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CODE_EXECPATH",
+            "ANTHROPIC_API_KEY",
+            "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+        ] {
             assert!(!is_session_marker(kept), "{kept}");
         }
         for m in SESSION_MARKERS {
@@ -1266,7 +1293,10 @@ mod tests {
     fn a_background_entry_is_a_live_process_told_apart_from_an_interactive_one() {
         let me = std::process::id();
         let bg = live_from(&entry("bg", me, serde_json::json!({"jobId":"dffac639"}))).unwrap();
-        assert_eq!((bg.pid, bg.id.as_str(), bg.cwd.as_str(), bg.started_at, bg.busy), (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work", 7, true));
+        assert_eq!(
+            (bg.pid, bg.id.as_str(), bg.cwd.as_str(), bg.started_at, bg.busy),
+            (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work", 7, true)
+        );
         assert_eq!(bg.background.as_deref(), Some("dffac639"));
         assert!(bg.is_background());
 
@@ -1309,7 +1339,13 @@ mod tests {
         assert_eq!((parked.pid, parked.id.as_str(), parked.cwd.as_str()), (me, "dffac639-c805-47ba-b57c-3767f4f768d8", "/work"));
 
         // Without the key, or with an empty or odd one, nothing changes.
-        for extra in [serde_json::json!({}), serde_json::json!({"parkedJobId":""}), serde_json::json!({"parkedJobId":"  "}), serde_json::json!({"parkedJobId":null}), serde_json::json!({"parkedJobId":7})] {
+        for extra in [
+            serde_json::json!({}),
+            serde_json::json!({"parkedJobId":""}),
+            serde_json::json!({"parkedJobId":"  "}),
+            serde_json::json!({"parkedJobId":null}),
+            serde_json::json!({"parkedJobId":7}),
+        ] {
             let l = live_from(&entry("interactive", me, extra.clone())).unwrap();
             assert!(l.parked.is_none() && !l.is_parked() && l.busy, "{extra}");
         }
@@ -1359,7 +1395,10 @@ mod tests {
         fs::write(dir.join("sessions/4.json"), "not json").unwrap();
         fs::write(dir.join("sessions/5.key"), "secret").unwrap();
         let live = Reader::with_root(dir.clone()).live();
-        assert_eq!(live.iter().map(|l| (l.id.as_str(), l.is_background())).collect::<Vec<_>>(), [("other", false), ("dffac639-c805-47ba-b57c-3767f4f768d8", true)]);
+        assert_eq!(
+            live.iter().map(|l| (l.id.as_str(), l.is_background())).collect::<Vec<_>>(),
+            [("other", false), ("dffac639-c805-47ba-b57c-3767f4f768d8", true)]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1439,19 +1478,25 @@ mod transcript_tests {
         assert!(may_be_reply(&line));
         assert_eq!(reply_in_line(&line, 200).as_deref(), Some("I fixed the redirect."));
         assert_eq!(reply_in_line(&line, 7).as_deref(), Some("I fixed"), "cut to the given number of characters");
-        let two = asst(json!([{"type":"text","text":"one"},{"type":"tool_use","name":"Bash","input":{"command":"rm -rf /"}},{"type":"text","text":"two"}]));
+        let two = asst(
+            json!([{"type":"text","text":"one"},{"type":"tool_use","name":"Bash","input":{"command":"rm -rf /"}},{"type":"text","text":"two"}]),
+        );
         assert_eq!(reply_in_line(&two, 200).as_deref(), Some("one two"), "tool calls are not in it");
         // Not replies: a tool call alone, thinking, tool output, the user's own words, a subagent, Claude's synthetic notices.
         let tool = asst(json!([{"type":"tool_use","name":"Bash","input":{"command":"ls"}}]));
         assert!(!may_be_reply(&tool) && reply_in_line(&tool, 200).is_none());
         let thinking = asst(json!([{"type":"thinking","thinking":"hmm"}]));
         assert!(!may_be_reply(&thinking) && reply_in_line(&thinking, 200).is_none());
-        let result = json!({"type":"user","message":{"content":[{"type":"tool_result","content":"{\"type\":\"assistant\"} {\"type\":\"text\"}"}]}}).to_string();
+        let result =
+            json!({"type":"user","message":{"content":[{"type":"tool_result","content":"{\"type\":\"assistant\"} {\"type\":\"text\"}"}]}})
+                .to_string();
         assert!(!may_be_reply(&result), "text inside a tool result is escaped and never matches");
         assert!(reply_in_line(&result, 200).is_none());
         let side = json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}).to_string();
         assert!(!may_be_reply(&side) && reply_in_line(&side, 200).is_none());
-        let synthetic = json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]}}).to_string();
+        let synthetic =
+            json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"No response requested."}]}})
+                .to_string();
         assert!(!may_be_reply(&synthetic));
         assert_eq!(reply_in_line(&asst(json!([{"type":"text","text":"   "}])), 200), None);
         assert_eq!(reply_in_line("not json", 200), None);
@@ -1463,13 +1508,20 @@ mod transcript_tests {
         use serde_json::json;
         let asst = |c: Value| json!({"type":"assistant","message":{"model":"claude-sonnet-5","content":c}}).to_string();
         // A long reply of many lines, with an escape sequence, a bell and a run of blank lines in it.
-        let mut text = String::from("Done. Two things are still open:\n\n\n\n- \u{1b}[31mWhich card provider?\u{1b}[0m\u{7}\n- Does VAT go in the total?\n\n");
+        let mut text = String::from(
+            "Done. Two things are still open:\n\n\n\n- \u{1b}[31mWhich card provider?\u{1b}[0m\u{7}\n- Does VAT go in the total?\n\n",
+        );
         for n in 0..200 {
             text.push_str(&format!("Line {n} of the rest of a long answer.\n"));
         }
-        let line = asst(json!([{"type":"text","text":text},{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"Last words."}]));
+        let line = asst(
+            json!([{"type":"text","text":text},{"type":"tool_use","name":"Bash","input":{"command":"ls"}},{"type":"text","text":"Last words."}]),
+        );
         let got = reply_text_in_line(&line, 1500).unwrap();
-        assert!(got.starts_with("Done. Two things are still open:\n\n- Which card provider?\n- Does VAT go in the total?\n\nLine 0"), "{got}");
+        assert!(
+            got.starts_with("Done. Two things are still open:\n\n- Which card provider?\n- Does VAT go in the total?\n\nLine 0"),
+            "{got}"
+        );
         assert!(!got.chars().any(|c| c.is_control() && c != '\n'), "{got:?}");
         assert!(!got.contains("\n\n\n"), "blank runs fold into one");
         assert_eq!(got.chars().count(), 1501, "cut to the length asked for, with a mark where it was cut");
@@ -1479,7 +1531,8 @@ mod transcript_tests {
             assert!(reply_text_in_line(&line, cap).unwrap().chars().count() <= cap + 1);
         }
         // A short one comes back whole, with the tool call left out between its two parts.
-        let short = asst(json!([{"type":"text","text":"one\ntwo"},{"type":"tool_use","name":"Bash","input":{}},{"type":"text","text":"three"}]));
+        let short =
+            asst(json!([{"type":"text","text":"one\ntwo"},{"type":"tool_use","name":"Bash","input":{}},{"type":"text","text":"three"}]));
         assert_eq!(reply_text_in_line(&short, 1500).as_deref(), Some("one\ntwo\n\nthree"));
         // Not replies, exactly as for the one-line reading.
         let side = json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"sub"}]}}).to_string();
@@ -1527,7 +1580,15 @@ mod hidden_tests {
         ] {
             assert!(h.covers(&yes), "{yes}");
         }
-        for no in ["", "/", "relative/ai-work", &s(base.join("cache")), &s(base.join("cache/ai-work-2")), &s(base.join("other/ai-work")), &s(base.join("cache/ai-wor"))] {
+        for no in [
+            "",
+            "/",
+            "relative/ai-work",
+            &s(base.join("cache")),
+            &s(base.join("cache/ai-work-2")),
+            &s(base.join("other/ai-work")),
+            &s(base.join("cache/ai-wor")),
+        ] {
             assert!(!h.covers(no), "{no}");
         }
         // Hidden before the folder exists (nothing has been called yet).
@@ -1587,7 +1648,9 @@ mod hidden_tests {
     }
 
     fn user_line(text: &str) -> String {
-        format!(r#"{{"type":"user","cwd":"/work/x","timestamp":"2026-09-26T12:00:00.000Z","message":{{"role":"user","content":"{text}"}}}}"#)
+        format!(
+            r#"{{"type":"user","cwd":"/work/x","timestamp":"2026-09-26T12:00:00.000Z","message":{{"role":"user","content":"{text}"}}}}"#
+        )
     }
 
     /// An assistant reply big enough that a few hundred of them push the start of a file out of the tail.
@@ -1645,7 +1708,12 @@ mod hidden_tests {
         lines.extend(filler());
         assert_eq!(dirs_of(&p, &lines, None), ["/from-start"]);
         // A later reading (the head is not read again) keeps what the earlier one found when the tail has nothing.
-        let prev = Transcript { cwd: Some("/work/x".into()), first_prompt: Some("hello".into()), extra_dirs: vec!["/earlier".into()], ..Transcript::default() };
+        let prev = Transcript {
+            cwd: Some("/work/x".into()),
+            first_prompt: Some("hello".into()),
+            extra_dirs: vec!["/earlier".into()],
+            ..Transcript::default()
+        };
         assert_eq!(dirs_of(&p, &lines, Some(&prev)), ["/earlier"]);
         // A change in the tail wins over both.
         lines.extend([env(r#"["/from-tail"]"#), reply_line()]);
@@ -1734,8 +1802,11 @@ mod hidden_tests {
                 "toolUseResult":{"status":"completed","agentId":agent_id}}).to_string()
         }
         pub fn notice(call: &str, status: &str) -> String {
-            let text = format!("<task-notification>\n<task-id>x</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>{status}</status>\n<summary>Agent finished</summary>\n</task-notification>");
-            json!({"type":"user","isSidechain":false,"origin":{"kind":"task-notification"},"message":{"role":"user","content":text}}).to_string()
+            let text = format!(
+                "<task-notification>\n<task-id>x</task-id>\n<tool-use-id>{call}</tool-use-id>\n<status>{status}</status>\n<summary>Agent finished</summary>\n</task-notification>"
+            );
+            json!({"type":"user","isSidechain":false,"origin":{"kind":"task-notification"},"message":{"role":"user","content":text}})
+                .to_string()
         }
         pub fn queued_notice(call: &str) -> String {
             let text = format!("<task-notification>\n<tool-use-id>{call}</tool-use-id>\n<status>completed</status>\n</task-notification>");
@@ -1780,7 +1851,11 @@ mod hidden_tests {
             let text: Vec<String> = answers.iter().map(|(m, n)| answer(m, *n, 1, 0)).collect();
             fs::write(sub.join(format!("agent-{id}.jsonl")), text.join("\n") + "\n").unwrap();
             if let Some(a) = agent {
-                fs::write(sub.join(format!("agent-{id}.meta.json")), serde_json::json!({"agentType":a,"description":"x","toolUseId":"c"}).to_string()).unwrap();
+                fs::write(
+                    sub.join(format!("agent-{id}.meta.json")),
+                    serde_json::json!({"agentType":a,"description":"x","toolUseId":"c"}).to_string(),
+                )
+                .unwrap();
             }
         };
         member("p1", Some("coding-planner"), &[("p-1", 100), ("p-1", 100), ("p-2", 50)]);
@@ -1795,7 +1870,8 @@ mod hidden_tests {
         assert_eq!(log.leader_agent.as_deref(), Some("coding-leader"));
         // The leader's own answers: a1 once (its last line), and the six calls' one token each.
         assert_eq!((log.leader.input, log.leader.output, log.leader.cache_read), (10 + 6, 25 + 6, 1000));
-        let runs: Vec<(&str, &str, Option<&str>)> = log.runs.iter().map(|r| (r.agent.as_str(), r.description.as_str(), r.ended.as_deref())).collect();
+        let runs: Vec<(&str, &str, Option<&str>)> =
+            log.runs.iter().map(|r| (r.agent.as_str(), r.description.as_str(), r.ended.as_deref())).collect();
         assert_eq!(
             runs,
             [
@@ -1808,13 +1884,29 @@ mod hidden_tests {
             ]
         );
         let members: Vec<(&str, u64, u64)> = log.members.iter().map(|(n, s)| (n.as_str(), s.input, s.output)).collect();
-        assert_eq!(members, [("coding-planner", 150, 2), ("coding-builder", 10, 2), ("coding-reviewer", 40, 1), ("member", 9, 1)], "in the order they first ran, each answer once");
+        assert_eq!(
+            members,
+            [("coding-planner", 150, 2), ("coding-builder", 10, 2), ("coding-reviewer", 40, 1), ("member", 9, 1)],
+            "in the order they first ran, each answer once"
+        );
         assert!(log.members.iter().all(|(_, s)| s.subagents));
 
         // A failed background run says so; an error result from a foreground one too.
         let q = base.join("F.jsonl");
         let err = serde_json::json!({"type":"user","message":{"content":[{"tool_use_id":"f2","type":"tool_result","is_error":true,"content":"boom"}]}}).to_string();
-        fs::write(&q, [call("x1", "f1", "coding-builder", "Build"), launched("f1", "q1"), notice("f1", "failed"), call("x2", "f2", "coding-builder", "Build again"), err].join("\n") + "\n").unwrap();
+        fs::write(
+            &q,
+            [
+                call("x1", "f1", "coding-builder", "Build"),
+                launched("f1", "q1"),
+                notice("f1", "failed"),
+                call("x2", "f2", "coding-builder", "Build again"),
+                err,
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
         let ended: Vec<Option<String>> = read_leader(&q).unwrap().runs.into_iter().map(|r| r.ended).collect();
         assert_eq!(ended, [Some("failed".to_string()), Some("failed".to_string())]);
         // No file: nothing. An empty one: nothing spent, nothing run.

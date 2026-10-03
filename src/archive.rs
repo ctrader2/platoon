@@ -12,7 +12,7 @@
 
 use crate::model::Session;
 use crate::settings::MAX_AUTO_ARCHIVE_DAYS;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     fs, io,
@@ -192,7 +192,8 @@ impl Archive {
         // Restores older than any auto-archive age can no longer matter.
         let oldest = now.saturating_sub((MAX_AUTO_ARCHIVE_DAYS + 1) * 86_400);
         self.touched.retain(|_, at| *at >= oldest);
-        let text = serde_json::to_string_pretty(&json!({ "version": 1, "archived": sorted(&self.ids), "touched": sorted(&self.touched) })).unwrap_or_default();
+        let text = serde_json::to_string_pretty(&json!({ "version": 1, "archived": sorted(&self.ids), "touched": sorted(&self.touched) }))
+            .unwrap_or_default();
         let tmp = self.path.with_extension("json.tmp");
         fs::write(&tmp, text)?;
         fs::rename(&tmp, &self.path)?;
@@ -348,7 +349,19 @@ mod tests {
             description: String::new(),
             last_active: last_active_secs * 1000,
             archived: false,
-            procs: if running { vec![crate::model::Proc { pid: 1, started_at: 0, hosted: true, background: None, stale: false, parked: false, moved_to: None }] } else { vec![] },
+            procs: if running {
+                vec![crate::model::Proc {
+                    pid: 1,
+                    started_at: 0,
+                    hosted: true,
+                    background: None,
+                    stale: false,
+                    parked: false,
+                    moved_to: None,
+                }]
+            } else {
+                vec![]
+            },
             haystack: String::new(),
             name_source: crate::model::NameSource::Folder,
             summary: String::new(),

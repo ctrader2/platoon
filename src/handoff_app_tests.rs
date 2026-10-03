@@ -80,7 +80,10 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     assert_eq!(fake.calls(), 0, "and it asked Claude nothing");
     key(&mut app, KeyCode::Char('h'));
     assert!(matches!(app.mode, Mode::Handoff) && app.handoff.state == HandoffState::Asking, "the box opens while the call is out");
-    assert_eq!((app.handoff.session.as_str(), app.handoff.project_name.as_str(), app.handoff.cwd.clone()), ("sess-1", "Web shop", shop(&w)));
+    assert_eq!(
+        (app.handoff.session.as_str(), app.handoff.project_name.as_str(), app.handoff.cwd.clone()),
+        ("sess-1", "Web shop", shop(&w))
+    );
     wait_ready(&mut app);
     assert_eq!(app.handoff.state, HandoffState::Ready);
 
@@ -490,7 +493,11 @@ fn a_session_still_running_says_so_and_its_spend_counts_its_subagents_and_each_a
     fs::write(&path, t).unwrap();
     let sub = path.with_extension("").join("subagents");
     fs::create_dir_all(&sub).unwrap();
-    fs::write(sub.join("agent-a.jsonl"), serde_json::json!({"type":"assistant","message":{"id":"msg-s","usage":{"input_tokens":9,"output_tokens":300}}}).to_string() + "\n").unwrap();
+    fs::write(
+        sub.join("agent-a.jsonl"),
+        serde_json::json!({"type":"assistant","message":{"id":"msg-s","usage":{"input_tokens":9,"output_tokens":300}}}).to_string() + "\n",
+    )
+    .unwrap();
     w.live("sess-1", &shop(&w), crate::testkit::now_ms(), "idle");
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
@@ -771,7 +778,8 @@ fn the_session_start_hook_marks_the_project_it_places_a_session_into() {
     let (w, _fake) = world("joined-hook");
     let id = project_id(&w);
     let _ = fs::remove_file(crate::notesrun::due_path(&w.cache, &id));
-    let input = serde_json::json!({"session_id": "brand-new", "source": "startup", "cwd": "x", "hook_event_name": "SessionStart"}).to_string();
+    let input =
+        serde_json::json!({"session_id": "brand-new", "source": "startup", "cwd": "x", "hook_event_name": "SessionStart"}).to_string();
     let out = crate::sessionhook::session_start(&input, Some(&id), &w.config, &w.cache);
     assert!(out.is_some_and(|o| o.contains("Sell socks.")), "the notes still go to the session");
     assert_eq!(Projects::open(&w.config).project_id_of("brand-new"), Some(id.as_str()));

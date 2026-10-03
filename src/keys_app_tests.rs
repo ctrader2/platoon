@@ -7,14 +7,14 @@
 use crate::app::{App, Mode, Pane, SqFocus};
 use crate::client::Client;
 use crate::editors::Editor;
-use crate::host::{read_frame, F_INPUT};
+use crate::host::{F_INPUT, read_frame};
 use crate::testkit::World;
 use crate::tickets::{NewTicket, Tickets};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use std::{
     fs,
@@ -43,7 +43,10 @@ fn alt(app: &mut App, c: char) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -306,7 +309,13 @@ fn the_back_key_stops_the_notes_editor_and_otherwise_every_key_is_the_editors() 
     let path = w.base.join("slow-editor");
     fs::write(&path, "#!/bin/sh\necho EDITING\nexec sleep 30\n").unwrap();
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    app.set_editors_for_test(vec![Editor { id: "slow".into(), name: "slow".into(), program: path.to_string_lossy().into_owned(), args: Vec::new(), terminal: true }]);
+    app.set_editors_for_test(vec![Editor {
+        id: "slow".into(),
+        name: "slow".into(),
+        program: path.to_string_lossy().into_owned(),
+        args: Vec::new(),
+        terminal: true,
+    }]);
     let mut s = app.settings().get();
     s.notes_editor = "slow".into();
     crate::settings::save(&w.config, &s).unwrap();

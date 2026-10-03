@@ -11,7 +11,7 @@
 //! whatever happens.
 
 use crate::projects::{self, Projects};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, io::Read, path::Path};
 
 /// FNV-1a, 64 bits: stable across builds and Rust versions (a changed hash would only resend the notes once).
@@ -77,7 +77,11 @@ pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cach
     let mut projects = Projects::open(config);
     // A squad's leader belongs to its ticket, never to the project: it gets the notes of its ticket's project and is
     // never placed in `projects.json`, whatever `PLATOON_PROJECT` says.
-    let leader = if projects.of(session).is_none() { crate::tickets::find_leader(config, session).and_then(|(p, _, _)| projects.get(&p).cloned()) } else { None };
+    let leader = if projects.of(session).is_none() {
+        crate::tickets::find_leader(config, session).and_then(|(p, _, _)| projects.get(&p).cloned())
+    } else {
+        None
+    };
     if projects.of(session).is_none() && leader.is_none() {
         let fresh = matches!(source, "startup" | "clear");
         match env_project.filter(|p| fresh && !p.is_empty()) {
@@ -141,7 +145,12 @@ mod tests {
             Rig { config: base.join("config"), cache: base.join("cache"), base }
         }
         fn run(&self, session: &str, source: &str, env: Option<&str>) -> Option<String> {
-            session_start(&json!({"session_id": session, "source": source, "cwd": "/tmp", "hook_event_name": "SessionStart"}).to_string(), env, &self.config, &self.cache)
+            session_start(
+                &json!({"session_id": session, "source": source, "cwd": "/tmp", "hook_event_name": "SessionStart"}).to_string(),
+                env,
+                &self.config,
+                &self.cache,
+            )
         }
         fn notes(&self, p: &Projects, id: &str, text: &str) {
             let path = p.notes_path(id);
@@ -231,11 +240,25 @@ mod tests {
         r.notes(&p, &b, "notes of b");
         let mut t = crate::tickets::Tickets::open(&r.config, &a);
         let n = t.add(crate::tickets::NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &crate::tickets::Leader {
+                squad: "coding".into(),
+                session: "lead-1".into(),
+                started: 1,
+                names: Default::default(),
+                snapshot: None,
+            },
+            &[],
+        )
+        .unwrap();
         let before = fs::read_to_string(Projects::open(&r.config).path()).unwrap();
         // Even with PLATOON_PROJECT naming the other project (it must never get that far, but if it did).
         let text = context(&r.run("lead-1", "startup", Some(&b)).expect("the ticket's project's notes"));
-        assert!(text.starts_with("These are the notes of the project \"a\" that your ticket belongs to") && text.ends_with("notes of a"), "{text}");
+        assert!(
+            text.starts_with("These are the notes of the project \"a\" that your ticket belongs to") && text.ends_with("notes of a"),
+            "{text}"
+        );
         assert_eq!(fs::read_to_string(Projects::open(&r.config).path()).unwrap(), before, "projects.json is untouched");
         assert!(Projects::open(&r.config).of("lead-1").is_none());
         assert_eq!(r.run("lead-1", "resume", None), None, "sent once, like any session");

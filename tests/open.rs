@@ -117,7 +117,11 @@ impl World {
     fn save_transcript(&self, id: &str) {
         let dir = self.claude.join("projects").join("-tmp-x");
         fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join(format!("{id}.jsonl")), format!("{{\"type\":\"user\",\"cwd\":\"{}\",\"sessionId\":\"{id}\"}}\n", self.work.display())).unwrap();
+        fs::write(
+            dir.join(format!("{id}.jsonl")),
+            format!("{{\"type\":\"user\",\"cwd\":\"{}\",\"sessionId\":\"{id}\"}}\n", self.work.display()),
+        )
+        .unwrap();
     }
 }
 

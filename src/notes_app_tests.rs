@@ -8,9 +8,9 @@ use crate::notes;
 use crate::testkit::World;
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use std::{
     fs,
@@ -38,7 +38,10 @@ fn typed(app: &mut App, text: &str) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -348,7 +351,8 @@ fn the_pane_says_in_one_line_when_platoon_last_updated_the_notes_and_where_they_
     let buf = term.backend().buffer().clone();
     // The color of the cell where `word` starts.
     let at = |word: &str| {
-        let row = (0..buf.area.height).find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().contains(word)).unwrap();
+        let row =
+            (0..buf.area.height).find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect::<String>().contains(word)).unwrap();
         let line: String = (0..buf.area.width).map(|x| buf[(x, row)].symbol()).collect();
         let col = line[..line.find(word).unwrap()].chars().count() as u16;
         buf[(col, row)].fg

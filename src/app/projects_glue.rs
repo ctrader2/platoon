@@ -13,10 +13,8 @@ pub const TOP_PROJECTS: usize = 1;
 pub const TOP_SQUADS: usize = 2;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
-pub const PTABS: &[(&str, &str)] = &[
-    ("Active", "No projects yet. Press n to make one."),
-    ("Archived", "No archived projects. Press a on a project to archive it."),
-];
+pub const PTABS: &[(&str, &str)] =
+    &[("Active", "No projects yet. Press n to make one."), ("Archived", "No archived projects. Press a on a project to archive it.")];
 
 /// The three panes of a project's screen: Sessions over Tickets on the left, Notes on the right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -498,7 +496,9 @@ impl App {
                     let hooks_missing = !setup::notes_hook_installed(self.reader.root()) || !setup::stop_hook_installed(self.reader.root());
                     if hooks_missing && !self.projects.hook_told() {
                         let _ = self.projects.set_hook_told();
-                        msg.push_str(". To hand a project's notes to its sessions, and keep them up to date, run `platoon setup` once more.");
+                        msg.push_str(
+                            ". To hand a project's notes to its sessions, and keep them up to date, run `platoon setup` once more.",
+                        );
                         self.notice = Some((msg, Instant::now(), AUTO_ARCHIVE_NOTICE_FOR));
                     } else {
                         self.notify(msg);
@@ -630,7 +630,8 @@ impl App {
         let busy = running.iter().any(|s| s.status == Status::Busy);
         let outside = running.iter().any(|s| s.procs.iter().any(|p| !p.hosted));
         if busy || outside {
-            self.mode = Mode::Confirm(Confirm::ArchiveProject { id: p.id.clone(), name: p.name.clone(), running: running.len(), busy, outside });
+            self.mode =
+                Mode::Confirm(Confirm::ArchiveProject { id: p.id.clone(), name: p.name.clone(), running: running.len(), busy, outside });
         } else {
             self.archive_project(&p.id);
         }
@@ -640,7 +641,8 @@ impl App {
     /// the archive key does it (stopped on a worker thread, archived once their process has exited).
     pub(super) fn archive_project(&mut self, id: &str) {
         let Some(name) = self.projects.get(id).map(|p| p.name.clone()) else { return };
-        let members: Vec<(String, String, bool)> = self.archivable_members(id).iter().map(|s| (s.id.clone(), s.name.clone(), !s.procs.is_empty())).collect();
+        let members: Vec<(String, String, bool)> =
+            self.archivable_members(id).iter().map(|s| (s.id.clone(), s.name.clone(), !s.procs.is_empty())).collect();
         let ids: Vec<String> = members.iter().map(|m| m.0.clone()).collect();
         if let Err(e) = self.projects.archive(id, &ids) {
             return self.report_projects_error(e);

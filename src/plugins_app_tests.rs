@@ -6,13 +6,13 @@
 //! config); the catalog is a temp folder standing in for the one built into platoon.
 
 use crate::app::{App, Confirm, Mode, PlugState};
-use crate::plugins::testing::{bump, catalog_dir, from, list_in_index, write_catalog, GOOD_THEME};
+use crate::plugins::testing::{GOOD_THEME, bump, catalog_dir, from, list_in_index, write_catalog};
 use crate::testkit::World;
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 
 fn key(app: &mut App, code: KeyCode) {
@@ -26,7 +26,10 @@ fn ch(app: &mut App, c: char) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -78,9 +81,23 @@ fn the_plugin_screen_installs_a_theme_plugin_from_the_catalog_whose_theme_is_lab
     assert!(shown.contains("3 Squads") && !shown.contains("Plugins"), "three tabs: {shown}");
     open_tab(&mut app);
     let rows = app.pl.rows();
-    assert_eq!(rows.iter().map(|r| (r.manifest.id.as_str(), r.state.clone())).collect::<Vec<_>>(), [("sea-themes", PlugState::Available), ("dusk", PlugState::Available)]);
+    assert_eq!(
+        rows.iter().map(|r| (r.manifest.id.as_str(), r.state.clone())).collect::<Vec<_>>(),
+        [("sea-themes", PlugState::Available), ("dusk", PlugState::Available)]
+    );
     let shown = flat(&draw(&mut term, &app));
-    for want in ["Settings · Plugins", "sea-themes name", "dusk name", "Not installed", "What sea-themes is.", "Adds 1 theme: Deep Water", "By Someone", "Needs platoon 0.1.0 or newer", "enter install", "ctrl+space back to settings"] {
+    for want in [
+        "Settings · Plugins",
+        "sea-themes name",
+        "dusk name",
+        "Not installed",
+        "What sea-themes is.",
+        "Adds 1 theme: Deep Water",
+        "By Someone",
+        "Needs platoon 0.1.0 or newer",
+        "enter install",
+        "ctrl+space back to settings",
+    ] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
     // Where it comes from isn't a line of its own any more, and there is nothing to fetch.
@@ -183,7 +200,10 @@ fn an_empty_catalog_is_said_plainly_in_the_settings_and_f_does_nothing() {
     app.pl.store.install(&dir, crate::plugins::Origin::Folder { path: "/home/u/dusk".into() }).unwrap();
     app.plugins_changed_for_test();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove ctrl+space back"), "{shown}");
+    assert!(
+        shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove ctrl+space back"),
+        "{shown}"
+    );
     assert!(shown.contains("What dusk is."), "its description under the list: {shown}");
 }
 
@@ -195,7 +215,14 @@ fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_
     install(&mut app, "dusk");
     // A newer sea-themes in the catalog, and a third plugin not installed.
     let newer = GOOD_THEME.replace("#14181f", "#111820");
-    write_catalog(&cat, &[("sea-themes", "1.1.0", &[("Deep Water", newer.as_str())]), ("dusk", "0.3.0", &[("Dusk", DUSK)]), ("moss", "2.0.0", &[("Moss", GOOD_THEME)])]);
+    write_catalog(
+        &cat,
+        &[
+            ("sea-themes", "1.1.0", &[("Deep Water", newer.as_str())]),
+            ("dusk", "0.3.0", &[("Dusk", DUSK)]),
+            ("moss", "2.0.0", &[("Moss", GOOD_THEME)]),
+        ],
+    );
     app.pl.use_catalog(from(&cat));
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings) && app.settings_tab == crate::settings::TAB_PLUGINS);
@@ -203,13 +230,19 @@ fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_
     let shown = draw(&mut term, &app);
     // One line each: the name, its version, and where it stands in plain words.
     let line = |name: &str| shown.lines().find(|l| l.contains(name)).unwrap_or_else(|| panic!("{name}: {shown}")).to_string();
-    for (name, version, state) in [("sea-themes name", "1.1.0", "Update ready"), ("dusk name", "0.3.0", "Installed"), ("moss name", "2.0.0", "Available")] {
+    for (name, version, state) in
+        [("sea-themes name", "1.1.0", "Update ready"), ("dusk name", "0.3.0", "Installed"), ("moss name", "2.0.0", "Available")]
+    {
         let l = line(name);
         assert!(l.contains(&format!("{name}  {version}")) && l.contains(&format!(" {state} ")), "{name}: {l}");
     }
     let flat_shown = flat(&shown);
     // (dusk was selected last on the plugin screen, so it is here: its description under the list.)
-    for want in ["What dusk is.", "Enter opens a plugin: what it adds, and install, update or remove.", "↑↓ move enter open d remove ctrl+space back"] {
+    for want in [
+        "What dusk is.",
+        "Enter opens a plugin: what it adds, and install, update or remove.",
+        "↑↓ move enter open d remove ctrl+space back",
+    ] {
         assert!(flat_shown.contains(want), "{want}: {flat_shown}");
     }
     assert!(!flat_shown.contains("press 4"), "{flat_shown}");
@@ -316,8 +349,14 @@ fn enter_opens_the_plugin_screen_on_that_plugin_and_back_returns_to_the_settings
     assert_eq!(app.pl.selected, 1);
     // The footer's back is clickable too.
     let _ = draw(&mut term, &app);
-    let back = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::Action(crate::app::Action::Cancel))).map(|(r, _)| *r).unwrap();
-    app.on_mouse(ratatui::crossterm::event::MouseEvent { kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), column: back.x, row: back.y, modifiers: KeyModifiers::NONE });
+    let back =
+        app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::Action(crate::app::Action::Cancel))).map(|(r, _)| *r).unwrap();
+    app.on_mouse(ratatui::crossterm::event::MouseEvent {
+        kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        column: back.x,
+        row: back.y,
+        modifiers: KeyModifiers::NONE,
+    });
     assert!(matches!(app.mode, Mode::Settings) && app.setting == 1);
     // Out of the settings: the list, where q quits.
     key(&mut app, KeyCode::Esc);
@@ -416,7 +455,13 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.pl.review.as_ref().and_then(|r| r.reading), Some(2));
     let shown = flat(&draw(&mut term, &app));
-    for want in ["Agent: change-reader · from changelog name", "This is what Claude will follow, with your permissions:", "Its system prompt", "Read the commits and the diff since the last release", "ctrl+space back to the list"] {
+    for want in [
+        "Agent: change-reader · from changelog name",
+        "This is what Claude will follow, with your permissions:",
+        "Its system prompt",
+        "Read the commits and the diff since the last release",
+        "ctrl+space back to the list",
+    ] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
     assert!(!shown.contains("y install"), "the full view only reads: {shown}");
@@ -441,7 +486,10 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     assert!(matches!(app.mode, Mode::Plugins));
     app.refresh_until_for_test(20, "the install", |a| !a.plugins_busy());
     let notice = app.active_notice().unwrap_or_default().to_string();
-    assert!(notice.contains("changelog name is installed: 1 skill, 1 squad, 2 agents added. Its squads are on the Squads tab (3)"), "{notice}");
+    assert!(
+        notice.contains("changelog name is installed: 1 skill, 1 squad, 2 agents added. Its squads are on the Squads tab (3)"),
+        "{notice}"
+    );
     assert!(skill.is_file());
 
     key(&mut app, KeyCode::Esc);
@@ -464,11 +512,22 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     assert!(shown.contains("c copy to change") && !shown.contains("x remove") && !shown.contains("enter change"), "{shown}");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List), "no name box");
-    assert_eq!(app.active_notice(), Some("changelog squad comes with the plugin changelog name, so it can't be changed here. c makes a copy of your own to change; the squad stays as the plugin has it."));
+    assert_eq!(
+        app.active_notice(),
+        Some(
+            "changelog squad comes with the plugin changelog name, so it can't be changed here. c makes a copy of your own to change; the squad stays as the plugin has it."
+        )
+    );
     key(&mut app, KeyCode::Char('x'));
     key(&mut app, KeyCode::Char('d'));
     assert!(matches!(app.mode, Mode::List));
-    assert!(app.active_notice().unwrap().contains("comes with the plugin changelog name: removing the plugin (in the settings: s, then Plugins) takes it off"), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice()
+            .unwrap()
+            .contains("comes with the plugin changelog name: removing the plugin (in the settings: s, then Plugins) takes it off"),
+        "{:?}",
+        app.active_notice()
+    );
     assert!(!crate::squadfile::dir(&w.config).exists(), "nothing written to the user's squads");
     // c: a copy of the user's own, which can be changed.
     key(&mut app, KeyCode::Esc);
@@ -478,7 +537,11 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     let mine = app.sqt.listed().unwrap().clone();
     assert_eq!((mine.kind, mine.name()), (crate::squadfile::Kind::Own, "changelog squad copy"));
     assert!(crate::squadfile::path(&w.config, &mine.id).is_file());
-    assert_eq!(mine.squad.as_ref().unwrap().agent_ids(), ["plugin:changelog/change-reader", "plugin:changelog/changelog-writer", "editor"], "the copy uses the plugin's agents");
+    assert_eq!(
+        mine.squad.as_ref().unwrap().agent_ids(),
+        ["plugin:changelog/change-reader", "plugin:changelog/changelog-writer", "editor"],
+        "the copy uses the plugin's agents"
+    );
     // The Agents list: the plugin's agents under its name, read only.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Right);
@@ -493,7 +556,11 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Char(' '));
-    assert!(app.active_notice().unwrap().starts_with("change-reader comes with the plugin changelog name, so it can't be changed here."), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("change-reader comes with the plugin changelog name, so it can't be changed here."),
+        "{:?}",
+        app.active_notice()
+    );
     assert!(!crate::agentfile::dir(&w.config).exists(), "nothing written to the user's agents");
 
     // Removing the plugin: asked, naming the user's squad that uses its agents; afterwards that squad needs fixing.
@@ -501,7 +568,12 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
     open_tab(&mut app);
     ch(&mut app, 'd');
     let Mode::Confirm(Confirm::RemovePlugin { extra, .. }) = &app.mode else { panic!("asked first") };
-    assert!(extra.contains("Its skills leave Claude Code's skills folder") && extra.contains("Tickets its squads already have keep working") && extra.contains("Your squad changelog squad copy uses its agents"), "{extra}");
+    assert!(
+        extra.contains("Its skills leave Claude Code's skills folder")
+            && extra.contains("Tickets its squads already have keep working")
+            && extra.contains("Your squad changelog squad copy uses its agents"),
+        "{extra}"
+    );
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Remove changelog name?") && shown.contains("Your squad changelog squad copy uses its agents"), "{shown}");
     ch(&mut app, 'y');
@@ -520,11 +592,19 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
 fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_after_the_plugin_is_removed() {
     use crate::tickets::{NewTicket, Tickets};
     let w = World::new("plug-squad-ticket");
-    let s = crate::settings::Settings { tokens_enabled: true, tokens_asked: true, auto_archive_days: 0, squads_at_once: 1, ..Default::default() };
+    let s = crate::settings::Settings {
+        tokens_enabled: true,
+        tokens_asked: true,
+        auto_archive_days: 0,
+        squads_at_once: 1,
+        ..Default::default()
+    };
     crate::settings::save(&w.config, &s).unwrap();
     w.transcript("user-1", "/tmp", "make a basket page", 10);
     let src = crate::squadplugin::testing::plugin(&w.base.join("src"), "changelog", "1.0.0");
-    crate::plugins::store_for(&w.config).install(&src, crate::plugins::Origin::Folder { path: src.to_string_lossy().into_owned() }).unwrap();
+    crate::plugins::store_for(&w.config)
+        .install(&src, crate::plugins::Origin::Folder { path: src.to_string_lossy().into_owned() })
+        .unwrap();
     let mut app = w.app();
     let fake = crate::testkit::AiFake::new("plug-squad-ticket");
     fake.reply_default(r#"{"fits":true,"reason":"It fits."}"#);
@@ -557,7 +637,10 @@ fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_afte
     app.tk.selected = Some(app.ticket_rows()[at]);
     ch(&mut app, 'a');
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("changelog squad") && shown.contains("From changelog name. Writes the changelog entry for a release."), "{shown}");
+    assert!(
+        shown.contains("changelog squad") && shown.contains("From changelog name. Writes the changelog entry for a release."),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
     hand(&mut app, 1);
@@ -621,7 +704,13 @@ fn an_update_that_changes_an_agents_instructions_is_shown_again_with_the_changes
     assert!(matches!(app.mode, Mode::PluginReview), "asked again, with what changed: {:?}", app.active_notice());
     let mut term = Terminal::new(TestBackend::new(130, 36)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    for want in ["update plugin", "Update changelog name from 1.0.0 to 1.1.0?", "Its instructions changed. Read the ones marked new or changed", "Agent change-reader · changed", "y update"] {
+    for want in [
+        "update plugin",
+        "Update changelog name from 1.0.0 to 1.1.0?",
+        "Its instructions changed. Read the ones marked new or changed",
+        "Agent change-reader · changed",
+        "y update",
+    ] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
     assert!(!shown.contains("changelog-writer · changed"), "only what changed is marked: {shown}");
@@ -775,7 +864,11 @@ fn a_newer_platoon_updates_its_theme_plugins_quietly_says_so_once_and_asks_about
     // No: it stays, and that version isn't asked about again; the settings still say an update is ready.
     ch(&mut app, 'n');
     assert!(matches!(app.mode, Mode::List));
-    assert!(app.active_notice().unwrap().starts_with("changelog name stays at 1.0.0; platoon won't ask about 1.1.0 again."), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("changelog name stays at 1.0.0; platoon won't ask about 1.1.0 again."),
+        "{:?}",
+        app.active_notice()
+    );
     assert_eq!(store.get("changelog").unwrap().manifest.version, "1.0.0");
     let row = app.pl.rows().into_iter().find(|r| r.manifest.id == "changelog").unwrap();
     assert_eq!(row.state, PlugState::Update);

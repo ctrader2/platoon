@@ -89,7 +89,10 @@ impl Fake {
         if register {
             fs::write(
                 env.root.join("sessions").join(format!("{}.json", child.id())),
-                format!(r#"{{"pid":{},"sessionId":"sess-1","cwd":"/tmp","kind":"interactive","startedAt":{started_at},"status":"idle"}}"#, child.id()),
+                format!(
+                    r#"{{"pid":{},"sessionId":"sess-1","cwd":"/tmp","kind":"interactive","startedAt":{started_at},"status":"idle"}}"#,
+                    child.id()
+                ),
             )
             .unwrap();
         }
@@ -196,7 +199,9 @@ fn uncertainty_fails_open() {
 fn register_as(env: &Env, pid: u32, kind: &str, started_at: u64) {
     fs::write(
         env.root.join("sessions").join(format!("{pid}.json")),
-        format!(r#"{{"pid":{pid},"sessionId":"sess-1","cwd":"/tmp","kind":"{kind}","startedAt":{started_at},"status":"idle","jobId":"sess-1"}}"#),
+        format!(
+            r#"{{"pid":{pid},"sessionId":"sess-1","cwd":"/tmp","kind":"{kind}","startedAt":{started_at},"status":"idle","jobId":"sess-1"}}"#
+        ),
     )
     .unwrap();
 }

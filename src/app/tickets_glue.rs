@@ -53,7 +53,14 @@ pub struct TicketsState {
 
 impl TicketsState {
     pub fn new() -> Self {
-        Self { store: None, selected: None, unfolded: false, open: None, body_top: Cell::new(0), pick: TicketPick { kind: PickKind::Folders, number: 0, selected: 0 } }
+        Self {
+            store: None,
+            selected: None,
+            unfolded: false,
+            open: None,
+            body_top: Cell::new(0),
+            pick: TicketPick { kind: PickKind::Folders, number: 0, selected: 0 },
+        }
     }
 }
 
@@ -262,7 +269,10 @@ impl App {
         if self.sessions.iter().any(|s| s.id == from.session) {
             self.jump_to(&from.session);
         } else {
-            self.notify(format!("The conversation #{number} came from ({}) isn't in platoon's list any more.", crate::claude::short_id(&from.session)));
+            self.notify(format!(
+                "The conversation #{number} came from ({}) isn't in platoon's list any more.",
+                crate::claude::short_id(&from.session)
+            ));
         }
     }
 
@@ -407,7 +417,9 @@ impl App {
             KeyCode::Down => self.move_ticket_pick(1),
             KeyCode::Char('g') | KeyCode::Home => self.tk.pick.selected = 0,
             KeyCode::Char('G') | KeyCode::End => self.tk.pick.selected = self.ticket_pick_options().len().saturating_sub(1),
-            KeyCode::Char('d' | 'x') | KeyCode::Delete | KeyCode::Backspace if self.tk.pick.kind == PickKind::Folders => self.remove_ticket_folder(),
+            KeyCode::Char('d' | 'x') | KeyCode::Delete | KeyCode::Backspace if self.tk.pick.kind == PickKind::Folders => {
+                self.remove_ticket_folder()
+            }
             _ => {}
         }
     }
@@ -462,7 +474,9 @@ impl App {
         // Follow it on the pane: under the divider (the divider is picked while that is folded).
         self.tk.selected = Some(TRow::Ticket(number));
         match pid {
-            Some(pid) if self.stop_squad(number, pid) => self.notify(format!("#{number} is Cancelled. Stopping its squad's session; its conversation is kept.")),
+            Some(pid) if self.stop_squad(number, pid) => {
+                self.notify(format!("#{number} is Cancelled. Stopping its squad's session; its conversation is kept."))
+            }
             _ => self.notify(format!("#{number} is Cancelled now. It is listed under Done and cancelled.")),
         }
     }

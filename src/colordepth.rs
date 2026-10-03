@@ -111,7 +111,14 @@ mod tests {
         assert!(!no_color_with(&env(Some(""))), "empty counts as unset");
         assert!(!no_color_with(&env(None)));
         let mut buf = Buffer::empty(Rect::new(0, 0, 3, 1));
-        buf.set_style(Rect::new(0, 0, 3, 1), Style::new().fg(Color::Rgb(1, 2, 3)).bg(Color::Indexed(9)).underline_color(Color::Red).add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED));
+        buf.set_style(
+            Rect::new(0, 0, 3, 1),
+            Style::new()
+                .fg(Color::Rgb(1, 2, 3))
+                .bg(Color::Indexed(9))
+                .underline_color(Color::Red)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED | Modifier::REVERSED),
+        );
         strip(&mut buf);
         for cell in &buf.content {
             assert_eq!((cell.fg, cell.bg, cell.underline_color), (Color::Reset, Color::Reset, Color::Reset));
@@ -220,6 +227,10 @@ mod tests {
         // The override wins both ways.
         assert_eq!(d(&[("PLATOON_COLORS", "256"), ("COLORTERM", "truecolor")]), Depth::Indexed256);
         assert_eq!(d(&[("PLATOON_COLORS", "TrueColor")]), Depth::TrueColor);
-        assert_eq!(d(&[("PLATOON_COLORS", "bogus"), ("COLORTERM", "truecolor")]), Depth::TrueColor, "a value that means nothing is ignored");
+        assert_eq!(
+            d(&[("PLATOON_COLORS", "bogus"), ("COLORTERM", "truecolor")]),
+            Depth::TrueColor,
+            "a value that means nothing is ignored"
+        );
     }
 }

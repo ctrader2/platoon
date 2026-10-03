@@ -3,8 +3,12 @@
 //! everything on every refresh, or state that grows without limit, not small regressions.
 
 use crate::index::{Indexer, Scanner};
-use crate::testkit::{iso, now_ms, World};
-use ratatui::{backend::TestBackend, crossterm::event::{KeyCode, KeyEvent, KeyModifiers}, Terminal};
+use crate::testkit::{World, iso, now_ms};
+use ratatui::{
+    Terminal,
+    backend::TestBackend,
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+};
 use serde_json::json;
 use std::{
     fs,
@@ -33,7 +37,9 @@ fn block() -> &'static str {
     static BLOCK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     BLOCK.get_or_init(|| {
         let at = now_ms() - 3_000_000;
-        (0..40).map(|k| format!("{}\n{}\n", line_assistant("/work/big", 40_000 + k, at), line_user("/work/big", "continue", at + 1000))).collect()
+        (0..40)
+            .map(|k| format!("{}\n{}\n", line_assistant("/work/big", 40_000 + k, at), line_user("/work/big", "continue", at + 1000)))
+            .collect()
     })
 }
 
@@ -247,7 +253,12 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     let cold_time = t.elapsed();
     store.save();
     let file = fs::metadata(w.cache.join("prompts.jsonl")).unwrap().len();
-    println!("prompt index, cold: {} transcripts, {} MB read in {cold_time:?}; prompts.jsonl is {} KB", cold.read, cold.bytes / 1_000_000, file / 1000);
+    println!(
+        "prompt index, cold: {} transcripts, {} MB read in {cold_time:?}; prompts.jsonl is {} KB",
+        cold.read,
+        cold.bytes / 1_000_000,
+        file / 1000
+    );
     assert_eq!((cold.listed, cold.read, cold.rebuilt), (CONVERSATIONS, CONVERSATIONS - JUNK + JUNK, 0));
     assert!(cold.bytes <= total && cold.bytes > total - 1000 * CONVERSATIONS as u64, "each byte once: {} of {total}", cold.bytes);
     assert!(cold_time < Duration::from_secs(120), "cold prompt index took {cold_time:?}");
@@ -255,7 +266,10 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     // Claude's last words are found in the same pass, from the newest assistant text only: 200 characters of the
     // fat lorem-ipsum entry that ends each real conversation.
     let snapshot = store.snapshot();
-    let with_reply = snapshot.iter().filter(|f| f.reply.as_ref().is_some_and(|r| r.starts_with("lorem ipsum") && r.chars().count() == crate::claude::REPLY_CHARS)).count();
+    let with_reply = snapshot
+        .iter()
+        .filter(|f| f.reply.as_ref().is_some_and(|r| r.starts_with("lorem ipsum") && r.chars().count() == crate::claude::REPLY_CHARS))
+        .count();
     println!("prompt index: {with_reply} of {} conversations have a last reply", snapshot.len());
     assert_eq!(with_reply, snapshot.len(), "every conversation with prompts ends with a reply");
 
@@ -278,11 +292,13 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     drop(f);
     let after = fs::metadata(big).unwrap().len();
     let mut fresh = entries.clone();
-    let stamp = |p: &Path| std::sync::Arc::new(crate::index::Entry {
-        mtime: fs::metadata(p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
-        size: fs::metadata(p).unwrap().len(),
-        ..(**entries.iter().find(|e| e.path == *p).unwrap()).clone()
-    });
+    let stamp = |p: &Path| {
+        std::sync::Arc::new(crate::index::Entry {
+            mtime: fs::metadata(p).unwrap().modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64,
+            size: fs::metadata(p).unwrap().len(),
+            ..(**entries.iter().find(|e| e.path == *p).unwrap()).clone()
+        })
+    };
     let at = fresh.iter().position(|e| e.path == *big).unwrap();
     fresh[at] = stamp(big);
     let t = Instant::now();
@@ -291,7 +307,12 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
         got.extend(u.upserts);
         true
     });
-    println!("prompt index, one appended prompt and reply of a {} MB file: {:?}, {} bytes read", before / 1_000_000, t.elapsed(), append.bytes);
+    println!(
+        "prompt index, one appended prompt and reply of a {} MB file: {:?}, {} bytes read",
+        before / 1_000_000,
+        t.elapsed(),
+        append.bytes
+    );
     assert_eq!((append.read, append.rebuilt, append.bytes), (1, 0, after - before));
     assert!(got[0].prompts.last().unwrap().contains("quebec"));
     assert_eq!(got[0].reply.as_deref(), Some("Newest words from Claude"), "the reply moved on by reading only the appended bytes");
@@ -368,11 +389,21 @@ fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
     use crate::summaries::{Entry as Named, Summaries};
     let w = World::new("perf-smart");
     generate(&w.root, CONVERSATIONS);
-    let entry = |i: usize| (format!("{i:08}-aaaa-bbbb-cccc-dddddddddddd"), Named { name: format!("Task {i}"), summary: format!("Working on task number {i}."), covers: 1, model: "haiku".into(), at: 1 });
+    let entry = |i: usize| {
+        (
+            format!("{i:08}-aaaa-bbbb-cccc-dddddddddddd"),
+            Named { name: format!("Task {i}"), summary: format!("Working on task number {i}."), covers: 1, model: "haiku".into(), at: 1 },
+        )
+    };
     let mut sums = Summaries::open(&w.config);
     let t = Instant::now();
     sums.set_many(&(JUNK..CONVERSATIONS).map(entry).collect::<Vec<_>>()).unwrap();
-    println!("summaries.json: {} entries written in {:?}, {} KB", CONVERSATIONS - JUNK, t.elapsed(), fs::metadata(w.config.join("summaries.json")).unwrap().len() / 1000);
+    println!(
+        "summaries.json: {} entries written in {:?}, {} KB",
+        CONVERSATIONS - JUNK,
+        t.elapsed(),
+        fs::metadata(w.config.join("summaries.json")).unwrap().len() / 1000
+    );
     // One batch of thirty arriving in a file that size: what the app does after every call.
     let t = Instant::now();
     sums.set_many(&(JUNK..JUNK + 30).map(entry).collect::<Vec<_>>()).unwrap();
@@ -403,7 +434,10 @@ fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
         app.refresh_for_test();
     }
     let off = t.elapsed() / 10;
-    println!("smart features, {CONVERSATIONS} conversations all named: a refresh takes {on:?} with them on, {off:?} off; calls made: {}", fake.calls());
+    println!(
+        "smart features, {CONVERSATIONS} conversations all named: a refresh takes {on:?} with them on, {off:?} off; calls made: {}",
+        fake.calls()
+    );
     assert_eq!(fake.calls(), 0, "everything is named: nothing to send");
     assert!(on < off + Duration::from_millis(500), "the scheduler added {:?} to a refresh", on.saturating_sub(off));
 }
@@ -413,7 +447,8 @@ fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
 #[test]
 fn archiving_never_waits_for_a_process_and_stays_quick_with_five_thousand_rows() {
     let key = |app: &mut crate::app::App, c: char| app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    let hosted = |pid| crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() };
+    let hosted =
+        |pid| crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() };
     let limit = Duration::from_millis(500);
 
     // A few conversations, the process takes 1.5 s to exit.
@@ -469,8 +504,11 @@ fn archiving_never_waits_for_a_process_and_stays_quick_with_five_thousand_rows()
     term.draw(|f| crate::ui::draw(f, &app)).unwrap();
     let frame = t.elapsed();
     println!("archive key: {small_running:?} (a few rows, process 1.5 s to exit), {small_idle:?} (a few rows, nothing running)");
-    println!("archive key: {big_running:?} ({CONVERSATIONS} rows, process 1.5 s to exit), {big_idle:?} ({CONVERSATIONS} rows, nothing running; a reload alone {reload:?}, a frame {frame:?})");
-    for (what, took) in [("small running", small_running), ("small idle", small_idle), ("big running", big_running), ("big idle", big_idle)] {
+    println!(
+        "archive key: {big_running:?} ({CONVERSATIONS} rows, process 1.5 s to exit), {big_idle:?} ({CONVERSATIONS} rows, nothing running; a reload alone {reload:?}, a frame {frame:?})"
+    );
+    for (what, took) in [("small running", small_running), ("small idle", small_idle), ("big running", big_running), ("big idle", big_idle)]
+    {
         assert!(took < limit, "{what}: the archive key took {took:?}");
     }
 }

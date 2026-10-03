@@ -13,7 +13,7 @@ use crate::index::Scanner;
 use crate::instructions;
 use crate::ledger::Ledger;
 use crate::prompts::{FilePrompts, Store};
-use crate::settings::{self, thousands, Settings};
+use crate::settings::{self, Settings, thousands};
 use crate::smart::{self, Conv, Digest, Misses, Rules, Tier};
 use crate::summaries::{Entry, Summaries};
 use crate::usage;
@@ -21,7 +21,7 @@ use std::{
     collections::HashSet,
     io::{BufRead, Write},
     path::Path,
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
     thread,
     time::Duration,
 };
@@ -139,7 +139,8 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
             if n_active == 1 { "" } else { "s" },
             active_estimate.plain()
         );
-        let _ = writeln!(out, "Naming them now, newest first. Press Ctrl+C to skip: platoon carries on in the background while it is open.");
+        let _ =
+            writeln!(out, "Naming them now, newest first. Press Ctrl+C to skip: platoon carries on in the background while it is open.");
         ai::watch_interrupt();
         outcome = name_active(env, &held, &mut sums, &settings, n_active, out, interrupted);
         ai::stop_watching_interrupt();
@@ -166,7 +167,10 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
             let (mut current, corrupt) = settings::load(env.config);
             current.ai_archived = true;
             if !corrupt && settings::save(env.config, &current).is_ok() {
-                let _ = writeln!(out, "Archived conversations will be named slowly in the background. Change it any time in the settings, on the Sessions tab.");
+                let _ = writeln!(
+                    out,
+                    "Archived conversations will be named slowly in the background. Change it any time in the settings, on the Sessions tab."
+                );
             } else {
                 let _ = writeln!(out, "Couldn't save that choice, so archived conversations are skipped.");
             }
@@ -178,7 +182,15 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
 }
 
 /// Name the active conversations, a batch at a time, with a one-line progress display.
-fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Settings, total: usize, out: &mut dyn Write, interrupted: &dyn Fn() -> bool) -> ScanOutcome {
+fn name_active(
+    env: &ScanEnv,
+    held: &[Held],
+    sums: &mut Summaries,
+    settings: &Settings,
+    total: usize,
+    out: &mut dyn Write,
+    interrupted: &dyn Fn() -> bool,
+) -> ScanOutcome {
     let ledger = Ledger::open(env.cache);
     let used_before = ledger.today(usage::now()).tokens();
     let mut misses = Misses::default();
@@ -208,7 +220,10 @@ fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Se
             let rules = Rules { settings, sums, misses: &misses, boosted: &boosted, now };
             let pending = smart::pending(&all, &rules, false);
             smart::next_batch(&pending, settings.ai_batch_size as usize).map(|(idx, _)| {
-                idx.into_iter().filter(|&i| all[i].fp.path.exists()).map(|i| (i, smart::digest(all[i].fp, sums.get(all[i].id), settings))).collect::<Vec<(usize, Digest)>>()
+                idx.into_iter()
+                    .filter(|&i| all[i].fp.path.exists())
+                    .map(|i| (i, smart::digest(all[i].fp, sums.get(all[i].id), settings)))
+                    .collect::<Vec<(usize, Digest)>>()
             })
         };
         let Some(batch) = batch else { break };
@@ -216,10 +231,18 @@ fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Se
             break;
         }
         if let Err(r) = ai::gate(settings, "names", env.cache, now) {
-            return finish(out, ScanOutcome::Stopped { named }, &format!("Stopping: {} platoon will carry on later while it is open.", r.plain()));
+            return finish(
+                out,
+                ScanOutcome::Stopped { named },
+                &format!("Stopping: {} platoon will carry on later while it is open.", r.plain()),
+            );
         }
         let digests: Vec<Digest> = batch.iter().map(|(_, d)| d.clone()).collect();
-        let mut req = Request::new("names", smart::names_system_with(&instructions::guidance(env.config, instructions::NAMES)), smart::names_prompt(&digests));
+        let mut req = Request::new(
+            "names",
+            smart::names_system_with(&instructions::guidance(env.config, instructions::NAMES)),
+            smart::names_prompt(&digests),
+        );
         let cancel = ai::Cancel::new();
         req.cancel = cancel.clone();
         let (tx, rx) = mpsc::channel();
@@ -240,9 +263,27 @@ fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Se
         };
         let reply = match answer {
             Some(Ok(r)) => r,
-            Some(Err(AiError::Cancelled)) => return finish(out, ScanOutcome::Skipped { named }, "Skipped. platoon will name the rest in the background while it is open."),
-            Some(Err(e)) => return finish(out, ScanOutcome::Stopped { named }, &format!("Stopping: {} platoon will carry on later while it is open.", e.plain())),
-            None => return finish(out, ScanOutcome::Stopped { named }, "Stopping: the call ended without an answer. platoon will carry on later while it is open."),
+            Some(Err(AiError::Cancelled)) => {
+                return finish(
+                    out,
+                    ScanOutcome::Skipped { named },
+                    "Skipped. platoon will name the rest in the background while it is open.",
+                );
+            }
+            Some(Err(e)) => {
+                return finish(
+                    out,
+                    ScanOutcome::Stopped { named },
+                    &format!("Stopping: {} platoon will carry on later while it is open.", e.plain()),
+                );
+            }
+            None => {
+                return finish(
+                    out,
+                    ScanOutcome::Stopped { named },
+                    "Stopping: the call ended without an answer. platoon will carry on later while it is open.",
+                );
+            }
         };
         let mut changes = Vec::new();
         let mut got = vec![false; batch.len()];
@@ -262,7 +303,11 @@ fn name_active(env: &ScanEnv, held: &[Held], sums: &mut Summaries, settings: &Se
             }
         }
         if let Err(e) = sums.set_many(&changes) {
-            return finish(out, ScanOutcome::Stopped { named }, &format!("Couldn't save the names ({e}). platoon will carry on later while it is open."));
+            return finish(
+                out,
+                ScanOutcome::Stopped { named },
+                &format!("Couldn't save the names ({e}). platoon will carry on later while it is open."),
+            );
         }
         named += changes.len();
         progress(out, named);
@@ -287,11 +332,21 @@ mod tests {
 
     fn fill(w: &World, active: usize, archived: usize) {
         for i in 1..=active {
-            w.transcript(&format!("act{i}"), &format!("/work/act{i}"), &format!("please look into the active topic number {i} for me"), 10 * i as u64);
+            w.transcript(
+                &format!("act{i}"),
+                &format!("/work/act{i}"),
+                &format!("please look into the active topic number {i} for me"),
+                10 * i as u64,
+            );
         }
         let mut a = Archive::open(&w.config);
         for i in 1..=archived {
-            w.transcript(&format!("arc{i}"), &format!("/work/arc{i}"), &format!("please look into the archived topic number {i} for me"), 5000 + i as u64);
+            w.transcript(
+                &format!("arc{i}"),
+                &format!("/work/arc{i}"),
+                &format!("please look into the archived topic number {i} for me"),
+                5000 + i as u64,
+            );
             a.archive(&format!("arc{i}"), usage::now()).unwrap();
         }
     }
@@ -320,8 +375,15 @@ mod tests {
         let (outcome, shown) = run(&w, &fake, "\n", true, &never);
         assert_eq!(outcome, ScanOutcome::Done { named: 3 });
         // The local estimate first, labelled as one, in plain words.
-        assert!(shown.contains("Smart names: 3 active conversations to name, about ") && shown.contains("tokens, roughly 1 call (an estimate, made on this computer)."), "{shown}");
-        assert!(shown.contains("newest first") && shown.contains("Ctrl+C") && shown.contains("carries on in the background while it is open"), "{shown}");
+        assert!(
+            shown.contains("Smart names: 3 active conversations to name, about ")
+                && shown.contains("tokens, roughly 1 call (an estimate, made on this computer)."),
+            "{shown}"
+        );
+        assert!(
+            shown.contains("newest first") && shown.contains("Ctrl+C") && shown.contains("carries on in the background while it is open"),
+            "{shown}"
+        );
         // The one-line progress display: rewritten in place, ending at all of them.
         assert!(shown.contains("\r  Naming conversations: 0 of 3") && shown.contains("Naming conversations: 3 of 3"), "{shown}");
         assert!(shown.contains("Used about 450 tokens."), "{shown}");
@@ -352,7 +414,11 @@ mod tests {
         let fake = AiFake::new("sc-own");
         let (outcome, _) = run(&w, &fake, "\n", true, &never);
         assert_eq!(outcome, ScanOutcome::Done { named: 2 });
-        assert!(fake.has_arg(1, &crate::instructions::compose("Name them after the file they are about.", smart::NAMES_FIXED)), "{:?}", fake.argv(1));
+        assert!(
+            fake.has_arg(1, &crate::instructions::compose("Name them after the file they are about.", smart::NAMES_FIXED)),
+            "{:?}",
+            fake.argv(1)
+        );
     }
 
     #[test]
@@ -488,11 +554,16 @@ mod tests {
         let w = World::new("sc-limit");
         fill(&w, 2, 0);
         on(&w, |s| s.ai_daily_tokens = 20_000);
-        Ledger::open(&w.cache).record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true).unwrap();
+        Ledger::open(&w.cache)
+            .record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
+            .unwrap();
         let fake = AiFake::new("sc-limit");
         let (outcome, shown) = run(&w, &fake, "\n", true, &never);
         assert_eq!(outcome, ScanOutcome::Stopped { named: 0 });
-        assert!(shown.contains("Stopping: Today's token limit is used up") && shown.contains("platoon will carry on later while it is open."), "{shown}");
+        assert!(
+            shown.contains("Stopping: Today's token limit is used up") && shown.contains("platoon will carry on later while it is open."),
+            "{shown}"
+        );
         assert_eq!(fake.calls(), 0);
         // A failed call: the plain message, the back-off started, nothing kept.
         let w = World::new("sc-fail");
@@ -502,14 +573,23 @@ mod tests {
         fake.fail(Some("Not logged in · Please run /login"));
         let (outcome, shown) = run(&w, &fake, "\n", true, &never);
         assert_eq!(outcome, ScanOutcome::Stopped { named: 0 });
-        assert!(shown.contains("Stopping: Claude isn't signed in.") && !shown.contains("Not logged in"), "Claude's own words are not shown: {shown}");
+        assert!(
+            shown.contains("Stopping: Claude isn't signed in.") && !shown.contains("Not logged in"),
+            "Claude's own words are not shown: {shown}"
+        );
         assert!(Ledger::open(&w.cache).load().backoff.is_some());
         assert!(!w.config.join("summaries.json").exists());
         // A program that isn't there.
         let w = World::new("sc-missing");
         fill(&w, 1, 0);
         on(&w, |_| {});
-        let env = ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, program: "/nonexistent/claude-not-here".into(), interactive: true };
+        let env = ScanEnv {
+            config: &w.config,
+            cache: &w.cache,
+            root: &w.root,
+            program: "/nonexistent/claude-not-here".into(),
+            interactive: true,
+        };
         let mut out = Vec::new();
         let outcome = offer_scan(&env, &mut std::io::Cursor::new(Vec::new()), &mut out, &never);
         assert_eq!(outcome, ScanOutcome::Stopped { named: 0 });
@@ -521,16 +601,25 @@ mod tests {
         let w = World::new("sc-writes");
         fill(&w, 2, 1);
         on(&w, |_| {});
-        let before: Vec<_> = fs::read_dir(w.root.join("projects/-some-project")).unwrap().flatten().map(|e| (e.file_name(), fs::read(e.path()).unwrap())).collect();
+        let before: Vec<_> = fs::read_dir(w.root.join("projects/-some-project"))
+            .unwrap()
+            .flatten()
+            .map(|e| (e.file_name(), fs::read(e.path()).unwrap()))
+            .collect();
         let fake = AiFake::new("sc-writes");
         run(&w, &fake, "\n", true, &never);
-        let after: Vec<_> = fs::read_dir(w.root.join("projects/-some-project")).unwrap().flatten().map(|e| (e.file_name(), fs::read(e.path()).unwrap())).collect();
+        let after: Vec<_> = fs::read_dir(w.root.join("projects/-some-project"))
+            .unwrap()
+            .flatten()
+            .map(|e| (e.file_name(), fs::read(e.path()).unwrap()))
+            .collect();
         let sorted = |mut v: Vec<(std::ffi::OsString, Vec<u8>)>| {
             v.sort();
             v
         };
         assert_eq!(sorted(before), sorted(after), "Claude's transcripts are untouched");
-        let mut in_config: Vec<String> = fs::read_dir(&w.config).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let mut in_config: Vec<String> =
+            fs::read_dir(&w.config).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         in_config.sort();
         assert_eq!(in_config, ["archive.json", "settings.json", "summaries.json"]);
         let text = fs::read_to_string(w.config.join("summaries.json")).unwrap();

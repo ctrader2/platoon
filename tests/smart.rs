@@ -5,7 +5,13 @@
 
 mod common;
 use common::*;
-use std::{fs, path::PathBuf, process::{Command, Stdio}, thread, time::Duration};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Stdio},
+    thread,
+    time::Duration,
+};
 
 struct Lab {
     base: PathBuf,
@@ -37,8 +43,17 @@ impl Lab {
         };
         let text = format!(
             "{}\n{}\n",
-            format!(r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{}","message":{{"role":"user","content":"{}"}}}}"#, cwd.display(), ts(secs - 5), prompt),
-            format!(r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"model":"claude-sonnet-5","content":[{{"type":"text","text":"On it."}}],"usage":{{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#, cwd.display(), ts(secs)),
+            format!(
+                r#"{{"type":"user","cwd":"{}","gitBranch":"main","timestamp":"{}","message":{{"role":"user","content":"{}"}}}}"#,
+                cwd.display(),
+                ts(secs - 5),
+                prompt
+            ),
+            format!(
+                r#"{{"type":"assistant","cwd":"{}","timestamp":"{}","message":{{"model":"claude-sonnet-5","content":[{{"type":"text","text":"On it."}}],"usage":{{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}}}}"#,
+                cwd.display(),
+                ts(secs)
+            ),
         );
         fs::write(self.dir("claude/projects/-work").join(format!("{id}.jsonl")), text).unwrap();
     }

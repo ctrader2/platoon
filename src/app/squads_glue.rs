@@ -10,7 +10,7 @@ use crate::instructions;
 use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, LeaderSetup, Place, Squad};
 use crate::tickets::{AgentNames, HandoverKind, Leader, State, Ticket, Tickets, Worktree};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::SystemTime;
 
 /// How long the commander's check may take before it is given up on (and nothing is handed over).
@@ -235,7 +235,10 @@ impl App {
             Some(format!("#{number} waits for #{first}, which isn't Done yet."))
         } else {
             // No folder at all is fine: the squad works in the ticket's own work folder then.
-            t.folders.iter().find(|f| !Path::new(f).is_dir()).map(|f| format!("{} doesn't exist any more. Press f to change #{number}'s folders.", dirs::tilde(f, &self.home)))
+            t.folders
+                .iter()
+                .find(|f| !Path::new(f).is_dir())
+                .map(|f| format!("{} doesn't exist any more. Press f to change #{number}'s folders.", dirs::tilde(f, &self.home)))
         };
         if let Some(why) = why {
             self.notify(why);
@@ -288,7 +291,8 @@ impl App {
     fn hand_to_squad(&mut self, number: u32, squad: Squad) {
         let Some(t) = self.ticket(number) else { return };
         if let Some(h) = t.handover.as_ref().filter(|h| h.squad == squad.id && h.kind == HandoverKind::Refused) {
-            self.mode = Mode::Confirm(Confirm::HandAnyway { number, squad: squad.id.clone(), title: t.title.clone(), says: h.says.clone() });
+            self.mode =
+                Mode::Confirm(Confirm::HandAnyway { number, squad: squad.id.clone(), title: t.title.clone(), says: h.says.clone() });
             return;
         }
         self.ask_commander(number, squad);
@@ -318,7 +322,11 @@ impl App {
             return;
         }
         let body = self.tk.store.as_ref().map(|s| s.body(&t)).unwrap_or_default();
-        let mut req = Request::new(squads::COMMANDER_FEATURE, squads::commander_system(&instructions::guidance(&self.config, instructions::COMMANDER)), String::new());
+        let mut req = Request::new(
+            squads::COMMANDER_FEATURE,
+            squads::commander_system(&instructions::guidance(&self.config, instructions::COMMANDER)),
+            String::new(),
+        );
         req.user_initiated = true;
         req.model = Some(squads::COMMANDER_MODEL);
         req.timeout = COMMANDER_TIMEOUT;
@@ -332,9 +340,14 @@ impl App {
         thread::spawn(move || {
             // Whether each folder is in git is looked up here too: a stat or two each, but on a network folder even
             // that can wait.
-            let facts: Vec<FolderFact> = t.folders.iter().map(|f| FolderFact { path: f.clone(), git: squads::in_git(Path::new(f)) }).collect();
+            let facts: Vec<FolderFact> =
+                t.folders.iter().map(|f| FolderFact { path: f.clone(), git: squads::in_git(Path::new(f)) }).collect();
             req.prompt = squads::commander_prompt(&checked, &t, &body, &facts);
-            let check = if never { Check::Failed("no stand-in for claude in this test".into()) } else { Check::from_answer(runner.run(&settings, &req)) };
+            let check = if never {
+                Check::Failed("no stand-in for claude in this test".into())
+            } else {
+                Check::from_answer(runner.run(&settings, &req))
+            };
             let _ = tx.send(Step::Checked(check));
         });
         self.begin_stage(&project, number, squad, Stage::Checking, rx);
@@ -479,12 +492,8 @@ impl App {
         let v: serde_json::Value = serde_json::from_str(&Tickets::open(&self.config, project).queued_crew(number)?).ok()?;
         let sv = v.get("squad")?;
         let squad = crate::squadfile::from_value(sv, sv.get("id")?.as_str()?).ok().filter(|s| s.id == id)?;
-        let agents = v
-            .get("agents")?
-            .as_array()?
-            .iter()
-            .filter_map(|a| crate::agentfile::from_value(a, a.get("id")?.as_str()?).ok())
-            .collect();
+        let agents =
+            v.get("agents")?.as_array()?.iter().filter_map(|a| crate::agentfile::from_value(a, a.get("id")?.as_str()?).ok()).collect();
         Some((squad, agents))
     }
 
@@ -498,7 +507,9 @@ impl App {
         if std::fs::create_dir_all(&self.config).is_err() {
             return false;
         }
-        let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.config.join("squad-line.lock")) else { return false };
+        let Ok(f) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(self.config.join("squad-line.lock")) else {
+            return false;
+        };
         // SAFETY: a plain advisory lock, not waited for, on a file we hold open; released when it is dropped.
         if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
             return false;
@@ -531,7 +542,8 @@ impl App {
             free -= 1;
             // A plugin removed since it joined the line: its squad and agents as they were then, from the copy kept.
             let kept = self.queued_crew(&project, number, &q.squad);
-            let squad = crate::squadfile::get(&self.config, &q.squad).or_else(|| kept.as_ref().filter(|_| crate::squadplugin::is_plugin(&q.squad)).map(|k| k.0.clone()));
+            let squad = crate::squadfile::get(&self.config, &q.squad)
+                .or_else(|| kept.as_ref().filter(|_| crate::squadplugin::is_plugin(&q.squad)).map(|k| k.0.clone()));
             let mut agents = crate::agentfile::all(&self.config);
             let gone: Vec<crate::agentfile::Agent> = kept
                 .map(|k| k.1)
@@ -634,7 +646,13 @@ impl App {
                 return;
             }
         };
-        let leader = Leader { squad: squad.id.to_string(), session: session.clone(), started: usage::now(), names: AgentNames::SquadRole, snapshot: Some(snapshot) };
+        let leader = Leader {
+            squad: squad.id.to_string(),
+            session: session.clone(),
+            started: usage::now(),
+            names: AgentNames::SquadRole,
+            snapshot: Some(snapshot),
+        };
         if let Err(e) = self.with_tickets(project, |s| s.start_leader(number, &leader, &worktrees)) {
             self.report_squad_error(e);
             return;
@@ -652,8 +670,11 @@ impl App {
         let from_line = self.sq.from_line.remove(&(project.to_string(), number));
         let show = !from_line && self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
         match self.launch_leader_in(project, number, Some(&first), show) {
-            Ok(()) if show => self.notify(format!("#{number} is with the {} squad now. {} goes back to the project.", squad.name, self.back_label())),
-            Ok(()) if from_line => self.notify(format!("A squad is free: #{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
+            Ok(()) if show => {
+                self.notify(format!("#{number} is with the {} squad now. {} goes back to the project.", squad.name, self.back_label()))
+            }
+            Ok(()) if from_line => self
+                .notify(format!("A squad is free: #{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Ok(()) => self.notify(format!("#{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
             Err(e) => {
                 // Only a New ticket is ever handed to a squad: that is what it goes back to.
@@ -692,7 +713,8 @@ impl App {
         // The work folder is made again if it has gone (a leader continued after it was deleted by hand).
         let work = crate::tickets::work_dir(&self.config, project, number);
         std::fs::create_dir_all(&work).map_err(|e| format!("couldn't make the ticket's work folder ({e})"))?;
-        let (dir, add_dirs) = squads::start_dirs(&t, launch.work_folder, &work.to_string_lossy()).ok_or_else(|| format!("#{number} has no folder to work in"))?;
+        let (dir, add_dirs) = squads::start_dirs(&t, launch.work_folder, &work.to_string_lossy())
+            .ok_or_else(|| format!("#{number} has no folder to work in"))?;
         if !Path::new(&dir).is_dir() {
             return Err(format!("{} doesn't exist any more", dirs::tilde(&dir, &self.home)));
         }
@@ -749,7 +771,8 @@ impl App {
                 .and_then(|text| Launch::from_json(&text))
                 .ok_or_else(|| "what it was started with can't be read any more".to_string());
         }
-        let squad = crate::squadfile::get(&self.config, &leader.squad).ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
+        let squad = crate::squadfile::get(&self.config, &leader.squad)
+            .ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
         let setup = LeaderSetup::load(&self.config, &self.settings.get());
         Ok(Launch::of(&crate::squadfile::Crew::load(&self.config, &squad), &setup, leader.names, Place::of(t)))
     }
@@ -807,7 +830,9 @@ impl App {
             return;
         }
         let Some(sock) = self.leader_host(&session).map(|h| h.sock.clone()) else {
-            self.notify(format!("#{number} may publish now. Its squad's session isn't running: open it with enter and tell it to go ahead."));
+            self.notify(format!(
+                "#{number} may publish now. Its squad's session isn't running: open it with enter and tell it to go ahead."
+            ));
             return;
         };
         let (rows, cols) = split_size(self.size);
@@ -847,7 +872,7 @@ pub fn split_size(size: (u16, u16)) -> (u16, u16) {
 /// Type `text` into a hosted session and press Enter, as a window of its own would: the words first, Enter a moment
 /// later (sent together, Claude would take the Enter as part of a paste).
 fn type_into(sock: &Path, rows: u16, cols: u16, text: &str) {
-    use crate::host::{size_payload, write_frame, F_INPUT, F_RESIZE};
+    use crate::host::{F_INPUT, F_RESIZE, size_payload, write_frame};
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(sock) else { return };
     if write_frame(&mut s, F_RESIZE, &size_payload(rows, cols)).is_err() {
         return;

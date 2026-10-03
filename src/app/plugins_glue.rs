@@ -210,7 +210,13 @@ impl PluginsState {
                     None if !e.problems.is_empty() => PlugState::Unavailable(e.problems.join("; ")),
                     None => PlugState::Available,
                 };
-                out.push(PlugRow { manifest: e.manifest.clone(), state, installed, entry: Some(e.clone()), download_bytes: e.download_bytes });
+                out.push(PlugRow {
+                    manifest: e.manifest.clone(),
+                    state,
+                    installed,
+                    entry: Some(e.clone()),
+                    download_bytes: e.download_bytes,
+                });
             }
         }
         for p in &self.installed {
@@ -355,7 +361,9 @@ impl App {
                     let _ = progress.send(JobMsg::Progress(p));
                 };
                 if let Err(e) = editorplugin::install_downloads(&store, &dirs, &report) {
-                    said = format!("{said} The code editor's downloads didn't finish: {e} Enter on it in the settings (s, then Plugins) tries again.");
+                    said = format!(
+                        "{said} The code editor's downloads didn't finish: {e} Enter on it in the settings (s, then Plugins) tries again."
+                    );
                 }
             }
             let _ = tx.send(JobMsg::Done(if failed.is_empty() { Ok(said) } else { Err(said) }));
@@ -420,9 +428,19 @@ impl App {
                         .pl
                         .progress
                         .values()
-                        .map(|p| if p.done + p.failed >= p.total && p.failed == 0 { format!("{} ✓", p.part.label()) } else { format!("{} {}/{}", p.part.label(), p.done, p.total) })
+                        .map(|p| {
+                            if p.done + p.failed >= p.total && p.failed == 0 {
+                                format!("{} ✓", p.part.label())
+                            } else {
+                                format!("{} {}/{}", p.part.label(), p.done, p.total)
+                            }
+                        })
                         .collect();
-                    let line = if parts.is_empty() { self.pl.job_label.clone() } else { format!("{} {}", self.pl.job_label.trim_end_matches('…'), parts.join("  ")) };
+                    let line = if parts.is_empty() {
+                        self.pl.job_label.clone()
+                    } else {
+                        format!("{} {}", self.pl.job_label.trim_end_matches('…'), parts.join("  "))
+                    };
                     self.notify(line);
                 }
             }
@@ -532,7 +550,9 @@ impl App {
         let Some(row) = self.pl.selected_row() else { return };
         if row.state != PlugState::Update {
             let msg = match row.state {
-                PlugState::FromFolder => format!("{} was installed from a folder: `platoon plugin add` that folder again to update it.", row.manifest.name),
+                PlugState::FromFolder => {
+                    format!("{} was installed from a folder: `platoon plugin add` that folder again to update it.", row.manifest.name)
+                }
                 _ if row.state.installed() => format!("{} is up to date.", row.manifest.name),
                 _ => format!("{} isn't installed.", row.manifest.name),
             };
@@ -576,7 +596,8 @@ impl App {
             self.notify("A plugin is being installed; wait for it to finish.");
             return;
         }
-        let in_use = self.themes.plugin_of(&self.theme.id).is_some() && self.theme.id.starts_with(&format!("{}{}/", plugins::THEME_PREFIX, p.id()));
+        let in_use =
+            self.themes.plugin_of(&self.theme.id).is_some() && self.theme.id.starts_with(&format!("{}{}/", plugins::THEME_PREFIX, p.id()));
         self.pl.from_settings = from_settings;
         if p.manifest.editor.is_some() && (self.editor_busy() || self.ed_open_now()) {
             self.notify("The code editor is being installed or is open; try again when it has finished.");
@@ -594,7 +615,14 @@ impl App {
         if let Some(w) = crate::squadplugin::removal_warning(&crate::squadplugin::users_of_plugin(&self.config, p.id())) {
             extra.push(w);
         }
-        self.mode = Mode::Confirm(Confirm::RemovePlugin { id: p.id().to_string(), name: m.name.clone(), adds: m.adds_words(), in_use, editor, extra: extra.join(" ") });
+        self.mode = Mode::Confirm(Confirm::RemovePlugin {
+            id: p.id().to_string(),
+            name: m.name.clone(),
+            adds: m.adds_words(),
+            in_use,
+            editor,
+            extra: extra.join(" "),
+        });
     }
 
     // ---- reading what a plugin adds before it is installed -------------------------------------------------------
@@ -642,7 +670,10 @@ impl App {
         if let Some(r) = r.filter(|r| r.at_start) {
             let (from, to) = r.update.clone().unwrap_or_default();
             match self.pl.store.decline_update(&r.id, &to) {
-                Ok(()) => self.notify(format!("{} stays at {from}; platoon won't ask about {to} again. The settings (s, then Plugins) can update it.", r.name)),
+                Ok(()) => self.notify(format!(
+                    "{} stays at {from}; platoon won't ask about {to} again. The settings (s, then Plugins) can update it.",
+                    r.name
+                )),
                 Err(e) => self.notify(format!("{} stays at {from}. ({e})", r.name)),
             }
             self.plugins_changed();
@@ -717,31 +748,39 @@ impl App {
         let dirs = self.ed.dirs.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let r = entry.unpack().and_then(|u| store.install_noting(u.dir(), Origin::Catalog)).map_err(|e| format!("Not installed: {e}")).and_then(|(o, notes)| {
-                let m = &o.plugin().manifest;
-                let mut said = match o {
-                    plugins::Outcome::Replaced { ref was, .. } if *was != m.version => format!("{} is updated from {was} to {}.", m.name, m.version),
-                    plugins::Outcome::Replaced { .. } => format!("{} {} is installed from the catalog.", m.name, m.version),
-                    _ if m.editor.is_some() => format!("{} is installed.", m.name),
-                    _ => format!("{} is installed: {} added. {}", m.name, m.adds_words(), plugins::next_words(m)),
-                };
-                for n in notes {
-                    said.push(' ');
-                    said.push_str(&n);
-                }
-                if m.editor.is_none() {
-                    return Ok(said.trim_end().to_string());
-                }
-                // The code editor: then what its table has that the editor folder doesn't.
-                let progress = tx.clone();
-                let report = move |p| {
-                    let _ = progress.send(JobMsg::Progress(p));
-                };
-                match editorplugin::install_downloads(&store, &dirs, &report) {
-                    Ok(_) => Ok(format!("{said} v on a session or a ticket opens it.")),
-                    Err(e) => Err(format!("{said} Its downloads didn't finish: {e} Enter on it in the settings' Plugins tab tries again.")),
-                }
-            });
+            let r = entry
+                .unpack()
+                .and_then(|u| store.install_noting(u.dir(), Origin::Catalog))
+                .map_err(|e| format!("Not installed: {e}"))
+                .and_then(|(o, notes)| {
+                    let m = &o.plugin().manifest;
+                    let mut said = match o {
+                        plugins::Outcome::Replaced { ref was, .. } if *was != m.version => {
+                            format!("{} is updated from {was} to {}.", m.name, m.version)
+                        }
+                        plugins::Outcome::Replaced { .. } => format!("{} {} is installed from the catalog.", m.name, m.version),
+                        _ if m.editor.is_some() => format!("{} is installed.", m.name),
+                        _ => format!("{} is installed: {} added. {}", m.name, m.adds_words(), plugins::next_words(m)),
+                    };
+                    for n in notes {
+                        said.push(' ');
+                        said.push_str(&n);
+                    }
+                    if m.editor.is_none() {
+                        return Ok(said.trim_end().to_string());
+                    }
+                    // The code editor: then what its table has that the editor folder doesn't.
+                    let progress = tx.clone();
+                    let report = move |p| {
+                        let _ = progress.send(JobMsg::Progress(p));
+                    };
+                    match editorplugin::install_downloads(&store, &dirs, &report) {
+                        Ok(_) => Ok(format!("{said} v on a session or a ticket opens it.")),
+                        Err(e) => {
+                            Err(format!("{said} Its downloads didn't finish: {e} Enter on it in the settings' Plugins tab tries again."))
+                        }
+                    }
+                });
             let _ = tx.send(JobMsg::Done(r));
         });
         self.pl.progress.clear();
@@ -762,7 +801,8 @@ impl App {
             match r {
                 Ok((p, removed)) => {
                     let name = p.map_or_else(|| "The code editor".to_string(), |p| p.manifest.name);
-                    let size = if removed.editor { format!(" ({})", crate::editor_install::megabytes(removed.bytes)) } else { String::new() };
+                    let size =
+                        if removed.editor { format!(" ({})", crate::editor_install::megabytes(removed.bytes)) } else { String::new() };
                     self.notify(format!("Removed {name} and everything it downloaded{size}. v still opens your other editors."));
                 }
                 Err(e) => self.notify(format!("Not removed: {e}")),
@@ -773,7 +813,12 @@ impl App {
         self.plugins_changed();
         let notes = |n: &[String]| if n.is_empty() { String::new() } else { format!(" {}", n.join(" ")) };
         match r {
-            Ok((Some(p), n)) if was_using => self.notify(format!("Removed {}. Its theme was in use, so platoon is back to {}.{}", p.manifest.name, self.theme.name, notes(&n))),
+            Ok((Some(p), n)) if was_using => self.notify(format!(
+                "Removed {}. Its theme was in use, so platoon is back to {}.{}",
+                p.manifest.name,
+                self.theme.name,
+                notes(&n)
+            )),
             Ok((Some(p), n)) => self.notify(format!("Removed {}.{}", p.manifest.name, notes(&n))),
             Ok((None, _)) => self.notify("That plugin wasn't installed."),
             Err(e) => self.notify(format!("Not removed: {e}")),

@@ -1,6 +1,6 @@
 //! Connection from platoon to a session host, plus the emulator screen it draws from.
 
-use crate::host::{read_frame, size_payload, write_frame, F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK};
+use crate::host::{F_INPUT, F_OUTPUT, F_RESIZE, SCROLLBACK, read_frame, size_payload, write_frame};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{
     io,
@@ -8,8 +8,8 @@ use std::{
     os::unix::net::UnixStream,
     path::Path,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex, MutexGuard,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
 };
@@ -152,11 +152,7 @@ pub fn key_bytes(k: KeyEvent, app_cursor: bool) -> Vec<u8> {
         }
     };
     let tilde = |n: u8| {
-        if m > 1 {
-            format!("\x1b[{n};{m}~").into_bytes()
-        } else {
-            format!("\x1b[{n}~").into_bytes()
-        }
+        if m > 1 { format!("\x1b[{n};{m}~").into_bytes() } else { format!("\x1b[{n}~").into_bytes() }
     };
     match k.code {
         KeyCode::Char(c) => {

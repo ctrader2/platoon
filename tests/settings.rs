@@ -244,7 +244,12 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     t.wait_for_all(&["Deep Sea", "yours"]);
     t.send(b"\r");
     t.wait_gone("sample");
-    until("the theme to reach the file", || fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok()).is_some_and(|v| v["theme"] == "user:deep-sea"));
+    until("the theme to reach the file", || {
+        fs::read_to_string(&file)
+            .ok()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            .is_some_and(|v| v["theme"] == "user:deep-sea")
+    });
     assert_eq!(saved(&base)["keep"], serde_json::json!({"me":[1,2]}), "the rest of the file is kept");
     t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
     t.wait_for("Deep Sea"); // the Theme row now shows it
@@ -291,7 +296,15 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
     t.wait_for("enter open");
     t.send(b"s");
     // At 80 columns the seven titles only fit with "Smart features" shortened to its first word.
-    t.wait_for_all(&["General", " Smart ", "Sessions   Projects", "Editors   Plugins", "Stop idle sessions after", "Settings file:", "ctrl+space back"]);
+    t.wait_for_all(&[
+        "General",
+        " Smart ",
+        "Sessions   Projects",
+        "Editors   Plugins",
+        "Stop idle sessions after",
+        "Settings file:",
+        "ctrl+space back",
+    ]);
     let (row, _) = t.find("General").unwrap();
     let screen = t.text();
     let col = |name: &str| col_on(&screen, row, name);
@@ -324,7 +337,12 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
 
     // The smart features tab carries the day's token count.
     click(&mut t, row, smart + 2);
-    t.wait_for_all(&["Enable features which require tokens", "Model for smart features", "Used today: 0 of 500,000 tokens", "ctrl+space back"]);
+    t.wait_for_all(&[
+        "Enable features which require tokens",
+        "Model for smart features",
+        "Used today: 0 of 500,000 tokens",
+        "ctrl+space back",
+    ]);
     t.wait_bg(row, smart, surface);
     // At 80x24 the whole popup fits: its frame, the tabs, the file and the hints, and no text touches the border.
     let whole = t.stable();

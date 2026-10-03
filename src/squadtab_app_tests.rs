@@ -5,7 +5,7 @@
 //! be read, and `a` on a ticket listing the user's own squads. Every directory is a temp dir (`World`); nothing here starts a session.
 
 use crate::agentfile;
-use crate::app::{App, ARow, Confirm, DRow, Mode, SqFocus, SqView};
+use crate::app::{ARow, App, Confirm, DRow, Mode, SqFocus, SqView};
 use crate::editors::Editor;
 use crate::squadfile::{self, Back, Crew, Kind};
 use crate::squads::{Launch, LeaderSetup};
@@ -13,12 +13,17 @@ use crate::testkit::{AiFake, World};
 use crate::tickets::{AgentNames, Leader, NewTicket, Tickets};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use serde_json::Value;
-use std::{fs, os::unix::fs::PermissionsExt, thread, time::{Duration, Instant}};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    thread,
+    time::{Duration, Instant},
+};
 
 fn key(app: &mut App, code: KeyCode) {
     app.on_key(KeyEvent::new(code, KeyModifiers::NONE));
@@ -37,7 +42,10 @@ fn typed(app: &mut App, text: &str) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -93,7 +101,13 @@ fn file(w: &World, id: &str) -> Value {
 /// Pick the entry of the small list that reads `label`, and take it.
 fn choose(app: &mut App, label: &str) {
     assert!(matches!(app.mode, Mode::SquadChoice), "{:?}", app.active_notice());
-    let at = app.sqt.choice.options.iter().position(|(l, _)| l.starts_with(label)).unwrap_or_else(|| panic!("no {label} in {:?}", app.sqt.choice.options));
+    let at = app
+        .sqt
+        .choice
+        .options
+        .iter()
+        .position(|(l, _)| l.starts_with(label))
+        .unwrap_or_else(|| panic!("no {label} in {:?}", app.sqt.choice.options));
     while app.sqt.choice.selected > at {
         key(app, KeyCode::Up);
     }
@@ -181,14 +195,23 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     let l = left(&shown);
     assert!(l.contains("▎ Coding 4 agents Built in Research 4 agents Built in Docs 3 agents Built in Summarize 1 agent Built in"), "{l}");
     let r = right(&shown);
-    for s in ["About", "Name Coding", "What it can do Makes a change to code", "Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.", "Workflow"] {
+    for s in [
+        "About",
+        "Name Coding",
+        "What it can do Makes a change to code",
+        "Every squad has the same leader: its system prompt and model are in Settings (s), on the Projects tab.",
+        "Workflow",
+    ] {
         assert!(r.contains(s), "{s}: {shown}");
     }
     for gone in ["Needs a folder", "Use a worktree", "Leader Model", "System prompt You are given one ticket"] {
         assert!(!f.contains(gone), "no {gone} on a squad any more: {f}");
     }
     assert!(!f.contains("Members"), "a squad has no members of its own any more: {f}");
-    assert!(f.contains("n describe a new squad or agent") && f.contains("c copy") && !f.contains("d delete") && f.contains("← → agents"), "{f}");
+    assert!(
+        f.contains("n describe a new squad or agent") && f.contains("c copy") && !f.contains("d delete") && f.contains("← → agents"),
+        "{f}"
+    );
     // The selected label of the switch is in the accent colour, the other dim; the selected squad has the surface.
     let t = app.effective_theme().clone();
     assert_eq!(fg(&term, find(&term, "[Squads]")), t.accent);
@@ -203,8 +226,17 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("● 3 reviewer Opus commands Reads the change against the ticket"), "{f}");
     assert!(f.contains("↩ back to step 2 (builder), at most twice") && f.contains("↩ back to step 2 (builder), at most once"), "{f}");
-    assert!(f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the ticket + Add a step"), "{f}");
-    assert!(f.contains("enter pick the agent") && f.contains("g go to the agent") && f.contains("b send back") && f.contains("ctrl+space back to the list"), "{f}");
+    assert!(
+        f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the ticket + Add a step"),
+        "{f}"
+    );
+    assert!(
+        f.contains("enter pick the agent")
+            && f.contains("g go to the agent")
+            && f.contains("b send back")
+            && f.contains("ctrl+space back to the list"),
+        "{f}"
+    );
     // Tab and Shift+arrows move between the panes; on the list, plain ← → switch the list.
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.sqt.focus, SqFocus::List);
@@ -242,7 +274,19 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     key(&mut app, KeyCode::Home);
     let f = flat(&draw(&mut term, &app));
     // The first agent's details: what it is, and the squads it is used in.
-    for s in ["Built in", "Agent", "A change here is a change in every squad that uses it.", "Name planner", "Model Opus", "Can change files No", "Can run commands Yes", "Can use the web No", "System prompt You are the planner.", "Used in", "Coding step 1"] {
+    for s in [
+        "Built in",
+        "Agent",
+        "A change here is a change in every squad that uses it.",
+        "Name planner",
+        "Model Opus",
+        "Can change files No",
+        "Can run commands Yes",
+        "Can use the web No",
+        "System prompt You are the planner.",
+        "Used in",
+        "Coding step 1",
+    ] {
         assert!(f.contains(s), "{s}: {f}");
     }
     assert!(f.contains("← → squads") && f.contains("n describe a new squad or agent"), "{f}");
@@ -277,17 +321,26 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
     go_agent(&mut app, "builder");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(right(&shown).contains("Used in Coding step 2 Careful coding step 2") && left(&shown).contains("builder Sonnet · 2 squads"), "{shown}");
+    assert!(
+        right(&shown).contains("Used in Coding step 2 Careful coding step 2") && left(&shown).contains("builder Sonnet · 2 squads"),
+        "{shown}"
+    );
     go_arow(&mut app, ARow::Model);
     key(&mut app, KeyCode::Enter);
     assert!(flat(&draw(&mut term, &app)).contains("Model for builder:"));
     choose(&mut app, "Opus");
     assert_eq!(app.active_notice(), Some("builder runs on Opus now, in every squad that uses it (Coding and Careful coding)."));
     let v = agent_file(&w, "builder");
-    assert_eq!((v["builtin"].as_str(), v["model"].as_str(), v["guidance"].as_str()), (Some("builder"), Some("opus"), Some(crate::squads::BUILDER_GUIDANCE)));
+    assert_eq!(
+        (v["builtin"].as_str(), v["model"].as_str(), v["guidance"].as_str()),
+        (Some("builder"), Some("opus"), Some(crate::squads::BUILDER_GUIDANCE))
+    );
     assert!(!squadfile::path(&w.config, "coding").exists(), "the squads themselves didn't change");
     let l = left(&draw(&mut term, &app));
-    assert!(l.contains("summarizer Sonnet · 1 squad User Modified ▎ builder Opus · 2 squads"), "a changed built-in, in a group of its own: {l}");
+    assert!(
+        l.contains("summarizer Sonnet · 1 squad User Modified ▎ builder Opus · 2 squads"),
+        "a changed built-in, in a group of its own: {l}"
+    );
     // Both squads show it, and both start with it.
     for (id, downs) in [("coding", 0), ("careful-coding", 4)] {
         key(&mut app, KeyCode::Esc);
@@ -301,7 +354,9 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
         let f = flat(&draw(&mut term, &app));
         assert!(f.contains("● 2 builder Opus files · commands"), "{id}: {f}");
         let crew = Crew::load(&w.config, &squadfile::get(&w.config, id).unwrap());
-        let agents: Value = serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents).unwrap();
+        let agents: Value =
+            serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents)
+                .unwrap();
         assert_eq!(agents[format!("{id}-builder")]["model"], "opus", "{id}");
     }
     // A switch: the tools follow, everywhere.
@@ -309,7 +364,10 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
     go_arow(&mut app, ARow::Web);
     key(&mut app, KeyCode::Char(' '));
     assert_eq!(app.active_notice(), Some("builder can use the web now, in every squad that uses it (Coding and Careful coding)."));
-    assert_eq!(crate::squads::tools_for(&agentfile::get(&w.config, "builder").unwrap()), ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]);
+    assert_eq!(
+        crate::squads::tools_for(&agentfile::get(&w.config, "builder").unwrap()),
+        ["Read", "Grep", "Glob", "Edit", "Write", "Bash", "WebSearch", "WebFetch"]
+    );
     // Put back as platoon has it, after asking.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Char('d'));
@@ -317,7 +375,11 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
     assert!(flat(&draw(&mut term, &app)).contains("Put builder back as platoon has it?"));
     key(&mut app, KeyCode::Char('y'));
     assert!(!agentfile::path(&w.config, "builder").exists() && agentfile::path(&w.config, "builder").with_extension("json.bak").exists());
-    assert!(app.active_notice().unwrap().starts_with("builder is as platoon has it again, in every squad that uses it"), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("builder is as platoon has it again, in every squad that uses it"),
+        "{:?}",
+        app.active_notice()
+    );
     assert_eq!(agentfile::get(&w.config, "builder").unwrap().model, "sonnet");
 }
 
@@ -359,7 +421,12 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Which agent does step 4:") && f.contains("planner · Opus · runs commands") && f.contains("report-writer · Sonnet · changes files"), "{f}");
+    assert!(
+        f.contains("Which agent does step 4:")
+            && f.contains("planner · Opus · runs commands")
+            && f.contains("report-writer · Sonnet · changes files"),
+        "{f}"
+    );
     assert_eq!(app.sqt.choice.options.last().map(|(l, _)| l.as_str()), Some("+ New agent"), "at the bottom");
     assert_eq!(app.sqt.choice.options[app.sqt.choice.selected].1, "verifier", "on the one it has");
     choose(&mut app, "reviewer");
@@ -377,12 +444,26 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(squadfile::get(&w.config, "coding").unwrap().workflow[3].agent, "test-runner");
     let v = agent_file(&w, "test-runner");
-    assert_eq!((v["name"].as_str(), v["guidance"].as_str(), v["model"].as_str(), v.get("builtin")), (Some("Test runner"), Some(""), Some("sonnet"), None));
+    assert_eq!(
+        (v["name"].as_str(), v["guidance"].as_str(), v["model"].as_str(), v.get("builtin")),
+        (Some("Test runner"), Some(""), Some("sonnet"), None)
+    );
     assert_eq!((app.sqt.view, app.sqt.focus, app.arow()), (SqView::Agents, SqFocus::Detail, Some(ARow::Prompt)));
-    assert!(app.active_notice().unwrap().starts_with("Made the agent \"Test runner\" and put it on step 4. It needs a system prompt before the squad can start"), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice()
+            .unwrap()
+            .starts_with("Made the agent \"Test runner\" and put it on step 4. It needs a system prompt before the squad can start"),
+        "{:?}",
+        app.active_notice()
+    );
     let shown = draw(&mut term, &app);
     let f = right(&shown);
-    assert!(f.contains("Squads can't use it until this is fixed: Test runner has no system prompt yet.") && f.contains("System prompt None yet: enter writes one") && f.contains("Your own"), "{f}");
+    assert!(
+        f.contains("Squads can't use it until this is fixed: Test runner has no system prompt yet.")
+            && f.contains("System prompt None yet: enter writes one")
+            && f.contains("Your own"),
+        "{f}"
+    );
     assert!(left(&shown).contains("Your own ▎ Test runner needs fixing"), "{shown}");
     // Until it has one, the squad says so and can't start.
     let s = squadfile::get(&w.config, "coding").unwrap();
@@ -392,7 +473,11 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     key(&mut app, KeyCode::Home);
     go(&mut app, DRow::Name);
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("User Modified · needs fixing") && f.contains("Can't be handed a ticket until this is fixed: Step 4's agent isn't ready"), "{f}");
+    assert!(
+        f.contains("User Modified · needs fixing")
+            && f.contains("Can't be handed a ticket until this is fixed: Step 4's agent isn't ready"),
+        "{f}"
+    );
     // Written in the editor: ready.
     go_agent(&mut app, "test-runner");
     go_arow(&mut app, ARow::Prompt);
@@ -400,7 +485,10 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     assert!(matches!(app.mode, Mode::PickEditor));
     key(&mut app, KeyCode::Enter);
     wait_for_editor(&mut app);
-    assert_eq!(app.active_notice(), Some("Saved Test runner's system prompt, in every squad that uses it (Coding), from the next ticket each is handed."));
+    assert_eq!(
+        app.active_notice(),
+        Some("Saved Test runner's system prompt, in every squad that uses it (Coding), from the next ticket each is handed.")
+    );
     assert_eq!(agent_file(&w, "test-runner")["guidance"], "You are the test runner. Run the tests.");
     let s = squadfile::get(&w.config, "coding").unwrap();
     assert!(squadfile::problems(&s, &agentfile::all(&w.config)).is_empty());
@@ -436,13 +524,21 @@ fn a_new_step_can_be_given_a_new_agent_made_there() {
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::List));
     let s = squadfile::get(&w.config, "coding").unwrap();
-    assert_eq!((s.workflow.len(), s.workflow[4].agent.as_str(), s.workflow[4].does.as_str()), (5, "release-writer", "Writes the release notes."));
+    assert_eq!(
+        (s.workflow.len(), s.workflow[4].agent.as_str(), s.workflow[4].does.as_str()),
+        (5, "release-writer", "Writes the release notes.")
+    );
     let v = agent_file(&w, "release-writer");
     assert_eq!((v["name"].as_str(), v["guidance"].as_str()), (Some("Release writer"), Some("")));
-    assert_eq!((app.sqt.view, app.sqt.focus, app.sqt.agent().map(|a| a.id.as_str()), app.arow()), (SqView::Agents, SqFocus::Detail, Some("release-writer"), Some(ARow::Prompt)));
+    assert_eq!(
+        (app.sqt.view, app.sqt.focus, app.sqt.agent().map(|a| a.id.as_str()), app.arow()),
+        (SqView::Agents, SqFocus::Detail, Some("release-writer"), Some(ARow::Prompt))
+    );
     assert_eq!(
         app.active_notice(),
-        Some("Made the agent \"Release writer\" and added step 5, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.")
+        Some(
+            "Made the agent \"Release writer\" and added step 5, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one."
+        )
     );
     let f = right(&draw(&mut term, &app));
     assert!(f.contains("Used in Coding step 5") && f.contains("System prompt None yet: enter writes one"), "{f}");
@@ -484,13 +580,19 @@ fn deleting_an_agent_a_squad_uses_is_refused_naming_the_squads() {
     assert!(matches!(app.mode, Mode::List), "nothing to ask: it can't go");
     assert_eq!(
         app.active_notice(),
-        Some("Test runner is used in the Coding (step 2) and Careful coding (step 2) squads, so it can't be deleted. Give those steps another agent first.")
+        Some(
+            "Test runner is used in the Coding (step 2) and Careful coding (step 2) squads, so it can't be deleted. Give those steps another agent first."
+        )
     );
     assert!(agentfile::path(&w.config, "test-runner").exists());
     // A built-in is never deleted.
     key(&mut app, KeyCode::Home);
     key(&mut app, KeyCode::Char('d'));
-    assert!(app.active_notice().unwrap().starts_with("planner is built into platoon, so it can't be deleted."), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("planner is built into platoon, so it can't be deleted."),
+        "{:?}",
+        app.active_notice()
+    );
     // No longer used: deleted after asking, kept as a .bak.
     squadfile::remove(&w.config, "careful-coding").unwrap();
     squadfile::remove(&w.config, "coding").unwrap();
@@ -504,7 +606,10 @@ fn deleting_an_agent_a_squad_uses_is_refused_naming_the_squads() {
     assert!(agentfile::path(&w.config, "test-runner").exists());
     key(&mut app, KeyCode::Char('d'));
     key(&mut app, KeyCode::Char('y'));
-    assert!(!agentfile::path(&w.config, "test-runner").exists() && agentfile::path(&w.config, "test-runner").with_extension("json.bak").exists());
+    assert!(
+        !agentfile::path(&w.config, "test-runner").exists()
+            && agentfile::path(&w.config, "test-runner").with_extension("json.bak").exists()
+    );
     assert_eq!(app.active_notice(), Some("Deleted the agent \"Test runner\" (kept as test-runner.json.bak in the agents folder)."));
     assert!(!app.sqt.agents.iter().any(|l| l.id == "test-runner"));
 }
@@ -539,7 +644,10 @@ fn n_asks_whether_to_describe_a_squad_or_an_agent_and_an_agent_is_drafted_on_its
     assert!(matches!(app.mode, Mode::SquadChoice));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("What to describe for Claude to draft:") && f.contains("▎ A new squad") && f.contains("A new agent"), "on the Squads list, a squad first: {f}");
+    assert!(
+        f.contains("What to describe for Claude to draft:") && f.contains("▎ A new squad") && f.contains("A new agent"),
+        "on the Squads list, a squad first: {f}"
+    );
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::Char('n'));
@@ -559,12 +667,21 @@ fn n_asks_whether_to_describe_a_squad_or_an_agent_and_an_agent_is_drafted_on_its
     assert!(fake.has_arg(1, &agentfile::draft_system(agentfile::DRAFT_GUIDANCE)));
     assert!(fake.stdin(1).contains("The agent the user wants, in their words:\nwrites failing tests first"), "{}", fake.stdin(1));
     let day = crate::ledger::Ledger::open(app.cache_for_test()).load();
-    assert_eq!(day.days.values().next().unwrap().features.get(agentfile::DRAFT_FEATURE).map(|f| f.calls), Some(1), "its tokens are counted");
+    assert_eq!(
+        day.days.values().next().unwrap().features.get(agentfile::DRAFT_FEATURE).map(|f| f.calls),
+        Some(1),
+        "its tokens are counted"
+    );
     assert!(app.sqt.agent_draft_selected() && app.sqt.focus == SqFocus::Detail && app.sqt.view == SqView::Agents);
     assert!(app.active_notice().unwrap().starts_with("Here is a draft of the agent \"test-writer\"."), "{:?}", app.active_notice());
     app.notice = None;
     let shown = draw(&mut term, &app);
-    assert!(left(&shown).contains("Draft, not saved ▎ test-writer Sonnet") && right(&shown).contains("Can change files Yes") && flat(&shown).contains("ctrl+s save draft"), "{shown}");
+    assert!(
+        left(&shown).contains("Draft, not saved ▎ test-writer Sonnet")
+            && right(&shown).contains("Can change files Yes")
+            && flat(&shown).contains("ctrl+s save draft"),
+        "{shown}"
+    );
     assert!(!agentfile::path(&w.config, "test-writer").exists(), "not saved yet");
     // Changed before it is saved: in memory only.
     go_arow(&mut app, ARow::Model);
@@ -588,7 +705,12 @@ fn n_asks_whether_to_describe_a_squad_or_an_agent_and_an_agent_is_drafted_on_its
     assert_eq!(app.sqt.text.text, "writes failing tests first", "what was described is offered again");
     key(&mut app, KeyCode::Enter);
     app.refresh_until_for_test(20, "the draft", |a| !a.squad_drafting());
-    assert_eq!(app.active_notice(), Some("Claude's draft couldn't be used: test-writer's model \"gpt\" isn't one platoon offers (Opus, Sonnet or Haiku). Press n to try again."));
+    assert_eq!(
+        app.active_notice(),
+        Some(
+            "Claude's draft couldn't be used: test-writer's model \"gpt\" isn't one platoon offers (Opus, Sonnet or Haiku). Press n to try again."
+        )
+    );
     // Discarding a draft agent asks.
     fake.reply_default(AGENT_DRAFT);
     key(&mut app, KeyCode::Char('n'));
@@ -612,7 +734,10 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     assert!(matches!(app.mode, Mode::SquadText));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("describe a new squad") && f.contains("enter ask Claude to draft it") && f.contains("using your agents where they fit"), "{f}");
+    assert!(
+        f.contains("describe a new squad") && f.contains("enter ask Claude to draft it") && f.contains("using your agents where they fit"),
+        "{f}"
+    );
     typed(&mut app, "a squad that triages Sentry errors: a reader and a fixer");
     key(&mut app, KeyCode::Enter);
     assert!(app.squad_drafting());
@@ -624,17 +749,32 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     assert!(fake.has_arg(1, &squadfile::draft_system(squadfile::DRAFT_GUIDANCE)));
     let asked = fake.stdin(1);
     assert!(asked.contains("a squad that triages Sentry errors: a reader and a fixer"), "{asked}");
-    assert!(asked.contains("- builder (Sonnet; changes files, runs commands): Make the change the plan describes"), "the agents there are, to reuse: {asked}");
+    assert!(
+        asked.contains("- builder (Sonnet; changes files, runs commands): Make the change the plan describes"),
+        "the agents there are, to reuse: {asked}"
+    );
     let day = crate::ledger::Ledger::open(app.cache_for_test()).load();
-    assert_eq!(day.days.values().next().unwrap().features.get(squadfile::DRAFT_FEATURE).map(|f| f.calls), Some(1), "its tokens are counted");
+    assert_eq!(
+        day.days.values().next().unwrap().features.get(squadfile::DRAFT_FEATURE).map(|f| f.calls),
+        Some(1),
+        "its tokens are counted"
+    );
     assert!(app.sqt.draft_selected() && app.sqt.focus == SqFocus::Detail);
-    assert_eq!(app.active_notice(), Some("Here is a draft of \"Sentry triage\". It brings 1 new agent, saved with it. Change what you like: ctrl+s saves it, d discards it."));
+    assert_eq!(
+        app.active_notice(),
+        Some(
+            "Here is a draft of \"Sentry triage\". It brings 1 new agent, saved with it. Change what you like: ctrl+s saves it, d discards it."
+        )
+    );
     app.notice = None;
     go(&mut app, DRow::StepAgent(1));
     let shown = draw(&mut term, &app);
     let f = right(&shown);
     assert!(left(&shown).contains("Sentry triage 2 agents Draft, not saved") && flat(&shown).contains("ctrl+s save draft"), "{shown}");
-    assert!(f.contains("○ 1 reader Haiku web · new with the draft") && f.contains("● 2 builder Sonnet files · commands Fixes it"), "which are new and which are there already: {f}");
+    assert!(
+        f.contains("○ 1 reader Haiku web · new with the draft") && f.contains("● 2 builder Sonnet files · commands Fixes it"),
+        "which are new and which are there already: {f}"
+    );
     assert!(!squadfile::path(&w.config, "sentry-triage").exists() && !agentfile::path(&w.config, "reader").exists(), "not saved yet");
     // g on a new one says where it will be.
     go(&mut app, DRow::StepAgent(0));
@@ -648,8 +788,14 @@ fn describe_drafts_a_squad_that_reuses_agents_and_saves_its_new_ones_with_it() {
     ctrl(&mut app, 's');
     assert_eq!(app.active_notice(), Some("Saved the squad \"Sentry triage\" and its new agent. Tickets can be handed to it now."));
     let v = file(&w, "sentry-triage");
-    assert!(v.get("members").is_none() && v.get("leader").is_none() && v.get("needs_folder").is_none() && v.get("use_worktree").is_none(), "{v}");
-    assert_eq!((v["workflow"][1]["agent"].as_str(), v["workflow"][0]["agent"].as_str(), v["workflow"][2]["back_to"].as_u64()), (Some("reviewer"), Some("reader"), Some(2)));
+    assert!(
+        v.get("members").is_none() && v.get("leader").is_none() && v.get("needs_folder").is_none() && v.get("use_worktree").is_none(),
+        "{v}"
+    );
+    assert_eq!(
+        (v["workflow"][1]["agent"].as_str(), v["workflow"][0]["agent"].as_str(), v["workflow"][2]["back_to"].as_u64()),
+        (Some("reviewer"), Some("reader"), Some(2))
+    );
     assert_eq!(agent_file(&w, "reader")["guidance"], "Read the error.");
     assert!(app.sqt.draft.is_none() && app.sqt.draft_agents.is_empty());
     assert_eq!(app.sqt.listed().map(|l| (l.id.as_str(), l.kind)), Some(("sentry-triage", Kind::Own)));
@@ -666,7 +812,10 @@ fn a_draft_that_cant_be_used_says_why_and_n_offers_the_description_again() {
     typed(&mut app, "a triage squad");
     key(&mut app, KeyCode::Enter);
     app.refresh_until_for_test(20, "the draft", |a| !a.squad_drafting());
-    assert_eq!(app.active_notice(), Some("Claude's draft couldn't be used: Step 2 names an agent that isn't there (mender). Press n to try again."));
+    assert_eq!(
+        app.active_notice(),
+        Some("Claude's draft couldn't be used: Step 2 names an agent that isn't there (mender). Press n to try again.")
+    );
     assert!(app.sqt.draft.is_none() && !squadfile::dir(&w.config).exists() && !agentfile::path(&w.config, "reader").exists());
     key(&mut app, KeyCode::Char('n'));
     key(&mut app, KeyCode::Enter);
@@ -697,7 +846,11 @@ fn a_draft_that_cant_be_used_says_why_and_n_offers_the_description_again() {
     key(&mut app, KeyCode::Char('n'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Enter);
-    assert!(!app.squad_drafting() && app.active_notice().unwrap().starts_with("Couldn't draft a squad: AI features are switched off."), "{:?}", app.active_notice());
+    assert!(
+        !app.squad_drafting() && app.active_notice().unwrap().starts_with("Couldn't draft a squad: AI features are switched off."),
+        "{:?}",
+        app.active_notice()
+    );
     assert_eq!(fake.calls(), 2);
 }
 
@@ -727,7 +880,13 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
     // It may send the work back to step 2, three times.
     key(&mut app, KeyCode::Char('b'));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Never sends the work back") && f.contains("Back to step 1: planner") && f.contains("Back to step 3: reviewer") && !f.contains("Back to step 4"), "only earlier steps: {f}");
+    assert!(
+        f.contains("Never sends the work back")
+            && f.contains("Back to step 1: planner")
+            && f.contains("Back to step 3: reviewer")
+            && !f.contains("Back to step 4"),
+        "only earlier steps: {f}"
+    );
     choose(&mut app, "Back to step 2");
     choose(&mut app, "At most 3 times");
     assert_eq!(steps(&w)[3].back, Some(Back { to: 1, times: 3 }));
@@ -773,7 +932,10 @@ fn an_agents_system_prompt_is_edited_in_the_editor_and_saved_into_the_agent() {
     assert!(matches!(app.mode, Mode::EditNotes));
     wait_for_editor(&mut app);
     assert!(matches!(app.mode, Mode::List));
-    assert_eq!(app.active_notice(), Some("Saved builder's system prompt, in every squad that uses it (Coding), from the next ticket each is handed."));
+    assert_eq!(
+        app.active_notice(),
+        Some("Saved builder's system prompt, in every squad that uses it (Coding), from the next ticket each is handed.")
+    );
     assert_eq!(agent_file(&w, "builder")["guidance"], "Build it in small commits.");
     assert!(!w.cache.join("squad-prompts/agent-builder.md").exists(), "the file it was edited in is gone");
     assert!(!squadfile::path(&w.config, "coding").exists());
@@ -818,7 +980,10 @@ fn copy_delete_and_restore_each_ask_first_and_a_built_in_is_never_deleted() {
     assert!(squadfile::path(&w.config, "careful-coding").exists());
     key(&mut app, KeyCode::Char('d'));
     key(&mut app, KeyCode::Char('y'));
-    assert!(!squadfile::path(&w.config, "careful-coding").exists() && squadfile::path(&w.config, "careful-coding").with_extension("json.bak").exists());
+    assert!(
+        !squadfile::path(&w.config, "careful-coding").exists()
+            && squadfile::path(&w.config, "careful-coding").with_extension("json.bak").exists()
+    );
     assert_eq!(app.squad_list().len(), 4);
     // A changed built-in is restored, after asking.
     key(&mut app, KeyCode::Char('g'));
@@ -856,7 +1021,10 @@ fn a_file_that_cant_be_read_is_shown_as_such_and_left_alone() {
     key(&mut app, KeyCode::Char('G'));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("mine Can't be read") && f.contains("mine.json can't be read (it isn't valid JSON), so platoon leaves it alone."), "{f}");
+    assert!(
+        f.contains("mine Can't be read") && f.contains("mine.json can't be read (it isn't valid JSON), so platoon leaves it alone."),
+        "{f}"
+    );
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.sqt.focus, SqFocus::List, "nothing to change");
     key(&mut app, KeyCode::Char('c'));
@@ -900,7 +1068,9 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     app.projects.assign("user-1", Some(&id)).unwrap();
     let folder = w.base.join("docs");
     fs::create_dir_all(&folder).unwrap();
-    Tickets::open(&w.config, &id).add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() }).unwrap();
+    Tickets::open(&w.config, &id)
+        .add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() })
+        .unwrap();
     app.reload_for_test();
     key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
@@ -908,7 +1078,11 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     key(&mut app, KeyCode::Char('a'));
     assert!(matches!(app.mode, Mode::SquadPick));
     let names: Vec<&str> = app.sq.pick.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["Coding", "Research", "Docs", "Summarize", "Broken", "Careful coding"], "every squad, by name: built-ins first, then the user's own");
+    assert_eq!(
+        names,
+        ["Coding", "Research", "Docs", "Summarize", "Broken", "Careful coding"],
+        "every squad, by name: built-ins first, then the user's own"
+    );
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("▎ Coding") && !f.contains("Careful coding"), "six squads don't fit in 30 rows: {f}");
@@ -916,15 +1090,25 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
         key(&mut app, KeyCode::Down);
     }
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("▎ Careful coding") && f.contains("Needs fixing on the Squads tab first. Makes a change") && !f.contains("▎ Coding"), "{f}");
+    assert!(
+        f.contains("▎ Careful coding") && f.contains("Needs fixing on the Squads tab first. Makes a change") && !f.contains("▎ Coding"),
+        "{f}"
+    );
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadPick));
-    assert_eq!(app.active_notice(), Some("The Broken squad needs fixing on the Squads tab first: Step 1 names an agent that isn't there (nobody)."));
+    assert_eq!(
+        app.active_notice(),
+        Some("The Broken squad needs fixing on the Squads tab first: Step 1 names an agent that isn't there (nobody).")
+    );
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     app.refresh_until_for_test(20, "the leader to start", |a| !a.sq.launched.is_empty());
-    assert!(fake.stdin(1).starts_with("The squad: Careful coding\nWhat it can do: "), "the commander reads its name and what it can do: {}", fake.stdin(1));
+    assert!(
+        fake.stdin(1).starts_with("The squad: Careful coding\nWhat it can do: "),
+        "the commander reads its name and what it can do: {}",
+        fake.stdin(1)
+    );
     let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
     let leader = t.leader().unwrap().clone();
     assert_eq!((leader.squad.as_str(), leader.snapshot.as_deref()), ("careful-coding", Some("01-squad-1.json")));
@@ -943,7 +1127,12 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
     let mut store = Tickets::open(&w.config, "p1");
     let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
     let coding = squadfile::builtin("coding").unwrap();
-    let at_start = Launch::of(&Crew::of(&coding, &agentfile::builtins()), &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
+    let at_start = Launch::of(
+        &Crew::of(&coding, &agentfile::builtins()),
+        &LeaderSetup::builtin(),
+        AgentNames::SquadRole,
+        crate::squads::Place::WORKTREE,
+    );
     let snap = store.save_snapshot(n, 1, &at_start.to_json()).unwrap();
     let with = Leader { squad: "coding".into(), session: "s-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(snap) };
     // Its agents change afterwards.
@@ -976,13 +1165,28 @@ fn the_workflow_rail_draws_codings_send_backs_as_nested_loops_in_muted_colours()
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     // Both send-backs go to the build: the verify's (the longer) outside, the review's inside it, each with its words.
-    for piece in ["○  1 planner", "┌─▶ ●  2 builder", "│┌▶ │", "││  ●  3 reviewer", "│└──┤", "│   ●  4 verifier", "└───┤", "◉  Done: the result goes on the ticket", "+  Add a step"] {
+    for piece in [
+        "○  1 planner",
+        "┌─▶ ●  2 builder",
+        "│┌▶ │",
+        "││  ●  3 reviewer",
+        "│└──┤",
+        "│   ●  4 verifier",
+        "└───┤",
+        "◉  Done: the result goes on the ticket",
+        "+  Add a step",
+    ] {
         assert!(shown.contains(piece), "{piece}: {shown}");
     }
     let row_of = |text: &str| shown.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}"));
     assert!(shown.lines().nth(row_of("│└──┤")).unwrap().contains("↩ back to step 2 (builder), at most twice"));
     assert!(shown.lines().nth(row_of("└───┤")).unwrap().contains("↩ back to step 2 (builder), at most once"));
-    assert!(row_of("○  1 planner") < row_of("┌─▶ ●  2 builder") && row_of("┌─▶ ●  2 builder") < row_of("│└──┤") && row_of("│└──┤") < row_of("└───┤") && row_of("└───┤") < row_of("◉  Done"));
+    assert!(
+        row_of("○  1 planner") < row_of("┌─▶ ●  2 builder")
+            && row_of("┌─▶ ●  2 builder") < row_of("│└──┤")
+            && row_of("│└──┤") < row_of("└───┤")
+            && row_of("└───┤") < row_of("◉  Done")
+    );
     // The rail and the loops are muted; nothing on the details has the cursor yet.
     let t = app.effective_theme().clone();
     let (x, y) = find(&term, "┌─▶ ●");
@@ -1029,7 +1233,12 @@ fn twelve_steps(w: &World) -> squadfile::Squad {
     let mut s = squadfile::copy_of(&w.config, &squadfile::builtin("coding").unwrap(), "Long haul", &[]);
     let agents = ["planner", "builder", "reviewer", "verifier"];
     s.workflow = (0..12)
-        .map(|i| squadfile::Step { agent: agents[i % 4].into(), does: format!("Does part {} of the long haul, carefully and completely, then reports back.", i + 1), back: None, extra: Default::default() })
+        .map(|i| squadfile::Step {
+            agent: agents[i % 4].into(),
+            does: format!("Does part {} of the long haul, carefully and completely, then reports back.", i + 1),
+            back: None,
+            extra: Default::default(),
+        })
         .collect();
     for (from, to, times) in [(11, 0, 1), (10, 1, 2), (7, 2, 3), (5, 3, 1), (8, 6, 2)] {
         s.workflow[from].back = Some(Back { to, times });
@@ -1061,9 +1270,17 @@ fn twelve_steps_with_five_send_backs_scroll_at_80_columns() {
         assert!(seen.contains(&format!(" {n:>2} ")), "step {n}: {seen}");
     }
     let last = draw(&mut term, &app);
-    assert!(last.contains("◉  Done") && last.contains("+  Add a step") && seen.contains("▶") && seen.contains("┼"), "the loops drawn, one crossing another: {last}");
+    assert!(
+        last.contains("◉  Done") && last.contains("+  Add a step") && seen.contains("▶") && seen.contains("┼"),
+        "the loops drawn, one crossing another: {last}"
+    );
     // The words beside a loop: as much as fits in the width, never cut halfway.
-    assert!(seen.contains("↩ back to step 1, at most once") && seen.contains("↩ back to step 7, twice") && !seen.contains("↩ back to step 1 (planner), a…"), "{seen}");
+    assert!(
+        seen.contains("↩ back to step 1, at most once")
+            && seen.contains("↩ back to step 7, twice")
+            && !seen.contains("↩ back to step 1 (planner), a…"),
+        "{seen}"
+    );
     // Nothing runs past the pane: every line of the details stops at its right border.
     for l in last.lines().skip(3).take(25) {
         assert!(l.chars().count() <= 80, "{l}");
@@ -1077,13 +1294,17 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     // What is installed "here": a skill in Claude's config folder, two servers in its user config (a temp folder).
     fs::create_dir_all(w.root.join("skills/pdf")).unwrap();
     fs::write(w.root.join("skills/pdf/SKILL.md"), "---\nname: pdf\ndescription: PDFs\n---\n").unwrap();
-    fs::write(w.root.join(".claude.json"), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#).unwrap();
+    fs::write(w.root.join(".claude.json"), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#)
+        .unwrap();
     let mut app = w.app();
     key(&mut app, KeyCode::Char('3'));
     go_agent(&mut app, "builder");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = right(&draw(&mut term, &app));
-    assert!(f.contains("Skills None: enter picks from what is installed") && f.contains("MCP servers None: enter picks from what is installed"), "{f}");
+    assert!(
+        f.contains("Skills None: enter picks from what is installed") && f.contains("MCP servers None: enter picks from what is installed"),
+        "{f}"
+    );
     // Skills: the installed ones, and typing one. Enter ticks one and the list stays open.
     go_arow(&mut app, ARow::Skills);
     assert!(flat(&draw(&mut term, &app)).contains("enter pick"));
@@ -1133,7 +1354,9 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     assert_eq!(agentfile::get(&w.config, "builder").unwrap().mcp, ["sentry"]);
     // A squad using it starts it with them: preloaded skills, servers by name, the tools that let it use them.
     let crew = Crew::load(&w.config, &squadfile::builtin("coding").unwrap());
-    let agents: Value = serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents).unwrap();
+    let agents: Value =
+        serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents)
+            .unwrap();
     let b = &agents["coding-builder"];
     assert_eq!((b["skills"].clone(), b["mcpServers"].clone()), (serde_json::json!(["pdf"]), serde_json::json!(["sentry"])));
     assert_eq!(b["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry"]));
@@ -1142,5 +1365,8 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     key(&mut app, KeyCode::Left);
     assert!(flat(&draw(&mut term, &app)).contains("● 2 builder Sonnet files · commands · skills · MCP"));
     // Nothing is written to Claude's own files.
-    assert_eq!(fs::read_to_string(w.root.join(".claude.json")).unwrap(), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#);
+    assert_eq!(
+        fs::read_to_string(w.root.join(".claude.json")).unwrap(),
+        r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#
+    );
 }

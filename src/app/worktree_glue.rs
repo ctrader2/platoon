@@ -13,7 +13,7 @@
 use super::*;
 use crate::tickets::{Ticket, Tickets, Worktree, WtMark};
 use crate::worktrees::{self, Removal};
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 /// How often the closed tickets are looked over for worktrees to remove.
 const EVERY: Duration = Duration::from_secs(2);
@@ -116,7 +116,8 @@ impl App {
 
     fn working_on(&self, project: &str, number: u32) -> bool {
         let is = |p: &str, n: u32| p == project && n == number;
-        self.wt.removing.as_ref().is_some_and(|(o, _)| is(&o.project, o.number)) || self.wt.back.as_ref().is_some_and(|(o, _)| is(&o.project, o.number))
+        self.wt.removing.as_ref().is_some_and(|(o, _)| is(&o.project, o.number))
+            || self.wt.back.as_ref().is_some_and(|(o, _)| is(&o.project, o.number))
     }
 
     /// Called on every refresh: take in what came back, and every couple of seconds look for a closed ticket whose
@@ -131,7 +132,12 @@ impl App {
         let mut pick: Option<(String, u32, u64, Vec<Worktree>)> = None;
         for (project, t) in self.every_ticket() {
             // (`v` on the ticket is on its way to opening the editor there: left alone until it has.)
-            if !t.state.closed() || t.worktrees.is_empty() || self.squad_running(t) || self.working_on(project, t.number) || self.editor_holds(project, t.number) {
+            if !t.state.closed()
+                || t.worktrees.is_empty()
+                || self.squad_running(t)
+                || self.working_on(project, t.number)
+                || self.editor_holds(project, t.number)
+            {
                 continue;
             }
             let todo: Vec<Worktree> = t
@@ -300,7 +306,8 @@ impl App {
             self.editor_continue();
             return;
         }
-        let show = self.open_project.as_deref() == Some(project.as_str()) && self.tk.open == Some(number) && matches!(self.mode, Mode::List);
+        let show =
+            self.open_project.as_deref() == Some(project.as_str()) && self.tk.open == Some(number) && matches!(self.mode, Mode::List);
         if let Err(e) = self.launch_leader_in(&project, number, None, show) {
             self.notify(format!("Couldn't start the squad: {e}"));
         }
@@ -326,7 +333,10 @@ impl App {
     /// given a moment (false when it can't say in time).
     pub(super) fn has_uncommitted_worktree(&self, number: u32) -> bool {
         let Some(t) = self.ticket(number) else { return false };
-        t.worktrees.iter().filter(|w| w.removed.is_none() && Path::new(&w.path).is_dir()).any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET))
+        t.worktrees
+            .iter()
+            .filter(|w| w.removed.is_none() && Path::new(&w.path).is_dir())
+            .any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET))
     }
 
     /// `w` on a ticket: remove its worktree that was kept for changes not yet committed, after asking.
@@ -351,7 +361,8 @@ impl App {
         }
         let kept = self.kept_worktrees(number);
         let opened_in = kept.iter().find_map(|w| w.opened_in.clone());
-        let uncommitted = kept.iter().any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET));
+        let uncommitted =
+            kept.iter().any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET));
         self.mode = Mode::Confirm(Confirm::RemoveWorktree { number, branch: crate::squads::branch_name(number), uncommitted, opened_in });
     }
 

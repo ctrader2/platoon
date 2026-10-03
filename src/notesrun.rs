@@ -94,7 +94,8 @@ fn lock_path(cache: &Path, id: &str) -> PathBuf {
 }
 
 pub fn now_ms() -> u64 {
-    usage::now() * 1000 + u64::from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_millis()).unwrap_or(0))
+    usage::now() * 1000
+        + u64::from(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_millis()).unwrap_or(0))
 }
 
 /// Note that this project has something new, at `at_ms`. A later turn simply writes a later time: that is the
@@ -360,7 +361,9 @@ pub fn read_session_with(path: &Path, cap: usize, reply_chars: Option<usize>) ->
 /// The last part of a session's folder, which is all the prompt says about where it is.
 fn folder_of(path: &Path, cwd: Option<String>) -> String {
     let from_cwd = cwd.and_then(|c| Path::new(&c).file_name().map(|n| n.to_string_lossy().into_owned()));
-    from_cwd.filter(|f| !f.is_empty()).unwrap_or_else(|| path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
+    from_cwd
+        .filter(|f| !f.is_empty())
+        .unwrap_or_else(|| path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
 }
 
 /// What is new in this project since the last update, and how much of each session has now been read.
@@ -403,8 +406,16 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
         if messages.is_empty() {
             continue; // nothing new in this one
         }
-        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
-        sessions.push((modified, SessionMaterial { folder: folder_of(&path, claude::transcript_cwd(&path)), messages, reply: read.reply, first_read }));
+        let modified = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        sessions.push((
+            modified,
+            SessionMaterial { folder: folder_of(&path, claude::transcript_cwd(&path)), messages, reply: read.reply, first_read },
+        ));
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
     sessions.sort_by(|a, b| b.0.cmp(&a.0));
@@ -423,7 +434,8 @@ pub fn gather_results(config: &Path, id: &str, state: &State) -> (Vec<notesupdat
         .filter_map(|t| {
             let leader = t.leader()?;
             // Its name as it was when the leader started (the snapshot), else as it is now.
-            let then = store.snapshot(leader).and_then(|text| crate::squads::Launch::from_json(&text)).map(|l| l.name).filter(|n| !n.is_empty());
+            let then =
+                store.snapshot(leader).and_then(|text| crate::squads::Launch::from_json(&text)).map(|l| l.name).filter(|n| !n.is_empty());
             let squad = then.unwrap_or_else(|| crate::squadfile::name_of(config, &leader.squad));
             Some(notesupdate::DoneTicket { number: t.number, squad, result: store.result(t.number)? })
         })
@@ -624,7 +636,11 @@ pub fn describe_once(env: &Env, id: &str) -> Described {
     if material.is_empty() {
         return Described::Nothing;
     }
-    let mut req = Request::new(describe::FEATURE, describe::system_with(&instructions::guidance(&env.config, instructions::DESCRIPTION)), describe::prompt(&material));
+    let mut req = Request::new(
+        describe::FEATURE,
+        describe::system_with(&instructions::guidance(&env.config, instructions::DESCRIPTION)),
+        describe::prompt(&material),
+    );
     req.timeout = DESCRIBE_TIMEOUT;
     let reply = match env.runner().run(&settings, &req) {
         Ok(r) => r.text,
@@ -745,7 +761,7 @@ fn helper_loop(env: &Env, id: &str, quiet_ms: u64) {
 mod tests {
     use super::*;
     use crate::ledger::{Ledger, Usage};
-    use crate::testkit::{iso, AiFake};
+    use crate::testkit::{AiFake, iso};
     use serde_json::json;
 
     struct Rig {
@@ -797,7 +813,11 @@ mod tests {
         /// A generated name and summary for a session, as the naming feature would have written them.
         fn summary(&self, sid: &str, name: &str, summary: &str, at: u64) {
             let mut sums = crate::summaries::Summaries::open(&self.env.config);
-            sums.set_many(&[(sid.to_string(), crate::summaries::Entry { name: name.into(), summary: summary.into(), covers: 1, model: "haiku".into(), at })]).unwrap();
+            sums.set_many(&[(
+                sid.to_string(),
+                crate::summaries::Entry { name: name.into(), summary: summary.into(), covers: 1, model: "haiku".into(), at },
+            )])
+            .unwrap();
         }
 
         fn description(&self, id: &str) -> String {
@@ -817,7 +837,8 @@ mod tests {
     }
 
     /// Notes in the shape platoon wrote before the sections became fluid: an update has to cope with them.
-    const NOTES: &str = "platoon keeps these.\n\n# Overview\n\nSell socks.\n\n# Requirements\n\n# Status\n\n# Decisions\n\n# Notes\n\nmine\n";
+    const NOTES: &str =
+        "platoon keeps these.\n\n# Overview\n\nSell socks.\n\n# Requirements\n\n# Status\n\n# Decisions\n\n# Notes\n\nmine\n";
 
     #[test]
     fn the_hook_marks_a_project_with_notes_and_costs_nothing_for_anything_else() {
@@ -835,9 +856,17 @@ mod tests {
             assert_eq!(stop_mark(bad, &r.env.config, &r.env.cache, false, 1), None, "{bad}");
         }
         // The helper's own session: by its environment, and by the folder it works in.
-        assert_eq!(stop_mark(&json!({"session_id":"in-project"}).to_string(), &r.env.config, &r.env.cache, true, 1), None, "PLATOON_AI is set");
+        assert_eq!(
+            stop_mark(&json!({"session_id":"in-project"}).to_string(), &r.env.config, &r.env.cache, true, 1),
+            None,
+            "PLATOON_AI is set"
+        );
         let work = ai::work_dir(&r.env.cache).display().to_string();
-        assert_eq!(stop_mark(&json!({"session_id":"in-project","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1), None, "the work folder");
+        assert_eq!(
+            stop_mark(&json!({"session_id":"in-project","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1),
+            None,
+            "the work folder"
+        );
         // An archived session of the project, and an archived project.
         let mut archive = Archive::open(&r.env.config);
         archive.archive("in-project", usage::now()).unwrap();
@@ -1075,7 +1104,10 @@ mod tests {
         assert_eq!(update_once(&r.env, &id), Round::Written { sections: 2, decisions: 1 });
         let text = r.notes(&id);
         assert!(text.contains("Sell socks.\nThere is a basket page."), "{text}");
-        assert!(text.starts_with("platoon keeps these.\n\n# Summary\n\nA shop that sells socks."), "the summary goes in at the top: {text}");
+        assert!(
+            text.starts_with("platoon keeps these.\n\n# Summary\n\nA shop that sells socks."),
+            "the summary goes in at the top: {text}"
+        );
         assert!(text.contains(&format!("- {}: Baskets are session based", notesupdate::day(usage::now()))), "{text}");
         assert!(text.contains("# Notes\n\nmine"), "Notes is untouched: {text}");
         // The version before it is kept, so `c` and `u` work on it.
@@ -1115,7 +1147,10 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), text, "nothing written");
         // An answer that keeps it goes in, with platoon's own line reworded around it.
         r.session(&id, "s1", &["Add a basket page to the shop", "Now add the checkout page as well", "And a receipt page too"], "Done.");
-        r.fake.reply(3, r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket and a checkout page.\nWe never sell hats."}]}"#);
+        r.fake.reply(
+            3,
+            r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket and a checkout page.\nWe never sell hats."}]}"#,
+        );
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.contains("There is a basket and a checkout page.") && after.contains("We never sell hats."), "{after}");
@@ -1126,7 +1161,10 @@ mod tests {
         let r = Rig::new("bad");
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
-        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"summary":""}"#, r#"{"sections":[{"heading":"Status"}]}"#].iter().enumerate() {
+        for (n, bad) in ["I am afraid I cannot help with that.", "{}", "[]", r#"{"summary":""}"#, r#"{"sections":[{"heading":"Status"}]}"#]
+            .iter()
+            .enumerate()
+        {
             r.fake.reply(n + 1, bad);
             assert_eq!(update_once(&r.env, &id), Round::BadReply, "{bad}");
             assert_eq!(r.notes(&id), NOTES, "{bad}");
@@ -1148,7 +1186,8 @@ mod tests {
         let path = Projects::open(&r.env.config).notes_path(&id);
         // The fake rewrites the notes while its call is out: exactly what a user typing in an editor does.
         let rewritten = NOTES.replace("Sell socks.", "Sell socks.\nWritten by hand while the call was out.");
-        fs::write(r.fake.dir.join("reply.1"), r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket page."}]}"#).unwrap();
+        fs::write(r.fake.dir.join("reply.1"), r#"{"sections":[{"heading":"Overview","body":"Sell socks.\nThere is a basket page."}]}"#)
+            .unwrap();
         fs::write(&path, &rewritten).unwrap();
         assert_eq!(update_once(&r.env, &id), Round::Unchanged, "the answer no longer fits what is on disk");
         assert_eq!(fs::read_to_string(&path).unwrap(), rewritten, "what the person wrote is still there");
@@ -1398,8 +1437,18 @@ mod tests {
         let mut t = Tickets::open(&r.env.config, &id);
         let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
         let other = t.add(NewTicket { title: "Socks".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
-        t.start_leader(other, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
+        t.start_leader(
+            other,
+            &Leader { squad: "coding".into(), session: "lead-2".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         // Only Done results count: one that is Done, one whose ticket was reopened after its result was written.
         t.squad_says(n, &crate::tickets::State::Done, "", Some("Added the basket page on ticket/1.")).unwrap();
         t.squad_says(other, &crate::tickets::State::Done, "", Some("Socks are in.")).unwrap();
@@ -1425,7 +1474,11 @@ mod tests {
         assert_eq!(update_once(&r.env, &id), Round::BadReply);
         r.fake.reply_default(r#"{"sections":[{"heading":"Status","body":"The basket page and the socks are in."}]}"#);
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
-        assert!(r.fake.stdin(3).contains("Ticket #2 (Coding squad):\n  Socks are in.\n") && !r.fake.stdin(3).contains("Ticket #1"), "{}", r.fake.stdin(3));
+        assert!(
+            r.fake.stdin(3).contains("Ticket #2 (Coding squad):\n  Socks are in.\n") && !r.fake.stdin(3).contains("Ticket #1"),
+            "{}",
+            r.fake.stdin(3)
+        );
         // The switch off: nothing marked.
         let _ = fs::remove_file(due_path(&r.env.cache, &id));
         let mut st = crate::settings::load(&r.env.config).0;

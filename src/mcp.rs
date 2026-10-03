@@ -386,7 +386,8 @@ fn norm(s: &str, home: &str) -> String {
 /// What a name amounts to without the decoration a launcher's script gets (`npx-cli.js` is `npx`).
 fn stem(path: &str) -> String {
     let file = path.rsplit('/').next().unwrap_or(path);
-    let file = ["js", "mjs", "cjs", "ts", "py", "sh", "exe", "cmd"].iter().find_map(|e| file.strip_suffix(&format!(".{e}"))).unwrap_or(file);
+    let file =
+        ["js", "mjs", "cjs", "ts", "py", "sh", "exe", "cmd"].iter().find_map(|e| file.strip_suffix(&format!(".{e}"))).unwrap_or(file);
     file.strip_suffix("-cli").unwrap_or(file).to_string()
 }
 
@@ -470,12 +471,17 @@ impl Config {
         if has_wildcard(&want[0]) && literal_len(&want[0]) == 0 {
             return false; // a command nobody knows the name of says nothing about what runs
         }
-        if want.len() == got.len() && self.same_command(&want[0], &got[0]) && want[1..].iter().zip(&got[1..]).all(|(w, g)| self.same_arg(w, g)) {
+        if want.len() == got.len()
+            && self.same_command(&want[0], &got[0])
+            && want[1..].iter().zip(&got[1..]).all(|(w, g)| self.same_arg(w, g))
+        {
             return true;
         }
         // Where the arguments can't be told apart (one string from `ps`, or a config that puts the whole
         // command line in `command`), compare the line as text.
-        let line = |v: &[String]| v.iter().map(|a| norm(a, &self.home)).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        let line = |v: &[String]| {
+            v.iter().map(|a| norm(a, &self.home)).collect::<Vec<_>>().join(" ").split_whitespace().collect::<Vec<_>>().join(" ")
+        };
         let (w, g) = (line(want), line(got));
         if has_wildcard(&w) { wildcard(&w, &g) } else { w == g }
     }
@@ -616,7 +622,9 @@ pub fn end_leftovers_after(claude: u32, tracked: &[Tracked], wait: Duration, gra
 /// Give leftovers `grace` to exit on their own, then SIGTERM each one that is still the same process.
 pub fn end_leftovers(tracked: &[Tracked], grace: Duration) {
     let started = Instant::now();
-    let any_running = || procs::table().is_some_and(|rows| tracked.iter().any(|t| rows.iter().any(|r| r.pid == t.pid && !r.zombie && r.start == t.start)));
+    let any_running = || {
+        procs::table().is_some_and(|rows| tracked.iter().any(|t| rows.iter().any(|r| r.pid == t.pid && !r.zombie && r.start == t.start)))
+    };
     while started.elapsed() < grace && any_running() {
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -811,30 +819,83 @@ mod tests {
         for (name, v) in files {
             w.write(&format!("claude/plugins/cache/{rel}/{name}"), v);
         }
-        w.write(
-            "claude/plugins/installed_plugins.json",
-            &{
-                let mut v: Value = fs::read_to_string(w.base.join("claude/plugins/installed_plugins.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(json!({"version": 2, "plugins": {}}));
-                v.get_mut("plugins").unwrap().as_object_mut().unwrap().insert(id.into(), json!([{"scope": "user", "installPath": dir, "version": "1"}]));
-                v
-            },
-        );
+        w.write("claude/plugins/installed_plugins.json", &{
+            let mut v: Value = fs::read_to_string(w.base.join("claude/plugins/installed_plugins.json"))
+                .ok()
+                .and_then(|t| serde_json::from_str(&t).ok())
+                .unwrap_or(json!({"version": 2, "plugins": {}}));
+            v.get_mut("plugins")
+                .unwrap()
+                .as_object_mut()
+                .unwrap()
+                .insert(id.into(), json!([{"scope": "user", "installPath": dir, "version": "1"}]));
+            v
+        });
         dir
     }
 
     #[test]
     fn plugin_servers_come_from_dot_mcp_json_and_plugin_json_with_the_plugin_root_filled_in() {
         let w = World::new("plugin");
-        let a = install_plugin(&w, "alpha@mk", "mk/alpha/1", &[(".mcp.json", json!({"mcpServers": {"wrapped": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/serve", "args": ["--data", "${CLAUDE_PLUGIN_DATA}", "--proj", "${CLAUDE_PROJECT_DIR}"]}}}))]);
-        let b = install_plugin(&w, "beta@mk", "mk/beta/2", &[(".mcp.json", json!({"flat": {"command": "bun", "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "start"]}, "remote": {"type": "http", "url": "https://x"}}))]);
-        let c = install_plugin(&w, "gamma@mk", "mk/gamma/3", &[(".claude-plugin/plugin.json", json!({"name": "gamma", "mcpServers": {"inline": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/s.js", "${FOO}", "${NOPE:-dflt}", "${NOPE}"]}}}))]);
-        let d = install_plugin(&w, "delta@mk", "mk/delta/4", &[(".claude-plugin/plugin.json", json!({"mcpServers": ["./servers.json", {"second": {"command": "py"}}, 5]})), ("servers.json", json!({"mcpServers": {"first": {"command": "sh", "args": ["x"]}}}))]);
+        let a = install_plugin(
+            &w,
+            "alpha@mk",
+            "mk/alpha/1",
+            &[(
+                ".mcp.json",
+                json!({"mcpServers": {"wrapped": {"command": "${CLAUDE_PLUGIN_ROOT}/bin/serve", "args": ["--data", "${CLAUDE_PLUGIN_DATA}", "--proj", "${CLAUDE_PROJECT_DIR}"]}}}),
+            )],
+        );
+        let b = install_plugin(
+            &w,
+            "beta@mk",
+            "mk/beta/2",
+            &[(
+                ".mcp.json",
+                json!({"flat": {"command": "bun", "args": ["run", "--cwd", "${CLAUDE_PLUGIN_ROOT}", "start"]}, "remote": {"type": "http", "url": "https://x"}}),
+            )],
+        );
+        let c = install_plugin(
+            &w,
+            "gamma@mk",
+            "mk/gamma/3",
+            &[(
+                ".claude-plugin/plugin.json",
+                json!({"name": "gamma", "mcpServers": {"inline": {"command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/s.js", "${FOO}", "${NOPE:-dflt}", "${NOPE}"]}}}),
+            )],
+        );
+        let d = install_plugin(
+            &w,
+            "delta@mk",
+            "mk/delta/4",
+            &[
+                (".claude-plugin/plugin.json", json!({"mcpServers": ["./servers.json", {"second": {"command": "py"}}, 5]})),
+                ("servers.json", json!({"mcpServers": {"first": {"command": "sh", "args": ["x"]}}})),
+            ],
+        );
         let got: HashMap<String, Vec<String>> = load(&w.src).servers.into_iter().map(|s| (s.name, s.argv)).collect();
         let root = |p: &Path| p.to_string_lossy().into_owned();
-        assert_eq!(got["wrapped"], strs(&[&format!("{}/bin/serve", root(&a)), "--data", &root(&w.base.join("claude/plugins/data/alpha-mk")), "--proj", &w.cwd_key()]));
-        assert_eq!(got["flat"], strs(&["bun", "run", "--cwd", &root(&b), "start"]), "the bare shape works, and the remote entry beside it is skipped");
+        assert_eq!(
+            got["wrapped"],
+            strs(&[
+                &format!("{}/bin/serve", root(&a)),
+                "--data",
+                &root(&w.base.join("claude/plugins/data/alpha-mk")),
+                "--proj",
+                &w.cwd_key()
+            ])
+        );
+        assert_eq!(
+            got["flat"],
+            strs(&["bun", "run", "--cwd", &root(&b), "start"]),
+            "the bare shape works, and the remote entry beside it is skipped"
+        );
         assert!(!got.contains_key("remote"));
-        assert_eq!(got["inline"], strs(&["node", &format!("{}/s.js", root(&c)), "bar", "dflt", "${NOPE}"]), "environment, defaults, and what can't be filled in stays");
+        assert_eq!(
+            got["inline"],
+            strs(&["node", &format!("{}/s.js", root(&c)), "bar", "dflt", "${NOPE}"]),
+            "environment, defaults, and what can't be filled in stays"
+        );
         assert!(got.contains_key("first") && got.contains_key("second"), "{got:?} ({})", root(&d));
     }
 
@@ -844,9 +905,18 @@ mod tests {
         install_plugin(&w, "on@mk", "mk/on/1", &[(".mcp.json", json!({"mcpServers": {"on": {"command": "a"}}}))]);
         install_plugin(&w, "off@mk", "mk/off/1", &[(".mcp.json", json!({"mcpServers": {"off": {"command": "b"}}}))]);
         install_plugin(&w, "unmentioned@mk", "mk/un/1", &[(".mcp.json", json!({"mcpServers": {"unmentioned": {"command": "c"}}}))]);
-        install_plugin(&w, "srv-off@mk", "mk/so/1", &[(".mcp.json", json!({"mcpServers": {"keep": {"command": "d"}, "drop": {"command": "e"}}}))]);
-        let mut list: Value = serde_json::from_str(&fs::read_to_string(w.base.join("claude/plugins/installed_plugins.json")).unwrap()).unwrap();
-        list["plugins"].as_object_mut().unwrap().insert("other@mk".into(), json!([{"scope": "project", "projectPath": "/not/here", "installPath": w.base.join("claude/plugins/cache/mk/other/1")}]));
+        install_plugin(
+            &w,
+            "srv-off@mk",
+            "mk/so/1",
+            &[(".mcp.json", json!({"mcpServers": {"keep": {"command": "d"}, "drop": {"command": "e"}}}))],
+        );
+        let mut list: Value =
+            serde_json::from_str(&fs::read_to_string(w.base.join("claude/plugins/installed_plugins.json")).unwrap()).unwrap();
+        list["plugins"].as_object_mut().unwrap().insert(
+            "other@mk".into(),
+            json!([{"scope": "project", "projectPath": "/not/here", "installPath": w.base.join("claude/plugins/cache/mk/other/1")}]),
+        );
         w.write("claude/plugins/installed_plugins.json", &list);
         w.write("claude/plugins/cache/mk/other/1/.mcp.json", &json!({"mcpServers": {"other": {"command": "f"}}}));
         w.write("claude/settings.json", &json!({"enabledPlugins": {"on@mk": true, "off@mk": false, "other@mk": true, "srv-off@mk": true}}));
@@ -887,7 +957,15 @@ mod tests {
         let c = cfg(&[&["node", "/srv/a/server.js", "--port", "9"], &["sleep", "100"]]);
         assert!(c.matches(&strs(&["node", "/srv/a/server.js", "--port", "9"])));
         assert!(c.matches(&strs(&["sleep", "100"])));
-        for other in [&["node", "/srv/a/server.js", "--port", "10"][..], &["node", "/srv/a/server.js"], &["node", "/srv/a/server.js", "--port", "9", "x"], &["sleep", "101"], &["sleep"], &["python", "/srv/a/server.js", "--port", "9"], &[]] {
+        for other in [
+            &["node", "/srv/a/server.js", "--port", "10"][..],
+            &["node", "/srv/a/server.js"],
+            &["node", "/srv/a/server.js", "--port", "9", "x"],
+            &["sleep", "101"],
+            &["sleep"],
+            &["python", "/srv/a/server.js", "--port", "9"],
+            &[],
+        ] {
             assert!(!c.matches(&strs(other)), "{other:?}");
         }
     }

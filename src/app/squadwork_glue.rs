@@ -36,7 +36,12 @@ pub struct WorkState {
 fn stamp_of(path: &Path) -> Stamp {
     let st = |p: &Path| std::fs::metadata(p).ok().map(|m| (p.to_path_buf(), m.len(), m.modified().ok()));
     let mut out: Stamp = st(path).into_iter().collect();
-    let mut subs: Stamp = std::fs::read_dir(path.with_extension("").join("subagents")).into_iter().flatten().flatten().filter_map(|e| st(&e.path())).collect();
+    let mut subs: Stamp = std::fs::read_dir(path.with_extension("").join("subagents"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| st(&e.path()))
+        .collect();
     subs.sort_by(|a, b| a.0.cmp(&b.0));
     out.extend(subs);
     out
@@ -99,8 +104,11 @@ impl App {
 
     /// The tokens ticket `t`'s squads spent, over every leader it has had. None until one has been read.
     pub fn ticket_tokens(&self, t: &Ticket) -> Option<TicketTokens> {
-        let leaders: Vec<(String, Option<&LeaderLog>)> =
-            t.leaders.iter().map(|l| (crate::squads::agent_name(&l.squad, crate::squads::LEADER_ROLE, l.names), self.leader_log(&l.session))).collect();
+        let leaders: Vec<(String, Option<&LeaderLog>)> = t
+            .leaders
+            .iter()
+            .map(|l| (crate::squads::agent_name(&l.squad, crate::squads::LEADER_ROLE, l.names), self.leader_log(&l.session)))
+            .collect();
         squadwork::ticket_tokens(&leaders)
     }
 

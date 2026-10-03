@@ -44,7 +44,11 @@ pub fn ticket_tokens(leaders: &[(String, Option<&LeaderLog>)]) -> Option<TicketT
 pub fn short(n: u64) -> String {
     let one = |v: u64, unit: u64, suffix: &str| {
         let tenths = (v * 10 + unit / 2) / unit;
-        if tenths < 100 && tenths % 10 != 0 { format!("{}.{}{suffix}", tenths / 10, tenths % 10) } else { format!("{}{suffix}", (v + unit / 2) / unit) }
+        if tenths < 100 && tenths % 10 != 0 {
+            format!("{}.{}{suffix}", tenths / 10, tenths % 10)
+        } else {
+            format!("{}{suffix}", (v + unit / 2) / unit)
+        }
     };
     match n {
         n if n < 1000 => n.to_string(),
@@ -175,25 +179,66 @@ mod tests {
             runs: vec![],
         };
         // A second leader of the same squad (handed over again after Done), and one that doesn't say its name.
-        let second = LeaderLog { leader_agent: Some("coding-leader".into()), leader: spent(1, 2, 3), members: vec![("coding-builder".into(), spent(5, 5, 5))], runs: vec![] };
-        let third = LeaderLog { leader_agent: None, leader: spent(7, 0, 0), members: vec![("docs-tech-writer".into(), spent(1, 1, 1))], runs: vec![] };
-        let t = ticket_tokens(&[("coding-leader".into(), Some(&first)), ("coding-leader".into(), Some(&second)), ("docs-leader".into(), Some(&third))]).unwrap();
+        let second = LeaderLog {
+            leader_agent: Some("coding-leader".into()),
+            leader: spent(1, 2, 3),
+            members: vec![("coding-builder".into(), spent(5, 5, 5))],
+            runs: vec![],
+        };
+        let third = LeaderLog {
+            leader_agent: None,
+            leader: spent(7, 0, 0),
+            members: vec![("docs-tech-writer".into(), spent(1, 1, 1))],
+            runs: vec![],
+        };
+        let t = ticket_tokens(&[
+            ("coding-leader".into(), Some(&first)),
+            ("coding-leader".into(), Some(&second)),
+            ("docs-leader".into(), Some(&third)),
+        ])
+        .unwrap();
         let agents: Vec<(&str, u64)> = t.agents.iter().map(|(n, s)| (n.as_str(), s.total())).collect();
-        assert_eq!(agents, [("coding-leader", 330 + 6), ("coding-planner", 1105), ("coding-builder", 100 + 15), ("docs-leader", 7), ("docs-tech-writer", 3)]);
+        assert_eq!(
+            agents,
+            [
+                ("coding-leader", 330 + 6),
+                ("coding-planner", 1105),
+                ("coding-builder", 100 + 15),
+                ("docs-leader", 7),
+                ("docs-tech-writer", 3)
+            ]
+        );
         assert_eq!(t.total.total(), 336 + 1105 + 115 + 7 + 3);
-        assert_eq!((t.total.input, t.total.output, t.total.cache_read), (10 + 100 + 50 + 1 + 5 + 7 + 1, 20 + 5 + 50 + 2 + 5 + 1, 300 + 1000 + 3 + 5 + 1));
+        assert_eq!(
+            (t.total.input, t.total.output, t.total.cache_read),
+            (10 + 100 + 50 + 1 + 5 + 7 + 1, 20 + 5 + 50 + 2 + 5 + 1, 300 + 1000 + 3 + 5 + 1)
+        );
         // A leader whose transcript isn't there (yet) adds nothing; none read at all: nothing to say.
         let one = ticket_tokens(&[("coding-leader".into(), None), ("coding-leader".into(), Some(&second))]).unwrap();
         assert_eq!(one.total.total(), 6 + 15);
         assert_eq!(ticket_tokens(&[("coding-leader".into(), None)]), None);
         assert_eq!(ticket_tokens(&[]), None);
         // An empty transcript is zero, not nothing.
-        assert_eq!(ticket_tokens(&[("leader".into(), Some(&LeaderLog::default()))]).map(|t| (t.total.total(), t.agents)), Some((0, vec![("leader".to_string(), Spent::default())])));
+        assert_eq!(
+            ticket_tokens(&[("leader".into(), Some(&LeaderLog::default()))]).map(|t| (t.total.total(), t.agents)),
+            Some((0, vec![("leader".to_string(), Spent::default())]))
+        );
     }
 
     #[test]
     fn counts_are_short_and_say_what_they_include() {
-        let cases = [(0, "0"), (950, "950"), (1000, "1K"), (1234, "1.2K"), (12_345, "12K"), (999_499, "999K"), (999_500, "1M"), (1_200_000, "1.2M"), (1_250_000, "1.3M"), (12_600_000, "13M")];
+        let cases = [
+            (0, "0"),
+            (950, "950"),
+            (1000, "1K"),
+            (1234, "1.2K"),
+            (12_345, "12K"),
+            (999_499, "999K"),
+            (999_500, "1M"),
+            (1_200_000, "1.2M"),
+            (1_250_000, "1.3M"),
+            (12_600_000, "13M"),
+        ];
         for (n, want) in cases {
             assert_eq!(short(n), want, "{n}");
         }

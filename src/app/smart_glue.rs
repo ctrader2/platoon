@@ -12,7 +12,7 @@ use crate::instructions;
 use crate::smart::{self, Digest, Estimate, FindItem, Misses, Rules};
 use crate::summaries::{Entry as Summary, Summaries};
 use std::collections::HashSet;
-use std::sync::mpsc::{channel, Receiver, TryRecvError};
+use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
 /// After being refused or after an error the worker looks again this many seconds later (no busy loop, no repeated notices).
 pub const IDLE_RECHECK_SECS: u64 = 30;
@@ -183,7 +183,11 @@ impl App {
                 self.launch_find(&settings, w.req, w.ids);
             }
         }
-        if settings.feature_on("names") && self.smart.flight.is_none() && self.smart.find_flight.is_none() && self.smart.find_waiting.is_none() {
+        if settings.feature_on("names")
+            && self.smart.flight.is_none()
+            && self.smart.find_flight.is_none()
+            && self.smart.find_waiting.is_none()
+        {
             self.schedule_names(&settings, now);
         }
     }
@@ -254,7 +258,14 @@ impl App {
         let ledger = Ledger::open(&self.cache);
         let (used, archived_used) = (ledger.today(now).tokens(), ledger.archived_today(now));
         let mut counted = pending_active;
-        let archived_open = settings.ai_archived && smart::archived_allowed(settings.ai_daily_tokens, used, archived_used, settings.ai_archived_share, smart::CALL_OVERHEAD_TOKENS);
+        let archived_open = settings.ai_archived
+            && smart::archived_allowed(
+                settings.ai_daily_tokens,
+                used,
+                archived_used,
+                settings.ai_archived_share,
+                smart::CALL_OVERHEAD_TOKENS,
+            );
         if archived_open {
             counted += pending_archived;
         }
@@ -286,7 +297,8 @@ impl App {
         let mut req = Request::new("names", system, prompt);
         req.cancel = self.switchboard.token("names");
         let rx = self.spawn_call(settings.clone(), req);
-        self.smart.flight = Some(Flight { rx, ids: p.ids, totals: p.totals, covers: p.covers, prev_names: p.prev_names, archived: p.archived });
+        self.smart.flight =
+            Some(Flight { rx, ids: p.ids, totals: p.totals, covers: p.covers, prev_names: p.prev_names, archived: p.archived });
     }
 
     fn poll_names(&mut self, now: u64) {
@@ -297,7 +309,9 @@ impl App {
                 self.smart.flight = Some(fl);
                 return;
             }
-            Err(TryRecvError::Disconnected) => Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() }),
+            Err(TryRecvError::Disconnected) => {
+                Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })
+            }
         };
         match answer {
             Ok(reply) => self.take_names(fl, reply, now),
@@ -324,7 +338,8 @@ impl App {
             // "Same" needs a name to keep.
             let Some(name) = r.name.or_else(|| fl.prev_names[i].clone()) else { continue };
             got[i] = true;
-            changes.push((fl.ids[i].clone(), Summary { name, summary: r.summary, covers: fl.covers[i], model: reply.model.clone(), at: now }));
+            changes
+                .push((fl.ids[i].clone(), Summary { name, summary: r.summary, covers: fl.covers[i], model: reply.model.clone(), at: now }));
         }
         for (i, id) in fl.ids.iter().enumerate() {
             if got[i] {
@@ -369,7 +384,11 @@ impl App {
     /// working. The screen no longer shows it (the count was noise); the tests read it.
     #[cfg(test)]
     pub fn smart_progress(&self) -> Option<(usize, usize, bool)> {
-        (self.smart.total > 0 && self.settings.get().feature_on("names")).then_some((self.smart.done, self.smart.total, self.smart.flight.is_none()))
+        (self.smart.total > 0 && self.settings.get().feature_on("names")).then_some((
+            self.smart.done,
+            self.smart.total,
+            self.smart.flight.is_none(),
+        ))
     }
 
     /// Why the naming work is waiting, in plain words, when a gate or a failure is the reason.
@@ -428,7 +447,8 @@ impl App {
 
     /// Typing is held while a description search is out: what was typed is what was asked.
     pub(super) fn find_locked(&self) -> bool {
-        self.search.kind == FIND_KIND && matches!(self.search.find.state, FindState::Waiting | FindState::Asking | FindState::Confirm { .. })
+        self.search.kind == FIND_KIND
+            && matches!(self.search.find.state, FindState::Waiting | FindState::Asking | FindState::Confirm { .. })
     }
 
     /// The words changed in the description search: the answer on screen was for other words.
@@ -487,12 +507,17 @@ impl App {
 
     /// The conversations a description search may pick from, the local way: by index into `sessions`.
     fn find_pool(&self, settings: &Settings) -> Vec<usize> {
-        (0..self.sessions.len()).filter(|&i| !(self.sessions[i].archived && !settings.search_archived) && self.in_scope(&self.sessions[i])).collect()
+        (0..self.sessions.len())
+            .filter(|&i| !(self.sessions[i].archived && !settings.search_archived) && self.in_scope(&self.sessions[i]))
+            .collect()
     }
 
     /// Ctrl+W: search wider. Says what that costs first and waits for enter.
     pub(super) fn ask_wider(&mut self) {
-        if self.search.kind != FIND_KIND || self.search.text.trim().is_empty() || matches!(self.search.find.state, FindState::Waiting | FindState::Asking | FindState::Confirm { .. }) {
+        if self.search.kind != FIND_KIND
+            || self.search.text.trim().is_empty()
+            || matches!(self.search.find.state, FindState::Waiting | FindState::Asking | FindState::Confirm { .. })
+        {
             return;
         }
         let settings = self.settings.get();
@@ -552,7 +577,11 @@ impl App {
             self.search.find.state = FindState::Failed("There are no conversations to search yet.".into());
             return;
         }
-        let mut req = Request::new("find", smart::find_system_with(&instructions::guidance(&self.config, instructions::FIND), settings.ai_find_results as usize), smart::find_prompt(&query, &texts));
+        let mut req = Request::new(
+            "find",
+            smart::find_system_with(&instructions::guidance(&self.config, instructions::FIND), settings.ai_find_results as usize),
+            smart::find_prompt(&query, &texts),
+        );
         req.user_initiated = true;
         req.timeout = FIND_TIMEOUT;
         req.cancel = self.switchboard.token("find");
@@ -578,7 +607,9 @@ impl App {
                 self.smart.find_flight = Some(fl);
                 return;
             }
-            Err(TryRecvError::Disconnected) => Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() }),
+            Err(TryRecvError::Disconnected) => {
+                Err(AiError::Failed { kind: crate::ledger::FailKind::Other, detail: "the call ended without an answer".into() })
+            }
         };
         // The dialog was closed or the words changed while it ran: nobody is waiting for the answer any more.
         if self.search.find.state != FindState::Asking {
@@ -592,7 +623,16 @@ impl App {
                     .filter_map(|r| {
                         let s = self.sessions.iter().find(|s| s.id == fl.ids[r.n - 1])?;
                         let detail = if !r.reason.is_empty() { r.reason.clone() } else { s.summary.clone() };
-                        Some(SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), extra_dirs: s.extra_dirs.clone(), archived: s.archived, last_active: s.last_active, detail, marks: Vec::new() })
+                        Some(SearchResult {
+                            id: s.id.clone(),
+                            name: s.name.clone(),
+                            dir: s.dir.clone(),
+                            extra_dirs: s.extra_dirs.clone(),
+                            archived: s.archived,
+                            last_active: s.last_active,
+                            detail,
+                            marks: Vec::new(),
+                        })
                     })
                     .collect();
                 self.search.total = results.len();

@@ -14,7 +14,7 @@
 //! can't be understood is never written over: every change is refused until the user has looked at it.
 
 use crate::projects::{lock, write_atomic};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -886,11 +886,15 @@ impl Tickets {
         let worktrees = worktrees.to_vec();
         self.edit(number, move |t, _| {
             // The same worktree as before (a squad continued in it) keeps what else its entry says.
-            let old: Vec<Map<String, Value>> = t.get("worktrees").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_object().cloned()).collect();
+            let old: Vec<Map<String, Value>> =
+                t.get("worktrees").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_object().cloned()).collect();
             let w: Vec<Value> = worktrees
                 .iter()
                 .map(|w| {
-                    let same = old.iter().find(|o| o.get("folder").and_then(Value::as_str) == Some(w.folder.as_str()) && o.get("path").and_then(Value::as_str) == Some(w.path.as_str()));
+                    let same = old.iter().find(|o| {
+                        o.get("folder").and_then(Value::as_str) == Some(w.folder.as_str())
+                            && o.get("path").and_then(Value::as_str) == Some(w.path.as_str())
+                    });
                     worktree_value(w, same)
                 })
                 .collect();
@@ -1118,7 +1122,8 @@ impl Tickets {
     pub fn toggle_blocker(&mut self, number: u32, blocker: u32) -> io::Result<bool> {
         let mut now_blocked = false;
         self.edit(number, |t, all| {
-            let mut list: Vec<u64> = t.get("blocked_by").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
+            let mut list: Vec<u64> =
+                t.get("blocked_by").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
             if let Some(pos) = list.iter().position(|n| *n == u64::from(blocker)) {
                 list.remove(pos);
             } else {
@@ -1280,7 +1285,10 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     match named.as_slice() {
         [one] => Ok(one),
         [] => Err(format!("there is no project called \"{want}\"")),
-        _ => Err(format!("more than one project is called \"{want}\"; use its id instead ({})", named.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", "))),
+        _ => Err(format!(
+            "more than one project is called \"{want}\"; use its id instead ({})",
+            named.iter().map(|p| p.id.as_str()).collect::<Vec<_>>().join(", ")
+        )),
     }
 }
 
@@ -1298,10 +1306,19 @@ const USAGE: &str = "usage: platoon ticket add (--project <name or id> | --from-
   where  the project a Claude Code session belongs to (exit 1 when it belongs to none)";
 
 /// What `platoon ticket add --how-far` says: the flag is gone, and where "how far" goes now.
-pub const HOW_FAR_GONE: &str = "don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")";
+pub const HOW_FAR_GONE: &str =
+    "don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")";
 
 /// `platoon ticket ...`. Returns the exit code; what it prints goes to `out`, problems to `err`.
-pub fn cli(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path, out: &mut dyn io::Write, err: &mut dyn io::Write) -> i32 {
+pub fn cli(
+    args: &[String],
+    config: &Path,
+    stdin: &mut dyn io::Read,
+    stdin_is_terminal: bool,
+    cwd: &Path,
+    out: &mut dyn io::Write,
+    err: &mut dyn io::Write,
+) -> i32 {
     match args.first().map(String::as_str) {
         Some("add") => match cli_add(&args[1..], config, stdin, stdin_is_terminal, cwd) {
             Ok(n) => {
@@ -1376,7 +1393,8 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
             flag @ ("--waits-for" | "--blocked-by") => {
                 let flag = flag.to_string();
                 let b = value(args, &mut i, &flag)?;
-                let n = b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("{flag} takes a ticket number, not \"{b}\""))?;
+                let n =
+                    b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("{flag} takes a ticket number, not \"{b}\""))?;
                 blocked.push(n);
             }
             other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
@@ -1667,11 +1685,17 @@ mod tests {
         let v = saved(&d);
         assert_eq!(v["squads"], json!(["coding"]));
         let one = &v["tickets"][0];
-        assert_eq!((one["squad"].as_str(), one["leader"].as_str(), one["state"].as_str(), one["title"].as_str()), (Some("coding"), Some("abc"), Some("reviewing"), Some("Uno")));
+        assert_eq!(
+            (one["squad"].as_str(), one["leader"].as_str(), one["state"].as_str(), one["title"].as_str()),
+            (Some("coding"), Some("abc"), Some("reviewing"), Some("Uno"))
+        );
         assert_eq!(v["tickets"][2], "not a ticket");
         assert_eq!(v["tickets"][1]["state"], "done");
         // "how far" was a field once: a ticket that has it keeps it in the file, and nothing reads it.
-        assert_eq!((v["tickets"][0]["how_far"].as_str(), v["tickets"][1]["how_far"].as_str()), (Some("Local commit"), Some("Ship it on Friday")));
+        assert_eq!(
+            (v["tickets"][0]["how_far"].as_str(), v["tickets"][1]["how_far"].as_str()),
+            (Some("Local commit"), Some("Ship it on Friday"))
+        );
         assert!(v["tickets"][3].get("how_far").is_none());
         assert_eq!(v["next"], 4);
     }
@@ -1699,7 +1723,8 @@ mod tests {
         for i in 0..5 {
             add(&mut t, &format!("T{i}"));
         }
-        let names: Vec<String> = fs::read_dir(d.join("projects/p1")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let names: Vec<String> =
+            fs::read_dir(d.join("projects/p1")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
         assert!(names.contains(&"tickets.lock".to_string()), "the lock sits beside the file: {names:?}");
         // Whatever is read at any moment is a whole file: a reader in a loop never sees half of one.
@@ -1750,12 +1775,39 @@ mod tests {
     }
 
     fn tk(number: u32, state: State, blocked_by: &[u32]) -> Ticket {
-        Ticket { number, title: format!("t{number}"), file: String::new(), state, folders: vec![], blocked_by: blocked_by.to_vec(), created: 0, updated: 0, leaders: vec![], worktrees: vec![], reason: String::new(), go_ahead: false, handover: None, permission: false, busy: None, queued: None, from: None }
+        Ticket {
+            number,
+            title: format!("t{number}"),
+            file: String::new(),
+            state,
+            folders: vec![],
+            blocked_by: blocked_by.to_vec(),
+            created: 0,
+            updated: 0,
+            leaders: vec![],
+            worktrees: vec![],
+            reason: String::new(),
+            go_ahead: false,
+            handover: None,
+            permission: false,
+            busy: None,
+            queued: None,
+            from: None,
+        }
     }
 
     #[test]
     fn a_ticket_is_ready_when_it_is_new_and_everything_it_waits_for_is_done() {
-        let all = vec![tk(1, State::Done, &[]), tk(2, State::New, &[]), tk(3, State::New, &[1, 2]), tk(4, State::New, &[1]), tk(5, State::Done, &[2]), tk(6, State::New, &[9]), tk(7, State::New, &[8]), tk(8, State::Cancelled, &[])];
+        let all = vec![
+            tk(1, State::Done, &[]),
+            tk(2, State::New, &[]),
+            tk(3, State::New, &[1, 2]),
+            tk(4, State::New, &[1]),
+            tk(5, State::Done, &[2]),
+            tk(6, State::New, &[9]),
+            tk(7, State::New, &[8]),
+            tk(8, State::Cancelled, &[]),
+        ];
         assert_eq!(waiting_for(&all[2], &all), [2], "only the unfinished blockers");
         assert!(!is_ready(&all[2], &all));
         assert!(is_ready(&all[3], &all) && is_ready(&all[1], &all));
@@ -1788,14 +1840,20 @@ mod tests {
         assert!(t.toggle_blocker(1, 3).unwrap(), "no loop any more");
         assert!(would_loop(t.all(), 3, 1) && !would_loop(t.all(), 4, 1));
         // A new ticket can only wait for tickets that exist.
-        assert!(t.add(NewTicket { title: "e".into(), blocked_by: vec![7], ..Default::default() }).unwrap_err().to_string().contains("no ticket #7"));
+        assert!(
+            t.add(NewTicket { title: "e".into(), blocked_by: vec![7], ..Default::default() })
+                .unwrap_err()
+                .to_string()
+                .contains("no ticket #7")
+        );
         assert_eq!(t.add(NewTicket { title: "e".into(), blocked_by: vec![2, 1, 2], ..Default::default() }).unwrap(), 5);
         assert_eq!(t.get(5).unwrap().blocked_by, [1, 2]);
     }
 
     #[test]
     fn states_have_the_words_of_the_screen() {
-        let words: Vec<String> = ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
+        let words: Vec<String> =
+            ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
         assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to push/publish", "Done", "Cancelled"]);
         assert!(State::Done.closed() && State::Cancelled.closed() && !State::Working.closed());
     }
@@ -1829,7 +1887,12 @@ mod tests {
         let id = crate::projects::Projects::open(&d).create("Web shop").unwrap();
         fs::create_dir_all(d.join("work")).unwrap();
         assert_eq!(run(&d, &["add", "--project", "web shop", "--title", "Login"], "", true), (0, "#1\n".into(), String::new()));
-        let (code, out, _) = run(&d, &["add", "--project", &id, "--title", "Basket", "--folder", "work", "--waits-for", "#1"], "## Body\nfrom stdin\n", false);
+        let (code, out, _) = run(
+            &d,
+            &["add", "--project", &id, "--title", "Basket", "--folder", "work", "--waits-for", "#1"],
+            "## Body\nfrom stdin\n",
+            false,
+        );
         assert_eq!((code, out.as_str()), (0, "#2\n"));
         let t = Tickets::open(&d, &id);
         let two = t.get(2).unwrap();
@@ -1878,7 +1941,9 @@ mod tests {
         assert_eq!((first["number"].as_u64(), first["state"].as_str(), first["ready"].as_bool()), (Some(2), Some("New"), Some(true)));
         assert!(v.as_array().unwrap().iter().all(|t| t.get("how_far").is_none()), "no how far in the JSON: {out}");
         assert_eq!(first["blocked_by"], json!([1]));
-        assert!(first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute());
+        assert!(
+            first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute()
+        );
         assert_eq!(v[2]["number"], 1, "the Done one last");
     }
 
@@ -1926,7 +1991,10 @@ mod tests {
         // --no-folder: a ticket without one, for a squad that needs none; not with --folder.
         call(&["add", "--project", "Web", "--title", "Research it", "--no-folder"]);
         assert!(Tickets::open(&d, &id).get(3).unwrap().folders.is_empty());
-        let args: Vec<String> = ["add", "--project", "Web", "--title", "Both", "--no-folder", "--folder", other.to_str().unwrap()].iter().map(|s| s.to_string()).collect();
+        let args: Vec<String> = ["add", "--project", "Web", "--title", "Both", "--no-folder", "--folder", other.to_str().unwrap()]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         assert_eq!(cli(&args, &d, &mut "".as_bytes(), true, &here, &mut out, &mut err), 1);
         assert_eq!(String::from_utf8(err).unwrap(), "platoon ticket add: --no-folder and --folder don't go together\n");
@@ -1991,7 +2059,10 @@ mod tests {
             (vec!["where", "--project", "Web shop"], "don't know"),
         ] {
             let (code, out, err) = run(&d, &args, "", true);
-            assert!(code == 1 && out.is_empty() && err.starts_with("platoon ticket where: ") && err.contains(says) && err.lines().count() == 1, "{args:?}: {err}");
+            assert!(
+                code == 1 && out.is_empty() && err.starts_with("platoon ticket where: ") && err.contains(says) && err.lines().count() == 1,
+                "{args:?}: {err}"
+            );
         }
         // An archived project takes no tickets, so `where` says so too.
         p.archive(&id, &[]).unwrap();
@@ -2025,13 +2096,39 @@ mod tests {
         fs::create_dir_all(d.join("a")).unwrap();
         fs::create_dir_all(d.join("b")).unwrap();
         fs::write(d.join("body.md"), "## What it should do\n\nIt works.\n").unwrap();
-        let (code, out, _) = run(&d, &["add", "--from-session", "sess-1", "--title", "Five", "--body-file", "body.md", "--folder", "a", "--folder", "b", "--waits-for", "1", "--waits-for", "2"], "", true);
+        let (code, out, _) = run(
+            &d,
+            &[
+                "add",
+                "--from-session",
+                "sess-1",
+                "--title",
+                "Five",
+                "--body-file",
+                "body.md",
+                "--folder",
+                "a",
+                "--folder",
+                "b",
+                "--waits-for",
+                "1",
+                "--waits-for",
+                "2",
+            ],
+            "",
+            true,
+        );
         assert_eq!((code, out.as_str()), (0, "#3\n"));
         let t = Tickets::open(&d, &web);
         let five = t.get(3).unwrap();
-        assert_eq!((five.blocked_by.clone(), five.folders.len(), t.body(five)), (vec![1, 2], 2, "## What it should do\n\nIt works.\n".to_string()));
+        assert_eq!(
+            (five.blocked_by.clone(), five.folders.len(), t.body(five)),
+            (vec![1, 2], 2, "## What it should do\n\nIt works.\n".to_string())
+        );
         // It is in the file and in `list --json`, and survives every rewrite of the ticket.
-        let saved_from = |d: &Path| -> Value { serde_json::from_str::<Value>(&fs::read_to_string(path_in(d, &web)).unwrap()).unwrap()["tickets"][0]["from"].clone() };
+        let saved_from = |d: &Path| -> Value {
+            serde_json::from_str::<Value>(&fs::read_to_string(path_in(d, &web)).unwrap()).unwrap()["tickets"][0]["from"].clone()
+        };
         assert_eq!(saved_from(&d), json!({"session": "sess-1", "project": web}));
         let mut t = Tickets::open(&d, &web);
         t.rename(1, "Basket page").unwrap();
@@ -2066,7 +2163,12 @@ mod tests {
         assert_eq!(x.handover, Some(Handover { squad: "coding".into(), kind: HandoverKind::Refused, says: "This is docs work.".into() }));
         t.handover_failed(n, "coding", HandoverKind::NoCheck, "Session limit has been reached").unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover.as_ref().map(|h| h.kind.clone()), Some(HandoverKind::NoCheck));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().handover, None, "a leader started: nothing to say any more");
         t.handover_failed(n, "coding", HandoverKind::NotStarted, "x").unwrap();
         t.set_state(n, &State::Cancelled).unwrap();
@@ -2078,7 +2180,12 @@ mod tests {
         let d = dir("permission");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         let before = fs::read(t.path()).unwrap();
         assert!(!t.permission_answered(n).unwrap(), "Working: nothing to answer");
         assert_eq!(fs::read(t.path()).unwrap(), before, "and nothing written, not even the time");
@@ -2128,10 +2235,20 @@ mod tests {
         let d = dir("names");
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "a");
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "new-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "new-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+            &[],
+        )
+        .unwrap();
         assert_eq!(saved(&d)["tickets"][0]["leaders"][0]["names"], "squad-role");
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().leader().unwrap().names, AgentNames::SquadRole);
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "old-1".into(), started: 2, names: AgentNames::Plain, snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "old-1".into(), started: 2, names: AgentNames::Plain, snapshot: None },
+            &[],
+        )
+        .unwrap();
         assert!(saved(&d)["tickets"][0]["leaders"][1].get("names").is_none(), "the plain names: nothing written, as before");
         // A leader written by the platoon before this one (no "names") was started with the plain names.
         let mut v = saved(&d);
@@ -2174,7 +2291,12 @@ mod tests {
         let mut t = Tickets::open(&d, "p1");
         let n = add(&mut t, "Basket");
         assert!(!leader_at_work(&d, "lead-1"));
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         assert!(leader_at_work(&d, "lead-1"));
         assert!(!leader_at_work(&d, "someone"));
         for s in [State::Waiting, State::Ready, State::Done, State::Cancelled, State::New] {
@@ -2182,7 +2304,12 @@ mod tests {
             assert!(!leader_at_work(&d, "lead-1"), "{s:?}");
         }
         t.set_state(n, &State::Working).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "lead-2".into(), started: 2, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         assert!(!leader_at_work(&d, "lead-1"), "an earlier leader");
         assert!(leader_at_work(&d, "lead-2"));
     }
@@ -2196,12 +2323,18 @@ mod tests {
         t.queue(n, "coding", true).unwrap();
         let v = saved(&d);
         let q = &v["tickets"][0];
-        assert_eq!((q["state"].as_str(), q["queued"]["squad"].as_str(), q["queued"]["anyway"].as_bool(), q["queued"]["says"].as_str()), (Some("working"), Some("coding"), Some(true), Some(QUEUED_WORDS)));
+        assert_eq!(
+            (q["state"].as_str(), q["queued"]["squad"].as_str(), q["queued"]["anyway"].as_bool(), q["queued"]["says"].as_str()),
+            (Some("working"), Some("coding"), Some(true), Some(QUEUED_WORDS))
+        );
         assert!(q["queued"]["since"].as_u64().unwrap() > 0 && q.get("handover").is_none(), "{q}");
         // Read again (another platoon, or the next one): the line survives.
         let again = Tickets::open(&d, "p1");
         let got = again.get(n).unwrap();
-        assert_eq!((got.state.clone(), got.queued.as_ref().map(|q| (q.squad.as_str(), q.anyway))), (State::Working, Some(("coding", true))));
+        assert_eq!(
+            (got.state.clone(), got.queued.as_ref().map(|q| (q.squad.as_str(), q.anyway))),
+            (State::Working, Some(("coding", true)))
+        );
         // Only a New ticket joins the line.
         assert!(t.queue(n, "coding", false).is_err());
         for s in [State::New, State::Cancelled, State::Done, State::Working] {

@@ -9,7 +9,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs,
@@ -138,7 +138,12 @@ impl Drop for Lab {
 }
 
 fn env_of(run: &Path) -> HashMap<String, String> {
-    fs::read_to_string(run.join("env")).unwrap().lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    fs::read_to_string(run.join("env"))
+        .unwrap()
+        .lines()
+        .filter_map(|l| l.split_once('='))
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
 }
 
 fn session_of(run: &Path) -> Value {
@@ -180,10 +185,19 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     assert_eq!(argv, vec!["-u".to_string(), s(&editor.join("config/init.lua"))]);
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&lab.work));
     assert!(run.join("stdin-is-a-terminal").is_file(), "it reads the real terminal");
-    assert!(editor.join("config/init.lua").is_file() && editor.join("config/lua/platoon/tree.lua").is_file() && editor.join("config/shell.sh").is_file());
+    assert!(
+        editor.join("config/init.lua").is_file()
+            && editor.join("config/lua/platoon/tree.lua").is_file()
+            && editor.join("config/shell.sh").is_file()
+    );
     // Its XDG folders are inside platoon's editor folder; the user's own are kept for its terminal.
     let env = env_of(&run);
-    for (k, sub) in [("XDG_CONFIG_HOME", "nvim/config"), ("XDG_DATA_HOME", "nvim/data"), ("XDG_STATE_HOME", "nvim/state"), ("XDG_CACHE_HOME", "nvim/cache")] {
+    for (k, sub) in [
+        ("XDG_CONFIG_HOME", "nvim/config"),
+        ("XDG_DATA_HOME", "nvim/data"),
+        ("XDG_STATE_HOME", "nvim/state"),
+        ("XDG_CACHE_HOME", "nvim/cache"),
+    ] {
         assert_eq!(env[k], s(&editor.join(sub)), "{k}");
     }
     assert_eq!(env["PLATOON_KEEP_XDG_CONFIG_HOME"], s(&lab.base.join("user-config")));
@@ -207,7 +221,10 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     t.wait_for_all(&["make the shop", "v editor", "Sessions"]);
     let screen = t.stable();
     assert!(!screen.contains("STAND-IN EDITOR RUNNING"), "the editor's screen is gone:\n{screen}");
-    assert!(!lab.data.join("editor/config").read_dir().unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("session-")), "its session file is removed");
+    assert!(
+        !lab.data.join("editor/config").read_dir().unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("session-")),
+        "its session file is removed"
+    );
     assert!(lab.cache.join("editor-open").read_dir().map_or(true, |mut d| d.next().is_none()), "and the note that it had the folders open");
     // And platoon answers keys again.
     t.send(b"2");
@@ -264,7 +281,10 @@ fn v_on_a_tickets_screen_opens_its_worktree_counted_from_where_it_was_made_and_c
     let session = session_of(&run);
     assert_eq!(session["title"], "#1 Basket");
     let root = &session["roots"][0];
-    assert_eq!((root["path"].as_str(), root["base"].as_str(), root["kind"].as_str()), (Some(s(&wt).as_str()), Some(base.as_str()), Some("worktree")));
+    assert_eq!(
+        (root["path"].as_str(), root["base"].as_str(), root["kind"].as_str()),
+        (Some(s(&wt).as_str()), Some(base.as_str()), Some("worktree"))
+    );
     assert_eq!(root["repo_name"], "work");
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&wt));
     t.send(b"\r");
@@ -320,7 +340,11 @@ fn pack(mirror: &Path, name: &str, top: &str, files: &[(&str, &str)]) -> Value {
     }
     let out = mirror.join(name);
     // An empty `top`: the files themselves at the top of the archive (as a font release has them).
-    let (from, what): (PathBuf, Vec<String>) = if top.is_empty() { (stage.clone(), files.iter().map(|(p, _)| p.to_string()).collect()) } else { (stage.clone(), vec![top.to_string()]) };
+    let (from, what): (PathBuf, Vec<String>) = if top.is_empty() {
+        (stage.clone(), files.iter().map(|(p, _)| p.to_string()).collect())
+    } else {
+        (stage.clone(), vec![top.to_string()])
+    };
     assert!(Command::new("tar").arg("-czf").arg(&out).arg("-C").arg(&from).args(&what).status().unwrap().success());
     fs::remove_dir_all(&stage).unwrap();
     json!({"url": format!("https://example.invalid/{name}"), "sha256": sha256(&out), "size": fs::metadata(&out).unwrap().len()})
@@ -349,7 +373,8 @@ fn editor_catalog_with(lab: &Lab, version: Option<&str>, extra: &[&str]) -> (Pat
     };
     let nvim = packed("nvim-fake.tar.gz", "nvim-dist", &[("bin/nvim", STAND_IN)]);
     let font = packed("Font.tar.xz", "", &[("FakeNerdFont-Regular.ttf", "font"), ("OFL.txt", "licence")]);
-    let downloads: serde_json::Map<String, Value> = ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"].iter().map(|k| (k.to_string(), nvim.clone())).collect();
+    let downloads: serde_json::Map<String, Value> =
+        ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"].iter().map(|k| (k.to_string(), nvim.clone())).collect();
     let mut pins = Vec::new();
     for name in std::iter::once("alpha.nvim").chain(extra.iter().copied()) {
         let short = name.trim_end_matches(".nvim");
@@ -547,11 +572,18 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     t.send(b"v");
     t.wait_for_all(&["╭ open with", "platoon's editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
     let shown = t.stable();
-    let rows: Vec<&str> = shown.lines().filter(|l| l.contains("platoon's editor") || l.contains("VS Code") || l.contains("Helix")).collect();
+    let rows: Vec<&str> =
+        shown.lines().filter(|l| l.contains("platoon's editor") || l.contains("VS Code") || l.contains("Helix")).collect();
     assert_eq!(rows.len(), 3, "{shown}");
-    assert!(rows[0].contains("platoon's editor") && rows[1].contains("VS Code") && rows[2].contains("Helix"), "platoon's own first:\n{shown}");
+    assert!(
+        rows[0].contains("platoon's editor") && rows[1].contains("VS Code") && rows[2].contains("Helix"),
+        "platoon's own first:\n{shown}"
+    );
     assert!(rows[1].contains("★") && !rows[0].contains("★") && !rows[2].contains("★"), "only the favourite is starred:\n{shown}");
-    assert!(rows[1].contains("▎") && rows[1].contains("in its own window") && rows[2].contains("here in platoon's terminal"), "and picked:\n{shown}");
+    assert!(
+        rows[1].contains("▎") && rows[1].contains("in its own window") && rows[2].contains("here in platoon's terminal"),
+        "and picked:\n{shown}"
+    );
     // The star is drawn in the theme's accent (Catppuccin Mocha lavender).
     let (row, col) = t.find("★ VS Code").unwrap();
     assert_eq!(t.fg_at(row, col), vt100::Color::Rgb(0xb4, 0xbe, 0xfe));
@@ -580,7 +612,12 @@ fn a_terminal_editor_of_yours_is_handed_the_terminal_on_the_first_folder_and_pla
     t.wait_for("STAND-IN HELIX RUNNING");
     let screen = t.stable();
     assert!(!screen.contains("make the shop") && !screen.contains("v editor"), "platoon's screen is gone:\n{screen}");
-    let run = fs::read_dir(&lab.out).unwrap().flatten().map(|e| e.path()).find(|p| p.file_name().unwrap().to_string_lossy().starts_with("hx-")).unwrap();
+    let run = fs::read_dir(&lab.out)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("hx-"))
+        .unwrap();
     assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&lab.work)]);
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&lab.work));
     assert!(run.join("stdin-is-a-terminal").is_file());
@@ -647,7 +684,13 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last (Plugins), then Editors before it
     t.wait_for("No plugins installed, and none from the catalog to show.");
     t.send(b"\x1b[Z");
-    t.wait_for_all(&["Editing platoon's text", "Editor for notes and tickets", "Editing files", "Editor for files (v)", "Always ask which editor"]);
+    t.wait_for_all(&[
+        "Editing platoon's text",
+        "Editor for notes and tickets",
+        "Editing files",
+        "Editor for files (v)",
+        "Always ask which editor",
+    ]);
     let shown = t.stable();
     let at = |needle: &str| shown.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{shown}"));
     assert!(at("Editing platoon's text") < at("Editor for notes and tickets"));
@@ -702,8 +745,18 @@ fn a_newer_editor_plugin_is_updated_when_platoon_starts_and_fetches_only_what_ch
         ])
         .collect();
     let cli = |args: &[&str]| {
-        let out = Command::new(BIN).args(args).envs(env.iter().map(|(k, v)| (*k, v.as_str()))).current_dir(&lab.base).stdin(Stdio::null()).output().unwrap();
-        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+        let out = Command::new(BIN)
+            .args(args)
+            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
+            .current_dir(&lab.base)
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     };
     let (code, out, err) = cli(&["plugin", "add", "editor"]);
     assert_eq!(code, 0, "{out}{err}");

@@ -9,9 +9,9 @@ use crate::testkit::World;
 use crate::ui;
 use crate::usage;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 
 fn key(app: &mut App, code: KeyCode) {
@@ -139,7 +139,8 @@ fn the_header_says_quietly_when_the_features_are_paused_shrinks_to_fit_and_goes_
     std::fs::create_dir_all(w.cache.join("status")).unwrap();
     std::fs::write(
         w.cache.join("status/s1.json"),
-        serde_json::json!({"ts": now, "context_pct": null, "five_hour": {"pct": 82, "resets_at": now + 3600}, "seven_day": null}).to_string(),
+        serde_json::json!({"ts": now, "context_pct": null, "five_hour": {"pct": 82, "resets_at": now + 3600}, "seven_day": null})
+            .to_string(),
     )
     .unwrap();
     app.refresh_for_test();
@@ -198,7 +199,9 @@ fn used_today_shows_the_ledger_against_the_limit_and_turns_to_a_warning_at_the_l
     select(&mut app, "Daily token limit");
     let shown = screen(&mut term, &app);
     assert!(shown.contains("Used today: 0 of 500,000 tokens"), "{shown}");
-    Ledger::open(&w.cache).record_call(usage::now(), "names", &Usage { input: 1000, cache_creation: 200, cache_read: 30_000, output: 5 }, 0.01, true).unwrap();
+    Ledger::open(&w.cache)
+        .record_call(usage::now(), "names", &Usage { input: 1000, cache_creation: 200, cache_read: 30_000, output: 5 }, 0.01, true)
+        .unwrap();
     app.refresh_for_test();
     let shown = screen(&mut term, &app);
     assert!(shown.contains("Used today: 31,205 of 500,000 tokens"), "{shown}");
@@ -232,7 +235,18 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
     select(&mut app, MASTER_LABEL);
     let shown = screen(&mut term, &app);
-    for want in [MASTER_LABEL, "Smart names and summaries", "Find a session by description", "Daily token limit", "500K tokens", "Pause above plan usage", "80%", "Model for smart features", "Haiku", "Used today"] {
+    for want in [
+        MASTER_LABEL,
+        "Smart names and summaries",
+        "Find a session by description",
+        "Daily token limit",
+        "500K tokens",
+        "Pause above plan usage",
+        "80%",
+        "Model for smart features",
+        "Haiku",
+        "Used today",
+    ] {
         assert!(shown.contains(want), "{want}:\n{shown}");
     }
     // The master's explanation is shown while it is selected, in plain words.
@@ -256,7 +270,10 @@ fn the_token_entries_are_drawn_with_off_muted_and_on_in_the_accent_and_the_line_
     for name in [MASTER_LABEL, "Daily token limit", "Model for smart features"] {
         select(&mut app, name);
         let shown = screen(&mut small, &app);
-        assert!(shown.contains(name) && shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("ctrl+space back"), "{name}:\n{shown}");
+        assert!(
+            shown.contains(name) && shown.contains("Used today: 0 of 500,000 tokens") && shown.contains("ctrl+space back"),
+            "{name}:\n{shown}"
+        );
     }
 }
 

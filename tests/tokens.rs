@@ -4,7 +4,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -97,7 +97,8 @@ fn text(b: &[u8]) -> String {
 }
 
 fn listing(dir: &Path) -> Vec<String> {
-    let mut v: Vec<String> = fs::read_dir(dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
+    let mut v: Vec<String> =
+        fs::read_dir(dir).map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect()).unwrap_or_default();
     v.sort();
     v
 }
@@ -112,7 +113,12 @@ fn the_test_call_is_refused_while_the_features_are_off_and_says_how_to_turn_them
     assert!(err.contains("Not run:") && err.contains("Enable features which require tokens") && err.contains("switched off"), "{err}");
     assert!(err.contains("press s in platoon") && err.contains("tokens_enabled") && err.contains("settings.json"), "{err}");
     assert!(!lab.ran(), "the fake claude was never started");
-    assert!(listing(&lab.cache()).is_empty() && listing(&lab.config()).is_empty(), "nothing was written: {:?} {:?}", listing(&lab.cache()), listing(&lab.config()));
+    assert!(
+        listing(&lab.cache()).is_empty() && listing(&lab.config()).is_empty(),
+        "nothing was written: {:?} {:?}",
+        listing(&lab.cache()),
+        listing(&lab.config())
+    );
 }
 
 #[test]
@@ -132,7 +138,20 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     let argv: Vec<String> = lab.rec("argv").lines().map(String::from).collect();
     assert_eq!(
         argv[..12],
-        ["-p", "--model", "haiku", "--tools", "", "--setting-sources", "", "--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config", "--system-prompt", argv[11].as_str()]
+        [
+            "-p",
+            "--model",
+            "haiku",
+            "--tools",
+            "",
+            "--setting-sources",
+            "",
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--system-prompt",
+            argv[11].as_str()
+        ]
     );
     assert_eq!(argv[12..], ["--effort", "low", "--output-format", "json"]);
     assert!(!argv.iter().any(|a| a == "--bare"));
@@ -149,7 +168,10 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     assert!(names.iter().all(|n| ["ai-usage.json", "ai-usage.lock", "ai-work"].contains(&n.as_str())), "{names:?}");
     let ledger = lab.ledger();
     let day = ledger["days"].as_object().unwrap().values().next().unwrap();
-    assert_eq!((day["calls"].as_u64(), day["usage"]["input"].as_u64(), day["features"]["test"]["tokens"].as_u64()), (Some(1), Some(400), Some(422)));
+    assert_eq!(
+        (day["calls"].as_u64(), day["usage"]["input"].as_u64(), day["features"]["test"]["tokens"].as_u64()),
+        (Some(1), Some(400), Some(422))
+    );
     assert!(!fs::read_to_string(lab.cache().join("ai-usage.json")).unwrap().contains("single word"), "no prompt text on disk");
 
     // A second call adds to today's total.
@@ -157,7 +179,10 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     assert!(o.contains("Used today: 844 of 500,000 tokens"), "{o}");
     // And `platoon tokens` reports it.
     let s = text(&lab.run(&["tokens"], &bin).stdout);
-    assert!(s.contains("Features that use tokens: on") && s.contains("Used today: 844 of 500,000 tokens") && s.contains("Model: haiku"), "{s}");
+    assert!(
+        s.contains("Features that use tokens: on") && s.contains("Used today: 844 of 500,000 tokens") && s.contains("Model: haiku"),
+        "{s}"
+    );
     // Where the tokens went, feature by feature, so the spend of each one is visible.
     assert!(s.contains("  Token test: 844 tokens in 2 calls"), "work with no switch of its own still says what it spent: {s}");
     assert!(s.contains("Project notes: on") && s.contains("Project descriptions: on"), "every feature has its own line: {s}");
@@ -188,7 +213,11 @@ fn the_daily_limit_and_the_plan_pause_and_a_failure_all_refuse_the_next_call_and
     let bin = lab.good();
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
     fs::create_dir_all(lab.cache().join("status")).unwrap();
-    fs::write(lab.cache().join("status/s1.json"), json!({"ts": now, "context_pct": null, "five_hour": {"pct": 95, "resets_at": now + 3600}, "seven_day": null}).to_string()).unwrap();
+    fs::write(
+        lab.cache().join("status/s1.json"),
+        json!({"ts": now, "context_pct": null, "five_hour": {"pct": 95, "resets_at": now + 3600}, "seven_day": null}).to_string(),
+    )
+    .unwrap();
     let out = lab.run(&["tokens", "test"], &bin);
     assert_eq!(out.status.code(), Some(3));
     assert!(text(&out.stderr).contains("95% used") && text(&out.stderr).contains("pause point of 80%"), "{}", text(&out.stderr));
@@ -209,7 +238,11 @@ fn the_daily_limit_and_the_plan_pause_and_a_failure_all_refuse_the_next_call_and
     let _ = fs::remove_file(lab.base.join("rec.argv"));
     let again = lab.run(&["tokens", "test"], &bin);
     assert_eq!(again.status.code(), Some(3));
-    assert!(text(&again.stderr).contains("paused after a failure") && text(&again.stderr).contains("isn't signed in"), "{}", text(&again.stderr));
+    assert!(
+        text(&again.stderr).contains("paused after a failure") && text(&again.stderr).contains("isn't signed in"),
+        "{}",
+        text(&again.stderr)
+    );
     assert!(!lab.ran());
     let s = text(&lab.run(&["tokens"], &bin).stdout);
     assert!(s.contains("Paused after a failure"), "{s}");
@@ -246,7 +279,10 @@ fn in_a_terminal_the_test_call_reads_well_and_when_refused_says_how_to_enable() 
     let mut t = Term::spawn(&["tokens", "test"], &lab.env(&bin), &lab.base, 24, 100);
     assert_eq!(t.wait_exit(), 0);
     let screen = t.text();
-    assert!(screen.contains("Asking Claude (haiku)") && screen.contains("Reply: ok") && screen.contains("Used today: 422 of 500,000 tokens"), "{screen}");
+    assert!(
+        screen.contains("Asking Claude (haiku)") && screen.contains("Reply: ok") && screen.contains("Used today: 422 of 500,000 tokens"),
+        "{screen}"
+    );
 }
 
 #[test]
@@ -285,7 +321,14 @@ fn setup_asks_in_a_terminal_and_yes_saves_the_master_switch_the_features_and_the
     let mut t = Term::spawn(&["setup"], &setup_env(&lab), &lab.base, 50, 110);
     t.wait_for_flat("Turn these features on? [y/N]");
     let screen = t.flat();
-    for want in ["Smart names and summaries", "Find a session by description", "your own Claude plan", "the prompts you typed", "one line of Claude's last reply", "press s in platoon"] {
+    for want in [
+        "Smart names and summaries",
+        "Find a session by description",
+        "your own Claude plan",
+        "the prompts you typed",
+        "one line of Claude's last reply",
+        "press s in platoon",
+    ] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     assert!(screen.contains("[✓]") || screen.contains("already done") || screen.contains("added"), "the checklist came first:\n{screen}");
@@ -334,7 +377,10 @@ fn setup_without_a_terminal_asks_nothing_leaves_everything_off_and_prints_one_li
     assert!(o.contains("All set."), "{o}");
     let hint: Vec<&str> = o.lines().filter(|l| l.contains("Smart features")).collect();
     assert_eq!(hint.len(), 1, "{o}");
-    assert!(hint[0].contains("off") && hint[0].contains("platoon setup") && hint[0].contains("Enable features which require tokens"), "{o}");
+    assert!(
+        hint[0].contains("off") && hint[0].contains("platoon setup") && hint[0].contains("Enable features which require tokens"),
+        "{o}"
+    );
     assert!(!lab.config().join("settings.json").exists(), "nothing saved: {:?}", listing(&lab.config()));
     assert!(!o.contains("[y/N]"));
     // With piped input too: a `y` on stdin is not an answer when stdout is not a terminal.

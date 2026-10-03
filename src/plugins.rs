@@ -36,15 +36,15 @@
 use crate::editor_install::{sha256_file, sha256_hex};
 use crate::theme::Theme;
 use crate::usertheme;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     ffi::OsStr,
     fs, io,
     os::unix::{fs::PermissionsExt, io::AsRawFd},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc,
+        atomic::{AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -194,7 +194,8 @@ pub fn valid_id(id: &str) -> bool {
 /// Text from a manifest, safe to print: control characters and the invisible ones that reorder text become spaces,
 /// runs of space are folded.
 fn clean(s: &str) -> String {
-    let odd = |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+    let odd =
+        |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
     s.chars().map(|c| if odd(c) { ' ' } else { c }).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
@@ -233,7 +234,10 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
     let license = text("license", MAX_LICENSE, false)?;
     let platoon = need("platoon", 20)?;
     if parse_version(&platoon).is_none() {
-        return Err(format!("\"platoon\" should be the oldest platoon version it works with, like {}; it is \"{platoon}\"", platoon_version()));
+        return Err(format!(
+            "\"platoon\" should be the oldest platoon version it works with, like {}; it is \"{platoon}\"",
+            platoon_version()
+        ));
     }
     let mut adds = Vec::new();
     let mut editor = None;
@@ -258,7 +262,11 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
             Some(_) => return Err(format!("\"{}\" must be a list of file names", kind.key)),
         }
     }
-    let unknown = obj.keys().filter(|k| !FIELDS.contains(&k.as_str()) && !KINDS.iter().any(|kind| kind.key == k.as_str())).map(|k| clean(k)).collect();
+    let unknown = obj
+        .keys()
+        .filter(|k| !FIELDS.contains(&k.as_str()) && !KINDS.iter().any(|kind| kind.key == k.as_str()))
+        .map(|k| clean(k))
+        .collect();
     Ok(Manifest { id, name, description, version, author, license, platoon, adds, editor, unknown })
 }
 
@@ -425,7 +433,8 @@ pub fn check(dir: &Path) -> CheckReport {
     let (problems, skills) = crate::skillplugin::check(&m.id, m.files(crate::skillplugin::KIND), &rel, safe_rel);
     r.problems.extend(problems);
     r.skills = skills;
-    let (problems, squads, agents) = crate::squadplugin::check(m.files(crate::squadplugin::SQUADS), m.files(crate::squadplugin::AGENTS), &rel, safe_rel);
+    let (problems, squads, agents) =
+        crate::squadplugin::check(m.files(crate::squadplugin::SQUADS), m.files(crate::squadplugin::AGENTS), &rel, safe_rel);
     r.problems.extend(problems);
     r.squads = squads;
     r.agents = agents;
@@ -676,7 +685,14 @@ impl Store {
                     .map(|o| o.iter().filter_map(|(name, p)| crate::skillplugin::Placed::from_json(name, p)).collect())
                     .unwrap_or_default();
                 let declined = v.get(DECLINED).and_then(Value::as_str).map(String::from);
-                Some(Installed { manifest, origin, sha256: s("sha256"), installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0), skills, declined })
+                Some(Installed {
+                    manifest,
+                    origin,
+                    sha256: s("sha256"),
+                    installed_at: v.get("installed_at").and_then(Value::as_u64).unwrap_or(0),
+                    skills,
+                    declined,
+                })
             })
             .collect();
         out.sort_by(|a, b| a.manifest.name.to_lowercase().cmp(&b.manifest.name.to_lowercase()).then(a.id().cmp(b.id())));
@@ -712,7 +728,12 @@ impl Store {
         let mut rec = self.read_record()?;
         if m.editor.is_some() {
             if let Some(other) = self.installed().into_iter().find(|p| p.manifest.editor.is_some() && p.id() != m.id) {
-                return Err(format!("{} can't be installed while {} is: platoon has one code editor. Remove {} first.", m.name, other.manifest.name, other.id()));
+                return Err(format!(
+                    "{} can't be installed while {} is: platoon has one code editor. Remove {} first.",
+                    m.name,
+                    other.manifest.name,
+                    other.id()
+                ));
             }
         }
         let before = self.get(&m.id);
@@ -723,14 +744,19 @@ impl Store {
         }
         // Where its skills go, worked out before anything is touched.
         let old_skills = before.as_ref().map(|b| b.skills.clone()).unwrap_or_default();
-        let others: Vec<(String, Vec<crate::skillplugin::Placed>)> = self.installed().into_iter().filter(|p| p.id() != m.id).map(|p| (p.manifest.name.clone(), p.skills)).collect();
+        let others: Vec<(String, Vec<crate::skillplugin::Placed>)> =
+            self.installed().into_iter().filter(|p| p.id() != m.id).map(|p| (p.manifest.name.clone(), p.skills)).collect();
         let skills_plan = if report.skills.is_empty() && old_skills.is_empty() {
             None
         } else {
             let Some(claude) = self.claude.clone() else {
-                return Err(format!("{} can't be installed: it has skills, and platoon doesn't know where Claude Code's folder is", m.name));
+                return Err(format!(
+                    "{} can't be installed: it has skills, and platoon doesn't know where Claude Code's folder is",
+                    m.name
+                ));
             };
-            let plan = crate::skillplugin::plan(&claude, &report.skills, &old_skills, &others).map_err(|e| format!("{} can't be installed: {e}", m.name))?;
+            let plan = crate::skillplugin::plan(&claude, &report.skills, &old_skills, &others)
+                .map_err(|e| format!("{} can't be installed: {e}", m.name))?;
             Some((claude, plan))
         };
         // Whatever an interrupted install left half done goes; nothing in it was ever recorded.
@@ -1051,8 +1077,18 @@ pub fn read_catalog(dir: &Path) -> (Vec<Entry>, Vec<String>) {
         let sha256 = tree_hash(&found).unwrap_or_default();
         // Its files are kept to be written out again when it is shown or installed (a plugin too big to install
         // keeps none: it can't be installed anyway).
-        let files: Vec<(String, Vec<u8>)> = if report.bytes <= MAX_PLUGIN_BYTES { found.iter().filter_map(|f| fs::read(&f.path).ok().map(|b| (f.rel.clone(), b))).collect() } else { Vec::new() };
-        entries.push(Entry { manifest: m, sha256, problems: report.problems, download_bytes: report.download_bytes, files: Arc::new(files) });
+        let files: Vec<(String, Vec<u8>)> = if report.bytes <= MAX_PLUGIN_BYTES {
+            found.iter().filter_map(|f| fs::read(&f.path).ok().map(|b| (f.rel.clone(), b))).collect()
+        } else {
+            Vec::new()
+        };
+        entries.push(Entry {
+            manifest: m,
+            sha256,
+            problems: report.problems,
+            download_bytes: report.download_bytes,
+            files: Arc::new(files),
+        });
     }
     (entries, skipped)
 }
@@ -1072,13 +1108,27 @@ pub fn update_available(p: &Installed, catalog: &Catalog) -> bool {
 pub enum Updated {
     /// Replaced with the catalog's: from this version to that (and what is worth saying besides: a skill the user
     /// changed, kept as it is).
-    Done { name: String, from: String, to: String, notes: Vec<String> },
-    UpToDate { name: String },
+    Done {
+        name: String,
+        from: String,
+        to: String,
+        notes: Vec<String>,
+    },
+    UpToDate {
+        name: String,
+    },
     /// Installed from a folder: add it again to update it.
-    FromFolder { name: String },
+    FromFolder {
+        name: String,
+    },
     /// The catalog doesn't have it any more (it stays installed).
-    Gone { name: String },
-    Failed { name: String, why: String },
+    Gone {
+        name: String,
+    },
+    Failed {
+        name: String,
+        why: String,
+    },
 }
 
 /// Bring installed plugins up to the catalog: each (or the one named) that came from the catalog and whose version
@@ -1106,7 +1156,9 @@ pub fn update(store: &Store, catalog: &Catalog, only: Option<&str>) -> Vec<Updat
         let done = e.unpack().and_then(|u| store.install_noting(u.dir(), Origin::Catalog));
         match done {
             Ok((Outcome::Same(_), _)) => out.push(Updated::UpToDate { name }),
-            Ok((o, notes)) => out.push(Updated::Done { name, from: p.manifest.version.clone(), to: o.plugin().manifest.version.clone(), notes }),
+            Ok((o, notes)) => {
+                out.push(Updated::Done { name, from: p.manifest.version.clone(), to: o.plugin().manifest.version.clone(), notes })
+            }
             Err(why) => out.push(Updated::Failed { name, why }),
         }
     }
@@ -1143,7 +1195,12 @@ pub fn auto_plan(store: &Store, catalog: &Catalog) -> AutoPlan {
         let Some(e) = catalog.get(p.id()) else { continue };
         if e.manifest.has_instructions() || p.manifest.has_instructions() {
             if p.declined.as_deref() != Some(e.manifest.version.as_str()) {
-                plan.ask.push(Ask { id: p.id().to_string(), name: e.manifest.name.clone(), from: p.manifest.version.clone(), to: e.manifest.version.clone() });
+                plan.ask.push(Ask {
+                    id: p.id().to_string(),
+                    name: e.manifest.name.clone(),
+                    from: p.manifest.version.clone(),
+                    to: e.manifest.version.clone(),
+                });
             }
         } else {
             plan.quiet.push(p.id().to_string());
@@ -1192,7 +1249,8 @@ impl Store {
     pub fn decline_update(&self, id: &str, version: &str) -> Result<(), String> {
         let _lock = self.lock()?;
         let mut rec = self.read_record()?;
-        let Some(entry) = rec.get_mut("plugins").and_then(Value::as_object_mut).and_then(|p| p.get_mut(id)).and_then(Value::as_object_mut) else {
+        let Some(entry) = rec.get_mut("plugins").and_then(Value::as_object_mut).and_then(|p| p.get_mut(id)).and_then(Value::as_object_mut)
+        else {
             return Ok(());
         };
         entry.insert(DECLINED.into(), json!(version));
@@ -1246,7 +1304,10 @@ pub fn themes(store: &Store, taken: &[String]) -> Vec<PluginTheme> {
             let lower = name.to_lowercase();
             let clash = taken.iter().any(|t| t.to_lowercase() == lower) || out.iter().any(|t| t.theme.name.to_lowercase() == lower);
             let shown = if clash { format!("{name} ({})", p.manifest.name) } else { name };
-            let Ok(theme) = usertheme::read_theme_text(&path, meta.len()).and_then(|t| usertheme::parse(&t)).map(|parsed| usertheme::build(id, shown, &parsed)) else {
+            let Ok(theme) = usertheme::read_theme_text(&path, meta.len())
+                .and_then(|t| usertheme::parse(&t))
+                .map(|parsed| usertheme::build(id, shown, &parsed))
+            else {
                 continue;
             };
             out.push(PluginTheme { theme, plugin: p.manifest.name.clone() });
@@ -1266,7 +1327,8 @@ pub fn next_words(m: &Manifest) -> String {
     } else if !m.files(crate::squadplugin::AGENTS).is_empty() {
         out.push("Its agents are on the Squads tab (3), for your squads' steps.".into());
     }
-    let skills: Vec<String> = m.files(crate::skillplugin::KIND).iter().map(|f| format!("/{}", f.trim_end_matches('/').rsplit('/').next().unwrap_or(f))).collect();
+    let skills: Vec<String> =
+        m.files(crate::skillplugin::KIND).iter().map(|f| format!("/{}", f.trim_end_matches('/').rsplit('/').next().unwrap_or(f))).collect();
     match skills.as_slice() {
         [] => {}
         [one] => out.push(format!("Its skill is in Claude Code's skills folder: type {one} in a new Claude session.")),
@@ -1302,7 +1364,11 @@ pub mod testing {
     use super::*;
 
     pub fn tmp(name: &str) -> PathBuf {
-        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-plugins-{name}-{}-{}", std::process::id(), unique())));
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!(
+            "platoon-plugins-{name}-{}-{}",
+            std::process::id(),
+            unique()
+        )));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -1360,7 +1426,8 @@ pub mod testing {
     /// Add plugin folder `dir` (already in `cat`) to the catalog's index.
     pub fn list_in_index(cat: &Path, id: &str, version: &str) {
         let path = cat.join(INDEX);
-        let mut index: Value = fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({"plugins": []}));
+        let mut index: Value =
+            fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_else(|| json!({"plugins": []}));
         index.get_mut("plugins").and_then(Value::as_array_mut).unwrap().push(json!({"id": id, "version": version}));
         fs::write(path, index.to_string()).unwrap();
     }
@@ -1376,13 +1443,18 @@ mod tests {
     use super::*;
 
     fn manifest_json(extra: &str) -> String {
-        format!(r#"{{"id": "sea-themes", "name": "Sea themes", "description": "Two themes.", "version": "1.2.0", "author": "A. Person", "platoon": "0.1.0", "themes": ["themes/Deep"]{extra}}}"#)
+        format!(
+            r#"{{"id": "sea-themes", "name": "Sea themes", "description": "Two themes.", "version": "1.2.0", "author": "A. Person", "platoon": "0.1.0", "themes": ["themes/Deep"]{extra}}}"#
+        )
     }
 
     #[test]
     fn a_manifest_parses_and_keeps_what_it_does_not_know_aside() {
         let m = parse_manifest(&manifest_json(r#", "license": "MIT", "widgets": ["widgets/x"], "homepage": "somewhere""#)).unwrap();
-        assert_eq!((m.id.as_str(), m.name.as_str(), m.version.as_str(), m.platoon.as_str()), ("sea-themes", "Sea themes", "1.2.0", "0.1.0"));
+        assert_eq!(
+            (m.id.as_str(), m.name.as_str(), m.version.as_str(), m.platoon.as_str()),
+            ("sea-themes", "Sea themes", "1.2.0", "0.1.0")
+        );
         assert_eq!(m.license.as_deref(), Some("MIT"));
         assert_eq!(m.themes(), ["themes/Deep"]);
         assert_eq!(m.unknown, ["widgets", "homepage"], "later kinds and other keys are left alone, not refused");
@@ -1466,7 +1538,8 @@ mod tests {
         fs::remove_file(dir.join("themes/A")).unwrap();
         assert!(reasons(&dir).contains("themes/A is listed in plugin.json but isn't in the folder"));
         let dir = plugin(&base, "escape", "1.0.0", &[("A", GOOD_THEME)]);
-        fs::write(dir.join(MANIFEST), manifest_json("").replace("sea-themes", "escape").replace("themes/Deep", "../escape/themes/A")).unwrap();
+        fs::write(dir.join(MANIFEST), manifest_json("").replace("sea-themes", "escape").replace("themes/Deep", "../escape/themes/A"))
+            .unwrap();
         assert!(reasons(&dir).contains("isn't a file name inside the plugin"));
         // A theme that can't be read, and ones that don't read well.
         let dir = plugin(&base, "unreadable", "1.0.0", &[("A", "background = nope\nforeground = #fff")]);
@@ -1482,7 +1555,15 @@ mod tests {
         assert!(reasons(&dir).contains("the ok and warning colors look too alike"), "{}", reasons(&dir));
         // A light theme is held to the same floors (the ratio is the same either way round): faint yellow on white
         // doesn't read, and a light theme with no colors of its own has none to offer.
-        let light = plugin(&base, "light", "1.0.0", &[("A", "background = #fafafa\nforeground = #111111\npalette = 1=#c0392b\npalette = 2=#2e7d32\npalette = 3=#f5d76e\npalette = 4=#1565c0\npalette = 5=#8e24aa")]);
+        let light = plugin(
+            &base,
+            "light",
+            "1.0.0",
+            &[(
+                "A",
+                "background = #fafafa\nforeground = #111111\npalette = 1=#c0392b\npalette = 2=#2e7d32\npalette = 3=#f5d76e\npalette = 4=#1565c0\npalette = 5=#8e24aa",
+            )],
+        );
         assert!(reasons(&light).contains("the warning color is hard to read on the background (1.4:1"), "{}", reasons(&light));
         assert!(!reasons(&light).contains("light"), "being light is no reason by itself: {}", reasons(&light));
         let bare_light = plugin(&base, "bare-light", "1.0.0", &[("A", "background = #fafafa\nforeground = #111111")]);
@@ -1505,7 +1586,11 @@ mod tests {
         fs::write(newer.join(MANIFEST), text).unwrap();
         assert!(reasons(&newer).contains("it needs platoon 99.0.0 or newer"));
         let twice = plugin(&base, "twice", "1.0.0", &[("A", GOOD_THEME)]);
-        fs::write(twice.join(MANIFEST), manifest_json("").replace("sea-themes", "twice").replace("[\"themes/Deep\"]", "[\"themes/A\", \"themes/A\"]")).unwrap();
+        fs::write(
+            twice.join(MANIFEST),
+            manifest_json("").replace("sea-themes", "twice").replace("[\"themes/Deep\"]", "[\"themes/A\", \"themes/A\"]"),
+        )
+        .unwrap();
         assert!(reasons(&twice).contains("already used by another theme"));
     }
 
@@ -1616,7 +1701,10 @@ mod tests {
         bump(&cat, "dusk", "0.4.0");
         let c3 = load_catalog(&from(&cat));
         assert!(update_available(&s.get("dusk").unwrap(), &c3));
-        assert_eq!(update(&s, &c3, Some("dusk")), [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into(), notes: Vec::new() }]);
+        assert_eq!(
+            update(&s, &c3, Some("dusk")),
+            [Updated::Done { name: "dusk name".into(), from: "0.3.0".into(), to: "0.4.0".into(), notes: Vec::new() }]
+        );
         assert_eq!(s.get("dusk").unwrap().manifest.version, "0.4.0");
         // An older one (an older platoon) is no update either.
         bump(&cat, "dusk", "0.2.0");
@@ -1741,7 +1829,10 @@ mod tests {
         let mut said: Vec<String> = runs.iter().flat_map(|(d, _)| d.iter().map(|(n, ..)| n.clone())).collect();
         said.sort();
         assert_eq!(said, ["dusk name", "sea-themes name"], "each update said once, by whichever did it");
-        assert_eq!((s.get("sea-themes").unwrap().manifest.version.as_str(), s.get("dusk").unwrap().manifest.version.as_str()), ("1.1.0", "0.4.0"));
+        assert_eq!(
+            (s.get("sea-themes").unwrap().manifest.version.as_str(), s.get("dusk").unwrap().manifest.version.as_str()),
+            ("1.1.0", "0.4.0")
+        );
         assert!(!s.tmp().exists());
     }
 
@@ -1785,7 +1876,8 @@ mod tests {
         // Read from inside platoon: the same plugins, the same files.
         let built = load_catalog(&CatalogFrom::BuiltIn);
         assert!(built.skipped.is_empty(), "{:?}", built.skipped);
-        let ids = |es: &[Entry]| es.iter().map(|e| (e.manifest.id.clone(), e.manifest.version.clone(), e.sha256.clone())).collect::<Vec<_>>();
+        let ids =
+            |es: &[Entry]| es.iter().map(|e| (e.manifest.id.clone(), e.manifest.version.clone(), e.sha256.clone())).collect::<Vec<_>>();
         assert_eq!(ids(&built.entries), ids(&on_disk));
         assert!(built.entries.iter().all(|e| e.problems.is_empty()));
         assert!(builtin_plugin(crate::editorplugin::ID).iter().any(|(rel, _)| *rel == crate::editorplugin::INIT));
@@ -1799,12 +1891,16 @@ mod tests {
         plugin(&cat, "other", "1.0.0", &[("A", GOOD_THEME)]);
         fs::rename(cat.join("other"), cat.join("renamed")).unwrap();
         plugin(&cat, "old", "1.0.0", &[("A", GOOD_THEME)]);
-        let index = json!({"plugins": [{"id": "good", "version": "1.0.0"}, {"id": "renamed"}, {"id": "old", "version": "0.9.0"}, {"id": "gone"}]});
+        let index =
+            json!({"plugins": [{"id": "good", "version": "1.0.0"}, {"id": "renamed"}, {"id": "old", "version": "0.9.0"}, {"id": "gone"}]});
         fs::write(cat.join(INDEX), index.to_string()).unwrap();
         let (entries, skipped) = read_catalog(&cat);
         assert_eq!(entries.iter().map(|e| e.manifest.id.as_str()).collect::<Vec<_>>(), ["good"]);
         assert_eq!(skipped.len(), 3, "{skipped:?}");
-        assert!(skipped[0].contains("says its id is other") && skipped[1].contains("different versions") && skipped[2].contains("no folder"), "{skipped:?}");
+        assert!(
+            skipped[0].contains("says its id is other") && skipped[1].contains("different versions") && skipped[2].contains("no folder"),
+            "{skipped:?}"
+        );
     }
 
     #[test]
@@ -1852,14 +1948,21 @@ mod tests {
         // Free: written and recorded.
         let (o, notes) = s.install_noting(&src, folder(&src)).unwrap();
         assert!(matches!(o, Outcome::New(_)) && notes.is_empty());
-        assert_eq!(fs::read_to_string(skill.join("SKILL.md")).unwrap(), fs::read_to_string(src.join("skills/changelog-entry/SKILL.md")).unwrap());
+        assert_eq!(
+            fs::read_to_string(skill.join("SKILL.md")).unwrap(),
+            fs::read_to_string(src.join("skills/changelog-entry/SKILL.md")).unwrap()
+        );
         let p = s.get("changelog").unwrap();
         assert_eq!(p.skills.len(), 1);
         assert_eq!((p.skills[0].name.as_str(), p.skills[0].dir.as_path()), ("changelog-entry", skill.as_path()));
         // A record that can't be written after the skill is in place: the skill goes again, the old version stays.
         let text = fs::read_to_string(src.join(MANIFEST)).unwrap().replace("1.0.0", "1.1.0");
         fs::write(src.join(MANIFEST), text).unwrap();
-        fs::write(src.join("skills/changelog-entry/SKILL.md"), crate::skillplugin::testing::skill_md("changelog-entry", "Write it better.")).unwrap();
+        fs::write(
+            src.join("skills/changelog-entry/SKILL.md"),
+            crate::skillplugin::testing::skill_md("changelog-entry", "Write it better."),
+        )
+        .unwrap();
         let mut failing = s.clone();
         failing.fail_record = true;
         assert!(failing.install(&src, folder(&src)).is_err());
@@ -1888,7 +1991,8 @@ mod tests {
         let (_, notes) = s.remove_noting("changelog").unwrap();
         assert!(notes.is_empty() && !skill.exists(), "{notes:?}");
         assert!(claude.join("skills/someone-elses/SKILL.md").exists());
-        let left: Vec<String> = fs::read_dir(claude.join("skills")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let left: Vec<String> =
+            fs::read_dir(claude.join("skills")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert_eq!(left, ["someone-elses"], "no staging or old copies left behind");
     }
 

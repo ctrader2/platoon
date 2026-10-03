@@ -86,7 +86,8 @@ impl Session {
     }
 
     pub fn rehaystack(&mut self) {
-        self.haystack = Self::make_haystack(&self.name, &self.dir, &self.extra_dirs, self.branch.as_deref(), &self.description, &self.summary);
+        self.haystack =
+            Self::make_haystack(&self.name, &self.dir, &self.extra_dirs, self.branch.as_deref(), &self.description, &self.summary);
     }
 }
 

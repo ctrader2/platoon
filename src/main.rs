@@ -9,105 +9,105 @@ mod colordepth;
 mod describe;
 mod dirs;
 mod editor;
+#[cfg(test)]
+mod editor_app_tests;
 mod editor_install;
 mod editorplugin;
 mod editors;
 mod fileeditors;
-mod guard;
 mod gitfacts;
+mod guard;
 mod handoff;
+#[cfg(test)]
+mod handoff_app_tests;
 mod host;
 mod index;
 mod instructions;
 mod keys;
 #[cfg(test)]
 mod keys_app_tests;
+#[cfg(test)]
+mod layout_app_tests;
 mod ledger;
 mod mcp;
 mod mdview;
 mod model;
 mod names;
 mod notes;
+#[cfg(test)]
+mod notes_app_tests;
 mod notesrun;
 mod notesupdate;
 mod open;
+#[cfg(test)]
+mod perf;
 mod plugincli;
 mod pluginreview;
 mod plugins;
+#[cfg(test)]
+mod plugins_app_tests;
 mod procs;
 mod projects;
+#[cfg(test)]
+mod projects_app_tests;
 mod prompts;
-mod select;
-mod sessionhook;
-mod setup;
 mod scan;
+#[cfg(test)]
+mod search_app_tests;
+mod select;
+#[cfg(test)]
+mod select_app_tests;
+mod sessionhook;
 mod settings;
+mod setup;
 mod skillplugin;
 mod smart;
-mod squads;
+#[cfg(test)]
+mod smart_app_tests;
 mod squadfile;
 mod squadplugin;
 mod squadqueue;
-mod squadwork;
-mod summaries;
-mod textbox;
-mod tickets;
-mod theme;
-mod totickets;
-mod ui;
-mod usertheme;
-mod worktrees;
 #[cfg(test)]
-mod editor_app_tests;
-#[cfg(test)]
-mod handoff_app_tests;
-#[cfg(test)]
-mod layout_app_tests;
-#[cfg(test)]
-mod notes_app_tests;
-#[cfg(test)]
-mod perf;
-#[cfg(test)]
-mod plugins_app_tests;
-#[cfg(test)]
-mod projects_app_tests;
-#[cfg(test)]
-mod search_app_tests;
-#[cfg(test)]
-mod stop_app_tests;
-#[cfg(test)]
-mod select_app_tests;
-#[cfg(test)]
-mod theme_pack_tests;
-#[cfg(test)]
-mod smart_app_tests;
-#[cfg(test)]
-mod testkit;
+mod squadqueue_app_tests;
+mod squads;
 #[cfg(test)]
 mod squads_app_tests;
 #[cfg(test)]
-mod squadqueue_app_tests;
-#[cfg(test)]
 mod squadtab_app_tests;
+mod squadwork;
+#[cfg(test)]
+mod stop_app_tests;
+mod summaries;
+#[cfg(test)]
+mod testkit;
+mod textbox;
+mod theme;
+#[cfg(test)]
+mod theme_pack_tests;
+mod tickets;
 #[cfg(test)]
 mod tickets_app_tests;
 #[cfg(test)]
 mod tokens_app_tests;
+mod totickets;
+mod ui;
 mod usage;
+mod usertheme;
 #[cfg(test)]
 mod wheel_app_tests;
 #[cfg(test)]
 mod worktree_app_tests;
+mod worktrees;
 
 use ratatui::crossterm::{
-    event::{
-        self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event,
-        KeyEventKind,
-    },
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event, KeyEventKind},
     execute,
-    terminal::{enable_raw_mode, Clear, ClearType, EnterAlternateScreen},
+    terminal::{Clear, ClearType, EnterAlternateScreen, enable_raw_mode},
 };
-use std::{io, time::{Duration, Instant}};
+use std::{
+    io,
+    time::{Duration, Instant},
+};
 
 fn main() -> io::Result<()> {
     match std::env::args().nth(1).as_deref() {
@@ -280,7 +280,13 @@ fn setup() -> io::Result<()> {
     // Yes now, or yes before and nothing named yet: the first pass over the active conversations, right here.
     if matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
         let (config, cache) = (archive::config_dir(), usage::cache_dir());
-        let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), interactive };
+        let env = scan::ScanEnv {
+            config: &config,
+            cache: &cache,
+            root: &root,
+            program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+            interactive,
+        };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
     Ok(())
@@ -363,7 +369,18 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = (start.elapsed().as_millis() / 100) as u64;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() || app.editor_busy() || app.plugins_busy() { Duration::from_millis(250) } else { Duration::from_secs(1) };
+        let every = if app.indexing().is_some()
+            || app.settling()
+            || app.smart_busy()
+            || app.handoff_busy()
+            || app.squads_busy()
+            || app.editor_busy()
+            || app.plugins_busy()
+        {
+            Duration::from_millis(250)
+        } else {
+            Duration::from_secs(1)
+        };
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
@@ -395,7 +412,13 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
 /// Hand the terminal to the code editor (`v`), wait for it to close, and take the terminal back: platoon's screen
 /// goes (raw mode off, the alternate screen left) so the editor draws on the real terminal, then comes back drawn in
 /// full, where the user was. Nothing of platoon reads the keyboard or draws in between (this loop is waiting).
-fn open_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, req: &editor::Request, depth: colordepth::Depth, no_color: bool) {
+fn open_editor(
+    terminal: &mut ratatui::DefaultTerminal,
+    app: &mut app::App,
+    req: &editor::Request,
+    depth: colordepth::Depth,
+    no_color: bool,
+) {
     let dirs = app.editor_dirs().clone();
     let env = |k: &str| std::env::var(k).ok();
     let theme = app.effective_theme().clone();
@@ -464,13 +487,13 @@ mod tests {
     use super::*;
     use crate::app::{Action, AdoptKind, App, Confirm, Hit, JumpPlan, Mode};
     use crate::model::Status;
+    use crate::testkit::{World, alive};
     use crate::theme::Theme;
-    use crate::testkit::{alive, World};
     use ratatui::{
-        backend::TestBackend,
-        style::Color,
-        crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
         Terminal,
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
+        style::Color,
     };
 
     fn screen_text(term: &Terminal<TestBackend>) -> String {
@@ -497,7 +520,12 @@ mod tests {
     fn popup_flat(shown: &str) -> String {
         let lines: Vec<Vec<char>> = shown.lines().map(|l| l.chars().collect()).collect();
         let top = lines.iter().position(|l| l.iter().collect::<String>().contains("╭ Settings")).expect("the popup");
-        let left = lines[top].iter().collect::<String>().find("╭ Settings").map(|b| lines[top].iter().collect::<String>()[..b].chars().count()).unwrap();
+        let left = lines[top]
+            .iter()
+            .collect::<String>()
+            .find("╭ Settings")
+            .map(|b| lines[top].iter().collect::<String>()[..b].chars().count())
+            .unwrap();
         let right = lines[top].iter().rposition(|&c| c == '╮').unwrap();
         let mut out = String::new();
         for line in &lines[top + 1..] {
@@ -552,7 +580,10 @@ mod tests {
         w.transcript("old-1", "/srv/alpha", "refactor the parser", 3 * 24 * 60);
         w.transcript("mid-2", "/srv/beta", "add a login page", 30);
         w.transcript("new-3", "/srv/gamma", "write the docs", 3);
-        w.transcript_lines("junk-4", &[r#"{"type":"user","cwd":"/srv/x","message":{"content":"<command-name>/clear</command-name>"}}"#.into()]);
+        w.transcript_lines(
+            "junk-4",
+            &[r#"{"type":"user","cwd":"/srv/x","message":{"content":"<command-name>/clear</command-name>"}}"#.into()],
+        );
         let pid = w.live("mid-2", "/srv/beta", 1, "idle");
         (w, pid)
     }
@@ -567,7 +598,10 @@ mod tests {
         let old = by("old-1");
         assert_eq!((old.name.as_str(), old.cwd.as_str(), old.description.as_str()), ("alpha", "/srv/alpha", "refactor the parser"));
         assert!(old.procs.is_empty() && old.status == Status::Idle && !old.unread);
-        assert_eq!((old.branch.as_deref(), old.model.as_deref(), old.context_pct, old.context_exact), (Some("main"), Some("Sonnet 5"), 25, false));
+        assert_eq!(
+            (old.branch.as_deref(), old.model.as_deref(), old.context_pct, old.context_exact),
+            (Some("main"), Some("Sonnet 5"), 25, false)
+        );
         // Running conversations carry their process.
         assert_eq!(by("mid-2").procs.iter().map(|p| p.pid).collect::<Vec<_>>(), [pid]);
         assert_eq!(app.counts, [3, 0]);
@@ -589,7 +623,23 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let text = draw(&mut term, &app);
         println!("{text}");
-        for want in ["NAME", "DIR", "LAST", "Active 3", "Archived 0", "working", "idle", "3m", "30m", "3d", "gamma", "write the docs", "Sonnet 5", "main", "~ 25%"] {
+        for want in [
+            "NAME",
+            "DIR",
+            "LAST",
+            "Active 3",
+            "Archived 0",
+            "working",
+            "idle",
+            "3m",
+            "30m",
+            "3d",
+            "gamma",
+            "write the docs",
+            "Sonnet 5",
+            "main",
+            "~ 25%",
+        ] {
             assert!(flat(&text).contains(want), "missing {want:?}:\n{text}");
         }
         for banned in ["ext", "paused", "2 places", "kill", "x kill", "not open", "open elsewhere", "in platoon"] {
@@ -764,7 +814,10 @@ mod tests {
         assert_eq!((app.top, app.tab), (0, 0));
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"), "{shown}");
+        assert!(
+            shown.contains("1 Sessions 2 2 Projects 0 3 Squads 4") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"),
+            "{shown}"
+        );
 
         // Left and right: Active and Archived.
         key(&mut app, KeyCode::Right);
@@ -872,7 +925,10 @@ mod tests {
         let mut app = w.app();
         app.selected = row_of(&app, "mid-2");
         ch(&mut app, 'a');
-        assert!(matches!(app.mode, Mode::Confirm(Confirm::Archive { outside: true, busy: false, .. })), "it isn't platoon's process to end unasked");
+        assert!(
+            matches!(app.mode, Mode::Confirm(Confirm::Archive { outside: true, busy: false, .. })),
+            "it isn't platoon's process to end unasked"
+        );
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let text = flat(&draw(&mut term, &app));
         for phrase in ["outside platoon", "Archiving ends that copy.", "The conversation is kept", "y archive", "n cancel"] {
@@ -915,7 +971,15 @@ mod tests {
         for size in [(110, 30), (60, 24)] {
             let mut term = Terminal::new(TestBackend::new(size.0, size.1)).unwrap();
             let text = flat(&draw(&mut term, &app));
-            for phrase in ["Archive \"tmp\"?", "outside platoon", "working right now.", "interrupts what it is doing.", "press enter to pick it up again.", "y archive", "n cancel"] {
+            for phrase in [
+                "Archive \"tmp\"?",
+                "outside platoon",
+                "working right now.",
+                "interrupts what it is doing.",
+                "press enter to pick it up again.",
+                "y archive",
+                "n cancel",
+            ] {
                 assert!(text.contains(phrase), "{size:?}: {phrase:?} cut off in:\n{text}");
             }
         }
@@ -1225,7 +1289,9 @@ mod tests {
         key(&mut app, KeyCode::Right);
         draw(&mut term, &app);
         let buf = term.backend().buffer();
-        let row = (0..buf.area.height).find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().contains("hello")).unwrap();
+        let row = (0..buf.area.height)
+            .find(|&y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>().contains("hello"))
+            .unwrap();
         let name_cell = (0..buf.area.width).map(|x| &buf[(x, row - 1)]).find(|c| c.symbol() == "a").unwrap();
         assert_eq!(name_cell.fg, app.theme.dim);
     }
@@ -1268,7 +1334,10 @@ mod tests {
             restore: false,
         });
         let text = flat(&draw(&mut term, &app));
-        assert!(text.contains("Reload") && text.contains("open in 2 places") && text.contains("interrupts it."), "the whole warning must be readable: {text}");
+        assert!(
+            text.contains("Reload") && text.contains("open in 2 places") && text.contains("interrupts it."),
+            "the whole warning must be readable: {text}"
+        );
     }
 
     #[test]
@@ -1323,7 +1392,7 @@ mod tests {
         for _ in 0..40 {
             std::thread::sleep(std::time::Duration::from_millis(250));
             app.poll_stops();
-        app.poll_editors();
+            app.poll_editors();
             app.refresh();
             if app.hosts.is_empty() {
                 break;
@@ -1356,7 +1425,10 @@ mod tests {
         let app = w.app();
         let s = session(&app, BG_ID);
         assert_eq!(s.status, Status::Background);
-        assert_eq!(s.procs.iter().map(|p| (p.pid, p.background.as_deref(), p.hosted, p.stale)).collect::<Vec<_>>(), [(pid, Some("dffac639"), false, false)]);
+        assert_eq!(
+            s.procs.iter().map(|p| (p.pid, p.background.as_deref(), p.hosted, p.stale)).collect::<Vec<_>>(),
+            [(pid, Some("dffac639"), false, false)]
+        );
         assert!(!s.unread && !s.archived);
         assert_eq!(session(&app, "plain-1").status, Status::Idle, "everything else is as before");
         assert_eq!(ids(&app), [BG_ID, "plain-1"]);
@@ -1409,7 +1481,10 @@ mod tests {
         app.refresh_with(vec![host], false);
         app.selected = row_of(&app, BG_ID);
         let s = session(&app, BG_ID);
-        assert_eq!((s.status, s.procs.len(), s.procs[0].hosted, s.procs[0].stale, s.procs[0].pid), (Status::Background, 1, true, false, pid));
+        assert_eq!(
+            (s.status, s.procs.len(), s.procs[0].hosted, s.procs[0].stale, s.procs[0].pid),
+            (Status::Background, 1, true, false, pid)
+        );
         assert_eq!(app.jump_plan(), Some(JumpPlan::Attach(4_000_000)));
         assert_eq!(ids(&app), [BG_ID, "plain-1"], "the attach client adds no row of its own");
 
@@ -1443,7 +1518,11 @@ mod tests {
         assert!(matches!(app.mode, Mode::List), "no dialog either: there is nothing to confirm");
         assert!(alive(pid), "Claude's own process must not be signalled");
         assert!(w.archive_file().is_none(), "and nothing is archived");
-        assert!(app.notice.as_ref().is_some_and(|(m, ..)| m.contains("runs in the background") && m.contains("can't archive it")), "{:?}", app.notice.as_ref().map(|n| &n.0));
+        assert!(
+            app.notice.as_ref().is_some_and(|(m, ..)| m.contains("runs in the background") && m.contains("can't archive it")),
+            "{:?}",
+            app.notice.as_ref().map(|n| &n.0)
+        );
         assert!(!session(&app, BG_ID).archived);
     }
 
@@ -1808,7 +1887,11 @@ mod tests {
         key(&mut app, KeyCode::Down);
         assert_eq!(app.setting, 2);
         key(&mut app, KeyCode::Right);
-        assert_eq!(on_disk(&w), Settings { idle_stop_minutes: 0, auto_archive_days: 7, ..Settings::default() }, "the other setting is left alone");
+        assert_eq!(
+            on_disk(&w),
+            Settings { idle_stop_minutes: 0, auto_archive_days: 7, ..Settings::default() },
+            "the other setting is left alone"
+        );
         key(&mut app, KeyCode::Up);
         assert_eq!(app.setting, 1);
         key(&mut app, KeyCode::Down);
@@ -1855,12 +1938,19 @@ mod tests {
     #[test]
     fn the_file_keeps_keys_platoon_does_not_know_including_nested_ones() {
         let w = World::new("set-unknown");
-        std::fs::write(config_file(&w), r#"{"version":1,"theme":{"name":"latte","tweaks":[1,{"a":null}]},"idle_stop_minutes":120,"note":"hi"}"#).unwrap();
+        std::fs::write(
+            config_file(&w),
+            r#"{"version":1,"theme":{"name":"latte","tweaks":[1,{"a":null}]},"idle_stop_minutes":120,"note":"hi"}"#,
+        )
+        .unwrap();
         let (mut app, _) = settings_screen(&w, 100, 30);
         key(&mut app, KeyCode::Right);
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
         assert_eq!(v["theme"], serde_json::json!({"name":"latte","tweaks":[1,{"a":null}]}));
-        assert_eq!((v["note"].as_str(), v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()), (Some("hi"), Some(240), Some(2)));
+        assert_eq!(
+            (v["note"].as_str(), v["idle_stop_minutes"].as_u64(), v["auto_archive_days"].as_u64()),
+            (Some("hi"), Some(240), Some(2))
+        );
     }
 
     // --- tabs as chips, and settings as a popup ---------------------------------------------------
@@ -1974,7 +2064,9 @@ mod tests {
     #[test]
     fn terminals_that_bring_their_own_symbols_get_round_badges_and_others_do_not() {
         // The detection is a pure function of the environment; check its rules without touching ours.
-        let g = |pairs: &[(&str, &str)]| crate::app::detect_rounded_with(&|k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()));
+        let g = |pairs: &[(&str, &str)]| {
+            crate::app::detect_rounded_with(&|k: &str| pairs.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string()))
+        };
         assert!(g(&[("TERM_PROGRAM", "ghostty")]) && g(&[("TERM", "xterm-kitty")]) && g(&[("WEZTERM_EXECUTABLE", "/x")]));
         assert!(!g(&[("TERM_PROGRAM", "Apple_Terminal"), ("TERM", "xterm-256color")]) && !g(&[]));
         assert!(g(&[("PLATOON_BADGES", "rounded")]) && !g(&[("PLATOON_BADGES", "square"), ("TERM_PROGRAM", "ghostty")]));
@@ -2019,7 +2111,10 @@ mod tests {
             let shown = draw(&mut term, &app);
             let header = shown.lines().nth(1).unwrap();
             assert!(flat(header).contains("Sessions 1234") && flat(header).contains("Projects 5678"), "{cols}: {header}");
-            assert!(header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"), "{cols}: usage still readable: {header}");
+            assert!(
+                header.contains("5h") && header.contains("47%") && header.contains("7d") && header.contains("21%"),
+                "{cols}: usage still readable: {header}"
+            );
             assert_eq!(header.contains('━'), bars, "{cols}: full bars only when there is room: {header}");
         }
         // With nothing to spare the readout gives way, never the tabs.
@@ -2105,7 +2200,11 @@ mod tests {
             }
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
-            assert!(text.contains(item.name) && text.contains(item.explain), "{} is shown with its explanation at 80x24:\n{shown}", item.name);
+            assert!(
+                text.contains(item.name) && text.contains(item.explain),
+                "{} is shown with its explanation at 80x24:\n{shown}",
+                item.name
+            );
             assert!(text.contains("ctrl+space back") && !text.contains("Used today"), "{shown}");
             for (j, other) in ITEMS.iter().enumerate().filter(|(j, _)| *j != i) {
                 assert!(!text.contains(other.explain), "{} is explained only while selected ({}, {j})", other.name, item.name);
@@ -2387,7 +2486,15 @@ mod tests {
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
             let ctx = format!("{cols}x{rows}\n{shown}");
-            for want in ["Idle stop and MCP servers", "Ignore MCP servers", "helper programs", "they are ignored", "start again when you open it", "Count MCP servers", ITEMS[3].explain] {
+            for want in [
+                "Idle stop and MCP servers",
+                "Ignore MCP servers",
+                "helper programs",
+                "they are ignored",
+                "start again when you open it",
+                "Count MCP servers",
+                ITEMS[3].explain,
+            ] {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
             let lower = text.to_lowercase();
@@ -2405,7 +2512,10 @@ mod tests {
     #[test]
     fn the_mcp_entry_steps_with_keys_and_mouse_and_is_saved_as_a_boolean() {
         let w = World::new("set-mcp-input");
-        let on_disk_flag = || serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["idle_stop_ignores_mcp"].clone();
+        let on_disk_flag = || {
+            serde_json::from_str::<serde_json::Value>(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap()["idle_stop_ignores_mcp"]
+                .clone()
+        };
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         for _ in 0..2 {
             key(&mut app, KeyCode::Down);
@@ -2471,7 +2581,10 @@ mod tests {
         }
         key(&mut app, KeyCode::Left);
         let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(config_file(&w)).unwrap()).unwrap();
-        assert_eq!((v["idle_stop_ignores_mcp"].clone(), v["keep"].clone(), v["idle_stop_minutes"].clone()), (serde_json::json!(false), serde_json::json!({"a": [1]}), serde_json::json!(60)));
+        assert_eq!(
+            (v["idle_stop_ignores_mcp"].clone(), v["keep"].clone(), v["idle_stop_minutes"].clone()),
+            (serde_json::json!(false), serde_json::json!({"a": [1]}), serde_json::json!(60))
+        );
         // An edit made elsewhere shows up on the open screen.
         std::fs::write(config_file(&w), r#"{"idle_stop_ignores_mcp":true}"#).unwrap();
         app.refresh_for_test();
@@ -2514,7 +2627,10 @@ mod tests {
         assert!(cramped.contains(ITEMS[3].name) && cramped.contains("ctrl+space back"), "{cramped}");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         let cramped = draw(&mut term, &app);
-        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("ctrl+space back"), "{cramped}");
+        assert!(
+            cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("ctrl+space back"),
+            "{cramped}"
+        );
     }
 
     #[test]
@@ -2611,10 +2727,27 @@ mod tests {
             let check = |term: &Terminal<TestBackend>, what: &str| {
                 for c in cells(term) {
                     if fixed {
-                        assert!(matches!(c.bg, Color::Rgb(..)) && !matches!(c.fg, Color::Indexed(_)), "{}: {what}: {:?}/{:?}", t.id, c.fg, c.bg);
-                        assert!(c.symbol().trim().is_empty() || matches!(c.fg, Color::Rgb(..)), "{}: {what}: {:?} is unthemed text", t.id, c.symbol());
+                        assert!(
+                            matches!(c.bg, Color::Rgb(..)) && !matches!(c.fg, Color::Indexed(_)),
+                            "{}: {what}: {:?}/{:?}",
+                            t.id,
+                            c.fg,
+                            c.bg
+                        );
+                        assert!(
+                            c.symbol().trim().is_empty() || matches!(c.fg, Color::Rgb(..)),
+                            "{}: {what}: {:?} is unthemed text",
+                            t.id,
+                            c.symbol()
+                        );
                     } else {
-                        assert!(!matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..)), "{}: {what}: {:?}/{:?}", t.id, c.fg, c.bg);
+                        assert!(
+                            !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..)),
+                            "{}: {what}: {:?}/{:?}",
+                            t.id,
+                            c.fg,
+                            c.bg
+                        );
                     }
                 }
             };
@@ -2679,12 +2812,19 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
             term.draw(|f| ui::draw_paused_banner(f, &app, f.area())).unwrap();
             let buf = term.backend().buffer();
-            let corner = (0..30).flat_map(|y| (0..100).map(move |x| (x, y))).find(|&(x, y)| buf[(x, y)].symbol() == "╭").expect("the banner's frame");
+            let corner = (0..30)
+                .flat_map(|y| (0..100).map(move |x| (x, y)))
+                .find(|&(x, y)| buf[(x, y)].symbol() == "╭")
+                .expect("the banner's frame");
             assert_eq!((buf[corner].fg, buf[corner].bg), (t.warn, t.bg), "{id}: the frame is the warning color");
             let title = (0..100).find(|&x| buf[(x, corner.1)].symbol() == "s" && buf[(x + 1, corner.1)].symbol() == "e").expect("title");
             assert_eq!(buf[(title, corner.1)].fg, t.warn, "{id}");
             let body = (0..100).find(|&x| buf[(x, corner.1 + 1)].symbol() == "T").expect("first line");
-            assert_eq!((buf[(body, corner.1 + 1)].fg, buf[(body, corner.1 + 1)].bg), (t.text, t.bg), "{id}: text on the theme's background");
+            assert_eq!(
+                (buf[(body, corner.1 + 1)].fg, buf[(body, corner.1 + 1)].bg),
+                (t.text, t.bg),
+                "{id}: text on the theme's background"
+            );
         }
     }
 
@@ -2716,7 +2856,11 @@ mod tests {
         w.transcript("bbb", "/srv/beta", "add a login page", 30);
         w.transcript("ccc", "/srv/gamma", "write the docs", 3);
         w.live("bbb", "/srv/beta", 1, "busy");
-        put_theme(&w, "My Theme", "background = #101820\nforeground = #e6e6e6\npalette = 12=#5fb3ff\npalette = 13=#ff8fd0\npalette = 10=#7fe28a\npalette = 11=#ffd866\npalette = 9=#ff6b6b\n");
+        put_theme(
+            &w,
+            "My Theme",
+            "background = #101820\nforeground = #e6e6e6\npalette = 12=#5fb3ff\npalette = 13=#ff8fd0\npalette = 10=#7fe28a\npalette = 11=#ffd866\npalette = 9=#ff6b6b\n",
+        );
         put_theme(&w, "Nord Light", "background = #eceff4\nforeground = #2e3440\n");
         w
     }
@@ -2840,11 +2984,20 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let (mocha, macchiato, frappe) = (by_id("catppuccin-mocha"), by_id("catppuccin-macchiato"), by_id("catppuccin-frappe"));
 
-        let list_before = { draw(&mut term, &app); snapshot(&term) };
+        let list_before = {
+            draw(&mut term, &app);
+            snapshot(&term)
+        };
         ch(&mut app, 's');
-        let settings_before = { draw(&mut term, &app); snapshot(&term) };
+        let settings_before = {
+            draw(&mut term, &app);
+            snapshot(&term)
+        };
         key(&mut app, KeyCode::Enter);
-        let picker_before = { draw(&mut term, &app); snapshot(&term) };
+        let picker_before = {
+            draw(&mut term, &app);
+            snapshot(&term)
+        };
 
         for (moves, want) in [(1, &macchiato), (1, &frappe)] {
             for _ in 0..moves {
@@ -2892,7 +3045,11 @@ mod tests {
     #[test]
     fn enter_keeps_the_theme_by_saving_its_id_and_the_rest_of_the_file_is_untouched() {
         let w = theme_world("tl-keep");
-        std::fs::write(config_file(&w), r#"{"version":1,"note":"mine","nested":{"a":[1,{"b":null}]},"idle_stop_minutes":60,"theme":"catppuccin-mocha"}"#).unwrap();
+        std::fs::write(
+            config_file(&w),
+            r#"{"version":1,"note":"mine","nested":{"a":[1,{"b":null}]},"idle_stop_minutes":60,"theme":"catppuccin-mocha"}"#,
+        )
+        .unwrap();
         let mut app = w.app();
         open_themes(&mut app);
         key(&mut app, KeyCode::Down);
@@ -2978,7 +3135,11 @@ mod tests {
         assert_eq!(app.effective_theme().id, "catppuccin-macchiato");
         key(&mut app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Settings));
-        assert_eq!((app.theme.id.as_str(), app.effective_theme().id.as_str()), ("catppuccin-mocha", "catppuccin-mocha"), "back to what is really saved");
+        assert_eq!(
+            (app.theme.id.as_str(), app.effective_theme().id.as_str()),
+            ("catppuccin-mocha", "catppuccin-mocha"),
+            "back to what is really saved"
+        );
         assert!(app.preview.is_none());
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let shown = draw(&mut term, &app);
@@ -2994,11 +3155,17 @@ mod tests {
         let stamp = std::fs::metadata(config_file(&w)).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         key(&mut app, KeyCode::Left);
-        assert_eq!(std::fs::metadata(config_file(&w)).unwrap().modified().unwrap(), stamp, "nothing before the first theme, so nothing is written");
+        assert_eq!(
+            std::fs::metadata(config_file(&w)).unwrap().modified().unwrap(),
+            stamp,
+            "nothing before the first theme, so nothing is written"
+        );
         key(&mut app, KeyCode::Right);
         assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str()), (Some("catppuccin-macchiato"), "catppuccin-macchiato"));
         assert!(matches!(app.mode, Mode::Settings) && app.preview.is_none(), "no preview and no list on this path");
-        for (k, want) in [('l', "catppuccin-frappe"), ('+', "tokyo-night"), ('=', "tokyo-night-storm"), ('h', "tokyo-night"), ('-', "catppuccin-frappe")] {
+        for (k, want) in
+            [('l', "catppuccin-frappe"), ('+', "tokyo-night"), ('=', "tokyo-night-storm"), ('h', "tokyo-night"), ('-', "catppuccin-frappe")]
+        {
             ch(&mut app, k);
             assert_eq!(saved_theme(&w).as_deref(), Some(want), "{k:?}");
         }
@@ -3019,7 +3186,10 @@ mod tests {
         let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Prev)));
         click(&mut app, prev.x + 1, prev.y);
         assert_eq!(saved_theme(&w).as_deref(), Some("terminal"));
-        let next = { draw(&mut term, &app); hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next))) };
+        let next = {
+            draw(&mut term, &app);
+            hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)))
+        };
         click(&mut app, next.x + 1, next.y);
         assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"));
         assert!(matches!(app.mode, Mode::Settings));
@@ -3089,14 +3259,20 @@ mod tests {
                 assert_eq!(app.effective_theme().id, t.id);
                 let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
                 let buf = snapshot(&term);
-                let cells: Vec<&ratatui::buffer::Cell> = (panel.y..panel.bottom()).flat_map(|y| (panel.x..panel.right()).map(move |x| (x, y))).map(|(x, y)| &buf[(x, y)]).collect();
+                let cells: Vec<&ratatui::buffer::Cell> = (panel.y..panel.bottom())
+                    .flat_map(|y| (panel.x..panel.right()).map(move |x| (x, y)))
+                    .map(|(x, y)| &buf[(x, y)])
+                    .collect();
                 let has_fg = |c: Color| cells.iter().any(|cell| cell.fg == c && cell.symbol().trim() != "");
                 let has_bg = |c: Color| cells.iter().any(|cell| cell.bg == c);
                 let ctx = format!("{} at {cols}x{rows}", t.id);
                 assert!(has_bg(t.bg) && has_bg(t.surface), "{ctx}: background and the selected row's surface");
                 assert!(has_fg(t.text) && has_fg(t.subtext) && has_fg(t.dim), "{ctx}: the three text colors");
                 assert!(has_fg(t.border), "{ctx}: the border of the frame and of the bars' tracks");
-                assert!(has_fg(t.accent) && has_fg(t.busy) && has_fg(t.ok) && has_fg(t.warn) && has_fg(t.err), "{ctx}: accent and the four status colors");
+                assert!(
+                    has_fg(t.accent) && has_fg(t.busy) && has_fg(t.ok) && has_fg(t.warn) && has_fg(t.err),
+                    "{ctx}: accent and the four status colors"
+                );
                 // The sample's parts are there in words, not only in colors.
                 let text: String = cells.iter().map(|c| c.symbol().to_string()).collect();
                 for want in ["Active", "docs-site", "notes", "5h", "enter open", "Archived"] {
@@ -3164,7 +3340,22 @@ mod tests {
         put_theme(&w, "Third", "");
         let mut app = w.app();
         open_themes(&mut app);
-        for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 20), (80, 20), (44, 12), (60, 10), (40, 8), (30, 6), (20, 5), (12, 4), (8, 3), (3, 3), (1, 1)] {
+        for (cols, rows) in [
+            (80, 24),
+            (100, 30),
+            (140, 30),
+            (60, 20),
+            (80, 20),
+            (44, 12),
+            (60, 10),
+            (40, 8),
+            (30, 6),
+            (20, 5),
+            (12, 4),
+            (8, 3),
+            (3, 3),
+            (1, 1),
+        ] {
             for sel in [0, 1, 7, 14] {
                 app.select_theme_for_test(sel);
                 let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
@@ -3179,7 +3370,11 @@ mod tests {
                 if cols >= 60 {
                     let panel = hit_rect(&app, |h| matches!(h, Hit::Inert));
                     for y in panel.y + 1..panel.bottom() - 1 {
-                        assert_eq!(term.backend().buffer()[(panel.right() - 2, y)].symbol(), " ", "text touches the panel's border at row {y}: {ctx}");
+                        assert_eq!(
+                            term.backend().buffer()[(panel.right() - 2, y)].symbol(),
+                            " ",
+                            "text touches the panel's border at row {y}: {ctx}"
+                        );
                     }
                 }
                 if cols >= 60 && rows >= 18 {
@@ -3372,7 +3567,10 @@ mod tests {
         open_themes(&mut app);
         key(&mut app, KeyCode::End);
         key(&mut app, KeyCode::Enter);
-        assert_eq!((saved_theme(&w).as_deref(), app.theme.id.as_str(), app.theme.name.as_str()), (Some("user:my-theme"), "user:my-theme", "My Theme"));
+        assert_eq!(
+            (saved_theme(&w).as_deref(), app.theme.id.as_str(), app.theme.name.as_str()),
+            (Some("user:my-theme"), "user:my-theme", "My Theme")
+        );
         // A new run reads it back.
         assert_eq!(w.app().theme.id, "user:my-theme");
         // The file goes: the default is shown, and the id is still on disk, even through another change.
@@ -3418,7 +3616,22 @@ mod tests {
                     if t.ansi.is_some() {
                         // (the entries' swatches are other themes' colors, but still fixed ones)
                         assert!(matches!(c.bg, Color::Rgb(..)) && !matches!(c.fg, Color::Indexed(_)), "{}: {:?}/{:?}", t.id, c.fg, c.bg);
-                        assert!(c.symbol().trim().is_empty() || matches!(c.fg, Color::Rgb(..) | Color::Reset | Color::LightBlue | Color::LightMagenta | Color::LightGreen | Color::LightYellow | Color::LightRed), "{}: {:?} is unthemed text", t.id, c.symbol());
+                        assert!(
+                            c.symbol().trim().is_empty()
+                                || matches!(
+                                    c.fg,
+                                    Color::Rgb(..)
+                                        | Color::Reset
+                                        | Color::LightBlue
+                                        | Color::LightMagenta
+                                        | Color::LightGreen
+                                        | Color::LightYellow
+                                        | Color::LightRed
+                                ),
+                            "{}: {:?} is unthemed text",
+                            t.id,
+                            c.symbol()
+                        );
                     } else {
                         assert!(!matches!(c.bg, Color::Rgb(..)), "{}: {:?}", t.id, c.bg);
                     }
@@ -3431,7 +3644,11 @@ mod tests {
                     Depth::Indexed256.apply(f.buffer_mut());
                 })
                 .unwrap();
-                assert!(cells(&term).iter().all(|c| !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..))), "{}: {cols}x{rows} in 256 colors", t.id);
+                assert!(
+                    cells(&term).iter().all(|c| !matches!(c.fg, Color::Rgb(..)) && !matches!(c.bg, Color::Rgb(..))),
+                    "{}: {cols}x{rows} in 256 colors",
+                    t.id
+                );
             }
         }
     }

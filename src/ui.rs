@@ -1,21 +1,24 @@
-use crate::app::{split_areas, Action, AdoptKind, App, AssignOpt, Confirm, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, Pane, PickKind, PickOpt, TRow, FIND_KIND, PTABS, SEARCH_KINDS, SPLIT_MIN_WIDTH, TABS, TOPS};
-use crate::tickets::{self, State, Ticket};
-use crate::dirs::tilde;
+use crate::app::{
+    Action, AdoptKind, App, AssignOpt, Confirm, FIND_KIND, FindState, HandoffState, Hit, Mode, NamePurpose, PStat, PTABS, Pane, PickKind,
+    PickOpt, SEARCH_KINDS, SPLIT_MIN_WIDTH, TABS, TOPS, TRow, split_areas,
+};
 use crate::client::Client;
-use crate::select::{Selection, Span as Cells};
+use crate::dirs::tilde;
 use crate::model::{NameSource, Session, Status};
+use crate::select::{Selection, Span as Cells};
 use crate::settings::{Kind, Step, TABS as SETTINGS_TABS};
+use crate::theme::{Theme, contrast};
+use crate::tickets::{self, State, Ticket};
 use crate::usage::Usage;
-use crate::theme::{contrast, Theme};
 mod plugins_view;
 mod squads_view;
 
 use ratatui::{
+    Frame,
     layout::{Alignment, Constraint, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
-    Frame,
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -42,7 +45,10 @@ fn draw_summary_strip(f: &mut Frame, app: &App, text: &str, area: Rect) {
     }
     for (i, line) in lines.iter().enumerate() {
         let lead = if i == 0 { Span::styled(format!("{marker} "), Style::new().fg(t.dim)) } else { Span::raw("  ") };
-        f.render_widget(Paragraph::new(Line::from(vec![lead, Span::styled(line.clone(), Style::new().fg(t.subtext))])), Rect::new(area.x, area.y + i as u16, area.width, 1));
+        f.render_widget(
+            Paragraph::new(Line::from(vec![lead, Span::styled(line.clone(), Style::new().fg(t.subtext))])),
+            Rect::new(area.x, area.y + i as u16, area.width, 1),
+        );
     }
 }
 
@@ -77,7 +83,10 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
-    let summary = app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.plugin_screen_showing());
+    let summary = app
+        .selected_session()
+        .map(|s| s.summary.as_str())
+        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.plugin_screen_showing());
     let strip_h = if summary.is_some() && inner.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = f.area().width;
     let [header, rule, shelf, titles, list, strip, footer] = Layout::vertical([
@@ -161,7 +170,28 @@ pub fn draw(f: &mut Frame, app: &App) {
     // notice sharing it) those hints go first.
     let notice = app.active_notice();
     let room = (footer.width as usize).saturating_sub(notice.map_or(0, |n| n.chars().count() + 6));
-    let mut droppable = vec!["tabs", "active/archived", "move", "editor", "hand-off", "project", "panes", "rename", "settings", "scroll", "new session", "search", "folders", "waits for", "edit", "back to the list", "details", "copy", "remove", "member"];
+    let mut droppable = vec![
+        "tabs",
+        "active/archived",
+        "move",
+        "editor",
+        "hand-off",
+        "project",
+        "panes",
+        "rename",
+        "settings",
+        "scroll",
+        "new session",
+        "search",
+        "folders",
+        "waits for",
+        "edit",
+        "back to the list",
+        "details",
+        "copy",
+        "remove",
+        "member",
+    ];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
     if app.open_project.is_some() && app.tk.open.is_some() {
         droppable.retain(|d| *d != "editor");
@@ -388,12 +418,9 @@ fn session_cell(st: &PStat, room: usize) -> (String, String) {
         return (session_counts(st), String::new());
     }
     let unread = format!("● {} unread", st.unread);
-    let full = if st.archived > 0 { format!("{} active · {} archived · ", st.active, st.archived) } else { format!("{} active · ", st.active) };
-    if full.chars().count() + unread.chars().count() <= room {
-        (full, unread)
-    } else {
-        (format!("{} active · ", st.active), unread)
-    }
+    let full =
+        if st.archived > 0 { format!("{} active · {} archived · ", st.active, st.archived) } else { format!("{} active · ", st.active) };
+    if full.chars().count() + unread.chars().count() <= room { (full, unread) } else { (format!("{} active · ", st.active), unread) }
 }
 
 /// A Projects row's TICKETS cell: `4 open · 1 ready`, `4 open` when none is ready, `no tickets` when none is open.
@@ -469,11 +496,7 @@ fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
 fn project_desc_lines(p: &crate::projects::Project, width: u16) -> Vec<String> {
     let room = (width as usize).saturating_sub(project_desc_indent(p) + 1);
     let lines = if room == 0 { Vec::new() } else { wrap(&p.description, room) };
-    if lines.is_empty() {
-        vec![String::new()]
-    } else {
-        lines
-    }
+    if lines.is_empty() { vec![String::new()] } else { lines }
 }
 
 /// Where a project row's description starts: under the name, past the badge.
@@ -570,7 +593,8 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     let t = app.effective_theme();
     let Some(p) = app.open_project() else { return };
     let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
-    let mut spans = vec![badge_span(t, p), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
+    let mut spans =
+        vec![badge_span(t, p), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
     if p.archived {
         spans.push(Span::styled("  archived", Style::new().fg(t.warn)));
     }
@@ -582,7 +606,8 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), title);
     // The description across the top, in full: as many lines as it needs, the panes below it. Until platoon has
     // written one for this project, the line stays empty.
-    let lines: Vec<Line> = wrap(&p.description, body.width as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
+    let lines: Vec<Line> =
+        wrap(&p.description, body.width as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
     let [desc, panes] = Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Min(1)]).areas(body);
     if !lines.is_empty() {
         f.render_widget(Paragraph::new(lines), desc);
@@ -708,11 +733,13 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new("No tickets yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), area);
         return;
     }
-    let shown: Vec<&Ticket> = rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
+    let shown: Vec<&Ticket> =
+        rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
     let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
     let want_state = shown.iter().map(|x| x.state.label().chars().count()).max().unwrap_or(0);
     // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
-    let tokens: std::collections::HashMap<u32, String> = shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
+    let tokens: std::collections::HashMap<u32, String> =
+        shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
     let tail_of = |x: &Ticket, with_state: bool| -> (String, bool) {
         let (tail, ready) = ticket_tail(x, all, with_state);
         match tokens.get(&x.number) {
@@ -748,7 +775,13 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     (true, true) => "-",
                     (false, true) => "+",
                 };
-                Line::from(vec![lead, Span::styled(fit_end(&format!("{mark} Done and cancelled · {n}"), rect.width as usize - 1), base.fg(t.subtext).add_modifier(Modifier::BOLD))])
+                Line::from(vec![
+                    lead,
+                    Span::styled(
+                        fit_end(&format!("{mark} Done and cancelled · {n}"), rect.width as usize - 1),
+                        base.fg(t.subtext).add_modifier(Modifier::BOLD),
+                    ),
+                ])
             }
             TRow::Ticket(n) => {
                 let Some(x) = all.iter().find(|x| x.number == *n) else { continue };
@@ -801,13 +834,20 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         }
     }
     if let Some(p) = app.open_project() {
-        head.push(Line::from(vec![Span::styled("in ", Style::new().fg(t.dim)), badge_span(t, p), Span::styled(format!(" {}", p.name), Style::new().fg(t.subtext))]));
+        head.push(Line::from(vec![
+            Span::styled("in ", Style::new().fg(t.dim)),
+            badge_span(t, p),
+            Span::styled(format!(" {}", p.name), Style::new().fg(t.subtext)),
+        ]));
     }
     head.push(Line::raw(""));
     const LABEL: usize = 12;
     let label = |s: &str| Span::styled(format!("{s:<LABEL$}"), Style::new().fg(t.dim));
     let (tail, ready) = ticket_tail(x, all, false);
-    let mut state = vec![label("State"), Span::styled(x.state.label().to_string(), Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD))];
+    let mut state = vec![
+        label("State"),
+        Span::styled(x.state.label().to_string(), Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)),
+    ];
     if !tail.is_empty() {
         state.push(Span::styled(format!(" · {tail}"), Style::new().fg(if ready { t.ok } else { t.warn })));
     }
@@ -866,14 +906,22 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         }
         // Opened in an editor with a window of its own, which platoon can't tell has closed: the user's to remove.
         if let Some(name) = &wt.opened_in {
-            let says = if x.state.closed() { format!("Kept: opened in {name}.") } else { format!("Opened in {name}: kept after the work until w removes it.") };
+            let says = if x.state.closed() {
+                format!("Kept: opened in {name}.")
+            } else {
+                format!("Opened in {name}: kept after the work until w removes it.")
+            };
             for l in wrap(&says, w.saturating_sub(LABEL)) {
                 head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
             }
         }
         if removable && (wt.kept_uncommitted || wt.opened_in.is_some()) {
             let what = if wt.kept_uncommitted { " removes it anyway" } else { " removes it" };
-            head.push(Line::from(vec![label(""), Span::styled("w", Style::new().fg(t.accent)), Span::styled(what, Style::new().fg(t.dim))]));
+            head.push(Line::from(vec![
+                label(""),
+                Span::styled("w", Style::new().fg(t.accent)),
+                Span::styled(what, Style::new().fg(t.dim)),
+            ]));
         }
     }
     if x.folders.is_empty() {
@@ -900,12 +948,18 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             None => format!("#{b} (not in this project)"),
         };
         let done = all.iter().any(|o| o.number == *b && o.state == State::Done);
-        head.push(Line::from(vec![label(if i == 0 { "Waits for" } else { "" }), Span::styled(fit_end(&what, w.saturating_sub(LABEL)), Style::new().fg(if done { t.dim } else { t.text }))]));
+        head.push(Line::from(vec![
+            label(if i == 0 { "Waits for" } else { "" }),
+            Span::styled(fit_end(&what, w.saturating_sub(LABEL)), Style::new().fg(if done { t.dim } else { t.text })),
+        ]));
     }
     // What its squads spent and what they did, from their leaders' transcripts.
     ticket_work_lines(app, x, w, &mut head);
     if let Some(name) = app.ticket_window_open(number) {
-        head.push(Line::styled(format!("Open in {name}, in a window of its own. platoon reads it again when you are done."), Style::new().fg(t.accent)));
+        head.push(Line::styled(
+            format!("Open in {name}, in a window of its own. platoon reads it again when you are done."),
+            Style::new().fg(t.accent),
+        ));
     }
     head.push(Line::styled("─".repeat(w), Style::new().fg(t.border)));
     let used = (head.len() as u16).min(area.height);
@@ -958,7 +1012,10 @@ fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'stati
         for (name, s) in &tk.agents {
             let mut spans = vec![
                 Span::styled(format!("  {:<name_w$}", fit(name, name_w)), Style::new().fg(t.text)),
-                Span::styled(format!("  {:>5}", crate::squadwork::short(crate::squadwork::sent_and_written(s))), Style::new().fg(t.subtext)),
+                Span::styled(
+                    format!("  {:>5}", crate::squadwork::short(crate::squadwork::sent_and_written(s))),
+                    Style::new().fg(t.subtext),
+                ),
             ];
             if s.cache_read > 0 {
                 spans.push(Span::styled(format!("  + {} from cache", crate::squadwork::short(s.cache_read)), Style::new().fg(t.dim)));
@@ -970,7 +1027,8 @@ fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'stati
     // `RUNS_SHOWN` of them in all, with a line for how many came before.
     let current = x.leader().map(|l| l.session.clone());
     let several = x.leaders.len() > 1;
-    let logs: Vec<_> = x.leaders.iter().filter_map(|l| app.leader_log(&l.session).filter(|log| !log.runs.is_empty()).map(|log| (l, log))).collect();
+    let logs: Vec<_> =
+        x.leaders.iter().filter_map(|l| app.leader_log(&l.session).filter(|log| !log.runs.is_empty()).map(|log| (l, log))).collect();
     let (mut skip, earlier) = crate::squadwork::earlier(logs.iter().map(|(_, log)| log.runs.len()).sum());
     if !logs.is_empty() {
         head.push(Line::raw(""));
@@ -1021,7 +1079,12 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
         PickKind::Folders => (
             format!("folders of #{}", x.number),
             if x.folders.is_empty() { "No folder yet.".into() } else { format!("#{} works in:", x.number) },
-            vec![("enter", "add", Some(Action::Confirm)), ("d", "remove", None), ("esc", "done", Some(Action::Cancel)), ("↑↓", "move", None)],
+            vec![
+                ("enter", "add", Some(Action::Confirm)),
+                ("d", "remove", None),
+                ("esc", "done", Some(Action::Cancel)),
+                ("↑↓", "move", None),
+            ],
         ),
     };
     let h = (opts.len() as u16 + 6).min(area.height.saturating_sub(2)).max(7);
@@ -1031,7 +1094,8 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [head_a, sep, list, _, foot] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
     f.render_widget(Paragraph::new(fit_end(&head, head_a.width as usize)).style(Style::new().fg(t.text)), head_a);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let rows = list.height as usize;
@@ -1095,7 +1159,13 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         let line = line_of(i);
         if i == active && active <= visible.len() && line > 0 && line - 1 >= top && line - 1 < top + rows {
             let y = area.y + (line - 1 - top) as u16;
-            f.render_widget(Paragraph::new(Span::styled(format!("Archived ({})", app.archived_rows), Style::new().fg(t.dim).add_modifier(Modifier::BOLD))), Rect::new(area.x, y, area.width, 1));
+            f.render_widget(
+                Paragraph::new(Span::styled(
+                    format!("Archived ({})", app.archived_rows),
+                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
+                )),
+                Rect::new(area.x, y, area.width, 1),
+            );
         }
         if line < top || line >= top + rows {
             continue;
@@ -1142,7 +1212,10 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let width = area.width as usize;
     match first {
         Some(first) if first.chars().count() + 1 + reach.chars().count() <= width => {
-            top_lines.push(Line::from(vec![Span::styled(first, Style::new().fg(first_color)), Span::styled(format!(" {reach}"), Style::new().fg(t.dim))]));
+            top_lines.push(Line::from(vec![
+                Span::styled(first, Style::new().fg(first_color)),
+                Span::styled(format!(" {reach}"), Style::new().fg(t.dim)),
+            ]));
         }
         first => {
             for line in first.iter().flat_map(|f| wrap(f, width)) {
@@ -1155,7 +1228,8 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     }
     top_lines.push(Line::raw(""));
     if let Some(name) = app.notes_editor_open() {
-        top_lines.push(Line::styled(format!("Open in {name}, in a window of its own."), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
+        top_lines
+            .push(Line::styled(format!("Open in {name}, in a window of its own."), Style::new().fg(t.accent).add_modifier(Modifier::BOLD)));
         top_lines.push(Line::styled("platoon reads them again when you are done.", Style::new().fg(t.subtext)));
         top_lines.push(Line::raw(""));
     }
@@ -1326,13 +1400,21 @@ fn chip_width(key: &str, label: &str, count: usize) -> u16 {
 fn tab_chip(t: &Theme, rounded: bool, key: &str, label: &str, count: usize, current: bool, hover: bool) -> Vec<Span<'static>> {
     let chip = if current || hover { t.surface } else { t.bg };
     let (k, l, badge) = if current {
-        (Style::new().fg(t.accent), Style::new().fg(t.text).add_modifier(Modifier::BOLD), Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD))
+        (
+            Style::new().fg(t.accent),
+            Style::new().fg(t.text).add_modifier(Modifier::BOLD),
+            Style::new().fg(t.on_accent).bg(t.accent).add_modifier(Modifier::BOLD),
+        )
     } else if hover {
         (Style::new().fg(t.accent), Style::new().fg(t.text), Style::new().fg(t.text).bg(t.border))
     } else {
         (Style::new().fg(t.dim), Style::new().fg(t.dim), Style::new().fg(t.dim).bg(t.surface))
     };
-    let mut out = vec![Span::styled(" ", Style::new().bg(chip)), Span::styled(key.to_string(), k.bg(chip)), Span::styled(label.to_string(), l.bg(chip))];
+    let mut out = vec![
+        Span::styled(" ", Style::new().bg(chip)),
+        Span::styled(key.to_string(), k.bg(chip)),
+        Span::styled(label.to_string(), l.bg(chip)),
+    ];
     out.extend(pill(t, rounded, &count.to_string(), badge, chip, t.bg));
     out
 }
@@ -1436,11 +1518,7 @@ const COL_GAP: usize = 2;
 
 /// What a row's project pill says at this terminal width: the name, or on a narrow terminal the badge letters.
 fn project_label(p: &crate::projects::Project, term_w: u16) -> &str {
-    if term_w >= PROJECT_NAME_MIN_WIDTH {
-        &p.name
-    } else {
-        &p.badge
-    }
+    if term_w >= PROJECT_NAME_MIN_WIDTH { &p.name } else { &p.badge }
 }
 
 /// How wide the PROJECT column wants to be for these rows: enough for the longest pill plus a gap, at most
@@ -1568,7 +1646,9 @@ fn row_look(t: &Theme, status: Status, unread: bool, tick: u64) -> Look {
     let pulse_on = (tick / 5) % 2 == 0;
     match (status, unread) {
         (Status::Busy, _) => Look { marker: SPINNER[(tick % 10) as usize], marker_color: t.busy, status: "working", status_color: t.busy },
-        (Status::Idle, true) => Look { marker: "●", marker_color: if pulse_on { t.ok } else { t.dim }, status: "done", status_color: t.ok },
+        (Status::Idle, true) => {
+            Look { marker: "●", marker_color: if pulse_on { t.ok } else { t.dim }, status: "done", status_color: t.ok }
+        }
         (Status::Idle, false) => Look { marker: "○", marker_color: t.dim, status: "idle", status_color: t.dim },
         // The accent: every theme keeps it apart from the working, done and warning colors (`MIN_DELTA_E`) and
         // readable on the background (`MIN_ROLE`), so a running-in-the-background row can't be mistaken for those.
@@ -1589,11 +1669,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     let subtext = if s.archived { t.dim } else { t.subtext };
 
     let Look { marker, marker_color, status: status_text, status_color } = row_look(t, s.status, s.unread, app.tick);
-    let name_style = if s.unread {
-        base.fg(t.ok).add_modifier(Modifier::BOLD)
-    } else {
-        base.fg(text)
-    };
+    let name_style = if s.unread { base.fg(t.ok).add_modifier(Modifier::BOLD) } else { base.fg(text) };
 
     let lead = if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) };
     let mut l1 = vec![lead.clone(), Span::styled(format!("{marker} "), base.fg(marker_color))];
@@ -1642,11 +1718,7 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1 + c.pad.last), base.fg(t.dim)));
 
     let desc_w = (area.width as usize).saturating_sub(3);
-    let l2 = vec![
-        lead,
-        Span::styled("  ", base),
-        Span::styled(fit(&s.description, desc_w.saturating_sub(1)), base.fg(t.dim)),
-    ];
+    let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(&s.description, desc_w.saturating_sub(1)), base.fg(t.dim))];
 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(area);
     f.render_widget(Paragraph::new(Line::from(l1)).style(base), rows[0]);
@@ -1847,7 +1919,13 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         fit_hints(hints, w, &["move", "tabs"])
     } else {
         fit_hints(
-            vec![("tab", "tabs", None), ("↑↓", "move", None), ("←→", "change", None), ("enter", "next choice", None), (app.back_label(), "back", Some(Action::Cancel))],
+            vec![
+                ("tab", "tabs", None),
+                ("↑↓", "move", None),
+                ("←→", "change", None),
+                ("enter", "next choice", None),
+                (app.back_label(), "back", Some(Action::Cancel)),
+            ],
             w,
             &["move", "next choice"],
         )
@@ -1862,20 +1940,26 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     if !store.is_corrupt() && app.active_notice().is_none() && !on_plugins {
         let text_w = (area.width as usize).saturating_sub(4);
         let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
-        let room = |notes: usize| path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top;
+        let room = |notes: usize| {
+            path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top
+        };
         // (On the smart features tab the first note is the day's token count: that one stays.)
         let keep = usize::from(app.settings_tab == crate::settings::TAB_SMART);
         let heads = settings_tab(app).headings.len();
-        if explain_level(&explained, app.setting, room(notes.len()) as usize, heads) == 2 && explain_level(&explained, app.setting, room(keep) as usize, heads) < 2 {
+        if explain_level(&explained, app.setting, room(notes.len()) as usize, heads) == 2
+            && explain_level(&explained, app.setting, room(keep) as usize, heads) < 2
+        {
             notes.truncate(keep);
         }
     }
     // The entries come before the notes: on a very short terminal the notes give way.
-    let rows_bottom = path_y.saturating_sub(notes.len() as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top));
+    let rows_bottom =
+        path_y.saturating_sub(notes.len() as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top));
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
 
     // The notes follow the entries directly.
-    let mut y = if on_plugins { plugins_view::draw_plugin_settings(f, app, rows_area) } else { draw_setting_rows(f, app, &current, rows_area) } + 1;
+    let mut y =
+        if on_plugins { plugins_view::draw_plugin_settings(f, app, rows_area) } else { draw_setting_rows(f, app, &current, rows_area) } + 1;
     for (line, color) in &notes {
         if y < path_y {
             f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(*color))), Rect::new(area.x, y, area.width, 1));
@@ -1944,7 +2028,9 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
     let need = |tab: usize| {
         let items = &SETTINGS_TABS[tab].items;
-        let mut entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>() + items.len().saturating_sub(1) + SETTINGS_TABS[tab].headings.len();
+        let mut entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>()
+            + items.len().saturating_sub(1)
+            + SETTINGS_TABS[tab].headings.len();
         if tab == crate::settings::TAB_PLUGINS {
             // Room for the longest description of any plugin, so the popup keeps its size as the selection moves.
             let rows = app.pl.rows();
@@ -2034,7 +2120,9 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     // Scroll only if even that doesn't fit, and only as far as it takes to keep the selected entry (with its
     // explanation) in view.
     let mut start = app.setting_top.get().min(app.setting);
-    while start < app.setting && (start..=app.setting).map(|i| height(i) + gap as usize).sum::<usize>() > area.height as usize + gap as usize {
+    while start < app.setting
+        && (start..=app.setting).map(|i| height(i) + gap as usize).sum::<usize>() > area.height as usize + gap as usize
+    {
         start += 1;
     }
     app.setting_top.set(start);
@@ -2047,7 +2135,10 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         }
         if let Some(heading) = tab.heading(i) {
             let style = Style::new().fg(t.accent).add_modifier(Modifier::BOLD);
-            f.render_widget(Paragraph::new(Span::styled(fit_end(heading, area.width as usize), style)), Rect::new(area.x, y, area.width, 1));
+            f.render_widget(
+                Paragraph::new(Span::styled(fit_end(heading, area.width as usize), style)),
+                Rect::new(area.x, y, area.width, 1),
+            );
             y += 1;
         }
         let h = h - head(i) as u16;
@@ -2109,7 +2200,13 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
 
         let arrow = |symbol: &'static str, rect: Rect, disabled: bool| {
             let hot = !disabled && rect.contains(app.mouse.into());
-            let (fg, cell_bg) = if disabled { (t.border, bg) } else if hot { (t.text, t.border) } else { (t.accent, bg) };
+            let (fg, cell_bg) = if disabled {
+                (t.border, bg)
+            } else if hot {
+                (t.text, t.border)
+            } else {
+                (t.accent, bg)
+            };
             Span::styled(symbol, Style::new().fg(fg).bg(cell_bg))
         };
         // "Off" reads as switched off: muted, where an active value is bold and colored.
@@ -2117,11 +2214,17 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         let hot_value = if val.contains(app.mouse.into()) { Style::new().bg(t.border) } else { Style::new().bg(bg) };
         // platoon's default updated under the user's own: said in the warning color, so it is noticed.
         let value_style = match item.kind {
-            Kind::Instructions(id) if app.instructions_status(id) == crate::instructions::Status::BuiltInUpdated => Style::new().fg(t.warn).add_modifier(Modifier::BOLD),
+            Kind::Instructions(id) if app.instructions_status(id) == crate::instructions::Status::BuiltInUpdated => {
+                Style::new().fg(t.warn).add_modifier(Modifier::BOLD)
+            }
             _ => value_style,
         };
         let control = if plain {
-            Line::from(vec![Span::styled(" ", Style::new().bg(bg)), Span::styled(format!("{label:>vw$}"), value_style.patch(hot_value)), Span::styled(" ", Style::new().bg(bg))])
+            Line::from(vec![
+                Span::styled(" ", Style::new().bg(bg)),
+                Span::styled(format!("{label:>vw$}"), value_style.patch(hot_value)),
+                Span::styled(" ", Style::new().bg(bg)),
+            ])
         } else {
             Line::from(vec![
                 arrow("‹ ", prev, at_start),
@@ -2252,7 +2355,10 @@ fn draw_theme_list(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(bg)), rect);
     }
     for (n, line) in note.iter().enumerate() {
-        f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(t.dim))), Rect::new(note_area.x, note_area.y + n as u16, note_area.width, 1));
+        f.render_widget(
+            Paragraph::new(Span::styled(line.clone(), Style::new().fg(t.dim))),
+            Rect::new(note_area.x, note_area.y + n as u16, note_area.width, 1),
+        );
     }
     if !sample.is_empty() {
         draw_theme_sample(f, app, sample);
@@ -2413,7 +2519,10 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Paragraph::new(Line::from(spans)), chips);
     f.render_widget(Paragraph::new(Span::styled(fit_end(kind.explain, explain.width as usize), Style::new().fg(t.dim))), explain);
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(s.text.clone(), Style::new().fg(t.text))])),
+        Paragraph::new(Line::from(vec![
+            Span::styled("❯ ", Style::new().fg(t.accent)),
+            Span::styled(s.text.clone(), Style::new().fg(t.text)),
+        ])),
         input,
     );
     f.set_cursor_position((input.x + 2 + (s.text.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
@@ -2450,7 +2559,10 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     if !enter.is_empty() {
         hints.push(("enter", enter, Some(Action::Confirm)));
     }
-    if s.kind == FIND_KIND && matches!(app.find_state(), FindState::Idle | FindState::Done | FindState::Failed(_)) && !s.text.trim().is_empty() {
+    if s.kind == FIND_KIND
+        && matches!(app.find_state(), FindState::Idle | FindState::Done | FindState::Failed(_))
+        && !s.text.trim().is_empty()
+    {
         hints.push(("ctrl+w", "search wider", None));
     }
     if app.search_kinds().len() > 1 {
@@ -2542,7 +2654,9 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
     } else {
         match app.find_state() {
             FindState::Idle if s.text.trim().is_empty() => lines.push((SEARCH_KINDS[FIND_KIND].prompt.to_string(), t.dim)),
-            FindState::Idle => lines.push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), t.dim)),
+            FindState::Idle => {
+                lines.push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), t.dim))
+            }
             FindState::Waiting => {
                 lines.push(("Asking Claude...".to_string(), t.subtext));
                 lines.push(("Waiting for the names being made to finish first. Press esc to cancel.".to_string(), t.dim));
@@ -2638,7 +2752,10 @@ fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
                 if m.start > at {
                     spans.push(Span::styled(chars[at..m.start].iter().collect::<String>(), base.fg(t.subtext)));
                 }
-                spans.push(Span::styled(chars[m.start.max(at)..end].iter().collect::<String>(), base.fg(t.accent).add_modifier(Modifier::BOLD)));
+                spans.push(Span::styled(
+                    chars[m.start.max(at)..end].iter().collect::<String>(),
+                    base.fg(t.accent).add_modifier(Modifier::BOLD),
+                ));
                 at = end;
             }
             if at < chars.len() {
@@ -2660,14 +2777,21 @@ fn draw_rename(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [input, sep, note, _, foot] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+            .areas(inner);
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(rn.input.clone(), Style::new().fg(t.text))])),
+        Paragraph::new(Line::from(vec![
+            Span::styled("❯ ", Style::new().fg(t.accent)),
+            Span::styled(rn.input.clone(), Style::new().fg(t.text)),
+        ])),
         input,
     );
     f.set_cursor_position((input.x + 2 + (rn.input.chars().count() as u16).min(input.width.saturating_sub(3)), input.y));
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
-    f.render_widget(Paragraph::new(fit_end("Leave it empty to go back to the automatic name.", note.width as usize)).style(Style::new().fg(t.dim)), note);
+    f.render_widget(
+        Paragraph::new(fit_end("Leave it empty to go back to the automatic name.", note.width as usize)).style(Style::new().fg(t.dim)),
+        note,
+    );
     let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
 }
@@ -2691,8 +2815,12 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
             crate::app::SquadName::Copy => ("copy squad", "The copy is yours to change; the squad you copied stays as it is."),
             crate::app::SquadName::AgentName => ("agent name", "What the agent is called. Every squad that uses it keeps it."),
             crate::app::SquadName::AgentCopy => ("copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
-            crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next."),
-            crate::app::SquadName::AgentSkill => ("a skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works."),
+            crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => {
+                ("new agent", "Its name, for the job it does (say, test writer). You write its system prompt next.")
+            }
+            crate::app::SquadName::AgentSkill => {
+                ("a skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works.")
+            }
             crate::app::SquadName::AgentMcp => ("an MCP server", "Its name, as it is configured where the squad works."),
         },
     };
@@ -2700,7 +2828,8 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
     let [input, sep, note_area, _, foot] =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)]).areas(inner);
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1), Constraint::Min(0), Constraint::Length(1)])
+            .areas(inner);
     // A long line shows its end, where the typing is.
     let room = (input.width as usize).saturating_sub(3);
     let len = nb.input.chars().count();
@@ -2727,8 +2856,12 @@ fn draw_assign(f: &mut Frame, app: &App, area: Rect) {
     let block = modal_block(t, "project");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [head, sep, list, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
-    f.render_widget(Paragraph::new(fit_end(&format!("Put \"{}\" in:", a.session_name), head.width as usize)).style(Style::new().fg(t.text)), head);
+    let [head, sep, list, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    f.render_widget(
+        Paragraph::new(fit_end(&format!("Put \"{}\" in:", a.session_name), head.width as usize)).style(Style::new().fg(t.text)),
+        head,
+    );
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let current = app.projects.project_id_of(&a.session);
     let rows = list.height as usize;
@@ -2777,14 +2910,9 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let block = modal_block(t, &what);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [head, sep, list, note, foot] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
+    let [head, sep, list, note, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
     f.render_widget(Paragraph::new(fit_end("Editors found on this computer:", head.width as usize)).style(Style::new().fg(t.text)), head);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let rows = list.height as usize;
@@ -2829,14 +2957,9 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let block = modal_block(t, "open with");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [head, sep, list, note, foot] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
+    let [head, sep, list, note, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
     f.render_widget(Paragraph::new(fit_end("Editors that open a folder:", head.width as usize)).style(Style::new().fg(t.text)), head);
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     let rows = list.height as usize;
@@ -2857,7 +2980,13 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let spans = vec![
             Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
             Span::styled(format!("{star} "), base.fg(t.accent)),
-            Span::styled(fit(&if e.is_platoon() && pick.platoon_missing { format!("{} (not installed)", e.name) } else { e.name.clone() }, (rect.width as usize).saturating_sub(31)), base.fg(t.text)),
+            Span::styled(
+                fit(
+                    &if e.is_platoon() && pick.platoon_missing { format!("{} (not installed)", e.name) } else { e.name.clone() },
+                    (rect.width as usize).saturating_sub(31),
+                ),
+                base.fg(t.text),
+            ),
             Span::styled(where_it_runs, base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
@@ -2879,7 +3008,8 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
     let block = modal_block(t, "what changed last");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [head, sep, body, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
+    let [head, sep, body, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     let legend = Line::from(vec![
         Span::styled("- ", Style::new().fg(t.err).add_modifier(Modifier::BOLD)),
         Span::styled("was there before    ", Style::new().fg(t.subtext)),
@@ -2905,7 +3035,8 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
             Rect::new(body.x, body.y + n as u16, body.width, 1),
         );
     }
-    let hints: [Hint; 3] = [(app.back_label(), "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    let hints: [Hint; 3] =
+        [(app.back_label(), "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
     draw_footer(f, app, foot, &hints, None);
 }
 
@@ -2961,7 +3092,9 @@ fn draw_handoff(f: &mut Frame, app: &App, area: Rect) {
     handoff_ruler(f, t, sep, crate::textbox::more_label(top, true));
     handoff_ruler(f, t, sep2, crate::textbox::more_label(below, false));
     let note_text = match &h.state {
-        HandoffState::Ready => "Edit it if you like. The old session is left exactly as it is. The project's notes go to the new session by themselves.",
+        HandoffState::Ready => {
+            "Edit it if you like. The old session is left exactly as it is. The project's notes go to the new session by themselves."
+        }
         _ => "The old session is left exactly as it is.",
     };
     f.render_widget(Paragraph::new(fit_end(note_text, note.width as usize)).style(Style::new().fg(t.dim)), note);
@@ -3054,7 +3187,10 @@ fn draw_look(f: &mut Frame, app: &App, area: Rect) {
     let label = crate::projects::SLOTS.get(lk.slot).map_or("", |s| s.1);
     f.render_widget(Paragraph::new(Span::styled(format!("Color: {label}   (←→ to change)"), Style::new().fg(t.dim))), names);
     f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("Badge ❯ ", Style::new().fg(t.accent)), Span::styled(lk.badge.clone(), Style::new().fg(t.text))])),
+        Paragraph::new(Line::from(vec![
+            Span::styled("Badge ❯ ", Style::new().fg(t.accent)),
+            Span::styled(lk.badge.clone(), Style::new().fg(t.text)),
+        ])),
         badge,
     );
     f.set_cursor_position((badge.x + 8 + lk.badge.chars().count() as u16, badge.y));
@@ -3062,7 +3198,10 @@ fn draw_look(f: &mut Frame, app: &App, area: Rect) {
         let mut shown = p.clone();
         shown.color = crate::projects::SLOTS.get(lk.slot).map_or("accent", |s| s.0).to_string();
         shown.badge = if lk.badge.is_empty() { crate::projects::default_badge(&p.name) } else { lk.badge.clone() };
-        f.render_widget(Paragraph::new(Line::from(vec![badge_span(t, &shown), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text))])), preview);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![badge_span(t, &shown), Span::raw(" "), Span::styled(p.name.clone(), Style::new().fg(t.text))])),
+            preview,
+        );
     }
     let hints: [Hint; 2] = [("enter", "save", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel))];
     draw_footer(f, app, foot, &hints, None);
@@ -3085,13 +3224,8 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
 
-    let [input, sep, list, foot] = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
+    let [input, sep, list, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1)]).areas(inner);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("❯ ", Style::new().fg(t.accent)),
@@ -3114,11 +3248,18 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let line = Line::from(vec![
             Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
-            Span::styled(fit(&tilde(path, &app.home), (rect.width as usize).saturating_sub(2)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
+            Span::styled(
+                fit(&tilde(path, &app.home), (rect.width as usize).saturating_sub(2)),
+                Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg),
+            ),
         ]);
         f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
     }
-    let hints: [Hint; 3] = [("enter", if p.ticket.is_some() { "add" } else { "start" }, Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "choose", None)];
+    let hints: [Hint; 3] = [
+        ("enter", if p.ticket.is_some() { "add" } else { "start" }, Some(Action::Confirm)),
+        ("esc", "cancel", Some(Action::Cancel)),
+        ("↑↓", "choose", None),
+    ];
     draw_footer(f, app, foot, &hints, Some((format!("{} dirs", p.results.len()), t.dim)));
 }
 
@@ -3355,7 +3496,9 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [a, b, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
+    let [a, b, _, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(body_lines), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
     f.render_widget(Paragraph::new(l1).style(Style::new().fg(t.text).add_modifier(Modifier::BOLD)), a);
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let no = match c {
@@ -3384,7 +3527,11 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
         if !x.reason.is_empty() {
             line.push_str(&format!(" · {}", x.reason));
         }
-        f.render_widget(Paragraph::new(fit_end(&line, a.ticket.width as usize)).style(Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)), a.ticket);
+        f.render_widget(
+            Paragraph::new(fit_end(&line, a.ticket.width as usize))
+                .style(Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)),
+            a.ticket,
+        );
     }
     let paused = app.attached_paused();
     draw_terminal(f, t, client, a.term, if paused { None } else { app.selection });
@@ -3406,7 +3553,11 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
 fn draw_ticket_with_squad(f: &mut Frame, app: &App, number: u32, area: Rect, term_w: u16) {
     let t = app.effective_theme();
     let running = app.leader_running(number);
-    let msg = if running { "The squad's session is running. Enter to open it." } else { "The squad's session isn't running. Enter to continue it." };
+    let msg = if running {
+        "The squad's session is running. Enter to open it."
+    } else {
+        "The squad's session isn't running. Enter to continue it."
+    };
     if term_w >= SPLIT_MIN_WIDTH {
         let left = area.width * 2 / 5;
         draw_ticket_screen(f, app, number, Rect::new(area.x, area.y, left.saturating_sub(1), area.height));
@@ -3415,9 +3566,19 @@ fn draw_ticket_with_squad(f: &mut Frame, app: &App, number: u32, area: Rect, ter
             f.render_widget(Paragraph::new("│").style(Style::new().fg(t.border)), Rect::new(area.x + left, y, 1, 1));
         }
         let at = Rect::new(right.x + 2, right.y + right.height / 3, right.width.saturating_sub(4), 2);
-        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).alignment(Alignment::Center).style(Style::new().fg(if running { t.subtext } else { t.warn })), at);
+        f.render_widget(
+            Paragraph::new(msg).wrap(Wrap { trim: true }).alignment(Alignment::Center).style(Style::new().fg(if running {
+                t.subtext
+            } else {
+                t.warn
+            })),
+            at,
+        );
     } else {
-        f.render_widget(Paragraph::new(fit_end(msg, area.width as usize)).style(Style::new().fg(if running { t.subtext } else { t.warn })), Rect::new(area.x, area.y, area.width, 1));
+        f.render_widget(
+            Paragraph::new(fit_end(msg, area.width as usize)).style(Style::new().fg(if running { t.subtext } else { t.warn })),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
         draw_ticket_screen(f, app, number, Rect::new(area.x, area.y + 2, area.width, area.height.saturating_sub(2)));
     }
 }
@@ -3454,8 +3615,13 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let block = modal_block(t, "hand to a squad");
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
-    let [head, sep, list, _, foot] = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)]).areas(inner);
-    f.render_widget(Paragraph::new(fit_end(&format!("#{} {}", x.number, x.title), head.width as usize)).style(Style::new().fg(t.text)), head);
+    let [head, sep, list, _, foot] =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Min(1), Constraint::Length(1), Constraint::Length(1)])
+            .areas(inner);
+    f.render_widget(
+        Paragraph::new(fit_end(&format!("#{} {}", x.number, x.title), head.width as usize)).style(Style::new().fg(t.text)),
+        head,
+    );
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
     // Scrolled so the picked squad shows: from the first one that leaves room for it.
     let picked = app.sq.pick_selected.min(rows.len().saturating_sub(1));
@@ -3472,12 +3638,16 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.sq.pick_selected;
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
-        let mut out = vec![Line::from(vec![Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)), Span::styled(s.name.clone(), base.fg(t.text).add_modifier(Modifier::BOLD))])];
+        let mut out = vec![Line::from(vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(s.name.clone(), base.fg(t.text).add_modifier(Modifier::BOLD)),
+        ])];
         out.extend(lines.iter().map(|l| Line::from(vec![Span::styled("  ", base), Span::styled(l.clone(), base.fg(t.subtext))])));
         f.render_widget(Paragraph::new(out).style(base), rect);
         y += h + 1;
     }
-    let hints: [Hint; 3] = [("enter", "hand it over", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    let hints: [Hint; 3] =
+        [("enter", "hand it over", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
     draw_footer(f, app, foot, &hints, None);
 }
 
@@ -3520,7 +3690,10 @@ pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(block, r);
     let lines = vec![
         Line::styled("This session was opened somewhere else too.", Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
-        Line::styled("To keep the conversation in sync and nothing overwritten, this copy is paused: what you type is not sent.", Style::new().fg(t.subtext)),
+        Line::styled(
+            "To keep the conversation in sync and nothing overwritten, this copy is paused: what you type is not sent.",
+            Style::new().fg(t.subtext),
+        ),
         Line::raw(""),
         Line::from(vec![
             Span::styled(app.back_label().to_string(), Style::new().fg(t.accent)),
@@ -3653,11 +3826,7 @@ fn fit(s: &str, n: usize) -> String {
 
 /// Pad to exactly `n` chars, or cut from the front (`…` first) so that the end stays: a path's last folder.
 fn fit_tail(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        format!("{s:<n$}")
-    } else {
-        fit_start(s, n)
-    }
+    if s.chars().count() <= n { format!("{s:<n$}") } else { fit_start(s, n) }
 }
 
 /// A conversation's folder and the folders added to it (`/add-dir`), as one text: `~/repos/platoon, /`.
@@ -3739,7 +3908,7 @@ mod tests {
         assert_eq!(footer_room(20, &two), 20 - (4 + 3 + 3) - 3);
         assert_eq!(footer_room(5, &hints), 0);
     }
-    use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
+    use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
     /// What a session that printed `bytes` looks like under `theme` (one row per line, 12 columns).
     fn shown(theme: &Theme, bytes: &[u8]) -> Buffer {
@@ -3846,10 +4015,17 @@ mod tests {
             for want in [PROJECT_MIN, 12, PROJECT_MAX] {
                 for content in [(6usize, 5usize), (20, 34), GREEDY] {
                     let c = cols(width, want, content);
-                    assert_eq!((c.branch, c.model, c.status), (plain.branch, plain.model, plain.status), "{width}: other drop rules unchanged");
+                    assert_eq!(
+                        (c.branch, c.model, c.status),
+                        (plain.branch, plain.model, plain.status),
+                        "{width}: other drop rules unchanged"
+                    );
                     assert!(c.project == 0 || (PROJECT_MIN..=want).contains(&c.project), "{width}/{want}: {}", c.project);
                     assert!(c.project == 0 || c.name + c.dir >= NAME_DIR_MIN.min(content.0 + content.1), "{width}/{want}/{content:?}");
-                    assert!(rest + sum(&c) <= (width as usize).max(rest + plain.status), "{width}/{want}/{content:?}: past the terminal's right edge");
+                    assert!(
+                        rest + sum(&c) <= (width as usize).max(rest + plain.status),
+                        "{width}/{want}/{content:?}: past the terminal's right edge"
+                    );
                 }
                 // Where the content fills the row anyway, the project column comes out of NAME and DIR, and
                 // the table still adds up to exactly the width it did before there was such a column.

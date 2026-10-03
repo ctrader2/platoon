@@ -3,15 +3,15 @@
 //! squad's session isn't running, and the split view's layout. Every directory is a temp dir (`World`); nothing here
 //! starts a session (the terminal tests in `tests/squads.rs` do, with a stand-in `claude`).
 
-use crate::app::{split_areas, App, Confirm, Mode, Pane};
+use crate::app::{App, Confirm, Mode, Pane, split_areas};
 use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
-    Terminal,
 };
 
 fn key(app: &mut App, code: KeyCode) {
@@ -27,7 +27,10 @@ fn typed(app: &mut App, text: &str) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -139,7 +142,8 @@ fn a_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     let (w, mut app, id) = on_the_project("sq-refuse");
     let mut t = Tickets::open(&w.config, &id);
     let first = t.add(NewTicket { title: "First".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-    let waits = t.add(NewTicket { title: "Second".into(), folders: vec!["/tmp".into()], blocked_by: vec![first], ..Default::default() }).unwrap();
+    let waits =
+        t.add(NewTicket { title: "Second".into(), folders: vec!["/tmp".into()], blocked_by: vec![first], ..Default::default() }).unwrap();
     let nofolder = t.add(NewTicket { title: "Third".into(), ..Default::default() }).unwrap();
     let working = t.add(NewTicket { title: "Fourth".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
     t.start_leader(working, &lead("lead-4"), &[]).unwrap();
@@ -171,7 +175,13 @@ fn a_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     assert!(matches!(app.mode, Mode::SquadPick) && app.sq.pick_ticket == first);
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("hand to a squad") && shown.contains("#1 First") && shown.contains("Coding") && shown.contains("Makes a change to code"), "{shown}");
+    assert!(
+        shown.contains("hand to a squad")
+            && shown.contains("#1 First")
+            && shown.contains("Coding")
+            && shown.contains("Makes a change to code"),
+        "{shown}"
+    );
     assert!(shown.contains("enter hand it over"), "{shown}");
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
@@ -211,7 +221,12 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
     let (w, mut app, id) = on_the_project("sq-screen");
     let mut t = Tickets::open(&w.config, &id);
     let n = t.add(NewTicket { title: "Basket".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
-    let wt = crate::tickets::Worktree { folder: "/tmp".into(), path: "/w/shop-worktrees/ticket-1".into(), branch: "ticket/1".into(), ..Default::default() };
+    let wt = crate::tickets::Worktree {
+        folder: "/tmp".into(),
+        path: "/w/shop-worktrees/ticket-1".into(),
+        branch: "ticket/1".into(),
+        ..Default::default()
+    };
     t.start_leader(n, &lead("lead-6"), &[wt]).unwrap();
     t.squad_says(n, &State::Waiting, "Asks: Red or blue?", None).unwrap();
     app.reload_for_test();
@@ -280,7 +295,13 @@ fn cancelling_a_ticket_whose_squad_runs_says_so_and_yes_stops_only_that_session(
     // Its leader "runs" in a host: a process of this test's own stands in for its claude; another one must be left alone.
     let mut leader = std::process::Command::new("sleep").arg("30").spawn().unwrap();
     let mut bystander = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-    app.hosts.push(crate::host::HostInfo { claude_pid: leader.id(), host_pid: 0, dir: "/tmp".into(), args: vec!["--resume".into(), "lead-8".into()], sock: Default::default() });
+    app.hosts.push(crate::host::HostInfo {
+        claude_pid: leader.id(),
+        host_pid: 0,
+        dir: "/tmp".into(),
+        args: vec!["--resume".into(), "lead-8".into()],
+        sock: Default::default(),
+    });
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Char('c'));
     let pid = leader.id();
@@ -338,7 +359,9 @@ fn with_commander(name: &str, spent: u64, folder: &std::path::Path) -> (World, A
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("user-1", Some(&id)).unwrap();
     std::fs::create_dir_all(folder).unwrap();
-    Tickets::open(&w.config, &id).add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() }).unwrap();
+    Tickets::open(&w.config, &id)
+        .add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() })
+        .unwrap();
     app.reload_for_test();
     key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
@@ -405,7 +428,11 @@ fn a_no_puts_it_back_to_new_with_the_reason_and_the_same_squad_again_asks_to_han
     assert_eq!(t.state, State::New);
     assert_eq!(t.handover.as_ref().map(|h| h.says.as_str()), Some("This is docs work; the Coding squad writes code."));
     assert!(app.sq.launched.is_empty() && t.leaders.is_empty());
-    assert!(app.active_notice().unwrap().starts_with("The commander says the Coding squad doesn't fit #1: This is docs work"), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("The commander says the Coding squad doesn't fit #1: This is docs work"),
+        "{:?}",
+        app.active_notice()
+    );
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(120, 34)).unwrap();
     let f = flat(&draw(&mut term, &app));
@@ -457,7 +484,11 @@ fn when_the_commander_cant_run_nothing_is_handed_over_and_the_ticket_says_why() 
     let t = Tickets::open(&w.config, &id).get(1).cloned().unwrap();
     assert_eq!(t.state, State::New);
     assert_eq!(t.handover.as_ref().map(|h| h.says.as_str()), Some("Session limit has been reached"));
-    assert!(app.active_notice().unwrap().starts_with("Session limit has been reached. #1 wasn't handed over."), "{:?}", app.active_notice());
+    assert!(
+        app.active_notice().unwrap().starts_with("Session limit has been reached. #1 wasn't handed over."),
+        "{:?}",
+        app.active_notice()
+    );
     assert_eq!(fake.calls(), 0);
     assert!(app.sq.launched.is_empty() && t.leaders.is_empty());
     assert!(!base.join("shop-worktrees").exists(), "no worktree");
@@ -582,7 +613,14 @@ fn a_ticket_without_a_folder_goes_to_any_squad_and_starts_in_its_work_folder() {
     let (w, mut app, id, fake) = handing("sq-nofolder", &[vec![], vec![]]);
     // Coding takes it: the commander is asked (told it has no folder of its own), then the leader starts in the work folder.
     hand_to(&mut app, 1, "Coding");
-    assert!(fake.stdin(1).starts_with("The squad: Coding\n") && fake.stdin(1).contains("Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"), "{}", fake.stdin(1));
+    assert!(
+        fake.stdin(1).starts_with("The squad: Coding\n")
+            && fake.stdin(1).contains(
+                "Where it works: the ticket has no folder of its own; the squad works in a private work folder platoon keeps for it.\n"
+            ),
+        "{}",
+        fake.stdin(1)
+    );
     let work = crate::tickets::work_dir(&w.config, &id, 1);
     assert!(work.ends_with("tickets/01-work") && work.is_dir(), "{}", work.display());
     let (dir, args) = app.sq.launched_with[0].clone();
@@ -593,9 +631,17 @@ fn a_ticket_without_a_folder_goes_to_any_squad_and_starts_in_its_work_folder() {
     assert_eq!(value_after(&args, "-n"), "Coding squad · #1 Ticket 1");
     let agents: serde_json::Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     let prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder") && !prompt.contains("stays in the worktree"), "{prompt}");
+    assert!(
+        prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder")
+            && !prompt.contains("stays in the worktree"),
+        "{prompt}"
+    );
     let first = args.last().unwrap();
-    assert!(first.contains(&format!("- {} (the ticket's private work folder; the session starts here.", work.display())) && first.contains("The ticket has no folder of its own."), "{first}");
+    assert!(
+        first.contains(&format!("- {} (the ticket's private work folder; the session starts here.", work.display()))
+            && first.contains("The ticket has no folder of its own."),
+        "{first}"
+    );
     let t = app.ticket(1).unwrap();
     assert!(t.state == State::Working && t.worktrees.is_empty(), "{t:?}");
     let snap = Tickets::open(&w.config, &id).snapshot(t.leader().unwrap()).unwrap();
@@ -623,14 +669,32 @@ fn research_works_in_a_worktree_of_a_git_folder_and_writes_its_report_in_the_wor
     assert!(wt.join("README.md").exists(), "Research works in a worktree of the git folder now, like every squad");
     let (dir, args) = app.sq.launched_with[0].clone();
     assert_eq!(dir, wt.to_string_lossy(), "it starts in the worktree");
-    assert_eq!(add_dirs(&args), [notes.to_string_lossy().into_owned(), work.to_string_lossy().into_owned()], "the plain folder as it is, then the work folder for its report");
+    assert_eq!(
+        add_dirs(&args),
+        [notes.to_string_lossy().into_owned(), work.to_string_lossy().into_owned()],
+        "the plain folder as it is, then the work folder for its report"
+    );
     assert_eq!(app.ticket(1).unwrap().worktrees.len(), 1);
     let agents: serde_json::Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     let prompt = agents["research-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("goes in the ticket's private work folder, never in the project's folders") && !prompt.contains("for reading only"), "{prompt}");
-    assert!(agents["research-report-writer"]["prompt"].as_str().unwrap().contains("report.md in the ticket's private work folder (the leader gives you its path), never in the project's folders"));
+    assert!(
+        prompt.contains("goes in the ticket's private work folder, never in the project's folders") && !prompt.contains("for reading only"),
+        "{prompt}"
+    );
+    assert!(
+        agents["research-report-writer"]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("report.md in the ticket's private work folder (the leader gives you its path), never in the project's folders")
+    );
     let first = args.last().unwrap();
-    assert!(first.contains(&format!("- {} (the ticket's private work folder, kept by platoon: for what the squad writes for the ticket rather than the project", work.display())), "{first}");
+    assert!(
+        first.contains(&format!(
+            "- {} (the ticket's private work folder, kept by platoon: for what the squad writes for the ticket rather than the project",
+            work.display()
+        )),
+        "{first}"
+    );
     let snap = Tickets::open(&w.config, &id).snapshot(app.ticket(1).unwrap().leader().unwrap()).unwrap();
     assert!(snap.contains("\"starts_in\": \"folder\""), "{snap}");
 }
@@ -653,10 +717,19 @@ fn docs_makes_a_worktree_only_of_a_git_folder_and_uses_a_plain_one_as_it_is() {
     assert_eq!((t.worktrees[0].folder.as_str(), t.worktrees[0].branch.as_str()), (s.as_str(), "ticket/1"));
     let (dir, args) = app.sq.launched_with[0].clone();
     assert_eq!(dir, wt.to_string_lossy());
-    assert_eq!(add_dirs(&args), [p.clone(), crate::tickets::work_dir(&w.config, &id, 1).to_string_lossy().into_owned()], "the plain folder, then the work folder");
+    assert_eq!(
+        add_dirs(&args),
+        [p.clone(), crate::tickets::work_dir(&w.config, &id, 1).to_string_lossy().into_owned()],
+        "the plain folder, then the work folder"
+    );
     let agents: serde_json::Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     assert_eq!(agents["docs-tech-writer"]["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write"]));
-    assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays where it was made (the worktree, or the folder used as it is)"));
+    assert!(
+        agents["docs-leader"]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("the change stays where it was made (the worktree, or the folder used as it is)")
+    );
     // Only a plain folder: no worktree at all; it starts in the folder itself.
     hand_to(&mut app, 2, "Docs");
     let t = app.ticket(2).unwrap();

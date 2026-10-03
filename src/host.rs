@@ -17,8 +17,8 @@ use crate::mcp::{self, Blocker, Tracked};
 use crate::procs;
 use crate::settings::SettingsStore;
 use crate::usage::cache_dir;
-use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
-use serde_json::{json, Value};
+use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read, Write},
@@ -29,7 +29,10 @@ use std::{
     },
     path::PathBuf,
     process::{Child, Command, Stdio},
-    sync::{atomic::{AtomicU64, Ordering}, Arc, Mutex, MutexGuard},
+    sync::{
+        Arc, Mutex, MutexGuard,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -123,7 +126,13 @@ pub fn discover() -> Vec<HostInfo> {
             continue;
         }
         let args = v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
-        out.push(HostInfo { claude_pid: claude_pid as u32, host_pid: host_pid as u32, dir: v["dir"].as_str().unwrap_or("").to_string(), args, sock });
+        out.push(HostInfo {
+            claude_pid: claude_pid as u32,
+            host_pid: host_pid as u32,
+            dir: v["dir"].as_str().unwrap_or("").to_string(),
+            args,
+            sock,
+        });
     }
     out
 }
@@ -599,7 +608,7 @@ pub fn end_processes_within(pids: &[u32], wait: Duration) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::{save, Settings};
+    use crate::settings::{Settings, save};
     use std::process::Child;
 
     /// A watchdog watching a real `sleep` (standing in for claude) with a fake registry and settings.
@@ -707,7 +716,11 @@ mod tests {
         fs::write(rig.dir.join("claude/sessions").join(format!("{}.json", daemon_child.id())), v.to_string()).unwrap();
         let t0 = Instant::now();
         let mut since = t0;
-        assert_eq!(rig.dog.decide(t0 + 10_000 * MIN, 0, &mut since), Decision::Keep(Reason::NotIdle), "no entry of its own: not known to be idle");
+        assert_eq!(
+            rig.dog.decide(t0 + 10_000 * MIN, 0, &mut since),
+            Decision::Keep(Reason::NotIdle),
+            "no entry of its own: not known to be idle"
+        );
         // Even a stray entry naming the service's pid is not this host's status: the lookup is by the host's own child.
         assert_eq!(registry_status(&rig.dir.join("claude"), rig.child.id()), None);
         let _ = daemon_child.kill();
@@ -735,7 +748,13 @@ mod tests {
 
     #[test]
     fn a_host_knows_which_background_session_it_shows_from_its_arguments() {
-        let info = |args: &[&str]| HostInfo { claude_pid: 1, host_pid: 2, dir: String::new(), args: args.iter().map(|a| a.to_string()).collect(), sock: PathBuf::new() };
+        let info = |args: &[&str]| HostInfo {
+            claude_pid: 1,
+            host_pid: 2,
+            dir: String::new(),
+            args: args.iter().map(|a| a.to_string()).collect(),
+            sock: PathBuf::new(),
+        };
         assert!(info(&["attach", "dffac639"]).attaches_to("dffac639"));
         assert!(!info(&["attach", "dffac639"]).attaches_to("dffac63"));
         assert!(!info(&["--resume", "dffac639"]).attaches_to("dffac639"));
@@ -806,12 +825,18 @@ mod tests {
         use crate::tickets::{Leader, NewTicket, State, Tickets};
         let mut rig = Rig::new("leader", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
         rig.status("idle");
-        rig.dog.session = session_of_args(&["--add-dir".into(), "/x".into(), "--session-id".into(), "lead-1".into(), "-n".into(), "#1 x".into()]);
+        rig.dog.session =
+            session_of_args(&["--add-dir".into(), "/x".into(), "--session-id".into(), "lead-1".into(), "-n".into(), "#1 x".into()]);
         assert_eq!(rig.dog.session.as_deref(), Some("lead-1"));
         let config = rig.dir.join("config");
         let mut t = Tickets::open(&config, "p1");
         let n = t.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None },
+            &[],
+        )
+        .unwrap();
         let t0 = Instant::now();
         assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::LeaderAtWork));
         for s in [State::Waiting, State::Ready, State::Done, State::Cancelled] {
@@ -852,9 +877,8 @@ mod tests {
             // The process table can be momentarily unreadable when the machine is busy (the whole suite runs at
             // once), so look again for a moment before deciding it isn't there.
             for _ in 0..100 {
-                let found = procs::live_descendants(self.shell.id()).and_then(|kids| {
-                    kids.into_iter().find(|&p| procs::cmdline(p).is_some_and(|a| a.join(" ").starts_with(word)))
-                });
+                let found = procs::live_descendants(self.shell.id())
+                    .and_then(|kids| kids.into_iter().find(|&p| procs::cmdline(p).is_some_and(|a| a.join(" ").starts_with(word))));
                 if let Some(pid) = found {
                     return pid;
                 }
@@ -1021,7 +1045,11 @@ mod tests {
     /// set that up (a SIGTERM before then would just end it).
     fn shell(after_term: Option<f32>) -> Child {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let ready = std::env::temp_dir().join(format!("platoon-host-ready-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
+        let ready = std::env::temp_dir().join(format!(
+            "platoon-host-ready-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
         let trap = after_term.map_or(String::new(), |secs| format!("sleep {secs}; exit 0"));
         let script = format!("trap '{trap}' TERM; : > '{}'; while :; do sleep 0.05; done", ready.display());
         let child = Command::new("sh").arg("-c").arg(script).spawn().unwrap();

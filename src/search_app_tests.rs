@@ -2,14 +2,14 @@
 //! list, the files and the screen show out. Every directory is a temp dir (`World`).
 
 use crate::app::{Action, App, Hit, Mode};
-use crate::testkit::{iso, now_ms, World};
+use crate::testkit::{World, iso, now_ms};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
     layout::Rect,
     style::Modifier,
-    Terminal,
 };
 use serde_json::json;
 
@@ -19,7 +19,8 @@ fn conv(w: &World, id: &str, cwd: &str, prompts: &[&str], mins_ago: u64) {
     let mut lines = vec![json!({"type":"mode","mode":"normal"}).to_string()];
     for (i, p) in prompts.iter().enumerate() {
         let t = at - (prompts.len() - i) as u64 * 1000;
-        lines.push(json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":iso(t),"message":{"role":"user","content":p}}).to_string());
+        lines
+            .push(json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":iso(t),"message":{"role":"user","content":p}}).to_string());
         // A tool result: the words in it must never be found.
         lines.push(
             json!({"type":"user","cwd":cwd,"timestamp":iso(t + 100),"message":{"role":"user","content":[{"tool_use_id":"x","type":"tool_result","content":format!("tool output mentioning zebra {i}")}]}})
@@ -217,7 +218,11 @@ fn results_are_ranked_by_one_message_having_all_the_words_then_by_how_many_menti
     key(&mut app, KeyCode::Char('/'));
     key(&mut app, KeyCode::Tab);
     type_str(&mut app, "docker build cache");
-    assert_eq!(found(&app), ["onemore0", "one00000", "older000", "spread00"], "one message with all the words first: more of those messages, then newer; words spread out last");
+    assert_eq!(
+        found(&app),
+        ["onemore0", "one00000", "older000", "spread00"],
+        "one message with all the words first: more of those messages, then newer; words spread out last"
+    );
 }
 
 #[test]
@@ -359,7 +364,12 @@ fn a_prompt_added_while_the_dialog_is_open_is_found_after_the_next_refresh() {
     let path = w.root.join("projects/-some-project/dddddddd-0000.jsonl");
     let mut f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
     use std::io::Write;
-    writeln!(f, "{}", json!({"type":"user","cwd":"/srv/delta","timestamp":iso(now_ms()),"message":{"role":"user","content":"now use terraform for it"}})).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({"type":"user","cwd":"/srv/delta","timestamp":iso(now_ms()),"message":{"role":"user","content":"now use terraform for it"}})
+    )
+    .unwrap();
     drop(f);
     app.refresh_for_test();
     assert_eq!(found(&app), ["dddddddd-0000"]);
@@ -420,7 +430,8 @@ fn results_area(term: &mut Terminal<TestBackend>, app: &App) -> (Vec<String>, Re
     let shown = screen(term, app);
     let (left, top) = find(&shown, "╭ Search");
     let lines: Vec<&str> = shown.lines().collect();
-    let sep = (top as usize + 1..lines.len()).find(|&r| lines[r].chars().skip(left as usize + 3).take(10).all(|c| c == '─')).expect("separator");
+    let sep =
+        (top as usize + 1..lines.len()).find(|&r| lines[r].chars().skip(left as usize + 3).take(10).all(|c| c == '─')).expect("separator");
     let foot = (sep + 1..lines.len()).find(|&r| lines[r].contains("esc ")).expect("footer");
     let width = lines[top as usize].chars().skip(left as usize).position(|c| c == '╮').expect("top right corner") as u16 + 1;
     let rows = (sep + 1..foot).map(|r| lines[r].chars().skip(left as usize + 1).take(width as usize - 2).collect::<String>()).collect();
@@ -587,7 +598,10 @@ fn the_dialog_shows_the_chips_the_box_and_results_with_the_words_lit_in_the_acce
     let (px, py) = find(&shown, "❯ delta");
     assert_eq!(term.backend().buffer()[(px, py)].fg, t.accent);
     assert_eq!(term.backend().buffer()[(px + 2, py)].fg, t.text);
-    assert!(shown.contains("1 shown") && shown.contains("esc clear") && shown.contains("enter keep filter") && shown.contains("tab switch"), "{shown}");
+    assert!(
+        shown.contains("1 shown") && shown.contains("esc clear") && shown.contains("enter keep filter") && shown.contains("tab switch"),
+        "{shown}"
+    );
 
     // Full-text: the matching message under the name, the word in bold accent, the rest quiet.
     key(&mut app, KeyCode::Tab);
@@ -708,7 +722,11 @@ fn r_opens_the_box_with_the_current_name_and_enter_saves_it_to_names_json_only()
     let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(w.config.join("names.json")).unwrap()).unwrap();
     assert_eq!(saved["names"], json!({"aaaaaaaa-0000": "Payments work"}));
     assert_eq!(app.active_notice(), Some("Renamed to \"Payments work\""));
-    assert_eq!(std::fs::read(w.root.join("projects/-some-project/aaaaaaaa-0000.jsonl")).unwrap(), claude_before, "Claude's files are never written");
+    assert_eq!(
+        std::fs::read(w.root.join("projects/-some-project/aaaaaaaa-0000.jsonl")).unwrap(),
+        claude_before,
+        "Claude's files are never written"
+    );
     assert!(!w.root.join("names.json").exists() && !w.cache.join("names.json").exists());
     // A new run sees it, and the quick filter searches it.
     let mut again = w.app();
@@ -733,7 +751,11 @@ fn esc_cancels_an_unchanged_name_writes_nothing_and_an_empty_one_goes_back_to_th
     ctrl(&mut app, 'u');
     key(&mut app, KeyCode::Enter);
     assert!(!w.config.join("names.json").exists(), "and clearing a name that was never given writes nothing either");
-    assert_eq!(app.selected_session().unwrap().name, "alpha", "an empty box on a conversation with no name of its own keeps the automatic one");
+    assert_eq!(
+        app.selected_session().unwrap().name,
+        "alpha",
+        "an empty box on a conversation with no name of its own keeps the automatic one"
+    );
 }
 
 #[test]
@@ -794,7 +816,8 @@ fn a_name_wins_over_the_one_a_running_session_was_given_and_is_cut_to_length() {
     conv(&w, "aaaaaaaa-0000", "/srv/alpha", &["hello"], 5);
     let pid = w.live("aaaaaaaa-0000", "/srv/alpha", 1, "idle");
     // The registry entry carries a name the user gave inside Claude.
-    let mut v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(w.root.join(format!("sessions/{pid}.json"))).unwrap()).unwrap();
+    let mut v: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(w.root.join(format!("sessions/{pid}.json"))).unwrap()).unwrap();
     v["name"] = json!("claude-side name");
     v["nameSource"] = json!("user");
     std::fs::write(w.root.join(format!("sessions/{pid}.json")), v.to_string()).unwrap();
@@ -840,7 +863,10 @@ fn the_rename_box_draws_the_name_the_hints_and_can_be_clicked() {
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     key(&mut app, KeyCode::Char('r'));
     let shown = screen(&mut term, &app);
-    assert!(shown.contains("rename conversation") && shown.contains("❯ alpha") && shown.contains("enter save") && shown.contains("esc cancel"), "{shown}");
+    assert!(
+        shown.contains("rename conversation") && shown.contains("❯ alpha") && shown.contains("enter save") && shown.contains("esc cancel"),
+        "{shown}"
+    );
     assert!(shown.contains("Leave it empty to go back to the automatic name."), "{shown}");
     let (x, y) = find(&shown, "❯ alpha");
     let buf = term.backend().buffer();

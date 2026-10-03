@@ -47,7 +47,10 @@ enum Piece {
 enum Container {
     Quote,
     /// A list item: its bullet or number on its first line, spaces as wide on every line after.
-    Item { first: String, used: bool },
+    Item {
+        first: String,
+        used: bool,
+    },
 }
 
 struct View<'t> {
@@ -274,7 +277,8 @@ impl<'t> View<'t> {
         if self.gap && !self.lines.is_empty() {
             let bars = self.prefix(false);
             let keep = bars.iter().any(|s| !s.content.trim().is_empty());
-            let prefix = if keep { bars.into_iter().map(|s| Span::styled(s.content.trim_end().to_string(), s.style)).collect() } else { Vec::new() };
+            let prefix =
+                if keep { bars.into_iter().map(|s| Span::styled(s.content.trim_end().to_string(), s.style)).collect() } else { Vec::new() };
             self.lines.push(Line::from(prefix));
         }
         self.gap = false;
@@ -415,7 +419,10 @@ fn push_char(line: &mut Vec<Span<'static>>, ch: char, style: Style) {
 enum Tok {
     Break,
     /// Characters with no space between them, which may change style part way ("**bold**,").
-    Word { segs: Vec<(String, Style)>, space_before: bool },
+    Word {
+        segs: Vec<(String, Style)>,
+        space_before: bool,
+    },
 }
 
 fn words(pieces: &[Piece]) -> Vec<Tok> {
@@ -494,7 +501,17 @@ fn cut_code(text: &str, avail: usize) -> Vec<String> {
 
 /// No control character or escape sequence reaches the screen: they are dropped, and a tab is a space.
 fn clean(s: &str) -> String {
-    s.chars().filter_map(|c| if c == '\t' { Some(' ') } else if c.is_control() { None } else { Some(c) }).collect()
+    s.chars()
+        .filter_map(|c| {
+            if c == '\t' {
+                Some(' ')
+            } else if c.is_control() {
+                None
+            } else {
+                Some(c)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -574,10 +591,24 @@ mod tests {
 
     #[test]
     fn nested_and_numbered_lists_indent_by_depth_and_use_plain_bullets_when_asked() {
-        let md = "- Pricing\n  - VAT in the total?\n    - per country\n- Shipping\n\n1. first\n2. second\n\nThen:\n\n10. tenth\n    goes on\n";
+        let md =
+            "- Pricing\n  - VAT in the total?\n    - per country\n- Shipping\n\n1. first\n2. second\n\nThen:\n\n10. tenth\n    goes on\n";
         assert_eq!(
             texts(md, 60),
-            ["• Pricing", "  ◦ VAT in the total?", "    ▪ per country", "• Shipping", "", "1. first", "2. second", "", "Then:", "", "10. tenth", "    goes on"]
+            [
+                "• Pricing",
+                "  ◦ VAT in the total?",
+                "    ▪ per country",
+                "• Shipping",
+                "",
+                "1. first",
+                "2. second",
+                "",
+                "Then:",
+                "",
+                "10. tenth",
+                "    goes on"
+            ]
         );
         let plain: Vec<String> = render(md, 60, &theme(), true).iter().map(text_of).collect();
         assert_eq!(plain[..4], ["- Pricing", "  * VAT in the total?", "    + per country", "- Shipping"]);

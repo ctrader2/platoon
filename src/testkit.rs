@@ -73,7 +73,11 @@ pub fn now_ms() -> u64 {
 
 impl World {
     pub fn new(name: &str) -> Self {
-        let base = removed_at_exit(std::env::temp_dir().join(format!("platoon-ut-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
+        let base = removed_at_exit(std::env::temp_dir().join(format!(
+            "platoon-ut-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        )));
         let _ = fs::remove_dir_all(&base);
         let (root, cache, config) = (base.join("claude"), base.join("cache"), base.join("config"));
         for d in [root.join("sessions"), root.join("projects"), cache.clone()] {
@@ -87,7 +91,8 @@ impl World {
 
     /// Write `settings.json` (0 turns a feature off).
     pub fn settings(&self, idle_stop_minutes: u64, auto_archive_days: u64) {
-        crate::settings::save(&self.config, &crate::settings::Settings { idle_stop_minutes, auto_archive_days, ..Default::default() }).unwrap();
+        crate::settings::save(&self.config, &crate::settings::Settings { idle_stop_minutes, auto_archive_days, ..Default::default() })
+            .unwrap();
     }
 
     pub fn app(&self) -> App {
@@ -223,12 +228,15 @@ pub struct AiFake {
 
 impl AiFake {
     pub fn new(name: &str) -> AiFake {
-        let dir = removed_at_exit(std::env::temp_dir().join(format!("platoon-aifake-{name}-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::SeqCst))));
+        let dir = removed_at_exit(std::env::temp_dir().join(format!(
+            "platoon-aifake-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        )));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(dir.join("calls")).unwrap();
         let d = dir.display();
-        let body = include_str!("../tests/fake-claude.sh")
-        .replace("@DIR@", &d.to_string());
+        let body = include_str!("../tests/fake-claude.sh").replace("@DIR@", &d.to_string());
         let script = dir.join("fake-claude");
         fs::write(&script, body).unwrap();
         fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
@@ -236,7 +244,9 @@ impl AiFake {
     }
 
     pub fn calls(&self) -> usize {
-        fs::read_dir(self.dir.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+        fs::read_dir(self.dir.join("calls"))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count())
+            .unwrap_or(0)
     }
 
     fn call_file(&self, k: usize, what: &str) -> String {
@@ -280,7 +290,11 @@ impl AiFake {
     }
 
     pub fn usage(&self, input: u64, output: u64) {
-        fs::write(self.dir.join("usage"), format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#)).unwrap();
+        fs::write(
+            self.dir.join("usage"),
+            format!(r#"{{"input_tokens":{input},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":{output}}}"#),
+        )
+        .unwrap();
     }
 
     pub fn hang(&self, on: bool) {

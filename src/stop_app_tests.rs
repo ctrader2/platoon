@@ -4,11 +4,11 @@
 
 use crate::app::{App, Confirm, Mode};
 use crate::host::HostInfo;
-use crate::testkit::{alive, World};
+use crate::testkit::{World, alive};
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use std::time::{Duration, Instant};
 
@@ -37,7 +37,10 @@ fn select(app: &mut App, id: &str) {
 fn screen(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| crate::ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn archived_ids(w: &World) -> Vec<String> {
@@ -78,7 +81,10 @@ fn the_row_leaves_at_once_and_the_archive_is_written_only_after_the_process_has_
     let took = t.elapsed();
     assert!(took < Duration::from_millis(400), "the key press took {took:?} (the process needs 1.5 s)");
     assert!(alive(pid), "the process is still shutting down: the row left without waiting for it");
-    assert!(!shown.contains("refactor the parser") && shown.contains("add a login page"), "gone from the screen, the others stay:\n{shown}");
+    assert!(
+        !shown.contains("refactor the parser") && shown.contains("add a login page"),
+        "gone from the screen, the others stay:\n{shown}"
+    );
     assert_eq!(ids(&app), ["beta-2", "gamma-3"]);
     assert_eq!(app.counts, [2, 0], "the Active count dropped at once");
     assert!(shown.split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 2 Archived 0"), "{shown}");

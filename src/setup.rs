@@ -5,8 +5,12 @@
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists.
 
 use crate::{ai, settings};
-use serde_json::{json, Value};
-use std::{fs, io::{BufRead, Write}, path::{Path, PathBuf}};
+use serde_json::{Value, json};
+use std::{
+    fs,
+    io::{BufRead, Write},
+    path::{Path, PathBuf},
+};
 
 pub struct Step {
     pub name: &'static str,
@@ -102,11 +106,7 @@ fn program_of(command: &str) -> &str {
 /// A command we wrote points at an absolute path; check that it still exists.
 fn command_state(command: &str) -> State {
     let prog = program_of(command);
-    if Path::new(prog).is_absolute() && !Path::new(prog).exists() {
-        State::Broken(format!("{prog} no longer exists"))
-    } else {
-        State::Done
-    }
+    if Path::new(prog).is_absolute() && !Path::new(prog).exists() { State::Broken(format!("{prog} no longer exists")) } else { State::Done }
 }
 
 fn is_statusline(c: &str) -> bool {
@@ -150,7 +150,9 @@ fn guard_commands(v: &Value) -> Vec<&str> {
 fn check_statusline(v: &Value) -> State {
     match v["statusLine"]["command"].as_str() {
         Some(c) if is_statusline(c) => command_state(c),
-        Some(other) => State::Skipped(format!("you have your own status line ({other}); make it also run `platoon statusline` to see plan usage")),
+        Some(other) => {
+            State::Skipped(format!("you have your own status line ({other}); make it also run `platoon statusline` to see plan usage"))
+        }
         None => State::Missing,
     }
 }
@@ -210,7 +212,8 @@ pub const REPLACEABLE: &[&str] = &[crate::totickets::NAME];
 
 /// What the tickets skill's line says when setup left it out or alone.
 const REMOVED_NOTE: &str = "removed by you: `platoon setup --add to-tickets` puts it back";
-const CHANGED_NOTE: &str = "changed by you, so left as it is: `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as SKILL.md.platoon-bak)";
+const CHANGED_NOTE: &str =
+    "changed by you, so left as it is: `platoon setup --replace to-tickets` puts platoon's copy in (yours is kept as SKILL.md.platoon-bak)";
 
 fn unknown_step(verb: &str, other: &str) -> String {
     let can = if verb == "replace" { REPLACEABLE } else { REMOVABLE };
@@ -223,7 +226,10 @@ pub fn remove_step(root: &Path, config: &Path, what: &str) -> Result<String, Str
         crate::totickets::NAME => {
             let path = crate::totickets::skill_path(root);
             Ok(if crate::totickets::remove(root, config)? {
-                format!("Removed the /to-tickets skill ({}). `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.", path.display())
+                format!(
+                    "Removed the /to-tickets skill ({}). `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.",
+                    path.display()
+                )
             } else {
                 "The /to-tickets skill wasn't there. `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.".to_string()
             })
@@ -257,7 +263,11 @@ pub fn replace_step(root: &Path, config: &Path, what: &str) -> Result<String, St
         crate::totickets::NAME => {
             let path = crate::totickets::skill_path(root);
             Ok(if crate::totickets::replace(root, config)? {
-                format!("Put platoon's /to-tickets skill in {}; yours is kept as {}.", path.display(), crate::totickets::backup_path(root).display())
+                format!(
+                    "Put platoon's /to-tickets skill in {}; yours is kept as {}.",
+                    path.display(),
+                    crate::totickets::backup_path(root).display()
+                )
             } else {
                 format!("Wrote platoon's /to-tickets skill to {}.", path.display())
             })
@@ -424,7 +434,9 @@ pub fn run(root: &Path, config: &Path) -> Result<Report, String> {
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
         saved = Some(path);
         if exe.contains("/target/") {
-            notes.push("That's a build directory path. Run `cargo install --path .` and then `platoon setup` again for a stable one.".to_string());
+            notes.push(
+                "That's a build directory path. Run `cargo install --path .` and then `platoon setup` again for a stable one.".to_string(),
+            );
         }
     }
 
@@ -472,7 +484,10 @@ pub enum TokenQuestion {
 pub fn ask_about_tokens(config: &Path, interactive: bool, input: &mut dyn BufRead, out: &mut dyn Write) -> TokenQuestion {
     let (mut current, corrupt) = settings::load(config);
     if corrupt {
-        let _ = writeln!(out, "\nYour settings file couldn't be read, so platoon left the smart features (which use your Claude tokens) off and didn't ask about them.");
+        let _ = writeln!(
+            out,
+            "\nYour settings file couldn't be read, so platoon left the smart features (which use your Claude tokens) off and didn't ask about them."
+        );
         return TokenQuestion::SettingsUnreadable;
     }
     if current.tokens_asked {
@@ -500,7 +515,8 @@ pub fn ask_about_tokens(config: &Path, interactive: bool, input: &mut dyn BufRea
     }
     match settings::save(config, &current) {
         Ok(()) if yes => {
-            let _ = writeln!(out, "Smart features are on. Turn them off any time: press s in platoon and switch off \"{}\".", ai::MASTER_LABEL);
+            let _ =
+                writeln!(out, "Smart features are on. Turn them off any time: press s in platoon and switch off \"{}\".", ai::MASTER_LABEL);
             TokenQuestion::Answered(true)
         }
         Ok(()) => {
@@ -551,7 +567,10 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         out.push("Claude Code picks up hook changes live. Restart running sessions for the status line.".into());
     }
     if let Some(p) = &r.skill {
-        out.push(format!("Wrote {}. Type /to-tickets in a session that is in a project; `platoon setup --remove to-tickets` takes it out.", p.display()));
+        out.push(format!(
+            "Wrote {}. Type /to-tickets in a session that is in a project; `platoon setup --remove to-tickets` takes it out.",
+            p.display()
+        ));
     }
     if r.saved.is_none() && r.skill.is_none() {
         out.push("Nothing to change.".into());
@@ -693,7 +712,10 @@ mod tests {
         assert_eq!(shown.matches("[✗]").count(), 2, "{shown}");
         assert!(shown.contains("Status line") && shown.contains("Session guard") && shown.contains("platoon setup"), "{shown}");
         assert!(shown.contains("[–] Project notes") && shown.contains("notes don't reach sessions"), "optional, not a cross: {shown}");
-        assert!(shown.contains("[–] Notes updates") && shown.contains("can't keep their notes up to date"), "the same for the Stop hook: {shown}");
+        assert!(
+            shown.contains("[–] Notes updates") && shown.contains("can't keep their notes up to date"),
+            "the same for the Stop hook: {shown}"
+        );
     }
 
     #[test]
@@ -724,7 +746,10 @@ mod tests {
         assert!(!remove_notes_hook(&root).unwrap());
         // A broken one (pointing at a platoon that is gone) is repaired in place, not duplicated.
         let mut v = settings(&root);
-        v["hooks"]["SessionStart"].as_array_mut().unwrap().push(json!({"hooks":[{"type":"command","command":"/gone/platoon hook session-start"}]}));
+        v["hooks"]["SessionStart"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"hooks":[{"type":"command","command":"/gone/platoon hook session-start"}]}));
         fs::write(root.join("settings.json"), v.to_string()).unwrap();
         assert!(matches!(check(&root, &pc(&root))[2], State::Broken(_)) && ready(&check(&root, &pc(&root))));
         assert_eq!(run(&root, &pc(&root)).unwrap().outcomes[2], Outcome::Repaired);
@@ -759,7 +784,8 @@ mod tests {
         // platoon's own copy changed since (here: the record says platoon last wrote the older one on disk): out of
         // date, never blocking, and setup brings it up to date quietly.
         fs::write(&skill, "an older copy").unwrap();
-        fs::write(pc(&root).join("setup.json"), json!({"to-tickets": {"written": crate::totickets::hash("an older copy")}}).to_string()).unwrap();
+        fs::write(pc(&root).join("setup.json"), json!({"to-tickets": {"written": crate::totickets::hash("an older copy")}}).to_string())
+            .unwrap();
         let states = check(&root, &pc(&root));
         assert_eq!(states[4], State::OutOfDate);
         assert!(ready(&states));
@@ -779,7 +805,10 @@ mod tests {
         let r = run(&root, &pc(&root)).unwrap();
         assert!(r.outcomes[4] == Outcome::Changed && r.skill.is_none());
         let shown = render_report(&r, &root, false);
-        assert!(shown.contains("[–] Tickets skill") && shown.contains("changed by you") && shown.contains("platoon setup --replace to-tickets"), "{shown}");
+        assert!(
+            shown.contains("[–] Tickets skill") && shown.contains("changed by you") && shown.contains("platoon setup --replace to-tickets"),
+            "{shown}"
+        );
         assert_eq!(fs::read_to_string(&skill).unwrap(), "my own copy");
         assert!(replace_step(&root, &pc(&root), "to-tickets").unwrap().contains("yours is kept as"));
         assert_eq!(fs::read_to_string(root.join("skills/to-tickets/SKILL.md.platoon-bak")).unwrap(), "my own copy");
@@ -798,7 +827,10 @@ mod tests {
         let r = run(&root, &pc(&root)).unwrap();
         assert!(r.outcomes[4] == Outcome::Removed && !skill.exists());
         let shown = render_report(&r, &root, false);
-        assert!(shown.contains("removed by you") && shown.contains("platoon setup --add to-tickets") && shown.contains("Nothing to change"), "{shown}");
+        assert!(
+            shown.contains("removed by you") && shown.contains("platoon setup --add to-tickets") && shown.contains("Nothing to change"),
+            "{shown}"
+        );
         assert!(render_blocked(&check(&root, &pc(&root)), false).contains("removed by you"));
         assert!(add_step(&root, &pc(&root), "to-tickets").unwrap().starts_with("Added the /to-tickets skill"));
         assert_eq!(check(&root, &pc(&root))[4], State::Done);
@@ -864,7 +896,15 @@ mod tests {
         for f in ai::FEATURES {
             assert!(shown.contains(f.label) && shown.contains(f.description), "{}: {shown}", f.id);
         }
-        for want in ["your own Claude plan", "the prompts you typed", "one line of Claude's last reply", "small batches", "press s in platoon", ai::MASTER_LABEL, "[y/N]"] {
+        for want in [
+            "your own Claude plan",
+            "the prompts you typed",
+            "one line of Claude's last reply",
+            "small batches",
+            "press s in platoon",
+            ai::MASTER_LABEL,
+            "[y/N]",
+        ] {
             assert!(shown.contains(want), "{want:?}: {shown}");
         }
         let lower = shown.split("[y/N]").next().unwrap().to_lowercase();
@@ -950,7 +990,10 @@ mod tests {
         fs::write(c.join("settings.json"), r#"{"idle_stop_minutes":30,"mine":{"a":1}}"#).unwrap();
         ask(&c, true, "y\n");
         let v: Value = serde_json::from_str(&fs::read_to_string(c.join("settings.json")).unwrap()).unwrap();
-        assert_eq!((v["idle_stop_minutes"].as_u64(), v["mine"].clone(), v["tokens_enabled"].clone()), (Some(30), json!({"a":1}), json!(true)));
+        assert_eq!(
+            (v["idle_stop_minutes"].as_u64(), v["mine"].clone(), v["tokens_enabled"].clone()),
+            (Some(30), json!({"a":1}), json!(true))
+        );
         // The settings file can't be replaced (it is a folder here): the question reports it and carries on.
         let c = cfg("ask-fail");
         fs::create_dir_all(c.join("settings.json")).unwrap();

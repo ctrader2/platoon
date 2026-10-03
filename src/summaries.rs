@@ -11,7 +11,7 @@
 //! kept when it writes. A change made by a second platoon window is picked up.
 
 use crate::archive::keep_backup;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     fs, io,

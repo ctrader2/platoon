@@ -6,13 +6,13 @@
 //! It also works out what the notes pane and the header say about the state of things: whether the notes are
 //! reaching the project's sessions, and why they are not being kept up to date (`poll_notes_status`).
 
+use super::squadtab_glue::SquadPromptEdit;
 use super::*;
 use crate::editors::{self, Editor};
 use crate::instructions;
 use crate::notes;
 use crate::notesrun;
 use crate::notesupdate;
-use super::squadtab_glue::SquadPromptEdit;
 
 /// A terminal editor running inside platoon's window on a project's notes, or on the instructions of an AI action.
 pub struct NotesEdit {
@@ -183,7 +183,13 @@ impl App {
             self.notify(format!("The notes are already open in {name}."));
             return;
         }
-        if let Some(name) = self.editing.as_ref().filter(|e| e.ticket.is_some()).map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().filter(|w| w.ticket.is_some()).map(|w| w.name.clone())) {
+        if let Some(name) = self
+            .editing
+            .as_ref()
+            .filter(|e| e.ticket.is_some())
+            .map(|e| e.name.clone())
+            .or_else(|| self.notes_window.as_ref().filter(|w| w.ticket.is_some()).map(|w| w.name.clone()))
+        {
             self.notify(format!("{name} is still open on a ticket. Close it first."));
             return;
         }
@@ -207,7 +213,8 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project: String::new(), instructions: Some(id), ticket: None, squad: None, options, selected: 0, starred };
+        self.epick =
+            EditorPick { project: String::new(), instructions: Some(id), ticket: None, squad: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -235,7 +242,8 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project: String::new(), instructions: None, ticket: None, squad: Some(edit), options, selected: 0, starred };
+        self.epick =
+            EditorPick { project: String::new(), instructions: None, ticket: None, squad: Some(edit), options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -246,7 +254,16 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &edit.path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: String::new(), instructions: None, ticket: None, squad: Some(edit), before: String::new(), name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit {
+                        project: String::new(),
+                        instructions: None,
+                        ticket: None,
+                        squad: Some(edit),
+                        before: String::new(),
+                        name: e.name.clone(),
+                        stamp,
+                        run,
+                    });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -260,7 +277,16 @@ impl App {
         match editors::launch_window(e, &edit.path) {
             Ok(child) => {
                 self.notify(format!("The system prompt opened in {}, in a window of its own.", e.name));
-                self.notes_window = Some(NotesWindow { project: String::new(), instructions: None, ticket: None, squad: Some(edit), before: String::new(), name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow {
+                    project: String::new(),
+                    instructions: None,
+                    ticket: None,
+                    squad: Some(edit),
+                    before: String::new(),
+                    name: e.name.clone(),
+                    stamp,
+                    child,
+                });
             }
             Err(err) => {
                 let _ = std::fs::remove_file(&edit.path);
@@ -337,7 +363,16 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: None, squad: None, before: String::new(), name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit {
+                        project: project.to_string(),
+                        instructions: None,
+                        ticket: None,
+                        squad: None,
+                        before: String::new(),
+                        name: e.name.clone(),
+                        stamp,
+                        run,
+                    });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -350,7 +385,16 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: None, squad: None, before: String::new(), name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow {
+                    project: project.to_string(),
+                    instructions: None,
+                    ticket: None,
+                    squad: None,
+                    before: String::new(),
+                    name: e.name.clone(),
+                    stamp,
+                    child,
+                });
                 self.notify(format!("The notes opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -375,7 +419,16 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: String::new(), instructions: Some(id), ticket: None, squad: None, before, name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit {
+                        project: String::new(),
+                        instructions: Some(id),
+                        ticket: None,
+                        squad: None,
+                        before,
+                        name: e.name.clone(),
+                        stamp,
+                        run,
+                    });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -388,7 +441,16 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: String::new(), instructions: Some(id), ticket: None, squad: None, before, name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow {
+                    project: String::new(),
+                    instructions: Some(id),
+                    ticket: None,
+                    squad: None,
+                    before,
+                    name: e.name.clone(),
+                    stamp,
+                    child,
+                });
                 self.notify(format!("The system prompt for {what} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => {
@@ -400,7 +462,9 @@ impl App {
 
     /// Open the body of ticket `number` in `e`. A body file that has gone is started again from the template.
     fn run_ticket_editor(&mut self, project: &str, number: u32, e: &Editor) {
-        let Some((path, before)) = self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| (s.body_path(t), s.body(t)))) else {
+        let Some((path, before)) =
+            self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| (s.body_path(t), s.body(t))))
+        else {
             return;
         };
         if self.ticket(number).is_some_and(|t| t.file.is_empty()) {
@@ -419,7 +483,16 @@ impl App {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &path, rows, cols) {
                 Ok(run) => {
-                    self.editing = Some(NotesEdit { project: project.to_string(), instructions: None, ticket: Some(number), squad: None, before, name: e.name.clone(), stamp, run });
+                    self.editing = Some(NotesEdit {
+                        project: project.to_string(),
+                        instructions: None,
+                        ticket: Some(number),
+                        squad: None,
+                        before,
+                        name: e.name.clone(),
+                        stamp,
+                        run,
+                    });
                     self.mode = Mode::EditNotes;
                     self.clear_selection();
                 }
@@ -429,7 +502,16 @@ impl App {
         }
         match editors::launch_window(e, &path) {
             Ok(child) => {
-                self.notes_window = Some(NotesWindow { project: project.to_string(), instructions: None, ticket: Some(number), squad: None, before, name: e.name.clone(), stamp, child });
+                self.notes_window = Some(NotesWindow {
+                    project: project.to_string(),
+                    instructions: None,
+                    ticket: Some(number),
+                    squad: None,
+                    before,
+                    name: e.name.clone(),
+                    stamp,
+                    child,
+                });
                 self.notify(format!("#{number} opened in {}, in a window of its own.", e.name));
             }
             Err(err) => self.notify(format!("Couldn't open #{number} in {}: {}", e.name, plain(&err))),
@@ -458,7 +540,9 @@ impl App {
             // Nothing changed: nothing to say (the entry still reads "Enter to change" or "User Modified").
             instructions::Edited::Unchanged => return,
             instructions::Edited::BuiltIn => format!("The system prompt for {what} is platoon's default again."),
-            instructions::Edited::Changed => format!("Saved: platoon uses your system prompt for {what} from the next time it asks Claude."),
+            instructions::Edited::Changed => {
+                format!("Saved: platoon uses your system prompt for {what} from the next time it asks Claude.")
+            }
         };
         self.notify(said);
     }
@@ -518,14 +602,20 @@ impl App {
             Some(w) => {
                 matches!(w.child.try_wait(), Ok(Some(_)))
                     || w.squad.as_ref().is_some_and(|sp| file_stamp(&sp.path) != w.stamp)
-                    || w.squad.is_none() && match (w.instructions, w.ticket) {
-                        (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
-                        (None, Some(n)) => {
-                            let path = self.tk.store.as_ref().filter(|s| s.project() == w.project).and_then(|s| s.get(n).map(|t| s.body_path(t)));
-                            path.is_some_and(|p| file_stamp(&p) != w.stamp)
+                    || w.squad.is_none()
+                        && match (w.instructions, w.ticket) {
+                            (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
+                            (None, Some(n)) => {
+                                let path = self
+                                    .tk
+                                    .store
+                                    .as_ref()
+                                    .filter(|s| s.project() == w.project)
+                                    .and_then(|s| s.get(n).map(|t| s.body_path(t)));
+                                path.is_some_and(|p| file_stamp(&p) != w.stamp)
+                            }
+                            (None, None) => notes::changed_on_disk(&self.config, &w.project, w.stamp),
                         }
-                        (None, None) => notes::changed_on_disk(&self.config, &w.project, w.stamp),
-                    }
             }
             None => false,
         };

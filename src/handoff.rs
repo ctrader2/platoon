@@ -184,7 +184,9 @@ pub fn prompt(m: &Material, git: Option<&GitFacts>) -> String {
                 }
             }
         }
-        _ => t.push_str("This folder is not a git repository, so fill \"files\" with the files the conversation shows were changed, if any.\n"),
+        _ => t.push_str(
+            "This folder is not a git repository, so fill \"files\" with the files the conversation shows were changed, if any.\n",
+        ),
     }
     t
 }
@@ -252,7 +254,9 @@ fn list(v: Option<&Value>, most: usize) -> Vec<String> {
                 match item {
                     Value::String(s) => raw.push(s.clone()),
                     Value::Object(m) => {
-                        if let Some(s) = ["text", "item", "step", "file", "path", "description"].iter().find_map(|k| m.get(*k).and_then(Value::as_str)) {
+                        if let Some(s) =
+                            ["text", "item", "step", "file", "path", "description"].iter().find_map(|k| m.get(*k).and_then(Value::as_str))
+                        {
                             raw.push(s.to_string());
                         }
                     }
@@ -418,7 +422,11 @@ pub fn facts_block(f: &Facts) -> String {
             lines.push(format!("- Git branch: {}", clean_text(b, NAME_MAX)));
         }
         if let Some(u) = &g.upstream {
-            lines.push(format!("- Compared with {}, as of the last fetch: {}", clean_text(&u.name, NAME_MAX), upstream_words(u.ahead, u.behind)));
+            lines.push(format!(
+                "- Compared with {}, as of the last fetch: {}",
+                clean_text(&u.name, NAME_MAX),
+                upstream_words(u.ahead, u.behind)
+            ));
         }
         if let Some(changes) = &g.changes {
             if changes.is_empty() {
@@ -480,7 +488,8 @@ pub fn upstream_words(ahead: usize, behind: usize) -> String {
 pub fn files_block(f: &Facts, b: &Brief) -> Option<String> {
     if let Some(g) = f.git.as_ref().filter(|g| g.knows_files()) {
         let uncommitted: Vec<&crate::gitfacts::Change> = g.changes.iter().flatten().collect();
-        let committed: Vec<&String> = g.since.iter().flat_map(|s| s.files.iter()).filter(|p| !uncommitted.iter().any(|c| &c.path == *p)).collect();
+        let committed: Vec<&String> =
+            g.since.iter().flat_map(|s| s.files.iter()).filter(|p| !uncommitted.iter().any(|c| &c.path == *p)).collect();
         if uncommitted.is_empty() && committed.is_empty() {
             return None;
         }
@@ -665,7 +674,8 @@ mod tests {
         let clean = GitFacts { changes: Some(vec![]), since: Some(Since::default()), ..git() };
         assert!(prompt(&material(), Some(&clean)).contains("Git shows no changed files. Leave \"files\" out."));
         // Many files: only so many are named.
-        let many = GitFacts { changes: Some((0..100).map(|i| Change { path: format!("f{i}.rs"), kind: Kind::Changed }).collect()), ..git() };
+        let many =
+            GitFacts { changes: Some((0..100).map(|i| Change { path: format!("f{i}.rs"), kind: Kind::Changed }).collect()), ..git() };
         let p = prompt(&material(), Some(&many));
         assert!(p.contains("f39.rs") && !p.contains("f40.rs") && p.contains("- and 62 more"), "{p}");
     }
@@ -853,11 +863,21 @@ mod tests {
     fn the_six_later_facts_are_worded_plainly_in_each_of_their_forms() {
         let line = |f: Facts, starts: &str| facts_block(&f).lines().find(|l| l.starts_with(starts)).map(str::to_string);
         // Still running, or not.
-        assert_eq!(line(Facts { running: Some(true), ..facts() }, "- Previous session:").unwrap(), "- Previous session: Basket page, in ~/shop (still running)");
-        assert_eq!(line(Facts { running: Some(false), folder: None, ..facts() }, "- Previous session:").unwrap(), "- Previous session: Basket page (not running)");
+        assert_eq!(
+            line(Facts { running: Some(true), ..facts() }, "- Previous session:").unwrap(),
+            "- Previous session: Basket page, in ~/shop (still running)"
+        );
+        assert_eq!(
+            line(Facts { running: Some(false), folder: None, ..facts() }, "- Previous session:").unwrap(),
+            "- Previous session: Basket page (not running)"
+        );
         // Tokens: nothing read from the cache leaves that part out; subagents are said to be counted.
-        let spent = |input, output, cache_read, subagents| Facts { tokens: Some(Spent { input, output, cache_read, subagents }), ..facts() };
-        assert_eq!(line(spent(900, 12, 0, false), "- Tokens").unwrap(), "- Tokens the previous session used: 900 sent to Claude and 12 written by Claude");
+        let spent =
+            |input, output, cache_read, subagents| Facts { tokens: Some(Spent { input, output, cache_read, subagents }), ..facts() };
+        assert_eq!(
+            line(spent(900, 12, 0, false), "- Tokens").unwrap(),
+            "- Tokens the previous session used: 900 sent to Claude and 12 written by Claude"
+        );
         assert_eq!(
             line(spent(1_000, 2_000, 3_000_000, true), "- Tokens").unwrap(),
             "- Tokens the previous session used: 1,000 sent to Claude and 2,000 written by Claude, plus 3,000,000 read again from Claude's cache (its subagents included)"
@@ -869,11 +889,17 @@ mod tests {
         assert_eq!(upstream_words(1, 0), "1 commit not pushed yet");
         assert_eq!(upstream_words(0, 1), "1 commit on the remote not pulled yet");
         assert_eq!(upstream_words(3, 2), "3 commits not pushed yet, 2 commits on the remote not pulled yet");
-        let up = Facts { git: Some(GitFacts { upstream: Some(Upstream { name: "origin/main".into(), ahead: 0, behind: 0 }), ..git() }), ..facts() };
+        let up = Facts {
+            git: Some(GitFacts { upstream: Some(Upstream { name: "origin/main".into(), ahead: 0, behind: 0 }), ..git() }),
+            ..facts()
+        };
         assert_eq!(line(up, "- Compared").unwrap(), "- Compared with origin/main, as of the last fetch: up to date");
         // The notes path and the id are as given; the id is how the old session is opened again.
         assert_eq!(line(facts(), "- Project notes").unwrap(), "- Project notes: ~/.config/platoon/projects/p1/project.md");
-        assert_eq!(line(facts(), "- Previous session id").unwrap(), format!("- Previous session id: {ID} (`claude --resume {ID}` opens it)"));
+        assert_eq!(
+            line(facts(), "- Previous session id").unwrap(),
+            format!("- Previous session id: {ID} (`claude --resume {ID}` opens it)")
+        );
         // Commit subjects: at most so many, newest first, the rest counted, each cut and cleaned.
         let many = Since {
             commits: 14,
@@ -916,9 +942,13 @@ mod tests {
         assert!(doc.contains("- src/basket.rs (changed)") && !doc.contains("src/a.rs: new"), "{doc}");
         // Not a repository: Claude's list, said to be Claude's.
         let doc = document(&Facts { git: None, ..facts() }, &from_claude);
-        assert!(doc.contains("## Files affected\n\nAs Claude described them (this folder is not a git repository):\n- src/a.rs: new\n"), "{doc}");
+        assert!(
+            doc.contains("## Files affected\n\nAs Claude described them (this folder is not a git repository):\n- src/a.rs: new\n"),
+            "{doc}"
+        );
         // A repository git couldn't list: the same.
-        let unknown = Facts { git: Some(GitFacts { top: "/home/u/shop".into(), branch: Some("main".into()), ..GitFacts::default() }), ..facts() };
+        let unknown =
+            Facts { git: Some(GitFacts { top: "/home/u/shop".into(), branch: Some("main".into()), ..GitFacts::default() }), ..facts() };
         assert!(document(&unknown, &from_claude).contains("- src/a.rs: new"));
         // A session in a subfolder: the paths are said to be from the top of the repository.
         let sub = Facts { folder: Some("~/shop/web".into()), ..facts() };

@@ -62,9 +62,13 @@ impl Spec {
 
 pub fn parse_spec(v: &Value) -> Result<Spec, String> {
     let obj = v.as_object().ok_or("\"editor\" must be an object with \"downloads\" and \"config\"")?;
-    let downloads = obj.get("downloads").and_then(Value::as_str).ok_or("\"editor\" needs \"downloads\": the file with its download table")?.to_string();
+    let downloads =
+        obj.get("downloads").and_then(Value::as_str).ok_or("\"editor\" needs \"downloads\": the file with its download table")?.to_string();
     let config = match obj.get("config") {
-        Some(Value::Array(a)) => a.iter().map(|x| x.as_str().map(String::from).ok_or("\"editor\"'s \"config\" must be a list of file names")).collect::<Result<Vec<_>, _>>()?,
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| x.as_str().map(String::from).ok_or("\"editor\"'s \"config\" must be a list of file names"))
+            .collect::<Result<Vec<_>, _>>()?,
         _ => return Err("\"editor\" needs \"config\": the list of the editor's settings files".into()),
     };
     Ok(Spec { downloads, config })
@@ -86,14 +90,18 @@ pub fn check_spec(spec: &Spec, files: &[(String, PathBuf, u64)], safe: fn(&str) 
     } else {
         match find(&spec.downloads) {
             None => out.push(format!("{} is listed in plugin.json but isn't in the folder", spec.downloads)),
-            Some((_, _, len)) if *len > MAX_TABLE_FILE => out.push(format!("{} is bigger than {} KiB", spec.downloads, MAX_TABLE_FILE / 1024)),
-            Some((_, path, _)) => match fs::read_to_string(path).map_err(|_| "it isn't text".to_string()).and_then(|t| editor_install::parse_table(&t)) {
-                Err(e) => out.push(format!("{}: {e}", spec.downloads)),
-                Ok(t) => {
-                    out.extend(editor_install::table_problems(&t).into_iter().map(|p| format!("{}: {p}", spec.downloads)));
-                    bytes = Some(editor_install::download_bytes(&t, here()));
+            Some((_, _, len)) if *len > MAX_TABLE_FILE => {
+                out.push(format!("{} is bigger than {} KiB", spec.downloads, MAX_TABLE_FILE / 1024))
+            }
+            Some((_, path, _)) => {
+                match fs::read_to_string(path).map_err(|_| "it isn't text".to_string()).and_then(|t| editor_install::parse_table(&t)) {
+                    Err(e) => out.push(format!("{}: {e}", spec.downloads)),
+                    Ok(t) => {
+                        out.extend(editor_install::table_problems(&t).into_iter().map(|p| format!("{}: {p}", spec.downloads)));
+                        bytes = Some(editor_install::download_bytes(&t, here()));
+                    }
                 }
-            },
+            }
         }
     }
     if !spec.config.iter().any(|c| c == INIT) {
@@ -190,7 +198,9 @@ pub fn complete(store: &Store, dirs: &Dirs) -> bool {
 /// An editor installed before it was a plugin: its folder has a record and can be opened, and no editor plugin is
 /// installed.
 pub fn from_before(store: &Store, dirs: &Dirs) -> bool {
-    installed(store).is_none() && dirs.editor.join("installed.json").is_file() && crate::editor::ready(&editor_install::status(dirs, &bundled_table()))
+    installed(store).is_none()
+        && dirs.editor.join("installed.json").is_file()
+        && crate::editor::ready(&editor_install::status(dirs, &bundled_table()))
 }
 
 /// Take over an editor installed before it was a plugin: the copy of the plugin that came with platoon is installed
@@ -320,8 +330,8 @@ mod tests {
     use super::*;
     use crate::editor_install::testing as fake;
     use crate::plugins::Outcome;
-    use std::path::Path;
     use crate::plugins::testing::tmp;
+    use std::path::Path;
 
     fn store(base: &Path) -> Store {
         Store::new(base.join("data/plugins"))
@@ -406,7 +416,11 @@ mod tests {
             e.insert("config".into(), serde_json::json!(["config/init.lua", "../outside.lua", "notes.lua"]));
             fs::write(d.join("plugin.json"), m.to_string()).unwrap();
         });
-        assert!(p.contains("\"../outside.lua\" must be a file inside the plugin's config/ folder") && p.contains("\"notes.lua\" must be a file inside"), "{p}");
+        assert!(
+            p.contains("\"../outside.lua\" must be a file inside the plugin's config/ folder")
+                && p.contains("\"notes.lua\" must be a file inside"),
+            "{p}"
+        );
         let p = problems(&|d: &Path| fs::write(d.join("config/init.lua"), [0u8, 159, 146, 150]).unwrap());
         assert!(p.contains("config/init.lua isn't plain text"), "{p}");
         let p = problems(&|d: &Path| fs::remove_file(d.join("config/shell.sh")).unwrap());

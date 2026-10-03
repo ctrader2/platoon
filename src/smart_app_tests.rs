@@ -6,15 +6,15 @@ use crate::app::{App, Mode};
 use crate::ledger::Ledger;
 use crate::model::NameSource;
 use crate::settings::{self, Settings};
-use crate::testkit::{iso, now_ms, AiFake, World};
+use crate::testkit::{AiFake, World, iso, now_ms};
 use crate::ui;
 use crate::usage;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::fs;
 
 // ---- fixtures ------------------------------------------------------------------------------------------------
@@ -27,7 +27,8 @@ fn conv(w: &World, id: &str, cwd: &str, prompts: &[&str], last_reply: &str, secs
     let mut lines = vec![json!({"type":"mode","mode":"normal"}).to_string()];
     let mut t = end - (prompts.len() as u64 * 3 + 6) * 1000;
     for p in prompts {
-        lines.push(json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":iso(t),"message":{"role":"user","content":p}}).to_string());
+        lines
+            .push(json!({"type":"user","cwd":cwd,"gitBranch":"main","timestamp":iso(t),"message":{"role":"user","content":p}}).to_string());
         t += 1000;
         lines.push(json!({"type":"assistant","cwd":cwd,"timestamp":iso(t),"message":{"model":"claude-sonnet-5","content":[{"type":"text","text":format!("reply about {p}")}],"usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}).to_string());
         t += 1000;
@@ -160,7 +161,16 @@ fn a_call_is_small_and_made_the_agreed_way() {
     let mut app = app_with(&w, &fake);
     app.settle_ai_for_test(10);
     let argv = fake.argv(1).join(" ");
-    for want in ["-p", "--model sonnet", "--tools ", "--no-session-persistence", "--strict-mcp-config", "--output-format json", "--effort low", "--system-prompt "] {
+    for want in [
+        "-p",
+        "--model sonnet",
+        "--tools ",
+        "--no-session-persistence",
+        "--strict-mcp-config",
+        "--output-format json",
+        "--effort low",
+        "--system-prompt ",
+    ] {
         assert!(argv.contains(want), "{want}: {argv}");
     }
     assert_eq!(fake.cwd(1), w.cache.join("ai-work").display().to_string());
@@ -172,7 +182,8 @@ fn a_call_is_small_and_made_the_agreed_way() {
 fn what_is_sent_is_the_first_message_the_last_few_cut_short_one_reply_line_and_nothing_else() {
     let w = World::new("sm-digest");
     let long = format!("{} end-marker", "word ".repeat(100));
-    let prompts: Vec<String> = (1..=12).map(|i| if i == 12 { long.clone() } else { format!("message number {i} about the payment module") }).collect();
+    let prompts: Vec<String> =
+        (1..=12).map(|i| if i == 12 { long.clone() } else { format!("message number {i} about the payment module") }).collect();
     let refs: Vec<&str> = prompts.iter().map(String::as_str).collect();
     let cwd = "/work/very-private-folder-name";
     conv(&w, "abcdef12-3456-7890-abcd-ef1234567890", cwd, &refs, &format!("I updated the module. {}", "x".repeat(400)), 300);
@@ -189,14 +200,29 @@ fn what_is_sent_is_the_first_message_the_last_few_cut_short_one_reply_line_and_n
     let recent: Vec<&str> = sent.lines().filter(|l| l.starts_with("- ")).collect();
     assert_eq!(recent.len(), 3, "the last three: {sent}");
     assert!(recent[0].contains("message number 10 ") && recent[1].contains("message number 11 "), "{recent:?}");
-    assert!(recent[2].chars().count() <= 2 + 100 && recent[2].contains("word word") && !recent[2].contains("end-marker"), "each message is cut to the limit: {}", recent[2]);
+    assert!(
+        recent[2].chars().count() <= 2 + 100 && recent[2].contains("word word") && !recent[2].contains("end-marker"),
+        "each message is cut to the limit: {}",
+        recent[2]
+    );
     assert!(!sent.contains("message number 2 ") && !sent.contains("message number 9 "), "only the first and the last few: {sent}");
     // One line of Claude's last words: the text before the tool output, cut to 200 characters, from the right entry.
     let reply_line = sent.lines().find(|l| l.starts_with("Claude's last reply: ")).unwrap();
     assert!(reply_line.starts_with("Claude's last reply: I updated the module. xxx"), "{reply_line}");
     assert_eq!(reply_line.chars().count(), "Claude's last reply: ".len() + 200);
     // Nothing else: no id, no folder, no tool output, no tool call, no thinking, no subagent, no synthetic notice.
-    for never in ["abcdef12", cwd, "very-private", "TOOL-OUTPUT-SECRET", "TOOLCALL-SECRET", "THINKING-SECRET", "SIDECHAIN-SECRET", "SYNTHETIC-SECRET", "gitBranch", "main"] {
+    for never in [
+        "abcdef12",
+        cwd,
+        "very-private",
+        "TOOL-OUTPUT-SECRET",
+        "TOOLCALL-SECRET",
+        "THINKING-SECRET",
+        "SIDECHAIN-SECRET",
+        "SYNTHETIC-SECRET",
+        "gitBranch",
+        "main",
+    ] {
         assert!(!sent.contains(never), "{never} must not be sent:\n{sent}");
     }
     assert!(!sent.contains("Current name:") && !sent.contains("Previous summary:"), "nothing to remember yet");
@@ -223,10 +249,17 @@ fn a_refresh_carries_the_current_name_and_the_previous_summary_and_same_keeps_th
     app.settle_ai_for_test(10);
     assert_eq!(fake.calls(), 2);
     let second = fake.stdin(2);
-    assert!(second.contains("Current name: Billing work\n") && second.contains("Previous summary: Working on the billing export.\n"), "{second}");
+    assert!(
+        second.contains("Current name: Billing work\n") && second.contains("Previous summary: Working on the billing export.\n"),
+        "{second}"
+    );
     assert!(second.contains("- later message number 7 about billing tests"), "{second}");
     let r = row(&app, "aaa");
-    assert_eq!((r.name.as_str(), r.summary.as_str()), ("Billing work", "Now testing the billing export."), "\"same\" keeps the old name and takes the new summary");
+    assert_eq!(
+        (r.name.as_str(), r.summary.as_str()),
+        ("Billing work", "Now testing the billing export."),
+        "\"same\" keeps the old name and takes the new summary"
+    );
     assert_eq!(summaries_file(&w)["entries"]["aaa"]["covers"], 7);
 }
 
@@ -275,7 +308,11 @@ fn a_bad_answer_keeps_the_good_entries_strips_control_text_and_caps_lengths() {
     app.settle_ai_for_test(10);
     // c1 (the newest, number 1 in the call) and c2 are good; c3 and c4 got nothing usable.
     let r1 = row(&app, "c1");
-    assert_eq!((r1.name.as_str(), r1.summary.as_str()), ("Clean red name", "Line break and more"), "control characters and escape sequences are gone");
+    assert_eq!(
+        (r1.name.as_str(), r1.summary.as_str()),
+        ("Clean red name", "Line break and more"),
+        "control characters and escape sequences are gone"
+    );
     let r2 = row(&app, "c2");
     assert_eq!((r2.name.chars().count(), r2.summary.chars().count()), (60, 300), "name 60, summary 300");
     assert_eq!(row(&app, "c3").name_source, NameSource::Folder);
@@ -504,7 +541,11 @@ fn the_plan_pause_holds_background_naming_back() {
     smart(&w, |_| {});
     let ts = usage::now();
     fs::create_dir_all(w.cache.join("status")).unwrap();
-    fs::write(w.cache.join("status/aaaa.json"), json!({"ts": ts, "context_pct": null, "five_hour": {"pct": 95, "resets_at": ts + 3600}, "seven_day": null}).to_string()).unwrap();
+    fs::write(
+        w.cache.join("status/aaaa.json"),
+        json!({"ts": ts, "context_pct": null, "five_hour": {"pct": 95, "resets_at": ts + 3600}, "seven_day": null}).to_string(),
+    )
+    .unwrap();
     let fake = AiFake::new("sm-plan");
     let mut app = app_with(&w, &fake);
     app.settle_ai_for_test(5);
@@ -621,7 +662,18 @@ fn a_change_made_by_a_second_window_shows_on_the_rows() {
     let mut app = app_with(&w, &fake);
     assert_eq!(row(&app, "aaa").name_source, NameSource::Folder);
     let mut other = crate::summaries::Summaries::open(&w.config);
-    other.set_many(&[("aaa".into(), crate::summaries::Entry { name: "From the other window".into(), summary: "Made elsewhere.".into(), covers: 1, model: "haiku".into(), at: 1 })]).unwrap();
+    other
+        .set_many(&[(
+            "aaa".into(),
+            crate::summaries::Entry {
+                name: "From the other window".into(),
+                summary: "Made elsewhere.".into(),
+                covers: 1,
+                model: "haiku".into(),
+                at: 1,
+            },
+        )])
+        .unwrap();
     app.refresh_for_test();
     assert_eq!((row(&app, "aaa").name.as_str(), row(&app, "aaa").summary.as_str()), ("From the other window", "Made elsewhere."));
 }
@@ -633,18 +685,41 @@ fn a_row_shows_your_name_then_one_typed_inside_claude_then_the_generated_one_the
     let w = World::new("sm-precedence");
     simple(&w, "aaa", "please look into the flaky test for me", 300);
     let mut sums = crate::summaries::Summaries::open(&w.config);
-    sums.set_many(&[("aaa".into(), crate::summaries::Entry { name: "Generated name".into(), summary: "A summary.".into(), covers: 1, model: "haiku".into(), at: 1 })]).unwrap();
+    sums.set_many(&[(
+        "aaa".into(),
+        crate::summaries::Entry { name: "Generated name".into(), summary: "A summary.".into(), covers: 1, model: "haiku".into(), at: 1 },
+    )])
+    .unwrap();
     let mut app = w.app();
-    assert_eq!((row(&app, "aaa").name.as_str(), row(&app, "aaa").name_source), ("Generated name", NameSource::Generated), "over the folder");
+    assert_eq!(
+        (row(&app, "aaa").name.as_str(), row(&app, "aaa").name_source),
+        ("Generated name", NameSource::Generated),
+        "over the folder"
+    );
     // A name typed with /rename inside Claude (a running session whose registry says the user chose it).
     let pid = std::process::id();
     let reg = json!({"pid": pid, "sessionId": "aaa", "cwd": "/work/aaa", "kind": "interactive", "startedAt": 1, "status": "idle", "name": "Typed in Claude", "nameSource": "user"});
     fs::write(w.root.join("sessions").join(format!("{pid}.json")), reg.to_string()).unwrap();
     app.refresh_for_test();
-    assert_eq!((row(&app, "aaa").name.as_str(), row(&app, "aaa").name_source), ("Typed in Claude", NameSource::Claude), "over the generated one");
+    assert_eq!(
+        (row(&app, "aaa").name.as_str(), row(&app, "aaa").name_source),
+        ("Typed in Claude", NameSource::Claude),
+        "over the generated one"
+    );
     // A generated name arriving later does not take it over.
     let mut other = crate::summaries::Summaries::open(&w.config);
-    other.set_many(&[("aaa".into(), crate::summaries::Entry { name: "Newer generated".into(), summary: "New summary.".into(), covers: 2, model: "haiku".into(), at: 2 })]).unwrap();
+    other
+        .set_many(&[(
+            "aaa".into(),
+            crate::summaries::Entry {
+                name: "Newer generated".into(),
+                summary: "New summary.".into(),
+                covers: 2,
+                model: "haiku".into(),
+                at: 2,
+            },
+        )])
+        .unwrap();
     app.refresh_for_test();
     assert_eq!((row(&app, "aaa").name.as_str(), row(&app, "aaa").summary.as_str()), ("Typed in Claude", "New summary."));
     // The name you gave in platoon beats all of them.
@@ -673,8 +748,26 @@ fn generated_names_and_summaries_are_found_by_the_quick_filter_and_by_full_text(
     simple(&w, "bbb", "please look into the login redirect for me", 400);
     let mut sums = crate::summaries::Summaries::open(&w.config);
     sums.set_many(&[
-        ("aaa".into(), crate::summaries::Entry { name: "Gremlin hunt".into(), summary: "Chasing intermittent failures in CI.".into(), covers: 1, model: "haiku".into(), at: 1 }),
-        ("bbb".into(), crate::summaries::Entry { name: "Auth flow".into(), summary: "Fixing redirects after sign in.".into(), covers: 1, model: "haiku".into(), at: 1 }),
+        (
+            "aaa".into(),
+            crate::summaries::Entry {
+                name: "Gremlin hunt".into(),
+                summary: "Chasing intermittent failures in CI.".into(),
+                covers: 1,
+                model: "haiku".into(),
+                at: 1,
+            },
+        ),
+        (
+            "bbb".into(),
+            crate::summaries::Entry {
+                name: "Auth flow".into(),
+                summary: "Fixing redirects after sign in.".into(),
+                covers: 1,
+                model: "haiku".into(),
+                at: 1,
+            },
+        ),
     ])
     .unwrap();
     let mut app = w.app();
@@ -695,7 +788,11 @@ fn generated_names_and_summaries_are_found_by_the_quick_filter_and_by_full_text(
     ctrl(&mut app, 'u');
     type_str(&mut app, "redirects sign");
     assert_eq!(app.search.results.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["bbb"], "words from the summary, in any order");
-    assert!(app.search.results[0].detail.contains("Fixing redirects"), "when only the summary matched, it is what is shown: {}", app.search.results[0].detail);
+    assert!(
+        app.search.results[0].detail.contains("Fixing redirects"),
+        "when only the summary matched, it is what is shown: {}",
+        app.search.results[0].detail
+    );
 }
 
 // ---- the settings screens ---------------------------------------------------------------------------------------
@@ -736,7 +833,10 @@ fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_s
     let short = screen(&mut narrow, &app);
     let short = short.lines().find(|l| l.contains("General")).unwrap().to_string();
     assert!(short.contains(" Smart ") && !short.contains("Smart features") && short.contains("Plugins"), "{short}");
-    assert!(general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"), "{general}");
+    assert!(
+        general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"),
+        "{general}"
+    );
     // The showing tab is lit like the header's (raised background, bold), the others quiet.
     let lit = |term: &Terminal<TestBackend>, title: &str| {
         let buf = term.backend().buffer();
@@ -765,7 +865,10 @@ fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_s
     key(&mut app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, 5);
     let editors = screen(&mut term, &app);
-    assert!(editors.contains("Editing platoon's text") && editors.contains("Editing files") && editors.contains("Always ask which editor"), "{editors}");
+    assert!(
+        editors.contains("Editing platoon's text") && editors.contains("Editing files") && editors.contains("Always ask which editor"),
+        "{editors}"
+    );
     key(&mut app, KeyCode::BackTab);
     assert_eq!(app.settings_tab, 4);
     let projects = screen(&mut term, &app);
@@ -811,7 +914,11 @@ fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
             let shown = screen(&mut term, &app);
             let flat = shown.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(shown.contains(item.name), "{}: selected entry visible at 80x24:\n{shown}", item.name);
-            assert!(flat.contains(&item.explain.split_whitespace().collect::<Vec<_>>().join(" ")), "{}: its explanation is whole at 80x24:\n{shown}", item.name);
+            assert!(
+                flat.contains(&item.explain.split_whitespace().collect::<Vec<_>>().join(" ")),
+                "{}: its explanation is whole at 80x24:\n{shown}",
+                item.name
+            );
             assert!(shown.contains("ctrl+space back") && shown.contains("Projects"), "{}:\n{shown}", item.name);
             // The day's use is on the smart features tab; the archived estimate with the archived entries on Sessions.
             assert_eq!(shown.contains("Used today: 0 of 500,000 tokens"), ti == settings::TAB_SMART, "{}:\n{shown}", item.name);
@@ -840,7 +947,10 @@ fn the_smart_features_screen_changes_the_new_settings_and_saves_them() {
     go(&mut app, "Archived conversations");
     key(&mut app, KeyCode::Right);
     assert!(settings::load(&w.config).0.ai_archived);
-    assert_eq!(serde_json::from_str::<Value>(&fs::read_to_string(w.config.join("settings.json")).unwrap()).unwrap()["ai_archived"], "background");
+    assert_eq!(
+        serde_json::from_str::<Value>(&fs::read_to_string(w.config.join("settings.json")).unwrap()).unwrap()["ai_archived"],
+        "background"
+    );
     go(&mut app, "Share for archived");
     key(&mut app, KeyCode::Left);
     assert_eq!(settings::load(&w.config).0.ai_archived_share, 25);
@@ -854,7 +964,7 @@ fn the_smart_features_screen_changes_the_new_settings_and_saves_them() {
 
 // ---- "Describe it": finding a conversation from a description ------------------------------------------------------
 
-use crate::app::{FindState, FIND_KIND};
+use crate::app::{FIND_KIND, FindState};
 
 fn many(w: &World, n: usize, word: &str) {
     for i in 1..=n {
@@ -910,11 +1020,17 @@ fn describe_it_is_offered_only_while_the_master_and_find_switches_are_on() {
     assert_eq!(app.search.kind, FIND_KIND);
     // The chip is lit while it is showing, like the others (an accent background), and clicking one goes to it.
     let shown = screen(&mut term, &app);
-    let (x, y) = shown.lines().enumerate().find_map(|(row, l)| l.find("Describe it").map(|b| (l[..b].chars().count() as u16, row as u16))).unwrap();
+    let (x, y) =
+        shown.lines().enumerate().find_map(|(row, l)| l.find("Describe it").map(|b| (l[..b].chars().count() as u16, row as u16))).unwrap();
     assert_eq!(term.backend().buffer()[(x + 2, y)].bg, app.theme.accent);
     key(&mut app, KeyCode::BackTab);
     screen(&mut term, &app);
-    app.on_mouse(ratatui::crossterm::event::MouseEvent { kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left), column: x + 2, row: y, modifiers: KeyModifiers::NONE });
+    app.on_mouse(ratatui::crossterm::event::MouseEvent {
+        kind: ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
+        column: x + 2,
+        row: y,
+        modifiers: KeyModifiers::NONE,
+    });
     assert_eq!(app.search.kind, FIND_KIND);
 }
 
@@ -929,7 +1045,13 @@ fn reaching_describe_it_with_the_switches_off_says_how_to_turn_it_on_and_asks_no
     app.set_search_kind(FIND_KIND);
     let shown = screen(&mut term, &app);
     let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ").replace("│ ", "").replace(" │", "");
-    assert!(flat.contains("Describe it is switched off") && flat.contains("Smart features") && flat.contains("Enable features which require tokens") && flat.contains("Find a session by description"), "{shown}");
+    assert!(
+        flat.contains("Describe it is switched off")
+            && flat.contains("Smart features")
+            && flat.contains("Enable features which require tokens")
+            && flat.contains("Find a session by description"),
+        "{shown}"
+    );
     type_str(&mut app, "the flaky thing");
     key(&mut app, KeyCode::Enter);
     match state(&app) {
@@ -951,7 +1073,10 @@ fn nothing_is_asked_while_typing_only_when_enter_is_pressed_and_enter_runs_exact
     type_str(&mut app, "that thing about invoices");
     assert_eq!((fake.calls(), state(&app)), (0, FindState::Idle), "typing asks nothing");
     let shown = screen(&mut term, &app);
-    assert!(shown.contains("Press enter to ask Claude. It uses some of your plan, and nothing is") && shown.contains("sent until you do."), "{shown}");
+    assert!(
+        shown.contains("Press enter to ask Claude. It uses some of your plan, and nothing is") && shown.contains("sent until you do."),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Enter);
     assert_eq!(state(&app), FindState::Asking);
     assert!(screen(&mut term, &app).contains("Asking Claude..."));
@@ -1003,7 +1128,11 @@ fn a_result_on_the_archived_tab_opens_that_tab_and_the_results_are_capped_and_us
     type_str(&mut app, "billing");
     key(&mut app, KeyCode::Enter);
     app.settle_ai_for_test(10);
-    assert_eq!(app.search.results.iter().map(|r| r.detail.as_str()).collect::<Vec<_>>(), ["one", "two", "three"], "known numbers, once each, at most the setting's 3");
+    assert_eq!(
+        app.search.results.iter().map(|r| r.detail.as_str()).collect::<Vec<_>>(),
+        ["one", "two", "three"],
+        "known numbers, once each, at most the setting's 3"
+    );
     // Make the archived one the result and open it: the Archived tab comes up with it selected.
     fake.reply(2, r#"[{"n":6,"reason":"the archived one"}]"#);
     ctrl(&mut app, 'u');
@@ -1069,7 +1198,9 @@ fn the_refusals_are_shown_plainly_in_the_dialog_and_nothing_is_started() {
     open_find(&mut app);
     type_str(&mut app, "the billing one");
     // The daily limit.
-    Ledger::open(&w.cache).record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true).unwrap();
+    Ledger::open(&w.cache)
+        .record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
+        .unwrap();
     key(&mut app, KeyCode::Enter);
     let shown = screen(&mut term, &app);
     let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ").replace("│ ", "").replace(" │", "");
@@ -1080,7 +1211,11 @@ fn the_refusals_are_shown_plainly_in_the_dialog_and_nothing_is_started() {
     let _ = fs::remove_file(l.path());
     l.note_failure(usage::now(), crate::ledger::FailKind::Network).unwrap();
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(state(&app), FindState::Failed(ref m) if m.contains("paused after a failure") && m.contains("trying again in")), "{:?}", state(&app));
+    assert!(
+        matches!(state(&app), FindState::Failed(ref m) if m.contains("paused after a failure") && m.contains("trying again in")),
+        "{:?}",
+        state(&app)
+    );
     assert_eq!(fake.calls(), 0);
     // A call that fails: the plain message, and the back-off starts.
     let _ = fs::remove_file(l.path());
@@ -1095,7 +1230,11 @@ fn the_refusals_are_shown_plainly_in_the_dialog_and_nothing_is_started() {
     app.refresh_for_test();
     let _ = fs::remove_file(l.path());
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(state(&app), FindState::Failed(ref m) if m.contains("Enable features which require tokens") && m.contains("switched off")), "{:?}", state(&app));
+    assert!(
+        matches!(state(&app), FindState::Failed(ref m) if m.contains("Enable features which require tokens") && m.contains("switched off")),
+        "{:?}",
+        state(&app)
+    );
 }
 
 #[test]
@@ -1105,7 +1244,11 @@ fn a_description_search_ignores_the_plan_pause_that_holds_the_background_work_ba
     smart(&w, |_| {});
     let ts = usage::now();
     fs::create_dir_all(w.cache.join("status")).unwrap();
-    fs::write(w.cache.join("status/aaaa.json"), json!({"ts": ts, "context_pct": null, "five_hour": {"pct": 97, "resets_at": ts + 3600}, "seven_day": null}).to_string()).unwrap();
+    fs::write(
+        w.cache.join("status/aaaa.json"),
+        json!({"ts": ts, "context_pct": null, "five_hour": {"pct": 97, "resets_at": ts + 3600}, "seven_day": null}).to_string(),
+    )
+    .unwrap();
     let fake = AiFake::new("fd-plan");
     let mut app = app_with(&w, &fake);
     app.settle_ai_for_test(5);
@@ -1150,7 +1293,13 @@ fn a_wider_search_says_what_it_costs_waits_for_enter_and_sends_more_candidates()
     assert_eq!(count, 60);
     let shown = screen(&mut term, &app);
     let flat = shown.split_whitespace().collect::<Vec<_>>().join(" ").replace("│ ", "").replace(" │", "");
-    assert!(flat.contains("Search wider? This sends 60 conversations to Claude, about ") && flat.contains("tokens (an estimate)") && flat.contains("enter to go ahead") || flat.contains("Press enter to go ahead"), "{shown}");
+    assert!(
+        flat.contains("Search wider? This sends 60 conversations to Claude, about ")
+            && flat.contains("tokens (an estimate)")
+            && flat.contains("enter to go ahead")
+            || flat.contains("Press enter to go ahead"),
+        "{shown}"
+    );
     assert!(shown.contains("enter go ahead") && shown.contains("esc back"), "{shown}");
     assert_eq!(fake.calls(), 1);
     // Esc goes back to the earlier answer without asking anything.
@@ -1187,7 +1336,17 @@ fn candidates_come_from_the_local_words_and_a_weak_match_is_topped_up_with_the_m
     assert!(sent.find("gardening").unwrap() < sent.find("billing").unwrap(), "the local matches come first:\n{sent}");
     // Conversations that have a summary are represented by it; the others by a piece of their first and last message.
     let mut sums = crate::summaries::Summaries::open(&w.config);
-    sums.set_many(&[("c001".into(), crate::summaries::Entry { name: "Billing export".into(), summary: "Exporting invoices to CSV.".into(), covers: 1, model: "haiku".into(), at: 1 })]).unwrap();
+    sums.set_many(&[(
+        "c001".into(),
+        crate::summaries::Entry {
+            name: "Billing export".into(),
+            summary: "Exporting invoices to CSV.".into(),
+            covers: 1,
+            model: "haiku".into(),
+            at: 1,
+        },
+    )])
+    .unwrap();
     app.refresh_for_test();
     ctrl(&mut app, 'u');
     type_str(&mut app, "invoices csv");
@@ -1261,13 +1420,18 @@ fn describe_it_at_80_by_24_and_wider_shows_the_chips_the_words_and_the_results_w
         }
         // The first result is highlighted (the accent bar) and its reason is under its name.
         let lines: Vec<&str> = shown.lines().collect();
-        let bar_y = (0..lines.len() - 1).find(|&r| lines[r].contains('▎') && lines[r].contains("c00") && lines[r + 1].contains("Reason 1")).unwrap_or_else(|| panic!("no highlighted result at {cols}x{rows}:\n{shown}")) as u16;
+        let bar_y = (0..lines.len() - 1)
+            .find(|&r| lines[r].contains('▎') && lines[r].contains("c00") && lines[r + 1].contains("Reason 1"))
+            .unwrap_or_else(|| panic!("no highlighted result at {cols}x{rows}:\n{shown}")) as u16;
         let bar_x = lines[bar_y as usize].rfind('▎').map(|b| lines[bar_y as usize][..b].chars().count() as u16).unwrap();
         assert_eq!(term.backend().buffer()[(bar_x, bar_y)].fg, app.theme.accent);
         let below: String = (0..cols).map(|x| term.backend().buffer()[(x, bar_y + 1)].symbol().to_string()).collect();
         assert!(below.contains("Reason 1"), "the reason sits under the name at {cols}x{rows}: {below}");
         for line in shown.lines().filter(|l| l.starts_with('│')) {
-            assert!(line.trim_end_matches('│').ends_with(' ') || line.trim_end_matches('│').chars().last().is_some_and(|c| c == ' '), "text touches the border at {cols}x{rows}: {line}");
+            assert!(
+                line.trim_end_matches('│').ends_with(' ') || line.trim_end_matches('│').chars().last().is_some_and(|c| c == ' '),
+                "text touches the border at {cols}x{rows}: {line}"
+            );
         }
     }
 }
@@ -1276,7 +1440,11 @@ fn describe_it_at_80_by_24_and_wider_shows_the_chips_the_words_and_the_results_w
 
 fn name_generated(w: &World, id: &str, name: &str, summary: &str) {
     let mut sums = crate::summaries::Summaries::open(&w.config);
-    sums.set_many(&[(id.into(), crate::summaries::Entry { name: name.into(), summary: summary.into(), covers: 1, model: "haiku".into(), at: 1 })]).unwrap();
+    sums.set_many(&[(
+        id.into(),
+        crate::summaries::Entry { name: name.into(), summary: summary.into(), covers: 1, model: "haiku".into(), at: 1 },
+    )])
+    .unwrap();
 }
 
 /// (column, row) of the first `needle` on the screen, counted in characters.
@@ -1362,7 +1530,12 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
     let lines: Vec<&str> = shown.lines().collect();
     let footer = lines.iter().position(|l| l.contains("enter open")).unwrap();
     assert_eq!(footer, 22, "the footer is the last line inside the frame");
-    assert!(lines[footer - 2].contains("✦ Fixing the redirect") && lines[footer - 1].starts_with("│    ") && lines[footer - 1].contains("adding a test"), "two lines right above it:\n{shown}");
+    assert!(
+        lines[footer - 2].contains("✦ Fixing the redirect")
+            && lines[footer - 1].starts_with("│    ")
+            && lines[footer - 1].contains("adding a test"),
+        "two lines right above it:\n{shown}"
+    );
     assert!(lines[footer - 1].contains('…'), "a longer summary is cut with an ellipsis, not run into the frame:\n{shown}");
     assert!(!shown.contains("third sentence"));
     // The marker is dim, the words are the subtext color.
@@ -1377,7 +1550,11 @@ fn the_summary_of_the_selected_row_shows_in_two_lines_just_above_the_footer_and_
     let shown = screen(&mut term, &app);
     let lines: Vec<&str> = shown.lines().collect();
     let footer = lines.iter().position(|l| l.contains("enter open")).unwrap();
-    assert!(lines[footer - 1].trim_matches(|c| c == '│' || c == ' ').is_empty() && lines[footer - 2].trim_matches(|c| c == '│' || c == ' ').is_empty(), "{shown}");
+    assert!(
+        lines[footer - 1].trim_matches(|c| c == '│' || c == ' ').is_empty()
+            && lines[footer - 2].trim_matches(|c| c == '│' || c == ' ').is_empty(),
+        "{shown}"
+    );
     // Too short a terminal: it is left out, the list keeps its room.
     key(&mut app, KeyCode::Home);
     for (rows, shown_strip) in [(16u16, false), (17, true), (20, true), (40, true)] {
@@ -1547,7 +1724,14 @@ fn auto_archive_never_reaches_the_helpers_old_transcript() {
     let w = World::new("hid-auto");
     w.settings(120, 1);
     conv(&w, "old-real", "/work/real", &["please look into the old thing"], "Done.", 3 * 24 * 60 * 60 / 60 * 60);
-    conv(&w, "old-helper", &w.cache.join("ai-work").display().to_string(), &["please look into the helper thing"], "Done.", 3 * 24 * 60 * 60 / 60 * 60);
+    conv(
+        &w,
+        "old-helper",
+        &w.cache.join("ai-work").display().to_string(),
+        &["please look into the helper thing"],
+        "Done.",
+        3 * 24 * 60 * 60 / 60 * 60,
+    );
     let mut app = w.app();
     app.refresh_for_test();
     let archived: Vec<String> = w.archive_file().map(|v| v.to_string()).into_iter().collect();
@@ -1582,7 +1766,7 @@ fn own_guidance(w: &World, id: &str, text: &str) {
 
 #[test]
 fn naming_sends_the_users_own_guidance_then_the_fixed_part_and_the_built_in_text_without_it() {
-    use crate::instructions::{compose, NAMES};
+    use crate::instructions::{NAMES, compose};
     let w = World::new("sm-own-names");
     simple(&w, "aaa", "please fix the login redirect", 300);
     smart(&w, |_| {});
@@ -1605,7 +1789,7 @@ fn naming_sends_the_users_own_guidance_then_the_fixed_part_and_the_built_in_text
 
 #[test]
 fn describe_it_sends_the_users_own_guidance_then_the_fixed_part() {
-    use crate::instructions::{compose, FIND};
+    use crate::instructions::{FIND, compose};
     let w = World::new("fd-own");
     many(&w, 4, "billing");
     smart(&w, |s| s.set_feature("names", false));
@@ -1617,7 +1801,8 @@ fn describe_it_sends_the_users_own_guidance_then_the_fixed_part() {
     key(&mut app, KeyCode::Enter);
     app.settle_ai_for_test(10);
     assert_eq!(fake.calls(), 1);
-    let want = compose("Prefer the newest conversation when two match.", &crate::smart::find_fixed(settings::DEFAULT_FIND_RESULTS as usize));
+    let want =
+        compose("Prefer the newest conversation when two match.", &crate::smart::find_fixed(settings::DEFAULT_FIND_RESULTS as usize));
     assert!(fake.has_arg(1, &want), "{:?}", fake.argv(1));
     assert_eq!(state(&app), FindState::Done, "the answer is read as always");
 }
@@ -1627,7 +1812,9 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     let w = World::new("sm-own-keys");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    let footer = |shown: &str| shown.lines().rev().find(|l| l.contains("ctrl+space back")).unwrap_or_else(|| panic!("no footer:\n{shown}")).to_string();
+    let footer = |shown: &str| {
+        shown.lines().rev().find(|l| l.contains("ctrl+space back")).unwrap_or_else(|| panic!("no footer:\n{shown}")).to_string()
+    };
     // On an ordinary entry c and r do nothing.
     go(&mut app, "Update notes after");
     key(&mut app, KeyCode::Char('c'));
@@ -1649,12 +1836,21 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.instructions == Some(crate::instructions::NOTES));
     let shown = screen(&mut term, &app);
-    assert!(shown.contains("edit the system prompt with") && shown.contains("System prompt for project notes"), "the settings stay behind it:\n{shown}");
+    assert!(
+        shown.contains("edit the system prompt with") && shown.contains("System prompt for project notes"),
+        "the settings stay behind it:\n{shown}"
+    );
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings), "esc goes back to the settings, not the list");
     // A click on the value does what enter does.
     screen(&mut term, &app);
-    let value = app.hits.borrow().iter().find(|(_, h)| matches!(h, crate::app::Hit::SettingStep(i, settings::Step::Cycle) if *i == app.setting)).map(|(r, _)| *r).unwrap();
+    let value = app
+        .hits
+        .borrow()
+        .iter()
+        .find(|(_, h)| matches!(h, crate::app::Hit::SettingStep(i, settings::Step::Cycle) if *i == app.setting))
+        .map(|(r, _)| *r)
+        .unwrap();
     click_at(&mut app, value.x + 1, value.y);
     assert!(matches!(app.mode, Mode::PickEditor));
     key(&mut app, KeyCode::Esc);
@@ -1671,7 +1867,10 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     key(&mut app, KeyCode::Char('r'));
     assert!(matches!(app.mode, Mode::Confirm(crate::app::Confirm::ResetInstructions { id: "project-notes" })));
     let shown = screen(&mut term, &app);
-    assert!(shown.contains("Restore platoon's default system prompt for project notes?") && shown.contains("project-notes.md.bak"), "{shown}");
+    assert!(
+        shown.contains("Restore platoon's default system prompt for project notes?") && shown.contains("project-notes.md.bak"),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::Settings));
     assert!(w.config.join("prompts/project-notes.md").exists());

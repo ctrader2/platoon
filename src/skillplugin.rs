@@ -22,7 +22,7 @@
 //! changed is kept, and said. An update replaces an untouched copy and keeps a changed one.
 
 use crate::editor_install::{sha256_file, sha256_hex};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -218,7 +218,8 @@ pub fn check(plugin: &str, entries: &[String], files: &[(String, PathBuf, u64)],
             problems.push(format!("\"{folder}\" isn't a folder name inside the plugin (no leading /, no .., no hidden parts)"));
             continue;
         }
-        let inside: Vec<&(String, PathBuf, u64)> = files.iter().filter(|(r, ..)| r.strip_prefix(&folder).is_some_and(|rest| rest.starts_with('/'))).collect();
+        let inside: Vec<&(String, PathBuf, u64)> =
+            files.iter().filter(|(r, ..)| r.strip_prefix(&folder).is_some_and(|rest| rest.starts_with('/'))).collect();
         let Some((_, md_path, md_len)) = inside.iter().find(|(r, ..)| *r == format!("{folder}/SKILL.md")).copied() else {
             problems.push(format!("{folder}: there is no SKILL.md in it (a skill is a folder with its SKILL.md)"));
             continue;
@@ -248,7 +249,9 @@ pub fn check(plugin: &str, entries: &[String], files: &[(String, PathBuf, u64)],
                 Some(t) if short != "SKILL.md" => others.push((short, t)),
                 Some(_) => {}
                 None => {
-                    problems.push(say(format!("{short} isn't plain text: everything in a skill is text, so it can be read before it is installed")));
+                    problems.push(say(format!(
+                        "{short} isn't plain text: everything in a skill is text, so it can be read before it is installed"
+                    )));
                     unreadable = true;
                 }
             }
@@ -417,7 +420,11 @@ pub fn plan(claude: &Path, skills: &[Skill], before: &[Placed], others: &[(Strin
         match mine.map(Placed::now) {
             Some(Now::AsWritten) => p.write.push((s.clone(), to, true)),
             Some(Now::Changed) => {
-                p.notes.push(format!("Your changed copy of the skill {} is kept as it is (in {}); the plugin's new version of it wasn't written.", s.name, to.display()));
+                p.notes.push(format!(
+                    "Your changed copy of the skill {} is kept as it is (in {}); the plugin's new version of it wasn't written.",
+                    s.name,
+                    to.display()
+                ));
                 p.keep.push(mine.cloned().unwrap_or_else(|| Placed { name: s.name.clone(), dir: to.clone(), files: Vec::new() }));
             }
             Some(Now::Gone) | None => {
@@ -435,7 +442,11 @@ pub fn plan(claude: &Path, skills: &[Skill], before: &[Placed], others: &[(Strin
     for old in before.iter().filter(|o| !skills.iter().any(|s| s.name == o.name)) {
         match old.now() {
             Now::AsWritten if old.plausible() => p.drop.push(old.clone()),
-            Now::Changed => p.notes.push(format!("The skill {} isn't in the new version; your changed copy of it is kept (in {}).", old.name, old.dir.display())),
+            Now::Changed => p.notes.push(format!(
+                "The skill {} isn't in the new version; your changed copy of it is kept (in {}).",
+                old.name,
+                old.dir.display()
+            )),
             _ => {}
         }
     }
@@ -510,7 +521,8 @@ pub fn apply(claude: &Path, plan: &Plan, plugin_dir: &Path) -> Result<(Vec<Place
                 let bytes = fs::read(from.join(&rel)).map_err(|e| format!("couldn't read the skill {}'s {rel}: {e}", s.name))?;
                 fs::write(&dst, &bytes).map_err(|e| format!("couldn't write the skill {}: {e}", s.name))?;
                 // Text, never programs: nothing is made runnable.
-                fs::set_permissions(&dst, fs::Permissions::from_mode(0o644)).map_err(|e| format!("couldn't write the skill {}: {e}", s.name))?;
+                fs::set_permissions(&dst, fs::Permissions::from_mode(0o644))
+                    .map_err(|e| format!("couldn't write the skill {}: {e}", s.name))?;
                 files.push((rel, sha256_hex(&bytes)));
             }
             if *replace {
@@ -556,7 +568,11 @@ pub fn take_away(placed: &[Placed]) -> Vec<String> {
                 }
             }
             Now::AsWritten => {}
-            Now::Changed => notes.push(format!("The skill {} was changed after it was installed, so it is kept (in {}): remove it yourself if you don't want it.", p.name, p.dir.display())),
+            Now::Changed => notes.push(format!(
+                "The skill {} was changed after it was installed, so it is kept (in {}): remove it yourself if you don't want it.",
+                p.name,
+                p.dir.display()
+            )),
         }
     }
     notes
@@ -649,7 +665,12 @@ mod tests {
     fn a_good_skill_passes_and_each_bad_one_fails_plainly() {
         let base = tmp("check");
         let p = base.join("changelog");
-        write_skill(&p, "changelog-entry", &skill_md("changelog-entry", "Write a changelog entry."), &[("templates/entry.md", "## [x.y.z]\n")]);
+        write_skill(
+            &p,
+            "changelog-entry",
+            &skill_md("changelog-entry", "Write a changelog entry."),
+            &[("templates/entry.md", "## [x.y.z]\n")],
+        );
         let (problems, skills) = check("changelog", &["skills/changelog-entry".into()], &files_of(&p), safe);
         assert!(problems.is_empty(), "{problems:?}");
         assert_eq!(skills[0].name, "changelog-entry");
@@ -678,7 +699,12 @@ mod tests {
         let t = base.join("to-tickets");
         write_skill(&t, "to-tickets", &skill_md("to-tickets", "d"), &[]);
         assert!(check("to-tickets", &["skills/to-tickets".into()], &files_of(&t), safe).0.join(" ").contains("platoon's own skill"));
-        assert!(namespaced("changelog", "changelog") && namespaced("changelog", "changelog-entry") && !namespaced("changelog", "changelogs") && !namespaced("changelog", "changelog-"));
+        assert!(
+            namespaced("changelog", "changelog")
+                && namespaced("changelog", "changelog-entry")
+                && !namespaced("changelog", "changelogs")
+                && !namespaced("changelog", "changelog-")
+        );
     }
 
     fn skill(dir: &Path, name: &str, text: &str) -> Skill {
@@ -702,7 +728,10 @@ mod tests {
         assert_eq!(fs::read_to_string(dir.join("SKILL.md")).unwrap(), s.text);
         assert_eq!(fs::metadata(dir.join("SKILL.md")).unwrap().permissions().mode() & 0o111, 0);
         assert_eq!(placed[0].now(), Now::AsWritten);
-        assert!(fs::read_dir(claude.join("skills")).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with('.')), "no staging left");
+        assert!(
+            fs::read_dir(claude.join("skills")).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().starts_with('.')),
+            "no staging left"
+        );
         // An untouched copy is replaced by a new version.
         let s2 = skill(&plugin, "changelog-entry", &skill_md("changelog-entry", "Write it better."));
         let p = plan(&claude, std::slice::from_ref(&s2), &placed, &[]).unwrap();

@@ -34,7 +34,8 @@ pub struct Ctx<'a> {
     pub ask: &'a dyn Fn(&str) -> Option<bool>,
 }
 
-pub const USAGE: &str = "usage: platoon plugin list | add <id or folder> [--yes] | remove <id> | update [id] [--yes] | show <id or folder> | check <folder>
+pub const USAGE: &str =
+    "usage: platoon plugin list | add <id or folder> [--yes] | remove <id> | update [id] [--yes] | show <id or folder> | check <folder>
   list             the plugins in platoon's catalog (built into platoon), and the ones installed
   add <id>         install a plugin from the catalog
   add <folder>     install a plugin from a folder on this computer (for making one; say ./name for a folder here)
@@ -92,7 +93,15 @@ pub fn setup_alias(flag: &str, c: &Ctx, out: &mut dyn Write, err: &mut dyn Write
 
 /// Before a plugin with instructions is installed (or updated with changed ones): the summary, then y/N in a
 /// terminal, or `--yes`. Ok: go on. Err: the exit code, nothing changed (0 when the person answered no, 1 otherwise).
-fn confirmed(c: &Ctx, dir: &Path, installed: Option<PathBuf>, update: Option<(&str, &str)>, yes: bool, out: &mut dyn Write, err: &mut dyn Write) -> Result<(), i32> {
+fn confirmed(
+    c: &Ctx,
+    dir: &Path,
+    installed: Option<PathBuf>,
+    update: Option<(&str, &str)>,
+    yes: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), i32> {
     let (m, review) = match pluginreview::review(dir, installed.as_deref()) {
         Ok(x) => x,
         Err(e) => {
@@ -118,7 +127,11 @@ fn confirmed(c: &Ctx, dir: &Path, installed: Option<PathBuf>, update: Option<(&s
             Err(0)
         }
         None => {
-            let cmd = if update.is_some() { format!("platoon plugin update {} --yes", m.id) } else { format!("platoon plugin add {} --yes", m.id) };
+            let cmd = if update.is_some() {
+                format!("platoon plugin update {} --yes", m.id)
+            } else {
+                format!("platoon plugin add {} --yes", m.id)
+            };
             let _ = writeln!(
                 err,
                 "Not {}: it has instructions Claude follows with your permissions, so platoon asks first, and there is no terminal here to ask in. Read them (platoon plugin show {}), then run `{cmd}`.",
@@ -146,7 +159,11 @@ fn editor_downloads(c: &Ctx, out: &mut dyn Write, err: &mut dyn Write) -> bool {
             true
         }
         Err(e) => {
-            let _ = writeln!(err, "The code editor plugin is installed, but its downloads didn't finish.\n{e}\n`platoon plugin add {}` tries again.", editorplugin::ID);
+            let _ = writeln!(
+                err,
+                "The code editor plugin is installed, but its downloads didn't finish.\n{e}\n`platoon plugin add {}` tries again.",
+                editorplugin::ID
+            );
             false
         }
     }
@@ -211,7 +228,9 @@ fn say_outcome(o: &Outcome, out: &mut dyn Write) {
     };
     let _ = match o {
         Outcome::New(_) => writeln!(out, "Installed {} {} ({}).{next}", m.name, m.version, m.adds_words()),
-        Outcome::Replaced { was, .. } if *was == m.version => writeln!(out, "Installed {} {} from the catalog, in place of the copy there was.", m.name, m.version),
+        Outcome::Replaced { was, .. } if *was == m.version => {
+            writeln!(out, "Installed {} {} from the catalog, in place of the copy there was.", m.name, m.version)
+        }
         Outcome::Replaced { was, .. } => writeln!(out, "Updated {} from {was} to {}.", m.name, m.version),
         Outcome::Same(_) => writeln!(out, "{} {} is already installed, with the same files.", m.name, m.version),
     };
@@ -260,7 +279,9 @@ fn add(c: &Ctx, what: &str, yes: bool, out: &mut dyn Write, err: &mut dyn Write)
         let was = id_in(&dir).and_then(|id| store.get(&id));
         let update = was.as_ref().map(|p| p.manifest.version.clone());
         let to = plugins::check(&dir).manifest.map(|m| m.version).unwrap_or_default();
-        if let Err(code) = confirmed(c, &dir, was.as_ref().map(|p| store.plugin_dir(p.id())), update.as_deref().map(|f| (f, to.as_str())), yes, out, err) {
+        if let Err(code) =
+            confirmed(c, &dir, was.as_ref().map(|p| store.plugin_dir(p.id())), update.as_deref().map(|f| (f, to.as_str())), yes, out, err)
+        {
             return code;
         }
         return match store.install_noting(&dir, Origin::Folder { path: dir.to_string_lossy().into_owned() }) {
@@ -290,7 +311,9 @@ fn add(c: &Ctx, what: &str, yes: bool, out: &mut dyn Write, err: &mut dyn Write)
     let was = store.get(what);
     if !was.as_ref().is_some_and(|p| p.sha256 == entry.sha256) {
         let update = was.as_ref().map(|p| (p.manifest.version.clone(), entry.manifest.version.clone()));
-        if let Err(code) = confirmed(c, unpacked.dir(), installed_dir(store, what), update.as_ref().map(|(a, b)| (a.as_str(), b.as_str())), yes, out, err) {
+        if let Err(code) =
+            confirmed(c, unpacked.dir(), installed_dir(store, what), update.as_ref().map(|(a, b)| (a.as_str(), b.as_str())), yes, out, err)
+        {
             return code;
         }
     }
@@ -309,9 +332,16 @@ fn remove(c: &Ctx, id: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         return match editorplugin::remove(store, c.dirs, id) {
             Ok((p, r)) => {
                 let name = p.map_or_else(|| "The code editor".to_string(), |p| p.manifest.name);
-                let what = if r.editor { format!(" and everything it downloaded ({}, {})", c.dirs.editor.display(), editor_install::megabytes(r.bytes)) } else { String::new() };
+                let what = if r.editor {
+                    format!(" and everything it downloaded ({}, {})", c.dirs.editor.display(), editor_install::megabytes(r.bytes))
+                } else {
+                    String::new()
+                };
                 let font = if r.font_files > 0 { ", with the font platoon installed" } else { "" };
-                let _ = writeln!(out, "Removed {name}{what}{font}. Your own Neovim and its settings are not touched; `platoon plugin add {id}` puts it back.");
+                let _ = writeln!(
+                    out,
+                    "Removed {name}{what}{font}. Your own Neovim and its settings are not touched; `platoon plugin add {id}` puts it back."
+                );
                 0
             }
             Err(e) => {
@@ -374,13 +404,18 @@ fn update(c: &Ctx, only: Option<&str>, yes: bool, out: &mut dyn Write, err: &mut
     let mut results = Vec::new();
     for p in installed.iter().filter(|p| only.is_none_or(|id| p.id() == id)) {
         // Changed instructions are shown and asked about again first.
-        if let Some(e) = catalog.get(p.id()).filter(|e| plugins::update_available(p, &catalog) && (e.manifest.has_instructions() || p.manifest.has_instructions())) {
+        if let Some(e) = catalog
+            .get(p.id())
+            .filter(|e| plugins::update_available(p, &catalog) && (e.manifest.has_instructions() || p.manifest.has_instructions()))
+        {
             let versions = (p.manifest.version.clone(), e.manifest.version.clone());
             let asked = e.unpack().map_err(|e| {
                 let _ = writeln!(err, "{e}");
                 1
             });
-            if let Err(c2) = asked.and_then(|u| confirmed(c, u.dir(), Some(store.plugin_dir(p.id())), Some((&versions.0, &versions.1)), yes, out, err)) {
+            if let Err(c2) =
+                asked.and_then(|u| confirmed(c, u.dir(), Some(store.plugin_dir(p.id())), Some((&versions.0, &versions.1)), yes, out, err))
+            {
                 code = code.max(c2);
                 continue;
             }
@@ -447,7 +482,10 @@ fn show(c: &Ctx, what: &str, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             },
             (None, Some(p)) => (store.plugin_dir(p.id()), format!("the copy installed here, from {}", p.origin.words(c.home))),
             (None, None) => {
-                let _ = writeln!(err, "There is no plugin called \"{what}\" in the catalog or installed. `platoon plugin list` shows what there is.");
+                let _ = writeln!(
+                    err,
+                    "There is no plugin called \"{what}\" in the catalog or installed. `platoon plugin list` shows what there is."
+                );
                 return 1;
             }
         }
@@ -488,11 +526,30 @@ fn check(dir: &Path, out: &mut dyn Write) -> i32 {
     let _ = writeln!(out, "Checking {}", dir.display());
     if let Some(m) = &r.manifest {
         let license = m.license.as_deref().map_or(String::new(), |l| format!(", license {l}"));
-        let _ = writeln!(out, "  plugin.json: {} ({}) {} by {}{license}, for platoon {} or newer", m.name, m.id, m.version, m.author, m.platoon);
-        let _ = writeln!(out, "  adds: {}", if r.themes.is_empty() { m.adds_words() } else { format!("{} theme{}: {}", r.themes.len(), if r.themes.len() == 1 { "" } else { "s" }, r.themes.join(", ")) });
+        let _ = writeln!(
+            out,
+            "  plugin.json: {} ({}) {} by {}{license}, for platoon {} or newer",
+            m.name, m.id, m.version, m.author, m.platoon
+        );
+        let _ = writeln!(
+            out,
+            "  adds: {}",
+            if r.themes.is_empty() {
+                m.adds_words()
+            } else {
+                format!("{} theme{}: {}", r.themes.len(), if r.themes.len() == 1 { "" } else { "s" }, r.themes.join(", "))
+            }
+        );
         let names = |v: Vec<String>| v.join(", ");
         if !r.skills.is_empty() {
-            let _ = writeln!(out, "  skills: {} (SKILL.md at most {} KiB; a skill's folder at most {} files, {} KiB, text only)", names(r.skills.iter().map(|s| s.name.clone()).collect()), crate::skillplugin::MAX_SKILL_MD / 1024, crate::skillplugin::MAX_SKILL_FILES, crate::skillplugin::MAX_SKILL_BYTES / 1024);
+            let _ = writeln!(
+                out,
+                "  skills: {} (SKILL.md at most {} KiB; a skill's folder at most {} files, {} KiB, text only)",
+                names(r.skills.iter().map(|s| s.name.clone()).collect()),
+                crate::skillplugin::MAX_SKILL_MD / 1024,
+                crate::skillplugin::MAX_SKILL_FILES,
+                crate::skillplugin::MAX_SKILL_BYTES / 1024
+            );
         }
         if !r.squads.is_empty() {
             let _ = writeln!(out, "  squads: {}", names(r.squads.iter().map(|s| format!("{} ({})", s.name, s.id)).collect()));
@@ -501,7 +558,14 @@ fn check(dir: &Path, out: &mut dyn Write) -> i32 {
             let _ = writeln!(out, "  agents: {}", names(r.agents.iter().map(|a| format!("{} ({})", a.name, a.id)).collect()));
         }
     }
-    let _ = writeln!(out, "  {} file{}, {} KiB (at most {} KiB)", r.files, if r.files == 1 { "" } else { "s" }, r.bytes.div_ceil(1024), plugins::MAX_PLUGIN_BYTES / 1024);
+    let _ = writeln!(
+        out,
+        "  {} file{}, {} KiB (at most {} KiB)",
+        r.files,
+        if r.files == 1 { "" } else { "s" },
+        r.bytes.div_ceil(1024),
+        plugins::MAX_PLUGIN_BYTES / 1024
+    );
     for n in &r.notes {
         let _ = writeln!(out, "  note: {n}");
     }
@@ -560,7 +624,12 @@ mod tests {
         assert_eq!(setup_alias("--add", &c, &mut o, &mut e), 0, "{}", String::from_utf8_lossy(&e));
         let out = String::from_utf8(o).unwrap();
         assert!(out.starts_with("The code editor is a plugin now: this is `platoon plugin add editor`.\n"), "{out}");
-        assert!(out.contains("Installed Code editor (Neovim) 1.0.0 (the code editor).") && out.contains("Downloading the code editor's parts") && out.contains("The code editor is ready:"), "{out}");
+        assert!(
+            out.contains("Installed Code editor (Neovim) 1.0.0 (the code editor).")
+                && out.contains("Downloading the code editor's parts")
+                && out.contains("The code editor is ready:"),
+            "{out}"
+        );
         assert!(crate::editorplugin::complete(&store, &dirs));
         let (_, out, _) = r(&["list"]);
         assert!(out.contains("[installed]") && !out.contains("aren't complete"), "{out}");
@@ -569,21 +638,30 @@ mod tests {
         let (_, out, _) = r(&["list"]);
         assert!(out.contains("its downloads aren't complete: `platoon plugin add editor` finishes them"), "{out}");
         let (code, out, _) = r(&["update"]);
-        assert!(code == 0 && out.contains("Code editor (Neovim) is up to date.") && out.contains("Downloading the code editor's parts"), "{out}");
+        assert!(
+            code == 0 && out.contains("Code editor (Neovim) is up to date.") && out.contains("Downloading the code editor's parts"),
+            "{out}"
+        );
         assert!(crate::editorplugin::complete(&store, &dirs));
         // Downloads that can't finish: the plugin stays, said plainly, exit 1.
         std::fs::remove_dir_all(dirs.site().join("pack/platoon/start/alpha.nvim")).unwrap();
         let mirror = dirs.mirror.clone().unwrap();
         std::fs::rename(&mirror, base.join("mirror-away")).unwrap();
         let (code, _, err) = r(&["add", "editor"]);
-        assert!(code == 1 && err.contains("its downloads didn't finish") && err.contains("`platoon plugin add editor` tries again"), "{err}");
+        assert!(
+            code == 1 && err.contains("its downloads didn't finish") && err.contains("`platoon plugin add editor` tries again"),
+            "{err}"
+        );
         std::fs::rename(base.join("mirror-away"), &mirror).unwrap();
         // `platoon setup --remove editor`: the plugin, the folder and the font.
         let (mut o, mut e) = (Vec::new(), Vec::new());
         assert_eq!(setup_alias("--remove", &c, &mut o, &mut e), 0);
         let out = String::from_utf8(o).unwrap();
         assert!(out.starts_with("The code editor is a plugin now: this is `platoon plugin remove editor`."), "{out}");
-        assert!(out.contains("Removed Code editor (Neovim) and everything it downloaded (") && out.contains("with the font platoon installed"), "{out}");
+        assert!(
+            out.contains("Removed Code editor (Neovim) and everything it downloaded (") && out.contains("with the font platoon installed"),
+            "{out}"
+        );
         assert!(!dirs.editor.exists() && !dirs.fonts.exists() && store.get("editor").is_none());
         let (code, out, _) = r(&["remove", "editor"]);
         assert!(code == 0 && out.contains("isn't installed; there is nothing to remove"), "{out}");
@@ -594,7 +672,8 @@ mod tests {
         let cat = base.join("catalog");
         let _ = std::fs::remove_dir_all(cat.join("changelog"));
         crate::squadplugin::testing::plugin(&cat, "changelog", version);
-        std::fs::write(cat.join(plugins::INDEX), serde_json::json!({"plugins": [{"id": "changelog", "version": version}]}).to_string()).unwrap();
+        std::fs::write(cat.join(plugins::INDEX), serde_json::json!({"plugins": [{"id": "changelog", "version": version}]}).to_string())
+            .unwrap();
         cat
     }
 
@@ -626,15 +705,32 @@ mod tests {
         // show: everything, in full, without installing anything.
         let (code, out, err) = run_asking(&["show", "changelog"], &store, &src, None);
         assert_eq!(code, 0, "{err}");
-        assert!(out.starts_with("changelog name 1.0.0 by Someone, license MIT\nWhat changelog is.\nFrom the catalog. It adds 1 skill, 1 squad, 2 agents."), "{out}");
-        for want in ["==== Skill: changelog-entry ====", "Do the thing carefully", "==== Squad: changelog squad ====", "2. **changelog-writer** (this plugin)", "==== Agent: change-reader ====", crate::squadplugin::testing::READER, "- Can run commands on this computer"] {
+        assert!(
+            out.starts_with(
+                "changelog name 1.0.0 by Someone, license MIT\nWhat changelog is.\nFrom the catalog. It adds 1 skill, 1 squad, 2 agents."
+            ),
+            "{out}"
+        );
+        for want in [
+            "==== Skill: changelog-entry ====",
+            "Do the thing carefully",
+            "==== Squad: changelog squad ====",
+            "2. **changelog-writer** (this plugin)",
+            "==== Agent: change-reader ====",
+            crate::squadplugin::testing::READER,
+            "- Can run commands on this computer",
+        ] {
             assert!(out.contains(want), "{want}: {out}");
         }
         assert!(store.installed().is_empty() && !skill.exists());
         // No terminal to ask in: refused, nothing written.
         let (code, out, err) = run_asking(&["add", "changelog"], &store, &src, None);
         assert_eq!(code, 1);
-        assert!(out.contains("changelog name 1.0.0 adds instructions Claude follows with your permissions:") && out.contains("Read them in full: platoon plugin show changelog"), "{out}");
+        assert!(
+            out.contains("changelog name 1.0.0 adds instructions Claude follows with your permissions:")
+                && out.contains("Read them in full: platoon plugin show changelog"),
+            "{out}"
+        );
         assert!(err.contains("Not installed: it has instructions Claude follows with your permissions, so platoon asks first, and there is no terminal here to ask in.") && err.contains("platoon plugin add changelog --yes"), "{err}");
         assert!(store.installed().is_empty() && !skill.exists());
         // Asked, and no.
@@ -644,7 +740,11 @@ mod tests {
         // Asked, and yes.
         let (code, out, err) = run_asking(&["add", "changelog"], &store, &src, Some(true));
         assert_eq!(code, 0, "{err}");
-        assert!(out.contains("Installed changelog name 1.0.0 (1 skill, 1 squad, 2 agents). Its squads are on the Squads tab (3)") && out.contains("type /changelog-entry in a new Claude session"), "{out}");
+        assert!(
+            out.contains("Installed changelog name 1.0.0 (1 skill, 1 squad, 2 agents). Its squads are on the Squads tab (3)")
+                && out.contains("type /changelog-entry in a new Claude session"),
+            "{out}"
+        );
         assert!(skill.is_file());
         // The same again: nothing to ask.
         let (code, out, _) = run_asking(&["add", "changelog"], &store, &src, None);
@@ -655,7 +755,11 @@ mod tests {
         std::fs::write(&reader, std::fs::read_to_string(&reader).unwrap().replace("change nothing", "change nothing at all")).unwrap();
         let (code, out, err) = run_asking(&["update"], &store, &src, None);
         assert_eq!(code, 1);
-        assert!(out.contains("changelog name 1.0.0 -> 1.1.0 changes instructions Claude follows with your permissions. Read them again:") && out.contains("Agent change-reader  [changed]"), "{out}");
+        assert!(
+            out.contains("changelog name 1.0.0 -> 1.1.0 changes instructions Claude follows with your permissions. Read them again:")
+                && out.contains("Agent change-reader  [changed]"),
+            "{out}"
+        );
         assert!(err.contains("Not updated") && err.contains("platoon plugin update changelog --yes"), "{err}");
         assert_eq!(store.get("changelog").unwrap().manifest.version, "1.0.0");
         let (code, out, err) = run_asking(&["update", "--yes"], &store, &src, None);
@@ -675,7 +779,12 @@ mod tests {
         // --yes from a folder too; check lists what it adds.
         let dir = crate::squadplugin::testing::plugin(&base.join("mine"), "notes-kit", "0.1.0");
         let (code, out, _) = run_asking(&["check", &dir.to_string_lossy()], &store, &src, None);
-        assert!(code == 0 && out.contains("skills: notes-kit-entry (SKILL.md at most 64 KiB") && out.contains("agents: change-reader (change-reader), changelog-writer (changelog-writer)"), "{out}");
+        assert!(
+            code == 0
+                && out.contains("skills: notes-kit-entry (SKILL.md at most 64 KiB")
+                && out.contains("agents: change-reader (change-reader), changelog-writer (changelog-writer)"),
+            "{out}"
+        );
         let (code, _, err) = run_asking(&["add", &dir.to_string_lossy()], &store, &src, None);
         assert!(code == 1 && err.contains("platoon plugin add notes-kit --yes"), "{err}");
         let (code, out, err) = run_asking(&["add", &dir.to_string_lossy(), "--yes"], &store, &src, None);

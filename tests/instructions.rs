@@ -85,7 +85,12 @@ const DESCRIPTION_EXPLAIN: &str = "How platoon asks Claude to write";
 /// The words on the rows under the entry `name`, up to the settings' closing note, without the frame.
 fn under(screen: &str, name: &str) -> String {
     // Up to the next entry (an entry's name starts "System prompt for"), or the end of the list.
-    let rows: Vec<&str> = screen.lines().skip_while(|l| !l.contains(name)).skip(1).take_while(|l| !l.contains("Changes are saved") && !l.contains("System prompt for")).collect();
+    let rows: Vec<&str> = screen
+        .lines()
+        .skip_while(|l| !l.contains(name))
+        .skip(1)
+        .take_while(|l| !l.contains("Changes are saved") && !l.contains("System prompt for"))
+        .collect();
     rows.iter().flat_map(|l| l.split_whitespace()).filter(|w| *w != "│").collect::<Vec<_>>().join(" ")
 }
 
@@ -131,7 +136,10 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.send(b"rc");
     round_trip(&mut t);
     let screen = t.stable();
-    assert!(footer(&screen).contains("enter edit") && line_with(&screen, "System prompt for the hand-off").contains("Enter to change"), "{screen}");
+    assert!(
+        footer(&screen).contains("enter edit") && line_with(&screen, "System prompt for the hand-off").contains("Enter to change"),
+        "{screen}"
+    );
     assert!(!screen.contains("Restore") && !screen.contains("yours") && !screen.contains("only in"), "{screen}");
 
     // Enter: the same list of editors as the notes, over the settings; enter again opens the stand-in with the file,
@@ -142,7 +150,10 @@ fn enter_to_change_then_edited_is_changed_and_only_then_r_restores_the_default_a
     t.wait_for_all(&["FAKE NANO EDITING", "hand-off.md", "the system prompt for the hand-off"]);
     let file = lab.prompts().join("hand-off.md");
     let started = fs::read_to_string(&file).unwrap();
-    assert!(started.starts_with("You write the hand-off document") && !started.contains("JSON"), "only the guidance is the user's:\n{started}");
+    assert!(
+        started.starts_with("You write the hand-off document") && !started.contains("JSON"),
+        "only the guidance is the user's:\n{started}"
+    );
     // Closed with nothing changed (an empty line added at the end): no message at all, and nothing kept.
     t.send(b"\r");
     t.wait_gone("FAKE NANO EDITING");

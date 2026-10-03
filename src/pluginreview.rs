@@ -163,7 +163,9 @@ fn agent_item(a: &Agent) -> Item {
 }
 
 fn squad_item(s: &Squad, own: &[Agent]) -> Item {
-    let name_of = |id: &str| own.iter().find(|a| a.id == id).map_or_else(|| crate::agentfile::builtin(id).map_or(id.to_string(), |a| a.name), |a| a.name.clone());
+    let name_of = |id: &str| {
+        own.iter().find(|a| a.id == id).map_or_else(|| crate::agentfile::builtin(id).map_or(id.to_string(), |a| a.name), |a| a.name.clone())
+    };
     let agents: Vec<String> = s.agent_ids().iter().map(|id| format!("{} ({})", name_of(id), whose(id, own))).collect();
     let permissions = vec![
         format!("{} step{}, done by {}", s.workflow.len(), if s.workflow.len() == 1 { "" } else { "s" }, list_words(&agents)),
@@ -178,7 +180,11 @@ fn squad_item(s: &Squad, own: &[Agent]) -> Item {
     for (i, st) in s.workflow.iter().enumerate() {
         text.push_str(&format!("{}. **{}** ({}): {}", i + 1, name_of(&st.agent), whose(&st.agent, own), st.does));
         if let Some(b) = st.back {
-            text.push_str(&format!(" It may send the work back to step {}, at most {}.", b.to + 1, if b.times == 1 { "once".to_string() } else { format!("{} times", b.times) }));
+            text.push_str(&format!(
+                " It may send the work back to step {}, at most {}.",
+                b.to + 1,
+                if b.times == 1 { "once".to_string() } else { format!("{} times", b.times) }
+            ));
         }
         text.push('\n');
     }
@@ -240,7 +246,9 @@ fn items_lenient(dir: &Path) -> Option<Vec<Item>> {
 /// full.
 pub fn summary(m: &Manifest, r: &Review, update: Option<(&str, &str)>) -> String {
     let mut out = match update {
-        Some((from, to)) if r.changed() => format!("{} {from} -> {to} changes instructions Claude follows with your permissions. Read them again:\n", m.name),
+        Some((from, to)) if r.changed() => {
+            format!("{} {from} -> {to} changes instructions Claude follows with your permissions. Read them again:\n", m.name)
+        }
         Some((from, to)) => format!("{} {from} -> {to} adds instructions Claude follows with your permissions:\n", m.name),
         None => format!("{} {} adds instructions Claude follows with your permissions:\n", m.name, m.version),
     };
@@ -274,7 +282,7 @@ fn one_line(s: &str, max: usize) -> String {
 mod tests {
     use super::*;
     use crate::plugins::testing::tmp;
-    use crate::squadplugin::testing::{plugin, READER};
+    use crate::squadplugin::testing::{READER, plugin};
     use std::fs;
 
     #[test]
@@ -294,25 +302,56 @@ mod tests {
             ]
         );
         let skill = &r.items[0];
-        assert_eq!(skill.permissions, ["Claude may use it by itself when it fits; you can also type /changelog-entry", "Asks your permission as usual for anything it runs or changes"]);
+        assert_eq!(
+            skill.permissions,
+            [
+                "Claude may use it by itself when it fits; you can also type /changelog-entry",
+                "Asks your permission as usual for anything it runs or changes"
+            ]
+        );
         assert!(skill.text.contains("Do the thing carefully"), "the skill's own words: {}", skill.text);
         let squad = &r.items[1];
-        assert_eq!(squad.permissions[0], "3 steps, done by change-reader (this plugin), changelog-writer (this plugin) and editor (built in)");
-        assert!(squad.text.contains("3. **editor** (built in): Checks the entry against the changes. It may send the work back to step 2, at most once."), "{}", squad.text);
+        assert_eq!(
+            squad.permissions[0],
+            "3 steps, done by change-reader (this plugin), changelog-writer (this plugin) and editor (built in)"
+        );
+        assert!(
+            squad.text.contains(
+                "3. **editor** (built in): Checks the entry against the changes. It may send the work back to step 2, at most once."
+            ),
+            "{}",
+            squad.text
+        );
         let reader = &r.items[2];
         assert_eq!(reader.permissions, ["Runs on Sonnet", "Reads and searches files", "Can run commands on this computer"]);
         assert!(reader.text.contains(READER));
         let writer = &r.items[3];
-        assert_eq!(writer.permissions, ["Runs on Sonnet", "Reads and searches files", "Can change files: edit and write them", "Starts with the skill changelog-entry (and can use other skills)"]);
+        assert_eq!(
+            writer.permissions,
+            [
+                "Runs on Sonnet",
+                "Reads and searches files",
+                "Can change files: edit and write them",
+                "Starts with the skill changelog-entry (and can use other skills)"
+            ]
+        );
         let text = summary(&m, &r, None);
         assert!(text.starts_with("changelog name 1.0.0 adds instructions Claude follows with your permissions:\n"), "{text}");
-        assert!(text.contains("  Agent change-reader: Read the commits and the diff") && text.contains("      - Can run commands on this computer\n") && text.ends_with("Read them in full: platoon plugin show changelog\n"), "{text}");
+        assert!(
+            text.contains("  Agent change-reader: Read the commits and the diff")
+                && text.contains("      - Can run commands on this computer\n")
+                && text.ends_with("Read them in full: platoon plugin show changelog\n"),
+            "{text}"
+        );
     }
 
     #[test]
     fn permissions_are_worded_from_an_agents_switches_skills_and_servers() {
         let mut a = crate::agentfile::builtin("questioner").unwrap();
-        assert_eq!(a.permission_lines(), ["Runs on Sonnet", "Only reads and searches files: it can't change files, run commands or use the web"]);
+        assert_eq!(
+            a.permission_lines(),
+            ["Runs on Sonnet", "Only reads and searches files: it can't change files, run commands or use the web"]
+        );
         a.web = true;
         a.mcp = vec!["sentry".into(), "linear".into()];
         a.skills = vec!["a".into(), "b".into(), "c".into()];
@@ -330,11 +369,23 @@ mod tests {
         let mut s = crate::skillplugin::Skill {
             name: "x-y".into(),
             folder: "skills/x-y".into(),
-            front: crate::skillplugin::front_matter("---\nname: x-y\ndescription: d\nallowed-tools: Bash(git log:*)\ndisable-model-invocation: true\nmodel: opus\n---\n").unwrap().0,
+            front: crate::skillplugin::front_matter(
+                "---\nname: x-y\ndescription: d\nallowed-tools: Bash(git log:*)\ndisable-model-invocation: true\nmodel: opus\n---\n",
+            )
+            .unwrap()
+            .0,
             text: String::new(),
             others: vec![("ref.md".into(), "r".into())],
         };
-        assert_eq!(skill_permissions(&s), ["Only when you type /x-y", "Can use these without asking you while it runs: Bash(git log:*)", "Also asks Claude Code for model: opus", "With 1 more file: ref.md"]);
+        assert_eq!(
+            skill_permissions(&s),
+            [
+                "Only when you type /x-y",
+                "Can use these without asking you while it runs: Bash(git log:*)",
+                "Also asks Claude Code for model: opus",
+                "With 1 more file: ref.md"
+            ]
+        );
         s.front.model_may_use = true;
         s.front.user_may_type = false;
         assert!(skill_permissions(&s)[0].contains("it can't be typed"));
@@ -350,13 +401,28 @@ mod tests {
         // The reader's instructions change, the writer goes, a skill file changes.
         let p = new.join("agents/change-reader.json");
         fs::write(&p, fs::read_to_string(&p).unwrap().replace("change nothing", "change nothing, ever")).unwrap();
-        fs::write(new.join("skills/changelog-entry/SKILL.md"), crate::skillplugin::testing::skill_md("changelog-entry", "Write it better.")).unwrap();
+        fs::write(
+            new.join("skills/changelog-entry/SKILL.md"),
+            crate::skillplugin::testing::skill_md("changelog-entry", "Write it better."),
+        )
+        .unwrap();
         let (m, r) = review(&new, Some(&old)).unwrap();
         let changes: Vec<(&str, Change)> = r.items.iter().map(|i| (i.name.as_str(), i.change)).collect();
-        assert_eq!(changes, [("changelog-entry", Change::Changed), ("changelog squad", Change::Same), ("change-reader", Change::Changed), ("changelog-writer", Change::Same)]);
+        assert_eq!(
+            changes,
+            [
+                ("changelog-entry", Change::Changed),
+                ("changelog squad", Change::Same),
+                ("change-reader", Change::Changed),
+                ("changelog-writer", Change::Same)
+            ]
+        );
         assert!(r.changed());
         let text = summary(&m, &r, Some(("1.0.0", "1.1.0")));
-        assert!(text.starts_with("changelog name 1.0.0 -> 1.1.0 changes instructions Claude follows with your permissions. Read them again:"), "{text}");
+        assert!(
+            text.starts_with("changelog name 1.0.0 -> 1.1.0 changes instructions Claude follows with your permissions. Read them again:"),
+            "{text}"
+        );
         assert!(text.contains("Skill changelog-entry  [changed]") && text.contains("Agent change-reader  [changed]"), "{text}");
     }
 }

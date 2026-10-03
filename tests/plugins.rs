@@ -8,11 +8,11 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
-    path::{Path, PathBuf},
     os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 use vt100::Color::Rgb;
@@ -33,7 +33,8 @@ fn plugin(at: &Path, id: &str, name: &str) -> PathBuf {
     dir
 }
 
-const READER: &str = "You are the change-reader. Read the commits since the last release and list what a user would notice. Change nothing.";
+const READER: &str =
+    "You are the change-reader. Read the commits since the last release and list what a user would notice. Change nothing.";
 
 /// A plugin folder `<at>/changelog-kit`: the skill changelog-kit-entry, the squad Release notes (its two agents, then
 /// the built-in editor) and the agents change-reader and changelog-writer.
@@ -81,7 +82,11 @@ impl Lab {
         fs::create_dir_all(&cat).unwrap();
         plugin(&cat, "harbor", "Harbor themes");
         instructions_plugin(&cat);
-        fs::write(cat.join("index.json"), json!({"plugins": [{"id": "harbor", "version": "1.0.0"}, {"id": "changelog-kit", "version": "1.0.0"}]}).to_string()).unwrap();
+        fs::write(
+            cat.join("index.json"),
+            json!({"plugins": [{"id": "harbor", "version": "1.0.0"}, {"id": "changelog-kit", "version": "1.0.0"}]}).to_string(),
+        )
+        .unwrap();
         let lab = Lab {
             claude: base.join("claude"),
             cache: base.join("cache"),
@@ -127,7 +132,11 @@ impl Lab {
             c.env(k, v);
         }
         let out = c.output().unwrap();
-        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 }
 
@@ -288,7 +297,8 @@ impl Lab {
             fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
         }
         // The index names the version the plugin's own file has (a catalog whose two disagree is refused).
-        let version = serde_json::from_str::<serde_json::Value>(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap()["version"].clone();
+        let version =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap()["version"].clone();
         let index = json!({"plugins": [{"id": "editor", "version": version}, {"id": "harbor", "version": "1.0.0"}]});
         fs::write(self.cat.join("index.json"), index.to_string()).unwrap();
     }
@@ -304,7 +314,14 @@ fn the_editor_plugin_shows_on_the_tab_and_in_the_list_with_what_it_downloads() {
     t.wait_for_all(&["make the shop", "3 Squads"]);
     settings_plugins(&mut t, "Code editor (Neovim)");
     t.send(b"\r");
-    t.wait_for_all(&["Settings · Plugins", "Code editor (Neovim)", "Harbor themes", "Adds", "the code editor (Neovim, its tools and plugins,", "it downloads about"]);
+    t.wait_for_all(&[
+        "Settings · Plugins",
+        "Code editor (Neovim)",
+        "Harbor themes",
+        "Adds",
+        "the code editor (Neovim, its tools and plugins,",
+        "it downloads about",
+    ]);
     t.wait_for_all(&["Not installed. Enter installs it and its downloads; then v on a session", "enter install"]);
     t.send(b"\r");
     t.wait_for_all(&["Install Code editor (Neovim)?", "It downloads about", "y install", "n not now"]);
@@ -340,7 +357,15 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     t.wait_for_all(&["enter read and install", "Enter shows each skill, squad and agent it adds"]);
     // Enter: each thing it adds, with what it may do.
     t.send(b"\r");
-    t.wait_for_all(&["Install Changelog kit?", "Read each one before you install it", "changelog-kit-entry", "Release notes", "change-reader", "Can run commands on this computer", "Can change files: edit and write them"]);
+    t.wait_for_all(&[
+        "Install Changelog kit?",
+        "Read each one before you install it",
+        "changelog-kit-entry",
+        "Release notes",
+        "change-reader",
+        "Can run commands on this computer",
+        "Can change files: edit and write them",
+    ]);
     t.wait_for_all(&["enter read it", "y install", "n not now"]);
     // The keys of its hints in the accent colour, like every other hint.
     let (row, col) = t.find("y install").unwrap();
@@ -355,14 +380,23 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     t.send(b"\x1b[B");
     t.send(b"\x1b[B");
     t.send(b"\r");
-    t.wait_for_all(&["Agent: change-reader · from Changelog kit", "Its system prompt", "Read the commits since the last release", "ctrl+space back to the list"]);
+    t.wait_for_all(&[
+        "Agent: change-reader · from Changelog kit",
+        "Its system prompt",
+        "Read the commits since the last release",
+        "ctrl+space back to the list",
+    ]);
     t.send(b"\x1b");
     t.wait_gone("Its system prompt");
     t.wait_for("y install");
     t.send(b"y");
     t.wait_for("Changelog kit is installed: 1 skill, 1 squad, 2 agents added.");
     until("its skill in Claude's folder", || lab.claude.join("skills/changelog-kit-entry/SKILL.md").is_file());
-    assert!(lab.installed()["plugins"]["changelog-kit"]["skills"]["changelog-kit-entry"]["files"]["SKILL.md"].is_string(), "{}", lab.installed());
+    assert!(
+        lab.installed()["plugins"]["changelog-kit"]["skills"]["changelog-kit-entry"]["files"]["SKILL.md"].is_string(),
+        "{}",
+        lab.installed()
+    );
     // Its squad on the Squads tab, labelled with the plugin's name.
     t.wait_gone("Install Changelog kit?");
     back_to_the_list(&mut t);
@@ -370,7 +404,10 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
     t.wait_for_all(&["Release notes", "From Changelog kit"]);
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
-    assert!(!lab.config.join("squads").exists() && !lab.config.join("agents").exists(), "nothing of it written to the user's squads or agents");
+    assert!(
+        !lab.config.join("squads").exists() && !lab.config.join("agents").exists(),
+        "nothing of it written to the user's squads or agents"
+    );
 }
 
 #[test]
@@ -378,20 +415,36 @@ fn the_command_line_shows_a_plugin_with_instructions_refuses_it_without_a_termin
     let lab = Lab::new("plug-cli-instructions");
     let (code, out, err) = lab.cli(&["plugin", "show", "changelog-kit"]);
     assert_eq!(code, 0, "{err}");
-    for want in ["Changelog kit 1.0.0 by Someone, license MIT", "==== Skill: changelog-kit-entry ====", "Read the commits, then write one plain line", "==== Squad: Release notes ====", "==== Agent: change-reader ====", READER, "- Can run commands on this computer"] {
+    for want in [
+        "Changelog kit 1.0.0 by Someone, license MIT",
+        "==== Skill: changelog-kit-entry ====",
+        "Read the commits, then write one plain line",
+        "==== Squad: Release notes ====",
+        "==== Agent: change-reader ====",
+        READER,
+        "- Can run commands on this computer",
+    ] {
         assert!(out.contains(want), "{want}: {out}");
     }
     // No terminal (stdin is not one): refused, nothing installed.
     let (code, out, err) = lab.cli(&["plugin", "add", "changelog-kit"]);
     assert_eq!(code, 1);
-    assert!(out.contains("Changelog kit 1.0.0 adds instructions Claude follows with your permissions:") && out.contains("  Agent change-reader: Read the commits since the last release"), "{out}");
+    assert!(
+        out.contains("Changelog kit 1.0.0 adds instructions Claude follows with your permissions:")
+            && out.contains("  Agent change-reader: Read the commits since the last release"),
+        "{out}"
+    );
     assert!(err.contains("there is no terminal here to ask in") && err.contains("platoon plugin add changelog-kit --yes"), "{err}");
     assert!(lab.installed()["plugins"].get("changelog-kit").is_none());
     assert!(!lab.claude.join("skills/changelog-kit-entry").exists());
     // --yes: installed, the skill written.
     let (code, out, err) = lab.cli(&["plugin", "add", "changelog-kit", "--yes"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("Installed Changelog kit 1.0.0 (1 skill, 1 squad, 2 agents).") && out.contains("type /changelog-kit-entry in a new Claude session"), "{out}");
+    assert!(
+        out.contains("Installed Changelog kit 1.0.0 (1 skill, 1 squad, 2 agents).")
+            && out.contains("type /changelog-kit-entry in a new Claude session"),
+        "{out}"
+    );
     assert!(lab.claude.join("skills/changelog-kit-entry/SKILL.md").is_file());
     // Its squad is listed for the /to-tickets skill with the others.
     let (code, out, _) = lab.cli(&["squads", "--kinds"]);
@@ -412,7 +465,11 @@ impl Lab {
             c.env(k, v);
         }
         let out = c.output().unwrap();
-        (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+        (
+            out.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+            String::from_utf8_lossy(&out.stderr).into_owned(),
+        )
     }
 
     /// The version installed of plugin `id`, as `installed.json` has it.
@@ -468,7 +525,12 @@ fn the_catalog_built_into_platoon_lists_and_installs_with_no_network_and_no_git(
     let (path, git_ran) = git_that_tells(&lab);
     let (id, name) = a_built_in_theme_plugin();
     // An empty PLATOON_PLUGIN_CATALOG: the catalog built in. A proxy that answers nothing: no network either.
-    let extra = [("PLATOON_PLUGIN_CATALOG", String::new()), ("PATH", path.clone()), ("https_proxy", "http://127.0.0.1:9".into()), ("HTTPS_PROXY", "http://127.0.0.1:9".into())];
+    let extra = [
+        ("PLATOON_PLUGIN_CATALOG", String::new()),
+        ("PATH", path.clone()),
+        ("https_proxy", "http://127.0.0.1:9".into()),
+        ("HTTPS_PROXY", "http://127.0.0.1:9".into()),
+    ];
     let (code, out, err) = lab.cli_with(&extra, &["plugin", "list"]);
     assert_eq!(code, 0, "{err}");
     assert!(out.starts_with("In the catalog:\n") && out.contains("Code editor (Neovim)") && out.contains(&name), "{out}");
@@ -564,10 +626,20 @@ fn a_newer_catalog_updates_installed_plugins_when_platoon_starts_and_asks_about_
     assert_eq!(t.wait_exit(), 0);
     // `platoon plugin update` asks too (no terminal here: it says how), and with --yes updates it.
     let (code, out, err) = lab.cli(&["plugin", "update"]);
-    assert!(code == 1 && out.contains("Changelog kit 1.0.0 -> 1.1.0 changes instructions") && err.contains("platoon plugin update changelog-kit --yes"), "{out}{err}");
+    assert!(
+        code == 1
+            && out.contains("Changelog kit 1.0.0 -> 1.1.0 changes instructions")
+            && err.contains("platoon plugin update changelog-kit --yes"),
+        "{out}{err}"
+    );
     let (code, out, err) = lab.cli(&["plugin", "update", "--yes"]);
     assert_eq!(code, 0, "{err}");
-    assert!(out.contains("Updated Changelog kit from 1.0.0 to 1.1.0.") && out.contains("Harbor themes is up to date.") && out.contains("My theme was installed from a folder"), "{out}");
+    assert!(
+        out.contains("Updated Changelog kit from 1.0.0 to 1.1.0.")
+            && out.contains("Harbor themes is up to date.")
+            && out.contains("My theme was installed from a folder"),
+        "{out}"
+    );
     assert!(lab.installed()["plugins"]["changelog-kit"].get("declined_update").is_none());
 }
 

@@ -15,9 +15,9 @@
 //! The in-memory side keeps, per conversation, its prompts and one lower-case copy of them for searching:
 //! a search is a substring scan over that text.
 
-use crate::claude::{may_be_reply, prompt_in_line, reply_in_line, REPLY_CHARS};
+use crate::claude::{REPLY_CHARS, may_be_reply, prompt_in_line, reply_in_line};
 use crate::index::Entry;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
@@ -25,8 +25,8 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{
-        mpsc::{channel, Receiver, Sender},
         Arc,
+        mpsc::{Receiver, Sender, channel},
     },
     thread,
     time::{Duration, Instant},
@@ -97,7 +97,12 @@ impl FilePrompts {
     /// A conversation for tests of other modules.
     #[cfg(test)]
     pub fn for_test(id: &str, prompts: &[&str], reply: Option<&str>) -> Self {
-        Self::new(id.into(), PathBuf::from(format!("/x/{id}.jsonl")), prompts.iter().map(|s| s.to_string()).collect(), reply.map(String::from))
+        Self::new(
+            id.into(),
+            PathBuf::from(format!("/x/{id}.jsonl")),
+            prompts.iter().map(|s| s.to_string()).collect(),
+            reply.map(String::from),
+        )
     }
 
     /// The lower-cased prompts, one per line, aligned with `prompts`.
@@ -400,7 +405,10 @@ enum Msg {
 }
 
 enum Backend {
-    Thread { requests: Sender<Request>, rx: Receiver<Msg> },
+    Thread {
+        requests: Sender<Request>,
+        rx: Receiver<Msg>,
+    },
     /// Works on the caller's thread, to completion, when asked. For tests, which need determinism.
     #[cfg(test)]
     Inline(Store),
@@ -704,7 +712,13 @@ mod tests {
     fn entry(path: &Path) -> Arc<Entry> {
         let meta = fs::metadata(path).unwrap();
         let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
-        Arc::new(Entry { id: path.file_stem().unwrap().to_str().unwrap().to_string(), path: path.to_path_buf(), mtime, size: meta.len(), t: Default::default() })
+        Arc::new(Entry {
+            id: path.file_stem().unwrap().to_str().unwrap().to_string(),
+            path: path.to_path_buf(),
+            mtime,
+            size: meta.len(),
+            t: Default::default(),
+        })
     }
 
     fn write(dir: &Path, id: &str, lines: &[String]) -> PathBuf {
@@ -1099,7 +1113,8 @@ mod tests {
     }
 
     fn tool_output() -> String {
-        json!({"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"SECRET-OUTPUT"}]}}).to_string()
+        json!({"type":"user","message":{"role":"user","content":[{"tool_use_id":"t","type":"tool_result","content":"SECRET-OUTPUT"}]}})
+            .to_string()
     }
 
     #[test]
@@ -1117,7 +1132,8 @@ mod tests {
                 tool_call(),
                 tool_output(),
                 json!({"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"SECRET-SUBAGENT"}]}}).to_string(),
-                json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"SECRET-SYNTHETIC"}]}}).to_string(),
+                json!({"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"SECRET-SYNTHETIC"}]}})
+                    .to_string(),
                 json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"SECRET-THINKING"}]}}).to_string(),
             ],
         );
@@ -1179,7 +1195,11 @@ mod tests {
         scan(&mut s, &[&p]);
         s.save();
         let text = fs::read_to_string(d.join("prompts.jsonl")).unwrap();
-        assert!(text.starts_with(&format!("{{\"cap\":2000,\"version\":{VERSION}")) || text.lines().next().unwrap().contains(&format!("\"version\":{VERSION}")), "{text}");
+        assert!(
+            text.starts_with(&format!("{{\"cap\":2000,\"version\":{VERSION}"))
+                || text.lines().next().unwrap().contains(&format!("\"version\":{VERSION}")),
+            "{text}"
+        );
         assert!(VERSION >= 2, "the reply made the saved format different");
         let again = Store::load(&d, 2000);
         assert_eq!(again.snapshot()[0].reply.as_deref(), Some("Done."));

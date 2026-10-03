@@ -93,7 +93,8 @@ fn a_session_that_did_not_ask_keeps_the_wheel_for_scrolling_platoons_own_screen(
     let (mut t, _end) = attach("wheel-e2e-plain");
     t.send(b"seq 1000 1099; echo done-$((6*7))\r");
     t.wait_for("done-42");
-    let numbers = |screen: &str| -> Vec<u32> { screen.lines().filter_map(|l| l.trim().trim_matches('\u{2502}').trim().parse().ok()).collect() };
+    let numbers =
+        |screen: &str| -> Vec<u32> { screen.lines().filter_map(|l| l.trim().trim_matches('\u{2502}').trim().parse().ok()).collect() };
     let before = numbers(&t.text());
     assert!(!before.is_empty(), "the numbers are on the screen:\n{}", t.text());
     let top = *before.iter().min().unwrap();

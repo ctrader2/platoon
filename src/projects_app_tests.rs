@@ -2,15 +2,15 @@
 //! session rows, a project's screen, the scoped search and what archiving, restoring and deleting a project does.
 //! Every directory is a temp dir (`World`); the only processes signalled are the tests' own stand-ins.
 
-use crate::app::{App, AssignOpt, Confirm, Hit, Mode, Pane, FIND_KIND};
+use crate::app::{App, AssignOpt, Confirm, FIND_KIND, Hit, Mode, Pane};
 use crate::host::HostInfo;
 use crate::projects::{self, Projects};
-use crate::testkit::{alive, now_ms, AiFake, World};
+use crate::testkit::{AiFake, World, alive, now_ms};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind},
-    Terminal,
 };
 use std::{fs, time::Duration};
 
@@ -32,7 +32,10 @@ fn type_str(app: &mut App, text: &str) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -155,7 +158,10 @@ fn m_offers_the_active_projects_new_project_and_no_project() {
     app.notice = None;
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("Put \"alpha\" in:") || shown.contains("Put \"tmp\" in:"), "{shown}");
-    assert!(shown.contains("AP Apples") && shown.contains("New project…") && shown.contains("No project") && !shown.contains("Old stuff"), "{shown}");
+    assert!(
+        shown.contains("AP Apples") && shown.contains("New project…") && shown.contains("No project") && !shown.contains("Old stuff"),
+        "{shown}"
+    );
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List) && app.projects.of("alpha-1").is_none());
 
@@ -240,7 +246,8 @@ fn a_session_in_a_project_shows_the_project_as_a_pill_in_its_own_column() {
     let lines = cells(&term);
     let h = header_row(&lines);
     // PROJECT comes right after NAME, before DIR.
-    let (name_x, proj_x, dir_x) = (col_of(&lines[h], "NAME").unwrap(), col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
+    let (name_x, proj_x, dir_x) =
+        (col_of(&lines[h], "NAME").unwrap(), col_of(&lines[h], "PROJECT").unwrap(), col_of(&lines[h], "DIR").unwrap());
     assert!(name_x < proj_x && proj_x < dir_x, "{}", text_of(&lines[h]));
     // As wide as the name needs, pill and gap included (and its share of the screen's spare width), never
     // narrower than its title and a space.
@@ -532,7 +539,14 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     fs::create_dir_all(notes.parent().unwrap()).unwrap();
     fs::write(&notes, "# Overview\nA shop for fruit.\n\n## Decisions\n- apples first\n").unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("Overview") && !f.contains("# Overview") && f.contains("A shop for fruit.") && f.contains("• apples first") && !f.contains("No notes yet"), "{f}");
+    assert!(
+        f.contains("Overview")
+            && !f.contains("# Overview")
+            && f.contains("A shop for fruit.")
+            && f.contains("• apples first")
+            && !f.contains("No notes yet"),
+        "{f}"
+    );
     // Esc goes back to the Projects tab with the project selected; the Projects tab shows the counts and tickets
     // (not the notes: that column went).
     key(&mut app, KeyCode::Esc);
@@ -610,7 +624,10 @@ fn describe_it_on_a_projects_screen_sends_only_its_sessions() {
     app.settle_ai_for_test(10);
     assert_eq!(fake.calls(), 1);
     let sent = fake.stdin(1);
-    assert!(sent.contains("gamma talks") && !sent.contains("alpha talks") && !sent.contains("beta talks") && !sent.contains("pears"), "{sent}");
+    assert!(
+        sent.contains("gamma talks") && !sent.contains("alpha talks") && !sent.contains("beta talks") && !sent.contains("pears"),
+        "{sent}"
+    );
 }
 
 #[test]
@@ -909,7 +926,8 @@ fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen
         let end_line = lines_with(&shown, end).into_iter().find(|&l| l > at[0]).unwrap_or_else(|| panic!("{name}: {shown}"));
         assert!(end_line < (r.y + r.height) as usize, "{name}: {shown}");
         // Rows drawn never overlap, and no row is drawn with its text cut off at the bottom.
-        let hits: Vec<ratatui::layout::Rect> = app.hits.borrow().iter().filter(|(_, h)| matches!(h, Hit::ProjectRow(_))).map(|(r, _)| *r).collect();
+        let hits: Vec<ratatui::layout::Rect> =
+            app.hits.borrow().iter().filter(|(_, h)| matches!(h, Hit::ProjectRow(_))).map(|(r, _)| *r).collect();
         for pair in hits.windows(2) {
             assert!(pair[0].y + pair[0].height <= pair[1].y, "{name}: {hits:?}");
         }
@@ -919,7 +937,10 @@ fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen
     let shown = draw(&mut term, &app);
     let last = order.len() - 1;
     assert_eq!(app.pselected, last);
-    assert!(shown.contains(order[last].as_str()) && app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::ProjectRow(i) if *i == last)), "{shown}");
+    assert!(
+        shown.contains(order[last].as_str()) && app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::ProjectRow(i) if *i == last)),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -1066,7 +1087,10 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     fs::create_dir_all(notes.parent().unwrap()).unwrap();
     fs::write(&notes, "# Overview\nA shop for fruit.\n").unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("A shop for fruit.") && f.contains("notes are added as context to each session in a project") && !f.contains(one), "{f}");
+    assert!(
+        f.contains("A shop for fruit.") && f.contains("notes are added as context to each session in a project") && !f.contains(one),
+        "{f}"
+    );
     // A blank file is no notes.
     fs::write(&notes, " \n\n").unwrap();
     let f = flat(&draw(&mut term, &app));
@@ -1079,7 +1103,13 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.open_project().map(|p| p.id.as_str()), Some(id.as_str()));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("No notes yet") && f.contains("Press e to start them") && f.contains("They live in") && f.contains("notes are added as context"), "{f}");
+    assert!(
+        f.contains("No notes yet")
+            && f.contains("Press e to start them")
+            && f.contains("They live in")
+            && f.contains("notes are added as context"),
+        "{f}"
+    );
     assert!(!f.contains(one) && !f.contains(hint), "{f}");
 
     // A filter that finds nothing still says so.

@@ -14,7 +14,7 @@
 use crate::archive::keep_backup;
 use crate::theme::Theme;
 use ratatui::style::Color;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     fs, io,
@@ -168,7 +168,8 @@ pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
 
 impl Projects {
     pub fn open(config: &Path) -> Self {
-        let mut p = Self { config: config.to_path_buf(), list: Vec::new(), members: HashMap::new(), stamp: None, corrupt: false, generation: 0 };
+        let mut p =
+            Self { config: config.to_path_buf(), list: Vec::new(), members: HashMap::new(), stamp: None, corrupt: false, generation: 0 };
         p.load();
         p
     }
@@ -237,9 +238,7 @@ impl Projects {
             Err(_) => return Err(()),
         };
         match serde_json::from_str::<Value>(&text) {
-            Ok(Value::Object(o))
-                if o.get("projects").is_none_or(Value::is_object) && o.get("sessions").is_none_or(Value::is_object) =>
-            {
+            Ok(Value::Object(o)) if o.get("projects").is_none_or(Value::is_object) && o.get("sessions").is_none_or(Value::is_object) => {
                 Ok(Some(o))
             }
             _ => Err(()),
@@ -267,7 +266,8 @@ impl Projects {
             if !safe_id(id) {
                 continue;
             }
-            let badge = o.get("badge").and_then(Value::as_str).map(clean_badge).filter(|b| !b.is_empty()).unwrap_or_else(|| default_badge(&name));
+            let badge =
+                o.get("badge").and_then(Value::as_str).map(clean_badge).filter(|b| !b.is_empty()).unwrap_or_else(|| default_badge(&name));
             self.list.push(Project {
                 id: id.clone(),
                 color: o.get("color").and_then(Value::as_str).unwrap_or("accent").to_string(),
@@ -340,12 +340,7 @@ impl Projects {
             return Err(io::Error::other("a project needs a name"));
         }
         let used: Vec<&str> = self.list.iter().filter(|p| !p.archived).map(|p| p.color.as_str()).collect();
-        let color = SLOTS
-            .iter()
-            .map(|(s, _)| *s)
-            .find(|s| !used.contains(s))
-            .unwrap_or(SLOTS[self.list.len() % SLOTS.len()].0)
-            .to_string();
+        let color = SLOTS.iter().map(|(s, _)| *s).find(|s| !used.contains(s)).unwrap_or(SLOTS[self.list.len() % SLOTS.len()].0).to_string();
         let badge = default_badge(&name);
         let now = now_secs();
         self.change(|root| {
@@ -481,7 +476,9 @@ impl Projects {
     /// One session was restored on its own: it stays in its project (which stays as it is), and a later restore
     /// of the project has nothing more to do for it.
     pub fn session_restored(&mut self, session: &str) -> io::Result<()> {
-        let Some(p) = self.of(session).filter(|p| p.archived_sessions.iter().any(|s| s == session)).map(|p| p.id.clone()) else { return Ok(()) };
+        let Some(p) = self.of(session).filter(|p| p.archived_sessions.iter().any(|s| s == session)).map(|p| p.id.clone()) else {
+            return Ok(());
+        };
         let session = session.to_string();
         self.change(move |root| {
             drop_archived_session(root, &p, &session);
@@ -602,7 +599,11 @@ pub fn launches(cache: &Path) -> Vec<Launch> {
         let Some(pid) = name.strip_suffix(".json").and_then(|p| p.parse::<u32>().ok()) else { continue };
         let Some(v) = fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
         let Some(project) = v.get("project").and_then(Value::as_str) else { continue };
-        let placed = v.get("placed").and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        let placed = v
+            .get("placed")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .unwrap_or_default();
         out.push(Launch { pid, project: project.to_string(), at_ms: v.get("at_ms").and_then(Value::as_u64).unwrap_or(0), placed });
     }
     out
@@ -612,7 +613,12 @@ pub fn launches(cache: &Path) -> Vec<Launch> {
 /// yet goes into the project (unless it is in one already), and a launch whose process has gone is forgotten.
 /// `alive` says whether a pid still runs. Gives back (session, project) for every session actually placed, so the
 /// caller can tell the notes helper that the project has something new.
-pub fn resolve_launches(cache: &Path, projects: &mut Projects, live: &[(u32, String, u64)], alive: &dyn Fn(u32) -> bool) -> Vec<(String, String)> {
+pub fn resolve_launches(
+    cache: &Path,
+    projects: &mut Projects,
+    live: &[(u32, String, u64)],
+    alive: &dyn Fn(u32) -> bool,
+) -> Vec<(String, String)> {
     let mut placed: Vec<(String, String)> = Vec::new();
     for mut l in launches(cache) {
         let path = launches_dir(cache).join(format!("{}.json", l.pid));

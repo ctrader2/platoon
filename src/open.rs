@@ -5,18 +5,18 @@
 //! working, and the session keeps running when you detach with the back key (Ctrl+Space unless `keys.json` says
 //! otherwise; see keys.rs, read once as this starts).
 
-use crate::claude::{self, claude_root, find_transcript, saved_session_ids, transcript_cwd, Reader};
+use crate::claude::{self, Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
 use crate::guard;
+use crate::host::{self, F_INPUT, F_OUTPUT, F_RESIZE, HostInfo, read_frame, size_payload, write_frame};
 use crate::projects::{self, Projects};
-use crate::host::{self, read_frame, size_payload, write_frame, HostInfo, F_INPUT, F_OUTPUT, F_RESIZE};
 use ratatui::crossterm::terminal;
 use std::{
     io::{self, Read, Write},
     os::unix::net::UnixStream,
     path::Path,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
@@ -44,7 +44,11 @@ fn resolve_id(arg: &str, mut known: Vec<String>) -> Result<String, String> {
     match matches.as_slice() {
         [one] => Ok((*one).clone()),
         [] => Err(format!("no session matches \"{arg}\"")),
-        many => Err(format!("\"{arg}\" matches {} sessions: {}", many.len(), many.iter().take(5).map(|s| s.as_str()).collect::<Vec<_>>().join(", "))),
+        many => Err(format!(
+            "\"{arg}\" matches {} sessions: {}",
+            many.len(),
+            many.iter().take(5).map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        )),
     }
 }
 
@@ -88,7 +92,8 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
             return Ok(h.clone()); // already shown under platoon: just join it
         }
         let cwd = Some(bg.cwd.clone()).filter(|c| Path::new(c).is_dir());
-        let cwd = cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
+        let cwd =
+            cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
         let args = claude::attach_args(&attach_id);
         return host::launch(&program(), &cwd, &[args[0].as_str(), args[1].as_str()], &[], rows, cols).map(|(h, _)| h);
     }
@@ -98,9 +103,8 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     if let Some(h) = hosts.iter().find(|h| joinable.iter().any(|e| e.pid == h.claude_pid)) {
         return Ok(h.clone()); // already running under platoon: just join it
     }
-    let cwd = find_transcript(&root, &id)
-        .and_then(|p| transcript_cwd(&p))
-        .ok_or_else(|| format!("couldn't find where session {id} was run"))?;
+    let cwd =
+        find_transcript(&root, &id).and_then(|p| transcript_cwd(&p)).ok_or_else(|| format!("couldn't find where session {id} was run"))?;
     if !Path::new(&cwd).is_dir() {
         return Err(format!("session {id} was run in {cwd}, which no longer exists"));
     }
@@ -130,7 +134,8 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     let at_ms = crate::usage::now().saturating_sub(2) * 1000;
     let (info, _) = host::launch(&program(), &cwd.to_string_lossy(), &[], &[("PLATOON_PROJECT", p.id.as_str())], rows, cols)?;
     // Placed in the project once its session id shows up (by any platoon window, or by the notes hook).
-    projects::note_launch(&crate::usage::cache_dir(), info.claude_pid, &p.id, at_ms).map_err(|e| format!("couldn't note the project: {e}"))?;
+    projects::note_launch(&crate::usage::cache_dir(), info.claude_pid, &p.id, at_ms)
+        .map_err(|e| format!("couldn't note the project: {e}"))?;
     Ok(info)
 }
 
@@ -314,7 +319,9 @@ mod tests {
 
     #[test]
     fn the_arguments_are_an_id_or_a_project_never_both() {
-        let a = |v: &[&str]| parse_args(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()).map(|(i, p)| (i.map(String::from), p.map(String::from)));
+        let a = |v: &[&str]| {
+            parse_args(&v.iter().map(|s| s.to_string()).collect::<Vec<_>>()).map(|(i, p)| (i.map(String::from), p.map(String::from)))
+        };
         assert_eq!(a(&[]).unwrap(), (None, None));
         assert_eq!(a(&["abcd"]).unwrap(), (Some("abcd".into()), None));
         assert_eq!(a(&["--project", "Web shop"]).unwrap(), (None, Some("Web shop".into())));

@@ -66,7 +66,8 @@ fn located(program: &str, w: &Worktree, number: u32) -> Result<(PathBuf, PathBuf
     if !Path::new(&w.folder).is_dir() {
         return Err(format!("its repository's folder {} isn't there any more", w.folder));
     }
-    let top = git(program, Path::new(&w.folder), &["rev-parse", "--show-toplevel"]).map_err(|e| format!("{} isn't in a git repository any more: {e}", w.folder))?;
+    let top = git(program, Path::new(&w.folder), &["rev-parse", "--show-toplevel"])
+        .map_err(|e| format!("{} isn't in a git repository any more: {e}", w.folder))?;
     let root = PathBuf::from(top.trim());
     let dir = worktree_dir(&root, number);
     if !path.starts_with(&dir) || same_place(&dir, &root) {
@@ -83,7 +84,8 @@ pub fn uncommitted(program: &str, dir: &Path) -> Result<bool, String> {
 
 /// `uncommitted`, for a question to the user on the UI thread: git gets `budget`; false when it can't say in time.
 pub fn uncommitted_quick(program: &str, dir: &Path, budget: Duration) -> bool {
-    crate::gitfacts::run(program, dir, &["status", "--porcelain", "--untracked-files=normal"], Instant::now() + budget).is_some_and(|out| !out.trim().is_empty())
+    crate::gitfacts::run(program, dir, &["status", "--porcelain", "--untracked-files=normal"], Instant::now() + budget)
+        .is_some_and(|out| !out.trim().is_empty())
 }
 
 /// Remove ticket `number`'s worktree `w`, keeping its branch. Only a worktree whose record is sound (see the top of
@@ -101,11 +103,15 @@ pub fn remove(program: &str, w: &Worktree, number: u32, force: bool) -> Removal 
         return Removal::Refused(format!("git didn't list the worktrees of {}", root.display()));
     }
     match listed.iter().enumerate().find(|(_, (p, _))| same_place(p, &dir)) {
-        None if dir.exists() => return Removal::Refused(format!("{} isn't a git worktree of {}, so platoon leaves it alone", dir.display(), root.display())),
+        None if dir.exists() => {
+            return Removal::Refused(format!("{} isn't a git worktree of {}, so platoon leaves it alone", dir.display(), root.display()));
+        }
         // Gone, and git knows nothing of it: nothing to do.
         None => return Removal::Removed,
         Some((0, _)) => return Removal::Refused(format!("{} is the repository itself", dir.display())),
-        Some((_, (_, b))) if *b != full => return Removal::Refused(format!("{} is on another branch now, so platoon leaves it alone", dir.display())),
+        Some((_, (_, b))) if *b != full => {
+            return Removal::Refused(format!("{} is on another branch now, so platoon leaves it alone", dir.display()));
+        }
         // Gone already (removed by hand): only git's note of it is left.
         Some(_) if !dir.exists() => {
             return match git(program, &root, &["worktree", "prune"]) {
@@ -210,7 +216,8 @@ mod tests {
         let config = dir("base-config");
         let mut t = Tickets::open(&config, "p1");
         let n = t.add(NewTicket { title: "Basket".into(), folders: folders.clone(), ..Default::default() }).unwrap();
-        let lead = crate::tickets::Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None };
+        let lead =
+            crate::tickets::Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None };
         t.start_leader(n, &lead, &got).unwrap();
         assert_eq!(Tickets::open(&config, "p1").get(n).unwrap().worktrees, got);
         let text = fs::read_to_string(crate::tickets::path_in(&config, "p1")).unwrap();
@@ -230,7 +237,15 @@ mod tests {
         fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
         let mut t = Tickets::open(&config, "p1");
         let w = t.get(1).unwrap().worktrees[0].clone();
-        assert_eq!(w, Worktree { folder: "/w/shop".into(), path: "/w/shop-worktrees/ticket-1".into(), branch: "ticket/1".into(), ..Default::default() });
+        assert_eq!(
+            w,
+            Worktree {
+                folder: "/w/shop".into(),
+                path: "/w/shop-worktrees/ticket-1".into(),
+                branch: "ticket/1".into(),
+                ..Default::default()
+            }
+        );
         // A rename rewrites the file: the worktree's entry, and everything platoon doesn't know, as they were.
         t.rename(1, "Old one").unwrap();
         let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
@@ -291,7 +306,8 @@ mod tests {
         // Its branch deleted, or its repository gone: no base.
         let gone = Worktree { base: None, branch: "ticket/99".into(), ..got[0].clone() };
         assert_eq!(diff_base(&gone, "git"), None);
-        let nowhere = Worktree { folder: "/nowhere/at/all".into(), path: "/nowhere/else".into(), branch: "ticket/1".into(), ..Default::default() };
+        let nowhere =
+            Worktree { folder: "/nowhere/at/all".into(), path: "/nowhere/else".into(), branch: "ticket/1".into(), ..Default::default() };
         assert_eq!(diff_base(&nowhere, "git"), None);
         let _ = fs::remove_dir_all(&base);
     }

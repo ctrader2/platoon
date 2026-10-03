@@ -26,8 +26,8 @@ use super::*;
 use crate::editor::{self, Request};
 use crate::editor_install::{Dirs, Part, Progress, Report};
 use crate::editorplugin;
-use crate::plugins::Origin;
 use crate::fileeditors::{self, FileEditor, Runs};
+use crate::plugins::Origin;
 use crate::tickets::{State, Ticket, Tickets};
 use std::collections::BTreeMap;
 use std::sync::mpsc::TryRecvError;
@@ -106,7 +106,14 @@ impl EdState {
     #[cfg(test)]
     fn dirs() -> Dirs {
         let none = std::env::temp_dir().join(format!("platoon-unit-no-editor-{}", std::process::id()));
-        Dirs { editor: none.join("editor"), fonts: none.join("fonts"), mirror: Some(none.join("mirror")), search_path: Vec::new(), refresh_fonts: false, platform: Some(crate::editor_install::Platform::LinuxX64) }
+        Dirs {
+            editor: none.join("editor"),
+            fonts: none.join("fonts"),
+            mirror: Some(none.join("mirror")),
+            search_path: Vec::new(),
+            refresh_fonts: false,
+            platform: Some(crate::editor_install::Platform::LinuxX64),
+        }
     }
 
     pub fn new() -> Self {
@@ -168,7 +175,10 @@ impl App {
 
     /// The folder picker, for the editor: the project's folders first when one is open or selected.
     fn open_editor_picker(&mut self) {
-        let project = self.open_project.clone().or_else(|| if self.projects_list_showing() { self.selected_project().map(|p| p.id.clone()) } else { None });
+        let project = self
+            .open_project
+            .clone()
+            .or_else(|| if self.projects_list_showing() { self.selected_project().map(|p| p.id.clone()) } else { None });
         self.open_picker_in(project);
         self.picker.editor = true;
     }
@@ -203,7 +213,10 @@ impl App {
             return e.clone();
         }
         if self.ed.said_missing.as_deref() != Some(id.as_str()) {
-            let line = format!("{} isn't on this computer any more, so platoon's editor opens instead (Settings, Editors).", fileeditors::name_of(&id));
+            let line = format!(
+                "{} isn't on this computer any more, so platoon's editor opens instead (Settings, Editors).",
+                fileeditors::name_of(&id)
+            );
             self.notify(line.clone());
             self.ed.note = Some(line);
             self.ed.said_missing = Some(id);
@@ -258,7 +271,6 @@ impl App {
     pub fn set_file_editors_for_test(&mut self, list: Vec<FileEditor>) {
         self.ed.files = list;
     }
-
 
     /// The ticket a flow is about, as it is now.
     fn flow_ticket(&self, project: &str, number: u32) -> Option<Ticket> {
@@ -317,7 +329,11 @@ impl App {
                 if dirs.len() > 1 {
                     let others: Vec<String> = dirs[1..].iter().map(|d| dirs::tilde(d, &self.home)).collect();
                     let first = dirs::tilde(&dirs[0], &self.home);
-                    self.ed.note = Some(format!("{} opened {first} only: it opens one folder at a time. Not opened: {}.", chosen.name, others.join(", ")));
+                    self.ed.note = Some(format!(
+                        "{} opened {first} only: it opens one folder at a time. Not opened: {}.",
+                        chosen.name,
+                        others.join(", ")
+                    ));
                 }
                 self.ed.own = Some((chosen, dirs));
             }
@@ -350,7 +366,11 @@ impl App {
         let shown = if e.several == fileeditors::Several::EachWindow { opened } else { dirs.len() };
         let mut line = match (e.several, dirs.len()) {
             (fileeditors::Several::EachWindow, n) if n > 1 && left > 0 => {
-                format!("Opened {opened} of the {n} folders in {}, a window each (it opens at most {}).", e.name, fileeditors::JETBRAINS_MOST)
+                format!(
+                    "Opened {opened} of the {n} folders in {}, a window each (it opens at most {}).",
+                    e.name,
+                    fileeditors::JETBRAINS_MOST
+                )
             }
             (fileeditors::Several::EachWindow, n) if n > 1 => format!("Opened the {n} folders in {}, a window each.", e.name),
             _ => format!("Opened in {}, in a window of its own.", e.name),
@@ -404,7 +424,8 @@ impl App {
         if !plugin {
             self.pl.ensure_catalog();
         }
-        let from_catalog = if plugin { None } else { self.pl.catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).and_then(|e| e.download_bytes) };
+        let from_catalog =
+            if plugin { None } else { self.pl.catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).and_then(|e| e.download_bytes) };
         let bytes = from_catalog.unwrap_or_else(|| editorplugin::download_bytes(&self.pl.store));
         self.mode = Mode::Confirm(Confirm::InstallEditor { bytes, plugin });
     }
@@ -466,7 +487,8 @@ impl App {
                 if editorplugin::installed(&store).is_some() {
                     return Ok(());
                 }
-                let entry = catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).ok_or("platoon's plugin catalog has no code editor plugin")?;
+                let entry =
+                    catalog.as_ref().and_then(|c| c.get(editorplugin::ID)).ok_or("platoon's plugin catalog has no code editor plugin")?;
                 if !entry.problems.is_empty() {
                     return Err(format!("{} can't be installed here: {}", entry.manifest.name, entry.problems.join("; ")));
                 }
@@ -495,7 +517,13 @@ impl App {
             .ed
             .progress
             .values()
-            .map(|p| if p.done + p.failed >= p.total && p.failed == 0 { format!("{} ✓", p.part.label()) } else { format!("{} {}/{}", p.part.label(), p.done, p.total) })
+            .map(|p| {
+                if p.done + p.failed >= p.total && p.failed == 0 {
+                    format!("{} ✓", p.part.label())
+                } else {
+                    format!("{} {}/{}", p.part.label(), p.done, p.total)
+                }
+            })
             .collect();
         match (&self.ed.stage, parts.is_empty()) {
             (_, false) => format!("Installing the code editor: {}", parts.join("  ")),

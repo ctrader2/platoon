@@ -2,7 +2,7 @@
 
 mod common;
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
     fs,
     io::{Read, Write},
@@ -66,7 +66,10 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     assert!(first.status.success());
     let shown = text(&first.stdout);
     assert_eq!(shown.matches("[✓]").count(), 5, "{shown}");
-    assert!(shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"), "{shown}");
+    assert!(
+        shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"),
+        "{shown}"
+    );
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
 
     let second = platoon(&claude, &cache, &["setup"]);
@@ -91,7 +94,15 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     // Claude may offer it, but only after asking, only in a platoon project, once, and after a no it only says how to
     // type it.
     let desc = text_on_disk.lines().find(|l| l.starts_with("description: ")).unwrap();
-    for want in ["Never start it unasked", "only after a yes", "belongs to a platoon project", "ask once", "After a no", "type /to-tickets any time", "do not offer again"] {
+    for want in [
+        "Never start it unasked",
+        "only after a yes",
+        "belongs to a platoon project",
+        "ask once",
+        "After a no",
+        "type /to-tickets any time",
+        "do not offer again",
+    ] {
         assert!(desc.contains(want), "{want:?} in {desc}");
     }
     // Written by the platoon before this one, which kept no record (so there is none): platoon's own, so it is updated
@@ -107,14 +118,16 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     let before = include_str!("fixtures/to-tickets-skill-d8e7d22.md");
     assert_ne!(before, text_on_disk, "platoon's copy has moved on since");
     fs::write(&skill, before).unwrap();
-    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string()).unwrap();
+    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string())
+        .unwrap();
     let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
     assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
     assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
     assert!(!claude.join("skills/to-tickets/SKILL.md.platoon-bak").exists());
     // The same old copy with a line of the user's: theirs, left alone.
     fs::write(&skill, format!("{before}\nMy line.\n")).unwrap();
-    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string()).unwrap();
+    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string())
+        .unwrap();
     assert!(text(&platoon(&claude, &cache, &["setup"]).stdout).contains("changed by you"));
     assert!(fs::read_to_string(&skill).unwrap().ends_with("My line.\n"));
     fs::write(&skill, &text_on_disk).unwrap();
@@ -164,7 +177,12 @@ fn setup_remembers_a_removal_and_leaves_a_skill_the_user_changed_alone() {
     for _ in 0..2 {
         let shown = setup();
         let line = tickets_line(&shown);
-        assert!(line.starts_with("Tickets skill") && line.contains("removed by you") && line.contains("`platoon setup --add to-tickets` puts it back"), "{shown}");
+        assert!(
+            line.starts_with("Tickets skill")
+                && line.contains("removed by you")
+                && line.contains("`platoon setup --add to-tickets` puts it back"),
+            "{shown}"
+        );
         assert!(!skill.exists() && shown.contains("Nothing to change"), "{shown}");
     }
     // Put back: written, and the mark is gone.
@@ -302,11 +320,7 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
 fn the_stop_hook_that_keeps_notes_up_to_date_is_added_beside_any_other_stop_hook() {
     let (claude, cache) = dirs("stop-hook");
     // Somebody else's Stop hook is already there: it must survive, and platoon's goes beside it.
-    fs::write(
-        claude.join("settings.json"),
-        r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say-something"}]}]}}"#,
-    )
-    .unwrap();
+    fs::write(claude.join("settings.json"), r#"{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"say-something"}]}]}}"#).unwrap();
     assert!(platoon(&claude, &cache, &["setup"]).status.success());
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(claude.join("settings.json")).unwrap()).unwrap();
     let groups = v["hooks"]["Stop"].as_array().unwrap();
@@ -345,10 +359,38 @@ fn themes_lists_the_built_ins_without_setup_and_touches_nothing() {
     assert_eq!(
         ids,
         [
-            "catppuccin-mocha", "catppuccin-macchiato", "catppuccin-frappe", "tokyo-night", "tokyo-night-storm", "dracula", "one-dark",
-            "nord", "gruvbox-dark", "gruvbox-material-dark", "rose-pine", "rose-pine-moon", "kanagawa-wave", "kanagawa-dragon",
-            "night-owl", "ayu-mirage", "vesper", "solarized-dark", "github-dark", "material-ocean", "everforest-dark-hard", "nightfox",
-            "sonokai", "moonfly", "melange-dark", "flexoki-dark", "oxocarbon", "poimandres", "horizon", "synthwave", "claude", "terminal"
+            "catppuccin-mocha",
+            "catppuccin-macchiato",
+            "catppuccin-frappe",
+            "tokyo-night",
+            "tokyo-night-storm",
+            "dracula",
+            "one-dark",
+            "nord",
+            "gruvbox-dark",
+            "gruvbox-material-dark",
+            "rose-pine",
+            "rose-pine-moon",
+            "kanagawa-wave",
+            "kanagawa-dragon",
+            "night-owl",
+            "ayu-mirage",
+            "vesper",
+            "solarized-dark",
+            "github-dark",
+            "material-ocean",
+            "everforest-dark-hard",
+            "nightfox",
+            "sonokai",
+            "moonfly",
+            "melange-dark",
+            "flexoki-dark",
+            "oxocarbon",
+            "poimandres",
+            "horizon",
+            "synthwave",
+            "claude",
+            "terminal"
         ]
     );
     assert!(shown.contains("Catppuccin Mocha  (default)") && shown.contains("Rosé Pine") && shown.contains("Terminal colors"), "{shown}");
@@ -370,8 +412,16 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     let out = platoon(&claude, &cache, &["themes"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     let shown = text(&out.stdout);
-    let ids: Vec<&str> = shown.lines().filter(|l| !l.starts_with(' ') && l.contains("  ") && !l.contains("skipped")).filter_map(|l| l.split_whitespace().next()).collect();
-    assert_eq!(&ids[ids.len() - 2..], ["user:deep-sea", "user:nord"], "the built-ins first, then the user's own in file-name order:\n{shown}");
+    let ids: Vec<&str> = shown
+        .lines()
+        .filter(|l| !l.starts_with(' ') && l.contains("  ") && !l.contains("skipped"))
+        .filter_map(|l| l.split_whitespace().next())
+        .collect();
+    assert_eq!(
+        &ids[ids.len() - 2..],
+        ["user:deep-sea", "user:nord"],
+        "the built-ins first, then the user's own in file-name order:\n{shown}"
+    );
     assert_eq!(ids[0], "catppuccin-mocha");
     assert!(shown.contains("user:deep-sea") && shown.contains("Deep Sea  (yours)"), "{shown}");
     assert!(shown.contains("Nord (yours)") && !shown.contains("Nord (yours)  (yours)"), "a name a built-in has is marked once: {shown}");
@@ -380,7 +430,10 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     fs::write(themes.join("Paper"), "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 5=#9a2fa0\npalette = 2=#2e7d32\npalette = 3=#8a5d00\npalette = 1=#c62828\n").unwrap();
     let out = platoon(&claude, &cache, &["themes"]);
     let shown = text(&out.stdout);
-    assert!(shown.contains("user:paper") && shown.contains("Paper  (yours)"), "a light theme that reads as it is is one of the user's:\n{shown}");
+    assert!(
+        shown.contains("user:paper") && shown.contains("Paper  (yours)"),
+        "a light theme that reads as it is is one of the user's:\n{shown}"
+    );
     let nord_light = "Nord Light: a light theme has to read as it is: palette 12 (or 4) is missing: it is the accent color (or give it as platoon-accent), and 4 more problems";
     for want in [nord_light, "Half: no background color", "Noise: the file isn't text"] {
         assert!(shown.lines().any(|l| l.trim() == want), "{want:?} in:\n{shown}");
@@ -415,10 +468,17 @@ fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
     assert_eq!(out.status.code(), Some(1), "{out:?}");
     assert!(text(&out.stdout).starts_with("The code editor is a plugin now: this is `platoon plugin add editor`."), "{out:?}");
     assert!(text(&out.stderr).contains("There is no plugin called \"editor\" in the catalog"), "{out:?}");
-    assert!(!base.join("data/editor").exists() && !base.join("data/plugins/editor").exists() && !base.join("fonts").exists(), "nothing installed");
+    assert!(
+        !base.join("data/editor").exists() && !base.join("data/plugins/editor").exists() && !base.join("fonts").exists(),
+        "nothing installed"
+    );
     let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
     assert!(out.status.success(), "{out:?}");
-    assert!(text(&out.stdout).contains("this is `platoon plugin remove editor`") && text(&out.stdout).contains("isn't installed; there is nothing to remove"), "{out:?}");
+    assert!(
+        text(&out.stdout).contains("this is `platoon plugin remove editor`")
+            && text(&out.stdout).contains("isn't installed; there is nothing to remove"),
+        "{out:?}"
+    );
     // `--replace` is only for the skill.
     let out = platoon(&claude, &cache, &["setup", "--replace", "editor"]);
     assert_eq!(out.status.code(), Some(1));

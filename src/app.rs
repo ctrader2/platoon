@@ -1,7 +1,7 @@
 use crate::ai;
 use crate::archive::{self, Archive};
 use crate::claude::{self, Live, Reader};
-use crate::client::{key_bytes, Client};
+use crate::client::{Client, key_bytes};
 use crate::clipboard::Clipboard;
 use crate::dirs;
 use crate::editors::Editor;
@@ -14,14 +14,14 @@ use crate::model::{NameSource, Proc, Session, Status};
 use crate::names::{self, Names};
 use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
-use crate::select::{click_count, extract, Click, Point, Selection, Unit};
+use crate::select::{Click, Point, Selection, Unit, click_count, extract};
 use crate::settings::{EditorFor, Item, Kind, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
-use crate::usertheme::Registry;
 use crate::usage::{self, Usage};
-use fuzzy_matcher::{skim::SkimMatcherV2, FuzzyMatcher};
+use crate::usertheme::Registry;
+use fuzzy_matcher::{FuzzyMatcher, skim::SkimMatcherV2};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
 use std::{
@@ -32,8 +32,8 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{
-        mpsc::{channel, Receiver, Sender},
         Arc,
+        mpsc::{Receiver, Sender, channel},
     },
     thread,
     time::{Duration, Instant},
@@ -46,8 +46,8 @@ mod plugins_glue;
 mod projects_glue;
 mod smart_glue;
 mod squads_glue;
-mod squadwork_glue;
 mod squadtab_glue;
+mod squadwork_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
 #[cfg(test)]
@@ -55,10 +55,12 @@ pub use editor_glue::EdTarget;
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use plugins_glue::{PlugRow, PlugState, PluginsState, Review};
-pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, Pane, PTABS, TOPS, TOP_SESSIONS};
-pub use smart_glue::{Engine, FindData, FindState, FIND_KIND};
-pub use squads_glue::{split_areas, SquadState, SPLIT_MIN_WIDTH};
-pub use squadtab_glue::{agent_rows, detail_rows, ARow, ChoiceFor, DRow, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, NEW_AGENT};
+pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOPS};
+pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
+pub use squads_glue::{SPLIT_MIN_WIDTH, SquadState, split_areas};
+pub use squadtab_glue::{
+    ARow, ChoiceFor, DRow, Drafting, NEW_AGENT, SqFocus, SqView, SquadName, SquadTab, TextFor, agent_rows, detail_rows,
+};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -376,11 +378,8 @@ impl Picker {
             res.extend(self.all.iter().take(200).cloned());
         } else {
             let m = SkimMatcherV2::default();
-            let mut scored: Vec<(i64, &String)> = self
-                .all
-                .iter()
-                .filter_map(|p| m.fuzzy_match(&dirs::tilde(p, home), q).map(|s| (s, p)))
-                .collect();
+            let mut scored: Vec<(i64, &String)> =
+                self.all.iter().filter_map(|p| m.fuzzy_match(&dirs::tilde(p, home), q).map(|s| (s, p))).collect();
             scored.sort_by(|a, b| b.0.cmp(&a.0));
             res.extend(scored.into_iter().take(200).map(|(_, p)| p.clone()));
         }
@@ -712,9 +711,26 @@ impl App {
             selected: 0,
             filter: String::new(),
             mode: Mode::List,
-            search: Search { kind: 0, text: String::new(), results: Vec::new(), total: 0, selected: 0, top: Cell::new(0), computed_for: None, find: FindData::new() },
+            search: Search {
+                kind: 0,
+                text: String::new(),
+                results: Vec::new(),
+                total: 0,
+                selected: 0,
+                top: Cell::new(0),
+                computed_for: None,
+                find: FindData::new(),
+            },
             rename: Rename { id: String::new(), input: String::new(), original: String::new() },
-            picker: Picker { input: String::new(), all: Vec::new(), results: Vec::new(), selected: 0, project: None, ticket: None, editor: false },
+            picker: Picker {
+                input: String::new(),
+                all: Vec::new(),
+                results: Vec::new(),
+                selected: 0,
+                project: None,
+                ticket: None,
+                editor: false,
+            },
             hosts: Vec::new(),
             client: None,
             spawned: Vec::new(),
@@ -753,7 +769,15 @@ impl App {
             editors: crate::editors::detect(),
             editing: None,
             notes_window: None,
-            epick: EditorPick { project: String::new(), instructions: None, ticket: None, squad: None, options: Vec::new(), selected: 0, starred: String::new() },
+            epick: EditorPick {
+                project: String::new(),
+                instructions: None,
+                ticket: None,
+                squad: None,
+                options: Vec::new(),
+                selected: 0,
+                starred: String::new(),
+            },
             changes: Changes { lines: Vec::new(), top: Cell::new(0) },
             handoff: HandoffBox::empty(),
             handoff_flight: None,
@@ -949,7 +973,8 @@ impl App {
             let (active, archived): (Vec<usize>, Vec<usize>) =
                 self.sessions.iter().enumerate().filter(|(_, s)| mine(s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
             self.tab_view = active.into_iter().chain(archived).collect();
-            let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
+            let view: Vec<usize> =
+                self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
             self.archived_rows = view.iter().filter(|&&i| self.sessions[i].archived).count();
             self.view = view;
         } else if self.top != TOP_SESSIONS {
@@ -957,7 +982,8 @@ impl App {
             self.view.clear();
         } else {
             self.tab_view = self.sessions.iter().enumerate().filter(|(_, s)| listed(s) && shows(s)).map(|(i, _)| i).collect();
-            let view: Vec<usize> = self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
+            let view: Vec<usize> =
+                self.tab_view.iter().copied().filter(|&i| q.is_empty() || self.sessions[i].haystack.contains(&q)).collect();
             self.view = view;
         }
         self.counts = TABS.iter().map(|t| self.sessions.iter().filter(|s| listed(s) && (t.shows)(s)).count()).collect();
@@ -1089,7 +1115,8 @@ impl App {
         let live: Vec<Live> = all_live.into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
-        let ids: Vec<(u32, String, u64)> = live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
+        let ids: Vec<(u32, String, u64)> =
+            live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
         // A session platoon started under a project is placed here; that is a membership change like any other,
         // so its project is told there is something new (the same as pressing `m`).
         for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &claude::pid_alive) {
@@ -1140,14 +1167,30 @@ impl App {
                     // `hosted`: a platoon host is showing it right now (its process is a `claude attach`, which has no
                     // registry entry of its own, so it never appears among `live`).
                     let hosted = self.hosts.iter().any(|h| h.attaches_to(attach_id));
-                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: Some(attach_id.clone()), stale: false, parked: false, moved_to: None });
+                    s.procs.push(Proc {
+                        pid: l.pid,
+                        started_at: l.started_at,
+                        hosted,
+                        background: Some(attach_id.clone()),
+                        stale: false,
+                        parked: false,
+                        moved_to: None,
+                    });
                     continue;
                 }
                 let hosted = self.hosts.iter().any(|h| h.claude_pid == l.pid);
                 if let Some(job) = &l.parked {
                     // Where it went, while that background session still runs.
                     let moved_to = jobs.contains(job.as_str()).then(|| job.clone());
-                    s.procs.push(Proc { pid: l.pid, started_at: l.started_at, hosted, background: None, stale: false, parked: true, moved_to });
+                    s.procs.push(Proc {
+                        pid: l.pid,
+                        started_at: l.started_at,
+                        hosted,
+                        background: None,
+                        stale: false,
+                        parked: true,
+                        moved_to,
+                    });
                     continue;
                 }
                 if shared && hosted && !guard_on {
@@ -1243,7 +1286,8 @@ impl App {
             }
             None => false,
         };
-        let due = settled || sessions_changed || settings_changed || self.last_auto_archive.is_none_or(|t| t.elapsed() >= AUTO_ARCHIVE_EVERY);
+        let due =
+            settled || sessions_changed || settings_changed || self.last_auto_archive.is_none_or(|t| t.elapsed() >= AUTO_ARCHIVE_EVERY);
         if !due || !self.indexer.first_scan_done || self.indexer.remaining > 0 {
             return;
         }
@@ -1311,7 +1355,8 @@ impl App {
         let est = (t.context_tokens * 100 / window).min(100) as u8;
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
-        let mut s = self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms());
+        let mut s =
+            self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms());
         if !t.extra_dirs.is_empty() {
             s.extra_dirs = t.extra_dirs.iter().map(|d| dirs::tilde(d, &self.home)).collect();
             s.rehaystack();
@@ -1325,14 +1370,26 @@ impl App {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn session(&self, id: String, cwd: String, branch: Option<String>, model: Option<String>, est: u8, description: String, last_active: u64) -> Session {
+    fn session(
+        &self,
+        id: String,
+        cwd: String,
+        branch: Option<String>,
+        model: Option<String>,
+        est: u8,
+        description: String,
+        last_active: u64,
+    ) -> Session {
         // Claude Code derives a placeholder name; only a name the user chose (set from the registry) replaces this, and
         // a name the user gave it in platoon replaces both.
         let generated = self.summaries.get(&id);
         let (name, name_source) = match (self.names.get(&id), generated) {
             (Some(n), _) => (n.to_string(), NameSource::Platoon),
             (None, Some(g)) => (g.name.clone(), NameSource::Generated),
-            (None, None) => (Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string(), NameSource::Folder),
+            (None, None) => (
+                Path::new(&cwd).file_name().and_then(|n| n.to_str()).filter(|n| !n.is_empty()).unwrap_or(&cwd).to_string(),
+                NameSource::Folder,
+            ),
         };
         let summary = generated.map(|g| g.summary.clone()).unwrap_or_default();
         let dir = dirs::tilde(&cwd, &self.home);
@@ -1531,7 +1588,14 @@ impl App {
             return;
         }
         let settings = self.settings.get();
-        let key = (self.search.kind, self.search.text.clone(), self.prompts.generation, self.rev, settings.search_archived, settings.search_results);
+        let key = (
+            self.search.kind,
+            self.search.text.clone(),
+            self.prompts.generation,
+            self.rev,
+            settings.search_archived,
+            settings.search_results,
+        );
         if self.search.computed_for.as_ref() == Some(&key) {
             return;
         }
@@ -1556,7 +1620,8 @@ impl App {
                 continue;
             }
             // The name you gave and the one platoon made up both count as the name; the summary is searched too.
-            let name = format!("{} {}", self.names.get(&s.id).unwrap_or(""), self.summaries.get(&s.id).map_or("", |g| g.name.as_str())).to_lowercase();
+            let name = format!("{} {}", self.names.get(&s.id).unwrap_or(""), self.summaries.get(&s.id).map_or("", |g| g.name.as_str()))
+                .to_lowercase();
             let summary = s.summary.to_lowercase();
             let data = self.prompts.get(&s.id);
             if let Some(f) = prompts::find_with(data.map(|d| &**d), &name, &summary, &words) {
@@ -1564,7 +1629,9 @@ impl App {
             }
         }
         found.sort_by(|a, b| {
-            let key = |x: &(&Session, prompts::Found, _)| (Reverse(x.1.in_name), Reverse(x.1.in_one_prompt), Reverse(x.1.hits), Reverse(x.0.last_active));
+            let key = |x: &(&Session, prompts::Found, _)| {
+                (Reverse(x.1.in_name), Reverse(x.1.in_one_prompt), Reverse(x.1.hits), Reverse(x.0.last_active))
+            };
             key(a).cmp(&key(b)).then_with(|| a.0.id.cmp(&b.0.id))
         });
         let total = found.len();
@@ -1578,7 +1645,16 @@ impl App {
                     _ => s.description.clone(),
                 };
                 let marks = prompts::spans(&detail, &words);
-                SearchResult { id: s.id.clone(), name: s.name.clone(), dir: s.dir.clone(), extra_dirs: s.extra_dirs.clone(), archived: s.archived, last_active: s.last_active, detail, marks }
+                SearchResult {
+                    id: s.id.clone(),
+                    name: s.name.clone(),
+                    dir: s.dir.clone(),
+                    extra_dirs: s.extra_dirs.clone(),
+                    archived: s.archived,
+                    last_active: s.last_active,
+                    detail,
+                    marks,
+                }
             })
             .collect();
         (results, total)
@@ -1689,7 +1765,8 @@ impl App {
     /// automatic name.
     fn save_rename(&mut self) {
         self.mode = Mode::List;
-        let Rename { id, input, original } = std::mem::replace(&mut self.rename, Rename { id: String::new(), input: String::new(), original: String::new() });
+        let Rename { id, input, original } =
+            std::mem::replace(&mut self.rename, Rename { id: String::new(), input: String::new(), original: String::new() });
         let text = names::clean(&input);
         let has_own = self.names.get(&id).is_some();
         if text == names::clean(&original) || (text.is_empty() && !has_own) {
@@ -1910,7 +1987,13 @@ impl App {
             (None, _) => 0,
             (Some(i), Step::Prev) => i.saturating_sub(1),
             (Some(i), Step::Next) => (i + 1).min(last),
-            (Some(i), Step::Cycle) => if i >= last { 0 } else { i + 1 },
+            (Some(i), Step::Cycle) => {
+                if i >= last {
+                    0
+                } else {
+                    i + 1
+                }
+            }
         };
         let chosen = options[next].0.clone();
         if chosen == id {
@@ -2127,8 +2210,12 @@ impl App {
             return; // already on its way
         }
         // Never a background session's process: Claude's own service owns it (the archive key refuses those rows).
-        let pids: Vec<u32> =
-            self.sessions.iter().filter(|s| s.id == id).flat_map(|s| s.procs.iter().filter(|p| p.background.is_none()).map(|p| p.pid)).collect();
+        let pids: Vec<u32> = self
+            .sessions
+            .iter()
+            .filter(|s| s.id == id)
+            .flat_map(|s| s.procs.iter().filter(|p| p.background.is_none()).map(|p| p.pid))
+            .collect();
         if pids.is_empty() {
             self.record_archived(id, name);
             self.reload();
@@ -2613,7 +2700,11 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
-                    Mode::Attached(_) if self.sq.split.is_some() && split_areas(self.size.0, self.size.1).wide && split_areas(self.size.0, self.size.1).ticket.contains((m.column, m.row).into()) => {
+                    Mode::Attached(_)
+                        if self.sq.split.is_some()
+                            && split_areas(self.size.0, self.size.1).wide
+                            && split_areas(self.size.0, self.size.1).ticket.contains((m.column, m.row).into()) =>
+                    {
                         self.wheel_ticket(up);
                     }
                     Mode::Attached(_) => {
@@ -2666,12 +2757,7 @@ impl App {
                 }
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let hit = self
-                    .hits
-                    .borrow()
-                    .iter()
-                    .find(|(r, _)| r.contains((m.column, m.row).into()))
-                    .map(|(_, h)| *h);
+                let hit = self.hits.borrow().iter().find(|(r, _)| r.contains((m.column, m.row).into())).map(|(_, h)| *h);
                 match hit {
                     Some(Hit::Action(a)) => self.act(a),
                     Some(Hit::Tab(i)) if self.projects_list_showing() => self.switch_ptab(i),
@@ -2714,7 +2800,9 @@ impl App {
                         self.change_setting(i, step);
                     }
                     // Clicking the selected row again acts like Enter.
-                    Some(Hit::Row(i)) if i == self.selected && (self.open_project.is_none() || self.pane == Pane::Sessions) => self.act(Action::Jump),
+                    Some(Hit::Row(i)) if i == self.selected && (self.open_project.is_none() || self.pane == Pane::Sessions) => {
+                        self.act(Action::Jump)
+                    }
                     Some(Hit::Row(i)) => {
                         self.selected = i;
                         self.focus_pane(Pane::Sessions);

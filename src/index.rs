@@ -8,16 +8,16 @@
 //! Scanning runs on a background thread (`Indexer::spawn`) and streams results back in batches, newest
 //! files first, so the list fills in while the UI is already usable.
 
-use crate::claude::{read_transcript, Hidden, Transcript};
-use serde_json::{json, Map, Value};
+use crate::claude::{Hidden, Transcript, read_transcript};
+use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
-        mpsc::{channel, Receiver, Sender},
         Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc::{Receiver, Sender, channel},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -173,10 +173,8 @@ impl Scanner {
         stats.removed = removed.len();
 
         // Newest first: what the user is most likely to want appears first.
-        let mut changed: Vec<(PathBuf, u64, u64)> = listing
-            .into_iter()
-            .filter(|(p, m, s)| !self.map.get(p).is_some_and(|e| e.mtime == *m && e.size == *s))
-            .collect();
+        let mut changed: Vec<(PathBuf, u64, u64)> =
+            listing.into_iter().filter(|(p, m, s)| !self.map.get(p).is_some_and(|e| e.mtime == *m && e.size == *s)).collect();
         changed.sort_by(|a, b| b.1.cmp(&a.1));
 
         if !removed.is_empty() {
@@ -283,7 +281,15 @@ impl Indexer {
                 while woken.try_recv().is_ok() {}
             }
         });
-        Self { backend: Backend::Thread { rx, wake, busy }, entries, generation: 1, remaining: 0, first_scan_done: false, hidden: None, hidden_memo: HashMap::new() }
+        Self {
+            backend: Backend::Thread { rx, wake, busy },
+            entries,
+            generation: 1,
+            remaining: 0,
+            first_scan_done: false,
+            hidden: None,
+            hidden_memo: HashMap::new(),
+        }
     }
 
     /// Scan on the calling thread on every poll.
@@ -291,7 +297,15 @@ impl Indexer {
     pub fn inline(claude_root: &Path, cache: &Path) -> Self {
         let scanner = Scanner::load(claude_root, cache);
         let entries = scanner.entries().into_iter().map(|e| (e.path.clone(), e)).collect();
-        Self { backend: Backend::Inline(scanner), entries, generation: 1, remaining: 0, first_scan_done: false, hidden: None, hidden_memo: HashMap::new() }
+        Self {
+            backend: Backend::Inline(scanner),
+            entries,
+            generation: 1,
+            remaining: 0,
+            first_scan_done: false,
+            hidden: None,
+            hidden_memo: HashMap::new(),
+        }
     }
 
     /// Leave out every transcript whose working folder is (inside) `dir`, now and from here on.
@@ -386,7 +400,10 @@ mod tests {
     }
 
     fn user(text: &str, ts: &str) -> String {
-        format!(r#"{{"type":"user","cwd":"/work/x","gitBranch":"main","timestamp":"{ts}","message":{{"role":"user","content":{}}}}}"#, json!(text))
+        format!(
+            r#"{{"type":"user","cwd":"/work/x","gitBranch":"main","timestamp":"{ts}","message":{{"role":"user","content":{}}}}}"#,
+            json!(text)
+        )
     }
 
     fn assistant(tokens: u64, ts: &str) -> String {
@@ -469,7 +486,15 @@ mod tests {
     #[test]
     fn junk_conversations_are_indexed_but_have_no_prompt_and_subdirectories_are_ignored() {
         let (root, cache) = (tmp("junk-c"), tmp("junk-i"));
-        write(&root, "-work-x", "junk", &[user("<command-name>/clear</command-name>", "2026-09-19T01:00:00.000Z"), r#"{"type":"user","cwd":"/w","message":{"content":""}}"#.into()]);
+        write(
+            &root,
+            "-work-x",
+            "junk",
+            &[
+                user("<command-name>/clear</command-name>", "2026-09-19T01:00:00.000Z"),
+                r#"{"type":"user","cwd":"/w","message":{"content":""}}"#.into(),
+            ],
+        );
         write(&root, "-work-x", "empty", &[]);
         // Subagent and tool-result files live in subdirectories of the session's own folder.
         write(&root, "-work-x/junk/subagents", "agent-1", &[user("subagent prompt", "2026-09-19T01:00:00.000Z")]);
@@ -511,8 +536,17 @@ mod tests {
     #[test]
     fn the_added_folders_are_kept_in_the_index_and_an_index_from_before_them_is_read_again() {
         let (root, cache) = (tmp("dirs-c"), tmp("dirs-i"));
-        let env = |dirs: &str| format!(r#"{{"type":"attachment","isSidechain":false,"attachment":{{"type":"environment","snapshot":{{"additionalWorkingDirectories":{dirs}}},"changes":null}}}}"#);
-        write(&root, "-p", "aaa", &[user("first", "2026-09-19T01:00:00.000Z"), env(r#"["/","/srv/data"]"#), assistant(10, "2026-09-19T01:00:01.000Z")]);
+        let env = |dirs: &str| {
+            format!(
+                r#"{{"type":"attachment","isSidechain":false,"attachment":{{"type":"environment","snapshot":{{"additionalWorkingDirectories":{dirs}}},"changes":null}}}}"#
+            )
+        };
+        write(
+            &root,
+            "-p",
+            "aaa",
+            &[user("first", "2026-09-19T01:00:00.000Z"), env(r#"["/","/srv/data"]"#), assistant(10, "2026-09-19T01:00:01.000Z")],
+        );
         write(&root, "-p", "bbb", &[user("second", "2026-09-19T01:00:00.000Z")]);
         let mut s = Scanner::load(&root, &cache);
         scan(&mut s);
@@ -592,7 +626,11 @@ mod tests {
     fn transcripts_recorded_in_a_hidden_folder_never_enter_the_entries_and_a_similar_folder_does() {
         let d = tmp("hidden");
         let (root, cache) = (d.join("claude"), d.join("cache"));
-        let line = |cwd: &str| format!(r#"{{"type":"user","cwd":"{cwd}","timestamp":"2026-09-19T03:53:40.091Z","message":{{"role":"user","content":"a real prompt"}}}}"#);
+        let line = |cwd: &str| {
+            format!(
+                r#"{{"type":"user","cwd":"{cwd}","timestamp":"2026-09-19T03:53:40.091Z","message":{{"role":"user","content":"a real prompt"}}}}"#
+            )
+        };
         let work = cache.join("ai-work");
         fs::create_dir_all(&work).unwrap();
         write(&root, "-a", "helper", &[line(&work.display().to_string())]);

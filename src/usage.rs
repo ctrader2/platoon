@@ -5,7 +5,7 @@
 //! numbers under the cache dir, and the TUI reads them back. `platoon setup` installs it.
 
 use crate::model::{PlanUsage, Window};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs,

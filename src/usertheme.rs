@@ -9,7 +9,7 @@
 //! a theme, ...). Nothing in here may panic or hang on a strange file: sizes and counts are capped, only regular files
 //! are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather than guessed at.
 
-use crate::theme::{contrast, delta_e, is_light, lift_contrast, mix, Theme, MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT};
+use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, Theme, contrast, delta_e, is_light, lift_contrast, mix};
 use ratatui::style::Color;
 use std::{
     collections::HashSet,
@@ -266,24 +266,7 @@ pub fn build(id: String, name: String, p: &Parsed) -> Theme {
     let subtext = lift_contrast(mix(bg, toward, 0.72), bg, toward, MIN_SUBTEXT);
     let roles = distinct(picks, bg, text);
     let [accent, busy, ok, warn, err] = roles;
-    Theme {
-        id,
-        name,
-        bg,
-        surface,
-        border,
-        dim,
-        subtext,
-        text,
-        accent,
-        busy,
-        ok,
-        warn,
-        err,
-        on_accent: bg,
-        ansi: Some(pal),
-        light,
-    }
+    Theme { id, name, bg, surface, border, dim, subtext, text, accent, busy, ok, warn, err, on_accent: bg, ansi: Some(pal), light }
 }
 
 /// The five role colors, each lifted to read on `bg`, and no two of them alike: one that is too close to an
@@ -306,7 +289,8 @@ fn distinct(picks: [Color; 5], bg: Color, text: Color) -> [Color; 5] {
 /// A file name as a theme's display name: control characters dropped (they could act on the terminal that shows
 /// it) and so are the invisible ones that reorder text, runs of space folded, cut at `MAX_NAME` characters.
 pub fn display_name(file: &OsStr) -> String {
-    let odd = |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+    let odd =
+        |c: char| c.is_control() || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
     let name: String = file.to_string_lossy().chars().map(|c| if odd(c) { ' ' } else { c }).collect();
     let name = name.split_whitespace().collect::<Vec<_>>().join(" ");
     name.chars().take(MAX_NAME).collect::<String>().trim_end().to_string()
@@ -425,7 +409,9 @@ pub fn read_theme_text(path: &Path, len: u64) -> Result<String, String> {
     }
     let mut bytes = Vec::new();
     // Capped again here: the file may have grown since it was measured.
-    fs::File::open(path).and_then(|f| f.take(MAX_BYTES + 1).read_to_end(&mut bytes)).map_err(|_| "the file couldn't be read".to_string())?;
+    fs::File::open(path)
+        .and_then(|f| f.take(MAX_BYTES + 1).read_to_end(&mut bytes))
+        .map_err(|_| "the file couldn't be read".to_string())?;
     if bytes.len() as u64 > MAX_BYTES {
         return Err(format!("the file is bigger than {} KiB", MAX_BYTES / 1024));
     }
@@ -442,7 +428,9 @@ pub fn scan(dir: &Path) -> Scan {
     let mut ids: HashSet<String> = HashSet::new();
     for (file, path, len, _) in files.into_iter().take(MAX_FILES) {
         let name = display_name(&file);
-        let skip = |out: &mut Scan, name: &str, reason: String| out.skipped.push(Skipped { name: if name.is_empty() { "(unnamed)".into() } else { name.to_string() }, reason });
+        let skip = |out: &mut Scan, name: &str, reason: String| {
+            out.skipped.push(Skipped { name: if name.is_empty() { "(unnamed)".into() } else { name.to_string() }, reason })
+        };
         if name.is_empty() {
             skip(&mut out, "", "the file name has nothing to show".into());
             continue;
@@ -497,7 +485,8 @@ impl Registry {
 
     /// The user's themes and those of the plugins installed in `plugins` (`<data>/plugins`).
     pub fn open_with_plugins(config: &Path, plugins: &Path) -> Self {
-        let mut r = Self { dir: config.join("themes"), plugins: Some(crate::plugins::Store::new(plugins.to_path_buf())), ..Self::default() };
+        let mut r =
+            Self { dir: config.join("themes"), plugins: Some(crate::plugins::Store::new(plugins.to_path_buf())), ..Self::default() };
         r.reload();
         r
     }
@@ -644,7 +633,19 @@ mod tests {
 
     #[test]
     fn garbage_never_panics() {
-        for text in ["\0\0\0", "===", "=", "palette", "palette=", "palette==", "background=", &"x".repeat(100_000), "\u{feff}", "é=é\nñ", "palette = 99999999999999999999=#fff"] {
+        for text in [
+            "\0\0\0",
+            "===",
+            "=",
+            "palette",
+            "palette=",
+            "palette==",
+            "background=",
+            &"x".repeat(100_000),
+            "\u{feff}",
+            "é=é\nñ",
+            "palette = 99999999999999999999=#fff",
+        ] {
             let _ = parse(text);
         }
         for name in ["", " ", "\u{202e}", "é", "a\nb", &"n".repeat(300)] {
@@ -729,7 +730,12 @@ mod tests {
         assert_readable(&t);
         assert_ne!(t.err, t.ok, "the statuses were all one color and are told apart now");
         // A near-white-on-black theme whose colors are all one bright hue, and an all-black one.
-        for (bg, fg, col) in [("#000000", "#ffffff", "#ff0000"), ("#000000", "#000000", "#000000"), ("#05050a", "#101018", "#20202a"), ("#111111", "#aaaaaa", "#222222")] {
+        for (bg, fg, col) in [
+            ("#000000", "#ffffff", "#ff0000"),
+            ("#000000", "#000000", "#000000"),
+            ("#05050a", "#101018", "#20202a"),
+            ("#111111", "#aaaaaa", "#222222"),
+        ] {
             let mut text = format!("background = {bg}\nforeground = {fg}\n");
             for n in 0..16 {
                 text.push_str(&format!("palette = {n}={col}\n"));
@@ -757,7 +763,10 @@ mod tests {
                     assert_eq!(t.light, p.light(), "{name}");
                     assert_readable(&t);
                 }
-                Err(why) => assert!(p.light() && why.starts_with("a light theme has to read as it is: ") && !problems(&p).is_empty(), "{name}: {why}"),
+                Err(why) => assert!(
+                    p.light() && why.starts_with("a light theme has to read as it is: ") && !problems(&p).is_empty(),
+                    "{name}: {why}"
+                ),
             }
         }
     }
@@ -775,15 +784,31 @@ mod tests {
         assert_readable(&t);
         // Black on white with no colors of its own: it has no accent to offer, and says so first.
         let bare = theme_from("user:l".into(), "L".into(), &parse("background = #ffffff\nforeground = #000000").unwrap()).unwrap_err();
-        assert_eq!(bare, "a light theme has to read as it is: palette 12 (or 4) is missing: it is the accent color (or give it as platoon-accent), and 4 more problems");
+        assert_eq!(
+            bare,
+            "a light theme has to read as it is: palette 12 (or 4) is missing: it is the accent color (or give it as platoon-accent), and 4 more problems"
+        );
         // Faint text: the text's own ratio, in plain words, and a light theme is never lightened or darkened to fit.
         let faint = format!("{good}\nforeground = #b0b0a8");
         let why = theme_from("u".into(), "n".into(), &parse(&faint).unwrap()).unwrap_err();
-        assert!(why.starts_with("a light theme has to read as it is: the text is hard to read on the background (2.") && why.ends_with("it needs 7:1)") && !why.contains("more"), "{why}");
+        assert!(
+            why.starts_with("a light theme has to read as it is: the text is hard to read on the background (2.")
+                && why.ends_with("it needs 7:1)")
+                && !why.contains("more"),
+            "{why}"
+        );
         // Right at the threshold the built-ins use: just dark is lifted and loads; just light has nothing to reach 7:1 with.
-        assert!(theme_from("u".into(), "n".into(), &parse("background=#707070\nforeground=#fff").unwrap()).is_ok(), "luminance {:.3}", luminance(c(0x707070)));
+        assert!(
+            theme_from("u".into(), "n".into(), &parse("background=#707070\nforeground=#fff").unwrap()).is_ok(),
+            "luminance {:.3}",
+            luminance(c(0x707070))
+        );
         let why = theme_from("u".into(), "n".into(), &parse("background=#808080\nforeground=#fff").unwrap()).unwrap_err();
-        assert!(why.contains("the text is hard to read on the background (3.9:1; it needs 7:1)"), "luminance {:.3}: {why}", luminance(c(0x808080)));
+        assert!(
+            why.contains("the text is hard to read on the background (3.9:1; it needs 7:1)"),
+            "luminance {:.3}: {why}",
+            luminance(c(0x808080))
+        );
     }
 
     #[test]
@@ -890,7 +915,11 @@ mod tests {
         put(&d, "Zeta", "background = #000000\nforeground = #eeeeee\n");
         put(&d, "Alpha", "background = #10141c\nforeground = #eeeeee\n");
         put(&d, "Nord Light", "background = #eceff4\nforeground = #2e3440\n");
-        put(&d, "Paper", "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 5=#9a2fa0\npalette = 2=#2e7d32\npalette = 3=#8a5d00\npalette = 1=#c62828\n");
+        put(
+            &d,
+            "Paper",
+            "background = #fafafa\nforeground = #202020\npalette = 4=#1a55c0\npalette = 5=#9a2fa0\npalette = 2=#2e7d32\npalette = 3=#8a5d00\npalette = 1=#c62828\n",
+        );
         put(&d, "Empty", "");
         put(&d, "Binary", [0u8, 159, 146, 150, 0xff, 0xfe]);
         put(&d, "Huge", vec![b'#'; (MAX_BYTES + 1) as usize]);
@@ -901,7 +930,11 @@ mod tests {
         put(&d, "Folder/inside", NORD);
         let scan = scan(&d.join("themes"));
         let names: Vec<&str> = scan.themes.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["Alpha", "Nord (yours)", "Paper", "Zeta"], "name order; a name a built-in has is marked; a light theme that reads");
+        assert_eq!(
+            names,
+            ["Alpha", "Nord (yours)", "Paper", "Zeta"],
+            "name order; a name a built-in has is marked; a light theme that reads"
+        );
         let ids: Vec<&str> = scan.themes.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, ["user:alpha", "user:nord", "user:paper", "user:zeta"]);
         assert!(scan.themes[2].light && !scan.themes[0].light);
@@ -936,7 +969,9 @@ mod tests {
     fn weird_file_names_load_or_are_skipped_without_trouble() {
         let d = tmp("weird");
         let ok = "background = #000000\nforeground = #eeeeee\n";
-        for name in ["with space", "ünïcode", "夜の海", "dots.and.more", "-dash", "A\u{1b}[2Jb", "x".repeat(200).as_str(), "trailing.", "a\tb"] {
+        for name in
+            ["with space", "ünïcode", "夜の海", "dots.and.more", "-dash", "A\u{1b}[2Jb", "x".repeat(200).as_str(), "trailing.", "a\tb"]
+        {
             put(&d, name, ok);
         }
         let scan = scan(&d.join("themes"));

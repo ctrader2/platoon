@@ -8,7 +8,7 @@
 //! Also `platoon squads --kinds`: each squad's name and what it can do, which the skill
 //! reads to shape the tickets (it never picks a squad).
 
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -67,10 +67,13 @@ fn record(config: &Path) -> Map<String, Value> {
 
 /// One step's record in `setup.json` (empty when there is none, or the file can't be read), by its key.
 pub fn choice(config: &Path, key: &str) -> Map<String, Value> {
-    load_choices(config).and_then(|mut o| o.remove(key)).and_then(|v| match v {
-        Value::Object(o) => Some(o),
-        _ => None,
-    }).unwrap_or_default()
+    load_choices(config)
+        .and_then(|mut o| o.remove(key))
+        .and_then(|v| match v {
+            Value::Object(o) => Some(o),
+            _ => None,
+        })
+        .unwrap_or_default()
 }
 
 /// Change this skill's record (`None` removes a key). Nothing is written when nothing changes.
@@ -334,7 +337,16 @@ mod tests {
         assert!(body.contains("platoon squads --kinds") && body.contains("Never pick a squad"), "squads");
         assert!(body.contains("either should be able to take the ticket"), "two squads of one kind");
         // The shape.
-        for want in ["fits in one fresh session", "not a list of file changes", "- [ ] ", "must fail before the work", "No file paths", "How far: local changes only.", "Preparation first", "waits for"] {
+        for want in [
+            "fits in one fresh session",
+            "not a list of file changes",
+            "- [ ] ",
+            "must fail before the work",
+            "No file paths",
+            "How far: local changes only.",
+            "Preparation first",
+            "waits for",
+        ] {
             assert!(body.contains(want), "{want:?}");
         }
         // The quiz, before anything is written.
@@ -342,7 +354,9 @@ mod tests {
         let write = body.find("## 5.").unwrap();
         assert!(quiz < write);
         let q = &body[quiz..write];
-        for want in ["numbered list", "right size", "merged or split", "\"waits for\" links real", "clearly approves", "write\nnothing to platoon"] {
+        for want in
+            ["numbered list", "right size", "merged or split", "\"waits for\" links real", "clearly approves", "write\nnothing to platoon"]
+        {
             assert!(q.contains(want), "{want:?}: {q}");
         }
         // Writing: through platoon only, blockers first, with the numbers it printed, the session's folders.
@@ -364,7 +378,11 @@ mod tests {
         let block = &w[w.find("```sh\n").unwrap() + 6..];
         let block = &block[..block.find("```").unwrap()];
         let lines: Vec<&str> = block.lines().collect();
-        assert!(lines[0].starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" ") && lines[0].ends_with(" <<'PLATOON_TICKET_BODY'"), "{block}");
+        assert!(
+            lines[0].starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" ")
+                && lines[0].ends_with(" <<'PLATOON_TICKET_BODY'"),
+            "{block}"
+        );
         assert_eq!(lines.last(), Some(&"PLATOON_TICKET_BODY"), "{block}");
         assert_eq!(lines.iter().filter(|l| l.contains("platoon")).count(), 1, "one platoon command: {block}");
         for bad in ["mktemp", "rm -f", "cat >", "--body-file", "$(", "&&", "; ", "|"] {
@@ -421,7 +439,11 @@ mod tests {
         assert_eq!(installed(&root, &config), Installed::Yes);
         assert!(!replace(&root, &config).unwrap(), "nothing different to keep the second time");
         // Removed: the file, the backup and the empty folder go; `skills/` and other skills stay; setup leaves it out.
-        fs::write(config.join("setup.json"), serde_json::to_string(&json!({"theirs": 1, "to-tickets": {"written": hash(SKILL), "extra": "kept"}})).unwrap()).unwrap();
+        fs::write(
+            config.join("setup.json"),
+            serde_json::to_string(&json!({"theirs": 1, "to-tickets": {"written": hash(SKILL), "extra": "kept"}})).unwrap(),
+        )
+        .unwrap();
         fs::create_dir_all(root.join("skills/mine")).unwrap();
         assert!(remove(&root, &config).unwrap());
         assert!(!root.join("skills/to-tickets").exists() && root.join("skills/mine").is_dir());

@@ -8,7 +8,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::Write,
@@ -43,7 +43,14 @@ exec sh
 impl Lab {
     fn new(name: &str) -> Self {
         let base = tmp(name);
-        let lab = Self { claude: base.join("claude"), cache: base.join("cache"), config: base.join("config"), work: base.join("work"), base, procs: Vec::new() };
+        let lab = Self {
+            claude: base.join("claude"),
+            cache: base.join("cache"),
+            config: base.join("config"),
+            work: base.join("work"),
+            base,
+            procs: Vec::new(),
+        };
         for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.work] {
             fs::create_dir_all(d).unwrap();
         }

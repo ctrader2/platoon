@@ -7,7 +7,7 @@
 //! everything in it that platoon doesn't know (other keys, another version's entries) is kept when it writes.
 
 use crate::archive::keep_backup;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},

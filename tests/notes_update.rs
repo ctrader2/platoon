@@ -8,10 +8,11 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{fs, io::Write, os::unix::fs::PermissionsExt, path::PathBuf, process::Stdio};
 
-const NOTES: &str = "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
+const NOTES: &str =
+    "platoon keeps Overview, Requirements and Status up to date and adds to Decisions. Notes is yours: platoon never changes it.
 
 # Overview
 
@@ -39,7 +40,8 @@ struct Lab {
 impl Lab {
     fn new(name: &str) -> Lab {
         let base = tmp(name);
-        let lab = Lab { claude: base.join("claude"), cache: base.join("cache"), config: base.join("config"), fake: base.join("fake"), base };
+        let lab =
+            Lab { claude: base.join("claude"), cache: base.join("cache"), config: base.join("config"), fake: base.join("fake"), base };
         for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.fake.join("calls")] {
             fs::create_dir_all(d).unwrap();
         }
@@ -100,7 +102,8 @@ impl Lab {
     }
 
     fn versions(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = fs::read_dir(self.config.join("projects/pweb/history")).into_iter().flatten().flatten().map(|e| e.path()).collect();
+        let mut v: Vec<PathBuf> =
+            fs::read_dir(self.config.join("projects/pweb/history")).into_iter().flatten().flatten().map(|e| e.path()).collect();
         v.sort();
         v
     }
@@ -117,12 +120,15 @@ impl Lab {
 
     /// The description platoon has written for the project, straight from `projects.json`.
     fn description(&self) -> String {
-        let v: Value = serde_json::from_str(&fs::read_to_string(self.config.join("projects.json")).unwrap_or_default()).unwrap_or(Value::Null);
+        let v: Value =
+            serde_json::from_str(&fs::read_to_string(self.config.join("projects.json")).unwrap_or_default()).unwrap_or(Value::Null);
         v["projects"]["pweb"]["description"].as_str().unwrap_or("").to_string()
     }
 
     fn calls(&self) -> usize {
-        fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+        fs::read_dir(self.fake.join("calls"))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count())
+            .unwrap_or(0)
     }
 
     fn sent(&self, k: usize) -> String {
@@ -224,7 +230,11 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     let after = lab.notes();
     let headings: Vec<&str> = after.lines().filter(|l| l.starts_with("# ")).collect();
     // Open questions, sent as a section, is the fixed one: right after the summary.
-    assert_eq!(headings, ["# Summary", "# Open questions", "# Overview", "# Requirements", "# Where it stands", "# Decisions", "# Notes"], "{after}");
+    assert_eq!(
+        headings,
+        ["# Summary", "# Open questions", "# Overview", "# Requirements", "# Where it stands", "# Decisions", "# Notes"],
+        "{after}"
+    );
     assert!(after.contains("# Summary\n\nA sock shop. The basket works and the totals add up."), "{after}");
     assert!(after.contains("# Where it stands\n\nThe basket totals add up."), "{after}");
     assert!(after.contains("# Open questions\n\n- Does VAT go in the basket total?"), "{after}");

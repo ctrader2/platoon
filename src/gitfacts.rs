@@ -574,7 +574,11 @@ mod tests {
         assert_eq!(parse_status("x\0\0MM\0"), []);
         let log = parse_log("@@commit abc\0First\n\na.rs\nb.rs\n@@commit def\n\na.rs\n");
         assert_eq!((log.commits, log.files), (2, vec!["a.rs".to_string(), "b.rs".into()]));
-        assert_eq!(log.subjects, [("abc".to_string(), "First".to_string()), ("def".into(), String::new())], "a line with no subject still counts");
+        assert_eq!(
+            log.subjects,
+            [("abc".to_string(), "First".to_string()), ("def".into(), String::new())],
+            "a line with no subject still counts"
+        );
         // What `rev-list --count` says, and rubbish.
         assert_eq!(parse_counts("1\t3\n"), Some((1, 3)));
         for bad in ["", "1", "a\tb", "1\t2\t3", "-1\t2"] {

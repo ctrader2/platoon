@@ -9,9 +9,9 @@ use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 use std::{
     fs,
@@ -27,7 +27,10 @@ fn key(app: &mut App, code: KeyCode) {
 fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
     term.draw(|f| ui::draw(f, app)).unwrap();
     let buf = term.backend().buffer();
-    (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn flat(text: &str) -> String {
@@ -137,7 +140,11 @@ fn nothing_is_removed_while_the_squad_or_another_session_is_in_it_and_a_clean_wo
     assert!(!l.wt.exists());
     assert_eq!(l.branch_tip(), l.tip);
     let t = l.ticket();
-    assert_eq!((t.worktrees[0].base.clone(), t.worktrees[0].path.clone(), t.state), (l.made.base.clone(), l.made.path.clone(), State::Done), "path and base kept");
+    assert_eq!(
+        (t.worktrees[0].base.clone(), t.worktrees[0].path.clone(), t.state),
+        (l.made.base.clone(), l.made.path.clone(), State::Done),
+        "path and base kept"
+    );
     assert_eq!(l.app.active_notice(), Some("Removed #1's worktree (its branch ticket/1 is kept)."), "said once, in one line");
     // The screen says so.
     l.app.tk.open = Some(1);
@@ -174,17 +181,22 @@ fn a_worktree_with_changes_not_yet_committed_is_kept_said_on_its_screen_and_w_re
     // Its key in the accent, like every key hint.
     let t = l.app.effective_theme();
     let buf = term.backend().buffer().clone();
-    let (y, x) = shown.lines().enumerate().find_map(|(y, line)| line.find("w removes it anyway").map(|b| (y, line[..b].chars().count()))).unwrap();
+    let (y, x) =
+        shown.lines().enumerate().find_map(|(y, line)| line.find("w removes it anyway").map(|b| (y, line[..b].chars().count()))).unwrap();
     assert_eq!(buf[(x as u16, y as u16)].fg, t.accent);
     assert_eq!(buf[(x as u16 + 2, y as u16)].fg, t.dim);
-    let (ky, kx) = shown.lines().enumerate().find_map(|(y, line)| line.find("Kept because").map(|b| (y, line[..b].chars().count()))).unwrap();
+    let (ky, kx) =
+        shown.lines().enumerate().find_map(|(y, line)| line.find("Kept because").map(|b| (y, line[..b].chars().count()))).unwrap();
     assert_eq!(buf[(kx as u16, ky as u16)].fg, t.warn);
     // `w`: asked first, in plain words.
     key(&mut l.app, KeyCode::Char('w'));
     assert!(matches!(l.app.mode, Mode::Confirm(Confirm::RemoveWorktree { number: 1, .. })));
     let f = flat(&draw(&mut term, &l.app));
     assert!(f.contains("Remove #1's worktree anyway?"), "{f}");
-    assert!(f.contains("It has changes not yet committed, and they will be lost. Its branch ticket/1 and everything committed on it are kept."), "{f}");
+    assert!(
+        f.contains("It has changes not yet committed, and they will be lost. Its branch ticket/1 and everything committed on it are kept."),
+        "{f}"
+    );
     assert!(f.contains("y remove it") && f.contains("n keep it"), "{f}");
     // No: nothing happens.
     key(&mut l.app, KeyCode::Char('n'));
@@ -230,7 +242,10 @@ fn cancelling_a_ticket_whose_worktree_has_changes_says_platoon_keeps_it() {
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
     let f = flat(&draw(&mut term, &l.app));
     // Wrapped in the popup: each of its lines.
-    assert!(f.contains("Its worktree has changes not yet committed, so") && f.contains("platoon keeps it: w on the ticket removes it anyway."), "{f}");
+    assert!(
+        f.contains("Its worktree has changes not yet committed, so") && f.contains("platoon keeps it: w on the ticket removes it anyway."),
+        "{f}"
+    );
     key(&mut l.app, KeyCode::Char('y'));
     assert_eq!(l.ticket().state, State::Cancelled);
     l.app.refresh_until_for_test(15, "the worktree kept", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].kept_uncommitted));
@@ -278,8 +293,14 @@ fn the_notice_says_each_ticket_once_in_plain_words() {
     assert_eq!(removal_notice(7, 0, 0), None);
     assert_eq!(removal_notice(7, 1, 0).as_deref(), Some("Removed #7's worktree (its branch ticket/7 is kept)."));
     assert_eq!(removal_notice(7, 2, 0).as_deref(), Some("Removed #7's worktrees (2); their branch ticket/7 is kept."));
-    assert_eq!(removal_notice(7, 0, 1).as_deref(), Some("Kept #7's worktree: it has changes not yet committed (w on the ticket removes it)."));
-    assert_eq!(removal_notice(7, 0, 2).as_deref(), Some("Kept #7's worktrees (2): they have changes not yet committed (w on the ticket removes them)."));
+    assert_eq!(
+        removal_notice(7, 0, 1).as_deref(),
+        Some("Kept #7's worktree: it has changes not yet committed (w on the ticket removes it).")
+    );
+    assert_eq!(
+        removal_notice(7, 0, 2).as_deref(),
+        Some("Kept #7's worktrees (2): they have changes not yet committed (w on the ticket removes them).")
+    );
     assert_eq!(
         removal_notice(7, 1, 1).as_deref(),
         Some("Removed #7's worktree (its branch ticket/7 is kept); kept one with changes not yet committed (w on the ticket removes it).")
@@ -311,7 +332,9 @@ fn a_ticket_with_worktrees_in_two_repositories_gets_one_notice_for_both() {
     t.squad_says(n, &State::Done, "", None).unwrap();
     app.reload_for_test();
     let config = w.config.clone();
-    app.refresh_until_for_test(15, "both removed", |a| a.worktrees_idle() && Tickets::open(&config, &project).get(1).is_some_and(|t| t.worktrees.iter().all(|w| w.removed.is_some())));
+    app.refresh_until_for_test(15, "both removed", |a| {
+        a.worktrees_idle() && Tickets::open(&config, &project).get(1).is_some_and(|t| t.worktrees.iter().all(|w| w.removed.is_some()))
+    });
     assert_eq!(app.active_notice(), Some("Removed #1's worktrees (2); their branch ticket/1 is kept."));
     for m in &made {
         assert!(!Path::new(&m.path).exists());

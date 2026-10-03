@@ -9,13 +9,8 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
-use std::{
-    fs,
-    os::unix::fs::PermissionsExt,
-    path::PathBuf,
-    process::Child,
-};
+use serde_json::{Value, json};
+use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Child};
 
 const FAKE: &str = r#"#!/bin/sh
 if [ "$1" = "-p" ]; then
@@ -121,7 +116,9 @@ impl Lab {
     }
 
     fn calls(&self) -> usize {
-        fs::read_dir(self.fake.join("calls")).map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count()).unwrap_or(0)
+        fs::read_dir(self.fake.join("calls"))
+            .map(|d| d.flatten().filter(|e| e.file_name().to_string_lossy().ends_with(".stdin")).count())
+            .unwrap_or(0)
     }
 
     fn sent(&self, k: usize) -> String {
@@ -234,7 +231,10 @@ fn h_writes_a_brief_the_user_edits_and_accepts_and_a_new_session_starts_in_the_s
     let args = lab.started(1);
     assert!(args.starts_with("# Session hand-off: shop\n\nThis is context for this session. The user will prompt you for the next course of action.\n\n- Written: "), "one argument, the document: {args}");
     assert!(args.contains("## Executive summary\n\nThe basket page is in.\n"), "{args}");
-    assert!(args.contains("\n- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"), "the new session is given the old one's id: {args}");
+    assert!(
+        args.contains("\n- Previous session id: sess-1 (`claude --resume sess-1` opens it)\n"),
+        "the new session is given the old one's id: {args}"
+    );
     assert!(args.contains(&format!("\n- Project notes: {}\n", lab.config.join("projects/pweb/project.md").display())), "{args}");
     assert!(args.trim_end().ends_with("1. Take card payments.\nSizes matter too."), "{args}");
 
@@ -289,7 +289,12 @@ fn a_long_document_wraps_and_scrolls_in_the_box_and_the_new_session_gets_all_of_
     let summary = "The basket page shows every item with its size, colour and price, and the totals at the foot of it \
                    now add up across currencies once the exchange rates are fetched when the page first loads.";
     let steps: Vec<String> = (1..=8)
-        .map(|i| format!("Step {i}: check the totals, the sizes, the colours and the prices on the basket page before moving on to step {}", i + 1))
+        .map(|i| {
+            format!(
+                "Step {i}: check the totals, the sizes, the colours and the prices on the basket page before moving on to step {}",
+                i + 1
+            )
+        })
         .collect();
     let next: Vec<String> = steps.iter().map(|s| format!("\"{s}\"")).collect();
     lab.reply(&format!(r#"{{"summary":"{summary}","done":["Built the basket page"],"next":[{}]}}"#, next.join(",")));

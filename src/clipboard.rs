@@ -272,7 +272,12 @@ fn hold(text: &str) -> Result<(), String> {
     use arboard::{LinuxClipboardKind, SetExtLinux};
     let mut board = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     let _ = board.set().clipboard(LinuxClipboardKind::Primary).text(text.to_owned());
-    board.set().clipboard(LinuxClipboardKind::Clipboard).wait_until(std::time::Instant::now() + HOLD_FOR).text(text.to_owned()).map_err(|e| e.to_string())
+    board
+        .set()
+        .clipboard(LinuxClipboardKind::Clipboard)
+        .wait_until(std::time::Instant::now() + HOLD_FOR)
+        .text(text.to_owned())
+        .map_err(|e| e.to_string())
 }
 
 /// (macOS keeps what was copied after the program has gone: nothing to wait for.)
@@ -403,7 +408,9 @@ mod tests {
 
     #[test]
     fn base64_matches_the_rfc_4648_vectors() {
-        for (plain, encoded) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+        for (plain, encoded) in
+            [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")]
+        {
             assert_eq!(base64(plain.as_bytes()), encoded);
         }
         assert_eq!(base64(&[0xff, 0xfe, 0xfd, 0xfc]), "//79/A==");

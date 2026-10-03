@@ -107,7 +107,10 @@ fn dragging_over_a_line_of_the_session_highlights_it_and_copies_it_once_and_a_do
     let mut at = None;
     until("the output line", || {
         let screen = t.text();
-        at = screen.lines().position(|l| l.contains("alpha bravo-charlie") && !l.contains("echo")).map(|row| (find(screen.lines().nth(row).unwrap(), "bravo-charlie").0, row as u16));
+        at = screen
+            .lines()
+            .position(|l| l.contains("alpha bravo-charlie") && !l.contains("echo"))
+            .map(|row| (find(screen.lines().nth(row).unwrap(), "bravo-charlie").0, row as u16));
         at.is_some()
     });
     let (col, row) = at.unwrap();

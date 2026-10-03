@@ -21,7 +21,7 @@
 
 use crate::agentfile::{self, Agent};
 use crate::projects::{lock, write_atomic};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     path::{Path, PathBuf},
@@ -229,7 +229,11 @@ fn builtin_research() -> Squad {
         workflow: vec![
             s("questioner", "Turns the ticket into a short list of specific questions to answer.", None),
             s("researcher", "Answers each question with its sources, from the ticket's folders and the web.", None),
-            s("report-writer", "Writes report.md in the ticket's private work folder (never in the project's folders): the answers, the sources, and what is still unknown.", None),
+            s(
+                "report-writer",
+                "Writes report.md in the ticket's private work folder (never in the project's folders): the answers, the sources, and what is still unknown.",
+                None,
+            ),
             s("checker", "Checks each claim in the report against its source.", Some(Back { to: 1, times: 1 })),
         ],
         extra: Map::new(),
@@ -246,7 +250,11 @@ fn builtin_docs() -> Squad {
         workflow: vec![
             s("outliner", "Reads the ticket, the existing docs and the code they describe, and proposes what to write where.", None),
             s("tech-writer", "Writes or updates the Markdown files the outline names, in the ticket's folder.", None),
-            s("editor", "Checks the files for accuracy against the code and the ticket, clarity, and the project's style.", Some(Back { to: 1, times: 2 })),
+            s(
+                "editor",
+                "Checks the files for accuracy against the code and the ticket, clarity, and the project's style.",
+                Some(Back { to: 1, times: 2 }),
+            ),
         ],
         extra: Map::new(),
     }
@@ -423,7 +431,9 @@ pub fn from_value(v: &Value, id: &str) -> Result<Squad, String> {
     let list = |k: &str| -> Result<Vec<Map<String, Value>>, String> {
         match o.get(k) {
             None | Some(Value::Null) => Ok(Vec::new()),
-            Some(Value::Array(a)) => a.iter().map(|x| x.as_object().cloned().ok_or_else(|| format!("an entry of \"{k}\" isn't an object"))).collect(),
+            Some(Value::Array(a)) => {
+                a.iter().map(|x| x.as_object().cloned().ok_or_else(|| format!("an entry of \"{k}\" isn't an object"))).collect()
+            }
             Some(_) => Err(format!("\"{k}\" isn't a list")),
         }
     };
@@ -514,7 +524,10 @@ pub fn old_form_backup(config: &Path, id: &str) -> PathBuf {
 fn convert_old(config: &Path, id: &str, text: &str, v: &Value) -> Result<Squad, String> {
     let o = v.as_object().ok_or("it isn't a JSON object")?;
     let members: Vec<Map<String, Value>> = match o.get("members") {
-        Some(Value::Array(a)) => a.iter().map(|x| x.as_object().cloned().ok_or_else(|| "an entry of \"members\" isn't an object".to_string())).collect::<Result<_, _>>()?,
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| x.as_object().cloned().ok_or_else(|| "an entry of \"members\" isn't an object".to_string()))
+            .collect::<Result<_, _>>()?,
         _ => return Err("\"members\" isn't a list".into()),
     };
     let mut library = agentfile::all(config);
@@ -524,9 +537,13 @@ fn convert_old(config: &Path, id: &str, text: &str, v: &Value) -> Result<Squad, 
         let name = str_of(m, "name")?.trim().to_string();
         let mut a = agentfile::from_value(&Value::Object(m.clone()), &name)?;
         let free = |want: &str, library: &[Agent]| {
-            slug_problem(want).is_none() && want != LEADER_ROLE && !library.iter().any(|x| x.id == want) && !agentfile::path(config, want).exists()
+            slug_problem(want).is_none()
+                && want != LEADER_ROLE
+                && !library.iter().any(|x| x.id == want)
+                && !agentfile::path(config, want).exists()
         };
-        let tries = std::iter::once(name.clone()).chain(std::iter::once(format!("{id}-{name}"))).chain((2..50).map(|n| format!("{id}-{name}-{n}")));
+        let tries =
+            std::iter::once(name.clone()).chain(std::iter::once(format!("{id}-{name}"))).chain((2..50).map(|n| format!("{id}-{name}-{n}")));
         let mut chosen = None;
         for want in tries {
             if let Some(same) = library.iter().find(|x| x.id == want && x.same_work_as(&a)) {
@@ -614,7 +631,9 @@ pub fn label_of(kind: Kind, plugin: Option<&str>) -> String {
 
 /// Why a plugin's squad or agent can't be changed here, in plain words.
 pub fn read_only_words(what: &str, name: &str, plugin: &str) -> String {
-    format!("{name} comes with the plugin {plugin}, so it can't be changed here. c makes a copy of your own to change; the {what} stays as the plugin has it.")
+    format!(
+        "{name} comes with the plugin {plugin}, so it can't be changed here. c makes a copy of your own to change; the {what} stays as the plugin has it."
+    )
 }
 
 /// One squad of the list: the definition, or why its file can't be read.
@@ -666,7 +685,9 @@ pub fn load_all(config: &Path) -> Vec<Listed> {
         out.push(match load(config, &b.id) {
             Ok(None) => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(b), corrupt: None, plugin: None },
             // An old file converted into exactly the built-in has gone.
-            Ok(Some(s)) if !path(config, &b.id).exists() => Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(s), corrupt: None, plugin: None },
+            Ok(Some(s)) if !path(config, &b.id).exists() => {
+                Listed { id: b.id.clone(), kind: Kind::BuiltIn, squad: Some(s), corrupt: None, plugin: None }
+            }
             Ok(Some(s)) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: Some(s), corrupt: None, plugin: None },
             Err(why) => Listed { id: b.id.clone(), kind: Kind::Modified, squad: None, corrupt: Some(why), plugin: None },
         });
@@ -685,7 +706,13 @@ pub fn load_all(config: &Path) -> Vec<Listed> {
     for p in crate::squadplugin::installed(&crate::plugins::store_for(config)) {
         let mut theirs: Vec<Squad> = p.squads;
         theirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
-        out.extend(theirs.into_iter().map(|s| Listed { id: s.id.clone(), kind: Kind::Plugin, squad: Some(s), corrupt: None, plugin: Some(p.name.clone()) }));
+        out.extend(theirs.into_iter().map(|s| Listed {
+            id: s.id.clone(),
+            kind: Kind::Plugin,
+            squad: Some(s),
+            corrupt: None,
+            plugin: Some(p.name.clone()),
+        }));
     }
     out
 }
@@ -693,7 +720,12 @@ pub fn load_all(config: &Path) -> Vec<Listed> {
 /// A plugin's squad by its id (`plugin:<plugin>/<id>`), when that plugin is installed.
 fn from_plugin(config: &Path, id: &str) -> Option<Squad> {
     let (plugin, _) = crate::squadplugin::split(id)?;
-    crate::squadplugin::installed(&crate::plugins::store_for(config)).into_iter().find(|p| p.plugin == plugin)?.squads.into_iter().find(|s| s.id == id)
+    crate::squadplugin::installed(&crate::plugins::store_for(config))
+        .into_iter()
+        .find(|p| p.plugin == plugin)?
+        .squads
+        .into_iter()
+        .find(|s| s.id == id)
 }
 
 /// The squad with this id as the user has it now, if it is there and readable.
@@ -726,7 +758,12 @@ pub fn save(config: &Path, s: &Squad) -> io::Result<()> {
     match fs::read_to_string(&p) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
             Ok(Value::Object(o)) => keep = without_retired(&rest(&o, TOP_KEYS)),
-            _ => return Err(io::Error::other(format!("{} can't be read, so platoon leaves it alone. Fix or move the file to go on.", p.display()))),
+            _ => {
+                return Err(io::Error::other(format!(
+                    "{} can't be read, so platoon leaves it alone. Fix or move the file to go on.",
+                    p.display()
+                )));
+            }
         },
         Err(e) if e.kind() == io::ErrorKind::NotFound => {}
         Err(e) => return Err(e),
@@ -783,7 +820,9 @@ pub(crate) fn slugify(name: &str, prefix: &str) -> String {
 /// A new squad's id from its name: its slug, made unique among the squads there are (and the ones in `taken`).
 pub fn new_id(config: &Path, name: &str, taken: &[String]) -> String {
     let base = slugify(name, "squad");
-    let used = |id: &str| is_builtin(id) || path(config, id).exists() || path(config, id).with_extension("json.bak").exists() || taken.iter().any(|t| t == id);
+    let used = |id: &str| {
+        is_builtin(id) || path(config, id).exists() || path(config, id).with_extension("json.bak").exists() || taken.iter().any(|t| t == id)
+    };
     if !used(&base) {
         return base;
     }
@@ -832,12 +871,7 @@ pub const MIGRATED_MARK: &str = ".prompts-carried-over";
 /// The four members' files, and the built-in text each one started from (what "no change" meant then).
 fn legacy_prompts() -> [(&'static str, &'static str); 4] {
     use crate::squads::{BUILDER_GUIDANCE, PLANNER_GUIDANCE, REVIEWER_GUIDANCE, VERIFIER_GUIDANCE};
-    [
-        ("planner", PLANNER_GUIDANCE),
-        ("builder", BUILDER_GUIDANCE),
-        ("reviewer", REVIEWER_GUIDANCE),
-        ("verifier", VERIFIER_GUIDANCE),
-    ]
+    [("planner", PLANNER_GUIDANCE), ("builder", BUILDER_GUIDANCE), ("reviewer", REVIEWER_GUIDANCE), ("verifier", VERIFIER_GUIDANCE)]
 }
 
 /// Carry a real change to the old Coding members' system prompts into the built-in agents, once. True when it wrote
@@ -958,13 +992,22 @@ pub struct Draft {
 /// and the agents it brings, or what was wrong with it, in plain words. `agents`: the agents there are already, which
 /// its steps may name. A new agent that has the id of one there is already gets an id of its own, and the steps that
 /// name it follow; a new agent no step names is left out, and so is a skill or an MCP server that isn't installed.
-pub fn parse_draft(reply: &str, config: &Path, taken: &[String], agents: &[Agent], installed: &agentfile::Installed) -> Result<Draft, String> {
+pub fn parse_draft(
+    reply: &str,
+    config: &Path,
+    taken: &[String],
+    agents: &[Agent],
+    installed: &agentfile::Installed,
+) -> Result<Draft, String> {
     let v = crate::ai::extract_json(reply).ok_or("its answer wasn't a squad (no JSON in it)")?;
     let Some(o) = v.as_object() else { return Err("its answer wasn't a squad (not a JSON object)".into()) };
     let mut s = from_value(&v, "draft").map_err(|why| format!("its answer wasn't a squad ({why})"))?;
     let listed: Vec<Map<String, Value>> = match o.get("new_agents") {
         None | Some(Value::Null) => Vec::new(),
-        Some(Value::Array(a)) => a.iter().map(|x| x.as_object().cloned().ok_or("its answer wasn't a squad (an entry of \"new_agents\" isn't an object)".to_string())).collect::<Result<_, _>>()?,
+        Some(Value::Array(a)) => a
+            .iter()
+            .map(|x| x.as_object().cloned().ok_or("its answer wasn't a squad (an entry of \"new_agents\" isn't an object)".to_string()))
+            .collect::<Result<_, _>>()?,
         Some(_) => return Err("its answer wasn't a squad (\"new_agents\" isn't a list)".into()),
     };
     // Keys it made up (a leader of its own, say) are not kept: a draft is platoon's own shape.
@@ -1042,14 +1085,28 @@ mod tests {
         assert_eq!(c.name, "Coding");
         assert_eq!(c.agent_ids(), ["planner", "builder", "reviewer", "verifier"]);
         let steps: Vec<(&str, Option<Back>)> = c.workflow.iter().map(|s| (s.agent.as_str(), s.back)).collect();
-        assert_eq!(steps, [("planner", None), ("builder", None), ("reviewer", Some(Back { to: 1, times: 2 })), ("verifier", Some(Back { to: 1, times: 1 }))]);
+        assert_eq!(
+            steps,
+            [
+                ("planner", None),
+                ("builder", None),
+                ("reviewer", Some(Back { to: 1, times: 2 })),
+                ("verifier", Some(Back { to: 1, times: 1 }))
+            ]
+        );
         assert!(problems(&c, &agents()).is_empty(), "{:?}", problems(&c, &agents()));
         assert!(is_builtin("coding") && is_builtin("research") && !is_builtin("coda"));
         let crew = Crew::of(&c, &agents());
-        let m: Vec<(&str, &str, bool, bool, bool)> = crew.agents.iter().map(|m| (m.id.as_str(), m.model.as_str(), m.files, m.commands, m.web)).collect();
+        let m: Vec<(&str, &str, bool, bool, bool)> =
+            crew.agents.iter().map(|m| (m.id.as_str(), m.model.as_str(), m.files, m.commands, m.web)).collect();
         assert_eq!(
             m,
-            [("planner", "opus", false, true, false), ("builder", "sonnet", true, true, false), ("reviewer", "opus", false, true, false), ("verifier", "haiku", false, true, false)]
+            [
+                ("planner", "opus", false, true, false),
+                ("builder", "sonnet", true, true, false),
+                ("reviewer", "opus", false, true, false),
+                ("verifier", "haiku", false, true, false)
+            ]
         );
         assert_eq!(steps_words(&[2]), "step 2");
         assert_eq!(steps_words(&[1, 2, 4]), "steps 1, 2 and 4");
@@ -1076,7 +1133,10 @@ mod tests {
         let v: Value = serde_json::from_str(&fs::read_to_string(&p).unwrap()).unwrap();
         assert_eq!(v["colour"], "red");
         assert_eq!(v["can_do"], "Triages Sentry errors.");
-        assert!(v.get("leader").is_none() && v.get("needs_folder").is_none() && v.get("use_worktree").is_none(), "a squad has no leader or switches of its own: {v}");
+        assert!(
+            v.get("leader").is_none() && v.get("needs_folder").is_none() && v.get("use_worktree").is_none(),
+            "a squad has no leader or switches of its own: {v}"
+        );
         assert!(v.get("members").is_none(), "a squad file names its agents in its steps");
         assert_eq!(v["workflow"][0]["agent"], "builder");
         assert_eq!(v["workflow"][1]["label"], "Plan", "the key goes with its step");
@@ -1091,7 +1151,13 @@ mod tests {
         let listed = load_all(&c);
         assert_eq!(
             listed.iter().map(|l| (l.id.as_str(), l.kind)).collect::<Vec<_>>(),
-            [("coding", Kind::BuiltIn), ("research", Kind::BuiltIn), ("docs", Kind::BuiltIn), ("summarize", Kind::BuiltIn), ("sentry-triage", Kind::Own)]
+            [
+                ("coding", Kind::BuiltIn),
+                ("research", Kind::BuiltIn),
+                ("docs", Kind::BuiltIn),
+                ("summarize", Kind::BuiltIn),
+                ("sentry-triage", Kind::Own)
+            ]
         );
     }
 
@@ -1119,7 +1185,11 @@ mod tests {
         assert_eq!(load(&c, "mine").unwrap_err(), "\"workflow\" isn't a list");
         fs::write(path(&c, "mine"), r#"{"name":"x","members":{"a":1}}"#).unwrap();
         assert_eq!(load(&c, "mine").unwrap_err(), "\"members\" isn't a list");
-        assert_eq!(fs::read_to_string(path(&c, "mine")).unwrap(), r#"{"name":"x","members":{"a":1}}"#, "an old file that can't be read isn't converted");
+        assert_eq!(
+            fs::read_to_string(path(&c, "mine")).unwrap(),
+            r#"{"name":"x","members":{"a":1}}"#,
+            "an old file that can't be read isn't converted"
+        );
     }
 
     #[test]
@@ -1152,14 +1222,26 @@ mod tests {
             f(&mut s);
             problems(&s, &agents())
         };
-        assert_eq!(with(&|s| s.id = "Bad Id".into()), ["\"Bad Id\" can't be a squad's id: use lowercase letters, digits and dashes, starting with a letter."]);
+        assert_eq!(
+            with(&|s| s.id = "Bad Id".into()),
+            ["\"Bad Id\" can't be a squad's id: use lowercase letters, digits and dashes, starting with a letter."]
+        );
         assert_eq!(with(&|s| s.name = " ".into()), ["The squad has no name."]);
         assert_eq!(with(&|s| s.can_do = String::new()), ["It doesn't say what it can do."]);
         assert_eq!(with(&|s| s.workflow[2].agent = "fixer".into()), ["Step 3 names an agent that isn't there (fixer)."]);
         assert_eq!(with(&|s| s.workflow[2].agent = String::new()), ["Step 3 has no agent."]);
-        assert_eq!(with(&|s| s.workflow[1].back = Some(Back { to: 3, times: 1 })), ["Step 2 sends the work back to step 4, which isn't before it."]);
-        assert_eq!(with(&|s| s.workflow[1].back = Some(Back { to: 1, times: 1 })), ["Step 2 sends the work back to step 2, which isn't before it."]);
-        assert_eq!(with(&|s| s.workflow[2].back = Some(Back { to: 0, times: 9 })), ["Step 3 may send the work back 9 times; it has to be 1 to 5."]);
+        assert_eq!(
+            with(&|s| s.workflow[1].back = Some(Back { to: 3, times: 1 })),
+            ["Step 2 sends the work back to step 4, which isn't before it."]
+        );
+        assert_eq!(
+            with(&|s| s.workflow[1].back = Some(Back { to: 1, times: 1 })),
+            ["Step 2 sends the work back to step 2, which isn't before it."]
+        );
+        assert_eq!(
+            with(&|s| s.workflow[2].back = Some(Back { to: 0, times: 9 })),
+            ["Step 3 may send the work back 9 times; it has to be 1 to 5."]
+        );
         assert_eq!(with(&|s| s.workflow[0].does = String::new()), ["Step 1 doesn't say what it does."]);
         assert_eq!(with(&|s| s.workflow.clear()), ["The workflow has no steps."]);
         // An agent with problems of its own keeps the squads that use it from starting, said once.
@@ -1214,12 +1296,23 @@ mod tests {
         let listed = load_all(&c);
         assert_eq!(listed[0].kind, Kind::BuiltIn, "the old leader's text isn't carried anywhere: every squad shares one leader now");
         assert!(!path(&c, "coding").exists());
-        assert!(!crate::instructions::path(&c, crate::instructions::SQUAD_LEADER).exists(), "nor into the leaders' shared prompt (it spoke of Coding only)");
-        assert_eq!(agentfile::get(&c, "builder").unwrap().guidance, "Build it in small commits.", "the member's change is the built-in agent's");
+        assert!(
+            !crate::instructions::path(&c, crate::instructions::SQUAD_LEADER).exists(),
+            "nor into the leaders' shared prompt (it spoke of Coding only)"
+        );
+        assert_eq!(
+            agentfile::get(&c, "builder").unwrap().guidance,
+            "Build it in small commits.",
+            "the member's change is the built-in agent's"
+        );
         let v: Value = serde_json::from_str(&fs::read_to_string(agentfile::path(&c, "builder")).unwrap()).unwrap();
         assert_eq!(v["builtin"], "builder");
         assert!(!agentfile::path(&c, "planner").exists(), "unchanged stays the built-in");
-        assert_eq!(fs::read_to_string(c.join("prompts/coding-builder.md")).unwrap(), "Build it in small commits.\n", "the old file is left as it is");
+        assert_eq!(
+            fs::read_to_string(c.join("prompts/coding-builder.md")).unwrap(),
+            "Build it in small commits.\n",
+            "the old file is left as it is"
+        );
         assert!(super::dir(&c).join(MIGRATED_MARK).exists());
         // Restored: not carried over again.
         agentfile::remove(&c, "builder").unwrap();
@@ -1277,7 +1370,10 @@ mod tests {
         assert_eq!(reader.extra.get("note"), Some(&json!("mine")), "keys the member had go with it");
         assert_eq!(agentfile::get(&c, "triage-reviewer").unwrap().guidance, "Look it over.");
         assert!(!agentfile::path(&c, "planner").exists(), "the same as the built-in: nothing new");
-        assert!(agentfile::get(&c, "reviewer").unwrap().same_as(&agentfile::builtin("reviewer").unwrap()), "the built-in reviewer is left alone");
+        assert!(
+            agentfile::get(&c, "reviewer").unwrap().same_as(&agentfile::builtin("reviewer").unwrap()),
+            "the built-in reviewer is left alone"
+        );
         // Once: reading it again changes nothing.
         let before = stamp(&c);
         let again = load_all(&c);
@@ -1300,7 +1396,16 @@ mod tests {
         assert_eq!(ids("triage-two"), ["reader"]);
         assert_eq!(agentfile::get(&c, "sorting-reader").unwrap().guidance, "Read the queue.");
         // A third, whose "<squad>-reader" is taken by something else too: "-2".
-        fs::write(path(&c, "sorting-b"), old_form("Sorting B", json!([{"name": "reader", "model": "opus", "guidance": "Read slowly."}]), json!([{"member": "reader", "does": "Reads."}])).to_string()).unwrap();
+        fs::write(
+            path(&c, "sorting-b"),
+            old_form(
+                "Sorting B",
+                json!([{"name": "reader", "model": "opus", "guidance": "Read slowly."}]),
+                json!([{"member": "reader", "does": "Reads."}]),
+            )
+            .to_string(),
+        )
+        .unwrap();
         let mut clash = agentfile::builtin("planner").unwrap();
         clash.id = "sorting-b-reader".into();
         clash.name = "sorting-b-reader".into();
@@ -1316,7 +1421,12 @@ mod tests {
         let member = |a: &Agent| json!({"name": a.id, "model": a.model, "can_change_files": a.files, "can_run_commands": a.commands, "can_use_web": a.web, "guidance": a.guidance});
         let mut builder = agentfile::builtin("builder").unwrap();
         builder.guidance = "Build it in small commits.".into();
-        let members = json!([member(&agentfile::builtin("planner").unwrap()), member(&builder), member(&agentfile::builtin("reviewer").unwrap()), member(&agentfile::builtin("verifier").unwrap())]);
+        let members = json!([
+            member(&agentfile::builtin("planner").unwrap()),
+            member(&builder),
+            member(&agentfile::builtin("reviewer").unwrap()),
+            member(&agentfile::builtin("verifier").unwrap())
+        ]);
         let mut v = to_value(&coding(), Some("coding"));
         let o = v.as_object_mut().unwrap();
         o.insert("members".into(), members);
@@ -1337,13 +1447,19 @@ mod tests {
         assert!(file.get("leader").is_none(), "the converted file is written without the retired keys: {file}");
         assert!(old_form_backup(&c, "coding").exists());
         assert_eq!(agentfile::get(&c, "coding-builder").unwrap().guidance, "Build it in small commits.");
-        assert_eq!(agentfile::load_all(&c).iter().filter(|l| l.kind != Kind::BuiltIn).map(|l| l.id.as_str()).collect::<Vec<_>>(), ["coding-builder"]);
+        assert_eq!(
+            agentfile::load_all(&c).iter().filter(|l| l.kind != Kind::BuiltIn).map(|l| l.id.as_str()).collect::<Vec<_>>(),
+            ["coding-builder"]
+        );
         // An old Coding file that is exactly the built-in: converted, and no file is needed any more.
         let c2 = dir("convert-builtin-same");
         fs::create_dir_all(super::dir(&c2)).unwrap();
         let mut v = to_value(&coding(), Some("coding"));
         let o = v.as_object_mut().unwrap();
-        o.insert("members".into(), json!(["planner", "builder", "reviewer", "verifier"].map(|id| member(&agentfile::builtin(id).unwrap()))));
+        o.insert(
+            "members".into(),
+            json!(["planner", "builder", "reviewer", "verifier"].map(|id| member(&agentfile::builtin(id).unwrap()))),
+        );
         o.insert("leader".into(), json!({"model": "sonnet", "guidance": "Lead."}));
         o.insert("use_worktree".into(), json!(true));
         fs::write(path(&c2, "coding"), v.to_string()).unwrap();
@@ -1394,7 +1510,8 @@ mod tests {
         assert!(s.extra.is_empty(), "keys it made up are not kept");
         assert_eq!(parse_draft(GOOD_DRAFT, &c, &["sentry-triage".into()], &agents(), &none).unwrap().squad.id, "sentry-triage-2");
         // A new agent with the id of one there is already: an id of its own, and its steps follow.
-        let clash = GOOD_DRAFT.replace("\"name\":\"reader\"", "\"name\":\"checker\"").replace("\"agent\":\"reader\"", "\"agent\":\"checker\"");
+        let clash =
+            GOOD_DRAFT.replace("\"name\":\"reader\"", "\"name\":\"checker\"").replace("\"agent\":\"reader\"", "\"agent\":\"checker\"");
         let d2 = parse_draft(&clash, &c, &[], &agents(), &none).unwrap();
         assert_eq!(d2.new_agents[0].id, "checker-2");
         assert_eq!(d2.squad.workflow[0].agent, "checker-2");
@@ -1402,16 +1519,31 @@ mod tests {
         let bad = GOOD_DRAFT.replace("\"agent\":\"builder\"", "\"agent\":\"mender\"");
         assert_eq!(parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(), "Step 3 names an agent that isn't there (mender).");
         let bad = GOOD_DRAFT.replace("\"back_to\":2", "\"back_to\":4");
-        assert_eq!(parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(), "Step 3 sends the work back to step 4, which isn't before it.");
-        let bad = GOOD_DRAFT.replace("\"model\":\"haiku\",\"can_change_files\":false,\"can_run_commands\":false,\"can_use_web\":true", "\"model\":\"gpt-5\",\"can_change_files\":false,\"can_run_commands\":false,\"can_use_web\":true");
-        assert_eq!(parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(), "Step 1's agent isn't ready: reader's model \"gpt-5\" isn't one platoon offers (Opus, Sonnet or Haiku).");
+        assert_eq!(
+            parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(),
+            "Step 3 sends the work back to step 4, which isn't before it."
+        );
+        let bad = GOOD_DRAFT.replace(
+            "\"model\":\"haiku\",\"can_change_files\":false,\"can_run_commands\":false,\"can_use_web\":true",
+            "\"model\":\"gpt-5\",\"can_change_files\":false,\"can_run_commands\":false,\"can_use_web\":true",
+        );
+        assert_eq!(
+            parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(),
+            "Step 1's agent isn't ready: reader's model \"gpt-5\" isn't one platoon offers (Opus, Sonnet or Haiku)."
+        );
         let bad = GOOD_DRAFT.replace("\"name\":\"reader\"", "\"name\":\"Reader\"");
-        assert_eq!(parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(), "\"Reader\" can't be a new agent's name: use lowercase letters, digits and dashes, starting with a letter.");
+        assert_eq!(
+            parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(),
+            "\"Reader\" can't be a new agent's name: use lowercase letters, digits and dashes, starting with a letter."
+        );
         let bad = GOOD_DRAFT.replace("\"name\":\"unused\"", "\"name\":\"reader\"");
         assert_eq!(parse_draft(&bad, &c, &[], &agents(), &none).unwrap_err(), "Two new agents are called reader.");
         assert_eq!(parse_draft("no idea", &c, &[], &agents(), &none).unwrap_err(), "its answer wasn't a squad (no JSON in it)");
         assert_eq!(parse_draft("[1,2]", &c, &[], &agents(), &none).unwrap_err(), "its answer wasn't a squad (not a JSON object)");
-        assert_eq!(parse_draft(r#"{"name":"x","new_agents":"all"}"#, &c, &[], &agents(), &none).unwrap_err(), "its answer wasn't a squad (\"new_agents\" isn't a list)");
+        assert_eq!(
+            parse_draft(r#"{"name":"x","new_agents":"all"}"#, &c, &[], &agents(), &none).unwrap_err(),
+            "its answer wasn't a squad (\"new_agents\" isn't a list)"
+        );
         let many = parse_draft(r#"{"name":"","workflow":[]}"#, &c, &[], &agents(), &none).unwrap_err();
         assert_eq!(many, "The squad has no name. It doesn't say what it can do. The workflow has no steps.");
         let more = parse_draft(r#"{"name":"","workflow":[{"agent":"x"},{"agent":""}]}"#, &c, &[], &agents(), &none).unwrap_err();
@@ -1423,11 +1555,17 @@ mod tests {
         // A draft that still gives a leader or the old switches: those are not kept (every squad has the same leader).
         assert!(s.extra.get("leader").is_none() && s.extra.get("needs_folder").is_none(), "{s:?}");
         // A new agent's skills and MCP servers: only what is installed here.
-        let with = GOOD_DRAFT.replace("\"can_use_web\":true,\"guidance\":\"Read the error.\"", "\"can_use_web\":true,\"skills\":[\"sentry-cli\",\"nope\"],\"mcp_servers\":[\"sentry\"],\"guidance\":\"Read the error.\"");
+        let with = GOOD_DRAFT.replace(
+            "\"can_use_web\":true,\"guidance\":\"Read the error.\"",
+            "\"can_use_web\":true,\"skills\":[\"sentry-cli\",\"nope\"],\"mcp_servers\":[\"sentry\"],\"guidance\":\"Read the error.\"",
+        );
         assert_ne!(with, GOOD_DRAFT);
         let installed = agentfile::Installed { skills: vec!["sentry-cli".into()], mcp: vec!["sentry".into()] };
         let d = parse_draft(&with, &c, &[], &agents(), &installed).unwrap();
-        assert_eq!((d.new_agents[0].skills.clone(), d.new_agents[0].mcp.clone()), (vec!["sentry-cli".to_string()], vec!["sentry".to_string()]));
+        assert_eq!(
+            (d.new_agents[0].skills.clone(), d.new_agents[0].mcp.clone()),
+            (vec!["sentry-cli".to_string()], vec!["sentry".to_string()])
+        );
         let d = parse_draft(&with, &c, &[], &agents(), &none).unwrap();
         assert!(d.new_agents[0].skills.is_empty() && d.new_agents[0].mcp.is_empty());
     }
@@ -1441,29 +1579,62 @@ mod tests {
             assert!(s.workflow.iter().all(|st| st.does.chars().count() <= DOES_MAX), "{}", s.id);
         }
         let switches = |id: &str| -> Vec<(String, String, bool, bool, bool)> {
-            Crew::of(&builtin(id).unwrap(), &agents()).agents.iter().map(|m| (m.id.clone(), m.model.clone(), m.files, m.commands, m.web)).collect()
+            Crew::of(&builtin(id).unwrap(), &agents())
+                .agents
+                .iter()
+                .map(|m| (m.id.clone(), m.model.clone(), m.files, m.commands, m.web))
+                .collect()
         };
         let m = |n: &str, model: &str, f: bool, c: bool, w: bool| (n.to_string(), model.to_string(), f, c, w);
         let r = builtin("research").unwrap();
         assert_eq!(r.name, "Research");
-        assert!(r.workflow[2].does.contains("report.md in the ticket's private work folder (never in the project's folders)"), "{:?}", r.workflow[2]);
+        assert!(
+            r.workflow[2].does.contains("report.md in the ticket's private work folder (never in the project's folders)"),
+            "{:?}",
+            r.workflow[2]
+        );
         assert_eq!(
             switches("research"),
-            [m("questioner", "sonnet", false, false, false), m("researcher", "sonnet", false, false, true), m("report-writer", "sonnet", true, false, false), m("checker", "opus", false, false, true)]
+            [
+                m("questioner", "sonnet", false, false, false),
+                m("researcher", "sonnet", false, false, true),
+                m("report-writer", "sonnet", true, false, false),
+                m("checker", "opus", false, false, true)
+            ]
         );
         let steps = |s: &Squad| s.workflow.iter().map(|st| (st.agent.clone(), st.back)).collect::<Vec<_>>();
         assert_eq!(
             steps(&r),
-            [("questioner".to_string(), None), ("researcher".into(), None), ("report-writer".into(), None), ("checker".into(), Some(Back { to: 1, times: 1 }))],
+            [
+                ("questioner".to_string(), None),
+                ("researcher".into(), None),
+                ("report-writer".into(), None),
+                ("checker".into(), Some(Back { to: 1, times: 1 }))
+            ],
             "the checker may send it back to the researcher, once"
         );
         let d = builtin("docs").unwrap();
         assert_eq!(d.name, "Docs");
-        assert_eq!(switches("docs"), [m("outliner", "sonnet", false, false, false), m("tech-writer", "sonnet", true, false, false), m("editor", "opus", false, false, false)]);
-        assert_eq!(steps(&d), [("outliner".to_string(), None), ("tech-writer".into(), None), ("editor".into(), Some(Back { to: 1, times: 2 }))], "the editor, back to the writer twice");
+        assert_eq!(
+            switches("docs"),
+            [
+                m("outliner", "sonnet", false, false, false),
+                m("tech-writer", "sonnet", true, false, false),
+                m("editor", "opus", false, false, false)
+            ]
+        );
+        assert_eq!(
+            steps(&d),
+            [("outliner".to_string(), None), ("tech-writer".into(), None), ("editor".into(), Some(Back { to: 1, times: 2 }))],
+            "the editor, back to the writer twice"
+        );
         let z = builtin("summarize").unwrap();
         assert_eq!(z.name, "Summarize");
-        assert!(z.workflow[0].does.contains("The result is that summary itself: put it just above your last line"), "Summarize's rule is in its step now: {:?}", z.workflow[0]);
+        assert!(
+            z.workflow[0].does.contains("The result is that summary itself: put it just above your last line"),
+            "Summarize's rule is in its step now: {:?}",
+            z.workflow[0]
+        );
         assert_eq!(switches("summarize"), [m("summarizer", "sonnet", false, false, true)]);
         assert_eq!(z.workflow.len(), 1);
         // A copy of one is the user's own.
@@ -1511,7 +1682,12 @@ mod tests {
         assert_eq!(v["can_do"], "Runs scripts.");
         // The leader a session starts with comes from the settings, whatever the file says.
         let crew = Crew::of(&s, &agents());
-        let launch = crate::squads::Launch::of(&crew, &crate::squads::LeaderSetup::builtin(), crate::tickets::AgentNames::SquadRole, crate::squads::Place::WORKTREE);
+        let launch = crate::squads::Launch::of(
+            &crew,
+            &crate::squads::LeaderSetup::builtin(),
+            crate::tickets::AgentNames::SquadRole,
+            crate::squads::Place::WORKTREE,
+        );
         assert_eq!(launch.model, "sonnet");
         assert!(!launch.agents.contains("Lead the scripts squad."));
     }
@@ -1605,8 +1781,14 @@ mod tests {
         lib[0].guidance = String::new();
         assert!(!draft_prompt("x", &lib, &none).contains("- planner "));
         assert!(draft_prompt("x", &[], &none).contains("(none)"));
-        assert!(fixed.contains("new_agents") && fixed.contains("\"agent\":") && DRAFT_GUIDANCE.contains("Use an agent the user has already"), "{fixed}");
-        assert!(!fixed.contains("needs_folder") && !fixed.contains("use_worktree") && !fixed.contains("\"leader\":"), "no leader and no switches to draft: {fixed}");
+        assert!(
+            fixed.contains("new_agents") && fixed.contains("\"agent\":") && DRAFT_GUIDANCE.contains("Use an agent the user has already"),
+            "{fixed}"
+        );
+        assert!(
+            !fixed.contains("needs_folder") && !fixed.contains("use_worktree") && !fixed.contains("\"leader\":"),
+            "no leader and no switches to draft: {fixed}"
+        );
         assert!(fixed.contains("\"skills\":[],\"mcp_servers\":[]") && fixed.contains("only names from the installed"), "{fixed}");
         assert!(DRAFT_GUIDANCE.contains("same leader") && DRAFT_GUIDANCE.contains("private work folder"), "{DRAFT_GUIDANCE}");
         assert!(p.contains("\nSkills installed: (none)\nMCP servers installed: (none)\n\nThe squad the user wants"), "{p}");

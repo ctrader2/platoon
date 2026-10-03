@@ -23,8 +23,13 @@ use crate::host;
 use crate::procs::ppid;
 use crate::sessionhook;
 use crate::usage::cache_dir;
-use serde_json::{json, Value};
-use std::{collections::HashSet, fs, io::Read, path::{Path, PathBuf}};
+use serde_json::{Value, json};
+use std::{
+    collections::HashSet,
+    fs,
+    io::Read,
+    path::{Path, PathBuf},
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry {
@@ -40,7 +45,10 @@ pub struct Entry {
 pub enum Verdict {
     Allow,
     /// Another live copy owns the session.
-    Blocked { owner: u32, owner_in_platoon: bool },
+    Blocked {
+        owner: u32,
+        owner_in_platoon: bool,
+    },
     /// This copy was refused before, or diverged; it must not write again.
     Stale,
 }
@@ -55,7 +63,12 @@ pub fn live_entries(root: &Path) -> Vec<Entry> {
         }
         let (Some(pid), Some(id)) = (v["pid"].as_u64(), v["sessionId"].as_str()) else { continue };
         if pid_alive(pid as u32) {
-            out.push(Entry { pid: pid as u32, id: id.to_string(), started_at: v["startedAt"].as_u64().unwrap_or(0), parked: parked_job(&v).is_some() });
+            out.push(Entry {
+                pid: pid as u32,
+                id: id.to_string(),
+                started_at: v["startedAt"].as_u64().unwrap_or(0),
+                parked: parked_job(&v).is_some(),
+            });
         }
     }
     out
@@ -73,11 +86,7 @@ pub fn decide(entries: &[Entry], caller: u32, in_platoon: &dyn Fn(u32) -> bool, 
         return Verdict::Stale;
     }
     let Some(owner) = entries.iter().min_by_key(|e| (e.started_at, !in_platoon(e.pid), e.pid)) else { return Verdict::Allow };
-    if owner.pid == caller {
-        Verdict::Allow
-    } else {
-        Verdict::Blocked { owner: owner.pid, owner_in_platoon: in_platoon(owner.pid) }
-    }
+    if owner.pid == caller { Verdict::Allow } else { Verdict::Blocked { owner: owner.pid, owner_in_platoon: in_platoon(owner.pid) } }
 }
 
 fn stale_dir(cache: &Path) -> PathBuf {
@@ -173,7 +182,11 @@ pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool)
     }
     let projects = crate::projects::Projects::open(config);
     // A squad's leader is in no project, but its ticket is: it gets that project's notes too.
-    let leader = if projects.of(session).is_none() { crate::tickets::find_leader(config, session).and_then(|(p, _, _)| projects.get(&p).cloned()) } else { None };
+    let leader = if projects.of(session).is_none() {
+        crate::tickets::find_leader(config, session).and_then(|(p, _, _)| projects.get(&p).cloned())
+    } else {
+        None
+    };
     let project = match &leader {
         Some(p) => p,
         None => projects.of(session)?,
@@ -193,7 +206,11 @@ pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool)
         return None;
     }
     sessionhook::mark_sent(cache, session, &hash);
-    Some(if leader.is_some() { sessionhook::ticket_context_text(&project.name, &notes) } else { sessionhook::context_text(&project.name, &notes) })
+    Some(if leader.is_some() {
+        sessionhook::ticket_context_text(&project.name, &notes)
+    } else {
+        sessionhook::context_text(&project.name, &notes)
+    })
 }
 
 /// What the hook prints when it lets a prompt through and the notes have changed: context for the conversation.
@@ -339,7 +356,8 @@ mod tests {
 
     impl NotesRig {
         fn new(name: &str) -> NotesRig {
-            let base = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-guard-notes-{name}-{}", std::process::id())));
+            let base =
+                crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-guard-notes-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&base);
             let r = NotesRig { config: base.join("config"), cache: base.join("cache"), base };
             fs::create_dir_all(&r.config).unwrap();
@@ -406,9 +424,24 @@ mod tests {
         let id = r.project("someone", "# Overview\nSell socks.\n");
         let mut t = crate::tickets::Tickets::open(&r.config, &id);
         let n = t.add(crate::tickets::NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(n, &crate::tickets::Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None }, &[]).unwrap();
+        t.start_leader(
+            n,
+            &crate::tickets::Leader {
+                squad: "coding".into(),
+                session: "lead-1".into(),
+                started: 1,
+                names: Default::default(),
+                snapshot: None,
+            },
+            &[],
+        )
+        .unwrap();
         let text = r.prompt("lead-1").expect("the leader gets them");
-        assert!(text.starts_with("These are the notes of the project \"Web shop\" that your ticket belongs to") && text.ends_with("Sell socks."), "{text}");
+        assert!(
+            text.starts_with("These are the notes of the project \"Web shop\" that your ticket belongs to")
+                && text.ends_with("Sell socks."),
+            "{text}"
+        );
         assert_eq!(r.prompt("lead-1"), None);
         assert!(crate::projects::Projects::open(&r.config).of("lead-1").is_none());
         assert_eq!(r.prompt("not-a-leader"), None);
@@ -459,7 +492,12 @@ mod tests {
         let _ = fs::remove_file(crate::projects::notes_path(&r.config, &id));
         assert_eq!(r.prompt("sess-1"), None);
         // Input that makes no sense, and a session id that is not a file name.
-        for bad in [serde_json::json!({}), serde_json::json!({"session_id": 5}), serde_json::json!({"session_id": "../../x"}), serde_json::json!(null)] {
+        for bad in [
+            serde_json::json!({}),
+            serde_json::json!({"session_id": 5}),
+            serde_json::json!({"session_id": "../../x"}),
+            serde_json::json!(null),
+        ] {
             assert_eq!(notes_context(&bad, &r.config, &r.cache, false), None, "{bad}");
         }
         // Nothing was written down for any of them.

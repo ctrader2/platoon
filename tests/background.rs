@@ -60,7 +60,11 @@ impl World {
     /// A stand-in claude: writes its arguments to a log, says how it was started, then gives a shell.
     fn fake_claude(&self) -> PathBuf {
         let p = self.claude.join("fake-claude.sh");
-        fs::write(&p, format!("#!/bin/sh\necho \"$*\" >> \"{}\"\necho \"fake-claude args:$* cwd:$(pwd)\"\nexec sh\n", self.argv_log.display())).unwrap();
+        fs::write(
+            &p,
+            format!("#!/bin/sh\necho \"$*\" >> \"{}\"\necho \"fake-claude args:$* cwd:$(pwd)\"\nexec sh\n", self.argv_log.display()),
+        )
+        .unwrap();
         fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
         p
     }
@@ -81,7 +85,9 @@ impl World {
     }
 
     fn hosts(&self) -> usize {
-        fs::read_dir(self.cache.join("hosts")).map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json")).count()).unwrap_or(0)
+        fs::read_dir(self.cache.join("hosts"))
+            .map(|d| d.flatten().filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("json")).count())
+            .unwrap_or(0)
     }
 
     fn service_alive(&mut self) -> bool {
@@ -127,7 +133,11 @@ fn the_list_shows_background_and_enter_attaches_it_instead_of_resuming_and_leavi
     t.wait_for("an ordinary idle conversation"); // the saved conversations are read in the background
     // The two rows and the counts fill in together, and half a frame can be read: wait for all of it.
     t.wait_for_all(&["an ordinary idle conversation", "Background", "idle"]);
-    assert!(t.stable().split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 2"), "a background session is on the Active tab:\n{}", t.text());
+    assert!(
+        t.stable().split_whitespace().collect::<Vec<_>>().join(" ").contains("Active 2"),
+        "a background session is on the Active tab:\n{}",
+        t.text()
+    );
 
     // The status is drawn in the theme's accent (Catppuccin Mocha lavender), not the idle grey or working purple.
     let (row, col) = find(&mut t, "Background");

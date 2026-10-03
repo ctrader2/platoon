@@ -6,9 +6,9 @@ use crate::app::{App, AssignOpt, Mode};
 use crate::testkit::World;
 use crate::ui;
 use ratatui::{
+    Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
-    Terminal,
 };
 
 fn key(app: &mut App, code: KeyCode) {
@@ -164,7 +164,10 @@ fn the_header_and_the_rows_are_the_same_width_at_every_terminal_width() {
         for line in &lines {
             assert!(line.chars().count() == width.max(1) as usize, "{width}: nothing is written past the terminal");
             if width >= 2 {
-                assert!(line.ends_with('│') || line.ends_with('╮') || line.ends_with('╯') || line.ends_with('─'), "{width}: the frame is intact: {line}");
+                assert!(
+                    line.ends_with('│') || line.ends_with('╮') || line.ends_with('╯') || line.ends_with('─'),
+                    "{width}: the frame is intact: {line}"
+                );
             }
         }
     }
@@ -270,7 +273,8 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        let (proj_x, sess_x, tickets_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
+        let (proj_x, sess_x, tickets_x) =
+            (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
         let share = (tickets_x - sess_x) - 24;
         assert!(share > 0, "{width}: {head}");
         let want = 4 + 1 + "Web shop".len() + 2 + share;
@@ -288,15 +292,14 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     app.notice = None;
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];
-    let (proj_x, sess_x, tickets_x) = (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
+    let (proj_x, sess_x, tickets_x) =
+        (col_of(head, "PROJECT").unwrap(), col_of(head, "SESSIONS").unwrap(), col_of(head, "TICKETS").unwrap());
     let share = (tickets_x - sess_x) - 24;
     assert!([60 + share, 61 + share].contains(&(sess_x - proj_x)), "{head}");
     let row = lines.iter().find(|l| l.contains("LLLL")).expect("the long row");
     assert!(row.contains('…'), "the long name is cut: {row}");
     assert!(!row.contains(&long), "{row}");
 }
-
-
 
 /// A conversation in `cwd` with folders added beside it, as Claude Code records them (an environment snapshot).
 fn with_added(w: &World, id: &str, cwd: &str, added: &[&str], prompt: &str, mins_ago: u64) {
@@ -327,7 +330,8 @@ fn added_folders_follow_the_folder_in_the_dir_column_and_are_counted_when_they_d
     assert_eq!(app.home, home);
     app.notice = None;
 
-    let row_of = |lines: &[String], word: &str| lines.iter().find(|l| l.contains(word)).cloned().unwrap_or_else(|| panic!("{word}: {lines:#?}"));
+    let row_of =
+        |lines: &[String], word: &str| lines.iter().find(|l| l.contains(word)).cloned().unwrap_or_else(|| panic!("{word}: {lines:#?}"));
     let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
     let lines = draw(&mut term, &app);
     assert!(row_of(&lines, "~/repos/platoon").contains("~/repos/platoon, /  "), "in full where there is room\n{lines:#?}");

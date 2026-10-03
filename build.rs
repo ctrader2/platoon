@@ -35,7 +35,9 @@ fn main() {
             walk(&catalog, &dir, &mut files);
         }
     }
-    let mut out = String::from("/// Every file of the plugin catalog built into platoon: (its path in `plugins/`, its bytes). Written by build.rs.\npub static FILES: &[(&str, &[u8])] = &[\n");
+    let mut out = String::from(
+        "/// Every file of the plugin catalog built into platoon: (its path in `plugins/`, its bytes). Written by build.rs.\npub static FILES: &[(&str, &[u8])] = &[\n",
+    );
     for (rel, path) in &files {
         let abs = path.to_str().unwrap_or_else(|| panic!("{} isn't a UTF-8 path", path.display()));
         out.push_str(&format!("    ({rel:?}, include_bytes!({abs:?})),\n"));
@@ -62,7 +64,13 @@ fn walk(catalog: &Path, dir: &Path, out: &mut Vec<(String, PathBuf)>) {
         } else if meta.is_dir() {
             walk(catalog, &path, out);
         } else if meta.is_file() {
-            let rel = path.strip_prefix(catalog).expect("inside the catalog").components().map(|c| c.as_os_str().to_str().expect("UTF-8")).collect::<Vec<_>>().join("/");
+            let rel = path
+                .strip_prefix(catalog)
+                .expect("inside the catalog")
+                .components()
+                .map(|c| c.as_os_str().to_str().expect("UTF-8"))
+                .collect::<Vec<_>>()
+                .join("/");
             out.push((rel, path));
         }
     }

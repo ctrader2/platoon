@@ -20,12 +20,12 @@
 //! Knobs: `PLATOON_NVIM_BIN` runs that program instead of platoon's nvim (tests: a stand-in that records what it was
 //! given); with `PLATOON_FORBID_REAL_EDITOR` set and no stand-in, the real one is refused.
 
-use crate::colordepth::{rgb_to_256, Depth};
+use crate::colordepth::{Depth, rgb_to_256};
 use crate::editor_install::Dirs;
 use crate::theme::{self, Theme};
 use crate::tickets::Ticket;
 use ratatui::style::Color;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::{
     fs, io,
     os::unix::{fs::PermissionsExt, process::CommandExt},
@@ -158,7 +158,17 @@ pub fn ticket_roots(t: &Ticket, work: &Path, git: &str) -> Vec<Root> {
                 let repo = git_top(git, Path::new(&w.path));
                 let repo_name = git_top(git, Path::new(&w.folder)).map(|r| base_name(&r)).or_else(|| Some(base_name(&w.folder)));
                 let base = crate::worktrees::diff_base(w, git);
-                push_unique(&mut out, Root { path: w.path.clone(), name: format!("{} · {tag}", base_name(&w.folder)), repo, repo_name, base, kind: "worktree" });
+                push_unique(
+                    &mut out,
+                    Root {
+                        path: w.path.clone(),
+                        name: format!("{} · {tag}", base_name(&w.folder)),
+                        repo,
+                        repo_name,
+                        base,
+                        kind: "worktree",
+                    },
+                );
             }
             Some(_) => {}
             None if Path::new(f).is_dir() => push_unique(&mut out, plain_root(f, base_name(f), "folder", git)),
@@ -169,7 +179,17 @@ pub fn ticket_roots(t: &Ticket, work: &Path, git: &str) -> Vec<Root> {
     for w in t.worktrees.iter().filter(|w| !t.folders.contains(&w.folder) && !w.is_gone()) {
         let repo = git_top(git, Path::new(&w.path));
         let base = crate::worktrees::diff_base(w, git);
-        push_unique(&mut out, Root { path: w.path.clone(), name: format!("{} · {tag}", base_name(&w.folder)), repo, repo_name: Some(base_name(&w.folder)), base, kind: "worktree" });
+        push_unique(
+            &mut out,
+            Root {
+                path: w.path.clone(),
+                name: format!("{} · {tag}", base_name(&w.folder)),
+                repo,
+                repo_name: Some(base_name(&w.folder)),
+                base,
+                kind: "worktree",
+            },
+        );
     }
     let has_files = fs::read_dir(work).is_ok_and(|mut d| d.next().is_some());
     if has_files {
@@ -279,7 +299,10 @@ pub fn base16(t: &Theme) -> Option<[(String, Color); 16]> {
         lift(ansi[13]),
         lift(theme::mix(ansi[1], ansi[3], 0.5)),
     ];
-    let names = ["base00", "base01", "base02", "base03", "base04", "base05", "base06", "base07", "base08", "base09", "base0A", "base0B", "base0C", "base0D", "base0E", "base0F"];
+    let names = [
+        "base00", "base01", "base02", "base03", "base04", "base05", "base06", "base07", "base08", "base09", "base0A", "base0B", "base0C",
+        "base0D", "base0E", "base0F",
+    ];
     Some(std::array::from_fn(|i| (names[i].to_string(), cols[i])))
 }
 
@@ -307,7 +330,8 @@ fn link(name: &'static str, to: &'static str) -> Group {
 fn groups(t: &Theme) -> Vec<Group> {
     let s = Some;
     let sel = t.selection_bg();
-    let (bg, surface, border, dim, subtext, text, accent, busy, ok, warn, err) = (t.bg, t.surface, t.border, t.dim, t.subtext, t.text, t.accent, t.busy, t.ok, t.warn, t.err);
+    let (bg, surface, border, dim, subtext, text, accent, busy, ok, warn, err) =
+        (t.bg, t.surface, t.border, t.dim, t.subtext, t.text, t.accent, t.busy, t.ok, t.warn, t.err);
     vec![
         g("Normal", s(text), s(bg)),
         g("NormalFloat", s(text), s(surface)),
@@ -411,11 +435,14 @@ fn groups(t: &Theme) -> Vec<Group> {
 /// (truecolor only: in 256 colors the editor's terminal shows the terminal's own), platoon's roles, the groups.
 pub fn colors_json(t: &Theme, mode: ColorMode) -> Value {
     let mut out = Map::new();
-    out.insert("mode".into(), json!(match mode {
-        ColorMode::TrueColor => "truecolor",
-        ColorMode::Indexed256 => "256",
-        ColorMode::Terminal => "terminal",
-    }));
+    out.insert(
+        "mode".into(),
+        json!(match mode {
+            ColorMode::TrueColor => "truecolor",
+            ColorMode::Indexed256 => "256",
+            ColorMode::Terminal => "terminal",
+        }),
+    );
     // Neovim's `background`: which way round the theme is (not said for Terminal colors: the terminal knows).
     if mode != ColorMode::Terminal {
         out.insert("background".into(), json!(if t.light { "light" } else { "dark" }));
@@ -510,7 +537,7 @@ impl Copying {
     }
 
     fn json(&self) -> Value {
-        use crate::clipboard::{Target, HOLD_COMMAND, MAX_OSC52_PAYLOAD};
+        use crate::clipboard::{HOLD_COMMAND, MAX_OSC52_PAYLOAD, Target};
         let target = match self.target {
             Target::System => "system",
             Target::Osc52 => "osc52",
@@ -636,7 +663,11 @@ fn write_if_changed(path: &Path, text: &str) -> io::Result<()> {
 /// config folder, so git run by the editor's plugins (with the editor's XDG folders) still reads the user's global
 /// ignore file and settings. Nothing there is written.
 fn link_git_config(dirs: &Dirs, env: &dyn Fn(&str) -> Option<String>) {
-    let theirs = env("XDG_CONFIG_HOME").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("git"));
+    let theirs = env("XDG_CONFIG_HOME")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config")))
+        .map(|c| c.join("git"));
     let ours = xdg_dir(dirs).join("config/git");
     let is_link = fs::symlink_metadata(&ours).is_ok_and(|m| m.file_type().is_symlink());
     match theirs.filter(|t| t.is_dir()) {
@@ -662,7 +693,9 @@ fn link_git_config(dirs: &Dirs, env: &dyn Fn(&str) -> Option<String>) {
 fn forget_old_sessions(cfg: &Path) {
     for e in fs::read_dir(cfg).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(pid) = name.strip_prefix("session-").and_then(|r| r.strip_suffix(".json")).and_then(|p| p.parse::<i32>().ok()) else { continue };
+        let Some(pid) = name.strip_prefix("session-").and_then(|r| r.strip_suffix(".json")).and_then(|p| p.parse::<i32>().ok()) else {
+            continue;
+        };
         // SAFETY: signal 0 only asks whether the process is there.
         if pid > 0 && unsafe { libc::kill(pid, 0) } != 0 && io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) {
             let _ = fs::remove_file(e.path());
@@ -673,7 +706,14 @@ fn forget_old_sessions(cfg: &Path) {
 /// Write the editor's settings files (`config`: path under the config folder, text; the editor plugin's), this
 /// opening's session file, make its folders, and say how to run it. A `.sh` file is made runnable (the editor runs
 /// it as its 'shell').
-pub fn prepare(dirs: &Dirs, req: &Request, look: &Look, env: &dyn Fn(&str) -> Option<String>, id: u32, config: &[(String, String)]) -> Result<Launch, String> {
+pub fn prepare(
+    dirs: &Dirs,
+    req: &Request,
+    look: &Look,
+    env: &dyn Fn(&str) -> Option<String>,
+    id: u32,
+    config: &[(String, String)],
+) -> Result<Launch, String> {
     let program = program(dirs, env)?;
     let cfg = config_dir(dirs);
     let err = |what: &str, e: io::Error| format!("couldn't write the editor's {what}: {e}");
@@ -700,7 +740,12 @@ pub fn prepare(dirs: &Dirs, req: &Request, look: &Look, env: &dyn Fn(&str) -> Op
     let session = cfg.join(format!("session-{id}.json"));
     let text = serde_json::to_string_pretty(&session_json(req, look, dirs)).unwrap_or_default();
     crate::projects::write_atomic(&session, &text).map_err(|e| err("session", e))?;
-    let cwd = req.roots.first().map(|r| PathBuf::from(&r.path)).filter(|p| p.is_dir()).unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_else(|| "/".into())));
+    let cwd = req
+        .roots
+        .first()
+        .map(|r| PathBuf::from(&r.path))
+        .filter(|p| p.is_dir())
+        .unwrap_or_else(|| PathBuf::from(env("HOME").unwrap_or_else(|| "/".into())));
     Ok(Launch {
         program,
         args: vec!["-u".into(), cfg.join("init.lua").to_string_lossy().into_owned()],
@@ -845,7 +890,10 @@ mod tests {
     }
 
     fn config() -> Vec<(String, String)> {
-        crate::editorplugin::bundled_files().into_iter().filter_map(|(p, t)| p.strip_prefix("config/").map(|r| (r.to_string(), t.to_string()))).collect()
+        crate::editorplugin::bundled_files()
+            .into_iter()
+            .filter_map(|(p, t)| p.strip_prefix("config/").map(|r| (r.to_string(), t.to_string())))
+            .collect()
     }
     use crate::tickets::Worktree;
     use std::collections::HashMap;
@@ -956,7 +1004,11 @@ mod tests {
         fs::create_dir_all(&work).unwrap();
         let t = ticket(4, folders.clone(), made.clone());
         let roots = ticket_roots(&t, &work, "git");
-        assert_eq!(roots.iter().map(|r| r.path.clone()).collect::<Vec<_>>(), vec![w.path.clone(), s(&plain)], "an empty work folder is left out");
+        assert_eq!(
+            roots.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
+            vec![w.path.clone(), s(&plain)],
+            "an empty work folder is left out"
+        );
         assert_eq!(roots[0].kind, "worktree");
         assert_eq!(roots[0].base.as_deref(), Some(base.as_str()), "the commit it was made from, not the branch's tip");
         assert_eq!(roots[0].repo.as_deref(), Some(w.path.as_str()));
@@ -1001,11 +1053,19 @@ mod tests {
     fn nvim_keeps_everything_inside_the_editor_folder_and_the_terminal_gets_the_users_environment_back() {
         let d = tmp("env");
         let dirs = testing::dirs(&d, vec![]);
-        let env = env_of(&[("PATH", "/usr/bin:/bin"), ("XDG_CONFIG_HOME", "/home/u/.config"), ("NVIM_APPNAME", "mine"), ("HOME", "/home/u")]);
+        let env =
+            env_of(&[("PATH", "/usr/bin:/bin"), ("XDG_CONFIG_HOME", "/home/u/.config"), ("NVIM_APPNAME", "mine"), ("HOME", "/home/u")]);
         let session = d.join("s.json");
         let got: HashMap<String, Option<String>> = nvim_env(&dirs, &session, &env).into_iter().collect();
         let x = xdg_dir(&dirs);
-        for (k, sub) in [("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache"), ("XDG_CONFIG_DIRS", "none"), ("XDG_DATA_DIRS", "none")] {
+        for (k, sub) in [
+            ("XDG_CONFIG_HOME", "config"),
+            ("XDG_DATA_HOME", "data"),
+            ("XDG_STATE_HOME", "state"),
+            ("XDG_CACHE_HOME", "cache"),
+            ("XDG_CONFIG_DIRS", "none"),
+            ("XDG_DATA_DIRS", "none"),
+        ] {
             let v = got[k].clone().unwrap();
             assert_eq!(v, s(&x.join(sub)), "{k}");
             assert!(Path::new(&v).starts_with(&dirs.editor), "{k} inside the editor folder");
@@ -1044,7 +1104,12 @@ mod tests {
             }
         }
         // (A script just written can be "text file busy" while another test's thread forks: started with retries.)
-        let run = |cmd: &mut Command| crate::ai::spawn_retrying(cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped())).unwrap().wait_with_output().unwrap();
+        let run = |cmd: &mut Command| {
+            crate::ai::spawn_retrying(cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()))
+                .unwrap()
+                .wait_with_output()
+                .unwrap()
+        };
         let out = run(&mut cmd);
         assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "P=/usr/bin:/bin C=/home/u/.config D=unset K=unset E=unset");
         // Run again from inside (a shell started from that shell): nothing more changes.
@@ -1163,10 +1228,28 @@ mod tests {
         let t = Theme::default();
         let req = Request {
             title: "#3 Basket".into(),
-            roots: vec![Root { path: "/r/shop-worktrees/ticket-3".into(), name: "shop · #3".into(), repo: Some("/r/shop-worktrees/ticket-3".into()), repo_name: Some("shop".into()), base: Some("abc123".into()), kind: "worktree" }],
+            roots: vec![Root {
+                path: "/r/shop-worktrees/ticket-3".into(),
+                name: "shop · #3".into(),
+                repo: Some("/r/shop-worktrees/ticket-3".into()),
+                repo_name: Some("shop".into()),
+                base: Some("abc123".into()),
+                kind: "worktree",
+            }],
         };
         for icons in [true, false] {
-            let v = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons, compile_parsers: true, copying: Copying::off(), back: "<C-Space>".into() }, &dirs);
+            let v = session_json(
+                &req,
+                &Look {
+                    theme: &t,
+                    mode: ColorMode::TrueColor,
+                    icons,
+                    compile_parsers: true,
+                    copying: Copying::off(),
+                    back: "<C-Space>".into(),
+                },
+                &dirs,
+            );
             assert_eq!(v["icons"], icons);
             assert_eq!(v["title"], "#3 Basket");
             assert_eq!(v["roots"][0]["base"], "abc123");
@@ -1176,11 +1259,33 @@ mod tests {
             assert_eq!(v["colors"]["mode"], "truecolor");
             assert_eq!(v["keys"]["back"], "<C-Space>", "the back key, in Neovim's notation");
         }
-        let custom = session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<M-b>".into() }, &dirs);
+        let custom = session_json(
+            &req,
+            &Look {
+                theme: &t,
+                mode: ColorMode::TrueColor,
+                icons: false,
+                compile_parsers: false,
+                copying: Copying::off(),
+                back: "<M-b>".into(),
+            },
+            &dirs,
+        );
         assert_eq!(custom["keys"]["back"], "<M-b>");
         // A folder's name with quotes and backslashes stays itself (JSON, never pasted into Lua or a shell).
         let odd = Request { title: "a \"b\" \\ c".into(), roots: vec![] };
-        let v = session_json(&odd, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &dirs);
+        let v = session_json(
+            &odd,
+            &Look {
+                theme: &t,
+                mode: ColorMode::TrueColor,
+                icons: false,
+                compile_parsers: false,
+                copying: Copying::off(),
+                back: "<C-Space>".into(),
+            },
+            &dirs,
+        );
         let back: Value = serde_json::from_str(&v.to_string()).unwrap();
         assert_eq!(back["title"], "a \"b\" \\ c");
     }
@@ -1192,17 +1297,34 @@ mod tests {
         let dirs = testing::dirs(&d, vec![]);
         let t = Theme::default();
         let req = Request { title: "x".into(), roots: vec![] };
-        let clip = |copying: Copying| session_json(&req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying, back: "<C-Space>".into() }, &dirs)["clipboard"].clone();
+        let clip = |copying: Copying| {
+            session_json(
+                &req,
+                &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying, back: "<C-Space>".into() },
+                &dirs,
+            )["clipboard"]
+                .clone()
+        };
         // The default (system): this very platoon holds the text on the system clipboard, and OSC 52 too.
         let sys = Copying::like(Target::System);
         let me = std::env::current_exe().unwrap();
         assert_eq!(sys.helper.as_deref(), Some(me.as_path()));
-        assert_eq!(clip(sys), json!({"target": "system", "helper": [me, "clipboard-hold"], "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD}));
+        assert_eq!(
+            clip(sys),
+            json!({"target": "system", "helper": [me, "clipboard-hold"], "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD})
+        );
         // OSC 52 only, or nothing: no helper is ever named.
-        assert_eq!(clip(Copying::like(Target::Osc52)), json!({"target": "osc52", "helper": null, "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD}));
+        assert_eq!(
+            clip(Copying::like(Target::Osc52)),
+            json!({"target": "osc52", "helper": null, "osc52_max": crate::clipboard::MAX_OSC52_PAYLOAD})
+        );
         assert_eq!(clip(Copying::like(Target::Off))["target"], "off");
         assert_eq!(clip(Copying::like(Target::Off))["helper"], Value::Null);
-        assert_eq!(clip(Copying { target: Target::Osc52, helper: Some(me.clone()) })["helper"], Value::Null, "a helper only for the system clipboard");
+        assert_eq!(
+            clip(Copying { target: Target::Osc52, helper: Some(me.clone()) })["helper"],
+            Value::Null,
+            "a helper only for the system clipboard"
+        );
     }
 
     #[test]
@@ -1213,11 +1335,17 @@ mod tests {
         assert!(plugin_file("config/init.lua").contains("vim.api.nvim_create_autocmd('TextYankPost'"));
         assert!(plugin_file("config/init.lua").contains("ev.operator == 'y' and (ev.regname == nil or ev.regname == '')"));
         assert!(plugin_file("config/init.lua").contains("vim.g.clipboard = {\n  name = 'platoon',"));
-        assert!(plugin_file("config/init.lua").contains("require('vim.ui.clipboard.osc52').copy('+')(out)"), "OSC 52 by Neovim's own provider");
+        assert!(
+            plugin_file("config/init.lua").contains("require('vim.ui.clipboard.osc52').copy('+')(out)"),
+            "OSC 52 by Neovim's own provider"
+        );
         assert!(!plugin_file("config/init.lua").contains("osc52').paste"), "never OSC 52 paste: many terminals don't answer it");
         assert!(plugin_file("config/init.lua").contains("return { last.lines, last.regtype }"));
         assert!(plugin_file("config/init.lua").contains("pcall(vim.system, CB.helper, { stdin = text, detach = true"));
-        assert!(plugin_file("config/init.lua").contains("CB.target == 'system' and type(CB.helper) == 'table'"), "the helper only for the system clipboard");
+        assert!(
+            plugin_file("config/init.lua").contains("CB.target == 'system' and type(CB.helper) == 'table'"),
+            "the helper only for the system clipboard"
+        );
     }
 
     #[test]
@@ -1231,7 +1359,22 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let req = Request { title: "x".into(), roots: folder_roots(&s(&root), "git") };
         let env = env_of(&[("PLATOON_NVIM_BIN", "/bin/true"), ("HOME", home.to_str().unwrap()), ("PATH", "/usr/bin")]);
-        let l = prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &env, 7, &config()).unwrap();
+        let l = prepare(
+            &dirs,
+            &req,
+            &Look {
+                theme: &t,
+                mode: ColorMode::TrueColor,
+                icons: false,
+                compile_parsers: false,
+                copying: Copying::off(),
+                back: "<C-Space>".into(),
+            },
+            &env,
+            7,
+            &config(),
+        )
+        .unwrap();
         let cfg = config_dir(&dirs);
         assert_eq!(fs::read_to_string(cfg.join("init.lua")).unwrap(), plugin_file("config/init.lua"));
         assert_eq!(fs::read_to_string(cfg.join("lua/platoon/tree.lua")).unwrap(), plugin_file("config/lua/platoon/tree.lua"));
@@ -1255,7 +1398,22 @@ mod tests {
         fs::write(&live, "{}").unwrap();
         // The user's git folder gone: the link goes too.
         fs::remove_dir(home.join(".config/git")).unwrap();
-        prepare(&dirs, &req, &Look { theme: &t, mode: ColorMode::TrueColor, icons: false, compile_parsers: false, copying: Copying::off(), back: "<C-Space>".into() }, &env, 7, &config()).unwrap();
+        prepare(
+            &dirs,
+            &req,
+            &Look {
+                theme: &t,
+                mode: ColorMode::TrueColor,
+                icons: false,
+                compile_parsers: false,
+                copying: Copying::off(),
+                back: "<C-Space>".into(),
+            },
+            &env,
+            7,
+            &config(),
+        )
+        .unwrap();
         assert!(fs::symlink_metadata(xdg_dir(&dirs).join("config/git")).is_err());
         assert!(!stale.exists() && live.exists());
     }

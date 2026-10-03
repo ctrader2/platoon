@@ -470,7 +470,9 @@ impl App {
             .list
             .iter()
             .filter_map(|l| l.squad.as_ref())
-            .filter_map(|s| Some(s.steps_of(id)).filter(|n| !n.is_empty()).map(|steps| User { squad: Some(s.id.clone()), name: s.name.clone(), steps }))
+            .filter_map(|s| {
+                Some(s.steps_of(id)).filter(|n| !n.is_empty()).map(|steps| User { squad: Some(s.id.clone()), name: s.name.clone(), steps })
+            })
             .collect();
         if let Some(d) = self.sqt.draft.as_ref() {
             let steps = d.steps_of(id);
@@ -672,7 +674,9 @@ impl App {
                 KeyCode::Down => self.move_squad(1),
                 KeyCode::Char('g') | KeyCode::Home => self.move_squad(-(i32::MAX / 2)),
                 KeyCode::Char('G') | KeyCode::End => self.move_squad(i32::MAX / 2),
-                KeyCode::Enter if self.sqt.view == SqView::Agents && self.sqt.new_agent_selected() => self.open_squad_name(SquadName::NewAgent(None), ""),
+                KeyCode::Enter if self.sqt.view == SqView::Agents && self.sqt.new_agent_selected() => {
+                    self.open_squad_name(SquadName::NewAgent(None), "")
+                }
                 KeyCode::Enter => self.focus_squad_detail(),
                 _ => {}
             },
@@ -723,7 +727,10 @@ impl App {
             self.sqt.focus = SqFocus::Detail;
             self.clamp_squad_row();
         } else if let Some(why) = self.sqt.listed().and_then(|l| l.corrupt.clone()) {
-            self.notify(format!("{}'s file can't be read ({why}), so there is nothing to change. Fix or move the file.", self.sqt.listed().map_or("", |l| l.id.as_str())));
+            self.notify(format!(
+                "{}'s file can't be read ({why}), so there is nothing to change. Fix or move the file.",
+                self.sqt.listed().map_or("", |l| l.id.as_str())
+            ));
         }
     }
 
@@ -733,9 +740,18 @@ impl App {
     /// true. Copying it (`c`) makes one of the user's own.
     fn plugin_locked(&mut self) -> bool {
         let (what, label) = if self.sqt.view == SqView::Agents {
-            ("agent", self.sqt.agent_listed().filter(|l| l.kind == Kind::Plugin).map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())))
+            (
+                "agent",
+                self.sqt
+                    .agent_listed()
+                    .filter(|l| l.kind == Kind::Plugin)
+                    .map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())),
+            )
         } else {
-            ("squad", self.sqt.listed().filter(|l| l.kind == Kind::Plugin).map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())))
+            (
+                "squad",
+                self.sqt.listed().filter(|l| l.kind == Kind::Plugin).map(|l| (l.name().to_string(), l.plugin.clone().unwrap_or_default())),
+            )
         };
         match label {
             Some((name, plugin)) => {
@@ -815,7 +831,12 @@ impl App {
                 let new = if self.sqt.is_draft_agent(&a.id) {
                     " · new, saved with the draft".to_string()
                 } else {
-                    self.sqt.agents.iter().find(|l| l.id == a.id).and_then(|l| l.plugin.as_ref()).map_or(String::new(), |p| format!(" · from {p}"))
+                    self.sqt
+                        .agents
+                        .iter()
+                        .find(|l| l.id == a.id)
+                        .and_then(|l| l.plugin.as_ref())
+                        .map_or(String::new(), |p| format!(" · from {p}"))
                 };
                 (format!("{}{new}", agent_line(a)), a.id.clone())
             })
@@ -1068,7 +1089,11 @@ impl App {
         };
         let what = if mcp { "MCP server" } else { "skill" };
         let said = if now {
-            let away = if (if mcp { self.sqt.installed().mcp } else { self.sqt.installed().skills }).iter().any(|n| n == name) { "" } else { " (not found here: it has to be there where the squad works)" };
+            let away = if (if mcp { self.sqt.installed().mcp } else { self.sqt.installed().skills }).iter().any(|n| n == name) {
+                ""
+            } else {
+                " (not found here: it has to be there where the squad works)"
+            };
             format!("{} has the {what} {name} now{away}{}.", a.name, self.everywhere(&a.id))
         } else {
             format!("{} doesn't have the {what} {name} any more{}.", a.name, self.everywhere(&a.id))
@@ -1144,9 +1169,15 @@ impl App {
                     return;
                 }
                 let to: usize = value.parse().unwrap_or(0);
-                let now = self.sqt.squad().and_then(|s| s.workflow.get(i)).and_then(|st| st.back).filter(|b| b.to == to).map_or(1, |b| b.times);
+                let now =
+                    self.sqt.squad().and_then(|s| s.workflow.get(i)).and_then(|st| st.back).filter(|b| b.to == to).map_or(1, |b| b.times);
                 let options = (1..=squadfile::MAX_TIMES).map(|n| (format!("At most {}", times_label(n)), n.to_string())).collect();
-                return self.open_choice(ChoiceFor::BackTimes(i, to), &format!("How often step {} may send it back to step {}", i + 1, to + 1), options, &now.to_string());
+                return self.open_choice(
+                    ChoiceFor::BackTimes(i, to),
+                    &format!("How often step {} may send it back to step {}", i + 1, to + 1),
+                    options,
+                    &now.to_string(),
+                );
             }
             _ => {}
         }
@@ -1268,12 +1299,19 @@ impl App {
             return self.notify(format!("Couldn't save the agent: {e}"));
         }
         self.reload_agents(Some(&a.id));
-        let mut said = format!("Made the agent \"{}\". It needs a system prompt before a squad can use it: enter on System prompt writes one.", a.name);
+        let mut said = format!(
+            "Made the agent \"{}\". It needs a system prompt before a squad can use it: enter on System prompt writes one.",
+            a.name
+        );
         if let Some(i) = step {
             if let Some(mut s) = self.squad_to_change().filter(|s| i < s.workflow.len()) {
                 s.workflow[i].agent = a.id.clone();
                 if self.commit_squad(s) {
-                    said = format!("Made the agent \"{}\" and put it on step {}. It needs a system prompt before the squad can start: enter on System prompt writes one.", a.name, i + 1);
+                    said = format!(
+                        "Made the agent \"{}\" and put it on step {}. It needs a system prompt before the squad can start: enter on System prompt writes one.",
+                        a.name,
+                        i + 1
+                    );
                 }
             }
         }
@@ -1283,7 +1321,10 @@ impl App {
                 let n = s.workflow.len();
                 if self.commit_squad(s) {
                     self.select_step(n - 1, true);
-                    said = format!("Made the agent \"{}\" and added step {n}, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.", a.name);
+                    said = format!(
+                        "Made the agent \"{}\" and added step {n}, done by it. It needs a system prompt before the squad can start: enter on System prompt writes one.",
+                        a.name
+                    );
                 }
             }
         }
@@ -1507,7 +1548,11 @@ impl App {
         }
         self.sqt.reread_installed();
         let prompt = squadfile::draft_prompt(description, &self.agent_library(), &self.sqt.installed());
-        let mut req = Request::new(squadfile::DRAFT_FEATURE, squadfile::draft_system(&instructions::guidance(&self.config, instructions::SQUAD_DRAFT)), prompt);
+        let mut req = Request::new(
+            squadfile::DRAFT_FEATURE,
+            squadfile::draft_system(&instructions::guidance(&self.config, instructions::SQUAD_DRAFT)),
+            prompt,
+        );
         req.user_initiated = true;
         req.model = Some(squadfile::DRAFT_MODEL);
         req.timeout = DRAFT_TIMEOUT;
@@ -1522,10 +1567,14 @@ impl App {
         if let Err(r) = ai::gate_for(&settings, agentfile::DRAFT_FEATURE, &self.cache, self.clock(), true) {
             return self.notify(format!("Couldn't draft an agent: {}. {}", crate::squads::refusal_words(&r), r.on_screen()));
         }
-        let mut req = Request::new(agentfile::DRAFT_FEATURE, agentfile::draft_system(&instructions::guidance(&self.config, instructions::AGENT_DRAFT)), agentfile::draft_prompt(description, &{
-            self.sqt.reread_installed();
-            self.sqt.installed()
-        }));
+        let mut req = Request::new(
+            agentfile::DRAFT_FEATURE,
+            agentfile::draft_system(&instructions::guidance(&self.config, instructions::AGENT_DRAFT)),
+            agentfile::draft_prompt(description, &{
+                self.sqt.reread_installed();
+                self.sqt.installed()
+            }),
+        );
         req.user_initiated = true;
         req.model = Some(squadfile::DRAFT_MODEL);
         req.timeout = DRAFT_TIMEOUT;
@@ -1701,7 +1750,9 @@ impl App {
             Kind::Own => Mode::Confirm(Confirm::DeleteSquad { id: l.id, name }),
             Kind::Modified => Mode::Confirm(Confirm::RestoreSquad { id: l.id, name }),
             Kind::BuiltIn => {
-                return self.notify(format!("{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."));
+                return self.notify(format!(
+                    "{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."
+                ));
             }
             Kind::Plugin => {
                 let plugin = l.plugin.unwrap_or_default();
@@ -1731,7 +1782,9 @@ impl App {
             }
             Kind::Modified => Mode::Confirm(Confirm::RestoreAgent { id: l.id, name }),
             Kind::BuiltIn => {
-                return self.notify(format!("{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."));
+                return self.notify(format!(
+                    "{name} is built into platoon, so it can't be deleted. It is as platoon has it already; c makes a copy of your own."
+                ));
             }
             Kind::Plugin => {
                 let plugin = l.plugin.unwrap_or_default();
@@ -1764,13 +1817,20 @@ impl App {
     pub(super) fn remove_agent(&mut self, id: &str, restore: bool) {
         self.mode = Mode::List;
         let name = self.sqt.agents.iter().find(|l| l.id == id).map_or_else(|| id.to_string(), |l| l.name().to_string());
-        let done = if restore { agentfile::remove(&self.config, id).map_err(|e| format!("Couldn't change the agent's file: {e}")) } else { agentfile::delete(&self.config, id) };
+        let done = if restore {
+            agentfile::remove(&self.config, id).map_err(|e| format!("Couldn't change the agent's file: {e}"))
+        } else {
+            agentfile::delete(&self.config, id)
+        };
         match done {
             Ok(()) => {
                 self.reload_agents(if restore { Some(id) } else { None });
                 self.sqt.focus = SqFocus::List;
                 self.notify(if restore {
-                    format!("{name} is as platoon has it again{}. Your version is kept as {id}.json.bak in the agents folder.", self.everywhere(id))
+                    format!(
+                        "{name} is as platoon has it again{}. Your version is kept as {id}.json.bak in the agents folder.",
+                        self.everywhere(id)
+                    )
                 } else {
                     format!("Deleted the agent \"{name}\" (kept as {id}.json.bak in the agents folder).")
                 });

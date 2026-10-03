@@ -3,13 +3,13 @@
 
 mod common;
 
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::{
     io::{self, Read, Write},
     os::unix::{net::UnixStream, process::CommandExt},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::mpsc::{channel, Receiver},
+    sync::mpsc::{Receiver, channel},
     thread,
     time::{Duration, Instant},
 };
@@ -264,7 +264,8 @@ fn enter_right_after_starting_attaches_to_a_session_platoon_already_hosts() {
         }
     }
     let reap = Reap(pid);
-    let reg = serde_json::json!({"pid": pid, "sessionId": "aaaa-0001", "cwd": work, "kind": "interactive", "startedAt": 1, "status": "idle"});
+    let reg =
+        serde_json::json!({"pid": pid, "sessionId": "aaaa-0001", "cwd": work, "kind": "interactive", "startedAt": 1, "status": "idle"});
     std::fs::write(claude.join("sessions").join(format!("{pid}.json")), reg.to_string()).unwrap();
 
     let mut t = common::Term::spawn(&[], &env, &work, 30, 110);

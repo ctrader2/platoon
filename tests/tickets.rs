@@ -7,7 +7,7 @@
 
 mod common;
 use common::*;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     os::unix::fs::PermissionsExt,
@@ -243,11 +243,17 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
     t.wait_for_flat("#1 Log in with a link New ready");
     let v = lab.tickets();
     let one = &v["tickets"][0];
-    assert_eq!((one["number"].as_u64(), one["state"].as_str(), one["file"].as_str()), (Some(1), Some("new"), Some("01-log-in-with-a-link.md")));
+    assert_eq!(
+        (one["number"].as_u64(), one["state"].as_str(), one["file"].as_str()),
+        (Some(1), Some("new"), Some("01-log-in-with-a-link.md"))
+    );
     assert!(one.get("how_far").is_none(), "the ticket's text says how far: {one}");
     assert_eq!(one["folders"], json!([lab.work.to_string_lossy()]), "the folder of the project's session");
     let body = fs::read_to_string(lab.config.join("projects/pweb/tickets/01-log-in-with-a-link.md")).unwrap();
-    assert!(body.starts_with("## What it should do") && body.contains("## Acceptance") && body.ends_with("A link by email logs you in.\n"), "{body}");
+    assert!(
+        body.starts_with("## What it should do") && body.contains("## Acceptance") && body.ends_with("A link by email logs you in.\n"),
+        "{body}"
+    );
     assert!(body.contains("How far: local changes only (say if you want a commit, or a push and merge request)."), "{body}");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
@@ -312,16 +318,31 @@ fn a_tickets_screen_shows_its_fields_and_scrolls_its_body_and_esc_goes_back_to_t
     let lab = Lab::new("tk-screen");
     lab.write_tickets(&[(1, "Base", "new", &[]), (2, "Basket page", "new", &[1])]);
     let steps: String = (1..=60).map(|i| format!("- step {i}\n")).collect();
-    fs::write(lab.config.join("projects/pweb/tickets/02-t.md"), format!("## What it should do\n\nThe basket keeps its items.\n\n{steps}")).unwrap();
+    fs::write(lab.config.join("projects/pweb/tickets/02-t.md"), format!("## What it should do\n\nThe basket keeps its items.\n\n{steps}"))
+        .unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
     lab.open_project(&mut t);
     t.send(b"\t");
     t.wait_for("#2 Basket page");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["#2 Basket page", "State", "New · waits for #1", "Folders", "None: a squad works in its work folder", "Waits for", "#1 Base · New", "What it should do", "The basket keeps its items.", "step 1"]);
+    t.wait_for_all(&[
+        "#2 Basket page",
+        "State",
+        "New · waits for #1",
+        "Folders",
+        "None: a squad works in its work folder",
+        "Waits for",
+        "#1 Base · New",
+        "What it should do",
+        "The basket keeps its items.",
+        "step 1",
+    ]);
     t.wait_for_flat("c cancel e edit r rename f folders b waits for");
     let screen = t.stable();
-    assert!(!screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"), "no how far, though the file has one:\n{screen}");
+    assert!(
+        !screen.contains("How far") && !screen.contains("Local changes only") && !screen.contains("how far"),
+        "no how far, though the file has one:\n{screen}"
+    );
     assert!(!t.text().contains("step 40"));
     for _ in 0..80 {
         t.send(b"\x1b[B");
@@ -356,9 +377,20 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     t.wait_for("No tickets yet");
     // --how-far is gone: refused, with where to say it instead.
     let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "x", "--how-far", "local commit"], "");
-    assert!(code == 1 && out.is_empty() && err.trim() == format!("platoon ticket add: don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")"), "{err}");
+    assert!(
+        code == 1
+            && out.is_empty()
+            && err.trim()
+                == format!(
+                    "platoon ticket add: don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")"
+                ),
+        "{err}"
+    );
     assert!(!lab.tickets_path().exists(), "nothing made");
-    let (code, out, err) = lab.cli(&["add", "--project", "web", "--title", "From the command line", "--folder", "."], "## Body\npiped in\n\nHow far: a local commit.\n");
+    let (code, out, err) = lab.cli(
+        &["add", "--project", "web", "--title", "From the command line", "--folder", "."],
+        "## Body\npiped in\n\nHow far: a local commit.\n",
+    );
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
     t.wait_for_flat("#1 From the command line New ready");
     let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--waits-for", "1"], "");
@@ -375,7 +407,10 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
     let (code, out, _) = lab.cli(&["list", "--json"], "");
     assert_eq!(code, 0);
     let v: Value = serde_json::from_str(&out).unwrap();
-    assert_eq!((v[0]["title"].as_str(), v[0]["folders"][0].as_str()), (Some("From the command line"), Some(lab.work.canonicalize().unwrap().to_str().unwrap())));
+    assert_eq!(
+        (v[0]["title"].as_str(), v[0]["folders"][0].as_str()),
+        (Some("From the command line"), Some(lab.work.canonicalize().unwrap().to_str().unwrap()))
+    );
     assert_eq!((v[1]["ready"].as_bool(), v[1]["blocked_by"].clone()), (Some(false), json!([1])));
     assert!(v[0].get("how_far").is_none() && v[1].get("how_far").is_none(), "{out}");
     let (_, out, _) = lab.cli(&["list"], "");
@@ -438,7 +473,20 @@ fn a_ticket_made_from_a_session_shows_where_it_came_from_and_enter_opens_that_se
     assert!(code == 1 && err.contains("isn't in a project") && err.contains("press m"), "{err}");
     let body = lab.base.join("body.md");
     fs::write(&body, "## What it should do\n\nA basket.\n").unwrap();
-    let (code, out, err) = lab.cli(&["add", "--from-session", "s-1", "--title", "Basket page", "--body-file", body.to_str().unwrap(), "--folder", lab.work.to_str().unwrap()], "");
+    let (code, out, err) = lab.cli(
+        &[
+            "add",
+            "--from-session",
+            "s-1",
+            "--title",
+            "Basket page",
+            "--body-file",
+            body.to_str().unwrap(),
+            "--folder",
+            lab.work.to_str().unwrap(),
+        ],
+        "",
+    );
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
     assert_eq!(lab.tickets()["tickets"][0]["from"], json!({"session": "s-1", "project": "pweb"}));
     let kinds = Command::new(BIN).args(["squads", "--kinds"]).envs(lab.env()).output().unwrap();
@@ -501,7 +549,12 @@ fn the_skills_heredoc_command_makes_a_ticket_with_that_body_and_an_empty_one_get
             .replace("## What it should do\n...\n", body)
     };
     let first = command("Basket page", "");
-    assert!(first.starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" --title \"Basket page\"") && first.contains("A basket") && !first.contains("..."), "{first}");
+    assert!(
+        first.starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" --title \"Basket page\"")
+            && first.contains("A basket")
+            && !first.contains("..."),
+        "{first}"
+    );
     assert_eq!(sh(&first), (0, "#1\n".into(), String::new()));
     assert_eq!(body_of(1), body, "the heredoc's text, nothing expanded");
     let t = lab.tickets();

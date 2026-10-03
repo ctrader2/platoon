@@ -72,7 +72,14 @@ pub struct FileEditor {
 
 impl FileEditor {
     pub fn platoon() -> Self {
-        Self { id: PLATOON.into(), name: "platoon's editor".into(), program: String::new(), args: Vec::new(), runs: Runs::Platoon, several: Several::OneWindow }
+        Self {
+            id: PLATOON.into(),
+            name: "platoon's editor".into(),
+            program: String::new(),
+            args: Vec::new(),
+            runs: Runs::Platoon,
+            several: Several::OneWindow,
+        }
     }
 
     pub fn is_platoon(&self) -> bool {
@@ -95,7 +102,13 @@ struct Known {
     mac: &'static [(&'static str, &'static str)],
 }
 
-const fn window(id: &'static str, name: &'static str, commands: &'static [&'static str], args: &'static [&'static str], mac: &'static [(&'static str, &'static str)]) -> Known {
+const fn window(
+    id: &'static str,
+    name: &'static str,
+    commands: &'static [&'static str],
+    args: &'static [&'static str],
+    mac: &'static [(&'static str, &'static str)],
+) -> Known {
     Known { id, name, commands, args, runs: Runs::Window, several: Several::OneWindow, mac }
 }
 
@@ -104,7 +117,12 @@ const fn window(id: &'static str, name: &'static str, commands: &'static [&'stat
 /// `dontReopenProjects`, `disableNonBundledPlugins`, `--wait` and the diff/merge/format/inspect/installPlugins
 /// commands), so a running IDE opens the folder as its own "Open project in" setting says (new window, this window, or
 /// ask); platoon never changes that setting.
-const fn jetbrains(id: &'static str, name: &'static str, commands: &'static [&'static str], mac: &'static [(&'static str, &'static str)]) -> Known {
+const fn jetbrains(
+    id: &'static str,
+    name: &'static str,
+    commands: &'static [&'static str],
+    mac: &'static [(&'static str, &'static str)],
+) -> Known {
     Known { id, name, commands, args: &[], runs: Runs::Window, several: Several::EachWindow, mac }
 }
 
@@ -120,10 +138,30 @@ const KNOWN: &[Known] = &[
     window("subl", "Sublime Text", &["subl"], &["--new-window"], &[("Sublime Text.app", "Contents/SharedSupport/bin/subl")]),
     // `kate --new a b`: a Kate of its own with both folders (its Projects view).
     window("kate", "Kate", &["kate"], &["--new"], &[]),
-    jetbrains("idea", "IntelliJ IDEA", &["idea", "idea.sh", "intellij-idea-ultimate"], &[("IntelliJ IDEA.app", ""), ("IntelliJ IDEA Ultimate.app", "")]),
-    jetbrains("idea-community", "IntelliJ IDEA Community", &["idea-community", "intellij-idea-community"], &[("IntelliJ IDEA CE.app", ""), ("IntelliJ IDEA Community Edition.app", "")]),
-    jetbrains("pycharm", "PyCharm", &["pycharm", "pycharm.sh", "pycharm-professional"], &[("PyCharm.app", ""), ("PyCharm Professional Edition.app", "")]),
-    jetbrains("pycharm-community", "PyCharm Community", &["pycharm-community"], &[("PyCharm CE.app", ""), ("PyCharm Community Edition.app", "")]),
+    jetbrains(
+        "idea",
+        "IntelliJ IDEA",
+        &["idea", "idea.sh", "intellij-idea-ultimate"],
+        &[("IntelliJ IDEA.app", ""), ("IntelliJ IDEA Ultimate.app", "")],
+    ),
+    jetbrains(
+        "idea-community",
+        "IntelliJ IDEA Community",
+        &["idea-community", "intellij-idea-community"],
+        &[("IntelliJ IDEA CE.app", ""), ("IntelliJ IDEA Community Edition.app", "")],
+    ),
+    jetbrains(
+        "pycharm",
+        "PyCharm",
+        &["pycharm", "pycharm.sh", "pycharm-professional"],
+        &[("PyCharm.app", ""), ("PyCharm Professional Edition.app", "")],
+    ),
+    jetbrains(
+        "pycharm-community",
+        "PyCharm Community",
+        &["pycharm-community"],
+        &[("PyCharm CE.app", ""), ("PyCharm Community Edition.app", "")],
+    ),
     jetbrains("webstorm", "WebStorm", &["webstorm", "webstorm.sh"], &[("WebStorm.app", "")]),
     jetbrains("goland", "GoLand", &["goland", "goland.sh"], &[("GoLand.app", "")]),
     jetbrains("rustrover", "RustRover", &["rustrover", "rustrover.sh"], &[("RustRover.app", "")]),
@@ -134,7 +172,15 @@ const KNOWN: &[Known] = &[
     Known { id: "helix", name: "Helix", commands: &["hx", "helix"], args: &[], runs: Runs::Terminal, several: Several::First, mac: &[] },
     // Only with a config folder of the user's own: that is what "your setup" means (plain nvim is not a file-tree
     // editor, and platoon's own is first in the list anyway).
-    Known { id: "nvim", name: "Neovim (your setup)", commands: &["nvim"], args: &[], runs: Runs::Terminal, several: Several::First, mac: &[] },
+    Known {
+        id: "nvim",
+        name: "Neovim (your setup)",
+        commands: &["nvim"],
+        args: &[],
+        runs: Runs::Terminal,
+        several: Several::First,
+        mac: &[],
+    },
 ];
 
 /// What a person calls the editor an id names (also one this computer no longer has).
@@ -184,7 +230,8 @@ pub fn places(env: &dyn Fn(&str) -> Option<String>, root: &Path, macos: bool) ->
     if !macos {
         extra.push(under("/snap/bin"));
         // A tarball unpacked into /opt (`/opt/idea-IU-253.1/bin/idea.sh`, `/opt/android-studio/bin/studio.sh`).
-        let mut opt: Vec<PathBuf> = fs::read_dir(under("/opt")).into_iter().flatten().flatten().map(|e| e.path().join("bin")).filter(|b| b.is_dir()).collect();
+        let mut opt: Vec<PathBuf> =
+            fs::read_dir(under("/opt")).into_iter().flatten().flatten().map(|e| e.path().join("bin")).filter(|b| b.is_dir()).collect();
         opt.sort();
         extra.extend(opt);
     }
@@ -215,7 +262,14 @@ pub fn detect_in(places: &Places) -> Vec<FileEditor> {
             continue;
         }
         let args = || k.args.iter().map(|a| (*a).to_string()).collect::<Vec<_>>();
-        let of = |program: String, args: Vec<String>| FileEditor { id: k.id.into(), name: k.name.into(), program, args, runs: k.runs, several: k.several };
+        let of = |program: String, args: Vec<String>| FileEditor {
+            id: k.id.into(),
+            name: k.name.into(),
+            program,
+            args,
+            runs: k.runs,
+            several: k.several,
+        };
         if let Some(found) = find(k.commands, &dirs) {
             out.push(of(found, args()));
             continue;
@@ -326,7 +380,8 @@ mod tests {
 
     impl World {
         fn new(name: &str) -> Self {
-            let root = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-fileeditors-{name}-{}", std::process::id())));
+            let root =
+                crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-fileeditors-{name}-{}", std::process::id())));
             let _ = fs::remove_dir_all(&root);
             fs::create_dir_all(root.join("home/u")).unwrap();
             fs::create_dir_all(root.join("usr/bin")).unwrap();
@@ -481,7 +536,14 @@ mod tests {
         );
         assert_eq!(
             found,
-            vec![("platoon", ""), ("idea", idea.as_str()), ("idea-community", community.as_str()), ("pycharm", pycharm.as_str()), ("rustrover", rust.as_str()), ("android-studio", studio.as_str())]
+            vec![
+                ("platoon", ""),
+                ("idea", idea.as_str()),
+                ("idea-community", community.as_str()),
+                ("pycharm", pycharm.as_str()),
+                ("rustrover", rust.as_str()),
+                ("android-studio", studio.as_str())
+            ]
         );
         assert!(list[1..].iter().all(|e| e.runs == Runs::Window && e.several == Several::EachWindow));
         // PATH comes first when both have it.
@@ -511,7 +573,10 @@ mod tests {
         assert_eq!(code.program, w.at("Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"));
         assert_eq!(code.args, ["--new-window"]);
         let idea = by_id(&list, "idea-community").unwrap();
-        assert_eq!((idea.program.as_str(), idea.args.clone()), ("open", vec!["-na".to_string(), w.at("Applications/IntelliJ IDEA CE.app"), "--args".to_string()]));
+        assert_eq!(
+            (idea.program.as_str(), idea.args.clone()),
+            ("open", vec!["-na".to_string(), w.at("Applications/IntelliJ IDEA CE.app"), "--args".to_string()])
+        );
         assert!(by_id(&list, "goland").is_some(), "~/Applications too");
         assert!(by_id(&list, "zed").is_none());
         let (cmds, _) = commands(idea, &["/r/a".into()]);
@@ -551,7 +616,11 @@ mod tests {
         assert_eq!(argv("subl", &four).0, vec!["subl --new-window /r/a /r/b /r/c /r/d"]);
         assert_eq!(argv("kate", &four).0, vec!["kate --new /r/a /r/b /r/c /r/d"]);
         assert_eq!(argv("idea", &one), (vec!["idea /r/a".to_string()], 0));
-        assert_eq!(argv("idea", &four), (vec!["idea /r/a".to_string(), "idea /r/b".into(), "idea /r/c".into()], 1), "a window each, at most three");
+        assert_eq!(
+            argv("idea", &four),
+            (vec!["idea /r/a".to_string(), "idea /r/b".into(), "idea /r/c".into()], 1),
+            "a window each, at most three"
+        );
         assert_eq!(argv("helix", &four), (vec!["hx /r/a".to_string()], 3), "the first folder");
         assert_eq!(argv("nvim", &four), (vec!["nvim /r/a".to_string()], 3));
         assert_eq!(commands(&FileEditor::platoon(), &four), (Vec::new(), 0), "platoon's own is run by editor.rs");
@@ -575,7 +644,10 @@ mod tests {
         assert_eq!(program_of("/usr/bin/code", &env(vec![("PLATOON_EDITOR_BIN", "/bin/true")])).unwrap(), "/bin/true");
         assert!(program_of("/usr/bin/code", &env(vec![("PLATOON_FORBID_REAL_EDITOR", "1")])).is_err());
         assert!(program_of("/x/code", &env(vec![("PLATOON_FORBID_REAL_EDITOR", "1"), ("PLATOON_EDITOR_PATH", "/x")])).is_ok());
-        assert!(launch_window("/usr/bin/code", &[], Path::new("/"), &env(vec![("PLATOON_FORBID_REAL_EDITOR", "1")])).is_err(), "refused before anything starts");
+        assert!(
+            launch_window("/usr/bin/code", &[], Path::new("/"), &env(vec![("PLATOON_FORBID_REAL_EDITOR", "1")])).is_err(),
+            "refused before anything starts"
+        );
     }
 
     #[test]
@@ -583,7 +655,8 @@ mod tests {
         let w = World::new("launch");
         let out = w.root.join("out");
         let script = w.root.join("usr/bin/code");
-        fs::write(&script, format!("#!/bin/sh\npwd > '{0}.cwd'\nprintf '%s\\n' \"$@\" > '{0}.tmp'\nmv '{0}.tmp' '{0}'\n", s(&out))).unwrap();
+        fs::write(&script, format!("#!/bin/sh\npwd > '{0}.cwd'\nprintf '%s\\n' \"$@\" > '{0}.tmp'\nmv '{0}.tmp' '{0}'\n", s(&out)))
+            .unwrap();
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
         let e = by_id(&w.list(), "code").unwrap().clone();
         let (cmds, _) = commands(&e, &[s(&w.root.join("home")), s(&w.root.join("usr"))]);
@@ -600,7 +673,14 @@ mod tests {
 
     #[test]
     fn a_terminal_editor_of_yours_runs_in_the_folder_with_your_own_environment() {
-        let e = FileEditor { id: "helix".into(), name: "Helix".into(), program: "/x/hx".into(), args: vec![], runs: Runs::Terminal, several: Several::First };
+        let e = FileEditor {
+            id: "helix".into(),
+            name: "Helix".into(),
+            program: "/x/hx".into(),
+            args: vec![],
+            runs: Runs::Terminal,
+            several: Several::First,
+        };
         let l = terminal_launch(&e, "/r/a", &|_| None).unwrap();
         assert_eq!(l.program, PathBuf::from("/x/hx"));
         assert_eq!(l.args, ["/r/a"]);

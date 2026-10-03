@@ -19,8 +19,8 @@
 //! built-in or user's id can be (they never have two dashes together).
 
 use crate::agentfile::{self, Agent};
-use crate::plugins::{valid_id, Store};
-use crate::squadfile::{self, slug_problem, Squad};
+use crate::plugins::{Store, valid_id};
+use crate::squadfile::{self, Squad, slug_problem};
 use serde_json::Value;
 use std::{
     fs,
@@ -114,7 +114,12 @@ fn same_name(a: &str, b: &str) -> bool {
 /// agents (by their short ids, as in the files) that passed. Every rule a user's own squad and agent follow
 /// (`squadfile::problems`, `agentfile::problems`), and: no id or name of a built-in, a squad's steps name only built-in
 /// agents and the plugin's own.
-pub fn check(squads: &[String], agents: &[String], files: &[(String, PathBuf, u64)], safe: fn(&str) -> bool) -> (Vec<String>, Vec<Squad>, Vec<Agent>) {
+pub fn check(
+    squads: &[String],
+    agents: &[String],
+    files: &[(String, PathBuf, u64)],
+    safe: fn(&str) -> bool,
+) -> (Vec<String>, Vec<Squad>, Vec<Agent>) {
     let mut problems = Vec::new();
     let mut own: Vec<Agent> = Vec::new();
     for rel in agents {
@@ -228,8 +233,10 @@ pub fn read(dir: &Path, m: &crate::plugins::Manifest) -> (Vec<Squad>, Vec<Agent>
         let v: Value = serde_json::from_str(&fs::read_to_string(&path).ok()?).ok()?;
         Some((stem, v))
     };
-    let agents: Vec<Agent> = m.files(AGENTS).iter().filter_map(read_one).filter_map(|(id, v)| agentfile::from_value(&v, &id).ok()).collect();
-    let squads: Vec<Squad> = m.files(SQUADS).iter().filter_map(read_one).filter_map(|(id, v)| squadfile::from_value(&v, &id).ok()).collect();
+    let agents: Vec<Agent> =
+        m.files(AGENTS).iter().filter_map(read_one).filter_map(|(id, v)| agentfile::from_value(&v, &id).ok()).collect();
+    let squads: Vec<Squad> =
+        m.files(SQUADS).iter().filter_map(read_one).filter_map(|(id, v)| squadfile::from_value(&v, &id).ok()).collect();
     (squads, agents)
 }
 
@@ -293,7 +300,12 @@ pub mod testing {
     /// checking, which may send it back once) and its two agents.
     pub fn plugin(base: &Path, id: &str, version: &str) -> PathBuf {
         let dir = base.join(id);
-        crate::skillplugin::testing::write_skill(&dir, &format!("{id}-entry"), &crate::skillplugin::testing::skill_md(&format!("{id}-entry"), "Write a changelog entry for the work on this branch."), &[]);
+        crate::skillplugin::testing::write_skill(
+            &dir,
+            &format!("{id}-entry"),
+            &crate::skillplugin::testing::skill_md(&format!("{id}-entry"), "Write a changelog entry for the work on this branch."),
+            &[],
+        );
         fs::create_dir_all(dir.join("agents")).unwrap();
         fs::create_dir_all(dir.join("squads")).unwrap();
         let reader = json!({"name": "change-reader", "model": "sonnet", "can_change_files": false, "can_run_commands": true, "can_use_web": false, "guidance": READER});
@@ -362,17 +374,29 @@ mod tests {
         let config = base.join("config");
         let src = plugin(&base.join("src"), "changelog", "1.0.0");
         let store = crate::plugins::store_for(&config);
-        assert!(store.dir.starts_with(&base) && store.claude.as_ref().is_some_and(|c| c.starts_with(&base)), "a test's store is beside its config");
+        assert!(
+            store.dir.starts_with(&base) && store.claude.as_ref().is_some_and(|c| c.starts_with(&base)),
+            "a test's store is beside its config"
+        );
         let stamp = squadfile::stamp(&config);
         store.install(&src, crate::plugins::Origin::Folder { path: src.to_string_lossy().into_owned() }).unwrap();
         assert_ne!(squadfile::stamp(&config), stamp, "installing a plugin changes what the lists show");
         // Listed after the built-ins and the user's own, labelled with the plugin's name.
         let listed = squadfile::load_all(&config);
         let last = listed.last().unwrap();
-        assert_eq!((last.id.as_str(), last.kind, last.label()), ("plugin:changelog/changelog", Kind::Plugin, "From changelog name".to_string()));
+        assert_eq!(
+            (last.id.as_str(), last.kind, last.label()),
+            ("plugin:changelog/changelog", Kind::Plugin, "From changelog name".to_string())
+        );
         let agents = agentfile::load_all(&config);
         let theirs: Vec<(&str, String)> = agents.iter().filter(|l| l.kind == Kind::Plugin).map(|l| (l.id.as_str(), l.label())).collect();
-        assert_eq!(theirs, [("plugin:changelog/change-reader", "From changelog name".to_string()), ("plugin:changelog/changelog-writer", "From changelog name".to_string())]);
+        assert_eq!(
+            theirs,
+            [
+                ("plugin:changelog/change-reader", "From changelog name".to_string()),
+                ("plugin:changelog/changelog-writer", "From changelog name".to_string())
+            ]
+        );
         // Found by id; read only.
         let squad = squadfile::get(&config, "plugin:changelog/changelog").unwrap();
         let reader = agentfile::get(&config, "plugin:changelog/change-reader").unwrap();
@@ -380,11 +404,15 @@ mod tests {
         assert!(agentfile::save(&config, &reader).unwrap_err().to_string().contains("comes with a plugin"));
         assert!(squadfile::remove(&config, &squad.id).is_err() && agentfile::remove(&config, &reader.id).is_err());
         assert!(agentfile::delete(&config, &reader.id).unwrap_err().contains("comes with a plugin"));
-        assert!(!squadfile::dir(&config).exists() && !agentfile::dir(&config).exists(), "nothing of a plugin is written to the user's folders");
+        assert!(
+            !squadfile::dir(&config).exists() && !agentfile::dir(&config).exists(),
+            "nothing of a plugin is written to the user's folders"
+        );
         // It starts: the built-in editor and its own agents, named by their short ids in its session.
         let crew = squadfile::Crew::load(&config, &squad);
         assert!(squadfile::problems(&squad, &agentfile::all(&config)).is_empty());
-        let launch = crate::squads::Launch::of(&crew, &crate::squads::LeaderSetup::builtin(), Default::default(), crate::squads::Place::WorkFolder);
+        let launch =
+            crate::squads::Launch::of(&crew, &crate::squads::LeaderSetup::builtin(), Default::default(), crate::squads::Place::WorkFolder);
         let v: Value = serde_json::from_str(&launch.agents).unwrap();
         let names: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
         assert_eq!(names, ["changelog-leader", "changelog-change-reader", "changelog-changelog-writer", "changelog-editor"]);
@@ -396,7 +424,10 @@ mod tests {
         squadfile::save(&config, &mine).unwrap();
         let users = users_of_plugin(&config, "changelog");
         assert_eq!(users, [("Careful changelog".to_string(), vec!["change-reader".to_string(), "changelog-writer".to_string()])]);
-        assert_eq!(removal_warning(&users).unwrap(), "Your squad Careful changelog uses its agents: those steps will show the agent as missing until you pick another one on the Squads tab.");
+        assert_eq!(
+            removal_warning(&users).unwrap(),
+            "Your squad Careful changelog uses its agents: those steps will show the agent as missing until you pick another one on the Squads tab."
+        );
         let two = [("A".to_string(), vec![]), ("B".to_string(), vec![]), ("C".to_string(), vec![])];
         assert!(removal_warning(&two).unwrap().starts_with("Your squads A, B and C use its agents"));
         assert_eq!(removal_warning(&[]), None);
@@ -406,9 +437,15 @@ mod tests {
         assert_eq!(crate::squads::Launch::from_json(&snapshot), Some(launch));
         // Gone: not listed, not found, and the user's copy says which agent is missing.
         assert!(squadfile::load_all(&config).iter().all(|l| l.kind != Kind::Plugin));
-        assert!(squadfile::get(&config, "plugin:changelog/changelog").is_none() && agentfile::get(&config, "plugin:changelog/change-reader").is_none());
+        assert!(
+            squadfile::get(&config, "plugin:changelog/changelog").is_none()
+                && agentfile::get(&config, "plugin:changelog/change-reader").is_none()
+        );
         let mine = squadfile::get(&config, &mine.id).unwrap();
-        assert_eq!(squadfile::problems(&mine, &agentfile::all(&config))[0], "Step 1 names an agent that isn't there (plugin:changelog/change-reader).");
+        assert_eq!(
+            squadfile::problems(&mine, &agentfile::all(&config))[0],
+            "Step 1 names an agent that isn't there (plugin:changelog/change-reader)."
+        );
     }
 
     #[test]
@@ -447,7 +484,12 @@ mod tests {
             }
         });
         let r = reasons(&d);
-        assert!(r.contains("is the name of platoon's built-in agent builder") && r.contains("has no system prompt yet") && r.contains("isn't one platoon offers"), "{r}");
+        assert!(
+            r.contains("is the name of platoon's built-in agent builder")
+                && r.contains("has no system prompt yet")
+                && r.contains("isn't one platoon offers"),
+            "{r}"
+        );
         // A squad with a built-in's id or name, a file that isn't JSON, too big, missing, a bad id.
         let d = plugin(&base.join("d"), "changelog", "1.0.0");
         edit(&d, "squads/changelog.json", &|v| {

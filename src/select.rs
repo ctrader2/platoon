@@ -189,9 +189,7 @@ fn word_bounds(screen: &vt100::Screen, p: Point) -> (Point, Point) {
     }
     if class == Class::Word {
         let mut trimmed = end;
-        while trimmed > start
-            && screen.cell(trimmed.row, trimmed.col).is_some_and(|c| matches!(c.contents(), "." | ":" | "?"))
-        {
+        while trimmed > start && screen.cell(trimmed.row, trimmed.col).is_some_and(|c| matches!(c.contents(), "." | ":" | "?")) {
             match prev(screen, trimmed) {
                 Some(q) => trimmed = q,
                 None => break,
@@ -429,7 +427,11 @@ mod tests {
 
     #[test]
     fn a_word_is_a_run_of_letters_digits_and_the_punctuation_that_lives_in_paths_and_urls() {
-        let p = screen(4, 90, "see https://ex.com/a_b-c.html?x=1&y=2#top and ~/repos/platoon/src/app.rs:120 now\nrun --flag=value (in parens), \"quoted\"");
+        let p = screen(
+            4,
+            90,
+            "see https://ex.com/a_b-c.html?x=1&y=2#top and ~/repos/platoon/src/app.rs:120 now\nrun --flag=value (in parens), \"quoted\"",
+        );
         assert_eq!(word(&p, pt(0, 10)), "https://ex.com/a_b-c.html?x=1&y=2#top");
         assert_eq!(word(&p, pt(0, 50)), "~/repos/platoon/src/app.rs:120");
         assert_eq!(word(&p, pt(1, 6)), "--flag=value");
