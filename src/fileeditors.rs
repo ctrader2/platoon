@@ -1,16 +1,15 @@
-//! The editors `v` can open a ticket's or a session's folders in: platoon's own editor (`editor.rs`, always offered,
-//! installed on first use), then the editors **this computer has** that open a whole folder with a file tree. Only
-//! what is really there is offered: a program found on `PATH` or in the places those editors install themselves
-//! (JetBrains Toolbox's scripts, snaps, `/opt/<app>/bin`, `~/.local/bin`; on macOS the `.app` bundles), never a name
-//! alone. Editors without a file tree (vi, vim, nano, micro, gedit, Mousepad) are not offered: they are the notes
-//! editors of `editors.rs`.
+//! The editors `v` can open a ticket's or a session's folders in: the editors **this computer has** that open a whole
+//! folder with a file tree. platoon installs none of its own: when none is found, `v` says so. Only what is really
+//! there is offered: a program found on `PATH` or in the places those editors install themselves (JetBrains Toolbox's
+//! scripts, snaps, `/opt/<app>/bin`, `~/.local/bin`; on macOS the `.app` bundles), never a name alone. Editors without
+//! a file tree (vi, vim, nano, micro, gedit, Mousepad) are not offered: they are the notes editors of `editors.rs`.
 //!
 //! How each opens several folders (a ticket with worktrees in two repositories, a session with added folders):
 //! - VS Code, Cursor, Zed, Sublime Text, Kate: every folder in one new window (`code --new-window a b` makes one
 //!   window with both as its roots);
 //! - the JetBrains IDEs: each folder is a project, in a window of its own, at most `JETBRAINS_MOST`;
-//! - Helix and the user's own Neovim setup draw in the terminal: they are handed platoon's terminal exactly as
-//!   platoon's editor is, on the first folder (they open one folder at a time).
+//! - Helix and the user's own Neovim setup draw in the terminal: they are handed platoon's terminal (`editor::run`), on
+//!   the first folder (they open one folder at a time).
 //!
 //! Editors with a window of their own start beside platoon and are left alone (their own session, no output, no
 //! waiting): platoon cannot tell when they close.
@@ -27,18 +26,13 @@ use std::{
     thread,
 };
 
-/// The id of platoon's own editor, in the settings file and the list.
-pub const PLATOON: &str = "platoon";
-
 /// A JetBrains IDE opens this many folders at most, one window each.
 pub const JETBRAINS_MOST: usize = 3;
 
 /// Where an editor draws.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Runs {
-    /// platoon's own editor: handed the terminal (`editor.rs`).
-    Platoon,
-    /// The machine's own editor that draws in the terminal: handed the terminal the same way.
+    /// An editor that draws in the terminal: handed platoon's terminal (`editor::run`).
     Terminal,
     /// A window of its own, beside platoon.
     Window,
@@ -62,29 +56,12 @@ pub struct FileEditor {
     pub id: String,
     /// What a person calls it.
     pub name: String,
-    /// The program, an absolute path where one was found (`open` for a macOS app bundle). Empty for platoon's.
+    /// The program, an absolute path where one was found (`open` for a macOS app bundle).
     pub program: String,
     /// Arguments before the folder(s).
     pub args: Vec<String>,
     pub runs: Runs,
     pub several: Several,
-}
-
-impl FileEditor {
-    pub fn platoon() -> Self {
-        Self {
-            id: PLATOON.into(),
-            name: "platoon's editor".into(),
-            program: String::new(),
-            args: Vec::new(),
-            runs: Runs::Platoon,
-            several: Several::OneWindow,
-        }
-    }
-
-    pub fn is_platoon(&self) -> bool {
-        self.runs == Runs::Platoon
-    }
 }
 
 /// An editor platoon knows how to find and start.
@@ -126,7 +103,7 @@ const fn jetbrains(
     Known { id, name, commands, args: &[], runs: Runs::Window, several: Several::EachWindow, mac }
 }
 
-/// In the order the list shows them (after platoon's own): windowed editors, the JetBrains family, then the ones in
+/// In the order the list shows them: windowed editors, the JetBrains family, then the ones in
 /// the terminal.
 const KNOWN: &[Known] = &[
     // `--new-window` with several folders: one window with each as a root (an untitled multi-root workspace).
@@ -171,7 +148,7 @@ const KNOWN: &[Known] = &[
     jetbrains("android-studio", "Android Studio", &["studio", "studio.sh", "android-studio"], &[("Android Studio.app", "")]),
     Known { id: "helix", name: "Helix", commands: &["hx", "helix"], args: &[], runs: Runs::Terminal, several: Several::First, mac: &[] },
     // Only with a config folder of the user's own: that is what "your setup" means (plain nvim is not a file-tree
-    // editor, and platoon's own is first in the list anyway).
+    // editor).
     Known {
         id: "nvim",
         name: "Neovim (your setup)",
@@ -185,9 +162,6 @@ const KNOWN: &[Known] = &[
 
 /// What a person calls the editor an id names (also one this computer no longer has).
 pub fn name_of(id: &str) -> String {
-    if id == PLATOON {
-        return FileEditor::platoon().name;
-    }
     KNOWN.iter().find(|k| k.id == id).map_or_else(|| id.to_string(), |k| k.name.to_string())
 }
 
@@ -253,9 +227,9 @@ fn find(commands: &[&str], dirs: &[PathBuf]) -> Option<String> {
     commands.iter().find_map(|c| dirs.iter().map(|d| d.join(c)).find(|p| runnable(p))).map(|p| p.to_string_lossy().into_owned())
 }
 
-/// The editors `v` offers here: platoon's own first, then each one found, in `KNOWN`'s order.
+/// The editors `v` offers here: each one found, in `KNOWN`'s order.
 pub fn detect_in(places: &Places) -> Vec<FileEditor> {
-    let mut out = vec![FileEditor::platoon()];
+    let mut out = Vec::new();
     let dirs: Vec<PathBuf> = places.path.iter().chain(&places.extra).cloned().collect();
     for k in KNOWN {
         if k.id == "nvim" && places.nvim_config.is_none() {
@@ -307,7 +281,7 @@ pub fn commands(e: &FileEditor, dirs: &[String]) -> (Vec<(String, Vec<String>)>,
         (e.program.clone(), a)
     };
     match e.several {
-        _ if dirs.is_empty() || e.is_platoon() => (Vec::new(), 0),
+        _ if dirs.is_empty() => (Vec::new(), 0),
         Several::OneWindow => (vec![with(dirs)], 0),
         Several::EachWindow => {
             let n = dirs.len().min(JETBRAINS_MOST);
@@ -354,7 +328,7 @@ pub fn launch_window(program: &str, args: &[String], cwd: &Path, env: &dyn Fn(&s
 }
 
 /// How a terminal editor of the user's own is run on platoon's terminal (`editor::run`): in the folder, with the
-/// user's environment as it is (not platoon's editor's world), only Claude Code's marks taken out.
+/// user's environment as it is, only Claude Code's marks taken out.
 pub fn terminal_launch(e: &FileEditor, dir: &str, env: &dyn Fn(&str) -> Option<String>) -> io::Result<crate::editor::Launch> {
     let (cmds, _) = commands(e, &[dir.to_string()]);
     let (program, args) = cmds.into_iter().next().ok_or_else(|| io::Error::other("nothing to open"))?;
@@ -363,7 +337,6 @@ pub fn terminal_launch(e: &FileEditor, dir: &str, env: &dyn Fn(&str) -> Option<S
         args,
         env: vec![("CLAUDECODE".into(), None), ("CLAUDE_CODE_ENTRYPOINT".into(), None)],
         cwd: PathBuf::from(dir),
-        session: None,
     })
 }
 
@@ -438,12 +411,10 @@ mod tests {
     }
 
     #[test]
-    fn nothing_installed_offers_platoons_editor_alone() {
+    fn nothing_installed_offers_nothing() {
         let w = World::new("none");
         let list = w.list();
-        assert_eq!(list, vec![FileEditor::platoon()]);
-        assert_eq!(list[0].name, "platoon's editor");
-        assert_eq!(list[0].runs, Runs::Platoon);
+        assert_eq!(list, Vec::<FileEditor>::new());
     }
 
     #[test]
@@ -471,9 +442,9 @@ mod tests {
             let w = World::new(&format!("one-{}", program.replace('/', "-")));
             w.program(program);
             let list = w.list();
-            assert_eq!(list.len(), 2, "{program}: {list:?}");
-            assert_eq!((list[1].id.as_str(), list[1].name.as_str()), (id, name), "{program}");
-            assert_eq!(list[1].program, w.at(program), "the program found, by its full path");
+            assert_eq!(list.len(), 1, "{program}: {list:?}");
+            assert_eq!((list[0].id.as_str(), list[0].name.as_str()), (id, name), "{program}");
+            assert_eq!(list[0].program, w.at(program), "the program found, by its full path");
         }
     }
 
@@ -482,7 +453,7 @@ mod tests {
         let w = World::new("not-runnable");
         fs::write(w.root.join("usr/bin/code"), "not a program").unwrap();
         w.dir("usr/bin/cursor"); // a folder called cursor
-        assert_eq!(w.ids(), ["platoon"]);
+        assert_eq!(w.ids(), Vec::<String>::new());
     }
 
     #[test]
@@ -491,30 +462,30 @@ mod tests {
         for p in ["vi", "vim", "nano", "micro", "gedit", "mousepad", "emacs", "gnome-text-editor"] {
             w.program(&format!("usr/bin/{p}"));
         }
-        assert_eq!(w.ids(), ["platoon"]);
+        assert_eq!(w.ids(), Vec::<String>::new());
     }
 
     #[test]
     fn your_own_neovim_only_with_a_config_folder_of_yours() {
         let mut w = World::new("nvim");
         w.program("usr/bin/nvim");
-        assert_eq!(w.ids(), ["platoon"], "nvim alone is not 'your setup'");
+        assert_eq!(w.ids(), Vec::<String>::new(), "nvim alone is not 'your setup'");
         w.dir("home/u/.config/nvim");
-        assert_eq!(w.ids(), ["platoon", "nvim"]);
-        assert_eq!(w.list()[1].name, "Neovim (your setup)");
-        assert_eq!(w.list()[1].runs, Runs::Terminal);
+        assert_eq!(w.ids(), ["nvim"]);
+        assert_eq!(w.list()[0].name, "Neovim (your setup)");
+        assert_eq!(w.list()[0].runs, Runs::Terminal);
         // XDG_CONFIG_HOME wins over ~/.config, and NVIM_APPNAME names the folder.
         let other = w.at("xdg");
         w.set("XDG_CONFIG_HOME", &other);
-        assert_eq!(w.ids(), ["platoon"], "no nvim folder in XDG_CONFIG_HOME");
+        assert_eq!(w.ids(), Vec::<String>::new(), "no nvim folder in XDG_CONFIG_HOME");
         w.dir("xdg/mine");
         w.set("NVIM_APPNAME", "mine");
-        assert_eq!(w.ids(), ["platoon", "nvim"]);
+        assert_eq!(w.ids(), ["nvim"]);
         // A config folder without nvim: nothing.
         let mut v = World::new("nvim-config-only");
         v.dir("home/u/.config/nvim");
         v.set("PATH", "");
-        assert_eq!(v.ids(), ["platoon"]);
+        assert_eq!(v.ids(), Vec::<String>::new());
     }
 
     #[test]
@@ -537,7 +508,6 @@ mod tests {
         assert_eq!(
             found,
             vec![
-                ("platoon", ""),
                 ("idea", idea.as_str()),
                 ("idea-community", community.as_str()),
                 ("pycharm", pycharm.as_str()),
@@ -545,7 +515,7 @@ mod tests {
                 ("android-studio", studio.as_str())
             ]
         );
-        assert!(list[1..].iter().all(|e| e.runs == Runs::Window && e.several == Several::EachWindow));
+        assert!(list.iter().all(|e| e.runs == Runs::Window && e.several == Several::EachWindow));
         // PATH comes first when both have it.
         w.program("usr/bin/pycharm");
         assert_eq!(by_id(&w.list(), "pycharm").unwrap().program, w.at("usr/bin/pycharm"));
@@ -558,7 +528,7 @@ mod tests {
         w.program("fake/zed");
         let only = w.at("fake");
         w.set("PLATOON_EDITOR_PATH", &only);
-        assert_eq!(w.ids(), ["platoon", "zed"]);
+        assert_eq!(w.ids(), ["zed"]);
     }
 
     #[test]
@@ -582,17 +552,17 @@ mod tests {
         let (cmds, _) = commands(idea, &["/r/a".into()]);
         assert_eq!(cmds[0].1, vec!["-na".to_string(), w.at("Applications/IntelliJ IDEA CE.app"), "--args".into(), "/r/a".into()]);
         // Linux places are not macOS ones.
-        assert_eq!(w.ids(), ["platoon"]);
+        assert_eq!(w.ids(), Vec::<String>::new());
     }
 
     #[test]
-    fn the_order_is_platoons_then_windows_then_jetbrains_then_the_terminal() {
+    fn the_order_is_windows_then_jetbrains_then_the_terminal() {
         let w = World::new("order");
         for p in ["hx", "rider", "code", "kate", "idea", "subl", "nvim", "zed", "cursor"] {
             w.program(&format!("usr/bin/{p}"));
         }
         w.dir("home/u/.config/nvim");
-        assert_eq!(w.ids(), ["platoon", "code", "cursor", "zed", "subl", "kate", "idea", "rider", "helix", "nvim"]);
+        assert_eq!(w.ids(), ["code", "cursor", "zed", "subl", "kate", "idea", "rider", "helix", "nvim"]);
     }
 
     #[test]
@@ -623,13 +593,11 @@ mod tests {
         );
         assert_eq!(argv("helix", &four), (vec!["hx /r/a".to_string()], 3), "the first folder");
         assert_eq!(argv("nvim", &four), (vec!["nvim /r/a".to_string()], 3));
-        assert_eq!(commands(&FileEditor::platoon(), &four), (Vec::new(), 0), "platoon's own is run by editor.rs");
     }
 
     #[test]
     fn names_of_editors_this_computer_may_not_have() {
         assert_eq!(name_of("code"), "VS Code");
-        assert_eq!(name_of("platoon"), "platoon's editor");
         assert_eq!(name_of("rustrover"), "RustRover");
         assert_eq!(name_of("something-else"), "something-else");
     }
@@ -685,7 +653,6 @@ mod tests {
         assert_eq!(l.program, PathBuf::from("/x/hx"));
         assert_eq!(l.args, ["/r/a"]);
         assert_eq!(l.cwd, PathBuf::from("/r/a"));
-        assert_eq!(l.session, None);
-        assert!(l.env.iter().all(|(k, v)| v.is_none() && k.starts_with("CLAUDE")), "nothing of platoon's editor's world: {:?}", l.env);
+        assert!(l.env.iter().all(|(k, v)| v.is_none() && k.starts_with("CLAUDE")), "the user's own environment: {:?}", l.env);
     }
 }

@@ -26,6 +26,3 @@ ratatui = "0.30.2"
 serde_json = { version = "1.0.151", features = ["preserve_order"] }
 unicode-width = "0.2.2"
 vt100 = "0.16.2"
-
-[build-dependencies]
-serde_json = { version = "1.0.151", features = ["preserve_order"] }

@@ -818,21 +818,28 @@ fn click_at(app: &mut App, x: u16, y: u16) {
 }
 
 #[test]
-fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
+fn the_settings_have_six_tabs_that_tab_shift_tab_and_a_click_switch_with_the_showing_one_lit() {
     let w = World::new("sm-tabs");
     let mut app = w.app();
-    // Wide enough for every title in full (at 80 columns "Smart features" is shortened to "Smart").
+    // Wide enough for every title in full (at 70 columns "Smart features" is shortened to "Smart").
     let mut term = Terminal::new(TestBackend::new(100, 24)).unwrap();
     key(&mut app, KeyCode::Char('s'));
     let general = screen(&mut term, &app);
     let tabs_line = general.lines().find(|l| l.contains("General")).unwrap().to_string();
-    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"] {
+    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"] {
         assert!(tabs_line.contains(title), "{title} on the tab line: {tabs_line}");
     }
-    let mut narrow = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    // At 80 columns too, now that there are six.
+    let mut at_80 = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    let line = screen(&mut at_80, &app);
+    let line = line.lines().find(|l| l.contains("General")).unwrap().to_string();
+    for title in ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"] {
+        assert!(line.contains(title), "{title} on the tab line at 80 columns: {line}");
+    }
+    let mut narrow = Terminal::new(TestBackend::new(70, 24)).unwrap();
     let short = screen(&mut narrow, &app);
     let short = short.lines().find(|l| l.contains("General")).unwrap().to_string();
-    assert!(short.contains(" Smart ") && !short.contains("Smart features") && short.contains("Plugins"), "{short}");
+    assert!(short.contains(" Smart ") && !short.contains("Smart features") && short.contains("Editors"), "{short}");
     assert!(
         general.contains("Stop idle sessions after") && !general.contains("Daily token limit") && !general.contains("Used today"),
         "{general}"
@@ -859,11 +866,7 @@ fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_s
     assert_eq!(lit(&term, "General"), (t.bg, t.dim, false));
     key(&mut app, KeyCode::BackTab);
     key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.settings_tab, 6, "shift+tab from the first goes to the last");
-    let plugins = screen(&mut term, &app);
-    assert!(plugins.contains("No plugins installed") && plugins.contains("Enter opens a plugin"), "{plugins}");
-    key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.settings_tab, 5);
+    assert_eq!(app.settings_tab, 5, "shift+tab from the first goes to the last");
     let editors = screen(&mut term, &app);
     assert!(
         editors.contains("Editing platoon's text") && editors.contains("Editing files") && editors.contains("Always ask which editor"),
@@ -873,7 +876,6 @@ fn the_settings_have_seven_tabs_that_tab_shift_tab_and_a_click_switch_with_the_s
     assert_eq!(app.settings_tab, 4);
     let projects = screen(&mut term, &app);
     assert!(projects.contains("Update notes after") && !projects.contains("Stop idle sessions after"), "{projects}");
-    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.settings_tab, 0, "tab from the last goes to the first");

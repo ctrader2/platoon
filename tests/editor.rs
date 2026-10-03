@@ -1,11 +1,12 @@
-//! The code editor (`v`) end to end, in a real terminal with the real binary and a stand-in for nvim
-//! (`PLATOON_NVIM_BIN`): a small script that writes down what it was started with (arguments, folder, environment,
-//! the session file) and waits for a line typed on its terminal. Checked: platoon's screen goes while it runs and
-//! nothing of platoon draws over it, the keys reach it, and platoon comes back drawn in full where the user was; the
-//! folders of a session and of a ticket; the question while the squad is working; the offer to install (from an
-//! empty mirror: never the network); `v` typed into a box stays a letter.
+//! The code editor (`v`) end to end, in a real terminal with the real binary and stand-ins for the editors this
+//! computer has, in a folder `PLATOON_EDITOR_PATH` makes the only place looked in: a Helix that writes down what it
+//! was started with (arguments, folder, environment) and waits for a line typed on its terminal, and a VS Code that
+//! writes down its arguments and ends at once. Checked: platoon's screen goes while a terminal editor runs and nothing
+//! of platoon draws over it, the keys reach it, and platoon comes back drawn in full where the user was; the folders of
+//! a session and of a ticket; the question while the squad is working; the list of editors; a window editor beside
+//! platoon; the settings; no editor found; `v` typed into a box stays a letter.
 //!
-//! Every directory is a temp dir (the editor folder too: `PLATOON_DATA_DIR`); no real nvim, no real `claude`.
+//! Every directory is a temp dir; no real editor, no real `claude`.
 
 mod common;
 use common::*;
@@ -19,17 +20,26 @@ use std::{
     time::Duration,
 };
 
-/// Stands in for nvim: writes down how it was started into a folder of its own under `$STANDIN_OUT`, shows a line,
+/// Stands in for an editor with a window of its own: writes down how it was started into `$STANDIN_OUT/<its name>-*`
+/// and ends at once, as a launcher handing over to a running copy does.
+const WINDOW_STAND_IN: &str = r#"#!/bin/sh
+n=$(basename "$0")
+printf '%s\n' "$@" > "$STANDIN_OUT/$n.argv.tmp"
+pwd > "$STANDIN_OUT/$n.cwd"
+if [ -t 0 ]; then echo yes > "$STANDIN_OUT/$n.tty"; fi
+mv "$STANDIN_OUT/$n.argv.tmp" "$STANDIN_OUT/$n.argv"
+"#;
+
+/// Stands in for Helix: writes down how it was started into a folder of its own under `$STANDIN_OUT`, shows a line,
 /// waits for a line typed on its terminal, and writes that down too.
-const STAND_IN: &str = r#"#!/bin/sh
-d="$STANDIN_OUT/run-$$"
+const HX_STAND_IN: &str = r#"#!/bin/sh
+d="$STANDIN_OUT/hx-$$"
 mkdir -p "$d"
 printf '%s\n' "$@" > "$d/argv"
 pwd > "$d/cwd"
 env > "$d/env"
-cp "$PLATOON_EDITOR_SESSION" "$d/session.json"
 if [ -t 0 ]; then echo yes > "$d/stdin-is-a-terminal"; fi
-printf 'STAND-IN EDITOR RUNNING\n'
+printf 'STAND-IN HELIX RUNNING\n'
 IFS= read -r line
 printf '%s\n' "$line" > "$d/typed"
 "#;
@@ -40,9 +50,9 @@ struct Lab {
     cache: PathBuf,
     config: PathBuf,
     work: PathBuf,
-    data: PathBuf,
     out: PathBuf,
-    standin: PathBuf,
+    /// The only place editors are looked for (`PLATOON_EDITOR_PATH`): Helix alone, unless a test puts more there.
+    editors: PathBuf,
 }
 
 fn git(dir: &Path, args: &[&str]) -> String {
@@ -72,17 +82,14 @@ impl Lab {
             cache: base.join("cache"),
             config: base.join("config"),
             work: base.join("work"),
-            data: base.join("data"),
             out: base.join("out"),
-            standin: base.join("bin/nvim-stand-in"),
+            editors: base.join("editors"),
             base,
         };
         for d in [&lab.claude.join("sessions"), &lab.claude.join("projects/-work"), &lab.cache, &lab.config, &lab.work, &lab.out] {
             fs::create_dir_all(d).unwrap();
         }
-        fs::create_dir_all(lab.standin.parent().unwrap()).unwrap();
-        fs::write(&lab.standin, STAND_IN).unwrap();
-        fs::set_permissions(&lab.standin, fs::Permissions::from_mode(0o755)).unwrap();
+        lab.put_editor("hx", HX_STAND_IN);
         fs::write(lab.config.join("settings.json"), r#"{"auto_archive_days":0}"#).unwrap();
         // The work folder is a git repository.
         fs::write(lab.work.join("README"), "hi\n").unwrap();
@@ -97,10 +104,9 @@ impl Lab {
             ("CLAUDE_CONFIG_DIR", s(&self.claude)),
             ("PLATOON_CACHE_DIR", s(&self.cache)),
             ("PLATOON_CONFIG_DIR", s(&self.config)),
-            ("PLATOON_DATA_DIR", s(&self.data)),
             ("PLATOON_SKIP_SETUP_CHECK", "1".into()),
             ("PLATOON_NOTES_HELPER", "off".into()),
-            ("PLATOON_NVIM_BIN", s(&self.standin)),
+            ("PLATOON_EDITOR_PATH", s(&self.editors)),
             ("STANDIN_OUT", s(&self.out)),
             ("XDG_CONFIG_HOME", s(&self.base.join("user-config"))),
         ]
@@ -117,9 +123,21 @@ impl Lab {
         fs::write(self.claude.join("projects/-work/s-1.jsonl"), text.join("\n") + "\n").unwrap();
     }
 
-    /// The stand-in's runs so far.
+    /// A stand-in editor called `name` in the only place editors are looked for.
+    fn put_editor(&self, name: &str, text: &str) {
+        fs::create_dir_all(&self.editors).unwrap();
+        fs::write(self.editors.join(name), text).unwrap();
+        fs::set_permissions(self.editors.join(name), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// The Helix stand-in's runs so far.
     fn runs(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = fs::read_dir(&self.out).unwrap().flatten().map(|e| e.path()).collect();
+        let mut v: Vec<PathBuf> = fs::read_dir(&self.out)
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.file_name().unwrap().to_string_lossy().starts_with("hx-"))
+            .collect();
         v.sort();
         v
     }
@@ -146,10 +164,6 @@ fn env_of(run: &Path) -> HashMap<String, String> {
         .collect()
 }
 
-fn session_of(run: &Path) -> Value {
-    serde_json::from_str(&fs::read_to_string(run.join("session.json")).unwrap()).unwrap()
-}
-
 /// Waits for a file the stand-in writes.
 fn wait_file(p: &Path) -> String {
     until(&format!("{} to be written", p.display()), || p.is_file());
@@ -158,7 +172,7 @@ fn wait_file(p: &Path) -> String {
 
 /// The editor is running: platoon's own screen is gone and stays gone (nothing of it is drawn meanwhile).
 fn editor_has_the_screen(t: &mut Term, platoon_text: &[&str]) {
-    t.wait_for("STAND-IN EDITOR RUNNING");
+    t.wait_for("STAND-IN HELIX RUNNING");
     let screen = t.stable();
     for p in platoon_text {
         assert!(!screen.contains(p), "platoon's {p:?} is still on the screen:\n{screen}");
@@ -176,56 +190,29 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     lab.session(&[s(&docs)]);
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
+    // None chosen yet: the only editor found (Helix), on the conversation's folder (it opens one at a time).
     t.send(b"v");
     editor_has_the_screen(&mut t, &["Sessions", "make the shop", "? help"]);
     let run = lab.only_run();
-    // Started as platoon's nvim is: its own settings file, in the conversation's folder.
-    let argv: Vec<String> = fs::read_to_string(run.join("argv")).unwrap().lines().map(String::from).collect();
-    let editor = lab.data.join("editor");
-    assert_eq!(argv, vec!["-u".to_string(), s(&editor.join("config/init.lua"))]);
+    assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&lab.work)]);
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&lab.work));
     assert!(run.join("stdin-is-a-terminal").is_file(), "it reads the real terminal");
-    assert!(
-        editor.join("config/init.lua").is_file()
-            && editor.join("config/lua/platoon/tree.lua").is_file()
-            && editor.join("config/shell.sh").is_file()
-    );
-    // Its XDG folders are inside platoon's editor folder; the user's own are kept for its terminal.
+    // The user's own environment, as it is (only Claude Code's marks taken out).
     let env = env_of(&run);
-    for (k, sub) in [
-        ("XDG_CONFIG_HOME", "nvim/config"),
-        ("XDG_DATA_HOME", "nvim/data"),
-        ("XDG_STATE_HOME", "nvim/state"),
-        ("XDG_CACHE_HOME", "nvim/cache"),
-    ] {
-        assert_eq!(env[k], s(&editor.join(sub)), "{k}");
-    }
-    assert_eq!(env["PLATOON_KEEP_XDG_CONFIG_HOME"], s(&lab.base.join("user-config")));
-    assert!(env["PATH"].starts_with(&format!("{}:", editor.join("bin").display())), "platoon's programs first");
-    assert_eq!(format!("{}:{}", editor.join("bin").display(), env["PLATOON_KEEP_PATH"]), env["PATH"]);
-    assert!(!env.contains_key("PLATOON_KEEP_XDG_DATA_HOME"), "not set by the user: nothing kept");
-    // The folders: the conversation's, and the one added to it.
-    let session = session_of(&run);
-    let roots: Vec<&str> = session["roots"].as_array().unwrap().iter().map(|r| r["path"].as_str().unwrap()).collect();
-    assert_eq!(roots, vec![s(&lab.work), s(&docs)]);
-    assert_eq!(session["roots"][0]["repo"], s(&lab.work).as_str());
-    assert_eq!(session["colors"]["mode"], "terminal", "NO_COLOR (the harness): nothing forced");
-    // Copies go where platoon's go: PLATOON_CLIPBOARD=osc52 (the harness) means OSC 52 only, no system helper.
-    assert_eq!(session["clipboard"], json!({"target": "osc52", "helper": null, "osc52_max": 100000}));
-    // The back key, in Neovim's notation (no keys.json: the default).
-    assert_eq!(session["keys"], json!({"back": "<C-Space>"}));
+    assert_eq!(env["XDG_CONFIG_HOME"], s(&lab.base.join("user-config")));
+    assert!(!env.keys().any(|k| k.starts_with("PLATOON_KEEP_") || k.starts_with("PLATOON_EDITOR_SESSION")), "{env:?}");
+    assert!(!env.contains_key("CLAUDECODE"));
+    assert!(lab.cache.join("editor-open").read_dir().unwrap().flatten().count() == 1, "its folder is marked open meanwhile");
     // Keys reach the editor, not platoon (a `q` or `2` would quit platoon or switch its tab).
     t.send(b"q2 typed\r");
     assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
-    // Back: platoon's screen drawn in full, on the same tab, the row still selected.
-    t.wait_for_all(&["make the shop", "? help", "Sessions"]);
+    // Back: platoon's screen drawn in full, on the same tab, the row still selected, and what Helix didn't open said
+    // (in the footer, for a while).
+    t.wait_for_all(&["make the shop", "Sessions"]);
+    t.wait_for_flat("only: it opens one folder at a time. Not opened:");
     let screen = t.stable();
-    assert!(!screen.contains("STAND-IN EDITOR RUNNING"), "the editor's screen is gone:\n{screen}");
-    assert!(
-        !lab.data.join("editor/config").read_dir().unwrap().flatten().any(|e| e.file_name().to_string_lossy().starts_with("session-")),
-        "its session file is removed"
-    );
-    assert!(lab.cache.join("editor-open").read_dir().map_or(true, |mut d| d.next().is_none()), "and the note that it had the folders open");
+    assert!(!screen.contains("STAND-IN HELIX RUNNING"), "the editor's screen is gone:\n{screen}");
+    assert!(lab.cache.join("editor-open").read_dir().unwrap().next().is_none(), "and the note that it had the folder open");
     // And platoon answers keys again.
     t.send(b"2");
     t.wait_for_flat("No projects yet");
@@ -269,8 +256,8 @@ fn to_tickets(t: &mut Term) {
 }
 
 #[test]
-fn v_on_a_tickets_screen_opens_its_worktree_counted_from_where_it_was_made_and_comes_back_to_the_ticket() {
-    let (lab, wt, base) = ticket_lab("ed-term-ticket", "waiting");
+fn v_on_a_tickets_screen_opens_its_worktree_and_comes_back_to_the_ticket() {
+    let (lab, wt, _) = ticket_lab("ed-term-ticket", "waiting");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     to_tickets(&mut t);
     t.send(b"\r");
@@ -278,14 +265,7 @@ fn v_on_a_tickets_screen_opens_its_worktree_counted_from_where_it_was_made_and_c
     t.send(b"v");
     editor_has_the_screen(&mut t, &["Basket", "v editor"]);
     let run = lab.only_run();
-    let session = session_of(&run);
-    assert_eq!(session["title"], "#1 Basket");
-    let root = &session["roots"][0];
-    assert_eq!(
-        (root["path"].as_str(), root["base"].as_str(), root["kind"].as_str()),
-        (Some(s(&wt).as_str()), Some(base.as_str()), Some("worktree"))
-    );
-    assert_eq!(root["repo_name"], "work");
+    assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&wt)]);
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&wt));
     t.send(b"\r");
     // Back on the ticket's own screen.
@@ -314,144 +294,12 @@ fn v_on_a_ticket_whose_squad_is_working_asks_first() {
     t.send(b"v");
     t.wait_for("anyway?");
     t.send(b"y");
-    t.wait_for("STAND-IN EDITOR RUNNING");
+    t.wait_for("STAND-IN HELIX RUNNING");
     t.send(b"\r");
     t.wait_for_flat("n new ticket");
     assert_eq!(lab.runs().len(), 1);
     let _ = leader.kill();
     let _ = leader.wait();
-}
-
-fn sha256(p: &Path) -> String {
-    let out = Command::new("sha256sum").arg(p).output().unwrap();
-    String::from_utf8_lossy(&out.stdout).split_whitespace().next().unwrap().to_string()
-}
-
-/// `<mirror>/<name>`: a tar.gz of the folder `top` holding `files` (path, text; runnable when it starts with `#!`).
-fn pack(mirror: &Path, name: &str, top: &str, files: &[(&str, &str)]) -> Value {
-    let stage = mirror.join(format!(".stage-{name}"));
-    for (p, text) in files {
-        let path = stage.join(top).join(p);
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, text).unwrap();
-        if text.starts_with("#!") {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        }
-    }
-    let out = mirror.join(name);
-    // An empty `top`: the files themselves at the top of the archive (as a font release has them).
-    let (from, what): (PathBuf, Vec<String>) = if top.is_empty() {
-        (stage.clone(), files.iter().map(|(p, _)| p.to_string()).collect())
-    } else {
-        (stage.clone(), vec![top.to_string()])
-    };
-    assert!(Command::new("tar").arg("-czf").arg(&out).arg("-C").arg(&from).args(&what).status().unwrap().success());
-    fs::remove_dir_all(&stage).unwrap();
-    json!({"url": format!("https://example.invalid/{name}"), "sha256": sha256(&out), "size": fs::metadata(&out).unwrap().len()})
-}
-
-/// A plugin catalog (a folder standing in for the one built into platoon: `PLATOON_PLUGIN_CATALOG`) whose code
-/// editor plugin is platoon's own (`plugins/editor`: its settings files, its version) with a download table of tiny
-/// fake downloads in a mirror: its "Neovim" is the stand-in (so after the install platoon runs the stand-in as the
-/// editor's own nvim), one Neovim plugin, a font. Never the network.
-fn editor_catalog(lab: &Lab) -> (PathBuf, PathBuf) {
-    editor_catalog_with(lab, None, &[])
-}
-
-/// The same at `version` (None: the plugin's own), with more fake Neovim plugins (`extra`, by name). A download
-/// already in the mirror is kept as it is (the same file, the same checksum), so a later table changes only what it adds.
-fn editor_catalog_with(lab: &Lab, version: Option<&str>, extra: &[&str]) -> (PathBuf, PathBuf) {
-    let mirror = lab.base.join("mirror");
-    fs::create_dir_all(&mirror).unwrap();
-    let packed = |name: &str, top: &str, files: &[(&str, &str)]| {
-        let out = mirror.join(name);
-        if out.is_file() {
-            json!({"url": format!("https://example.invalid/{name}"), "sha256": sha256(&out), "size": fs::metadata(&out).unwrap().len()})
-        } else {
-            pack(&mirror, name, top, files)
-        }
-    };
-    let nvim = packed("nvim-fake.tar.gz", "nvim-dist", &[("bin/nvim", STAND_IN)]);
-    let font = packed("Font.tar.xz", "", &[("FakeNerdFont-Regular.ttf", "font"), ("OFL.txt", "licence")]);
-    let downloads: serde_json::Map<String, Value> =
-        ["linux-x64", "linux-arm64", "macos-arm64", "macos-x64"].iter().map(|k| (k.to_string(), nvim.clone())).collect();
-    let mut pins = Vec::new();
-    for name in std::iter::once("alpha.nvim").chain(extra.iter().copied()) {
-        let short = name.trim_end_matches(".nvim");
-        let got = packed(&format!("rev-{short}"), &format!("{short}-rev"), &[(&format!("lua/{short}.lua"), "return 1")]);
-        let mut pin = json!({"name": name, "repo": format!("o/{short}"), "rev": format!("rev-{short}")});
-        pin.as_object_mut().unwrap().extend(got.as_object().unwrap().clone());
-        pins.push(pin);
-    }
-    let mut font_pin = json!({"family": "Fake Nerd Font", "version": "1", "files": ["FakeNerdFont-Regular.ttf", "OFL.txt"]});
-    font_pin.as_object_mut().unwrap().extend(font.as_object().unwrap().clone());
-    // Never the machine's own nvim, whatever it has: only a version no nvim has would be taken.
-    let table = json!({"format": 1, "tools": [{"id": "nvim", "version": "1.0.0", "min_yours": "999.0.0", "names": ["nvim"], "exe": "bin/nvim", "downloads": downloads}],
-        "plugins": pins, "parsers": [], "font": font_pin});
-    let cat = lab.base.join("catalog");
-    let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor");
-    let theirs = cat.join("editor");
-    for rel in ["plugin.json", "config/init.lua", "config/lua/platoon/tree.lua", "config/shell.sh"] {
-        fs::create_dir_all(theirs.join(rel).parent().unwrap()).unwrap();
-        fs::copy(ours.join(rel), theirs.join(rel)).unwrap();
-    }
-    fs::write(theirs.join("downloads.json"), serde_json::to_string_pretty(&table).unwrap()).unwrap();
-    // The index names the version the plugin's own file has (a catalog whose two disagree is refused).
-    let mut manifest: Value = serde_json::from_str(&fs::read_to_string(ours.join("plugin.json")).unwrap()).unwrap();
-    if let Some(v) = version {
-        manifest.as_object_mut().unwrap().insert("version".into(), json!(v));
-        fs::write(theirs.join("plugin.json"), serde_json::to_string_pretty(&manifest).unwrap()).unwrap();
-    }
-    fs::write(cat.join("index.json"), json!({"plugins": [{"id": "editor", "version": manifest["version"].clone()}]}).to_string()).unwrap();
-    (cat, mirror)
-}
-
-#[test]
-fn not_installed_v_offers_the_plugin_and_yes_installs_it_and_its_downloads_then_opens_it() {
-    let lab = Lab::new("ed-term-install");
-    lab.session(&[]);
-    let (cat, mirror) = editor_catalog(&lab);
-    // No stand-in named: the editor's own nvim is asked for, and it isn't installed. The catalog and the downloads
-    // are the lab's; the "Neovim" it installs is the stand-in, allowed to run (an empty PLATOON_FORBID_REAL_EDITOR).
-    let env: Vec<(&str, String)> = lab
-        .env()
-        .into_iter()
-        .filter(|(k, _)| *k != "PLATOON_NVIM_BIN")
-        .chain([
-            ("PLATOON_EDITOR_MIRROR", s(&mirror)),
-            ("PLATOON_PLUGIN_CATALOG", s(&cat)),
-            ("PLATOON_FONT_DIR", s(&lab.base.join("fonts"))),
-            ("PLATOON_FORBID_REAL_EDITOR", String::new()),
-            ("PATH", "/usr/bin:/bin".to_string()),
-        ])
-        .collect();
-    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for("make the shop");
-    t.send(b"v");
-    t.wait_for_all(&["platoon's code editor isn't installed. Install its plugin now?", "not now"]);
-    // (What it downloads: the catalog's figure.)
-    t.wait_for("It downloads about");
-    t.send(b"n");
-    t.wait_for_flat("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.");
-    t.wait_gone("Install its plugin now?");
-    assert!(!lab.data.join("editor/installed.json").exists() && !lab.data.join("plugins/editor").exists());
-    t.send(b"v");
-    t.wait_for_flat("Install its plugin now?");
-    t.send(b"y");
-    // Installed from the catalog, then its downloads, then it opens.
-    until("the editor to start", || !lab.runs().is_empty());
-    let run = lab.only_run();
-    wait_file(&run.join("argv"));
-    let argv = fs::read_to_string(run.join("argv")).unwrap();
-    assert!(argv.contains(&s(&lab.data.join("editor/config/init.lua"))), "{argv}");
-    assert!(lab.data.join("plugins/editor/plugin.json").is_file() && lab.data.join("editor/installed.json").is_file());
-    assert!(lab.data.join("editor/site/pack/platoon/start/alpha.nvim/lua/alpha.lua").is_file());
-    assert!(lab.base.join("fonts/FakeNerdFont-Regular.ttf").is_file());
-    let init = fs::read_to_string(lab.data.join("editor/config/init.lua")).unwrap();
-    assert!(init.contains("from its editor plugin"), "the plugin's settings file");
-    t.send(b"done\r");
-    wait_file(&run.join("typed"));
-    t.wait_for("make the shop");
 }
 
 #[test]
@@ -476,81 +324,18 @@ fn v_typed_into_a_box_is_a_letter() {
     assert!(lab.runs().is_empty(), "the editor never started");
 }
 
-/// The helper the editor runs for each copy says "not copied" (exit 1) at once when there is nothing to copy or no
-/// display to copy to, and never waits. (Run with an empty environment: no display, so the real clipboard can't be
-/// reached.)
-#[test]
-fn the_clipboard_helper_gives_up_at_once_without_text_or_a_display() {
-    use std::io::Write;
-    for text in ["", "some text"] {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_platoon"))
-            .arg("clipboard-hold")
-            .env_clear()
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
-        child.stdin.take().unwrap().write_all(text.as_bytes()).unwrap();
-        let until = std::time::Instant::now() + Duration::from_secs(10);
-        let status = loop {
-            if let Some(st) = child.try_wait().unwrap() {
-                break st;
-            }
-            if std::time::Instant::now() > until {
-                let _ = child.kill();
-                let _ = child.wait();
-                panic!("the helper kept waiting with {text:?}");
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        };
-        assert_eq!(status.code(), Some(1), "{text:?}");
-    }
-}
-
-// ---- the machine's own editors ------------------------------------------------------------------------------------
-
-/// Stands in for an editor with a window of its own: writes down how it was started into `$STANDIN_OUT/<its name>-*`
-/// and ends at once, as a launcher handing over to a running copy does.
-const WINDOW_STAND_IN: &str = r#"#!/bin/sh
-n=$(basename "$0")
-printf '%s\n' "$@" > "$STANDIN_OUT/$n.argv.tmp"
-pwd > "$STANDIN_OUT/$n.cwd"
-if [ -t 0 ]; then echo yes > "$STANDIN_OUT/$n.tty"; fi
-mv "$STANDIN_OUT/$n.argv.tmp" "$STANDIN_OUT/$n.argv"
-"#;
-
-/// Stands in for Helix: writes down how it was started, shows a line, waits for a line typed on its terminal.
-const HX_STAND_IN: &str = r#"#!/bin/sh
-d="$STANDIN_OUT/hx-$$"
-mkdir -p "$d"
-printf '%s\n' "$@" > "$d/argv"
-pwd > "$d/cwd"
-env > "$d/env"
-if [ -t 0 ]; then echo yes > "$d/stdin-is-a-terminal"; fi
-printf 'STAND-IN HELIX RUNNING\n'
-IFS= read -r line
-printf '%s\n' "$line" > "$d/typed"
-"#;
+// ---- more editors ------------------------------------------------------------------------------------------------
 
 impl Lab {
-    /// A folder of stand-in editors (`code`, `hx`) that `PLATOON_EDITOR_PATH` makes the only place looked in, and
-    /// the settings `extra` merged into the settings file.
+    /// VS Code too (a window stand-in) beside Helix, and the settings `extra` merged into the settings file.
     fn own_editors(&self, extra: Value) -> Vec<(&'static str, String)> {
-        let bin = self.base.join("editors");
-        fs::create_dir_all(&bin).unwrap();
-        for (name, text) in [("code", WINDOW_STAND_IN), ("hx", HX_STAND_IN)] {
-            fs::write(bin.join(name), text).unwrap();
-            fs::set_permissions(bin.join(name), fs::Permissions::from_mode(0o755)).unwrap();
-        }
+        self.put_editor("code", WINDOW_STAND_IN);
         let mut settings: Value = serde_json::from_str(&fs::read_to_string(self.config.join("settings.json")).unwrap()).unwrap();
         for (k, v) in extra.as_object().unwrap() {
             settings.as_object_mut().unwrap().insert(k.clone(), v.clone());
         }
         fs::write(self.config.join("settings.json"), settings.to_string()).unwrap();
-        let mut env = self.env();
-        env.push(("PLATOON_EDITOR_PATH", s(&bin)));
-        env
+        self.env()
     }
 
     fn settings(&self) -> Value {
@@ -570,18 +355,14 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for_all(&["╭ open with", "platoon's editor", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
+    t.wait_for_all(&["╭ open with", "★ VS Code", "Helix", "Choosing another makes it the favourite"]);
     let shown = t.stable();
-    let rows: Vec<&str> =
-        shown.lines().filter(|l| l.contains("platoon's editor") || l.contains("VS Code") || l.contains("Helix")).collect();
-    assert_eq!(rows.len(), 3, "{shown}");
+    let rows: Vec<&str> = shown.lines().filter(|l| l.contains("VS Code") || l.contains("Helix")).collect();
+    assert_eq!(rows.len(), 2, "{shown}");
+    assert!(rows[0].contains("VS Code") && rows[1].contains("Helix"), "in the order found:\n{shown}");
+    assert!(rows[0].contains("★") && !rows[1].contains("★"), "only the favourite is starred:\n{shown}");
     assert!(
-        rows[0].contains("platoon's editor") && rows[1].contains("VS Code") && rows[2].contains("Helix"),
-        "platoon's own first:\n{shown}"
-    );
-    assert!(rows[1].contains("★") && !rows[0].contains("★") && !rows[2].contains("★"), "only the favourite is starred:\n{shown}");
-    assert!(
-        rows[1].contains("▎") && rows[1].contains("in its own window") && rows[2].contains("here in platoon's terminal"),
+        rows[0].contains("▎") && rows[0].contains("in its own window") && rows[1].contains("here in platoon's terminal"),
         "and picked:\n{shown}"
     );
     // The star is drawn in the theme's accent (Catppuccin Mocha lavender).
@@ -595,45 +376,6 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
     assert_eq!(fs::read_to_string(lab.out.join("code.cwd")).unwrap().trim(), s(&lab.work));
     assert!(!lab.out.join("code.tty").exists(), "it doesn't get platoon's terminal");
     t.wait_for_all(&["make the shop", "Opened in VS Code, in a window of its own."]);
-    t.send(b"q");
-    assert_eq!(t.wait_exit(), 0);
-}
-
-#[test]
-fn a_terminal_editor_of_yours_is_handed_the_terminal_on_the_first_folder_and_platoon_comes_back() {
-    let lab = Lab::new("ed-term-hx");
-    let docs = lab.base.join("docs");
-    fs::create_dir_all(&docs).unwrap();
-    lab.session(&[s(&docs)]);
-    let env = lab.own_editors(json!({"files_editor": "helix"}));
-    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for_all(&["make the shop", "? help"]);
-    t.send(b"v");
-    t.wait_for("STAND-IN HELIX RUNNING");
-    let screen = t.stable();
-    assert!(!screen.contains("make the shop") && !screen.contains("? help"), "platoon's screen is gone:\n{screen}");
-    let run = fs::read_dir(&lab.out)
-        .unwrap()
-        .flatten()
-        .map(|e| e.path())
-        .find(|p| p.file_name().unwrap().to_string_lossy().starts_with("hx-"))
-        .unwrap();
-    assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&lab.work)]);
-    assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&lab.work));
-    assert!(run.join("stdin-is-a-terminal").is_file());
-    // The user's own environment, not platoon's editor's world.
-    let env = env_of(&run);
-    assert_eq!(env["XDG_CONFIG_HOME"], s(&lab.base.join("user-config")));
-    assert!(!env.contains_key("PLATOON_EDITOR_SESSION") && !env.contains_key("PLATOON_EDITOR_ENV"));
-    assert!(lab.cache.join("editor-open").read_dir().unwrap().flatten().count() == 1, "its folder is marked open meanwhile");
-    // Keys reach it; then platoon is back, drawn in full, and says what Helix didn't open.
-    t.send(b"q2 typed\r");
-    assert_eq!(wait_file(&run.join("typed")).trim(), "q2 typed");
-    t.wait_for_all(&["make the shop", "Sessions"]);
-    t.wait_for_flat("only: it opens one folder at a time. Not opened:");
-    assert!(!t.stable().contains("STAND-IN HELIX"));
-    assert!(lab.cache.join("editor-open").read_dir().unwrap().next().is_none(), "the mark is gone");
-    assert!(lab.runs().iter().all(|r| !r.file_name().unwrap().to_string_lossy().starts_with("run-")), "platoon's own editor never started");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }
@@ -681,9 +423,7 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     t.wait_for("make the shop");
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
-    t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last (Plugins), then Editors before it
-    t.wait_for("No plugins installed, and none from the catalog to show.");
-    t.send(b"\x1b[Z");
+    t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last, Editors
     t.wait_for_all(&[
         "Editing platoon's text",
         "Editor for notes and tickets",
@@ -697,11 +437,11 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     assert!(at("Editor for notes and tickets") < at("Editing files") && at("Editing files") < at("Editor for files (v)"));
     assert!(at("Editor for files (v)") < at("Always ask which editor"));
     let files_row = shown.lines().nth(at("Editor for files (v)")).unwrap();
-    assert!(files_row.contains("platoon's editor"), "the default: {files_row}");
+    assert!(files_row.contains("VS Code"), "none chosen yet: the first one found, which v opens: {files_row}");
     // Down to the files editor, right: the next editor found here, saved at once.
     t.send(b"\x1b[B\x1b[C");
-    t.wait_for_all(&["Editor for files (v)", "VS Code"]);
-    until("the choice to reach the settings file", || lab.settings()["files_editor"] == "code");
+    t.wait_for_all(&["Editor for files (v)", "Helix"]);
+    until("the choice to reach the settings file", || lab.settings()["files_editor"] == "helix");
     t.send(b"\x1b[B\r");
     until("always ask on", || lab.settings()["files_editor_ask"] == true);
     t.send(b"\x1b");
@@ -710,77 +450,19 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     assert_eq!(t.wait_exit(), 0);
 }
 
+/// No editor on this computer: `v` says so in one plain line, and nothing starts.
 #[test]
-fn the_editor_is_given_the_back_key_from_keys_json() {
-    let lab = Lab::new("ed-term-keys");
+fn v_with_no_editor_found_says_so() {
+    let lab = Lab::new("ed-term-none");
     lab.session(&[]);
-    fs::write(lab.config.join("keys.json"), r#"{ "back": "alt+x" }"#).unwrap();
+    fs::remove_file(lab.editors.join("hx")).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
     t.wait_for_all(&["make the shop", "? help"]);
     t.send(b"v");
-    t.wait_for("STAND-IN EDITOR RUNNING");
-    let run = lab.only_run();
-    until("the session file to be copied", || run.join("session.json").is_file());
-    assert_eq!(session_of(&run)["keys"], json!({"back": "<M-x>"}));
-    t.send(b"done\r");
-    t.wait_for_all(&["make the shop", "? help"]);
-    t.send(b"q");
-    assert_eq!(t.wait_exit(), 0);
-}
-
-#[test]
-fn a_newer_editor_plugin_is_updated_when_platoon_starts_and_fetches_only_what_changed() {
-    let lab = Lab::new("ed-term-auto");
-    lab.session(&[]);
-    let (cat, mirror) = editor_catalog_with(&lab, Some("1.0.0"), &[]);
-    let env: Vec<(&str, String)> = lab
-        .env()
-        .into_iter()
-        .chain([
-            ("PLATOON_EDITOR_MIRROR", s(&mirror)),
-            ("PLATOON_PLUGIN_CATALOG", s(&cat)),
-            ("PLATOON_FONT_DIR", s(&lab.base.join("fonts"))),
-            ("PLATOON_SKIP_FC_CACHE", "1".into()),
-            ("PATH", "/usr/bin:/bin".to_string()),
-        ])
-        .collect();
-    let cli = |args: &[&str]| {
-        let out = Command::new(BIN)
-            .args(args)
-            .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
-            .current_dir(&lab.base)
-            .stdin(Stdio::null())
-            .output()
-            .unwrap();
-        (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
-    };
-    let (code, out, err) = cli(&["plugin", "add", "editor"]);
-    assert_eq!(code, 0, "{out}{err}");
-    let site = lab.data.join("editor/site/pack/platoon/start");
-    assert!(site.join("alpha.nvim/lua/alpha.lua").is_file());
-    // A newer platoon: the editor plugin 1.1.0 with one more Neovim plugin. What didn't change leaves the mirror, so
-    // fetching it again would fail: only the new one can be fetched.
-    editor_catalog_with(&lab, Some("1.1.0"), &["beta.nvim"]);
-    for name in ["nvim-fake.tar.gz", "rev-alpha", "Font.tar.xz"] {
-        fs::remove_file(mirror.join(name)).unwrap();
-    }
-    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for_flat("Updated with platoon: Code editor (Neovim) 1.1.0.");
-    assert!(site.join("beta.nvim/lua/beta.lua").is_file() && site.join("alpha.nvim/lua/alpha.lua").is_file());
-    let installed: Value = serde_json::from_str(&fs::read_to_string(lab.data.join("plugins/installed.json")).unwrap()).unwrap();
-    assert_eq!(installed["plugins"]["editor"]["version"], "1.1.0");
-    let shown = t.stable();
-    assert!(!shown.contains("didn't finish"), "{shown}");
-    t.send(b"q");
-    assert_eq!(t.wait_exit(), 0);
-    // Started again: nothing more to do, nothing said.
-    let mut t = Term::spawn(&[], &env, &lab.work, 30, 120);
-    t.wait_for("make the shop");
-    assert!(!t.stable().contains("Updated with platoon"));
+    t.wait_for_flat("No code editor found: v opens VS Code, Zed, Helix, JetBrains IDEs and others once one is installed.");
+    let screen = t.stable();
+    assert!(screen.contains("make the shop") && !screen.contains("open with"), "platoon stays as it was:\n{screen}");
+    assert!(lab.runs().is_empty() && fs::read_dir(&lab.out).unwrap().next().is_none(), "nothing started");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
 }

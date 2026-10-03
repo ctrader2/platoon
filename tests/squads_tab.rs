@@ -330,12 +330,10 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.wait_for("esc back to the list");
     t.send(b"\x1b");
     t.wait_gone("esc back to the list");
-    // Settings, the Projects tab (before Editors and Plugins, the last): the leaders' model and system prompt, just after
-    // the commander's.
+    // Settings, the Projects tab (before Editors, the last): the leaders' model and system prompt, just after the
+    // commander's.
     t.send(b"s");
     t.wait_for("Settings file:");
-    t.send(b"\x1b[Z");
-    t.wait_for("No plugins installed, and none from the catalog to show.");
     t.send(b"\x1b[Z");
     t.wait_for("Editing files");
     t.send(b"\x1b[Z");

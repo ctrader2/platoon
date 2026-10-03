@@ -6,7 +6,7 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1`, `2`, `3`. (Plugins are in the settings: `s`, then Plugins.)
+/// The top-level tabs, on `1`, `2`, `3`.
 pub const TOPS: &[&str] = &["Sessions", "Projects", "Squads"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_PROJECTS: usize = 1;
@@ -287,8 +287,7 @@ impl App {
         }
     }
 
-    /// One of the top-level lists (Sessions, Projects, Squads) with nothing open over it: where quit quits. (The plugin
-    /// screen is a mode of its own, opened from the settings, and never one of these.)
+    /// One of the top-level lists (Sessions, Projects, Squads) with nothing open over it: where quit quits.
     pub fn at_top_level(&self) -> bool {
         self.open_project.is_none() && !(self.top == TOP_SQUADS && self.sqt.focus == super::SqFocus::Detail)
     }

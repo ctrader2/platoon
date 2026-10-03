@@ -99,16 +99,6 @@ impl Term {
         cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         cmd.env("PLATOON_FORBID_REAL_CLAUDE", "1"); // ...nor the real `claude`, if a test forgets to name a stand-in
         cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
-        // ...nor the real editor folder or fonts, nor the network for an install (an empty mirror); a test that needs
-        // them gives its own.
-        let spare = std::env::temp_dir().join(format!("platoon-term-no-data-{}", std::process::id()));
-        cmd.env("PLATOON_DATA_DIR", spare.join("data"));
-        cmd.env("PLATOON_FONT_DIR", spare.join("fonts"));
-        cmd.env("PLATOON_EDITOR_MIRROR", spare.join("mirror"));
-        cmd.env("PLATOON_SKIP_FC_CACHE", "1");
-        // ...nor the plugin catalog built into platoon (it changes as plugins are added): a catalog folder that isn't
-        // there, so no plugins show, unless a test gives its own (an empty value: the built-in one).
-        cmd.env("PLATOON_PLUGIN_CATALOG", spare.join("no-plugin-catalog"));
         for (k, v) in env {
             cmd.env(k, v);
         }
@@ -237,8 +227,8 @@ impl Term {
         self.text().split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
-    /// Waits for `platoon setup` to end, and checks it asked nothing about the code editor (a plugin now, installed
-    /// separately; setup used to ask last). Its exit code.
+    /// Waits for `platoon setup` to end, and checks it asked nothing about a code editor (an older platoon's setup
+    /// asked last). Its exit code.
     #[allow(dead_code)]
     pub fn exit_without_editor_question(&mut self) -> u32 {
         let code = self.wait_exit();

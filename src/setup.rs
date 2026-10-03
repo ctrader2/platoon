@@ -206,7 +206,7 @@ fn skill_state(i: crate::totickets::Installed) -> State {
 }
 
 /// The steps `platoon setup --remove` and `--add` take, by the word they take.
-pub const REMOVABLE: &[&str] = &[crate::totickets::NAME, EDITOR];
+pub const REMOVABLE: &[&str] = &[crate::totickets::NAME];
 /// The steps `--replace` takes.
 pub const REPLACEABLE: &[&str] = &[crate::totickets::NAME];
 
@@ -234,7 +234,6 @@ pub fn remove_step(root: &Path, config: &Path, what: &str) -> Result<String, Str
                 "The /to-tickets skill wasn't there. `platoon setup` leaves it out from now on; `platoon setup --add to-tickets` puts it back.".to_string()
             })
         }
-        EDITOR => Err(EDITOR_IS_A_PLUGIN.replace("{verb}", "remove")),
         other => Err(unknown_step("remove", other)),
     }
 }
@@ -252,7 +251,6 @@ pub fn add_step(root: &Path, config: &Path, what: &str) -> Result<String, String
                 Installed::Changed => format!("The /to-tickets skill is there already, {CHANGED_NOTE}."),
             })
         }
-        EDITOR => Err(EDITOR_IS_A_PLUGIN.replace("{verb}", "add")),
         other => Err(unknown_step("add", other)),
     }
 }
@@ -602,16 +600,6 @@ pub fn render_blocked(states: &[State], color: bool) -> String {
     out.join("\n")
 }
 
-// ---- the code editor: a plugin now -----------------------------------------------------------------------------------
-
-/// `platoon setup --add editor` / `--remove editor` still work: `main.rs` says the code editor is a plugin now and
-/// does `platoon plugin add/remove editor` (`plugincli::setup_alias`). `setup.json`'s old `"editor"` record (`asked`,
-/// `wanted`, `removed`, from when setup asked about it) is left as it is and no longer read.
-pub const EDITOR: &str = "editor";
-
-/// What `--add`/`--remove editor` say if they reach setup itself (only `main.rs`'s alias should call them).
-const EDITOR_IS_A_PLUGIN: &str = "The code editor is a plugin now: `platoon plugin {verb} editor`.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -852,12 +840,12 @@ mod tests {
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), "{ not json");
     }
 
-    // ---- the code editor ----
+    // ---- the old code editor question ----
 
-    /// setup no longer asks about the code editor or shows a line for it, and an old `setup.json` that remembers the
-    /// old question reads as before and is kept as it is.
+    /// setup doesn't ask about a code editor or show a line for one, and an old `setup.json` that remembers the
+    /// question an older platoon asked reads as before and is kept as it is.
     #[test]
-    fn setup_no_longer_knows_the_editor_and_an_old_setup_json_still_reads() {
+    fn setup_knows_no_editor_and_an_old_setup_json_still_reads() {
         let root = tmp("old-editor-choice");
         let config = pc(&root);
         fs::create_dir_all(&config).unwrap();
@@ -869,12 +857,12 @@ mod tests {
         assert!(ready(&check(&root, &config)));
         let kept: Value = serde_json::from_str(&fs::read_to_string(config.join("setup.json")).unwrap()).unwrap();
         assert_eq!(kept["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is kept");
-        assert!(crate::totickets::choice(&config, EDITOR).get("wanted").is_some());
+        assert!(crate::totickets::choice(&config, "editor").get("wanted").is_some());
         assert!(!render_blocked(&check(&root, &config), false).contains("Code editor"));
-        // Reached directly (main.rs answers first), they point at the plugin.
-        assert_eq!(add_step(&root, &config, "editor").unwrap_err(), "The code editor is a plugin now: `platoon plugin add editor`.");
-        assert!(remove_step(&root, &config, "editor").unwrap_err().contains("`platoon plugin remove editor`"));
-        assert!(remove_step(&root, &config, "x").unwrap_err().contains("can remove: to-tickets, editor"));
+        // `editor` is a step like any other setup doesn't know.
+        assert_eq!(add_step(&root, &config, "editor").unwrap_err(), "platoon setup can't add \"editor\"; it can add: to-tickets");
+        assert!(remove_step(&root, &config, "editor").unwrap_err().contains("can remove: to-tickets"));
+        assert!(remove_step(&root, &config, "x").unwrap_err().ends_with("can remove: to-tickets"));
         assert!(replace_step(&root, &config, "editor").unwrap_err().contains("can replace: to-tickets"));
     }
 

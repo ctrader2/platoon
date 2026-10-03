@@ -2,14 +2,12 @@
 //! the app: each of the twenty is exactly what the plugin made of it (`testdata/theme_pack_colors.tsv`, written by
 //! the plugin route before it was removed), and reads well as it is, in 24-bit and in 256 colors; the screens drawn
 //! in a light theme have the colors they should, cell by cell (the Sessions list with a selected row and a project
-//! badge, a popup, the settings, a project's notes, the attached view's footer, a squad's workflow rail); the code
-//! editor is told the theme is light; a saved theme id nobody has any more falls back to the default. Every folder is
-//! a temp one (`World`).
+//! badge, a popup, the settings, a project's notes, the attached view's footer, a squad's workflow rail); a saved theme
+//! id nobody has any more falls back to the default. Every folder is a temp one (`World`).
 
 use crate::app::{Mode, Pane};
 use crate::client::Client;
 use crate::colordepth::rgb_to_256;
-use crate::editor::{ColorMode, colors_json};
 use crate::testkit::World;
 use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, SELECTION_TEXT_CONTRAST, Theme, contrast, delta_e};
 use crate::{ui, usertheme};
@@ -195,9 +193,6 @@ fn every_theme_file_reads_well_as_it_is_and_after_the_derivation() {
                 crate::theme::luminance(t.surface) < crate::theme::luminance(t.bg),
                 "{name}: a light theme's selected row is a little darker"
             );
-            assert_eq!(t.strongest(), Color::Rgb(0, 0, 0));
-        } else {
-            assert_eq!(t.strongest(), Color::Rgb(255, 255, 255));
         }
     }
 }
@@ -587,32 +582,6 @@ fn rose_pine_dawn_is_rose_pine_dawn() {
     let dawn = &all.iter().find(|(n, _, _)| n == "Rosé Pine Dawn").unwrap().2;
     assert_eq!(dawn.id, "rose-pine-dawn");
     assert!(Theme::by_id("ros-pine-dawn").is_none(), "the accented letter is its plain letter, not dropped");
-}
-
-#[test]
-fn the_code_editor_is_told_a_light_theme_is_light() {
-    let all = file_themes();
-    let latte = &all.iter().find(|(n, _, _)| n == "Catppuccin Latte").unwrap().2;
-    let harbor = &all.iter().find(|(n, _, _)| n == "Harbor Night").unwrap().2;
-    for mode in [ColorMode::TrueColor, ColorMode::Indexed256] {
-        assert_eq!(colors_json(latte, mode)["background"], "light", "{mode:?}");
-        assert_eq!(colors_json(harbor, mode)["background"], "dark", "{mode:?}");
-        assert_eq!(colors_json(&Theme::default(), mode)["background"], "dark");
-    }
-    assert!(colors_json(&Theme::terminal(), ColorMode::Terminal).get("background").is_none(), "Terminal colors: the terminal knows");
-    // base06 and base07 are stronger than the text: darker on a light theme.
-    let v = colors_json(latte, ColorMode::TrueColor);
-    let hex = |k: &str| {
-        let s = v["base16"][k].as_str().unwrap().trim_start_matches('#').to_string();
-        let n = u32::from_str_radix(&s, 16).unwrap();
-        Color::Rgb((n >> 16) as u8, (n >> 8) as u8, n as u8)
-    };
-    let l = crate::theme::luminance;
-    assert!(l(hex("base07")) < l(hex("base06")) && l(hex("base06")) < l(latte.text), "darker and darker");
-    assert!(contrast(hex("base05"), hex("base00")) >= MIN_TEXT);
-    // And the editor's own settings file takes it up (Neovim's `background`).
-    let init = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/editor/config/init.lua")).unwrap();
-    assert!(init.contains("o.background = C.background == 'light' and 'light' or 'dark'"));
 }
 
 #[test]

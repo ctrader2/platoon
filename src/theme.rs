@@ -51,7 +51,7 @@ pub struct Theme {
     pub ansi: Option<[Color; 16]>,
     /// Drawn on a light background (dark text): the light built-in theme files and the user's own light themes. False
     /// for every `SPECS` theme and for Terminal colors, whose background platoon can't know. Anything that needs
-    /// "lighter" or "darker than the text" asks this (the code editor's `background`, the text on a project's colored badge).
+    /// "lighter" or "darker than the text" asks this (the text on a project's colored badge).
     pub light: bool,
 }
 
@@ -731,11 +731,6 @@ impl Theme {
         Self::all().into_iter().find(|t| t.id == id)
     }
 
-    /// The color text moves toward to stand out more: white on a dark theme, black on a light one.
-    pub fn strongest(&self) -> Color {
-        if self.light { Color::Rgb(0, 0, 0) } else { Color::Rgb(255, 255, 255) }
-    }
-
     /// Text for a fill of `fill` (a pill, a badge): the more readable of the theme's background and text, or, when
     /// neither reads at 4.5:1 (a middling color like a light theme's yellow), black or white, whichever reads better.
     pub fn text_on(&self, fill: Color) -> Color {
@@ -875,8 +870,6 @@ pub fn render_list(depth: Option<crate::colordepth::Depth>, user: &Registry) -> 
             "  (default)".to_string()
         } else if t.is_user() && !t.name.ends_with("(yours)") {
             "  (yours)".to_string()
-        } else if let Some(plugin) = user.plugin_of(&t.id).filter(|p| !t.name.ends_with(&format!("({p})"))) {
-            format!("  (plugin: {plugin})")
         } else {
             String::new()
         };

@@ -149,9 +149,10 @@ pub struct Settings {
     /// been used yet. platoon remembers the last choice here; an id this computer no longer has is simply not
     /// starred and stays in the file until another editor is used.
     pub notes_editor: String,
-    /// The favourite editor of `v` (a ticket's or a session's files): `fileeditors::PLATOON` (platoon's own, the
-    /// default) or the id of an editor of this computer's (`fileeditors.rs`). One that is no longer installed is kept
-    /// here, and `v` opens platoon's editor instead (saying so).
+    /// The favourite editor of `v` (a ticket's or a session's files): the id of an editor of this computer's
+    /// (`fileeditors.rs`), or empty while none has been chosen (`v` opens the first one found). One that is no longer
+    /// installed is kept here, and `v` opens the first one found instead (saying so). The `platoon` an older platoon
+    /// wrote (its own editor, gone) reads as none chosen.
     pub files_editor: String,
     /// `v` shows the list of editors every time (the favourite starred and picked) instead of opening the favourite.
     pub files_editor_ask: bool,
@@ -194,7 +195,7 @@ impl Default for Settings {
             ai_archived: false,
             ai_archived_share: DEFAULT_ARCHIVED_SHARE,
             notes_editor: crate::editors::ASK.into(),
-            files_editor: crate::fileeditors::PLATOON.into(),
+            files_editor: String::new(),
             files_editor_ask: false,
             notes_quiet_minutes: DEFAULT_NOTES_QUIET_MINUTES,
             notes_reply_chars: DEFAULT_NOTES_REPLY_CHARS,
@@ -323,7 +324,7 @@ fn parse(text: &str) -> Option<Settings> {
             files_editor: o
                 .get("files_editor")
                 .and_then(Value::as_str)
-                .filter(|v| !v.trim().is_empty())
+                .filter(|v| !v.trim().is_empty() && *v != OLD_PLATOON_EDITOR)
                 .map_or(d.files_editor.clone(), str::to_string),
             files_editor_ask: o.get("files_editor_ask").and_then(Value::as_bool).unwrap_or(d.files_editor_ask),
             notes_quiet_minutes: number("notes_quiet_minutes", d.notes_quiet_minutes),
@@ -344,6 +345,9 @@ fn parse(text: &str) -> Option<Settings> {
 pub fn path_in(dir: &Path) -> PathBuf {
     dir.join("settings.json")
 }
+
+/// The id an older platoon gave its own code editor in `files_editor`.
+const OLD_PLATOON_EDITOR: &str = "platoon";
 
 /// A theme of the Theme pack plugin platoon once had (`plugin:theme-pack/<slug>`) is now the built-in `<slug>`, so
 /// anyone who picked one keeps it. Any other id as it is.
@@ -585,8 +589,6 @@ pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
-/// Every plugin, installed or in the catalog, one line each: enter opens the plugin screen on it, `d` removes one.
-pub const TAB_PLUGINS: usize = 6;
 
 /// Every entry on every tab, in screen order.
 #[cfg(test)]
@@ -608,8 +610,6 @@ fn tabs() -> Vec<Tab> {
         Tab { title: "Sessions", items: sessions_items(), headings: &[] },
         Tab { title: "Projects", items: projects_items(), headings: &[] },
         Tab { title: "Editors", items: editors_items(), headings: &[(0, "Editing platoon's text"), (1, "Editing files")] },
-        // Its entries are the installed plugins, known only at run time: the app draws them and handles its keys.
-        Tab { title: "Plugins", items: Vec::new(), headings: &[] },
     ]
 }
 
@@ -635,8 +635,8 @@ fn editors_items() -> Vec<Item> {
         ),
         editor(
             "Editor for files (v)",
-            "Opens a ticket's or a session's folders (v): platoon's editor, or one of the editors this computer has that \
-             show a file tree. Choosing another from v's list changes it too.",
+            "Opens a ticket's or a session's folders (v): one of the editors this computer has that show a file tree. \
+             Choosing another from v's list changes it too.",
             EditorFor::Files,
         ),
         Item {
@@ -1209,10 +1209,10 @@ mod tests {
     }
 
     #[test]
-    fn the_editor_settings_default_to_platoons_editor_without_asking_and_read_back_what_was_saved() {
+    fn the_editor_settings_default_to_none_chosen_without_asking_and_read_back_what_was_saved() {
         let d = dir("editors");
         let s = load(&d).0;
-        assert_eq!((s.notes_editor.as_str(), s.files_editor.as_str(), s.files_editor_ask), (crate::editors::ASK, "platoon", false));
+        assert_eq!((s.notes_editor.as_str(), s.files_editor.as_str(), s.files_editor_ask), (crate::editors::ASK, "", false));
         save(&d, &Settings { notes_editor: "nano".into(), files_editor: "code".into(), files_editor_ask: true, ..Settings::default() })
             .unwrap();
         let back = load(&d).0;
@@ -1224,7 +1224,10 @@ mod tests {
         let odd = load(&d).0;
         assert_eq!((odd.files_editor.as_str(), odd.files_editor_ask), ("some-new-ide", false));
         write(&d, r#"{"files_editor":"  ","mine":1}"#);
-        assert_eq!(load(&d).0.files_editor, "platoon");
+        assert_eq!(load(&d).0.files_editor, "");
+        // An older platoon's own editor, gone: none chosen.
+        write(&d, r#"{"files_editor":"platoon","mine":1}"#);
+        assert_eq!(load(&d).0.files_editor, "");
         save(&d, &Settings { files_editor_ask: true, ..Settings::default() }).unwrap();
         let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
         assert_eq!(v["mine"], 1, "keys it doesn't know are kept");
@@ -1517,11 +1520,9 @@ mod tests {
     }
 
     #[test]
-    fn seven_tabs_hold_every_setting_once_each_where_it_belongs() {
+    fn six_tabs_hold_every_setting_once_each_where_it_belongs() {
         let titles: Vec<&str> = TABS.iter().map(|t| t.title).collect();
-        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors", "Plugins"]);
-        assert!(tab("Plugins").is_empty(), "its rows are the plugins, drawn by the app");
-        assert_eq!(TABS[TAB_PLUGINS].title, "Plugins");
+        assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"]);
         assert_eq!(
             tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(),
             ["Editor for notes and tickets", "Editor for files (v)", "Always ask which editor"]

@@ -213,7 +213,7 @@ fn at_60_columns_the_settings_strip_keeps_the_showing_tab_in_view_and_marks_the_
     let mut app = w.app();
     ch(&mut app, 's');
     assert!(matches!(app.mode, Mode::Settings));
-    let titles = ["General", "Search", "Smart", "Sessions", "Projects", "Editors", "Plugins"];
+    let titles = ["General", "Search", "Smart", "Sessions", "Projects", "Editors"];
     for height in [24u16, 14] {
         for (i, title) in titles.iter().enumerate() {
             app.switch_settings_tab(i);
@@ -222,8 +222,8 @@ fn at_60_columns_the_settings_strip_keeps_the_showing_tab_in_view_and_marks_the_
             if i == 0 && height == 24 {
                 println!("Settings strip at 60 columns, on General:\n{s}\n");
             }
-            if i == 6 && height == 24 {
-                println!("Settings strip at 60 columns, on Plugins:\n{s}\n");
+            if i == 5 && height == 24 {
+                println!("Settings strip at 60 columns, on Editors:\n{s}\n");
             }
             assert!(s.contains(&format!(" {title} ")), "60x{height}: {title} is in view: {s}");
             // Where some tabs are out of view, a mark says on which side.
@@ -231,7 +231,7 @@ fn at_60_columns_the_settings_strip_keeps_the_showing_tab_in_view_and_marks_the_
             let right_out = titles[i + 1..].iter().any(|t| !s.contains(&format!(" {t} ")));
             assert_eq!(s.contains('‹'), left_out, "60x{height} on {title}: {s}");
             assert_eq!(s.contains('›'), right_out, "60x{height} on {title}: {s}");
-            assert!(left_out || right_out, "seven tabs don't all fit in 60 columns: {s}");
+            assert!(left_out || right_out, "six tabs don't all fit in 60 columns: {s}");
         }
     }
     // Wide enough, every tab shows and there are no marks.

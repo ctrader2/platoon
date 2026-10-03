@@ -31,13 +31,6 @@ fn platoon(claude: &PathBuf, cache: &PathBuf, args: &[&str]) -> std::process::Ou
         .env("PLATOON_CACHE_DIR", cache)
         // Never the real one: `platoon themes` reads the user's theme files from here.
         .env("PLATOON_CONFIG_DIR", cache.parent().unwrap().join("config"))
-        // Nor the real editor folder or fonts, and never the network: downloads come from an empty mirror.
-        .env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"))
-        .env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"))
-        .env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"))
-        .env("PLATOON_SKIP_FC_CACHE", "1")
-        // ...nor the plugin catalog built into platoon: a catalog folder that isn't there.
-        .env("PLATOON_PLUGIN_CATALOG", cache.parent().unwrap().join("no-plugin-catalog"))
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .output()
@@ -239,10 +232,6 @@ fn run_in_terminal(claude: &PathBuf, cache: &PathBuf, wait_for: &str) -> String 
     cmd.env("CLAUDE_CONFIG_DIR", claude);
     cmd.env("PLATOON_CACHE_DIR", cache);
     cmd.env("PLATOON_CONFIG_DIR", cache.join("config"));
-    cmd.env("PLATOON_DATA_DIR", cache.parent().unwrap().join("data"));
-    cmd.env("PLATOON_FONT_DIR", cache.parent().unwrap().join("fonts"));
-    cmd.env("PLATOON_EDITOR_MIRROR", cache.parent().unwrap().join("mirror"));
-    cmd.env("PLATOON_PLUGIN_CATALOG", cache.parent().unwrap().join("no-plugin-catalog"));
     cmd.env("TERM", "xterm-256color");
     cmd.env_remove("PLATOON_SKIP_SETUP_CHECK");
     let mut child = pair.slave.spawn_command(cmd).unwrap();
@@ -464,11 +453,11 @@ fn themes_lists_the_users_own_themes_marked_and_the_files_it_skipped_with_the_re
     assert_eq!(fs::read_dir(&themes).unwrap().count(), 7);
 }
 
-/// The code editor is a plugin now: setup neither asks about it nor shows a line for it (an old `setup.json` that
-/// remembers the old question still reads), and `setup --add/--remove editor` say so and do the plugin's add/remove
-/// (here with an empty catalog in place of the built-in one: said plainly, nothing installed; never the network).
+/// setup asks nothing about a code editor and shows no line for one (an old `setup.json` that remembers the question an
+/// older platoon asked still reads), `setup --add/--remove editor` are steps setup doesn't know, and `platoon plugin`
+/// is a command platoon doesn't know: each fails like any other unknown one, and nothing is installed or fetched.
 #[test]
-fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
+fn there_is_no_editor_step_and_no_plugin_command() {
     let (claude, cache) = dirs("editor");
     let base = cache.parent().unwrap().to_path_buf();
     fs::create_dir_all(base.join("config")).unwrap();
@@ -484,23 +473,22 @@ fn the_code_editor_is_a_plugin_now_and_setups_add_and_remove_say_so() {
     let choices: serde_json::Value = serde_json::from_str(&fs::read_to_string(base.join("config/setup.json")).unwrap()).unwrap();
     assert_eq!(choices["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is left alone");
 
-    let out = platoon(&claude, &cache, &["setup", "--add", "editor"]);
-    assert_eq!(out.status.code(), Some(1), "{out:?}");
-    assert!(text(&out.stdout).starts_with("The code editor is a plugin now: this is `platoon plugin add editor`."), "{out:?}");
-    assert!(text(&out.stderr).contains("There is no plugin called \"editor\" in the catalog"), "{out:?}");
-    assert!(
-        !base.join("data/editor").exists() && !base.join("data/plugins/editor").exists() && !base.join("fonts").exists(),
-        "nothing installed"
-    );
-    let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
-    assert!(out.status.success(), "{out:?}");
-    assert!(
-        text(&out.stdout).contains("this is `platoon plugin remove editor`")
-            && text(&out.stdout).contains("isn't installed; there is nothing to remove"),
-        "{out:?}"
-    );
-    // `--replace` is only for the skill.
+    for (verb, args) in [("add", ["setup", "--add", "editor"]), ("remove", ["setup", "--remove", "editor"])] {
+        let out = platoon(&claude, &cache, &args);
+        assert_eq!(out.status.code(), Some(1), "{out:?}");
+        assert!(out.stdout.is_empty(), "{out:?}");
+        assert_eq!(text(&out.stderr).trim(), format!("platoon setup can't {verb} \"editor\"; it can {verb}: to-tickets"));
+    }
     let out = platoon(&claude, &cache, &["setup", "--replace", "editor"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("can replace: to-tickets"), "{out:?}");
+    // `platoon plugin ...` is unknown, exactly as a made-up command is.
+    let unknown = platoon(&claude, &cache, &["no-such-command"]);
+    for args in [&["plugin", "list"][..], &["plugin", "add", "editor"], &["plugin"]] {
+        let out = platoon(&claude, &cache, args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}: {out:?}");
+        assert_eq!((&out.stdout, &out.stderr), (&unknown.stdout, &unknown.stderr), "{args:?}");
+    }
+    assert!(text(&unknown.stderr).starts_with("usage: platoon") && !text(&unknown.stderr).contains("plugin"));
+    assert!(!base.join("data").exists() && !base.join("fonts").exists(), "nothing installed anywhere");
 }

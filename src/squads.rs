@@ -44,14 +44,10 @@ pub use crate::squadfile::{Crew, LEADER_ROLE, Squad};
 /// The name an agent of squad `id` has in the session (`--agents`, `--agent`, and what Claude Code shows in its lines
 /// and status bar): `coding-leader`, `coding-planner`, ... A leader started before the names carried the squad
 /// (`AgentNames::Plain`) is resumed with the plain role it began with.
-///
-/// A plugin's squad and its own agents go by their short ids (`changelog-leader`, `changelog-change-reader`); a
-/// plugin's agent in another squad is `<plugin>--<id>` (`squadplugin::member_part`), which no other id can be.
 pub fn agent_name(id: &str, role: &str, names: AgentNames) -> String {
-    let role = crate::squadplugin::member_part(id, role);
     match names {
-        AgentNames::SquadRole => format!("{}-{role}", crate::squadplugin::squad_part(id)),
-        AgentNames::Plain => role,
+        AgentNames::SquadRole => format!("{id}-{role}"),
+        AgentNames::Plain => role.to_string(),
     }
 }
 

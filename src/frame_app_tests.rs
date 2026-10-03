@@ -123,7 +123,7 @@ fn the_footer_keeps_help_however_narrow_and_drops_the_others_first() {
         // Whole hints only: nothing is cut off at the right.
         assert!(footer.ends_with(' ') && !footer.contains('…'), "{w}: {footer:?}");
     }
-    // On a ticket-less project screen, the Squads tab and the plugin screen too.
+    // On a ticket-less project screen and the Squads tab too.
     for top in ['2', '3'] {
         ch(&mut app, top);
         let mut term = sized(&mut app, 60, 14);
@@ -330,7 +330,7 @@ fn question_mark_is_only_help_on_platoons_own_screens() {
     assert!(!app.help_showing());
     let mut r = &host;
     assert!(matches!(read_frame(&mut r), Ok((_, b)) if b == b"?"), "sent to the session");
-    // On the project screen, the Squads tab and the plugin screen it is the help, with that screen's keys.
+    // On the project screen and the Squads tab it is the help, with that screen's keys.
     app.client = None;
     app.mode = Mode::List;
     ch(&mut app, '3');

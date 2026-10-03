@@ -13,8 +13,6 @@ mod dirs;
 mod editor;
 #[cfg(test)]
 mod editor_app_tests;
-mod editor_install;
-mod editorplugin;
 mod editors;
 mod fileeditors;
 #[cfg(test)]
@@ -47,11 +45,6 @@ mod notesupdate;
 mod open;
 #[cfg(test)]
 mod perf;
-mod plugincli;
-mod pluginreview;
-mod plugins;
-#[cfg(test)]
-mod plugins_app_tests;
 mod procs;
 mod projects;
 #[cfg(test)]
@@ -66,12 +59,10 @@ mod select_app_tests;
 mod sessionhook;
 mod settings;
 mod setup;
-mod skillplugin;
 mod smart;
 #[cfg(test)]
 mod smart_app_tests;
 mod squadfile;
-mod squadplugin;
 mod squadqueue;
 #[cfg(test)]
 mod squadqueue_app_tests;
@@ -128,10 +119,6 @@ fn main() -> io::Result<()> {
             std::process::exit(totickets::squads_cli(&args, &archive::config_dir(), &mut out, &mut err));
         }
         Some("themes") => return themes(),
-        Some("plugin") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            std::process::exit(plugin_cli(|c, out, err| plugincli::cli(&args, c, out, err)));
-        }
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (mut out, mut err) = (io::stdout(), io::stderr());
@@ -151,8 +138,6 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-notify") => std::process::exit(squads::run_notify_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-tool") => std::process::exit(squads::run_tool_hook()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-prompt") => std::process::exit(squads::run_prompt_hook()),
-        // Run by the code editor for each copy (`clipboard::run_hold`).
-        Some(clipboard::HOLD_COMMAND) => std::process::exit(clipboard::run_hold()),
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -198,7 +183,7 @@ fn main() -> io::Result<()> {
 }
 
 const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
-               squads --kinds | themes | plugin ... | tokens]
+               squads --kinds | themes | tokens]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. The back key (Ctrl+Space unless
@@ -208,10 +193,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   stops two copies of one session from overwriting each other, two hooks
                   that hand a project's notes to its sessions and keep them up to date, and
                   the /to-tickets skill that turns a conversation into tickets
-                  and asks once whether to install the optional code editor
   setup --remove to-tickets   take the /to-tickets skill out again
-  setup --add editor          the same as `plugin add editor` (the code editor is a plugin now)
-  setup --remove editor       the same as `plugin remove editor`
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...
                   make a ticket in that project and print its number (#N); with no --folder it
@@ -220,17 +202,11 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   ticket list [--project <name>] [--json]   the tickets, open ones first
   ticket where --session <id>   the project a session belongs to (exit 1 when none)
   squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
-  themes          list the color themes: the built-in ones, your own and those of plugins
-  plugin list | add <id or folder> [--yes] | remove <id> | update [id] [--yes] | show <id> | check <folder>
-                  plugins from platoon's catalog: see what there is, install, take off,
-                  update; read what a plugin's skills, squads and agents tell Claude (show);
-                  check a plugin folder you are making. `plugin add editor` installs
-                  platoon's code editor (Neovim, its plugins, a font with icons)
+  themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
                   hook squad-notify, hook squad-tool, hook squad-prompt,
-                  notes-update, clipboard-hold   internal: run by
-                  Claude Code, or by platoon itself (and its code editor)";
+                  notes-update   internal: run by Claude Code, or by platoon itself";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
 fn statusline() -> io::Result<()> {
@@ -261,7 +237,7 @@ fn use_color(stderr: bool) -> bool {
 /// colors, and the theme files that were skipped, with the reason.
 fn themes() -> io::Result<()> {
     let depth = use_color(false).then(colordepth::Depth::detect);
-    let registry = usertheme::Registry::open_with_plugins(&archive::config_dir(), &plugins::Store::from_env().dir);
+    let registry = usertheme::Registry::open(&archive::config_dir());
     print!("{}", theme::render_list(depth, &registry));
     Ok(())
 }
@@ -296,38 +272,11 @@ fn setup() -> io::Result<()> {
     Ok(())
 }
 
-/// Run a `platoon plugin` command (or a setup alias of one) with this computer's folders. Its exit code.
-fn plugin_cli(f: impl FnOnce(&plugincli::Ctx, &mut dyn io::Write, &mut dyn io::Write) -> i32) -> i32 {
-    use std::io::IsTerminal;
-    let (mut out, mut err) = (io::stdout(), io::stderr());
-    let home = std::env::var("HOME").unwrap_or_default();
-    let (store, from, dirs) = (plugins::Store::from_env(), plugins::CatalogFrom::from_env(), editor_install::Dirs::from_env());
-    let printer = editor_install::Printer::new(io::stdout().is_terminal());
-    let config = archive::config_dir();
-    // A yes/no question in the terminal; none where there is no terminal to ask in.
-    let ask = |question: &str| -> Option<bool> {
-        if !io::stdin().is_terminal() {
-            return None;
-        }
-        print!("{question}");
-        let _ = io::Write::flush(&mut io::stdout());
-        let mut line = String::new();
-        io::stdin().read_line(&mut line).ok()?;
-        Some(matches!(line.trim().to_lowercase().as_str(), "y" | "yes"))
-    };
-    let c = plugincli::Ctx { store: &store, from: &from, dirs: &dirs, home: &home, printer: &printer, config: &config, ask: &ask };
-    f(&c, &mut out, &mut err)
-}
-
 /// `platoon setup <args>`: `--remove <step>` (and remember it), `--add <step>` (undo that), `--replace <step>`
 /// (platoon's copy in place of one the user changed).
 fn setup_with(args: &[String]) -> i32 {
     let (root, config) = (claude::claude_root(), archive::config_dir());
     let done = match args {
-        // The code editor is a plugin now: said, then done as `platoon plugin add/remove editor`.
-        [flag, what] if what == setup::EDITOR && (flag == "--add" || flag == "--remove") => {
-            return plugin_cli(|c, out, err| plugincli::setup_alias(flag, c, out, err));
-        }
         [flag, what] if flag == "--remove" => setup::remove_step(&root, &config, what),
         [flag, what] if flag == "--add" => setup::add_step(&root, &config, what),
         [flag, what] if flag == "--replace" => setup::replace_step(&root, &config, what),
@@ -363,10 +312,6 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     let mut last_refresh = Instant::now();
     let mut screen = Screen::default();
     while !app.quit {
-        if let Some(req) = app.take_editor_request() {
-            open_editor(terminal, &mut app, &req, depth, no_color);
-            screen.forget();
-        }
         if let Some((e, dirs)) = app.take_own_editor_request() {
             open_own_editor(terminal, &mut app, &e, &dirs);
             screen.forget();
@@ -381,14 +326,7 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         app.tick = tick;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
-        let every = if app.indexing().is_some()
-            || app.settling()
-            || app.smart_busy()
-            || app.handoff_busy()
-            || app.squads_busy()
-            || app.editor_busy()
-            || app.plugins_busy()
-        {
+        let every = if app.indexing().is_some() || app.settling() || app.smart_busy() || app.handoff_busy() || app.squads_busy() {
             Duration::from_millis(250)
         } else {
             Duration::from_secs(1)
@@ -498,38 +436,10 @@ impl Screen {
     }
 }
 
-/// Hand the terminal to the code editor (`v`), wait for it to close, and take the terminal back: platoon's screen
-/// goes (raw mode off, the alternate screen left) so the editor draws on the real terminal, then comes back drawn in
-/// full, where the user was. Nothing of platoon reads the keyboard or draws in between (this loop is waiting).
-fn open_editor(
-    terminal: &mut ratatui::DefaultTerminal,
-    app: &mut app::App,
-    req: &editor::Request,
-    depth: colordepth::Depth,
-    no_color: bool,
-) {
-    let dirs = app.editor_dirs().clone();
-    let env = |k: &str| std::env::var(k).ok();
-    let theme = app.effective_theme().clone();
-    let look = editor::Look {
-        theme: &theme,
-        mode: editor::color_mode(&theme, depth, no_color),
-        icons: editor_install::nerd_font_present(&dirs),
-        compile_parsers: editor_install::can_build_parsers(&dirs),
-        copying: editor::Copying::like(app.clipboard_target()),
-        back: app.keys.get().back.nvim(),
-    };
-    let config = app.editor_config_files();
-    let launch = match editor::prepare(&dirs, req, &look, &env, std::process::id(), &config) {
-        Ok(l) => l,
-        Err(e) => return app.editor_closed(Err(e)),
-    };
-    let result = hand_over(terminal, app, &launch, &req.dirs());
-    app.editor_closed(result);
-}
-
 /// Hand the terminal to an editor of the user's own that draws in the terminal (Helix, their Neovim setup), on the
-/// first folder, exactly as platoon's editor is handed it.
+/// first folder, wait for it to close, and take the terminal back: platoon's screen goes (raw mode off, the alternate
+/// screen left) so the editor draws on the real terminal, then comes back drawn in full, where the user was. Nothing
+/// of platoon reads the keyboard or draws in between (this loop is waiting).
 fn open_own_editor(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, e: &fileeditors::FileEditor, dirs: &[String]) {
     let env = |k: &str| std::env::var(k).ok();
     let Some(first) = dirs.first() else { return };
@@ -556,7 +466,6 @@ fn hand_over(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, launch
     // that doesn't answer holds everything up.) The cursor is hidden again too.
     let _ = terminal.draw(|_| {});
     let _ = terminal.hide_cursor();
-    editor::finish(launch);
     if let Some(m) = mark {
         editor::unmark(&m);
     }
@@ -919,14 +828,14 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 to 3: the top-level tabs. A number with no tab does nothing (4 included: plugins are in the settings).
+        // 1 to 3: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
         assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '3');
         assert!(app.top == 2 && app.squads_tab_showing() && app.selected_session().is_none());
         ch(&mut app, '4');
-        assert!(app.top == 2 && !app.plugin_screen_showing() && matches!(app.mode, Mode::List));
+        assert!(app.top == 2 && matches!(app.mode, Mode::List));
         ch(&mut app, '5');
         assert_eq!(app.top, 2);
         ch(&mut app, '1');

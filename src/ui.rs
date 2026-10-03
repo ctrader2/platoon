@@ -12,7 +12,6 @@ use crate::tickets::{self, State, Ticket};
 use crate::usage::Usage;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod help_view;
-mod plugins_view;
 mod squads_view;
 
 use ratatui::{
@@ -95,7 +94,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // The Active/Archived switch of the Sessions and Projects lists sits at the right of the rule when it fits there
     // (clear of the current tab's mark); otherwise it has the row under the rule to itself.
-    let lists = !app.plugin_screen_showing() && app.open_project.is_none() && !app.squads_tab_showing();
+    let lists = app.open_project.is_none() && !app.squads_tab_showing();
     let (labels, counts, current): (Vec<&str>, &[usize], usize) = if app.projects_list_showing() {
         (PTABS.iter().map(|(l, _)| *l).collect(), &app.pcounts, app.ptab)
     } else {
@@ -113,7 +112,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     let summary = app
         .selected_session()
         .map(|s| s.summary.as_str())
-        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.plugin_screen_showing());
+        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing());
     let strip_h = if summary.is_some() && full.height >= STRIP_MIN_HEIGHT { 2 } else { 0 };
     let term_w = full.width;
     let [shelf, titles, list, strip, footer] = Layout::vertical([
@@ -130,10 +129,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
     // Everything between the rule and the footer: a screen that isn't a list with column titles takes all of it.
     let screen = Rect::new(rest.x, rest.y, rest.width, list.bottom() - rest.y);
-    if app.plugin_screen_showing() {
-        // Opened from the settings, over whatever screen they were opened on: it takes the whole body.
-        plugins_view::draw_plugin_screen(f, app, screen);
-    } else if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+    if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
         // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
         // In the line for a free squad, its squad's place beside it is not there yet (an earlier squad's isn't its).
         if app.ticket(n).is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
@@ -258,7 +254,6 @@ pub fn draw(f: &mut Frame, app: &App) {
         Mode::SquadPick => draw_squad_pick(f, app, full),
         Mode::SquadChoice => squads_view::draw_squad_choice(f, app, full),
         Mode::SquadText => squads_view::draw_squad_text(f, app, full),
-        Mode::PluginReview => plugins_view::draw_plugin_review(f, app, full),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, full),
         _ => {}
@@ -270,9 +265,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 
 /// The keys of the screen showing, as its footer lists them (and the help popup, from the same table).
 fn screen_hints(app: &App) -> Vec<Hint<'_>> {
-    if app.plugin_screen_showing() {
-        plugins_view::plugin_screen_hints(app)
-    } else if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+    if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
         ticket_screen_hints(app, n)
     } else if app.open_project.is_some() {
         project_screen_hints(app)
@@ -1396,8 +1389,6 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     let mut left = vec![Span::styled("platoon", Style::new().fg(t.accent).add_modifier(Modifier::BOLD)), Span::raw("   ")];
     let mut x = area.x + 10;
     let mut spans = Vec::new();
-    // The plugin screen (from the settings) is none of the tabs: none is current there, and they aren't clicked.
-    let on_tab = !app.plugin_screen_showing();
     for (i, tab) in TOPS.iter().enumerate() {
         if i > 0 {
             left.push(Span::raw(" "));
@@ -1405,16 +1396,16 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         }
         // A chip: ` 1 Sessions `, the key dim and the label lit on the current tab. No count: the Active/Archived
         // switch under it says how many there are.
-        let current = on_tab && i == app.top;
+        let current = i == app.top;
         let (key, label) = (format!("{}", i + 1), format!(" {tab} "));
         let w = (1 + key.chars().count() + label.chars().count()) as u16;
         let rect = Rect::new(x, area.y, w, 1).intersection(area);
-        if !rect.is_empty() && on_tab {
+        if !rect.is_empty() {
             app.hits.borrow_mut().push((rect, Hit::Top(i)));
         }
         spans.push((x, w, current));
         x += w;
-        let hover = on_tab && !current && rect.contains(app.mouse.into());
+        let hover = !current && rect.contains(app.mouse.into());
         let mut chip = tab_chip(t, app.rounded, &key, &label, 0, current, hover);
         // Just the key and the label: the count's pill (the last one or three spans) goes.
         chip.truncate(3);
@@ -2136,19 +2127,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         Some(Kind::Instructions(id)) => Some(app.instructions_status(id).restorable()),
         _ => None,
     };
-    let on_plugins = app.settings_tab == crate::settings::TAB_PLUGINS;
-    let hints = if on_plugins {
-        let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None)];
-        let rows = app.pl.rows();
-        if !rows.is_empty() {
-            hints.push(("enter", "open", None));
-        }
-        if rows.get(app.setting).is_some_and(|r| r.installed.is_some()) {
-            hints.push(("d", "remove", None));
-        }
-        hints.push(("esc", "back", Some(Action::Cancel)));
-        fit_hints(hints, w, &["move", "tabs"])
-    } else if let Some(restorable) = on_instructions {
+    let hints = if let Some(restorable) = on_instructions {
         let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None), ("enter", "edit", None)];
         if restorable {
             hints.push(("r", "restore", None));
@@ -2175,7 +2154,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let top = area.y;
     // The reassurance line is the first thing to go when that lets the selected entry explain itself.
     // A warning or an error is never dropped.
-    if !store.is_corrupt() && app.active_notice().is_none() && !on_plugins {
+    if !store.is_corrupt() && app.active_notice().is_none() {
         let text_w = (area.width as usize).saturating_sub(4);
         let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
         let room = |notes: usize| {
@@ -2196,8 +2175,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     let rows_area = Rect::new(area.x, top, area.width, rows_bottom - top);
 
     // The notes follow the entries directly.
-    let first =
-        if on_plugins { plugins_view::draw_plugin_settings(f, app, rows_area) } else { draw_setting_rows(f, app, &current, rows_area) } + 1;
+    let first = draw_setting_rows(f, app, &current, rows_area) + 1;
     for ((line, color), y) in notes.iter().zip(first..) {
         if y < path_y {
             f.render_widget(Paragraph::new(Span::styled(line.clone(), Style::new().fg(*color))), Rect::new(area.x, y, area.width, 1));
@@ -2239,15 +2217,6 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
         };
         notes.extend(wrap(&archived, w).into_iter().map(|l| (l, t.subtext)));
     }
-    if tab == crate::settings::TAB_PLUGINS {
-        // The selected plugin's description (a few lines at most, cut with "…"), then what enter does.
-        let rows = app.pl.rows();
-        if let Some(r) = rows.get(app.setting.min(rows.len().saturating_sub(1))) {
-            notes.extend(plugins_view::description_lines(r, w).into_iter().map(|l| (l, t.text)));
-        }
-        let msg = "Enter opens a plugin: what it adds, and install, update or remove.";
-        notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.subtext)));
-    }
     if app.settings().is_corrupt() {
         let msg = "The settings file couldn't be read, so the standard values are shown. Your first change saves a fresh file and keeps the old one as settings.json.bak.";
         notes.extend(wrap(msg, w).into_iter().map(|l| (l, t.warn)));
@@ -2265,16 +2234,9 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
     let need = |tab: usize| {
         let items = &SETTINGS_TABS[tab].items;
-        let mut entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>()
+        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>()
             + items.len().saturating_sub(1)
             + SETTINGS_TABS[tab].headings.len();
-        if tab == crate::settings::TAB_PLUGINS {
-            // Room for the longest description of any plugin, so the popup keeps its size as the selection moves.
-            let rows = app.pl.rows();
-            let shown = rows.get(app.setting.min(rows.len().saturating_sub(1))).map_or(0, |r| plugins_view::description_lines(r, w).len());
-            let most = rows.iter().map(|r| plugins_view::description_lines(r, w).len()).max().unwrap_or(0);
-            entries = plugins_view::plugin_settings_height(app) + most - shown.min(most);
-        }
         entries + 1 + settings_notes(app, tab, w).len()
     };
     let most = (0..SETTINGS_TABS.len()).map(need).max().unwrap_or(0);
@@ -2570,15 +2532,8 @@ fn draw_theme_list(f: &mut Frame, app: &App, area: Rect) {
         let bg = if selected || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         // marker(2) name space swatch(5) check(2)
         let name_w = w.saturating_sub(10);
-        // Where it came from, when that isn't platoon: " yours", or the plugin's name (cut to what fits).
-        let tag = if th.is_user() && !th.name.ends_with("(yours)") && name_w >= 14 {
-            " yours".to_string()
-        } else if let Some(plugin) = app.themes().plugin_of(&th.id).filter(|p| name_w >= 20 && !th.name.ends_with(&format!("({p})"))) {
-            let room = name_w.saturating_sub(th.name.chars().count() + 2).clamp(6, 16);
-            format!(" {}", fit_end(plugin, room))
-        } else {
-            String::new()
-        };
+        // Where it came from, when that isn't platoon: " yours".
+        let tag = if th.is_user() && !th.name.ends_with("(yours)") && name_w >= 14 { " yours".to_string() } else { String::new() };
         let name_style = if selected { Style::new().fg(t.text).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.subtext) };
         let mut spans = vec![
             Span::styled(if selected { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
@@ -3210,8 +3165,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
         let where_it_runs = match (e.runs, e.several) {
-            (Runs::Platoon, _) if pick.platoon_missing => "installs its plugin first",
-            (Runs::Platoon, _) | (Runs::Terminal, _) => "here in platoon's terminal",
+            (Runs::Terminal, _) => "here in platoon's terminal",
             (Runs::Window, Several::EachWindow) => "a window per folder",
             (Runs::Window, _) => "in its own window",
         };
@@ -3219,13 +3173,7 @@ fn draw_file_editor_pick(f: &mut Frame, app: &App, area: Rect) {
         let spans = vec![
             Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
             Span::styled(format!("{star} "), base.fg(t.accent)),
-            Span::styled(
-                fit(
-                    &if e.is_platoon() && pick.platoon_missing { format!("{} (not installed)", e.name) } else { e.name.clone() },
-                    (rect.width as usize).saturating_sub(31),
-                ),
-                base.fg(t.text),
-            ),
+            Span::styled(fit(&e.name, (rect.width as usize).saturating_sub(31)), base.fg(t.text)),
             Span::styled(where_it_runs, base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
@@ -3507,7 +3455,9 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     let (title, l1, l2, yes) = match c {
         Confirm::Archive { name, busy, outside, .. } => {
             let what = match (outside, busy) {
-                (true, true) => "It is running in a terminal outside platoon and is working right now. Archiving ends that copy, which interrupts what it is doing.",
+                (true, true) => {
+                    "It is running in a terminal outside platoon and is working right now. Archiving ends that copy, which interrupts what it is doing."
+                }
                 (true, false) => "It is running in a terminal outside platoon. Archiving ends that copy.",
                 _ => "It is working right now. Archiving stops it, which interrupts what it is doing.",
             };
@@ -3520,7 +3470,9 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         }
         Confirm::ArchiveProject { name, running, busy, outside, .. } => {
             let what = match (outside, busy) {
-                (true, true) => "Some of them run in a terminal outside platoon, and some are working right now: archiving ends them, which interrupts what they are doing.",
+                (true, true) => {
+                    "Some of them run in a terminal outside platoon, and some are working right now: archiving ends them, which interrupts what they are doing."
+                }
                 (true, false) => "Some of them run in a terminal outside platoon: archiving ends those copies.",
                 _ => "Some of them are working right now: archiving stops them, which interrupts what they are doing.",
             };
@@ -3546,25 +3498,8 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::EditorWhileWorking { number, title } => (
             "squad at work",
             format!("Open #{number} {title} in the editor anyway?"),
-            "The squad is still working in these files; what you change may clash with it. The editor reads a file again when \
-             the squad changes it, and asks before saving over a file the squad changed."
-                .to_string(),
+            "The squad is still working in these files; what you change may clash with it.".to_string(),
             "open anyway",
-        ),
-        Confirm::InstallEditor { bytes, plugin: false } => (
-            "code editor",
-            "platoon's code editor isn't installed. Install its plugin now?".to_string(),
-            format!(
-                "Neovim with a file tree, the changed files, diffs, search and a terminal, in platoon's own folder. It downloads {}, usually in under a minute. Your own Neovim settings are not touched; the settings (s, then Plugins) take it off again.",
-                crate::editorplugin::size_words(*bytes)
-            ),
-            "install",
-        ),
-        Confirm::InstallEditor { bytes, plugin: true } => (
-            "code editor",
-            "The code editor's downloads aren't complete. Finish them now?".to_string(),
-            format!("Only what is missing or changed is fetched (of {} in all); what is there already is kept.", crate::editorplugin::size_words(*bytes)),
-            "install",
         ),
         Confirm::DeleteSquad { id, name } => (
             "delete squad",
@@ -3575,7 +3510,9 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::RestoreSquad { id, name } => (
             "restore squad",
             format!("Put {name} back as platoon has it?"),
-            format!("Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tickets it already has keep what they started with."),
+            format!(
+                "Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tickets it already has keep what they started with."
+            ),
             "restore",
         ),
         Confirm::DiscardDraft { name } => (
@@ -3587,13 +3524,17 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::DeleteAgent { id, name } => (
             "delete agent",
             format!("Delete the agent \"{name}\"?"),
-            format!("No squad uses it. Tickets already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."),
+            format!(
+                "No squad uses it. Tickets already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."
+            ),
             "delete",
         ),
         Confirm::RestoreAgent { id, name } => (
             "restore agent",
             format!("Put {name} back as platoon has it?"),
-            format!("Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tickets already started keep what they started with."),
+            format!(
+                "Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tickets already started keep what they started with."
+            ),
             "restore",
         ),
         Confirm::DiscardAgentDraft { name } => (
@@ -3601,56 +3542,6 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("Throw away the draft agent \"{name}\"?"),
             "It was never saved, so nothing of it is kept.".to_string(),
             "discard",
-        ),
-        Confirm::InstallPlugin { name, update, download: Some(bytes), .. } => match update {
-            Some((from, to)) => (
-                "update plugin",
-                format!("Update {name} from {from} to {to}?"),
-                format!("Its files are replaced with the catalog's, then whatever changed in what it downloads is fetched (of {} in all).", crate::editorplugin::size_words(*bytes)),
-                "update",
-            ),
-            None => (
-                "install plugin",
-                format!("Install {name}?"),
-                format!(
-                    "Neovim with a file tree, the changed files, diffs, search and a terminal, opened with v. It downloads {} (Neovim, its tools and plugins, a font with icons), each checked against the checksum the plugin pins, into platoon's own folder; usually under a minute. d here takes it off again, with everything it downloaded.",
-                    crate::editorplugin::size_words(*bytes)
-                ),
-                "install",
-            ),
-        },
-        Confirm::InstallPlugin { name, adds, update, .. } => match update {
-            Some((from, to)) => ("update plugin", format!("Update {name} from {from} to {to}?"), format!("It adds {adds}. Its files are replaced with the catalog's."), "update"),
-            None => (
-                "install plugin",
-                format!("Install {name}?"),
-                format!("It adds {adds}. It holds files only, nothing that runs, and d on it (in the settings: s, then Plugins) takes it off again."),
-                "install",
-            ),
-        },
-        Confirm::RemovePlugin { name, editor: true, .. } => (
-            "remove plugin",
-            format!("Remove {name}?"),
-            "Everything it downloaded goes with it: platoon's editor folder (Neovim, its tools and plugins) and the font platoon installed. Your own Neovim and its settings are not touched. v still opens your other editors; installing the plugin again brings it back.".to_string(),
-            "remove",
-        ),
-        Confirm::RemovePlugin { name, adds, in_use, extra, .. } => (
-            "remove plugin",
-            format!("Remove {name}?"),
-            {
-                let mut says = if *in_use {
-                    format!("What it adds ({adds}) goes with it. You are using one of its themes: platoon goes back to its default theme.")
-                } else {
-                    format!("What it adds ({adds}) goes with it.")
-                };
-                if !extra.is_empty() {
-                    says.push(' ');
-                    says.push_str(extra);
-                }
-                says.push_str(" Installing it again brings it back.");
-                says
-            },
-            "remove",
         ),
         Confirm::HandAnyway { number, title, says, .. } => (
             "hand it anyway",
@@ -3663,9 +3554,13 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             format!("Cancel ticket #{number}?"),
             {
                 let mut says = match (pid, squad) {
-                    (Some(_), _) => format!("#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."),
+                    (Some(_), _) => format!(
+                        "#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. Its conversation is kept: talking to the squad again opens the ticket again."
+                    ),
                     (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
-                    (None, false) => format!("#{number} {title} goes under Done and cancelled. No squad has had it, so it stays cancelled."),
+                    (None, false) => {
+                        format!("#{number} {title} goes under Done and cancelled. No squad has had it, so it stays cancelled.")
+                    }
                 };
                 if *uncommitted {
                     says.push_str(" Its worktree has changes not yet committed, so platoon keeps it: w on the ticket removes it anyway.");
@@ -3697,7 +3592,10 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 format!("Restore platoon's default system prompt for {}?", a.what),
                 format!(
                     "Your version stops being used. It is kept as {}.bak in the prompts folder, until the next time you restore.",
-                    crate::instructions::path(std::path::Path::new(""), id).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                    crate::instructions::path(std::path::Path::new(""), id)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default()
                 ),
                 "restore",
             )
@@ -3742,8 +3640,6 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     f.render_widget(Paragraph::new(l2).wrap(Wrap { trim: true }).style(Style::new().fg(t.dim)), b);
     let no = match c {
         Confirm::CancelTicket { .. } | Confirm::RemoveWorktree { .. } => "keep it",
-        Confirm::InstallEditor { .. } | Confirm::InstallPlugin { .. } => "not now",
-        Confirm::RemovePlugin { .. } => "keep it",
         _ => "cancel",
     };
     let hints: [Hint; 2] = [("y", yes, Some(Action::Confirm)), ("n", no, Some(Action::Cancel))];
@@ -3839,11 +3735,6 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
                 format!("Needs fixing on the Squads tab first. {}", s.can_do)
             } else {
                 s.can_do.clone()
-            };
-            // A plugin's squad says which plugin it comes with.
-            let text = match app.squad_list().iter().find(|l| l.id == s.id).and_then(|l| l.plugin.as_ref()) {
-                Some(p) => format!("From {p}. {text}"),
-                None => text,
             };
             wrap(&text, inner_w.saturating_sub(2))
         })

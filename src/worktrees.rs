@@ -1,7 +1,7 @@
-//! A ticket's worktrees after the work: what a branch is compared with (`diff_base`), whether one has changes not yet
-//! committed, and removing one once its ticket is Done or Cancelled (`remove`). The branch is never touched: removing
-//! a worktree keeps every commit, and continuing the squad makes the worktree again from its branch
-//! (`squads::prepare_worktrees`). Making them is in `squads.rs`; when the app removes them is in `app/worktree_glue.rs`.
+//! A ticket's worktrees after the work: whether one has changes not yet committed, and removing one once its ticket is
+//! Done or Cancelled (`remove`). The branch is never touched: removing a worktree keeps every commit, and continuing
+//! the squad makes the worktree again from its branch (`squads::prepare_worktrees`). Making them is in `squads.rs`;
+//! when the app removes them is in `app/worktree_glue.rs`.
 //!
 //! What `remove` will touch, and nothing else: the folder platoon made for this ticket
 //! (`<parent>/<repo>-worktrees/ticket-<N>`, `squads::worktree_dir`), when the ticket's record points there, git lists it
@@ -25,32 +25,6 @@ pub enum Removal {
     Uncommitted,
     /// Not touched, and why, in plain words.
     Refused(String),
-}
-
-/// The commit ticket `w`'s branch is compared with to show what the ticket changed: the commit its worktree was made
-/// from, as written on the ticket. A worktree made before platoon wrote that down: where its branch left `main`
-/// (else `master`), else where it left the repository's HEAD as it is now (HEAD itself if they share nothing). None
-/// when its branch or its repository isn't there any more. `program` is git.
-pub fn diff_base(w: &Worktree, program: &str) -> Option<String> {
-    if let Some(b) = &w.base {
-        return Some(b.clone());
-    }
-    let dir = [&w.folder, &w.path].into_iter().map(Path::new).find(|p| p.is_dir())?;
-    // The repository's main worktree: its HEAD is the one "the repository's HEAD" means (the ticket's own worktree
-    // has the branch itself as its HEAD).
-    let main = worktrees_of(program, dir).into_iter().next().map(|(p, _)| p).filter(|p| p.is_dir()).unwrap_or_else(|| dir.to_path_buf());
-    let one = |args: &[&str]| git(program, &main, args).ok().map(|o| o.trim().to_string()).filter(|o| !o.is_empty());
-    let branch = format!("refs/heads/{}", w.branch);
-    one(&["rev-parse", "--verify", "--quiet", &format!("{branch}^{{commit}}")])?;
-    for trunk in ["refs/heads/main", "refs/heads/master"] {
-        if one(&["rev-parse", "--verify", "--quiet", trunk]).is_some()
-            && let Some(mb) = one(&["merge-base", &branch, trunk])
-        {
-            return Some(mb);
-        }
-    }
-    let head = one(&["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])?;
-    one(&["merge-base", &branch, &head]).or(Some(head))
 }
 
 /// Where ticket `number`'s worktree `w` is, checked against its record: (its repository's root, the worktree's
@@ -207,7 +181,6 @@ mod tests {
         let folders = vec![shop.to_string_lossy().into_owned()];
         let got = prepare_worktrees("git", &folders, 3, &[]).unwrap();
         assert_eq!(got[0].base.as_deref(), Some(head.as_str()));
-        assert_eq!(diff_base(&got[0], "git").as_deref(), Some(head.as_str()));
         // The main repository moves on; the worktree is used again: the base stays where the branch started.
         commit_in(&shop, "later.txt", "later on main");
         let again = prepare_worktrees("git", &folders, 3, &got).unwrap();
@@ -274,42 +247,6 @@ mod tests {
         fs::write(&file, bad.to_string()).unwrap();
         assert_eq!(Tickets::open(&config, "p1").get(1).unwrap().worktrees[0].base, None);
         let _ = fs::remove_dir_all(&config);
-    }
-
-    #[test]
-    fn a_worktree_without_a_base_is_compared_with_where_it_left_main_else_master_else_head() {
-        let base = dir("fallback");
-        let shop = repo(&base, "shop");
-        let start = run(&shop, &["rev-parse", "HEAD"]);
-        let got = prepare_worktrees("git", &[shop.to_string_lossy().into_owned()], 5, &[]).unwrap();
-        let wt = PathBuf::from(&got[0].path);
-        commit_in(&wt, "basket.txt", "basket on the branch");
-        commit_in(&shop, "other.txt", "main moves on");
-        let old = Worktree { base: None, ..got[0].clone() };
-        assert_eq!(diff_base(&old, "git").as_deref(), Some(start.as_str()), "where it left main");
-        // A repository whose trunk is `master`.
-        let legacy = repo(&base, "legacy");
-        run(&legacy, &["branch", "-m", "main", "master"]);
-        let start = run(&legacy, &["rev-parse", "HEAD"]);
-        let got = prepare_worktrees("git", &[legacy.to_string_lossy().into_owned()], 6, &[]).unwrap();
-        commit_in(Path::new(&got[0].path), "x.txt", "on the branch");
-        commit_in(&legacy, "y.txt", "master moves on");
-        assert_eq!(diff_base(&Worktree { base: None, ..got[0].clone() }, "git").as_deref(), Some(start.as_str()), "where it left master");
-        // Neither: where it left the repository's HEAD (the main worktree's, not the branch's own).
-        let odd = repo(&base, "odd");
-        run(&odd, &["branch", "-m", "main", "trunk"]);
-        let start = run(&odd, &["rev-parse", "HEAD"]);
-        let got = prepare_worktrees("git", &[odd.to_string_lossy().into_owned()], 7, &[]).unwrap();
-        commit_in(Path::new(&got[0].path), "x.txt", "on the branch");
-        commit_in(&odd, "y.txt", "trunk moves on");
-        assert_eq!(diff_base(&Worktree { base: None, ..got[0].clone() }, "git").as_deref(), Some(start.as_str()), "where it left HEAD");
-        // Its branch deleted, or its repository gone: no base.
-        let gone = Worktree { base: None, branch: "ticket/99".into(), ..got[0].clone() };
-        assert_eq!(diff_base(&gone, "git"), None);
-        let nowhere =
-            Worktree { folder: "/nowhere/at/all".into(), path: "/nowhere/else".into(), branch: "ticket/1".into(), ..Default::default() };
-        assert_eq!(diff_base(&nowhere, "git"), None);
-        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

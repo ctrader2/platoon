@@ -28,11 +28,11 @@ const GLOBAL: &[&str] = &["tabs", "settings", "search", "quit", "help"];
 fn everywhere(app: &App) -> Vec<(String, String)> {
     let list = matches!(app.mode, Mode::List);
     let mut out = vec![(format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", ")))];
-    // `s` is not the settings on a ticket (it was its state), and the plugin screen is opened from them.
+    // `s` is not the settings on a ticket (it was its state).
     if list && !app.ticket_has_keys() {
         out.push(("s".into(), "settings".into()));
     }
-    // The search looks for conversations and projects: not on a ticket, the Squads tab or the plugin screen.
+    // The search looks for conversations and projects: not on a ticket or the Squads tab.
     if list && app.tk.open.is_none() && !app.squads_tab_showing() {
         out.push(("/".into(), "search".into()));
     }

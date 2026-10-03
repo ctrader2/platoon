@@ -1,6 +1,6 @@
 //! The keys the user can change, in `<config dir>/keys.json` beside `settings.json`: an object of action name -> key,
 //! like `{ "back": "ctrl+space", "quit": "q" }`. Only `back` (one level back, everywhere: a session, `platoon open`,
-//! the notes editor, the code editor, every screen and popup) and `quit` (from the top-level lists) for now; the table
+//! the notes editor, every screen and popup) and `quit` (from the top-level lists) for now; the table
 //! (`ACTIONS`) is where others join later, one screen at a time, without the file changing shape.
 //!
 //! platoon never writes this file. A missing file is the defaults; one that can't be read or isn't a JSON object is the
@@ -10,10 +10,10 @@
 //!
 //! A key is written in lower case (any case is read): modifiers `ctrl+`, `alt+`, `shift+`, then a key name (`space`,
 //! `esc`, `enter`, `tab`, `backspace`, `delete`, `insert`, `home`, `end`, `pageup`, `pagedown`, `up`, `down`, `left`,
-//! `right`, `f1`..`f12`, or one character). The back key must be told apart from typing in three places: platoon's own
-//! screen (crossterm's key events), `platoon open` (the raw bytes the terminal sends) and the code editor (Neovim's
-//! notation), so it is a ctrl chord of `space` or a letter, or an alt chord of `space`, a letter or a digit. Ctrl+H, I,
-//! J, M (and Ctrl+[) are refused: a terminal sends them as Backspace, Tab, Enter and Esc.
+//! `right`, `f1`..`f12`, or one character). The back key must be told apart from typing in two places: platoon's own
+//! screen (crossterm's key events) and `platoon open` (the raw bytes the terminal sends), so it is a ctrl chord of
+//! `space` or a letter, or an alt chord of `space`, a letter or a digit. Ctrl+H, I, J, M (and Ctrl+[) are refused: a
+//! terminal sends them as Backspace, Tab, Enter and Esc.
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde_json::Value;
@@ -223,43 +223,6 @@ impl Chord {
             format!("\x1b[{b};{modifier}:1u").into_bytes(),
             format!("\x1b[27;{modifier};{b}~").into_bytes(),
         ]
-    }
-
-    /// The key in Neovim's notation, for the code editor: `<C-Space>`, `<C-b>`, `<M-b>`, `<M-1>`.
-    pub fn nvim(&self) -> String {
-        let mut mods = String::new();
-        if self.ctrl {
-            mods.push_str("C-");
-        }
-        if self.alt {
-            mods.push_str("M-");
-        }
-        if self.shift {
-            mods.push_str("S-");
-        }
-        let key = match self.key {
-            Name::Space => "Space".to_string(),
-            Name::Char('<') => "lt".to_string(),
-            Name::Char('\\') => "Bslash".to_string(),
-            Name::Char('|') => "Bar".to_string(),
-            Name::Char(ch) => ch.to_string(),
-            Name::Esc => "Esc".into(),
-            Name::Enter => "CR".into(),
-            Name::Tab => "Tab".into(),
-            Name::Backspace => "BS".into(),
-            Name::Delete => "Del".into(),
-            Name::Insert => "Insert".into(),
-            Name::Home => "Home".into(),
-            Name::End => "End".into(),
-            Name::PageUp => "PageUp".into(),
-            Name::PageDown => "PageDown".into(),
-            Name::Up => "Up".into(),
-            Name::Down => "Down".into(),
-            Name::Left => "Left".into(),
-            Name::Right => "Right".into(),
-            Name::F(n) => format!("F{n}"),
-        };
-        if mods.is_empty() && matches!(self.key, Name::Char(_)) { key } else { format!("<{mods}{key}>") }
     }
 }
 
@@ -580,7 +543,7 @@ mod tests {
         }
         assert_eq!(check_back(&p("ctrl+space")), Ok(None));
         assert_eq!(check_back(&p("alt+x")), Ok(None));
-        // Everything accepted has the three forms: bytes, an event, Neovim's notation.
+        // Everything accepted has its raw forms (the bytes `platoon open` looks for).
         for ok in ["ctrl+space", "ctrl+q", "alt+x", "alt+1", "alt+space"] {
             assert!(!p(ok).raw_forms().is_empty(), "{ok}");
         }
@@ -614,17 +577,6 @@ mod tests {
         let ctrl = p("ctrl+q").raw_forms();
         assert_eq!(find_back(b"ab\x11", &ctrl), Some((2, 1)));
         assert_eq!(find_back(b"ab\0", &ctrl), None);
-    }
-
-    #[test]
-    fn neovim_notation() {
-        assert_eq!(p("ctrl+space").nvim(), "<C-Space>");
-        assert_eq!(p("ctrl+b").nvim(), "<C-b>");
-        assert_eq!(p("alt+b").nvim(), "<M-b>");
-        assert_eq!(p("alt+1").nvim(), "<M-1>");
-        assert_eq!(p("alt+space").nvim(), "<M-Space>");
-        assert_eq!(p("q").nvim(), "q");
-        assert_eq!(p("f10").nvim(), "<F10>");
     }
 
     #[test]

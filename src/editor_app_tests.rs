@@ -1,10 +1,9 @@
-//! The code editor (`v`) at the level of the app: what it opens from each place, the questions before it opens (the
-//! squad is working, it isn't installed), a removed worktree brought back first, and the worktree clean-up never
-//! taking away a folder the editor is about to open or has open. Real git in temp repositories; nothing is run (the
-//! request the event loop would take is looked at instead).
+//! The code editor (`v`) at the level of the app: what it opens from each place, the question before it opens (the
+//! squad is working), a removed worktree brought back first, the worktree clean-up never taking away a folder an editor
+//! is about to open or has open, and what it says when this computer has no editor. Real git in temp repositories;
+//! nothing is run (the request the event loop would take is looked at instead, or a stand-in records its start).
 
 use crate::app::{App, Confirm, EdTarget, Mode};
-use crate::editor_install::{Dirs, testing as fake};
 use crate::host::HostInfo;
 use crate::testkit::World;
 use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
@@ -52,11 +51,16 @@ fn s(p: &Path) -> String {
     p.to_string_lossy().into_owned()
 }
 
-/// The folders the request the event loop would take opens.
+/// The folders the request the event loop would take opens (a terminal editor: the event loop hands it the first).
 fn opened(app: &mut App) -> Vec<String> {
-    app.take_editor_request()
-        .map(|r| r.dirs())
+    app.take_own_editor_request()
+        .map(|(_, dirs)| dirs)
         .unwrap_or_else(|| panic!("nothing to open; mode {:?}, notice {:?}", matches!(app.mode, Mode::List), app.notice))
+}
+
+/// The app's editors: Helix alone (a terminal editor, so the request is there for the event loop to take).
+fn with_helix(app: &mut App, w: &World) {
+    app.set_file_editors_for_test(vec![helix(&w.base.join("bin"))]);
 }
 
 /// A conversation in `cwd` with `added` folders beside it (Claude Code's environment snapshot).
@@ -81,13 +85,10 @@ fn v_on_a_session_opens_its_folder_and_its_added_folders() {
     fs::create_dir_all(&docs).unwrap();
     with_added(&w, "s-1", &s(&main), &[s(&docs)]);
     let mut app = w.app();
-    app.ed.stand_in = true;
+    with_helix(&mut app, &w);
     assert_eq!(app.editor_target(), Some(EdTarget::Session("s-1".into())));
     v(&mut app);
-    let req = app.take_editor_request().expect("opened at once: installed (a stand-in), nothing to ask");
-    assert_eq!(req.dirs(), vec![s(&main), s(&docs)]);
-    assert_eq!(req.roots[0].repo.as_deref(), Some(s(&main).as_str()));
-    assert_eq!(req.roots[0].base, None);
+    assert_eq!(opened(&mut app), vec![s(&main), s(&docs)], "opened at once: nothing to ask");
     assert!(matches!(app.mode, Mode::List));
 }
 
@@ -95,11 +96,11 @@ fn v_on_a_session_opens_its_folder_and_its_added_folders() {
 fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     let w = World::new("ed-picker");
     let mut app = w.app();
-    app.ed.stand_in = true;
+    with_helix(&mut app, &w);
     assert_eq!(app.editor_target(), None, "an empty list");
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
-    assert!(app.take_editor_request().is_none());
+    assert!(app.take_own_editor_request().is_none());
     // In the picker's box, v is typed.
     v(&mut app);
     assert_eq!(app.picker.input, "v");
@@ -126,7 +127,7 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     v(&mut app);
     assert!(matches!(app.mode, Mode::Search));
     assert_eq!(app.search.text, "v");
-    assert!(app.take_editor_request().is_none());
+    assert!(app.take_own_editor_request().is_none());
 }
 
 /// A project "Web shop" (its screen open, the Tickets pane in focus) with ticket #1 in the temp repository `shop`,
@@ -138,16 +139,15 @@ struct Lab {
     shop: PathBuf,
     made: Worktree,
     wt: PathBuf,
-    base: String,
 }
 
 fn lab(name: &str, state: State) -> Lab {
     let w = World::new(name);
     w.transcript("user-1", "/tmp", "make a basket page", 10);
     let shop = w.base.join("repos/shop");
-    let base = repo(&shop);
+    repo(&shop);
     let mut app = w.app();
-    app.ed.stand_in = true;
+    with_helix(&mut app, &w);
     let project = app.projects.create("Web shop").unwrap();
     app.projects.assign("user-1", Some(&project)).unwrap();
     let folders = vec![s(&shop)];
@@ -171,7 +171,7 @@ fn lab(name: &str, state: State) -> Lab {
     assert!(app.open_project().is_some());
     // The Tickets pane, on #1.
     app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
-    Lab { w, app, project, shop, made, wt, base }
+    Lab { w, app, project, shop, made, wt }
 }
 
 impl Lab {
@@ -214,14 +214,11 @@ impl Lab {
 }
 
 #[test]
-fn v_on_a_ticket_opens_its_worktree_counted_from_the_commit_it_was_made_from() {
+fn v_on_a_ticket_opens_its_worktree() {
     let mut l = lab("ed-ticket", State::Waiting);
     assert_eq!(l.app.editor_target(), Some(EdTarget::Ticket { project: l.project.clone(), number: 1 }));
     v(&mut l.app);
-    let req = l.app.take_editor_request().expect("opened");
-    assert_eq!(req.dirs(), vec![s(&l.wt)]);
-    assert_eq!(req.roots[0].base.as_deref(), Some(l.base.as_str()));
-    assert_eq!(req.title, "#1 Basket");
+    assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
     // And from the ticket's own screen.
     key(&mut l.app, KeyCode::Enter);
     assert_eq!(l.app.tk.open, Some(1));
@@ -237,10 +234,10 @@ fn the_squad_still_working_is_said_before_opening() {
     assert!(l.app.leader_running(1));
     v(&mut l.app);
     assert!(matches!(&l.app.mode, Mode::Confirm(Confirm::EditorWhileWorking { number: 1, .. })));
-    assert!(l.app.take_editor_request().is_none());
+    assert!(l.app.take_own_editor_request().is_none());
     key(&mut l.app, KeyCode::Char('n'));
     assert!(matches!(l.app.mode, Mode::List));
-    assert!(l.app.take_editor_request().is_none(), "no: nothing opens");
+    assert!(l.app.take_own_editor_request().is_none(), "no: nothing opens");
     assert_eq!(l.app.editor_flow_for_test(), None);
     v(&mut l.app);
     key(&mut l.app, KeyCode::Char('y'));
@@ -262,7 +259,7 @@ fn a_removed_worktree_is_brought_back_from_its_branch_before_the_editor_opens() 
     assert!(l.ticket().worktrees[0].removed.is_some());
     l.open_ticket_screen();
     v(&mut l.app);
-    assert!(l.app.take_editor_request().is_none(), "not yet: it is being made again");
+    assert!(l.app.take_own_editor_request().is_none(), "not yet: it is being made again");
     assert!(l.app.notice.as_ref().is_some_and(|(n, ..)| n.contains("back")), "{:?}", l.app.notice);
     l.app.refresh_until_for_test(10, "the worktree back and the editor asked for", |a| a.worktrees_idle());
     assert!(l.wt.is_dir());
@@ -290,21 +287,22 @@ fn v_just_after_the_clean_up_started_opens_on_a_worktree_that_stays() {
     assert_eq!(l.ticket().worktrees[0].removed, None);
 }
 
-/// While a `v` waits on a question (here: install?), or while an editor (this window's or another's) has the
+/// While a `v` waits on a question (here: which editor?), or while an editor (this window's or another's) has the
 /// worktree open, the clean-up leaves it alone; once the editor has closed, it goes as before.
 #[test]
 fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     let mut l = lab("ed-hold", State::Working);
-    // The question is open while the ticket turns Done and the squad stops.
-    l.app.ed.stand_in = false;
+    // The list of editors is open while the ticket turns Done and the squad stops.
+    with_settings(&l.w, |s| s.files_editor_ask = true);
+    l.app.reload_for_test();
     v(&mut l.app);
-    assert!(matches!(l.app.mode, Mode::Confirm(Confirm::InstallEditor { .. })));
+    assert!(matches!(l.app.mode, Mode::PickFileEditor));
     let mut t = Tickets::open(&l.w.config, &l.project);
     t.squad_says(1, &State::Done, "", None).unwrap();
     l.app.reload_for_test();
     l.refresh_for(2.5);
     assert!(l.wt.is_dir(), "kept while v is on its way");
-    key(&mut l.app, KeyCode::Char('n'));
+    key(&mut l.app, KeyCode::Esc);
 
     // An editor has it open (a mark, as main.rs writes while the editor runs; here another window's, this process).
     let mark = crate::editor::mark_open(&l.w.cache, std::process::id(), &[s(&l.wt)]).unwrap();
@@ -317,151 +315,6 @@ fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     l.app.reload_for_test();
     l.refresh_for(2.5);
     assert!(!l.wt.exists(), "removed once the editor has closed");
-}
-
-/// An app whose editor folder and plugin catalog are temp ones: a catalog folder with the editor plugin, its table a
-/// mirror of tiny fake downloads.
-fn with_editor_catalog(app: &mut App, name: &str) -> Dirs {
-    let base = fake::tmp(name);
-    let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
-    let (cat, _) = crate::editorplugin::testing::catalog(&base.join("cat"), dirs.mirror.as_ref().unwrap());
-    app.ed.dirs = dirs.clone();
-    app.ed.stand_in = false;
-    app.pl.use_catalog(crate::plugins::testing::from(&cat));
-    dirs
-}
-
-#[test]
-fn not_installed_it_offers_the_plugin_then_installs_it_and_its_downloads_then_opens() {
-    let w = World::new("ed-install");
-    let root = w.base.join("proj");
-    repo(&root);
-    w.transcript("s-1", &s(&root), "hello", 5);
-    let mut app = w.app();
-    let dirs = with_editor_catalog(&mut app, "app-install");
-
-    v(&mut app);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
-    key(&mut app, KeyCode::Char('n'));
-    assert!(
-        app.notice
-            .as_ref()
-            .is_some_and(|(n, ..)| n
-                .contains("No code editor, then. The settings (s, then Plugins) or `platoon plugin add editor` installs it later.")),
-        "{:?}",
-        app.notice
-    );
-    assert!(app.take_editor_request().is_none());
-    assert!(
-        !dirs.editor.join("installed.json").exists() && crate::editorplugin::installed(&app.pl.store).is_none(),
-        "nothing installed on a no"
-    );
-
-    v(&mut app);
-    key(&mut app, KeyCode::Char('y'));
-    assert!(app.editor_busy());
-    app.refresh_until_for_test(20, "the install to finish", |a| !a.editor_busy());
-    let p = crate::editorplugin::installed(&app.pl.store).expect("the plugin, from the catalog");
-    assert_eq!(p.origin, crate::plugins::Origin::Catalog);
-    assert!(crate::editorplugin::complete(&app.pl.store, &dirs), "and its downloads");
-    assert!(app.pl.editor_complete && app.pl.installed.iter().any(|p| p.id() == "editor"), "the plugin list knows");
-    assert_eq!(opened(&mut app), vec![s(&root)], "and then opened");
-    // The editor's settings are the plugin's.
-    assert!(app.editor_config_files().iter().any(|(p, _)| p == "init.lua"));
-
-    // Installed: v opens straight away.
-    v(&mut app);
-    assert_eq!(opened(&mut app), vec![s(&root)]);
-    // A part gone: v asks to finish the downloads (the plugin is there), and only that is fetched.
-    fs::remove_dir_all(dirs.site().join("pack/platoon/start/alpha.nvim")).unwrap();
-    v(&mut app);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: true, .. })));
-    key(&mut app, KeyCode::Char('y'));
-    app.refresh_until_for_test(20, "the downloads to finish", |a| !a.editor_busy());
-    assert_eq!(opened(&mut app), vec![s(&root)]);
-}
-
-#[test]
-fn an_install_that_fails_says_so_and_opens_nothing() {
-    let w = World::new("ed-install-fail");
-    w.transcript("s-1", &s(&w.base), "hello", 5);
-    let mut app = w.app();
-    let dirs = with_editor_catalog(&mut app, "app-install-fail");
-    // Every download missing from the mirror (the network is never used).
-    fs::remove_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
-    fs::create_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
-    v(&mut app);
-    key(&mut app, KeyCode::Char('y'));
-    app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(
-        app.notice
-            .as_ref()
-            .is_some_and(|(n, ..)| n.contains("didn't finish installing") && n.contains("`platoon plugin add editor`, tries again")),
-        "{:?}",
-        app.notice
-    );
-    assert!(app.take_editor_request().is_none());
-    // A catalog without the editor plugin: said plainly too.
-    let w2 = World::new("ed-install-nocat");
-    w2.transcript("s-1", &s(&w2.base), "hello", 5);
-    let mut app = w2.app();
-    app.ed.stand_in = false;
-    app.ed.dirs = fake::dirs(&fake::tmp("app-install-nocat"), vec![]);
-    v(&mut app);
-    key(&mut app, KeyCode::Char('y'));
-    app.refresh_until_for_test(20, "the install to stop", |a| !a.editor_busy());
-    assert!(
-        app.notice.as_ref().is_some_and(|(n, ..)| n.contains("platoon's plugin catalog has no code editor plugin")),
-        "{:?}",
-        app.notice
-    );
-}
-
-/// An editor installed before it was a plugin: `v` opens it at once (no question), and the app took it over as the
-/// editor plugin when it started, downloading nothing.
-#[test]
-fn an_editor_from_before_plugins_opens_at_once_and_is_taken_over() {
-    let w = World::new("ed-before");
-    let root = w.base.join("proj");
-    repo(&root);
-    w.transcript("s-1", &s(&root), "hello", 5);
-    let mut app = w.app();
-    let base = fake::tmp("app-before");
-    let dirs = fake::dirs(&base, vec![fake::fake_cc(&base)]);
-    fs::create_dir_all(dirs.mirror.as_ref().unwrap()).unwrap();
-    crate::editorplugin::testing::folder_from_before(&dirs);
-    app.ed.dirs = dirs.clone();
-    app.ed.stand_in = false;
-    // Before the take-over (the app of a platoon just updated): it opens at once, with the settings that came with
-    // platoon.
-    assert!(crate::editorplugin::installed(&app.pl.store).is_none());
-    v(&mut app);
-    assert_eq!(opened(&mut app), vec![s(&root)]);
-    assert!(app.editor_config_files().iter().any(|(p, t)| p == "init.lua" && t.contains("PLATOON_EDITOR_SESSION")));
-    let before = fs::read(dirs.editor.join("installed.json")).unwrap();
-    app.take_over_editor();
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("nothing was downloaded")), "{:?}", app.notice);
-    assert!(app.pl.installed.iter().any(|p| p.id() == "editor") && app.pl.editor_complete);
-    assert_eq!(fs::read(dirs.editor.join("installed.json")).unwrap(), before);
-    // Removing it from the settings' Plugins tab takes the folder and the font off.
-    key(&mut app, KeyCode::Char('s'));
-    key(&mut app, KeyCode::BackTab);
-    assert_eq!(app.settings_tab, crate::settings::TAB_PLUGINS);
-    app.refresh_until_for_test(20, "the catalog to be tried", |a| !a.plugins_busy());
-    for _ in 0..app.pl.position("editor").expect("listed") {
-        key(&mut app, KeyCode::Down);
-    }
-    key(&mut app, KeyCode::Char('d'));
-    assert!(matches!(&app.mode, Mode::Confirm(Confirm::RemovePlugin { editor: true, .. })));
-    key(&mut app, KeyCode::Char('y'));
-    assert!(matches!(app.mode, Mode::Settings));
-    key(&mut app, KeyCode::Esc);
-    assert!(!dirs.editor.exists() && !dirs.fonts.exists());
-    assert!(app.notice.as_ref().is_some_and(|(n, ..)| n.contains("and everything it downloaded")), "{:?}", app.notice);
-    // Now v offers the plugin again; the machine's own editors are unaffected (next test).
-    key(&mut app, KeyCode::Char('1'));
-    v(&mut app);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { plugin: false, .. })));
 }
 
 // ---- the machine's own editors (`fileeditors.rs`) -------------------------------------------------------------------
@@ -534,20 +387,20 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
     let bin = w.base.join("bin");
     let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
 
-    // The default: platoon's own, no list.
+    // None chosen yet: the first one found (Helix here), no list.
     let mut app = w.app();
-    app.ed.stand_in = true;
-    app.set_file_editors_for_test(vec![FileEditor::platoon(), code.clone(), helix(&bin)]);
+    app.set_file_editors_for_test(vec![helix(&bin), code.clone()]);
     v(&mut app);
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(opened(&mut app), vec![s(&main), s(&docs)]);
+    app.editor_closed(Ok(()));
 
     // VS Code the favourite: started beside platoon with both folders in one window, and platoon stays as it was.
     with_settings(&w, |s| s.files_editor = "code".into());
     app.reload_for_test();
     v(&mut app);
     assert!(matches!(app.mode, Mode::List), "no list, no question");
-    assert!(app.take_editor_request().is_none() && app.take_own_editor_request().is_none(), "nothing takes the terminal");
+    assert!(app.take_own_editor_request().is_none(), "nothing takes the terminal");
     assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {} {}", s(&main), s(&docs))]);
     assert_eq!(notice(&app), "Opened in VS Code, in a window of its own.");
 
@@ -558,7 +411,6 @@ fn v_goes_straight_to_the_favourite_when_always_ask_is_off() {
     v(&mut app);
     let (e, dirs) = app.take_own_editor_request().expect("a terminal editor of the user's");
     assert_eq!((e.id.as_str(), dirs), ("helix", vec![s(&main), s(&docs)]));
-    assert!(app.take_editor_request().is_none());
     app.editor_closed(Ok(()));
     assert!(
         notice(&app).starts_with("Helix opened ") && notice(&app).contains("only: it opens one folder at a time. Not opened:"),
@@ -577,17 +429,16 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
     let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
     with_settings(&w, |s| s.files_editor_ask = true);
     let mut app = w.app();
-    app.ed.stand_in = true;
-    app.set_file_editors_for_test(vec![FileEditor::platoon(), code, helix(&bin)]);
+    app.set_file_editors_for_test(vec![helix(&bin), code]);
     v(&mut app);
     assert!(matches!(app.mode, Mode::PickFileEditor));
     let ids: Vec<&str> = app.file_pick().options.iter().map(|e| e.id.as_str()).collect();
-    assert_eq!(ids, ["platoon", "code", "helix"], "platoon's own first, then the computer's");
-    assert_eq!((app.file_pick().starred.as_str(), app.file_pick().selected), ("platoon", 0));
+    assert_eq!(ids, ["helix", "code"], "the computer's, as found");
+    assert_eq!((app.file_pick().starred.as_str(), app.file_pick().selected), ("helix", 0), "none chosen yet: the first");
     // Esc: nothing opens.
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List) && app.editor_flow_for_test().is_none());
-    assert!(app.take_editor_request().is_none());
+    assert!(app.take_own_editor_request().is_none());
 
     // Down to VS Code, enter: it opens, and is the favourite from now on.
     v(&mut app);
@@ -601,29 +452,26 @@ fn always_ask_shows_the_list_with_the_favourite_starred_and_picked_and_another_c
     key(&mut app, KeyCode::Enter);
     assert_eq!(calls(&bin, "code", 2).len(), 2);
 
-    // Platoon's own, chosen from the list, still asks to install it first when it isn't there.
-    app.ed.stand_in = false;
+    // Back up to Helix: it opens in the terminal, and is the favourite now.
     v(&mut app);
-    assert!(app.file_pick().platoon_missing);
-    key(&mut app, KeyCode::Char('g'));
+    key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::Confirm(Confirm::InstallEditor { .. })));
-    key(&mut app, KeyCode::Char('n'));
-    assert_eq!(settings::load(&w.config).0.files_editor, "platoon");
+    assert_eq!(opened(&mut app), vec![s(&main)]);
+    assert_eq!(settings::load(&w.config).0.files_editor, "helix");
 }
 
 #[test]
-fn a_favourite_no_longer_installed_opens_platoons_editor_and_says_so_once() {
+fn a_favourite_no_longer_installed_opens_the_first_one_found_and_says_so_once() {
     let w = World::new("fe-gone");
     let main = w.base.join("repos/app");
     repo(&main);
     w.transcript("s-1", &s(&main), "hello", 5);
     with_settings(&w, |s| s.files_editor = "rustrover".into());
     let mut app = w.app();
-    app.ed.stand_in = true;
+    with_helix(&mut app, &w);
     v(&mut app);
     assert_eq!(opened(&mut app), vec![s(&main)]);
-    assert_eq!(notice(&app), "RustRover isn't on this computer any more, so platoon's editor opens instead (Settings, Editors).");
+    assert_eq!(notice(&app), "RustRover isn't on this computer any more, so Helix opens instead (Settings, Editors).");
     app.editor_closed(Ok(()));
     assert!(notice(&app).starts_with("RustRover isn't"), "said again once the editor has closed (it had the screen)");
     app.notice = None;
@@ -646,7 +494,7 @@ fn jetbrains_opens_each_folder_in_a_window_of_its_own_at_most_three() {
     let idea = window_stand_in(&bin, "idea", "IntelliJ IDEA", &[], Several::EachWindow);
     with_settings(&w, |s| s.files_editor = "idea".into());
     let mut app = w.app();
-    app.set_file_editors_for_test(vec![FileEditor::platoon(), idea]);
+    app.set_file_editors_for_test(vec![idea]);
     v(&mut app);
     let mut got = calls(&bin, "idea", 3);
     got.sort();
@@ -665,7 +513,7 @@ fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
     let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
     with_settings(&l.w, |s| s.files_editor = "code".into());
     l.app.reload_for_test();
-    l.app.set_file_editors_for_test(vec![FileEditor::platoon(), code]);
+    l.app.set_file_editors_for_test(vec![helix(&bin), code]);
     v(&mut l.app);
     assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {}", s(&l.wt))]);
     assert_eq!(l.ticket().worktrees[0].opened_in.as_deref(), Some("VS Code"), "written on the ticket: it survives a restart");
@@ -703,7 +551,7 @@ fn a_terminal_editor_keeps_nothing_after_the_work() {
     let bin = l.w.base.join("bin");
     with_settings(&l.w, |s| s.files_editor = "helix".into());
     l.app.reload_for_test();
-    l.app.set_file_editors_for_test(vec![FileEditor::platoon(), helix(&bin)]);
+    l.app.set_file_editors_for_test(vec![helix(&bin)]);
     v(&mut l.app);
     let (_, dirs) = l.app.take_own_editor_request().expect("handed the terminal");
     assert_eq!(dirs, vec![s(&l.wt)]);
@@ -718,11 +566,11 @@ fn the_settings_step_through_the_editors_this_computer_has() {
     let bin = w.base.join("bin");
     let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
     let mut app = w.app();
-    app.set_file_editors_for_test(vec![FileEditor::platoon(), code]);
+    app.set_file_editors_for_test(vec![code, helix(&bin)]);
     let nano = crate::editors::Editor { id: "nano".into(), name: "nano".into(), program: "/x/nano".into(), args: vec![], terminal: true };
     let kate = crate::editors::Editor { id: "kate".into(), name: "Kate".into(), program: "/x/kate".into(), args: vec![], terminal: false };
     app.set_editors_for_test(vec![nano, kate]);
-    assert_eq!(app.editor_setting(EditorFor::Files).0, "platoon's editor");
+    assert_eq!(app.editor_setting(EditorFor::Files).0, "VS Code", "none chosen yet: the first one found, which v opens");
     assert_eq!(app.editor_setting(EditorFor::Text).0, "None chosen yet");
     key(&mut app, KeyCode::Char('s'));
     assert!(matches!(app.mode, Mode::Settings));
@@ -736,11 +584,11 @@ fn the_settings_step_through_the_editors_this_computer_has() {
     assert_eq!(settings::load(&w.config).0.notes_editor, "kate");
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Right);
-    assert_eq!(settings::load(&w.config).0.files_editor, "code");
+    assert_eq!(settings::load(&w.config).0.files_editor, "helix");
     let (label, _, at_start, at_end) = app.editor_setting(EditorFor::Files);
-    assert_eq!((label.as_str(), at_start, at_end), ("VS Code", false, true));
+    assert_eq!((label.as_str(), at_start, at_end), ("Helix", false, true));
     key(&mut app, KeyCode::Enter); // round to the first
-    assert_eq!(settings::load(&w.config).0.files_editor, "platoon");
+    assert_eq!(settings::load(&w.config).0.files_editor, "code");
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     assert!(settings::load(&w.config).0.files_editor_ask);
@@ -748,4 +596,37 @@ fn the_settings_step_through_the_editors_this_computer_has() {
     with_settings(&w, |s| s.files_editor = "zed".into());
     app.reload_for_test();
     assert_eq!(app.editor_setting(EditorFor::Files).0, "Zed (not found)");
+    // No editor on this computer, none chosen: said so.
+    with_settings(&w, |s| s.files_editor = String::new());
+    app.reload_for_test();
+    app.set_file_editors_for_test(Vec::new());
+    assert_eq!(app.editor_setting(EditorFor::Files).0, "None found");
+}
+
+/// No editor on this computer: `v` says so in one plain line, in the footer, and nothing opens.
+#[test]
+fn v_with_no_editor_found_says_so() {
+    use ratatui::{Terminal, backend::TestBackend};
+    let w = World::new("fe-none");
+    let main = w.base.join("repos/app");
+    repo(&main);
+    w.transcript("s-1", &s(&main), "hello", 5);
+    let mut app = w.app();
+    assert!(app.file_editors().is_empty(), "a unit test's app finds none");
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::List) && app.editor_flow_for_test().is_none());
+    assert!(app.take_own_editor_request().is_none());
+    assert_eq!(notice(&app), crate::app::NO_EDITOR);
+    let mut term = Terminal::new(TestBackend::new(110, 24)).unwrap();
+    term.draw(|f| crate::ui::draw(f, &app)).unwrap();
+    let buf = term.backend().buffer();
+    let rows: Vec<String> = (0..buf.area.height).map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol()).collect()).collect();
+    assert!(rows.iter().any(|r| r.contains(crate::app::NO_EDITOR)), "{}", rows.join("\n"));
+    assert!(!rows.join("\n").to_lowercase().contains("plugin"), "nothing offers to install one");
+    // The same with "Always ask" on: no empty list.
+    with_settings(&w, |s| s.files_editor_ask = true);
+    app.reload_for_test();
+    v(&mut app);
+    assert!(matches!(app.mode, Mode::List));
+    assert_eq!(notice(&app), crate::app::NO_EDITOR);
 }

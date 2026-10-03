@@ -42,7 +42,6 @@ use std::{
 mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
-mod plugins_glue;
 mod projects_glue;
 mod smart_glue;
 mod squads_glue;
@@ -51,10 +50,9 @@ mod squadwork_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
 #[cfg(test)]
-pub use editor_glue::EdTarget;
+pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use plugins_glue::{PlugRow, PlugState, PluginsState, Review};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOPS};
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
 pub use squads_glue::{SPLIT_MIN_WIDTH, SquadState, split_areas};
@@ -127,16 +125,14 @@ pub struct Pages {
     pub tickets: Cell<usize>,
     /// The Squads tab's list, Squads or Agents.
     pub squads: Cell<usize>,
-    /// The settings' entries (or plugins, on the Plugins tab).
+    /// The settings' entries.
     pub settings: Cell<usize>,
-    /// The plugin screen's list.
-    pub plugins: Cell<usize>,
 }
 
 impl Default for Pages {
     fn default() -> Self {
         let c = || Cell::new(10);
-        Pages { sessions: c(), projects: c(), tickets: c(), squads: c(), settings: c(), plugins: c() }
+        Pages { sessions: c(), projects: c(), tickets: c(), squads: c(), settings: c() }
     }
 }
 
@@ -231,8 +227,6 @@ pub enum Hit {
     SquadDetail(usize),
     /// An entry of the small list open over the Squads tab.
     SquadChoiceRow(usize),
-    /// A plugin on the plugin screen.
-    PluginRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the editor list.
@@ -305,9 +299,6 @@ pub enum Confirm {
     HandAnyway { number: u32, squad: String, title: String, says: String },
     /// `v` on a ticket whose squad is still working in its files: open the editor anyway?
     EditorWhileWorking { number: u32, title: String },
-    /// `v` while the code editor isn't installed: install it now? (`bytes`: what it downloads; `plugin`: the plugin
-    /// is there already, only its downloads aren't.)
-    InstallEditor { bytes: u64, plugin: bool },
     /// Delete one of the user's own squads.
     DeleteSquad { id: String, name: String },
     /// Put a built-in squad the user changed back as platoon has it.
@@ -320,13 +311,6 @@ pub enum Confirm {
     RestoreAgent { id: String, name: String },
     /// Throw away the drafted agent that was never saved.
     DiscardAgentDraft { name: String },
-    /// Install a plugin from the catalog (`update`: the versions from and to, when it replaces the one installed).
-    /// `download`: what installing it downloads besides (the code editor's parts), in bytes.
-    InstallPlugin { id: String, name: String, adds: String, update: Option<(String, String)>, download: Option<u64> },
-    /// Take a plugin off (`in_use`: the theme in use is one of its; `editor`: it is the code editor, whose downloads
-    /// go with it; `extra`: what else is worth knowing first: its skills, the tickets its squads have, the user's own
-    /// squads that use its agents).
-    RemovePlugin { id: String, name: String, adds: String, in_use: bool, editor: bool, extra: String },
 }
 
 /// The smallest terminal platoon draws its screens in. Below it, `ui::draw` says so in one centered message instead of
@@ -381,12 +365,6 @@ pub enum Mode {
     /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
     /// (`sqt.text`).
     SquadText,
-    /// What a plugin with skills, squads or agents adds, to read before it is installed or updated (`pl.review`):
-    /// each one with its permissions, and one of them read in full.
-    PluginReview,
-    /// The plugin screen, full screen, opened from the settings' Plugins tab (`pl.screen`): every plugin with the
-    /// selected one's details, install, update, remove. Back goes to the settings, on the same plugin.
-    Plugins,
 }
 
 pub struct Picker {
@@ -587,12 +565,10 @@ pub struct App {
     pub sw: squadwork_glue::WorkState,
     /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
     pub wt: worktree_glue::WtState,
-    /// The code editor (`v`): the questions before it opens, installing it, the request the event loop takes.
+    /// The code editor (`v`): the questions before it opens, the request the event loop takes.
     pub ed: editor_glue::EdState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
-    /// The plugins: the catalog, what is installed, an install running.
-    pub pl: PluginsState,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -644,7 +620,7 @@ pub struct App {
     themes: Registry,
     pub quit: bool,
     /// The help popup (`?`) is open over the screen showing: every key of that screen. It opens only on platoon's own
-    /// screens (`Mode::List` and `Mode::Plugins`), which stay as they are under it.
+    /// screens (`Mode::List`), which stay as they are under it.
     pub help_open: bool,
     /// The first line of the help popup in view, when it is longer than the screen (kept in range by the drawing).
     pub help_top: Cell<usize>,
@@ -744,8 +720,6 @@ impl App {
         let prompts = PromptIndex::spawn(&cache, prompt_cap);
         let _ = threaded;
         let (stops_tx, stops_rx) = channel();
-        let plugins = PluginsState::for_config(&config);
-        let plugin_dir = plugins.store.dir.clone();
         let mut app = Self {
             sessions: Vec::new(),
             view: Vec::new(),
@@ -802,7 +776,6 @@ impl App {
             wt: worktree_glue::WtState::default(),
             ed: editor_glue::EdState::new(),
             sqt: SquadTab::new(&config),
-            pl: plugins,
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -835,7 +808,7 @@ impl App {
             theme: Theme::default(),
             preview: None,
             tpick: ThemePick { list: Vec::new(), selected: 0, top: Cell::new(0) },
-            themes: Registry::open_with_plugins(&config, &plugin_dir),
+            themes: Registry::open(&config),
             quit: false,
             rounded: false,
             plain_marker: false,
@@ -873,12 +846,6 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
-        // An editor installed before it was a plugin becomes the editor plugin (quietly, from the copy that came with
-        // platoon: no network, nothing downloaded).
-        app.take_over_editor();
-        // A newer platoon brings newer plugins: those installed from its catalog are updated (or asked about).
-        app.update_with_platoon();
-        app.pl.editor_facts(&app.ed.dirs);
         // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
         // `.claude.json` in that same (temporary) folder, never the user's own.
         app.sqt.claude_root = app.reader.root().to_path_buf();
@@ -1061,8 +1028,6 @@ impl App {
             || self.smart_busy()
             || self.handoff_busy()
             || self.squads_busy()
-            || self.editor_busy()
-            || self.plugins_busy()
             || !self.stopping.is_empty()
     }
 
@@ -1314,8 +1279,6 @@ impl App {
         self.start_from_line();
         self.poll_squad_work();
         self.poll_worktrees();
-        self.poll_editor_install();
-        self.poll_plugins();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();
@@ -1527,24 +1490,15 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::DeleteAgent { id, .. })) => self.remove_agent(&id, false),
             (Action::Confirm, Mode::Confirm(Confirm::RestoreAgent { id, .. })) => self.remove_agent(&id, true),
             (Action::Confirm, Mode::Confirm(Confirm::DiscardAgentDraft { .. })) => self.discard_agent_draft(),
-            (Action::Confirm, Mode::Confirm(Confirm::InstallPlugin { id, .. })) => self.install_plugin(&id),
-            (Action::Confirm, Mode::Confirm(Confirm::RemovePlugin { id, .. })) => self.remove_plugin(&id),
-            (Action::Cancel, Mode::Confirm(Confirm::RemovePlugin { .. })) => self.cancel_remove_plugin(),
             (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
-            (Action::Confirm, Mode::PluginReview) => self.accept_review(),
-            (Action::Cancel, Mode::PluginReview) => self.close_review(),
-            (Action::Cancel, Mode::Plugins) => self.close_plugin_screen(),
-            (Action::Cancel, Mode::Confirm(Confirm::InstallPlugin { .. })) => self.mode = self.plugins_base(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
             (Action::HandOff, Mode::List) if !self.projects_list_showing() => self.start_handoff(),
             (Action::Editor, Mode::List) => self.code_editor_key(),
-            (Action::Help, Mode::List | Mode::Plugins) => self.open_help(),
+            (Action::Help, Mode::List) => self.open_help(),
             (Action::Confirm, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_anyway(),
-            (Action::Cancel, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_cancel(false),
-            (Action::Confirm, Mode::Confirm(Confirm::InstallEditor { .. })) => self.install_editor(),
-            (Action::Cancel, Mode::Confirm(Confirm::InstallEditor { .. })) => self.editor_cancel(true),
+            (Action::Cancel, Mode::Confirm(Confirm::EditorWhileWorking { .. })) => self.editor_cancel(),
             (Action::Confirm, Mode::Handoff) => self.take_handoff(),
             (Action::Cancel, Mode::Handoff) => self.cancel_handoff(),
             (Action::Confirm, Mode::PickEditor) => self.take_editor_pick(),
@@ -1880,8 +1834,6 @@ impl App {
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
-        // The Plugins tab lists the catalog's plugins too: it is read the first time in a run.
-        self.plugins_shown();
     }
 
     /// Open the theme list on the theme in effect. Nothing changes until the highlight moves.
@@ -1978,10 +1930,6 @@ impl App {
 
     /// Move to another line of the settings screen.
     fn move_setting(&mut self, delta: i32) {
-        if self.settings_tab == crate::settings::TAB_PLUGINS {
-            self.setting = (self.setting as i32 + delta).clamp(0, self.pl.rows().len().saturating_sub(1) as i32) as usize;
-            return;
-        }
         self.setting = (self.setting as i32 + delta).clamp(0, self.items().len() as i32 - 1) as usize;
     }
 
@@ -2034,7 +1982,12 @@ impl App {
         let s = self.settings.get();
         match which {
             EditorFor::Text => (self.editors.iter().map(|e| (e.id.clone(), e.name.clone())).collect(), s.notes_editor),
-            EditorFor::Files => (self.file_editors().iter().map(|e| (e.id.clone(), e.name.clone())).collect(), s.files_editor),
+            EditorFor::Files => {
+                let options: Vec<(String, String)> = self.file_editors().iter().map(|e| (e.id.clone(), e.name.clone())).collect();
+                // None chosen yet: `v` opens the first one found, so that is the one shown.
+                let id = if s.files_editor.is_empty() { options.first().map(|o| o.0.clone()).unwrap_or_default() } else { s.files_editor };
+                (options, id)
+            }
         }
     }
 
@@ -2047,6 +2000,7 @@ impl App {
             Some(i) => options[i].1.clone(),
             None if which == EditorFor::Text && id == crate::editors::ASK => "None chosen yet".to_string(),
             None if which == EditorFor::Text => format!("{id} (not found)"),
+            None if id.is_empty() => "None found".to_string(),
             None => format!("{} (not found)", crate::fileeditors::name_of(&id)),
         };
         let widest = options.iter().map(|(_, n)| n.chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
@@ -2507,11 +2461,6 @@ impl App {
     }
 
     #[cfg(test)]
-    pub fn plugins_changed_for_test(&mut self) {
-        self.plugins_changed();
-    }
-
-    #[cfg(test)]
     pub fn reload_for_test(&mut self) {
         self.reload();
     }
@@ -2561,7 +2510,7 @@ impl App {
         }
         // `?` on platoon's own screens (never where it is typed: a session, the notes editor, a box or a list being
         // typed into are other modes) shows every key of the screen.
-        if key.code == KeyCode::Char('?') && !ctrl && !alt && matches!(self.mode, Mode::List | Mode::Plugins) {
+        if key.code == KeyCode::Char('?') && !ctrl && !alt && matches!(self.mode, Mode::List) {
             return self.act(Action::Help);
         }
         match self.mode.clone() {
@@ -2597,7 +2546,6 @@ impl App {
                 }
                 _ => {}
             },
-            Mode::Settings if self.plugin_settings_key(key) => {}
             Mode::Settings => match key.code {
                 KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
@@ -2693,8 +2641,6 @@ impl App {
             Mode::SquadPick => self.squad_pick_key(key),
             Mode::SquadChoice => self.squad_choice_key(key),
             Mode::SquadText => self.squad_text_key(key),
-            Mode::PluginReview => self.review_key(key),
-            Mode::Plugins => self.plugin_screen_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -2763,7 +2709,7 @@ impl App {
     /// The help popup is showing: open, and over one of the screens it opens on (a question that pops up over the
     /// screen meanwhile takes the keys, and closes it).
     pub fn help_showing(&self) -> bool {
-        self.help_open && matches!(self.mode, Mode::List | Mode::Plugins)
+        self.help_open && matches!(self.mode, Mode::List)
     }
 
     fn open_help(&mut self) {
@@ -2885,8 +2831,6 @@ impl App {
                     Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
                     Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
                     Mode::SquadText => {}
-                    Mode::PluginReview => self.wheel_review(up),
-                    Mode::Plugins => self.wheel_plugins(up),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
@@ -2924,7 +2868,6 @@ impl App {
                     Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
                     Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
                     Some(Hit::SquadEntry(i)) => self.click_squad(i),
-                    Some(Hit::PluginRow(i)) => self.click_plugin(i),
                     Some(Hit::SquadView(agents)) => self.show_squad_view(if agents { SqView::Agents } else { SqView::Squads }),
                     Some(Hit::SquadDetail(i)) => self.click_squad_row(i),
                     Some(Hit::SquadChoiceRow(i)) if i == self.sqt.choice.selected => self.act(Action::Confirm),
@@ -2935,8 +2878,6 @@ impl App {
                     // As in the list: clicking the highlighted result again takes it.
                     Some(Hit::SearchRow(i)) if i == self.search_selected() => self.act(Action::Confirm),
                     Some(Hit::SearchRow(i)) => self.select_search_row(i),
-                    // On the Plugins tab, clicking the selected plugin again opens it, like enter.
-                    Some(Hit::Setting(i)) if i == self.setting && self.plugin_settings_showing() => self.open_plugin_screen(),
                     Some(Hit::Setting(i)) => self.setting = i,
                     Some(Hit::SettingsTab(i)) => self.switch_settings_tab(i),
                     Some(Hit::SettingStep(i, step)) => {
@@ -3045,11 +2986,6 @@ impl App {
             }
             _ => self.selection = None,
         }
-    }
-
-    /// Where copies go (`PLATOON_CLIPBOARD`; nowhere in a unit test): the code editor copies the same way.
-    pub fn clipboard_target(&self) -> crate::clipboard::Target {
-        self.clipboard.target()
     }
 
     #[cfg(test)]

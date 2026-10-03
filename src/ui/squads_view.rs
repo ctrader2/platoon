@@ -26,17 +26,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
             _ => "",
         }
     };
-    let plugin = kind == Some(Kind::Plugin) && !draft;
     match sqt.focus {
-        SqFocus::Detail if plugin => {
-            match (agents, app.arow(), sqt.drow()) {
-                (true, Some(ARow::UsedIn(_)), _) => out.push(("enter", "open the squad", None)),
-                (false, _, Some(DRow::Step(_) | DRow::StepAgent(_))) => out.push(("g", "go to the agent", None)),
-                _ => {}
-            }
-            out.push(("c", "copy to change", None));
-            out.push(("esc", "back to the list", None));
-        }
         SqFocus::List => {
             if agents && sqt.new_agent_selected() {
                 out.push(("enter", "new agent", None));
@@ -110,18 +100,13 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
     out
 }
 
-/// A squad's label over its details: a plugin's says it is read only, and how to change one.
-fn read_only_label(l: &squadfile::Listed) -> String {
-    if l.kind == Kind::Plugin { format!("{} · read only: c makes a copy of your own to change", l.label()) } else { l.label() }
-}
-
 fn count_words(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
 /// What the list says about a squad: how many agents (beside its name), and under the name how it came to be. A
 /// built-in squad as platoon has it is what most of the list is, so it says nothing there (its details say "Built
-/// in"); the others say what sets them apart: "User Modified", "Your own", "From <plugin>".
+/// in"); the others say what sets them apart: "User Modified", "Your own".
 fn entry_note(app: &App, i: usize, library: &[crate::agentfile::Agent]) -> (String, String, bool) {
     let sqt = &app.sqt;
     if i == sqt.list.len() {
@@ -501,7 +486,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     let kind = if sqt.draft_selected() {
         "Draft, not saved: ctrl+s saves it, d discards it".to_string()
     } else {
-        sqt.listed().map_or(String::new(), read_only_label)
+        sqt.listed().map_or(String::new(), squadfile::Listed::label)
     };
     lines.push((None, Line::styled(fit_end(&kind, w), Style::new().fg(if sqt.draft_selected() { t.warn } else { t.dim }))));
     if let Some(first) = squadfile::problems(s, &known).first() {
@@ -829,7 +814,6 @@ impl Rail<'_> {
                 Span::styled(fit_end("  Done: the result goes on the ticket", text_w + 2), Style::new().fg(t.dim)),
             ]),
         ));
-        // A plugin's squad is read only: no "+ Add a step" (its rows don't have it).
         if let Some(add) = self.row_of(DRow::AddStep) {
             let sel = self.sel == Some(DRow::AddStep);
             let base = Style::new().bg(if sel { t.surface } else { t.bg });
@@ -879,9 +863,7 @@ fn draw_agent_detail(f: &mut Frame, app: &App, area: Rect) {
     let kind = if draft {
         "Draft, not saved: ctrl+s saves it, d discards it".to_string()
     } else {
-        sqt.agent_listed().map_or(String::new(), |l| {
-            if l.kind == Kind::Plugin { format!("{} · read only: c makes a copy of your own to change", l.label()) } else { l.label() }
-        })
+        sqt.agent_listed().map_or(String::new(), crate::agentfile::Listed::label)
     };
     lines.push((None, Line::styled(fit_end(&kind, w), Style::new().fg(if draft { t.warn } else { t.dim }))));
     if let Some(first) = crate::agentfile::problems(a).first() {

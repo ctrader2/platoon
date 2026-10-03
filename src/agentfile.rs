@@ -76,43 +76,6 @@ impl Agent {
         if on.is_empty() { "only reads".into() } else { on.join(", ") }
     }
 
-    /// What it may do, in plain words, one line each: what installing a plugin with it, or reading it, shows first.
-    /// Its model, what its three switches allow (the tools they give it: `squads::tools_for`), its skills and its MCP
-    /// servers.
-    pub fn permission_lines(&self) -> Vec<String> {
-        let mut out = vec![format!("Runs on {}", crate::squadfile::model_label(&self.model))];
-        if !self.files && !self.commands && !self.web {
-            out.push("Only reads and searches files: it can't change files, run commands or use the web".into());
-        } else {
-            out.push("Reads and searches files".into());
-        }
-        if self.files {
-            out.push("Can change files: edit and write them".into());
-        }
-        if self.commands {
-            out.push("Can run commands on this computer".into());
-        }
-        if self.web {
-            out.push("Can use the web: search it and read pages".into());
-        }
-        let list = |names: &[String]| match names {
-            [one] => one.clone(),
-            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-            [] => String::new(),
-        };
-        match self.skills.as_slice() {
-            [] => {}
-            [_] => out.push(format!("Starts with the skill {} (and can use other skills)", list(&self.skills))),
-            _ => out.push(format!("Starts with the skills {} (and can use other skills)", list(&self.skills))),
-        }
-        match self.mcp.as_slice() {
-            [] => {}
-            [_] => out.push(format!("Can use the MCP server {} (a program set up in your Claude Code)", list(&self.mcp))),
-            _ => out.push(format!("Can use the MCP servers {} (programs set up in your Claude Code)", list(&self.mcp))),
-        }
-        out
-    }
-
     /// One line of what it does, from its system prompt: its first sentence, after a first "You are the ..." one.
     /// Given to the drafting call so it can pick an agent that fits.
     pub fn about(&self) -> String {
@@ -182,13 +145,7 @@ pub fn is_builtin(id: &str) -> bool {
 pub fn problems(a: &Agent) -> Vec<String> {
     let mut out = Vec::new();
     let who = if a.name.trim().is_empty() { a.id.as_str() } else { a.name.as_str() };
-    if crate::squadplugin::is_plugin(&a.id) {
-        if let Some(why) = crate::squadplugin::id_problem(&a.id) {
-            out.push(format!("\"{}\" can't be an agent's id: {why}.", a.id));
-        } else if crate::squadplugin::split(&a.id).is_some_and(|(_, local)| local == LEADER_ROLE) {
-            out.push("An agent can't be called \"leader\": that is a squad leader's own name.".into());
-        }
-    } else if a.id == LEADER_ROLE {
+    if a.id == LEADER_ROLE {
         out.push("An agent can't be called \"leader\": that is a squad leader's own name.".into());
     } else if let Some(why) = slug_problem(&a.id) {
         out.push(format!("\"{}\" can't be an agent's id: {why} (at most {SLUG_MAX} characters).", a.id));
@@ -348,8 +305,6 @@ pub struct Listed {
     pub agent: Option<Agent>,
     /// Why its file can't be read.
     pub corrupt: Option<String>,
-    /// The name of the plugin it comes with.
-    pub plugin: Option<String>,
 }
 
 impl Listed {
@@ -357,9 +312,9 @@ impl Listed {
         self.agent.as_ref().map_or(&self.id, |a| a.name.as_str())
     }
 
-    /// "Built in", "Your own", "From Changelog", ...
+    /// "Built in", "User Modified", "Your own".
     pub fn label(&self) -> String {
-        crate::squadfile::label_of(self.kind, self.plugin.as_deref())
+        self.kind.label().to_string()
     }
 }
 
@@ -379,42 +334,30 @@ fn own_ids(config: &Path) -> Vec<String> {
     ids
 }
 
-/// Every agent, in four groups: the built-ins as platoon has them, the built-ins the user changed (each in the
-/// built-ins' order), the user's own by name, then the plugins' (by plugin name, each plugin's by name). The old
-/// Coding system prompts are carried over first, once.
+/// Every agent, in three groups: the built-ins as platoon has them, the built-ins the user changed (each in the
+/// built-ins' order), then the user's own by name. The old Coding system prompts are carried over first, once.
 pub fn load_all(config: &Path) -> Vec<Listed> {
     crate::squadfile::migrate_prompts(config);
     let mut plain = Vec::new();
     let mut changed = Vec::new();
     for b in builtins() {
         match load(config, &b.id) {
-            Ok(None) => plain.push(Listed { id: b.id.clone(), kind: Kind::BuiltIn, agent: Some(b), corrupt: None, plugin: None }),
-            Ok(Some(a)) => changed.push(Listed { id: b.id.clone(), kind: Kind::Modified, agent: Some(a), corrupt: None, plugin: None }),
-            Err(why) => changed.push(Listed { id: b.id.clone(), kind: Kind::Modified, agent: None, corrupt: Some(why), plugin: None }),
+            Ok(None) => plain.push(Listed { id: b.id.clone(), kind: Kind::BuiltIn, agent: Some(b), corrupt: None }),
+            Ok(Some(a)) => changed.push(Listed { id: b.id.clone(), kind: Kind::Modified, agent: Some(a), corrupt: None }),
+            Err(why) => changed.push(Listed { id: b.id.clone(), kind: Kind::Modified, agent: None, corrupt: Some(why) }),
         }
     }
     let mut own: Vec<Listed> = own_ids(config)
         .into_iter()
         .map(|id| match load(config, &id) {
-            Ok(a) => Listed { id, kind: Kind::Own, agent: a, corrupt: None, plugin: None },
-            Err(why) => Listed { id, kind: Kind::Own, agent: None, corrupt: Some(why), plugin: None },
+            Ok(a) => Listed { id, kind: Kind::Own, agent: a, corrupt: None },
+            Err(why) => Listed { id, kind: Kind::Own, agent: None, corrupt: Some(why) },
         })
         .filter(|l| l.agent.is_some() || l.corrupt.is_some())
         .collect();
     own.sort_by(|a, b| a.name().to_lowercase().cmp(&b.name().to_lowercase()).then(a.id.cmp(&b.id)));
     plain.extend(changed);
     plain.extend(own);
-    for p in crate::squadplugin::installed(&crate::plugins::store_for(config)) {
-        let mut theirs = p.agents;
-        theirs.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then(a.id.cmp(&b.id)));
-        plain.extend(theirs.into_iter().map(|a| Listed {
-            id: a.id.clone(),
-            kind: Kind::Plugin,
-            agent: Some(a),
-            corrupt: None,
-            plugin: Some(p.name.clone()),
-        }));
-    }
     plain
 }
 
@@ -425,15 +368,6 @@ pub fn all(config: &Path) -> Vec<Agent> {
 
 /// The agent with this id as the user has it now, if it is there and readable.
 pub fn get(config: &Path, id: &str) -> Option<Agent> {
-    if crate::squadplugin::is_plugin(id) {
-        let (plugin, _) = crate::squadplugin::split(id)?;
-        return crate::squadplugin::installed(&crate::plugins::store_for(config))
-            .into_iter()
-            .find(|p| p.plugin == plugin)?
-            .agents
-            .into_iter()
-            .find(|a| a.id == id);
-    }
     match load(config, id) {
         Ok(Some(a)) => Some(a),
         Ok(None) => builtin(id),
@@ -444,9 +378,6 @@ pub fn get(config: &Path, id: &str) -> Option<Agent> {
 /// Write an agent: under the lock, atomically, keeping the keys of the file platoon doesn't know. A file that can't
 /// be read is never written over. A built-in saved exactly as platoon has it needs no file: the file goes.
 pub fn save(config: &Path, a: &Agent) -> io::Result<()> {
-    if crate::squadplugin::is_plugin(&a.id) {
-        return Err(io::Error::other(format!("{} comes with a plugin, so it can't be changed here; copy it to change it", a.name)));
-    }
     let p = path(config, &a.id);
     let _lock = lock(&lock_path(config))?;
     let mut keep = Map::new();
@@ -481,9 +412,6 @@ pub fn save(config: &Path, a: &Agent) -> io::Result<()> {
 /// Put an agent's file aside as `<id>.json.bak` (one copy, replaced by the next): a built-in is as platoon has it
 /// again, one of the user's own is gone. Whether it may go at all is for `delete`.
 pub fn remove(config: &Path, id: &str) -> io::Result<()> {
-    if crate::squadplugin::is_plugin(id) {
-        return Err(io::Error::other("it comes with a plugin: removing the plugin (in the settings: s, then Plugins) takes it off"));
-    }
     let p = path(config, id);
     let _lock = lock(&lock_path(config))?;
     match fs::rename(&p, p.with_extension("json.bak")) {
@@ -514,9 +442,6 @@ pub fn delete(config: &Path, id: &str) -> Result<(), String> {
     if is_builtin(id) {
         return Err(format!("{} is built into platoon, so it can't be deleted.", a.name));
     }
-    if crate::squadplugin::is_plugin(id) {
-        return Err(format!("{} comes with a plugin: removing the plugin (in the settings: s, then Plugins) takes it off.", a.name));
-    }
     let squads: Vec<crate::squadfile::Squad> = crate::squadfile::load_all(config).into_iter().filter_map(|l| l.squad).collect();
     if let Some(why) = in_use(&a.name, id, &squads) {
         return Err(why);
@@ -543,9 +468,7 @@ pub fn new_id(config: &Path, name: &str, taken: &[String]) -> String {
 
 /// Things that change what the list shows: the agents folder's files, as they are now.
 pub fn stamp(config: &Path) -> Vec<(String, Option<(std::time::SystemTime, u64)>)> {
-    let mut out = crate::squadfile::stamp_of(&dir(config));
-    out.push(crate::squadfile::plugins_stamp(config));
-    out
+    crate::squadfile::stamp_of(&dir(config))
 }
 
 /// A copy of `a` under a new name, as one of the user's own agents.

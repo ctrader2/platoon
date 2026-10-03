@@ -297,7 +297,7 @@ impl App {
                 self.reread_all_tickets();
                 self.notify(format!("Couldn't bring #{number}'s worktree back: {e}"));
                 if then == After::Editor {
-                    self.editor_cancel(false);
+                    self.editor_cancel();
                 }
                 return;
             }

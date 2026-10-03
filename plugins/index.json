@@ -1,6 +1,0 @@
-{
-  "about": "The plugins platoon offers, in the order it shows them. Each is a folder here with its plugin.json; keep id and version the same as there (a test checks).",
-  "plugins": [
-    { "id": "editor", "name": "Code editor (Neovim)", "version": "1.2.0" }
-  ]
-}

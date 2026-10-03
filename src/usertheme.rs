@@ -2,12 +2,13 @@
 //! file (`~/.config/platoon/themes/Nord` is the theme "Nord"). Ghostty's bundled themes use the same format, so
 //! copying one over just works.
 //!
-//! A file is turned into a `Theme` the way the built-ins are, and the way a plugin's themes are: the same role
-//! derivation, then the same contrast floors. A dark file is lifted until it reads, so a sloppy or low-contrast one
-//! still gives something readable; a light one has to read as it is, like a plugin's. What can't be made to work is
-//! skipped with a reason that the picker and `platoon themes` show (a light theme that doesn't read, a file that isn't
-//! a theme, ...). Nothing in here may panic or hang on a strange file: sizes and counts are capped, only regular files
-//! are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather than guessed at.
+//! A file is turned into a `Theme` the way the built-ins are (exactly as the built-in theme files in `src/themes/`):
+//! the same role derivation, then the same contrast floors. A dark file is lifted until it reads, so a sloppy or
+//! low-contrast one still gives something readable; a light one has to read as it is, like the built-in light ones.
+//! What can't be made to work is skipped with a reason that the picker and `platoon themes` show (a light theme that
+//! doesn't read, a file that isn't a theme, ...). Nothing in here may panic or hang on a strange file: sizes and counts
+//! are capped, only regular files are opened (a named pipe would block), and text that isn't UTF-8 is skipped rather
+//! than guessed at.
 
 use crate::theme::{MIN_DELTA_E, MIN_DIM, MIN_ROLE, MIN_SUBTEXT, MIN_TEXT, Theme, contrast, delta_e, is_light, lift_contrast, mix};
 use ratatui::style::Color;
@@ -187,9 +188,9 @@ fn mixed_until(bg: Color, text: Color, from: f64, ok: impl Fn(Color) -> bool) ->
 }
 
 /// The theme one of the user's own files describes, or why there isn't one. A dark file is built (`build`) and lifted
-/// until it reads, whatever it says. A light one is held to the floors a plugin's theme is (`problems`: it has to read
-/// as it is, since a background just on the light side leaves nothing to lift the text toward) and then built the same
-/// way; one that doesn't read gets the first reason, in plain words, and how many more there are.
+/// until it reads, whatever it says. A light one is held to the floors the built-in theme files meet (`problems`: it
+/// has to read as it is, since a background just on the light side leaves nothing to lift the text toward) and then
+/// built the same way; one that doesn't read gets the first reason, in plain words, and how many more there are.
 pub fn theme_from(id: String, name: String, p: &Parsed) -> Result<Theme, String> {
     if p.light() {
         let problems = problems(p);
@@ -208,8 +209,8 @@ pub fn theme_from(id: String, name: String, p: &Parsed) -> Result<Theme, String>
 /// Why a theme file doesn't read well enough to be used as it is, in plain words (empty: it does). The same floors the
 /// built-ins are held to, on the file's own colors, before any lifting: the text at 7:1 on the background, the five
 /// colors that carry meaning (`Parsed::role_picks`: the file's own `platoon-accent` ... or its palette) at 4.5:1
-/// and told apart. Dark and light themes alike: the ratio is the same whichever side is the lighter. Every plugin
-/// theme is held to it (`plugins::check`), and so is a light theme in the user's own folder (`theme_from`).
+/// and told apart. Dark and light themes alike: the ratio is the same whichever side is the lighter. Every built-in
+/// theme file meets it (a test checks), and a light theme in the user's own folder is held to it (`theme_from`).
 pub fn problems(p: &Parsed) -> Vec<String> {
     let mut out = Vec::new();
     let (bg, fg) = (p.background, p.foreground);
@@ -459,33 +460,18 @@ pub fn scan(dir: &Path) -> Scan {
 
 type Print = Vec<(OsString, u64, Option<SystemTime>)>;
 
-type PluginPrint = Option<(u64, Option<SystemTime>)>;
-
-/// The user's themes as of the last look at the folder, and what is needed to see that it changed. Also the themes
-/// of installed plugins, when it was opened with a plugins folder.
+/// The user's themes as of the last look at the folder, and what is needed to see that it changed.
 #[derive(Default)]
 pub struct Registry {
     dir: PathBuf,
     print: Option<Print>,
     scan: Scan,
-    plugins: Option<crate::plugins::Store>,
-    plugin_print: PluginPrint,
-    plugin_themes: Vec<crate::plugins::PluginTheme>,
 }
 
 impl Registry {
     /// The themes in `<config>/themes`, read now. (`Registry::default()` has none and never looks anywhere.)
-    #[cfg(test)]
     pub fn open(config: &Path) -> Self {
         let mut r = Self { dir: config.join("themes"), ..Self::default() };
-        r.reload();
-        r
-    }
-
-    /// The user's themes and those of the plugins installed in `plugins` (`<data>/plugins`).
-    pub fn open_with_plugins(config: &Path, plugins: &Path) -> Self {
-        let mut r =
-            Self { dir: config.join("themes"), plugins: Some(crate::plugins::Store::new(plugins.to_path_buf())), ..Self::default() };
         r.reload();
         r
     }
@@ -507,32 +493,17 @@ impl Registry {
     fn reload(&mut self) {
         self.print = self.fingerprint();
         self.scan = scan(&self.dir);
-        self.reload_plugins();
-    }
-
-    fn reload_plugins(&mut self) {
-        let Some(store) = &self.plugins else { return };
-        self.plugin_print = crate::plugins::fingerprint(store);
-        let taken: Vec<String> = Theme::all().into_iter().map(|t| t.name).chain(self.scan.themes.iter().map(|t| t.name.clone())).collect();
-        self.plugin_themes = crate::plugins::themes(store, &taken);
     }
 
     /// Look at the folder again: a listing of names, sizes and times, and the files are only read again if that
-    /// changed. True when they were. Bounded by `MAX_ENTRIES`, so cheap enough for every settings refresh. The
-    /// plugins' themes are read again when what is installed changed.
+    /// changed. True when they were. Bounded by `MAX_ENTRIES`, so cheap enough for every settings refresh.
     pub fn refresh(&mut self) -> bool {
         let now = self.fingerprint();
         if now != self.print {
             self.reload();
             return true;
         }
-        match &self.plugins {
-            Some(store) if crate::plugins::fingerprint(store) != self.plugin_print => {
-                self.reload_plugins();
-                true
-            }
-            _ => false,
-        }
+        false
     }
 
     /// The user's themes, in file-name order.
@@ -544,20 +515,13 @@ impl Registry {
         &self.scan
     }
 
-    /// Built-ins in their order, then the user's, then the plugins'.
+    /// Built-ins in their order, then the user's.
     pub fn all(&self) -> Vec<Theme> {
-        Theme::all().into_iter().chain(self.user().iter().cloned()).chain(self.plugin_themes.iter().map(|p| p.theme.clone())).collect()
+        Theme::all().into_iter().chain(self.user().iter().cloned()).collect()
     }
 
     pub fn by_id(&self, id: &str) -> Option<Theme> {
-        Theme::by_id(id)
-            .or_else(|| self.scan.themes.iter().find(|t| t.id == id).cloned())
-            .or_else(|| self.plugin_themes.iter().find(|p| p.theme.id == id).map(|p| p.theme.clone()))
-    }
-
-    /// The name of the plugin a theme came from (None for a built-in or one of the user's).
-    pub fn plugin_of(&self, id: &str) -> Option<&str> {
-        self.plugin_themes.iter().find(|p| p.theme.id == id).map(|p| p.plugin.as_str())
+        Theme::by_id(id).or_else(|| self.scan.themes.iter().find(|t| t.id == id).cloned())
     }
 }
 
@@ -691,7 +655,7 @@ mod tests {
     /// white (black, on a light one) on that background could meet it: on a dark but not very dark one (a saturated
     /// blue) nothing can read at 7:1.
     fn assert_readable(t: &Theme) {
-        let reach = contrast(t.strongest(), t.bg) - 0.01;
+        let reach = contrast(if t.light { c(0) } else { c(0xffffff) }, t.bg) - 0.01;
         let on = |x: Color| contrast(x, t.bg);
         assert!(on(t.text) >= MIN_TEXT.min(reach), "{}: text {:.2}", t.name, on(t.text));
         assert!(on(t.subtext) >= MIN_SUBTEXT.min(reach), "{}: subtext {:.2}", t.name, on(t.subtext));
@@ -778,7 +742,7 @@ mod tests {
         assert!(p.light() && problems(&p).is_empty(), "{:?}", problems(&p));
         let t = theme_from("user:sol".into(), "Sol".into(), &p).unwrap();
         assert_eq!(t, build("user:sol".into(), "Sol".into(), &p), "built the way a built-in theme file is");
-        assert!(t.light && t.strongest() == c(0));
+        assert!(t.light);
         assert_eq!((t.text, t.accent, t.ok, t.warn), (c(0x47565c), c(0x6268b8), c(0x687700), c(0x8b6900)), "used as it is");
         assert_readable(&t);
         // Black on white with no colors of its own: it has no accent to offer, and says so first.
@@ -829,8 +793,8 @@ mod tests {
         let p = parse(text).unwrap();
         assert!(p.light());
         assert_eq!(p.role_picks(), [Some(c(0x1a55c0)), Some(c(0x9a2fa0)), Some(c(0x2e7d32)), Some(c(0xd8a820)), Some(c(0xc62828))]);
-        let t = build("plugin:x/l".into(), "L".into(), &p);
-        assert!(t.light && t.strongest() == c(0));
+        let t = build("user:l".into(), "L".into(), &p);
+        assert!(t.light);
         assert_eq!(t.text, c(0x202020));
         assert!(luminance(t.surface) < luminance(t.bg) && luminance(t.border) < luminance(t.surface), "darker toward the text");
         let on = |x: Color| contrast(x, t.bg);
@@ -851,7 +815,7 @@ mod tests {
         assert_eq!(t.text_on(c(0xf0d060)), t.text);
         assert_eq!(t.text_on(c(0xb07a10)), c(0), "a middling color: neither of the theme's reads at 4.5:1");
         let dark = build("x".into(), "D".into(), &parse(NORD).unwrap());
-        assert!(!dark.light && dark.strongest() == c(0xffffff));
+        assert!(!dark.light);
     }
 
     #[test]
