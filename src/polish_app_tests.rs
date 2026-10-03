@@ -608,3 +608,100 @@ fn a_long_notice_is_cut_beside_help_rather_than_take_its_place() {
         assert!(footer.width() == w as usize, "{w}: {footer:?}");
     }
 }
+
+// ---- group 7: the search and the settings ------------------------------------------------------------------------
+
+#[test]
+fn the_quick_filter_marks_the_words_and_shows_a_hidden_field_that_matched() {
+    let w = World::new("s-why");
+    w.transcript("alpha-1", "/srv/alpha", "fix the login page", 10);
+    w.transcript("beta-2", "/srv/beta", "write the release notes for the basket", 20);
+    let mut app = w.app();
+    app.notice = None;
+    let mut term = sized(&mut app, 100, 30);
+    let t = app.effective_theme().clone();
+    ch(&mut app, '/');
+    // A word in the name: marked there, in the accent color.
+    for c in "alph".chars() {
+        ch(&mut app, c);
+    }
+    let lines = draw(&mut term, &app);
+    let buf = term.backend().buffer().clone();
+    let y = lines.iter().rposition(|l| l.contains("▎ alpha")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
+    let x = (0..100).find(|&x| buf[(x, y as u16)].symbol() == "a" && buf[(x + 1, y as u16)].symbol() == "l").unwrap();
+    assert_eq!(buf[(x, y as u16)].fg, t.accent, "the typed words are marked");
+    assert!(buf[(x, y as u16)].modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_ne!(buf[(x + 4, y as u16)].fg, t.accent, "the rest of the name is not");
+    // A word only in what the row doesn't show (its first message): that part shows, dim, the word marked.
+    for _ in 0..4 {
+        key(&mut app, KeyCode::Backspace);
+    }
+    for c in "basket".chars() {
+        ch(&mut app, c);
+    }
+    let lines = draw(&mut term, &app);
+    let row = lines.iter().find(|l| l.contains("beta") && l.contains("basket")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
+    assert!(!row.contains("/srv/beta"), "the matching text takes the folder's place: {row}");
+    let y = lines.iter().position(|l| l == row).unwrap() as u16;
+    let bx = (0..100).find(|&x| buf_text(&term, x, y, 6) == "basket").unwrap();
+    let buf = term.backend().buffer().clone();
+    assert_eq!(buf[(bx, y)].fg, t.accent);
+    assert_eq!(buf[(bx - 2, y)].fg, t.dim, "the rest of it dim");
+    // A folder that matches is marked where it is.
+    for _ in 0..6 {
+        key(&mut app, KeyCode::Backspace);
+    }
+    for c in "srv/al".chars() {
+        ch(&mut app, c);
+    }
+    let lines = draw(&mut term, &app);
+    // (The list behind shows above the popup: the popup's row is the last one.)
+    let y = lines.iter().rposition(|l| l.contains("/srv/alpha")).unwrap() as u16;
+    let sx = (0..100).find(|&x| buf_text(&term, x, y, 6) == "srv/al").unwrap();
+    assert_eq!(term.backend().buffer()[(sx, y)].fg, t.accent);
+}
+
+/// The `n` cells from (x, y), as text.
+fn buf_text(term: &Terminal<TestBackend>, x: u16, y: u16, n: u16) -> String {
+    let buf = term.backend().buffer();
+    (x..(x + n).min(buf.area.width)).map(|x| buf[(x, y)].symbol()).collect()
+}
+
+#[test]
+fn the_settings_choosers_of_a_tab_line_up() {
+    let (_w, mut app) = three("s-align");
+    ch(&mut app, 's');
+    for (w, h) in [(120u16, 40u16), (80, 24), (60, 24)] {
+        for tab in 0..crate::settings::TABS.len() {
+            app.switch_settings_tab(tab);
+            let mut term = sized(&mut app, w, h);
+            let lines = draw(&mut term, &app);
+            let ctx = format!("{w}x{h} tab {tab}\n{}", lines.join("\n"));
+            // Where each chooser's `‹` and `›` are, in cells.
+            let buf = term.backend().buffer().clone();
+            // Below the popup's own tab strip (which has `‹ ›` too, at narrow widths) and the rule under it.
+            let top = lines.iter().position(|l| l.contains("╭ Settings")).unwrap() as u16;
+            let marks: Vec<(u16, u16)> = (top + 3..h)
+                .filter_map(|y| {
+                    let l = (0..w).find(|&x| buf[(x, y)].symbol() == "‹")?;
+                    let r = (0..w).find(|&x| buf[(x, y)].symbol() == "›")?;
+                    Some((l, r))
+                })
+                .collect();
+            assert!(!marks.is_empty() || tab != 0, "{ctx}");
+            // From 80 columns every chooser lines up. At 60 the names come first: a value too wide to share the width
+            // that leaves every name whole keeps its own (the others still line up), and none runs out of the popup.
+            let right = marks.iter().map(|m| m.1).max().unwrap_or(0);
+            assert!(marks.iter().all(|m| m.1 == right), "every chooser ends in one column: {marks:?}\n{ctx}");
+            if w >= 80 {
+                assert!(marks.iter().all(|m| m.0 == marks[0].0), "and starts in one: {marks:?}\n{ctx}");
+            }
+            // And every name beside a chooser is whole.
+            for item in crate::settings::TABS[tab].items.iter().filter(|it| !matches!(it.kind, crate::settings::Kind::Instructions(_))) {
+                let shown = lines.iter().any(|l| l.contains(item.name));
+                let cut = lines.iter().any(|l| l.contains(&item.name[..item.name.len().min(10)]) && l.contains('…'));
+                assert!(shown || !cut, "{}: {ctx}", item.name);
+            }
+        }
+    }
+}

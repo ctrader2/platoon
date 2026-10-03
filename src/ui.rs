@@ -2358,6 +2358,21 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     // A page: as many entries as the screen holds, counted at their usual height.
     app.pages.settings.set(((area.height as usize + gap as usize) / (2 + gap as usize)).max(1));
 
+    // Every chooser of the tab is as wide as the widest of them, so their arrows line up down the tab, as long as that
+    // leaves every entry's name whole; a value longer than that (a theme's name, an editor's) is cut with "…".
+    // (A system prompt's entry has no chooser: "Enter to change" is short, and its long name is cut as it always was.)
+    let names_w = items.iter().filter(|it| !matches!(it.kind, Kind::Instructions(_))).map(|it| it.name.width()).max().unwrap_or(0);
+    let shared = items
+        .iter()
+        .filter_map(|it| match it.kind {
+            Kind::Steps | Kind::Feature(_) => Some(it.choices.iter().map(|&c| (it.label)(c).width()).max().unwrap_or(0)),
+            Kind::Editor(which) => Some(app.editor_setting(which).1.min(26)),
+            Kind::Theme => Some(app.themes().all().iter().map(|t| t.name.width()).max().unwrap_or(0).min(24)),
+            Kind::Instructions(_) => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .min((area.width as usize).saturating_sub(names_w + 8));
     let mut y = area.y;
     for (i, item) in items.iter().enumerate().skip(start) {
         let h = height(i) as u16;
@@ -2386,7 +2401,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             Kind::Steps | Kind::Feature(_) => {
                 let value = item.value(current);
                 let label = (item.label)(value);
-                let vw = item.choices.iter().map(|&c| (item.label)(c).chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+                let vw = item.choices.iter().map(|&c| (item.label)(c).width()).chain([label.width(), shared]).max().unwrap_or(0);
                 (label, vw, item.step(value, Step::Prev) == value, item.step(value, Step::Next) == value, item.off == Some(value))
             }
             // "Enter to change" or "User Modified", with no arrows: enter (or a click on it) opens the editor list.
@@ -2400,13 +2415,13 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             }
             Kind::Editor(which) => {
                 let (label, widest, at_start, at_end) = app.editor_setting(which);
-                let vw = widest.min(26);
+                let vw = shared.max(widest.min(4));
                 (fit_end(&label, vw), vw, at_start, at_end, false)
             }
             Kind::Theme => {
                 let all = app.themes().all();
                 let at = all.iter().position(|t| t.id == app.theme.id).unwrap_or(0);
-                let vw = all.iter().map(|t| t.name.chars().count()).max().unwrap_or(0).min(24);
+                let vw = shared.max(4);
                 (fit_end(&app.theme.name, vw), vw, at == 0, at + 1 >= all.len(), false)
             }
         };
@@ -2881,6 +2896,8 @@ fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
     let rows = area.height as usize;
     let start = app.selected.saturating_sub(rows.saturating_sub(1));
     let now = crate::usage::now() * 1000;
+    // Lowercase, as the filter matches it.
+    let q = app.filter.to_lowercase();
     for (i, &idx) in visible.iter().enumerate().skip(start).take(rows) {
         let s = &app.sessions[idx];
         let rect = Rect::new(area.x, area.y + (i - start) as u16, area.width, 1);
@@ -2889,14 +2906,90 @@ fn draw_quick_rows(f: &mut Frame, app: &App, area: Rect) {
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let name_w = (area.width as usize * 2 / 5).max(8);
         let dir_w = (area.width as usize).saturating_sub(name_w + 2 + LAST_W);
-        let line = Line::from(vec![
-            Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
-            Span::styled(fit(&s.name, name_w.saturating_sub(2)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
-            Span::styled(fit_dirs(&s.dir, &s.extra_dirs, dir_w), Style::new().fg(t.dim).bg(bg)),
-            Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), Style::new().fg(t.dim).bg(bg)),
-        ]);
-        f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
+        let mark = Style::new().fg(t.accent).bg(bg).add_modifier(Modifier::BOLD);
+        let name = fit(&s.name, name_w.saturating_sub(2));
+        let dirs = fit_dirs(&s.dir, &s.extra_dirs, dir_w);
+        let mut spans = vec![Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg))];
+        spans.extend(marked(&name, &q, Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg), mark));
+        // Why it matched, when it isn't in what the row shows: the part of the hidden field that has the words.
+        match hidden_match(s, &q, &name, &dirs) {
+            Some((label, field)) => {
+                let shown = pad_cells(&snippet_around(&format!("{label}{field}"), &q, label.width(), dir_w), dir_w);
+                spans.extend(marked(&shown, &q, Style::new().fg(t.dim).bg(bg), mark));
+            }
+            None => spans.extend(marked(&dirs, &q, Style::new().fg(t.dim).bg(bg), mark)),
+        }
+        spans.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), Style::new().fg(t.dim).bg(bg)));
+        f.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(bg)), rect);
     }
+}
+
+/// `text` as spans, every place the lowercase `q` occurs in it (whatever its case) in `mark`, the rest in `style`.
+fn marked(text: &str, q: &str, style: Style, mark: Style) -> Vec<Span<'static>> {
+    let chars: Vec<char> = text.chars().collect();
+    let lower: Vec<char> = text.to_lowercase().chars().collect();
+    let needle: Vec<char> = q.chars().collect();
+    // A letter whose lowercase is more than one letter (rare) would shift the places: then nothing is marked.
+    if needle.is_empty() || lower.len() != chars.len() {
+        return vec![Span::styled(text.to_string(), style)];
+    }
+    let mut out = Vec::new();
+    let (mut at, mut from) = (0, 0);
+    while at + needle.len() <= lower.len() {
+        if lower[at..at + needle.len()] == needle[..] {
+            if at > from {
+                out.push(Span::styled(chars[from..at].iter().collect::<String>(), style));
+            }
+            out.push(Span::styled(chars[at..at + needle.len()].iter().collect::<String>(), mark));
+            at += needle.len();
+            from = at;
+        } else {
+            at += 1;
+        }
+    }
+    if from < chars.len() {
+        out.push(Span::styled(chars[from..].iter().collect::<String>(), style));
+    }
+    out
+}
+
+/// When the quick filter's words `q` are in neither the `name` nor the `dirs` a row shows: the first other thing of the
+/// conversation that has them, with a word saying what it is (an added folder cut from view, its branch, its
+/// description or summary). None when the row shows them already (or nothing is typed).
+fn hidden_match(s: &Session, q: &str, name: &str, dirs: &str) -> Option<(&'static str, String)> {
+    let has = |text: &str| text.to_lowercase().contains(q);
+    if q.is_empty() || has(name) || has(dirs) {
+        return None;
+    }
+    let one_line = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let fields = [("", s.name.as_str()), ("folder ", s.dir.as_str())]
+        .into_iter()
+        .chain(s.extra_dirs.iter().map(|d| ("folder ", d.as_str())))
+        .chain(s.branch.as_deref().map(|b| ("branch ", b)))
+        .chain([("", s.description.as_str()), ("", s.summary.as_str())]);
+    fields.into_iter().find(|(_, text)| has(text)).map(|(label, text)| (label, one_line(text)))
+}
+
+/// `text` in at most `width` cells with the first place `q` occurs in it in view: from its start when that shows it,
+/// else from a little before it, with "…" for what is left out. The first `keep` characters (a label) always stay.
+fn snippet_around(text: &str, q: &str, keep: usize, width: usize) -> String {
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let lower: Vec<char> = text.to_lowercase().chars().collect();
+    let needle: Vec<char> = q.chars().collect();
+    let found = (lower.len() == chars.len()).then(|| (keep..lower.len()).find(|&i| lower[i..].starts_with(&needle))).flatten();
+    let at = found.unwrap_or(keep);
+    // From its start when the words end inside the room; else from a little before them (up to ten characters, half
+    // the room they leave), so they read in their place.
+    if take_cells(text, width.saturating_sub(1)).chars().count() >= at + needle.len() {
+        return fit_end(text, width);
+    }
+    let label: String = chars[..keep.min(chars.len())].iter().collect();
+    let lead = (width.saturating_sub(keep + 2 + needle.len()) / 2).min(10);
+    let rest: String = chars[at.saturating_sub(lead).max(keep)..].iter().collect();
+    fit_end(&format!("{label}…{rest}"), width)
 }
 
 /// The quick filter on the Projects tab: the projects it narrows the list to, one line each.
@@ -2911,6 +3004,8 @@ fn draw_quick_project_rows(f: &mut Frame, app: &App, area: Rect) {
     let rows = area.height as usize;
     let start = app.pselected.saturating_sub(rows.saturating_sub(1));
     let all = app.projects.all();
+    // Lowercase, as the filter matches it.
+    let q = app.filter.to_lowercase();
     for (i, &idx) in rows_.iter().enumerate().skip(start).take(rows) {
         let p = &all[idx];
         let rect = Rect::new(area.x, area.y + (i - start) as u16, area.width, 1);
@@ -2918,14 +3013,17 @@ fn draw_quick_project_rows(f: &mut Frame, app: &App, area: Rect) {
         let sel = i == app.pselected;
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let st = app.pstats.get(&p.id).cloned().unwrap_or_default();
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled(if sel { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg)),
             badge_span(t, p),
             Span::styled(" ", Style::new().bg(bg)),
-            Span::styled(fit(&p.name, (area.width as usize / 2).max(8)), Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg)),
-            Span::styled(session_counts(&st), Style::new().fg(t.dim).bg(bg)),
-        ]);
-        f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), rect);
+        ];
+        // The typed words in the name, marked as in the sessions' rows.
+        let mark = Style::new().fg(t.accent).bg(bg).add_modifier(Modifier::BOLD);
+        let name = fit(&p.name, (area.width as usize / 2).max(8));
+        spans.extend(marked(&name, &q, Style::new().fg(if sel { t.text } else { t.subtext }).bg(bg), mark));
+        spans.push(Span::styled(session_counts(&st), Style::new().fg(t.dim).bg(bg)));
+        f.render_widget(Paragraph::new(Line::from(spans)).style(Style::new().bg(bg)), rect);
     }
 }
 
@@ -4149,6 +4247,22 @@ mod tests {
         for n in 0..20 {
             assert!(fit_start("/home/u/shop/api", n).width() <= n, "{n}");
         }
+    }
+
+    #[test]
+    fn a_hidden_match_shows_the_part_with_the_words() {
+        let text = "write the release notes and then look at why the basket total is wrong";
+        let shown = snippet_around(text, "basket", 0, 30);
+        assert!(shown.contains("basket") && shown.starts_with('…') && shown.width() <= 30, "{shown}");
+        assert_eq!(snippet_around(text, "write", 0, 30), fit_end(text, 30), "from its start when that shows the words");
+        let b = snippet_around("branch feature/a-very-long-name-for-the-coupon-work", "coupon", 7, 24);
+        assert!(b.starts_with("branch …") && b.contains("coupon") && b.width() <= 24, "{b}");
+        assert_eq!(snippet_around("short", "or", 0, 30), "short");
+        // Marked wherever it is, whatever its case.
+        let spans = marked("Fix the Basket and the basket page", "basket", Style::new(), Style::new().fg(Color::Red));
+        let red: Vec<&str> = spans.iter().filter(|s| s.style.fg == Some(Color::Red)).map(|s| s.content.as_ref()).collect();
+        assert_eq!(red, ["Basket", "basket"]);
+        assert_eq!(marked("abc", "", Style::new(), Style::new()).len(), 1);
     }
 
     #[test]

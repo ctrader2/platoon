@@ -472,7 +472,9 @@ fn the_quick_filter_lists_nothing_until_a_character_is_typed_and_nothing_again_w
     let shown = screen(&mut term, &app);
     assert!(!app.search_rows_hidden() && shown.contains("4 shown"), "{shown}");
     let (rows, _) = results_area(&mut term, &app);
-    assert_eq!(rows.iter().filter(|r| r.contains("/srv/")).count(), 4, "{rows:?}");
+    assert_eq!(rows.iter().filter(|r| !r.trim().is_empty()).count(), 4, "{rows:?}");
+    // A row that matched in what it doesn't show says so in place of its folder: "Fix the Docker build".
+    assert!(rows.iter().any(|r| r.contains("alpha") && r.contains("Fix the Docker build") && !r.contains("/srv/")), "{rows:?}");
     assert!(app.hits.borrow().iter().any(|(_, h)| matches!(h, Hit::SearchRow(3))));
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Down);
@@ -555,7 +557,7 @@ fn tab_to_full_text_and_back_keeps_the_rule_and_full_text_also_lists_nothing_unt
     // With words typed: Full-text lists what it found, the quick filter its rows; empty again on both.
     type_str(&mut app, "docker");
     let (rows, _) = results_area(&mut term, &app);
-    assert_eq!(rows.iter().filter(|r| r.contains("/srv/")).count(), 2);
+    assert_eq!(rows.iter().filter(|r| r.to_lowercase().contains("docker")).count(), 2, "{rows:?}");
     key(&mut app, KeyCode::Tab);
     assert_eq!(found(&app).len(), 3);
     ctrl(&mut app, 'u');
