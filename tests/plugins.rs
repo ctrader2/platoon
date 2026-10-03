@@ -189,7 +189,7 @@ fn the_settings_list_every_plugin_and_open_the_plugin_screen_which_installs_and_
     // Enter: the plugin screen, full screen, on that plugin.
     t.send(b"\r");
     t.wait_for_all(&["Settings · Plugins", "Not installed", "A quiet dark theme for testing.", "Adds", "1 theme: Harbor Test", "Needs"]);
-    t.wait_for_all(&["enter install", "ctrl+space back to settings"]);
+    t.wait_for_all(&["enter install", "esc back to settings"]);
     let shown = t.stable();
     assert!(!shown.contains("Settings file:") && !shown.contains("make the shop"), "the plugin screen takes the whole body:\n{shown}");
     // No "From" line, nothing about fetching, no hint for the tab numbers.
@@ -384,7 +384,7 @@ fn a_plugin_with_a_skill_a_squad_and_agents_is_read_before_it_is_installed_and_i
         "Agent: change-reader · from Changelog kit",
         "Its system prompt",
         "Read the commits since the last release",
-        "ctrl+space back to the list",
+        "esc back to the list",
     ]);
     t.send(b"\x1b");
     t.wait_gone("Its system prompt");

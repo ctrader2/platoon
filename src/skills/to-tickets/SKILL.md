@@ -120,4 +120,4 @@ Keep titles short and plain, without double quotes, `$` or backticks (they would
 ## 6. Say what was made
 
 List the tickets you made, each with the number platoon printed and its title. Tell the user they are on the
-project's screen in platoon (the Tickets pane), and that a squad is picked there: open a ticket and press a.
+project's screen in platoon (the Tickets pane), and that a squad is picked there: open a ticket and press S (shift+s).

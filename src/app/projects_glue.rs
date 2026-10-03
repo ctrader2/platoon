@@ -307,8 +307,10 @@ impl App {
             }
             KeyCode::Left => self.switch_tab(0),
             KeyCode::Right => self.switch_tab(1),
-            KeyCode::Down => self.move_selection(1),
-            KeyCode::Up => self.move_selection(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+            KeyCode::PageDown => self.move_selection(super::page_of(&self.pages.sessions)),
+            KeyCode::PageUp => self.move_selection(-super::page_of(&self.pages.sessions)),
             KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
             KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
             _ => {}
@@ -329,8 +331,10 @@ impl App {
             }
             KeyCode::Left => self.switch_ptab(0),
             KeyCode::Right => self.switch_ptab(1),
-            KeyCode::Down => self.move_project(1),
-            KeyCode::Up => self.move_project(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_project(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_project(-1),
+            KeyCode::PageDown => self.move_project(super::page_of(&self.pages.projects)),
+            KeyCode::PageUp => self.move_project(-super::page_of(&self.pages.projects)),
             KeyCode::Char('g') | KeyCode::Home => self.pselected = 0,
             KeyCode::Char('G') | KeyCode::End => self.pselected = self.pview.len().saturating_sub(1),
             _ => {}
@@ -363,10 +367,10 @@ impl App {
             // The Tickets pane has keys of its own (`n` there is a new ticket).
             _ if self.pane == Pane::Tickets => self.tickets_pane_key(key),
             KeyCode::Char('n') => self.act(Action::New),
-            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown if self.pane == Pane::Notes => {
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Char('j' | 'k') if self.pane == Pane::Notes => {
                 let d: i64 = match key.code {
-                    KeyCode::Up => -1,
-                    KeyCode::Down => 1,
+                    KeyCode::Up | KeyCode::Char('k') => -1,
+                    KeyCode::Down | KeyCode::Char('j') => 1,
                     KeyCode::PageUp => -10,
                     _ => 10,
                 };
@@ -384,8 +388,10 @@ impl App {
                 KeyCode::Char('m') => self.act(Action::Assign),
                 KeyCode::Char('h') => self.act(Action::HandOff),
                 KeyCode::Enter => self.act(Action::Jump),
-                KeyCode::Down => self.move_selection(1),
-                KeyCode::Up => self.move_selection(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
+                KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),
+                KeyCode::PageDown => self.move_selection(super::page_of(&self.pages.sessions)),
+                KeyCode::PageUp => self.move_selection(-super::page_of(&self.pages.sessions)),
                 KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
                 KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
                 _ => {}

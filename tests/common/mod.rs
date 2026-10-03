@@ -295,8 +295,8 @@ impl Term {
 
     /// The screen once it has stopped changing. For assertions about a whole frame - what is **not** on it, what
     /// order the rows are in, how many times something appears - which a half-drawn frame would answer wrongly.
-    /// (The program writes a few bytes on every frame whether or not anything changed, so this watches the screen
-    /// itself, not the stream.)
+    /// (It watches the screen itself, not the stream: the program writes nothing while nothing changes, but a frame
+    /// that changed only colors still arrives as bytes.)
     pub fn stable(&mut self) -> String {
         let start = Instant::now();
         let mut last = self.text();

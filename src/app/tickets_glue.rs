@@ -192,10 +192,10 @@ impl App {
                 }
                 None => {}
             },
-            KeyCode::Down => self.move_ticket(1),
-            KeyCode::Up => self.move_ticket(-1),
-            KeyCode::PageDown => self.move_ticket(5),
-            KeyCode::PageUp => self.move_ticket(-5),
+            KeyCode::Down | KeyCode::Char('j') => self.move_ticket(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_ticket(-1),
+            KeyCode::PageDown => self.move_ticket(super::page_of(&self.pages.tickets)),
+            KeyCode::PageUp => self.move_ticket(-super::page_of(&self.pages.tickets)),
             KeyCode::Char('g') | KeyCode::Home => self.select_ticket_row(0),
             KeyCode::Char('G') | KeyCode::End => self.select_ticket_row(self.ticket_rows().len().saturating_sub(1)),
             _ => {
@@ -210,7 +210,7 @@ impl App {
     fn ticket_key(&mut self, number: u32, key: KeyEvent) {
         // While it is being handed to a squad, what would change that waits.
         if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone())
-            && matches!(key.code, KeyCode::Char('c' | 'f' | 'a' | 'p' | 'w'))
+            && matches!(key.code, KeyCode::Char('c' | 'f' | 'S' | 'p' | 'w'))
         {
             self.notify(format!("#{number}: {busy} Wait a moment."));
             return;
@@ -221,7 +221,10 @@ impl App {
             KeyCode::Char('c') => self.ask_cancel_ticket(number),
             KeyCode::Char('f') => self.open_ticket_pick(PickKind::Folders, number),
             KeyCode::Char('b') => self.open_ticket_pick(PickKind::BlockedBy, number),
-            KeyCode::Char('a') => self.ask_hand_to_squad(number),
+            KeyCode::Char('S') => self.ask_hand_to_squad(number),
+            // `a` used to hand a ticket to a squad (and archives a session in the pane above): it does nothing here
+            // now, but says where that went rather than ignoring the key.
+            KeyCode::Char('a') => self.notify("S (shift+s) hands a ticket to a squad."),
             KeyCode::Char('p') => self.let_it_publish(number),
             KeyCode::Char('w') => self.ask_remove_worktree(number),
             _ => {}
@@ -234,8 +237,8 @@ impl App {
         let scroll = |app: &mut App, d: i64| app.tk.body_top.set((app.tk.body_top.get() as i64 + d).max(0) as usize);
         match key.code {
             KeyCode::Esc => self.close_ticket_screen(),
-            KeyCode::Down => scroll(self, 1),
-            KeyCode::Up => scroll(self, -1),
+            KeyCode::Down | KeyCode::Char('j') => scroll(self, 1),
+            KeyCode::Up | KeyCode::Char('k') => scroll(self, -1),
             KeyCode::PageDown => scroll(self, 10),
             KeyCode::PageUp => scroll(self, -10),
             KeyCode::Char('g') | KeyCode::Home => self.tk.body_top.set(0),

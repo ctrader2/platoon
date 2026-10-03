@@ -194,7 +194,9 @@ context is (`~` marks platoon's estimate rather than Claude's own figure), when 
 one-line description. Newest activity first.
 
 Status is `working`, `done` (Claude finished and you haven't looked yet), `idle`, `Background`, or `moved away` (see
-[Background sessions](#background-sessions)). Conversations that only ever held slash commands are hidden.
+[Background sessions](#background-sessions)). Conversations that only ever held slash commands are hidden. Each conversation
+takes two lines, its name line and its prompt line; the selected one is highlighted across both, with a `▎` in front of each.
+CONTEXT is left blank for a conversation platoon knows nothing about yet (no figure from Claude and nothing to estimate from).
 
 The name shown is, in this order: the one you gave it with `r` (platoon's own), then one you typed with `/rename` inside
 Claude, then, when the [smart features](#features-that-use-tokens) are on, a short name platoon made up (marked with a quiet `✦`
@@ -211,9 +213,10 @@ STATUS, CONTEXT and LAST hold what they always did. Whatever a wide terminal has
 then **shared equally between the columns**, so the row fills the screen and LAST sits at the right edge; the odd cell that
 does not divide evenly goes to the leftmost columns. Each value stays at the left of its column, so a short one simply leaves
 a wider gap after it than a long one, and the context bar keeps its own size (how full it looks is what it means) with its
-share of the spare width as clear air after the percentage. On a narrow terminal, where the content already wants more room
-than there is, nothing is over to share: BRANCH goes first, then MODEL, and NAME and DIR share whatever room is left, as
-before.
+share of the spare width as clear air after the percentage. Every column ends with at least one blank cell, so no two ever
+touch. On a narrow terminal, where the content already wants more room than there is, nothing is over to share, and columns
+go as it narrows: BRANCH first, then MODEL, then the CONTEXT bar, then DIR; NAME (and the prompt line under it), STATUS and
+LAST stay to the end. NAME and DIR share whatever room is left.
 
 | Key | Does |
 | --- | --- |
@@ -229,7 +232,7 @@ before.
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](#settings) |
 | `?` | every key of the screen you are on |
-| `↑` `↓` `g` `G` | move (`g`/`G` jump to the first/last); the mouse works too |
+| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tickets, Squads and Agents, the settings and the plugins |
 | `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a ticket's screen, or in a squad's details, `q` goes back one level |
 | `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](#keys-back-and-quit) |
 
@@ -347,7 +350,8 @@ Details worth knowing:
 
 `s` opens the settings as a popup over the list; the [back key](#keys-back-and-quit) (`ctrl+space`), `esc`, `s`, `q`, or a click outside it closes it. The settings are in seven
 tabs along the top: **General**, **Search**, **Smart features**, **Sessions**, **Projects**, **Editors** and **Plugins** (on a
-narrow terminal "Smart features" is shortened to "Smart"). `tab` goes to the next tab and
+narrow terminal "Smart features" is shortened to "Smart", and where even then they don't all fit, the strip shows the tabs
+around the one showing, with `‹` or `›` on the side that has more; a click on one goes there). `tab` goes to the next tab and
 `shift+tab` to the previous one (both go round), and a click on a tab's name shows it. The popup opens on General, and keeps the
 same size on every tab; a tab with more entries than fit scrolls, and on a small terminal only the selected entry is explained. Every setting keeps the name, choices and key in the file it had before the tabs.
 
@@ -483,7 +487,8 @@ One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a
 running), detaches `platoon open`, stops a notes editor running inside platoon, goes back to platoon from the code editor,
 goes from a ticket's screen to its project's screen and from there to the list, leaves a squad's details, a plugin's file,
 the plugin screen (back to the settings), the settings, the theme list and the changes view, and cancels every question, box and list that pops up. `esc` does the
-same on platoon's own screens and popups (not in a session or an editor, where it is theirs). On the top-level lists, with
+same on platoon's own screens and popups (not in a session or an editor, where it is theirs), so the key hints there say
+`esc back`; in a session's live view and the notes editor they name the back key. On the top-level lists, with
 nothing open, it does what `esc` does there (clears a kept filter) and never quits.
 
 `q` quits, but only from the top-level lists (Sessions, Projects, Squads with nothing open). On a project's or a
@@ -1000,7 +1005,7 @@ otherwise not-New ticket then says its state at the end of its row).
 | --- | --- |
 | `n` | new ticket: type its title, then the body opens in your editor (the same list of editors as the notes). An archived project takes no new tickets |
 | `enter` | open the ticket (on the Done and cancelled line: show or hide them) |
-| `c` `e` `r` `f` `b` `a` `p` `w` | as on the ticket's own screen, for the ticket picked |
+| `c` `e` `r` `f` `b` `S` `p` `w` | as on the ticket's own screen, for the ticket picked |
 
 A new ticket starts as **New**, works in the folder of the project's most recently used session (one made with
 `platoon ticket add`: the folder it was run in, which for `/to-tickets` is the session's own), and its body starts from a short template. When the
@@ -1027,7 +1032,7 @@ folders, its **work folder** once a squad has had it, what it waits for, and the
 | `c` | cancel it, after asking "Cancel ticket #N?" (`y` yes, `n` or `esc` no). When its squad's session is running, the question says it will be stopped too, and yes stops that one session (its conversation is kept). On a ticket that is Cancelled already, `c` only says so |
 | `f` | its folders: add one with the folder picker, `d` takes the picked one away |
 | `b` | what it waits for: tick the project's other tickets (`enter` or `space`). A ticket can't wait for itself, and a wait that would go round in a circle is refused |
-| `a` | hand it to a squad (see below) |
+| `S` (shift+s) | hand it to a squad (see below). `a` does nothing on a ticket: it says `S` does this |
 | `p` | let its squad publish, when it is Ready to push/publish |
 | `w` | remove its worktree anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a ticket a squad has: its squad's session, beside the ticket. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
@@ -1070,7 +1075,7 @@ what the conversation has agreed on. It goes like this:
 1. It asks platoon which project the session is in (`platoon ticket where`). If the session isn't in one, it says so in
    one line and stops: add the session to a project first (`m` on the Sessions tab), then type `/to-tickets` again.
 2. It reads what kinds of work your squads do (`platoon squads --kinds`) and shapes the tickets to fit, for example a
-   coding part apart from a documentation part. It never picks a squad: you do that on the ticket (`a`).
+   coding part apart from a documentation part. It never picks a squad: you do that on the ticket (`S`).
 3. It drafts the tickets. Each is one thin, complete piece that fits in one fresh session (whoever picks it up has never
    seen the conversation), says what should work when it is done rather than which files change, has acceptance checks
    that would fail before the work, a **How far:** line (local changes only, unless the conversation asked for more), no
@@ -1117,7 +1122,7 @@ as far as the ticket's text says; when the text doesn't say, it stops at local c
 squad's session they are named after the squad and the agent, `coding-leader`, `coding-planner`, `coding-builder`, `coding-reviewer`
 and `coding-verifier`, so Claude's own lines and status bar show which of them is at work.
 
-Press `a` on a New ticket (in the Tickets pane or on its screen), pick the squad and press `enter`: every squad is
+Press `S` (shift+s) on a New ticket (in the Tickets pane or on its screen), pick the squad and press `enter`: every squad is
 listed by name, with what it can do. A ticket that is not New, or that still waits for another ticket, is refused with
 one line saying why, and so is a squad that has something to fix on the Squads tab. Any squad can take a ticket with no
 folder of its own: it works in the ticket's work folder.
@@ -1126,7 +1131,7 @@ folder of its own: it works in the ticket's work folder.
   counted with your smart features' tokens) reads the ticket and what the squad can do, and says whether the squad can
   handle it. Meanwhile the ticket shows **Working** with "Commander is checking…", and platoon keeps going as usual. If
   the squad fits, the ticket goes on to it. If it doesn't, the ticket stays **New** and says why ("Commander: This is
-  docs work; ..."); press `a` and pick the same squad again to be asked "Hand it anyway?", and `y` hands it over without
+  docs work; ..."); press `S` and pick the same squad again to be asked "Hand it anyway?", and `y` hands it over without
   another check (another squad gets a check of its own). If the commander can't run - today's token limit is used up,
   or smart features are paused after a failure - **nothing is handed over**: the ticket stays New and says **Session
   limit has been reached** (or "AI features are switched off" when they are). A check that fails says so, and hands
@@ -1293,10 +1298,14 @@ aren't listed (type their name, `plugin:skill`), and neither are servers from cl
 `.mcp.json`; the skills of [platoon's plugins](#plugins) are, as they are in the skills folder. `enter` on a squad there opens it. **A change to an agent is a
 change in every squad that uses it**, so the tab says where it is used; for a variant, copy the agent (`c`) and put the
 copy on the steps you want. The list groups the agents as built in, **User Modified**, your own and those of each plugin,
-each with its model and how many squads use it; **+ New agent** at the end makes a blank one of your own.
+each with its model and how many squads use it (with only built-in agents there are no headings); **+ New agent** at the end
+makes a blank one of your own. In the Squads list, a built-in squad as platoon has it says nothing under its name; the others
+say what sets them apart: **User Modified**, **Your own** or **From** and the plugin's name.
 
 `↑` `↓` move in the list and in the details; `enter` (or `tab`, or `shift+→` / `ctrl+→`) goes into the details, and
-the back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the list. In the details, `enter` changes the line you are on: a name or a
+the back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the list. On a terminal under about 80
+columns the tab shows one pane at a time: the list, and `enter` opens the details in its place, full width; `esc` goes back
+to the list, on the same entry. In the details, `enter` changes the line you are on: a name or a
 line of text in a small box, a model or an agent from a short list, a system prompt in the same editors as a project's
 notes. `space` turns a switch on or off. Every change is saved at once.
 
@@ -1323,7 +1332,7 @@ beside the ticket (`tickets/<NN>-squad-<k>.json`). Changing the squad or its age
 leader, also when it is continued later: it goes on with the squad as it was. The next ticket gets them as they are then.
 
 **Squads and agents from plugins.** A [plugin](#plugins) can bring squads and agents. They are listed after your own,
-labelled with the plugin's name (**From** and the plugin's name), and can be handed tickets (`a`) like any squad. They are **read
+labelled with the plugin's name (**From** and the plugin's name), and can be handed tickets (`S`) like any squad. They are **read
 only**: the plugin's version is what you read before you installed it, and an update of the plugin replaces it. `c`
 makes a copy of your own to change (a copied squad still uses the plugin's agents; copy those too for a squad that is
 all yours). A plugin's squad uses platoon's built-in agents and the plugin's own, never yours. Your own squads may use a

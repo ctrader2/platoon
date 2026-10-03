@@ -105,7 +105,7 @@ fn a_narrow_screen_still_shares_the_room_between_name_and_dir_as_it_did() {
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
         let table = width as usize - 2;
-        let (branch, model) = (if table >= 90 { 16 } else { 0 }, if table >= 100 { 12 } else { 0 });
+        let (branch, model) = (if table >= 100 { 16 } else { 0 }, if table >= 88 { 12 } else { 0 });
         let flex = table - (3 + BAR + 5 + 6 + 11 + branch + model);
         let starts = column_starts(head);
         // Two fifths of what there is to NAME, the rest to DIR, exactly as before: nothing is over to share.
@@ -127,8 +127,8 @@ fn a_name_or_a_path_longer_than_the_cap_is_cut_and_a_path_keeps_its_end() {
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];
     let (name_x, dir_x, branch_x) = (col_of(head, "NAME").unwrap(), col_of(head, "DIR").unwrap(), col_of(head, "BRANCH").unwrap());
-    // The cap still holds: the columns are 60 cells of text each; what is past that is the equal share of
-    // the spare width, which is the same for both.
+    // The cap still holds: the columns are 60 cells each (59 of text and the blank cell every column ends with);
+    // what is past that is the equal share of the spare width, which is the same for both.
     let share = (dir_x - name_x) - 60;
     assert!(share > 0, "and take a share of the spare width\n{head}");
     // (The odd cell that does not divide evenly goes to the leftmost columns, hence "or one less".)
@@ -136,13 +136,13 @@ fn a_name_or_a_path_longer_than_the_cap_is_cut_and_a_path_keeps_its_end() {
     // The long name: cut with `…` at the end, inside its column.
     let name_row = lines.iter().find(|l| l.contains("nnnn")).expect("the long-named row");
     let shown_name: String = name_row.chars().skip(name_x).take(60).collect();
-    assert_eq!(shown_name, format!("{}…", "n".repeat(59)), "the name is cut with an ellipsis\n{name_row}");
+    assert_eq!(shown_name, format!("{}… ", "n".repeat(58)), "the name is cut with an ellipsis, a blank cell after it\n{name_row}");
     assert!(!name_row.contains(&long_name), "the whole 70-character name does not fit");
     // The long path: cut at the front, so the folder itself still reads.
     let dir_row = lines.iter().find(|l| l.contains("xxxx")).expect("the long-path row");
     assert_eq!(dir_row.chars().nth(dir_x), Some('…'), "the path is cut at its start\n{dir_row}");
     let shown: String = dir_row.chars().skip(dir_x).take(60).collect();
-    assert!(shown.ends_with("/repos/platoon"), "the end of the path is kept: {shown:?}");
+    assert!(shown.ends_with("/repos/platoon "), "the end of the path is kept, then the column's blank cell: {shown:?}");
     assert!(!shown.contains("/srv/"), "its start is gone: {shown:?}");
 }
 
@@ -177,19 +177,52 @@ fn the_header_and_the_rows_are_the_same_width_at_every_terminal_width() {
 }
 
 #[test]
-fn branch_and_model_still_drop_at_the_widths_they_always_did() {
+fn as_the_table_narrows_branch_then_model_then_the_context_bar_then_dir_go() {
     let w = short("l-drop");
     let mut app = w.app();
     app.notice = None;
-    // The rules go by the table's width, which is the terminal less the side margins (2 cells).
-    for width in [80u16, 90, 91, 92, 95, 100, 101, 102, 120] {
+    // The rules go by the table's width, which is the terminal less the side margins (2 cells). NAME, STATUS and LAST
+    // stay to the end: a conversation's name says more than a bar. (Below 60 columns platoon only says it needs more.)
+    for width in [60u16, 65, 66, 80, 89, 90, 101, 102, 120] {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
         let head = &lines[TITLES];
-        assert_eq!(head.contains("BRANCH"), width as usize - 2 >= 90, "{width}: {head}");
-        assert_eq!(head.contains("MODEL"), width as usize - 2 >= 100, "{width}: {head}");
-        assert!(head.contains("STATUS") && head.contains("CONTEXT") && head.contains("LAST"), "{width}: {head}");
+        let table = width as usize - 2;
+        assert_eq!(head.contains("BRANCH"), table >= 100, "{width}: {head}");
+        assert_eq!(head.contains("MODEL"), table >= 88, "{width}: {head}");
+        assert_eq!(head.contains("CONTEXT"), table >= 64, "{width}: {head}");
+        assert_eq!(head.contains("DIR"), table >= 44, "{width}: {head}");
+        assert!(head.contains("NAME") && head.contains("STATUS") && head.contains("LAST"), "{width}: {head}");
         assert_eq!(table_end(head), table_end(&lines[FIRST_ROW]), "{width}: the header and the row end together\n{head}");
+    }
+}
+
+/// Every pair of neighbouring columns has at least one blank cell between them, in the titles and in the rows,
+/// at every width: a long name, a long path, a long branch and a long model each fill their column to the end.
+#[test]
+fn no_two_columns_ever_touch_at_any_width() {
+    let w = World::new("l-gaps");
+    let lines = [
+        serde_json::json!({"type":"user","cwd":format!("/srv/{}", "d".repeat(70)),"gitBranch":"b".repeat(30),"timestamp":crate::testkit::iso(crate::testkit::now_ms() - 60_000),"message":{"role":"user","content":"talks about a lot"}}),
+        serde_json::json!({"type":"assistant","cwd":format!("/srv/{}", "d".repeat(70)),"gitBranch":"b".repeat(30),"timestamp":crate::testkit::iso(crate::testkit::now_ms() - 50_000),"message":{"model":"claude-sonnet-5","usage":{"input_tokens":50_000}}}),
+    ];
+    w.transcript_lines("long-1", &lines.iter().map(|v| v.to_string()).collect::<Vec<_>>());
+    let mut app = w.app();
+    app.notice = None;
+    // A name as long as a name may be.
+    app.sessions[0].name = "N".repeat(80);
+    app.sessions[0].model = Some("M".repeat(30));
+    for width in [60u16, 65, 66, 80, 89, 90, 92, 101, 102, 110, 120, 160] {
+        let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
+        let lines = draw(&mut term, &app);
+        let (head, row) = (&lines[TITLES], &lines[FIRST_ROW]);
+        let starts = column_starts(head);
+        assert!(starts.len() >= 3, "{width}: {head}");
+        for &x in &starts[1..] {
+            // The cell just before each column's start is blank, in the titles and in the row.
+            assert_eq!(head.chars().nth(x - 1), Some(' '), "{width}: a title touches the one before it\n{head}");
+            assert_eq!(row.chars().nth(x - 1), Some(' '), "{width}: a value touches the next column\n{head}\n{row}");
+        }
     }
 }
 
@@ -344,10 +377,18 @@ fn added_folders_follow_the_folder_in_the_dir_column_and_are_counted_when_they_d
     assert!(row_of(&lines, "~/repos/plain").contains("~/repos/plain  "), "a conversation without added folders is as before");
 
     // Narrow: the main folder is cut at the front and the rest counted.
+    // (At 60 columns the CONTEXT bar has gone and DIR has room for a short list: one more, longer, folder makes it too long.)
+    if let Some(s) = app.sessions.iter_mut().find(|s| s.id == "one-added") {
+        s.extra_dirs.push("/another/added/folder/far/away".into());
+    }
     let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
     let lines = draw(&mut term, &app);
     assert!(!lines.iter().any(|l| l.contains("platoon, /")), "no room for the whole list at 60 wide\n{lines:#?}");
-    assert_eq!(lines.iter().filter(|l| l.contains(", +1")).count(), 2, "both rows with added folders count them\n{lines:#?}");
+    assert_eq!(
+        lines.iter().filter(|l| l.contains(", +1") || l.contains(", +2")).count(),
+        2,
+        "both rows with added folders count them\n{lines:#?}"
+    );
 
     // The quick filter finds a conversation by an added folder.
     key(&mut app, KeyCode::Char('/'));

@@ -35,7 +35,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
                 _ => {}
             }
             out.push(("c", "copy to change", None));
-            out.push((app.back_label(), "back to the list", None));
+            out.push(("esc", "back to the list", None));
         }
         SqFocus::List => {
             if agents && sqt.new_agent_selected() {
@@ -47,7 +47,8 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
-            out.push(("n", "describe a new squad or agent", None));
+            // On a narrow terminal (one pane) the short words, so enter's hint keeps its place beside them.
+            out.push(("n", if sqt.one_pane.get() { "new squad or agent" } else { "describe a new squad or agent" }, None));
             let readable = if agents { sqt.agent().is_some() && !sqt.new_agent_selected() } else { sqt.squad().is_some() };
             if !draft && readable {
                 out.push(("c", "copy", None));
@@ -69,7 +70,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
-            out.push((app.back_label(), "back to the list", None));
+            out.push(("esc", "back to the list", None));
         }
         SqFocus::Detail => {
             match sqt.drow() {
@@ -93,10 +94,14 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
-            out.push((app.back_label(), "back to the list", None));
+            out.push(("esc", "back to the list", None));
         }
     }
-    out.extend([("tab shift+arrows", "panes", None), ("1-3", "tabs", None), ("s", "settings", Some(Action::Settings))]);
+    // With one pane at a time (a narrow terminal) enter and esc go between them: there are no panes to switch.
+    if !sqt.one_pane.get() {
+        out.push(("tab shift+arrows", "panes", None));
+    }
+    out.extend([("1-3", "tabs", None), ("s", "settings", Some(Action::Settings))]);
     // In the details the quit key goes back to the list (said above); only the list itself quits.
     out.push(("?", "help", Some(Action::Help)));
     if sqt.focus == SqFocus::List {
@@ -114,7 +119,9 @@ fn count_words(n: usize, one: &str) -> String {
     format!("{n} {one}{}", if n == 1 { "" } else { "s" })
 }
 
-/// What the list says about a squad: how many agents (beside its name), and under the name how it came to be.
+/// What the list says about a squad: how many agents (beside its name), and under the name how it came to be. A
+/// built-in squad as platoon has it is what most of the list is, so it says nothing there (its details say "Built
+/// in"); the others say what sets them apart: "User Modified", "Your own", "From <plugin>".
 fn entry_note(app: &App, i: usize, library: &[crate::agentfile::Agent]) -> (String, String, bool) {
     let sqt = &app.sqt;
     if i == sqt.list.len() {
@@ -126,17 +133,36 @@ fn entry_note(app: &App, i: usize, library: &[crate::agentfile::Agent]) -> (Stri
         None => (String::new(), "Can't be read".to_string(), true),
         Some(s) => {
             let broken = !squadfile::problems(s, library).is_empty();
-            let note = if broken { format!("{} · needs fixing", l.label()) } else { l.label() };
+            let kind = if l.kind == Kind::BuiltIn { String::new() } else { l.label() };
+            let note = match (kind.is_empty(), broken) {
+                (_, false) => kind,
+                (true, true) => "Needs fixing".to_string(),
+                (false, true) => format!("{kind} · needs fixing"),
+            };
             (count_words(s.agent_ids().len(), "agent"), note, broken)
         }
     }
 }
 
+/// Below this width (of the area the tab is given) the Squads tab is one pane: the list, and enter opens the details
+/// full width in its place (esc goes back to the list, on the same entry). From it, the list and the details side by
+/// side. 78 is what an 80-column terminal gives the tab (a column of air at each side): from 80 columns, two panes.
+pub const TWO_PANES_FROM: u16 = 78;
+
 pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let sqt = &app.sqt;
-    let left_w = (area.width * 30 / 100).clamp(26, 40).min(area.width.saturating_sub(20));
-    let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(area);
+    let one_pane = area.width < TWO_PANES_FROM;
+    sqt.one_pane.set(one_pane);
+    let (left, right) = if one_pane {
+        // The pane that has the keys takes the whole width; the other isn't drawn.
+        let none = Rect::new(area.x, area.y, 0, 0);
+        if sqt.focus == SqFocus::List { (area, none) } else { (none, area) }
+    } else {
+        let left_w = (area.width * 30 / 100).clamp(26, 40).min(area.width.saturating_sub(20));
+        let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(area);
+        (left, right)
+    };
     let block = |focused: bool| {
         Block::default()
             .borders(Borders::ALL)
@@ -153,19 +179,24 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(text, style)
     };
     let title = Line::from(vec![Span::raw(" "), seg("Squads", !agents), Span::raw(" "), seg("Agents", agents), Span::raw(" ")]);
-    let lb = block(focused).title(title);
-    let li = lb.inner(left).inner(Margin::new(1, 0));
-    f.render_widget(lb, left);
-    {
-        let mut hits = app.hits.borrow_mut();
-        hits.push((Rect::new(left.x + 2, left.y, 8, 1), Hit::SquadView(false)));
-        hits.push((Rect::new(left.x + 11, left.y, 8, 1), Hit::SquadView(true)));
+    if !left.is_empty() {
+        let lb = block(focused).title(title);
+        let li = lb.inner(left).inner(Margin::new(1, 0));
+        f.render_widget(lb, left);
+        {
+            let mut hits = app.hits.borrow_mut();
+            hits.push((Rect::new(left.x + 2, left.y, 8, 1), Hit::SquadView(false)));
+            hits.push((Rect::new(left.x + 11, left.y, 8, 1), Hit::SquadView(true)));
+        }
+        let library = app.agent_library();
+        if agents {
+            draw_agent_list(f, app, li);
+        } else {
+            draw_squad_list(f, app, li, &library);
+        }
     }
-    let library = app.agent_library();
-    if agents {
-        draw_agent_list(f, app, li);
-    } else {
-        draw_squad_list(f, app, li, &library);
+    if right.is_empty() {
+        return;
     }
     // The details.
     let title = if agents {
@@ -206,15 +237,18 @@ fn drafting_line(f: &mut Frame, app: &App, li: Rect, y: u16) {
 fn draw_squad_list(f: &mut Frame, app: &App, li: Rect, library: &[crate::agentfile::Agent]) {
     let t = app.effective_theme();
     let sqt = &app.sqt;
-    let per = 3u16;
-    let room = (li.height / per).max(1) as usize;
-    let start = sqt.selected.saturating_sub(room.saturating_sub(1));
+    // An entry is its name line, a line under it when there is something to say (see `entry_note`), and a spacer.
+    let notes: Vec<(String, String, bool)> = (0..sqt.len()).map(|i| entry_note(app, i, library)).collect();
+    let heights: Vec<u16> = notes.iter().map(|(_, note, _)| if note.is_empty() { 2 } else { 3 }).collect();
+    app.pages.squads.set((li.height / 2).max(1) as usize);
+    let start = project_list_start(&heights, sqt.selected, li.height);
     let mut y = li.y;
-    for i in (0..sqt.len()).skip(start) {
-        if y + 2 > li.bottom() {
+    for (i, (count, note, warn)) in notes.into_iter().enumerate().skip(start) {
+        let h = heights[i] - 1;
+        if y + h > li.bottom() {
             break;
         }
-        let rect = Rect::new(li.x, y, li.width, 2);
+        let rect = Rect::new(li.x, y, li.width, h);
         app.hits.borrow_mut().push((rect, Hit::SquadEntry(i)));
         let sel = i == sqt.selected;
         let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
@@ -224,24 +258,26 @@ fn draw_squad_list(f: &mut Frame, app: &App, li: Rect, library: &[crate::agentfi
         } else {
             sqt.list[i].name().to_string()
         };
-        let (count, note, warn) = entry_note(app, i, library);
         let w = li.width.saturating_sub(2) as usize;
         // The count goes beside the name when there is room for both.
         let count_w = count.chars().count();
         let (name_w, count) = if name.chars().count() + 2 + count_w <= w { (w - count_w - 1, count) } else { (w, String::new()) };
         let name = fit_end(&name, name_w);
         let gap = w.saturating_sub(name.chars().count() + count.chars().count());
-        let lines = vec![
-            Line::from(vec![
-                Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
-                Span::styled(name, base.fg(t.text).add_modifier(Modifier::BOLD)),
-                Span::styled(" ".repeat(gap), base),
-                Span::styled(count, base.fg(t.dim)),
-            ]),
-            Line::from(vec![Span::styled("  ", base), Span::styled(fit_end(&note, w), base.fg(if warn { t.warn } else { t.dim }))]),
-        ];
+        let mut lines = vec![Line::from(vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(name, base.fg(t.text).add_modifier(Modifier::BOLD)),
+            Span::styled(" ".repeat(gap), base),
+            Span::styled(count, base.fg(t.dim)),
+        ])];
+        if !note.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled("  ", base),
+                Span::styled(fit_end(&note, w), base.fg(if warn { t.warn } else { t.dim })),
+            ]));
+        }
         f.render_widget(Paragraph::new(lines).style(base), rect);
-        y += per;
+        y += h + 1;
     }
     drafting_line(f, app, li, y);
 }
@@ -283,7 +319,10 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
         ])
         .style(base)
     };
-    let mut group: Option<String> = None;
+    // The groups' headings say how each agent came to be. When every agent is built in, as platoon has them,
+    // there is nothing to tell apart and no heading.
+    let only_built_in = sqt.agents.iter().all(|l| l.kind == Kind::BuiltIn);
+    let mut group: Option<String> = only_built_in.then(|| Kind::BuiltIn.label().to_string());
     for (i, l) in sqt.agents.iter().enumerate() {
         if group.as_deref() != Some(l.label().as_str()) {
             if group.is_some() {
@@ -321,6 +360,7 @@ fn draw_agent_list(f: &mut Frame, app: &App, li: Rect) {
     ));
     // Scroll so the selected entry shows (with its heading when it can).
     let height = (li.height.saturating_sub(u16::from(sqt.drafting().is_some())) as usize).max(1);
+    app.pages.squads.set(height);
     let at = lines.iter().position(|(r, _)| *r == Some(sqt.agent_selected)).unwrap_or(0);
     let mut top = sqt.agent_list_top.get().min(lines.len().saturating_sub(height));
     if at < top {

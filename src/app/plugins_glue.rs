@@ -493,10 +493,10 @@ impl App {
 
     pub(super) fn plugin_list_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Up => self.move_plugin(-1),
-            KeyCode::Down => self.move_plugin(1),
-            KeyCode::PageUp => self.move_plugin(-5),
-            KeyCode::PageDown => self.move_plugin(5),
+            KeyCode::Up | KeyCode::Char('k') => self.move_plugin(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_plugin(1),
+            KeyCode::PageUp => self.move_plugin(-super::page_of(&self.pages.plugins)),
+            KeyCode::PageDown => self.move_plugin(super::page_of(&self.pages.plugins)),
             KeyCode::Char('g') | KeyCode::Home => self.pl.selected = 0,
             KeyCode::Char('G') | KeyCode::End => self.move_plugin(i32::MAX / 2),
             KeyCode::Enter | KeyCode::Char('i') => self.plugin_enter(),
@@ -839,10 +839,10 @@ impl App {
         }
         let last = self.pl.rows().len().saturating_sub(1);
         match key.code {
-            KeyCode::Up => self.setting = self.setting.saturating_sub(1).min(last),
-            KeyCode::Down => self.setting = (self.setting + 1).min(last),
-            KeyCode::PageUp => self.setting = self.setting.saturating_sub(5).min(last),
-            KeyCode::PageDown => self.setting = (self.setting + 5).min(last),
+            KeyCode::Up | KeyCode::Char('k') => self.setting = self.setting.saturating_sub(1).min(last),
+            KeyCode::Down | KeyCode::Char('j') => self.setting = (self.setting + 1).min(last),
+            KeyCode::PageUp => self.setting = self.setting.saturating_sub(super::page_of(&self.pages.settings) as usize).min(last),
+            KeyCode::PageDown => self.setting = (self.setting + super::page_of(&self.pages.settings) as usize).min(last),
             KeyCode::Home | KeyCode::Char('g') => self.setting = 0,
             KeyCode::End | KeyCode::Char('G') => self.setting = last,
             KeyCode::Enter => self.open_plugin_screen(),

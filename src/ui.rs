@@ -183,7 +183,8 @@ pub fn draw(f: &mut Frame, app: &App) {
         }
     }
     let hints = match app.mode {
-        Mode::Search => vec![("enter", "apply", Some(Action::Confirm)), ("esc", "clear", Some(Action::Cancel))],
+        // The Search popup has its own keys along its bottom: one set of hints, not two that say it differently.
+        Mode::Search => Vec::new(),
         _ => screen_hints(app),
     };
     // The mouse and the obvious keys need no reminder: when the line is short of room (a narrow terminal, or a
@@ -370,7 +371,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
             if t.state == State::Ready {
                 out.push(("p", "let it publish", None));
             } else if handable(app, t) {
-                out.push(("a", "hand to a squad", None));
+                out.push(("S", "hand to a squad", None));
             }
             if t.state != State::Cancelled {
                 out.push(("c", "cancel", None));
@@ -391,12 +392,12 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
         ("/", "search", Some(Action::Search)),
         ("tab shift+arrows", "panes", None),
         ("?", "help", Some(Action::Help)),
-        (app.back_label(), "back", Some(Action::Leave)),
+        ("esc", "back", Some(Action::Leave)),
     ]);
     out
 }
 
-/// A ticket `a` would hand to a squad now (the hint is only offered then; `a` says why not otherwise).
+/// A ticket `S` would hand to a squad now (the hint is only offered then; `S` says why not otherwise).
 fn handable(app: &App, t: &Ticket) -> bool {
     t.state == State::New && tickets::is_ready(t, app.tickets())
 }
@@ -412,7 +413,7 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
         out.push((app.ticket_source_key(t), "where it came from", None));
     }
     if t.is_some_and(|t| handable(app, t)) {
-        out.push(("a", "hand to a squad", None));
+        out.push(("S", "hand to a squad", None));
     }
     if t.is_some_and(|t| t.state == State::Ready) {
         out.push(("p", "let it publish", None));
@@ -431,7 +432,7 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
         ("v", "editor", Some(Action::Editor)),
         ("↑↓", "scroll", None),
         ("?", "help", Some(Action::Help)),
-        (app.back_label(), "back", Some(Action::Leave)),
+        ("esc", "back", Some(Action::Leave)),
     ]);
     out
 }
@@ -629,6 +630,8 @@ fn draw_project_list(f: &mut Frame, app: &App, area: Rect) {
     let descs: Vec<Vec<String>> = shown.iter().map(|&idx| project_desc_lines(&all[idx], area.width)).collect();
     let heights: Vec<u16> = descs.iter().map(|d| d.len() as u16 + 2).collect();
     let start = project_list_start(&heights, app.pselected, area.height);
+    // A page is as many rows as fit, counted with their usual height (a name line, one of description, a spacer).
+    app.pages.projects.set((area.height / 3).max(1) as usize);
     let mut y = area.y;
     for (i, &idx) in shown.iter().enumerate().skip(start) {
         let p = &all[idx];
@@ -857,6 +860,7 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     }
     let selected = app.ticket_selected();
     let height = area.height as usize;
+    app.pages.tickets.set(height.max(1));
     let top = selected.saturating_sub(height.saturating_sub(1)).min(rows.len().saturating_sub(height));
     let plain = app.plain_marker;
     for (i, row) in rows.iter().enumerate().skip(top).take(height) {
@@ -1249,6 +1253,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
     let line_of = |i: usize| if i < active { i } else { i + 1 };
     let total = line_of(visible.len() - 1) + 1;
     let rows = area.height as usize;
+    app.pages.sessions.set(rows.max(1));
     let want = line_of(app.selected);
     let top = if rows == 0 { 0 } else { want.saturating_sub(rows.saturating_sub(1)).min(total.saturating_sub(rows)) };
     let now = crate::usage::now() * 1000;
@@ -1281,7 +1286,7 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         let spans = vec![
             Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
             Span::styled(format!("{marker} "), base.fg(if s.archived { t.dim } else { marker_color })),
-            Span::styled(fit(&s.name, name_w), base.fg(text)),
+            Span::styled(cell(&s.name, name_w), base.fg(text)),
             Span::styled(fit_dirs(&s.dir, &s.extra_dirs, dir_w), base.fg(t.dim)),
             Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)),
         ];
@@ -1418,9 +1423,20 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
     if unread > 0 {
         left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
     }
-    if !app.filter.is_empty() && app.open_project.is_none() {
-        left.push(Span::styled(format!("   filter: {}", app.filter), Style::new().fg(t.accent)));
-        left.push(Span::styled("  (esc clears)", Style::new().fg(t.dim)));
+    // The filter the list is narrowed to, while the Search popup (which shows what is typed) is closed. It shows
+    // whole or not at all: first "(esc clears)" goes, then the filter itself, never cut in the middle of a word.
+    if !app.filter.is_empty() && app.open_project.is_none() && !matches!(app.mode, Mode::Search) {
+        let so_far = left.iter().map(|s| s.content.chars().count()).sum::<usize>();
+        let room = (area.width as usize).saturating_sub(so_far);
+        let filter = format!("   filter: {}", app.filter);
+        let clears = "  (esc clears)";
+        let n = filter.chars().count();
+        if n + clears.chars().count() <= room {
+            left.push(Span::styled(filter, Style::new().fg(t.accent)));
+            left.push(Span::styled(clears, Style::new().fg(t.dim)));
+        } else if n <= room {
+            left.push(Span::styled(filter, Style::new().fg(t.accent)));
+        }
     }
     if let Some(n) = app.indexing() {
         let spin = SPINNER[(app.tick % 10) as usize];
@@ -1533,6 +1549,8 @@ struct Cols {
     branch: usize,
     model: usize,
     status: usize,
+    /// The CONTEXT bar's column; 0 when the table is too narrow for it.
+    context: usize,
     /// The spare width of a wide terminal, shared out between the columns (see `Pad`).
     pad: Pad,
 }
@@ -1639,15 +1657,28 @@ fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
     ((name + COL_GAP).min(NAME_MAX), (dir + COL_GAP).min(DIR_MAX))
 }
 
+/// The widths at which the optional columns of the Sessions table show, measured on the area the table is given.
+/// As the table narrows they go in this order: BRANCH, MODEL, the CONTEXT bar, then DIR. NAME (with the prompt line
+/// under it), STATUS and LAST stay to the end: a conversation's name says more than a bar.
+const BRANCH_FROM: usize = 100;
+const MODEL_FROM: usize = 88;
+const CONTEXT_FROM: usize = 64;
+const DIR_FROM: usize = 44;
+/// The CONTEXT column: the bar, its percentage and a space.
+const CONTEXT_W: usize = BAR_WIDTH + 5;
+
 /// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for
-/// none) and NAME/DIR that want `want` (see `content_widths`).
+/// none) and NAME/DIR that want `want` (see `content_widths`). Every column keeps a blank cell at its end
+/// (`cell`), so no two columns ever touch, whatever the width.
 fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
-    // marker(3) + name + project + dir + branch + model + status + context bar(BAR_WIDTH + 5) + last active
-    let fixed = 3 + BAR_WIDTH + 5 + LAST_W;
     let w = width as usize;
-    let branch = if w >= 90 { 16 } else { 0 };
-    let model = if w >= 100 { 12 } else { 0 };
+    let branch = if w >= BRANCH_FROM { 16 } else { 0 };
+    let model = if w >= MODEL_FROM { 12 } else { 0 };
+    let context = if w >= CONTEXT_FROM { CONTEXT_W } else { 0 };
+    let with_dir = w >= DIR_FROM;
     let status = 11; // room for "Background" and a space
+    // marker(3) + name + project + dir + branch + model + status + context + last active
+    let fixed = 3 + context + LAST_W;
     let flex = w.saturating_sub(fixed + branch + model + status);
     // The project column comes out of the room NAME and DIR share, and gives way to them on a narrow terminal:
     // it shrinks (the name cut with `…`), and goes when not even its title fits.
@@ -1656,11 +1687,13 @@ fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
     let flex = flex - project;
     // NAME and DIR are as wide as their content needs. When the content wants more than there is, the two
     // fall back to sharing what there is, as they always have, so nothing overflows and the row still lines
-    // up with the titles.
-    let (wn, wd) = (want.0.min(NAME_MAX), want.1.min(DIR_MAX));
+    // up with the titles. Without DIR, NAME has it all.
+    let (wn, wd) = (want.0.min(NAME_MAX), if with_dir { want.1.min(DIR_MAX) } else { 0 });
     let share = flex * 2 / 5;
     let (name, dir) = if wn + wd <= flex {
         (wn, wd)
+    } else if !with_dir {
+        (flex, 0)
     } else if wn <= share {
         (wn, flex - wn)
     } else if wd <= flex - share {
@@ -1671,9 +1704,18 @@ fn cols(width: u16, project: usize, want: (usize, usize)) -> Cols {
     // Whatever a wide screen has over is then shared equally between the columns, so the row fills the
     // terminal and LAST sits at the right edge. On a narrow terminal there is nothing over and nothing moves.
     let spare = flex.saturating_sub(name + dir);
-    let s = spread(spare, [true, project > 0, true, branch > 0, model > 0, true, true, true]);
+    let s = spread(spare, [true, project > 0, with_dir, branch > 0, model > 0, true, context > 0, true]);
     let pad = Pad { name: s[0], project: s[1], dir: s[2], branch: s[3], model: s[4], status: s[5], context: s[6], last: s[7] };
-    Cols { name, project, dir, branch, model, status, pad }
+    Cols { name, project, dir, branch, model, status, context, pad }
+}
+
+/// `text` in a column `n` cells wide: cut (with `…`) or padded to all but the last cell, which stays blank so the
+/// next column never touches it.
+fn cell(text: &str, n: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    format!("{} ", fit(text, n - 1))
 }
 
 fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, c: &Cols) {
@@ -1681,21 +1723,25 @@ fn draw_columns(f: &mut Frame, t: &Theme, area: Rect, c: &Cols) {
     let p = &c.pad;
     let line = Line::from(vec![
         Span::raw("   "),
-        Span::styled(fit("NAME", c.name + p.name), s),
+        Span::styled(cell("NAME", c.name + p.name), s),
         Span::styled(fit(if c.project > 0 { "PROJECT" } else { "" }, c.project + p.project), s),
-        Span::styled(fit("DIR", c.dir + p.dir), s),
-        Span::styled(fit(if c.branch > 0 { "BRANCH" } else { "" }, c.branch + p.branch), s),
-        Span::styled(fit(if c.model > 0 { "MODEL" } else { "" }, c.model + p.model), s),
+        Span::styled(cell("DIR", c.dir + p.dir), s),
+        Span::styled(cell("BRANCH", c.branch + p.branch), s),
+        Span::styled(cell("MODEL", c.model + p.model), s),
         Span::styled(fit("STATUS", c.status + p.status), s),
-        Span::styled(fit("CONTEXT", BAR_WIDTH + 5 + p.context), s),
+        Span::styled(cell("CONTEXT", c.context + p.context), s),
         Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1 + p.last), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
 }
 
+/// Screen lines a conversation takes in the Sessions list: its name line and its prompt line, with no spacer (the
+/// selection's marker and highlight cover both, which is what keeps one row apart from the next).
+pub const ROW_H: u16 = 2;
+
 fn draw_list(f: &mut Frame, app: &App, visible: &[usize], c: &Cols, term_w: u16, area: Rect) {
-    const ROW_H: u16 = 3; // two text lines + one spacer
     let rows = (area.height / ROW_H) as usize;
+    app.pages.sessions.set(rows.max(1));
     let now = crate::usage::now() * 1000;
     // Keep the selection in view.
     let start = app.selected.saturating_sub(rows.saturating_sub(1));
@@ -1770,14 +1816,15 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         l1.push(Span::styled(fit(&s.name, name_w - 3), name_style));
         l1.push(Span::styled(format!(" {} ", app.marker()), base.fg(t.dim)));
     } else {
-        l1.push(Span::styled(fit(&s.name, name_w), name_style));
+        l1.push(Span::styled(cell(&s.name, name_w), name_style));
     }
     // The column's share of a wide screen's spare width sits after the text (see `Pad`).
     l1.push(gap(c.pad.name, base));
     // The last parts of a path are what tell folders apart, so a path too long for the column is cut at the
     // front (`…/repos/platoon`) and its end kept. (`s.dir` is already written with `~` for the home folder.)
     // Folders added to the conversation follow it, or are counted when there's no room (`…/platoon, +1`).
-    let dir = fit_dirs(&s.dir, &s.extra_dirs, c.dir);
+    // Its last cell stays blank, like every column's (see `cell`).
+    let dir = if c.dir > 0 { format!("{} ", fit_dirs(&s.dir, &s.extra_dirs, c.dir - 1)) } else { String::new() };
     // The project, as a pill in its color (the same pill as the counts beside Active and Archived), then a gap.
     if c.project > 0 {
         match app.projects.of(&s.id) {
@@ -1795,28 +1842,39 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     l1.extend([
         Span::styled(dir, base.fg(subtext)),
         gap(c.pad.dir, base),
-        Span::styled(fit(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
+        Span::styled(cell(s.branch.as_deref().unwrap_or("-"), c.branch), base.fg(t.dim)),
         gap(c.pad.branch, base),
-        Span::styled(fit(s.model.as_deref().unwrap_or("-"), c.model), base.fg(subtext)),
+        Span::styled(cell(s.model.as_deref().unwrap_or("-"), c.model), base.fg(subtext)),
         gap(c.pad.model, base),
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
         gap(c.pad.status, base),
     ]);
     // The bar keeps its own size, whatever the screen: how full it looks is what it means. Its column's
-    // share of the spare width sits after the percentage.
-    l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
+    // share of the spare width sits after the percentage. Where nothing is known about the context yet (no figure
+    // from Claude, and nothing to estimate from), the column is left blank rather than showing an empty bar.
+    if c.context > 0 {
+        if context_known(s) {
+            l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
+            l1.push(gap(c.context - CONTEXT_W, base));
+        } else {
+            l1.push(gap(c.context, base));
+        }
+    }
     l1.push(gap(c.pad.context, base));
     l1.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W - 1 + c.pad.last), base.fg(t.dim)));
 
     let desc_w = (area.width as usize).saturating_sub(3);
     let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(&s.description, desc_w.saturating_sub(1)), base.fg(t.dim))];
 
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1), Constraint::Length(1)]).split(area);
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
     f.render_widget(Paragraph::new(Line::from(l1)).style(base), rows[0]);
     f.render_widget(Paragraph::new(Line::from(l2)).style(base), rows[1]);
-    if rows[2].height > 0 {
-        f.render_widget(Block::default().style(Style::new().bg(t.bg)), rows[2]);
-    }
+}
+
+/// Is anything known about how full this conversation's context is: Claude's own figure, or an estimate above 0?
+/// (A conversation with nothing read from it yet has neither: its CONTEXT column stays blank.)
+fn context_known(s: &Session) -> bool {
+    s.context_exact || s.context_pct > 0
 }
 
 fn hints_width(hints: &[Hint<'_>]) -> usize {
@@ -1973,14 +2031,54 @@ fn settings_tab_labels(width: usize) -> Vec<String> {
     SETTINGS_TABS.iter().map(|tab| format!(" {} ", tab.title.split_whitespace().next().unwrap_or(tab.title))).collect()
 }
 
+/// Which settings tabs the strip shows at `width`: a run of them around `current` (always in it), and whether
+/// tabs are left out before and after it. The labels are `settings_tab_labels`; a `‹` or `›` (with a space) marks
+/// the side that has more, so every tab can be seen to be there and reached with tab, or by a click on the mark.
+fn settings_tab_window(labels: &[String], current: usize, width: usize) -> (std::ops::Range<usize>, bool, bool) {
+    let w = |r: &std::ops::Range<usize>| -> usize {
+        let tabs: usize = labels[r.clone()].iter().map(|l| l.chars().count()).sum::<usize>() + r.len().saturating_sub(1);
+        tabs + if r.start > 0 { 2 } else { 0 } + if r.end < labels.len() { 2 } else { 0 }
+    };
+    let all = 0..labels.len();
+    if w(&all) <= width || labels.is_empty() {
+        return (all, false, false);
+    }
+    let current = current.min(labels.len() - 1);
+    let mut r = current..current + 1;
+    // Grow to the right first (the order tab goes in), then to the left, while it fits.
+    loop {
+        let right = r.start..r.end + 1;
+        let left = r.start.saturating_sub(1)..r.end;
+        if r.end < labels.len() && w(&right) <= width {
+            r = right;
+        } else if r.start > 0 && w(&left) <= width {
+            r = left;
+        } else {
+            break;
+        }
+    }
+    let (before, after) = (r.start > 0, r.end < labels.len());
+    (r, before, after)
+}
+
 /// The tabs of the settings screen, lit like the header's: the showing one on the raised color in bold, a hovered one
-/// raised, the rest quiet. A rule under them separates them from the entries. A click on a title shows that tab.
+/// raised, the rest quiet. A rule under them separates them from the entries. A click on a title shows that tab. Where
+/// they don't all fit, the strip shows the ones around the showing tab, with `‹` `›` for the others.
 fn draw_settings_tabs(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let mut spans = Vec::new();
     let mut x = area.x;
-    for (i, label) in settings_tab_labels(area.width as usize).into_iter().enumerate() {
-        if i > 0 {
+    let labels = settings_tab_labels(area.width as usize);
+    let (shown, before, after) = settings_tab_window(&labels, app.settings_tab, area.width as usize);
+    let more = Style::new().fg(t.accent);
+    if before {
+        let rect = Rect::new(x, area.y, 2, 1).intersection(area);
+        app.hits.borrow_mut().push((rect, Hit::SettingsTab(shown.start - 1)));
+        spans.push(Span::styled("‹ ", more));
+        x += 2;
+    }
+    for (i, label) in labels.iter().enumerate().skip(shown.start).take(shown.len()) {
+        if i > shown.start {
             spans.push(Span::raw(" "));
             x += 1;
         }
@@ -1998,8 +2096,15 @@ fn draw_settings_tabs(f: &mut Frame, app: &App, area: Rect) {
         } else {
             Style::new().fg(t.dim).bg(t.bg)
         };
-        spans.push(Span::styled(label, style));
+        spans.push(Span::styled(label.clone(), style));
         x += w;
+    }
+    if after {
+        let rect = Rect::new(x, area.y, 2, 1).intersection(area);
+        if !rect.is_empty() {
+            app.hits.borrow_mut().push((rect, Hit::SettingsTab(shown.end)));
+        }
+        spans.push(Span::styled(" ›", more));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), Rect::new(area.x, area.y, area.width, 1));
     if area.height > 1 {
@@ -2041,14 +2146,14 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
         if rows.get(app.setting).is_some_and(|r| r.installed.is_some()) {
             hints.push(("d", "remove", None));
         }
-        hints.push((app.back_label(), "back", Some(Action::Cancel)));
+        hints.push(("esc", "back", Some(Action::Cancel)));
         fit_hints(hints, w, &["move", "tabs"])
     } else if let Some(restorable) = on_instructions {
         let mut hints: Vec<Hint> = vec![("tab", "tabs", None), ("↑↓", "move", None), ("enter", "edit", None)];
         if restorable {
             hints.push(("r", "restore", None));
         }
-        hints.push((app.back_label(), "back", Some(Action::Cancel)));
+        hints.push(("esc", "back", Some(Action::Cancel)));
         fit_hints(hints, w, &["move", "tabs"])
     } else {
         fit_hints(
@@ -2057,7 +2162,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
                 ("↑↓", "move", None),
                 ("←→", "change", None),
                 ("enter", "next choice", None),
-                (app.back_label(), "back", Some(Action::Cancel)),
+                ("esc", "back", Some(Action::Cancel)),
             ],
             w,
             &["move", "next choice"],
@@ -2258,6 +2363,8 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         start += 1;
     }
     app.setting_top.set(start);
+    // A page: as many entries as the screen holds, counted at their usual height.
+    app.pages.settings.set(((area.height as usize + gap as usize) / (2 + gap as usize)).max(1));
 
     let mut y = area.y;
     for (i, item) in items.iter().enumerate().skip(start) {
@@ -3167,8 +3274,7 @@ fn draw_changes(f: &mut Frame, app: &App, area: Rect) {
             Rect::new(body.x, body.y + n as u16, body.width, 1),
         );
     }
-    let hints: [Hint; 3] =
-        [(app.back_label(), "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
+    let hints: [Hint; 3] = [("esc", "close", Some(Action::Cancel)), ("↑↓", "scroll", None), ("u", "undo it", Some(Action::Undo))];
     draw_footer(f, app, foot, &hints, None);
 }
 
@@ -4138,18 +4244,18 @@ mod tests {
 
     #[test]
     fn the_project_column_takes_its_room_from_name_and_dir_and_never_widens_the_table() {
-        let rest = 3 + BAR_WIDTH + 5 + LAST_W;
-        let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status + c.pad.sum();
+        let sum = |c: &Cols| c.name + c.project + c.dir + c.branch + c.model + c.status + c.context + c.pad.sum();
         for width in 0..=240u16 {
             let plain = cols(width, 0, GREEDY);
+            let rest = 3 + LAST_W;
             assert_eq!(plain.project, 0);
-            let flex = (width as usize).saturating_sub(rest + plain.status + plain.branch + plain.model);
+            let flex = (width as usize).saturating_sub(rest + plain.status + plain.branch + plain.model + plain.context);
             for want in [PROJECT_MIN, 12, PROJECT_MAX] {
                 for content in [(6usize, 5usize), (20, 34), GREEDY] {
                     let c = cols(width, want, content);
                     assert_eq!(
-                        (c.branch, c.model, c.status),
-                        (plain.branch, plain.model, plain.status),
+                        (c.branch, c.model, c.status, c.context),
+                        (plain.branch, plain.model, plain.status, plain.context),
                         "{width}: other drop rules unchanged"
                     );
                     assert!(c.project == 0 || (PROJECT_MIN..=want).contains(&c.project), "{width}/{want}: {}", c.project);
@@ -4177,12 +4283,13 @@ mod tests {
 
     #[test]
     fn name_and_dir_are_sized_to_their_content_and_never_overflow_the_width() {
-        let rest = 3 + BAR_WIDTH + 5 + LAST_W; // marker, context bar, last active
-        let fixed = rest + 11; // and the status column
         for width in 0..=340u16 {
             for want in [(6, 5), (20, 34), (NAME_MAX, 12), (12, DIR_MAX), GREEDY] {
                 for project in [0, PROJECT_MIN, PROJECT_MAX] {
                     let c = cols(width, project, want);
+                    let rest = 3 + c.context + LAST_W; // marker, context bar (when it shows), last active
+                    let fixed = rest + 11; // and the status column
+                    let want = if (width as usize) < DIR_FROM { (want.0, 0) } else { want }; // no DIR: NAME wants it all
                     let total = rest + c.name + c.project + c.dir + c.branch + c.model + c.status + c.pad.sum();
                     assert!(total <= (width as usize).max(fixed), "{width}/{want:?}/{project}: {total} cells for {width} columns");
                     assert!(c.name <= NAME_MAX && c.dir <= DIR_MAX, "{width}/{want:?}: capped");
@@ -4206,14 +4313,14 @@ mod tests {
         let shares = [c.pad.name, c.pad.project, c.pad.dir, c.pad.branch, c.pad.model, c.pad.status, c.pad.context, c.pad.last];
         let (lo, hi) = (shares.iter().min().unwrap(), shares.iter().max().unwrap());
         assert!(hi - lo <= 1, "the eight columns share alike: {shares:?}");
-        assert_eq!(3 + c.name + c.project + c.dir + c.branch + c.model + c.status + BAR_WIDTH + 5 + LAST_W + c.pad.sum(), 341);
+        assert_eq!(3 + c.name + c.project + c.dir + c.branch + c.model + c.status + c.context + LAST_W + c.pad.sum(), 341);
         // A column that is not there takes no share: with no PROJECT column the other seven share it all.
         let c = cols(341, 0, (10, 18));
         assert_eq!(c.pad.project, 0);
         assert!(c.pad.name - c.pad.last <= 1, "and the rest still share alike: {} vs {}", c.pad.name, c.pad.last);
         // Narrow screen, long content: exactly the sharing of before (two fifths to NAME), nothing over.
         let narrow = cols(80, 0, GREEDY);
-        let flex = 80 - fixed;
+        let flex = 80 - (3 + CONTEXT_W + LAST_W + 11);
         assert_eq!((narrow.name, narrow.dir), (flex * 2 / 5, flex - flex * 2 / 5));
         assert_eq!(narrow.pad.sum(), 0);
     }

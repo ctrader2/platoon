@@ -96,7 +96,7 @@ fn the_plugin_screen_installs_a_theme_plugin_from_the_catalog_whose_theme_is_lab
         "By Someone",
         "Needs platoon 0.1.0 or newer",
         "enter install",
-        "ctrl+space back to settings",
+        "esc back to settings",
     ] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
@@ -186,7 +186,7 @@ fn an_empty_catalog_is_said_plainly_in_the_settings_and_f_does_nothing() {
     open_settings_plugins(&mut app);
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("No plugins installed, and none from the catalog to show."), "{shown}");
-    assert!(shown.contains("↑↓ move ctrl+space back") && !shown.contains("d remove"), "nothing to open or remove: {shown}");
+    assert!(shown.contains("↑↓ move esc back") && !shown.contains("d remove"), "nothing to open or remove: {shown}");
     // Enter with nothing listed says why, rather than doing nothing, and stays in the settings.
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Settings) && app.active_notice() == Some("No plugins to show."));
@@ -200,10 +200,7 @@ fn an_empty_catalog_is_said_plainly_in_the_settings_and_f_does_nothing() {
     app.pl.store.install(&dir, crate::plugins::Origin::Folder { path: "/home/u/dusk".into() }).unwrap();
     app.plugins_changed_for_test();
     let shown = flat(&draw(&mut term, &app));
-    assert!(
-        shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove ctrl+space back"),
-        "{shown}"
-    );
+    assert!(shown.contains("dusk name 0.3.0 Installed from a folder") && shown.contains("↑↓ move enter open d remove esc back"), "{shown}");
     assert!(shown.contains("What dusk is."), "its description under the list: {shown}");
 }
 
@@ -238,11 +235,9 @@ fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_
     }
     let flat_shown = flat(&shown);
     // (dusk was selected last on the plugin screen, so it is here: its description under the list.)
-    for want in [
-        "What dusk is.",
-        "Enter opens a plugin: what it adds, and install, update or remove.",
-        "↑↓ move enter open d remove ctrl+space back",
-    ] {
+    for want in
+        ["What dusk is.", "Enter opens a plugin: what it adds, and install, update or remove.", "↑↓ move enter open d remove esc back"]
+    {
         assert!(flat_shown.contains(want), "{want}: {flat_shown}");
     }
     assert!(!flat_shown.contains("press 4"), "{flat_shown}");
@@ -257,7 +252,7 @@ fn the_settings_plugins_tab_lists_every_plugin_with_where_it_stands_and_removes_
     assert!(matches!(app.mode, Mode::Settings));
     assert_eq!(app.active_notice(), Some("moss name isn't installed."));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("↑↓ move enter open ctrl+space back"), "no remove on one not installed: {shown}");
+    assert!(shown.contains("↑↓ move enter open esc back"), "no remove on one not installed: {shown}");
     // d on an installed one asks, and both answers come back to the settings.
     key(&mut app, KeyCode::Home);
     ch(&mut app, 'd');
@@ -459,7 +454,7 @@ fn a_plugin_with_instructions_is_read_before_it_is_installed_and_its_squad_and_a
         "This is what Claude will follow, with your permissions:",
         "Its system prompt",
         "Read the commits and the diff since the last release",
-        "ctrl+space back to the list",
+        "esc back to the list",
     ] {
         assert!(shown.contains(want), "{want}: {shown}");
     }
@@ -621,7 +616,7 @@ fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_afte
     let hand = |app: &mut App, n: u32| {
         let at = app.ticket_rows().iter().position(|r| *r == crate::app::TRow::Ticket(n)).unwrap();
         app.tk.selected = Some(app.ticket_rows()[at]);
-        ch(app, 'a');
+        ch(app, 'S');
         assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
         let to = app.sq.pick.iter().position(|s| s.id == "plugin:changelog/changelog").expect("the plugin's squad is offered");
         for _ in 0..to {
@@ -634,7 +629,7 @@ fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_afte
     // The picker says which plugin the squad comes with.
     let at = app.ticket_rows().iter().position(|r| *r == crate::app::TRow::Ticket(1)).unwrap();
     app.tk.selected = Some(app.ticket_rows()[at]);
-    ch(&mut app, 'a');
+    ch(&mut app, 'S');
     let shown = flat(&draw(&mut term, &app));
     assert!(
         shown.contains("changelog squad") && shown.contains("From changelog name. Writes the changelog entry for a release."),
@@ -675,7 +670,7 @@ fn a_plugin_squad_is_offered_for_a_ticket_and_its_leader_keeps_its_snapshot_afte
     let v2: serde_json::Value = serde_json::from_str(agents2).unwrap();
     assert!(v2.get("changelog-change-reader").is_some() && v2.get("changelog-changelog-writer").is_some(), "{v2}");
     // A new hand-over can't pick it any more.
-    ch(&mut app, 'a');
+    ch(&mut app, 'S');
     if matches!(app.mode, Mode::SquadPick) {
         assert!(app.sq.pick.iter().all(|s| s.id != "plugin:changelog/changelog"));
         key(&mut app, KeyCode::Esc);

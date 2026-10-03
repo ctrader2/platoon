@@ -1,4 +1,4 @@
-//! keys.json end to end, in a real terminal with the real binary: the hints show the configured back and quit keys, the
+//! keys.json end to end, in a real terminal with the real binary: the hints show the configured quit key (and esc on platoon's own screens), the
 //! back key typed as its terminal bytes goes back (and Ctrl+Space no longer does), and a bad entry is said on screen.
 //! Every directory is a temp dir and no session is started, so there is nothing to clean up afterwards.
 
@@ -31,7 +31,9 @@ fn the_configured_back_and_quit_keys_work_and_the_hints_show_them() {
     assert!(!t.text().contains("q quit"), "{}", t.text());
 
     t.send(b"s");
-    t.wait_for_all(&["Stop idle sessions after", "alt+x back"]);
+    // platoon's own screens say esc (the back key is a second esc there); the configured key works all the same.
+    t.wait_for_all(&["Stop idle sessions after", "esc back"]);
+    assert!(!t.text().contains("ctrl+space"), "{}", t.text());
     // Ctrl+Space (a NUL byte) is nothing now: the settings stay.
     t.send(&[0]);
     thread::sleep(Duration::from_millis(400));
@@ -56,7 +58,7 @@ fn a_bad_entry_is_said_on_screen_and_ctrl_space_stays_the_back_key() {
     let mut t = Term::spawn(&[], &env, &base, 30, 160);
     t.wait_for_all(&["keys.json: \"back\" is \"x\"", "Using ctrl+space."]);
     t.send(b"s");
-    t.wait_for_all(&["Stop idle sessions after", "ctrl+space back"]);
+    t.wait_for_all(&["Stop idle sessions after", "esc back"]);
     t.send(&[0]);
     t.wait_gone("Stop idle sessions after");
     t.wait_for("q quit");

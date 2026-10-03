@@ -260,6 +260,8 @@ pub struct SquadTab {
     pub row: usize,
     /// The first line of the details in view, kept between frames so they only scroll when they have to.
     pub detail_top: Cell<usize>,
+    /// The tab was last drawn as one pane (a narrow terminal): the list, or the details full width in its place.
+    pub one_pane: Cell<bool>,
     /// The agents (`agentfile::load_all`), re-read when a file changes.
     pub agents: Vec<agentfile::Listed>,
     agent_stamp: Vec<(String, Option<(std::time::SystemTime, u64)>)>,
@@ -298,6 +300,7 @@ impl SquadTab {
             focus: SqFocus::List,
             row: 0,
             detail_top: Cell::new(0),
+            one_pane: Cell::new(false),
             agents: agentfile::load_all(config),
             agent_stamp: agentfile::stamp(config),
             agent_draft: None,
@@ -670,8 +673,10 @@ impl App {
             SqFocus::List => match key.code {
                 KeyCode::Left => self.show_squad_view(SqView::Squads),
                 KeyCode::Right => self.show_squad_view(SqView::Agents),
-                KeyCode::Up => self.move_squad(-1),
-                KeyCode::Down => self.move_squad(1),
+                KeyCode::Up | KeyCode::Char('k') => self.move_squad(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_squad(1),
+                KeyCode::PageUp => self.move_squad(-super::page_of(&self.pages.squads)),
+                KeyCode::PageDown => self.move_squad(super::page_of(&self.pages.squads)),
                 KeyCode::Char('g') | KeyCode::Home => self.move_squad(-(i32::MAX / 2)),
                 KeyCode::Char('G') | KeyCode::End => self.move_squad(i32::MAX / 2),
                 KeyCode::Enter if self.sqt.view == SqView::Agents && self.sqt.new_agent_selected() => {
@@ -682,8 +687,8 @@ impl App {
             },
             SqFocus::Detail if self.sqt.view == SqView::Agents => match key.code {
                 KeyCode::Esc => self.sqt.focus = SqFocus::List,
-                KeyCode::Up => self.move_squad_row(-1),
-                KeyCode::Down => self.move_squad_row(1),
+                KeyCode::Up | KeyCode::Char('k') => self.move_squad_row(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_squad_row(1),
                 KeyCode::Char('g') | KeyCode::Home => self.sqt.agent_row = 0,
                 KeyCode::Char('G') | KeyCode::End => self.move_squad_row(i32::MAX / 2),
                 KeyCode::Enter => self.squad_enter(),
@@ -694,8 +699,8 @@ impl App {
                 let on_step = self.sqt.drow().and_then(DRow::step).is_some();
                 match key.code {
                     KeyCode::Esc => self.sqt.focus = SqFocus::List,
-                    KeyCode::Up => self.move_squad_row(-1),
-                    KeyCode::Down => self.move_squad_row(1),
+                    KeyCode::Up | KeyCode::Char('k') => self.move_squad_row(-1),
+                    KeyCode::Down | KeyCode::Char('j') => self.move_squad_row(1),
                     KeyCode::Char('g') if on_step => self.go_to_step_agent(),
                     KeyCode::Char('g') | KeyCode::Home => self.sqt.row = 0,
                     KeyCode::Char('G') | KeyCode::End => self.move_squad_row(i32::MAX / 2),

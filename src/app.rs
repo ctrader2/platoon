@@ -119,6 +119,32 @@ fn detect_rounded() -> bool {
     detect_rounded_with(&|k| std::env::var(k).ok())
 }
 
+/// A screenful of each list, as last drawn (see `App::pages`). Before the first frame, a guess.
+pub struct Pages {
+    /// The Sessions list, or the Sessions pane of a project's screen (only one of them shows at a time).
+    pub sessions: Cell<usize>,
+    pub projects: Cell<usize>,
+    pub tickets: Cell<usize>,
+    /// The Squads tab's list, Squads or Agents.
+    pub squads: Cell<usize>,
+    /// The settings' entries (or plugins, on the Plugins tab).
+    pub settings: Cell<usize>,
+    /// The plugin screen's list.
+    pub plugins: Cell<usize>,
+}
+
+impl Default for Pages {
+    fn default() -> Self {
+        let c = || Cell::new(10);
+        Pages { sessions: c(), projects: c(), tickets: c(), squads: c(), settings: c(), plugins: c() }
+    }
+}
+
+/// How far PageUp/PageDown move in a list that showed `rows` rows: a screenful, less one row kept in view.
+pub fn page_of(rows: &Cell<usize>) -> i32 {
+    (rows.get().saturating_sub(1)).max(1) as i32
+}
+
 pub fn detect_rounded_with(env: &dyn Fn(&str) -> Option<String>) -> bool {
     match env("PLATOON_BADGES").as_deref() {
         Some("rounded") => return true,
@@ -623,6 +649,8 @@ pub struct App {
     /// The first line of the help popup in view, when it is longer than the screen (kept in range by the drawing).
     pub help_top: Cell<usize>,
     pub hits: RefCell<Vec<(Rect, Hit)>>,
+    /// How many rows each list had room for when it was last drawn: what PageUp and PageDown move it by.
+    pub pages: Pages,
     size: (u16, u16),
     reader: Reader,
     indexer: Indexer,
@@ -814,6 +842,7 @@ impl App {
             hits: RefCell::new(Vec::new()),
             help_open: false,
             help_top: Cell::new(0),
+            pages: Pages::default(),
             size: (80, 24),
             reader,
             indexer,
@@ -937,7 +966,9 @@ impl App {
         }
     }
 
-    /// The back key as the hints show it (`ctrl+space` unless keys.json says otherwise).
+    /// The back key as the hints show it (`ctrl+space` unless keys.json says otherwise). Only where Esc belongs to
+    /// someone else: a session (the attached view) and the notes editor. On platoon's own screens, where the back key
+    /// is a second Esc, the hints say `esc back`.
     pub fn back_label(&self) -> &str {
         self.keys.get().back_label()
     }
@@ -1017,6 +1048,22 @@ impl App {
     fn clamp_selected(&mut self) {
         self.selected = self.selected.min(self.view.len().saturating_sub(1));
         self.pselected = self.pselected.min(self.pview.len().saturating_sub(1));
+    }
+
+    /// Is anything on the screen moving with the clock: a spinner (a working conversation, the index, a call out to
+    /// Claude, a squad starting, an install), an unread row's pulse, or a popup (which may hold one of those)? The
+    /// event loop draws a new frame on each tick only then (`main.rs`, `Screen`). When unsure, it says yes.
+    pub fn animating(&self) -> bool {
+        !matches!(self.mode, Mode::List)
+            || self.sessions.iter().any(|s| s.status == Status::Busy || s.unread)
+            || self.indexing().is_some()
+            || self.settling()
+            || self.smart_busy()
+            || self.handoff_busy()
+            || self.squads_busy()
+            || self.editor_busy()
+            || self.plugins_busy()
+            || !self.stopping.is_empty()
     }
 
     pub fn unread_count(&self) -> usize {
@@ -2554,8 +2601,10 @@ impl App {
             Mode::Settings => match key.code {
                 KeyCode::Esc | KeyCode::Char('s' | 'q') => self.act(Action::Cancel),
                 KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
-                KeyCode::Up => self.move_setting(-1),
-                KeyCode::Down => self.move_setting(1),
+                KeyCode::Up | KeyCode::Char('k') => self.move_setting(-1),
+                KeyCode::Down | KeyCode::Char('j') => self.move_setting(1),
+                KeyCode::PageUp => self.move_setting(-page_of(&self.pages.settings)),
+                KeyCode::PageDown => self.move_setting(page_of(&self.pages.settings)),
                 KeyCode::Tab => self.step_settings_tab(1),
                 KeyCode::BackTab => self.step_settings_tab(-1),
                 KeyCode::Home | KeyCode::Char('g') => self.setting = 0,

@@ -2,7 +2,7 @@
 //! keys (a model, a switch, steps, their agents, order and send-backs, a system prompt in a stand-in editor), a change
 //! to an agent shown in every squad that uses it, "Used in" and `g` between a step and its agent, drafting a squad
 //! or an agent with a stand-in `claude`, copying, deleting (an agent in use refused) and restoring, a file that can't
-//! be read, and `a` on a ticket listing the user's own squads. Every directory is a temp dir (`World`); nothing here starts a session.
+//! be read, and `S` on a ticket listing the user's own squads. Every directory is a temp dir (`World`); nothing here starts a session.
 
 use crate::agentfile;
 use crate::app::{ARow, App, Confirm, DRow, Mode, SqFocus, SqView};
@@ -193,7 +193,9 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     assert!(f.contains("3 Squads") && !f.contains("3 Squads 4"), "the tab, without a count: {f}");
     assert!(f.contains("[Squads] Agents"), "the switch, in the list's title: {f}");
     let l = left(&shown);
-    assert!(l.contains("▎ Coding 4 agents Built in Research 4 agents Built in Docs 3 agents Built in Summarize 1 agent Built in"), "{l}");
+    // A built-in squad as platoon has it says nothing under its name: a marker on every row would mark nothing.
+    assert!(l.contains("▎ Coding 4 agents Research 4 agents Docs 3 agents Summarize 1 agent"), "{l}");
+    assert!(!l.contains("Built in"), "{l}");
     let r = right(&shown);
     for s in [
         "About",
@@ -234,7 +236,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
         f.contains("enter pick the agent")
             && f.contains("g go to the agent")
             && f.contains("b send back")
-            && f.contains("ctrl+space back to the list"),
+            && f.contains("esc back to the list"),
         "{f}"
     );
     // Tab and Shift+arrows move between the panes; on the list, plain ← → switch the list.
@@ -262,8 +264,9 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     let mut term = Terminal::new(TestBackend::new(116, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let l = left(&shown);
-    assert!(l.starts_with("Squads [Agents] Built in"), "{l}");
-    assert!(l.contains("Built in ▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
+    // Every agent is built in, as platoon has it: no heading over them (it would tell nothing apart).
+    assert!(l.starts_with("Squads [Agents] ▎ planner"), "{l}");
+    assert!(l.contains("▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
     // A long name keeps its model beside it when the count doesn't fit.
     for s in ["report-writer Sonnet checker", "tech-writer Sonnet editor", "summarizer Sonnet · 1 squad"] {
         assert!(l.contains(s), "{s}: {l}");
@@ -1049,7 +1052,7 @@ fn a_file_that_cant_be_read_is_shown_as_such_and_left_alone() {
 }
 
 #[test]
-fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
+fn s_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     let w = World::new("sqt-hand");
     let mut slow = agentfile::copy_of(&w.config, &agentfile::builtin("verifier").unwrap(), "Slow verifier", &[]);
     slow.model = "sonnet".into();
@@ -1079,7 +1082,7 @@ fn a_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Char('a'));
+    key(&mut app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick));
     let names: Vec<&str> = app.sq.pick.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(

@@ -1,5 +1,5 @@
 //! The Squads tab end to end, in a real terminal with the real binary: a squad described in the text box and drafted
-//! by a stand-in `claude`, saved, handed a ticket with `a` (the leader starts with that squad's own `--agents`), then
+//! by a stand-in `claude`, saved, handed a ticket with `S` (the leader starts with that squad's own `--agents`), then
 //! changed on the tab (and the leaders' model in the settings) while its leader has stopped: continued, the leader runs
 //! with the squad as it was when it started. The squad leaders' system prompt and model, set in the settings, reaching
 //! a leader. An agent given a skill and an MCP server from what is installed (in a temp Claude config folder).
@@ -243,8 +243,8 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
     t.send(b"\t");
-    t.wait_for_flat("a hand to a squad");
-    t.send(b"a");
+    t.wait_for_flat("S hand to a squad");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Coding", "Careful coding", "Makes small, careful changes"]);
     // Coding, Research, Docs and Summarize come first.
     t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
@@ -327,9 +327,9 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     let screen = t.stable();
     assert!(!screen.contains("Needs a folder") && !screen.contains("Use a worktree"), "{screen}");
     t.send(b"\t");
-    t.wait_for("ctrl+space back to the list");
+    t.wait_for("esc back to the list");
     t.send(b"\x1b");
-    t.wait_gone("ctrl+space back to the list");
+    t.wait_gone("esc back to the list");
     // Settings, the Projects tab (before Editors and Plugins, the last): the leaders' model and system prompt, just after
     // the commander's.
     t.send(b"s");
@@ -374,8 +374,8 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
     t.send(b"\t");
-    t.wait_for_flat("a hand to a squad");
-    t.send(b"a");
+    t.wait_for_flat("S hand to a squad");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Coding", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
@@ -408,7 +408,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     t.send(b"\x1b[C");
     t.wait_for_all(&["[Agents]", "▎ planner"]);
     t.send(b"\r");
-    t.wait_for_all(&["ctrl+space back to the list", "Skills", "None: enter picks from what is installed"]);
+    t.wait_for_all(&["esc back to the list", "Skills", "None: enter picks from what is installed"]);
     // Down to Skills: past its name, model and three switches.
     t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
     t.wait_for("enter pick");
@@ -439,14 +439,14 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     );
     // Coding's leader starts with them: preloaded skills, servers by name, and the tools that let the planner use them.
     t.send(b"\x1b");
-    t.wait_gone("ctrl+space back to the list");
+    t.wait_gone("esc back to the list");
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
     t.send(b"\t");
-    t.wait_for_flat("a hand to a squad");
-    t.send(b"a");
+    t.wait_for_flat("S hand to a squad");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Coding", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
@@ -500,7 +500,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     t.send(b"\x1b[D");
     t.wait_for_all(&["[Squads]", "← → agents"]);
     t.send(b"\x1b[H\r");
-    t.wait_for("ctrl+space back to the list");
+    t.wait_for("esc back to the list");
     // Down to step 3's agent: past name, what it can do, and steps 1 and 2 (each its agent, then what it does).
     for _ in 0..6 {
         t.send(b"\x1b[B");

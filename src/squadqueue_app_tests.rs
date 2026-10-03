@@ -73,10 +73,10 @@ fn pick(app: &mut App, n: u32) {
     app.tk.selected = Some(app.ticket_rows()[at]);
 }
 
-/// `a` on ticket `n`, the Summarize squad picked (it needs no folder), and the commander's answer taken in.
+/// `S` on ticket `n`, the Summarize squad picked (it needs no folder), and the commander's answer taken in.
 fn hand(app: &mut App, n: u32) {
     pick(app, n);
-    key(app, KeyCode::Char('a'));
+    key(app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
     let to = app.sq.pick.iter().position(|s| s.name == "Summarize").unwrap();
     for _ in 0..to {
@@ -111,14 +111,14 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     // A third joins the line behind it.
     hand(&mut app, 3);
     assert!(on_disk(&w, &id, 3).queued.is_some() && app.sq.launched == [1]);
-    // On its own screen: Working · waiting for a free squad; `a` and enter say it is in the line.
+    // On its own screen: Working · waiting for a free squad; `S` and enter say it is in the line.
     pick(&mut app, 2);
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(2));
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains(&format!("State Working · {QUEUED_WORDS}")), "{f}");
-    assert!(!f.contains("enter continue the squad") && !f.contains("a hand to a squad"), "{f}");
-    key(&mut app, KeyCode::Char('a'));
+    assert!(!f.contains("enter continue the squad") && !f.contains("S hand to a squad"), "{f}");
+    key(&mut app, KeyCode::Char('S'));
     assert_eq!(app.active_notice(), Some("#2 is waiting for a free squad already. To take it out of the line, cancel it with c."));
     key(&mut app, KeyCode::Esc);
 

@@ -303,7 +303,7 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
         "Editors   Plugins",
         "Stop idle sessions after",
         "Settings file:",
-        "ctrl+space back",
+        "esc back",
     ]);
     let (row, _) = t.find("General").unwrap();
     let screen = t.text();
@@ -337,16 +337,11 @@ fn the_tabs_switch_by_key_and_by_click_are_lit_and_a_change_on_another_tab_is_sa
 
     // The smart features tab carries the day's token count.
     click(&mut t, row, smart + 2);
-    t.wait_for_all(&[
-        "Enable features which require tokens",
-        "Model for smart features",
-        "Used today: 0 of 500,000 tokens",
-        "ctrl+space back",
-    ]);
+    t.wait_for_all(&["Enable features which require tokens", "Model for smart features", "Used today: 0 of 500,000 tokens", "esc back"]);
     t.wait_bg(row, smart, surface);
     // At 80x24 the whole popup fits: its frame, the tabs, the file and the hints, and no text touches the border.
     let whole = t.stable();
-    for want in ["╭", "╰", "General", "Projects", "Settings file:", "ctrl+space back", "Used today"] {
+    for want in ["╭", "╰", "General", "Projects", "Settings file:", "esc back", "Used today"] {
         assert!(whole.contains(want), "{want:?} missing:\n{whole}");
     }
     // The popup is 76 columns wide, two columns in from each edge of the terminal (there is no frame around the app).

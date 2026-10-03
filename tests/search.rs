@@ -87,20 +87,24 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     // behind still has both rows, at the dialog's sides).
     t.wait_for("Type to narrow the list.");
     t.wait_for_flat("esc clear"); // (the footer of a frame can arrive after its rows)
-    let text = t.text();
+    let text = t.stable();
     let lines: Vec<&str> = text.lines().collect();
     let top = lines.iter().position(|l| l.contains("╭ Search")).unwrap();
     let left = lines[top].chars().position(|c| c == '╭').unwrap();
-    let inside = |l: &str| l.chars().skip(left + 2).take(70).collect::<String>();
-    let sep = (top..lines.len()).find(|&r| inside(lines[r]).starts_with("──────")).expect("separator");
-    let foot = (sep..lines.len()).find(|&r| lines[r].contains("esc clear")).expect("footer");
-    for line in lines.iter().take(foot).skip(sep + 1) {
+    let inside = |l: &str| l.chars().skip(left + 1).take(74).collect::<String>();
+    let sep = (top + 1..lines.len()).find(|&r| inside(lines[r]).trim_start().starts_with("──────")).expect("separator");
+    let foot = (sep..lines.len()).find(|&r| lines[r].contains("esc clear")).unwrap_or_else(|| panic!("footer:\n{text}"));
+    assert!(inside(lines[foot]).contains("enter keep filter"), "the popup's own footer: {text}");
+    for line in lines.iter().take(foot).skip(sep + 2) {
         let row = inside(line);
         assert!(
             !row.contains("alpha") && !row.contains("beta") && !row.contains("/work/") && !row.contains("ago"),
             "row text in the empty results area: {row:?}\n{text}"
         );
     }
+    // One set of key hints: the popup's. The list's own footer under it says nothing while the popup is open.
+    assert_eq!(text.matches("esc clear").count(), 1, "{text}");
+    assert!(!text.contains("enter apply") && !text.contains("/ search"), "{text}");
     assert!(!text.contains(" shown"), "{text}");
     // Typing right away narrows the list at once (the words are ones that are keys elsewhere, too).
     t.send(b"alp");

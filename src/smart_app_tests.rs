@@ -919,7 +919,7 @@ fn every_entry_of_every_tab_is_whole_with_its_explanation_at_80_by_24() {
                 "{}: its explanation is whole at 80x24:\n{shown}",
                 item.name
             );
-            assert!(shown.contains("ctrl+space back") && shown.contains("Projects"), "{}:\n{shown}", item.name);
+            assert!(shown.contains("esc back") && shown.contains("Projects"), "{}:\n{shown}", item.name);
             // The day's use is on the smart features tab; the archived estimate with the archived entries on Sessions.
             assert_eq!(shown.contains("Used today: 0 of 500,000 tokens"), ti == settings::TAB_SMART, "{}:\n{shown}", item.name);
             let estimate = flat.contains("Archived: 2 conversations, about ") && flat.contains(" tokens to index (an estimate)");
@@ -1815,9 +1815,8 @@ fn a_system_prompt_entry_opens_the_editor_list_on_enter_or_a_click_and_r_restore
     let w = World::new("sm-own-keys");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
-    let footer = |shown: &str| {
-        shown.lines().rev().find(|l| l.contains("ctrl+space back")).unwrap_or_else(|| panic!("no footer:\n{shown}")).to_string()
-    };
+    let footer =
+        |shown: &str| shown.lines().rev().find(|l| l.contains("esc back")).unwrap_or_else(|| panic!("no footer:\n{shown}")).to_string();
     // On an ordinary entry c and r do nothing.
     go(&mut app, "Update notes after");
     key(&mut app, KeyCode::Char('c'));

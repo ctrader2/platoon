@@ -6,6 +6,8 @@ mod claude;
 mod client;
 mod clipboard;
 mod colordepth;
+#[cfg(test)]
+mod density_app_tests;
 mod describe;
 mod dirs;
 mod editor;
@@ -359,16 +361,24 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     }
     let start = Instant::now();
     let mut last_refresh = Instant::now();
+    let mut screen = Screen::default();
     while !app.quit {
         if let Some(req) = app.take_editor_request() {
             open_editor(terminal, &mut app, &req, depth, no_color);
+            screen.forget();
         }
         if let Some((e, dirs)) = app.take_own_editor_request() {
             open_own_editor(terminal, &mut app, &e, &dirs);
+            screen.forget();
         }
         app.poll_stops();
         app.poll_editors();
-        app.tick = (start.elapsed().as_millis() / 100) as u64;
+        let tick = (start.elapsed().as_millis() / 100) as u64;
+        // A spinner or a pulse moves on with the tick: only then does a new tick need a new frame.
+        if tick != app.tick && app.animating() {
+            screen.dirty = true;
+        }
+        app.tick = tick;
         // While the index is still reading transcripts, pick up its results more often so rows fill in smoothly
         // (and, likewise, a settings change that is about to take effect).
         let every = if app.indexing().is_some()
@@ -386,18 +396,39 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
         if last_refresh.elapsed() >= every {
             app.refresh();
             last_refresh = Instant::now();
+            // Anything may have changed (sessions, tickets, usage, the time a row says); the frame says whether it did.
+            screen.dirty = true;
+        }
+        // A notice that appears or runs out changes the footer.
+        let notice = app.active_notice().map(str::to_string);
+        if notice != screen.notice {
+            screen.notice = notice;
+            screen.dirty = true;
+        }
+        // A session's screen (or a notes editor's, running inside platoon) changes whenever its program writes, which
+        // this loop isn't told about.
+        if matches!(app.mode, app::Mode::Attached(_) | app::Mode::EditNotes) {
+            screen.dirty = true;
         }
         let size = terminal.size()?;
+        if screen.shown.as_ref().is_none_or(|(b, _)| b.area.as_size() != size) {
+            screen.dirty = true;
+        }
         app.sync_size(size.width, size.height);
-        terminal.draw(|f| {
-            ui::draw(f, &app);
-            if no_color {
-                colordepth::strip(f.buffer_mut());
-            } else {
-                depth.apply(f.buffer_mut());
-            }
-        })?;
+        if screen.dirty {
+            screen.dirty = false;
+            screen.show(terminal, |f| {
+                ui::draw(f, &app);
+                if no_color {
+                    colordepth::strip(f.buffer_mut());
+                } else {
+                    depth.apply(f.buffer_mut());
+                }
+            })?;
+        }
         if event::poll(Duration::from_millis(50))? {
+            // Whatever came in (a key, the mouse, a paste, a new size) may change what is on the screen.
+            screen.dirty = true;
             match event::read()? {
                 Event::Key(key) if key.kind == KeyEventKind::Press => app.on_key(key),
                 Event::Mouse(m) => app.on_mouse(m),
@@ -409,6 +440,62 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     // Stops still running for the archive key get a few seconds to finish, so their records are written.
     app.finish_stops();
     Ok(app.hosts.len())
+}
+
+/// What is on the terminal, so a frame is only sent to it when it differs. The loop marks the screen `dirty` when
+/// something may have changed (an event, a refresh, a notice, a spinner's tick, a session's output); the frame is then
+/// drawn off screen first and sent only if it is not the one already showing. An idle platoon writes nothing at all.
+#[derive(Default)]
+struct Screen {
+    /// Something may have changed since the last frame: draw one (the first frame is always drawn).
+    dirty: bool,
+    /// The frame showing: its cells, and where the cursor is if it shows. None: unknown (draw in full).
+    shown: Option<(ratatui::buffer::Buffer, Option<ratatui::layout::Position>)>,
+    /// The notice the footer showed in that frame.
+    notice: Option<String>,
+    /// Where frames are drawn before they are compared.
+    off: Option<ratatui::Terminal<ratatui::backend::TestBackend>>,
+}
+
+impl Screen {
+    /// Forget what is showing (another program had the terminal): the next frame is drawn in full.
+    fn forget(&mut self) {
+        self.shown = None;
+        self.dirty = true;
+    }
+
+    /// Draw a frame with `render`, off screen, and send it to `terminal` if it is not what is showing already.
+    fn show(&mut self, terminal: &mut ratatui::DefaultTerminal, render: impl Fn(&mut ratatui::Frame)) -> io::Result<()> {
+        let size = terminal.size()?;
+        let off = match &mut self.off {
+            Some(t) if t.backend().buffer().area.as_size() == size => t,
+            slot => {
+                let Ok(t) = ratatui::Terminal::new(ratatui::backend::TestBackend::new(size.width, size.height));
+                slot.insert(t)
+            }
+        };
+        let Ok(_) = off.draw(|f| render(f));
+        let backend = off.backend();
+        let frame = (backend.buffer().clone(), backend.cursor_visible().then(|| backend.cursor_position()));
+        if self.shown.as_ref() == Some(&frame) {
+            return Ok(());
+        }
+        // The real terminal gets the same frame; ratatui sends only the cells that differ from what it showed last.
+        let (buffer, cursor) = &frame;
+        terminal.draw(|f| {
+            if f.area() == buffer.area {
+                f.buffer_mut().clone_from(buffer);
+                if let Some(p) = cursor {
+                    f.set_cursor_position(*p);
+                }
+            } else {
+                // The terminal changed size in between: draw this one directly (the next is compared again).
+                render(f);
+            }
+        })?;
+        self.shown = Some(frame);
+        Ok(())
+    }
 }
 
 /// Hand the terminal to the code editor (`v`), wait for it to close, and take the terminal back: platoon's screen
@@ -2098,22 +2185,22 @@ mod tests {
     }
 
     #[test]
-    fn j_and_k_no_longer_move_and_the_arrows_do() {
-        let (_w, mut app) = mixed_app("no-jk");
+    fn j_and_k_move_like_the_arrows_and_are_letters_in_the_filter() {
+        let (_w, mut app) = mixed_app("jk");
         assert_eq!(app.selected, 0);
         ch(&mut app, 'j');
-        assert_eq!(app.selected, 0, "j does nothing now");
+        assert_eq!(app.selected, 1, "j moves down");
+        ch(&mut app, 'k');
+        assert_eq!(app.selected, 0, "k moves up");
         key(&mut app, KeyCode::Down);
         assert_eq!(app.selected, 1);
-        ch(&mut app, 'k');
-        assert_eq!(app.selected, 1, "k does nothing now");
         key(&mut app, KeyCode::Up);
         assert_eq!(app.selected, 0);
         // Typing them into the filter still works: they are just letters there.
         ch(&mut app, '/');
         ch(&mut app, 'j');
         assert_eq!(app.filter, "j");
-        // And the footer no longer advertises them (wide enough for the arrows' hint next to `v editor`).
+        // The footer keeps the arrows' hint (j/k are the arrows' aliases, not a hint of their own).
         key(&mut app, KeyCode::Esc);
         let mut term = Terminal::new(TestBackend::new(140, 24)).unwrap();
         let shown = draw(&mut term, &app);
@@ -2208,7 +2295,7 @@ mod tests {
         let shown = draw(&mut tall, &app);
         let (first, last) = (
             shown.lines().position(|l| l.contains("Settings")).unwrap(),
-            shown.lines().enumerate().filter(|(_, l)| l.contains("ctrl+space back")).map(|(i, _)| i).last().unwrap(),
+            shown.lines().enumerate().filter(|(_, l)| l.contains("esc back")).map(|(i, _)| i).last().unwrap(),
         );
         assert!(first > 1 && shown.lines().count() - last > 3, "not stretched to the screen:\n{shown}");
         // 100x100 and 140x100: every explanation fits.
@@ -2233,7 +2320,7 @@ mod tests {
                 "{} is shown with its explanation at 80x24:\n{shown}",
                 item.name
             );
-            assert!(text.contains("ctrl+space back") && !text.contains("Used today"), "{shown}");
+            assert!(text.contains("esc back") && !text.contains("Used today"), "{shown}");
             for (j, other) in ITEMS.iter().enumerate().filter(|(j, _)| *j != i) {
                 assert!(!text.contains(other.explain), "{} is explained only while selected ({}, {j})", other.name, item.name);
             }
@@ -2473,7 +2560,7 @@ mod tests {
                 let must_explain = roomy || i == 0;
                 assert!(!must_explain || text.contains(item.explain), "explanation cut off or mangled at {ctx}");
             }
-            for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "enter next choice", "ctrl+space back", file] {
+            for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "enter next choice", "esc back", file] {
                 // At 60 columns the back key's longer name leaves no room for this one (it goes first).
                 if want == "enter next choice" && cols < 70 {
                     continue;
@@ -2532,7 +2619,7 @@ mod tests {
             for line in shown.lines().filter(|l| l.starts_with('│')) {
                 assert!(line.trim_end_matches('│').ends_with(' '), "text touches the border at {ctx}");
             }
-            assert!(text.contains("ctrl+space back") && text.contains("settings.json"), "{ctx}");
+            assert!(text.contains("esc back") && text.contains("settings.json"), "{ctx}");
             ch(&mut app, 'g');
         }
     }
@@ -2632,7 +2719,7 @@ mod tests {
                 assert!(flat(&text).contains(&format!("platoon needs at least 60×14 — this window is 60×{rows}")), "60x{rows}\n{text}");
                 continue;
             }
-            assert!(text.contains("Theme") && text.contains("ctrl+space back"), "60x{rows}\n{text}");
+            assert!(text.contains("Theme") && text.contains("esc back"), "60x{rows}\n{text}");
             if rows >= 10 {
                 assert!(text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
             }
@@ -2657,13 +2744,10 @@ mod tests {
         // Too cramped to explain it (the smallest size platoon draws in): the entries and the way back are still whole.
         let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
-        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("ctrl+space back"), "{cramped}");
+        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("esc back"), "{cramped}");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         let cramped = draw(&mut term, &app);
-        assert!(
-            cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("ctrl+space back"),
-            "{cramped}"
-        );
+        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
     }
 
     #[test]

@@ -24,7 +24,7 @@ pub(super) fn plugin_screen_hints(app: &App) -> Vec<Hint<'_>> {
         _ => {}
     }
     // (`1` `2` `3` go straight to a tab from here too; not shown, as on the settings.)
-    out.extend([("↑↓", "move", None), ("?", "help", Some(Action::Help)), (app.back_label(), "back to settings", Some(Action::Cancel))]);
+    out.extend([("↑↓", "move", None), ("?", "help", Some(Action::Help)), ("esc", "back to settings", Some(Action::Cancel))]);
     out
 }
 
@@ -100,6 +100,7 @@ fn draw_plugin_list(f: &mut Frame, app: &App, li: Rect, rows: &[PlugRow]) {
     }
     let per = 3u16;
     let room = (li.height / per).max(1) as usize;
+    app.pages.plugins.set(room);
     let selected = app.pl.selected.min(rows.len() - 1);
     let start = selected.saturating_sub(room.saturating_sub(1));
     let mut y = li.y;
@@ -255,6 +256,7 @@ pub(super) fn draw_plugin_settings(f: &mut Frame, app: &App, area: Rect) -> u16 
         return area.y + 1;
     }
     let room = (area.height as usize).max(1);
+    app.pages.settings.set(room);
     let selected = app.setting.min(rows.len() - 1);
     let start = selected.saturating_sub(room - 1);
     let mut y = area.y;
@@ -419,6 +421,6 @@ fn draw_review_item(f: &mut Frame, app: &App, r: &crate::app::Review, i: usize, 
     }
     let shown =
         if total <= rows { "all of it shown".to_string() } else { format!("lines {}-{} of {total}", top + 1, (top + rows).min(total)) };
-    let hints: [Hint; 2] = [("↑↓ pgup pgdn", "scroll", None), (app.back_label(), "back to the list", None)];
+    let hints: [Hint; 2] = [("↑↓ pgup pgdn", "scroll", None), ("esc", "back to the list", None)];
     draw_footer(f, app, Rect::new(inner.x, inner.bottom() - 1, inner.width, 1), &hints, Some((shown, t.dim)));
 }

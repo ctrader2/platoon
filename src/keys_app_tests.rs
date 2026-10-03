@@ -117,14 +117,14 @@ fn q_goes_back_on_a_project_or_ticket_screen_and_quits_only_from_the_top_level_l
     ch(&mut app, 'q');
     assert!(app.quit, "q on the list quits");
 
-    // The hints say so: no "q quit" on a project's or a ticket's screen, the back key instead; "q quit" at the top.
+    // The hints say so: no "q quit" on a project's or a ticket's screen, `esc back` instead (Esc is platoon's own there; the back key is a second Esc); "q quit" at the top.
     let (_w, mut app) = on_the_project("keys-q-hints");
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("ctrl+space back") && !shown.contains("q quit"), "{shown}");
+    assert!(shown.contains("esc back") && !shown.contains("q quit"), "{shown}");
     open_ticket(&mut app);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("ctrl+space back") && !shown.contains("q quit"), "{shown}");
+    assert!(shown.contains("esc back") && !shown.contains("q quit"), "{shown}");
     ch(&mut app, 'q');
     ch(&mut app, 'q');
     let shown = flat(&draw(&mut term, &app));
@@ -141,7 +141,7 @@ fn in_a_squads_details_the_back_key_esc_and_q_go_back_to_the_list_and_q_quits_fr
         key(&mut app, KeyCode::Enter);
         assert_eq!(app.sqt.focus, SqFocus::Detail);
         let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("ctrl+space back to the list") && !shown.contains("q quit"), "{shown}");
+        assert!(shown.contains("esc back to the list") && !shown.contains("q quit"), "{shown}");
         back(&mut app);
         assert_eq!(app.sqt.focus, SqFocus::List);
         assert!(!app.quit);
@@ -208,7 +208,11 @@ fn keys_json_changes_the_back_and_quit_keys_and_the_hints_say_them() {
     assert_eq!(app.active_notice(), None, "nothing to say about a good file");
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("alt+x back") && !shown.contains("ctrl+space"), "{shown}");
+    assert!(
+        shown.contains("esc back") && !shown.contains("ctrl+space") && !shown.contains("alt+x"),
+        "platoon's own screens say esc: {shown}"
+    );
+    assert_eq!(app.back_label(), "alt+x", "where Esc is the session's or the editor's, the hints name the back key from keys.json");
     open_ticket(&mut app);
     // Ctrl+Space is nothing now; alt+x goes back; so does esc, always.
     ctrl_space(&mut app);
@@ -226,7 +230,7 @@ fn keys_json_changes_the_back_and_quit_keys_and_the_hints_say_them() {
     assert!(!app.quit, "q no longer quits");
     ch(&mut app, 's');
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("alt+x back"), "the settings' hint too: {shown}");
+    assert!(shown.contains("esc back") && !shown.contains("alt+x"), "the settings' hint too: {shown}");
     ctrl_space(&mut app);
     assert!(matches!(app.mode, Mode::Settings), "ctrl+space no longer closes them");
     alt(&mut app, 'x');

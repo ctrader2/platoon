@@ -1,4 +1,4 @@
-//! Squads end to end, in a real terminal with the real binary: `a` on a ticket hands it to the Coding squad (a git
+//! Squads end to end, in a real terminal with the real binary: `S` on a ticket hands it to the Coding squad (a git
 //! worktree in a temp repository, the leader started in a platoon host with the squad's flags), the split view (the
 //! ticket beside the live session, typing reaches it, ctrl+space goes back), the leader kept out of the Sessions tab
 //! and the project's list, the hooks with real-shaped input, `p` typing the go-ahead, the leader asking before it
@@ -279,10 +279,10 @@ fn value_after<'a>(args: &'a [String], flag: &str) -> &'a str {
     &args[at + 1]
 }
 
-/// Hand ticket #1 to the Coding squad with `a` and wait for the split view.
+/// Hand ticket #1 to the Coding squad with `S` and wait for the split view.
 fn hand_over(lab: &Lab, t: &mut Term) {
     lab.open_tickets(t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Coding", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
@@ -687,7 +687,7 @@ fn when_the_commander_says_no_the_ticket_stays_new_with_why_and_a_second_a_can_h
     fs::write(lab.fake.join("verdict"), r#"{"fits":false,"reason":"This is docs work; the Coding squad writes code."}"#).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     lab.open_tickets(&mut t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_flat("The commander says the Coding squad doesn't fit #1: This is docs work");
@@ -704,7 +704,7 @@ fn when_the_commander_says_no_the_ticket_stays_new_with_why_and_a_second_a_can_h
     t.send(b"\r");
     t.wait_for_all(&["Commander", "This is docs work; the Coding squad writes code."]);
     // The same squad again: asked, and yes hands it over without a second check.
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_all(&["The commander said this squad doesn't fit. Hand it anyway?", "y hand it over"]);
@@ -728,7 +728,7 @@ fn when_the_session_limit_is_reached_nothing_is_handed_over() {
     lab.spend_the_day(600_000);
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     lab.open_tickets(&mut t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "enter hand it over"]);
     t.send(b"\r");
     t.wait_for_flat("Session limit has been reached. #1 wasn't handed over.");
@@ -763,7 +763,7 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     env.push(("PATH", format!("{}:{}", bin.display(), std::env::var("PATH").unwrap_or_default())));
     let mut t = Term::spawn(&[], &env, &lab.work, 40, 130);
     lab.open_tickets(&mut t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "enter hand it over"]);
     t.send(b"\r");
     until("the slow git to start", || lab.fake.join("git-slow").exists());
@@ -788,7 +788,7 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
 /// the split view.
 fn hand_to(lab: &Lab, t: &mut Term, squad: &str, downs: usize) {
     lab.open_tickets(t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", squad, "enter hand it over"]);
     t.send(&b"\x1b[B".repeat(downs));
     t.send(b"\r");
@@ -806,13 +806,13 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     // No squad needs a folder any more: the picker says nothing of it.
     lab.open_tickets(&mut t);
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Coding", "Research", "enter hand it over"]);
     assert!(!t.stable().contains("Needs a folder"));
     t.send(b"\x1b");
     t.wait_gone("enter hand it over");
     // Research takes it.
-    t.send(b"a");
+    t.send(b"S");
     t.wait_for_all(&["hand to a squad", "Research", "enter hand it over"]);
     t.send(b"\x1b[B\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
@@ -1006,7 +1006,7 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     // #2 and #3: checked by the commander, then in the line.
     for k in [2, 3] {
         t.send(b"\x1b[B");
-        t.send(b"a");
+        t.send(b"S");
         t.wait_for_all(&["hand to a squad", "enter hand it over"]);
         t.send(b"\r");
         t.wait_gone("enter hand it over");

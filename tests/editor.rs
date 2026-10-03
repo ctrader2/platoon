@@ -289,7 +289,7 @@ fn v_on_a_tickets_screen_opens_its_worktree_counted_from_where_it_was_made_and_c
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&wt));
     t.send(b"\r");
     // Back on the ticket's own screen.
-    t.wait_for_all(&["Basket", "v editor", "ctrl+space back"]);
+    t.wait_for_all(&["Basket", "v editor", "esc back"]);
     assert!(!t.stable().contains("STAND-IN"));
 }
 
@@ -654,7 +654,7 @@ fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() 
     t.send(b"\r");
     t.wait_for("#1");
     t.send(b"\x1b[B\r");
-    t.wait_for_all(&["Basket", "v editor", "ctrl+space back"]);
+    t.wait_for_all(&["Basket", "v editor", "esc back"]);
     t.send(b"v");
     assert_eq!(wait_file(&lab.out.join("code.argv")).lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&wt)]);
     t.wait_for_flat("Kept: opened in VS Code.");

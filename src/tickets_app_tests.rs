@@ -493,7 +493,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
         f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"),
         "the Markdown drawn: {shown}"
     );
-    assert!(f.contains("e edit") && f.contains("c cancel") && !f.contains("s state") && f.contains("ctrl+space back"), "the keys: {shown}");
+    assert!(f.contains("e edit") && f.contains("c cancel") && !f.contains("s state") && f.contains("esc back"), "the keys: {shown}");
     assert!(!f.contains("h how far") && !f.contains("how far"), "no how-far key: {shown}");
     assert!(!f.contains("step 60"));
     // The bold word is bold.

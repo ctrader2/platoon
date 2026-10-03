@@ -218,7 +218,7 @@ fn col_of(line: &[ratatui::buffer::Cell], word: &str) -> Option<usize> {
 
 /// The Sessions table's title line.
 fn header_row(lines: &[Vec<ratatui::buffer::Cell>]) -> usize {
-    lines.iter().position(|l| col_of(l, "STATUS").is_some() && col_of(l, "CONTEXT").is_some()).expect("the column titles")
+    lines.iter().position(|l| col_of(l, "STATUS").is_some() && col_of(l, "LAST").is_some()).expect("the column titles")
 }
 
 /// One column's share of a wide screen's spare width, read off the title line: STATUS is 11 cells, so
@@ -458,8 +458,9 @@ fn with_a_project_column_every_row_still_fits_the_width() {
             assert!(line.ends_with(' '), "{width}: nothing runs to the terminal's edge: {line}");
         }
         let has_col = head.contains("PROJECT");
-        // (The table is the terminal less a column of air at each side.)
-        assert_eq!(has_col, width >= 65, "{width}: {head}");
+        // (The table is the terminal less a column of air at each side. Below 66 columns the CONTEXT bar has gone,
+        // which leaves NAME and DIR room to share with it: at every size platoon draws in, the column shows.)
+        assert!(has_col, "{width}: {head}");
         assert_eq!(pill_rows(&lines, color).is_empty(), !has_col, "{width}");
         // The pill switches to the badge letters below 90 real terminal columns.
         if has_col {

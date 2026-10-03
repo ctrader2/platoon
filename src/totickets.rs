@@ -407,7 +407,7 @@ mod tests {
             assert!(!body.contains(bad), "{bad:?}");
         }
         // The end: the numbers, where they are, and that a squad is picked there.
-        assert!(body.contains("number platoon printed") && body.contains("press a"));
+        assert!(body.contains("number platoon printed") && body.contains("press S (shift+s)"));
     }
 
     #[test]

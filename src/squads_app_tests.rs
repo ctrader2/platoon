@@ -1,5 +1,5 @@
 //! Squads at the level of the app: squads' leader sessions left out of every list of the user's own sessions, the
-//! `a` refusals and the squad picker, the state list of a ticket with a squad, `p`, the ticket's screen while its
+//! `S` refusals and the squad picker, the state list of a ticket with a squad, `p`, the ticket's screen while its
 //! squad's session isn't running, and the split view's layout. Every directory is a temp dir (`World`); nothing here
 //! starts a session (the terminal tests in `tests/squads.rs` do, with a stand-in `claude`).
 
@@ -142,7 +142,7 @@ fn a_ticket_with_a_squad_is_only_cancelled_by_hand_and_s_does_nothing() {
 }
 
 #[test]
-fn a_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
+fn s_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     let (w, mut app, id) = on_the_project("sq-refuse");
     let mut t = Tickets::open(&w.config, &id);
     let first = t.add(NewTicket { title: "First".into(), folders: vec!["/tmp".into()], ..Default::default() }).unwrap();
@@ -158,12 +158,12 @@ fn a_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
         app.tk.selected = Some(app.ticket_rows()[at]);
     };
     pick(&mut app, waits);
-    key(&mut app, KeyCode::Char('a'));
+    key(&mut app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.active_notice(), Some("#2 waits for #1, which isn't Done yet."));
     // No folder: the picker opens, and every squad may take it (it works in the ticket's work folder).
     pick(&mut app, nofolder);
-    key(&mut app, KeyCode::Char('a'));
+    key(&mut app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick) && app.sq.pick_ticket == nofolder);
     let mut term = Terminal::new(TestBackend::new(120, 50)).unwrap();
     let shown = flat(&draw(&mut term, &app));
@@ -171,11 +171,11 @@ fn a_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     assert!(!shown.contains("Needs a folder"), "no squad needs a folder any more: {shown}");
     key(&mut app, KeyCode::Esc);
     pick(&mut app, working);
-    key(&mut app, KeyCode::Char('a'));
+    key(&mut app, KeyCode::Char('S'));
     assert_eq!(app.active_notice(), Some("#4 is Working. Only a New ticket can be handed to a squad."));
     // A New one, ready, with a folder: the picker, with what the squad can do.
     pick(&mut app, first);
-    key(&mut app, KeyCode::Char('a'));
+    key(&mut app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick) && app.sq.pick_ticket == first);
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
@@ -382,7 +382,7 @@ fn with_commander(name: &str, spent: u64, folder: &std::path::Path) -> (World, A
 }
 
 fn hand(app: &mut App) {
-    key(app, KeyCode::Char('a'));
+    key(app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
     key(app, KeyCode::Enter);
 }
@@ -578,11 +578,11 @@ fn handing(name: &str, folders: &[Vec<String>]) -> (World, App, String, crate::t
     (w, app, id, fake)
 }
 
-/// `a` on ticket `n`, the squad called `squad` picked, and the leader started (as far as a unit test starts one).
+/// `S` on ticket `n`, the squad called `squad` picked, and the leader started (as far as a unit test starts one).
 fn hand_to(app: &mut App, n: u32, squad: &str) {
     let at = app.ticket_rows().iter().position(|r| *r == crate::app::TRow::Ticket(n)).unwrap();
     app.tk.selected = Some(app.ticket_rows()[at]);
-    key(app, KeyCode::Char('a'));
+    key(app, KeyCode::Char('S'));
     assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
     let to = app.sq.pick.iter().position(|s| s.name == squad).unwrap();
     for _ in 0..to {
