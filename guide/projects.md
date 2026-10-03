@@ -151,11 +151,6 @@ bullets are `-` and `*`.
 word. A heading can only go away by being carried into the one that replaces it, and everything of yours that was under it
 has to come across with it or the change is thrown away (see [What it may write](#what-it-may-write)).
 
-Notes written by an older platoon - the five fixed headings Overview, Requirements, Status, Decisions and Notes - carry on
-working and lose nothing: a summary is added at the top the next time platoon writes, and your old headings become
-ordinary sections that platoon may reshape from then on. Your old **Notes** section is one of them: platoon has never
-written a word in it, so every line of it is yours and stays word for word.
-
 ## Notes that keep themselves up to date
 
 With **Project notes** on (see [Features that use tokens](tokens.md)), platoon writes the notes for you from what your

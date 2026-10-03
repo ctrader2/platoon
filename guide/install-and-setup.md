@@ -48,8 +48,8 @@ After the checklist, setup asks one more question: may platoon use your Claude p
 ### Running it again
 
 Running `platoon setup` again is harmless: finished steps show as already done, and a step whose command points at a
-platoon that no longer exists (you moved or reinstalled it) is repaired. If you set platoon up before a step existed
-(an older platoon had no Project notes or Notes updates step), run `platoon setup` once more to add it.
+platoon that no longer exists (you moved or reinstalled it) is repaired. When a newer platoon adds a step,
+run `platoon setup` once more to add it.
 
 If you run setup from a build folder (a path with `/target/` in it), it warns you: the hooks would point at a binary
 that moves. Install platoon first, then run `platoon setup` again.

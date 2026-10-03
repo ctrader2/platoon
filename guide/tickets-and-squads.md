@@ -41,7 +41,6 @@ under it, and an **Acceptance** heading with two empty checkboxes.
 **How far to take the work is said in the ticket's text**: write "a local commit", "push it and open a merge request" or
 anything else there. When the text doesn't say, a squad stops at local changes: it changes the files in its worktree (or
 the folder) and commits nothing; a ticket with no folder of its own stops once its result is written in its work folder.
-(Tickets made by an older platoon may have a separate "how far" in `tickets.json`: it is kept there and no longer read.)
 
 ### A ticket's own screen
 
@@ -198,8 +197,7 @@ of its own: it works in the ticket's work folder.
   `~/.config/platoon/projects/<id>/tickets/<NN>-work/` (platoon never removes it). The squad starts in the ticket's first
   folder (its worktree, when it has one), with its other folders and the work folder beside it, and writes what it makes
   for the ticket rather than for the project there, never in your repository: Research's `report.md`, notes, drafts. A
-  ticket with no folder of its own has the work folder as its folder: the squad starts there. (A leader started by an
-  older platoon, before every squad worked this way, is continued where it began.)
+  ticket with no folder of its own has the work folder as its folder: the squad starts there.
 - **Its own session.** The leader starts in a platoon session of its own (it keeps running when platoon closes), named
   after its squad (`Coding squad · #N title`), with the ticket as its first message and the project's notes given to it as
   context. It belongs to the ticket only: it is never listed on the Sessions tab, in the project's sessions, in searches or
@@ -409,14 +407,3 @@ Your squads and agents, and the built-in ones once you change them, are in `~/.c
 name once and never changes. Keys platoon doesn't know are kept, and a file that can't be read is shown as such on the tab
 and never written over.
 
-Files from an older platoon are read too:
-
-- A squad file from before agents were their own (its members inside it) is converted the first time platoon reads it:
-  each member becomes an agent of your own (an agent that is exactly the same is used as it is; a different one already
-  called that gets the squad's name in front, like `triage-reviewer`), and the old file is kept as
-  `<id>.before-agents.json.bak`.
-- If you had changed the Coding squad's system prompts in the settings before this tab existed, your text was carried into
-  the built-in agents the first time platoon read them (the old files in `prompts/` are left as they were; the old Coding
-  leader's text is not carried anywhere, as every squad's leader now shares one system prompt).
-- A squad file from before the leader moved to the settings may still have its own `leader`, `needs_folder` and
-  `use_worktree`: they are kept in the file as they are, and mean nothing any more.
