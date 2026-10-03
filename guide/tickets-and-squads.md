@@ -18,7 +18,7 @@ number, the title, the state and, for an open ticket, what it is still waiting f
 when it is New and everything it waits for is Done (a Cancelled ticket still holds up the ones waiting for it: only Done
 lets them go). These words are never cut: on a narrow terminal the title is. Narrower still, the state and what it waits
 for share one column (a row says what it waits for or **Can start**, else its state), and on the narrowest that column uses
-short words (**Waiting**, **To publish**, **Waits #1**, **In line**).
+short words (**Your turn** for Waiting on you, **To publish**, **Waits #1**, **In line**).
 
 | Key (Tickets pane) | Does |
 | --- | --- |

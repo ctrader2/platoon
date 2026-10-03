@@ -35,7 +35,7 @@ first, as `settings.json.platoon-bak` beside it, and leaves everything else in i
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](projects.md) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](projects.md) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions |
 | Notes updates | Lets platoon [keep a project's notes up to date](projects.md#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional |
-| Tickets skill | Adds [`/to-tickets`](tickets-and-squads.md#making-tickets-from-a-conversation) to Claude Code, which turns a conversation into tickets. Optional. Unlike the others it is a file, not a setting (see [The tickets skill](#the-tickets-skill)) |
+| Tickets skill | Adds [`/to-tickets`](tickets-and-squads.md#making-tickets-from-a-conversation) to Claude Code, which turns a session into tickets. Optional. Unlike the others it is a file, not a setting (see [The tickets skill](#the-tickets-skill)) |
 
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in

@@ -440,7 +440,7 @@ fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
     let (_w, mut app) = a_shop("c-tickets");
     // (size, the words every row must show whole)
     let full = ["Can start", "Working", "Waiting on you", "Ready to publish", "Waits for #1", "Done", "Cancelled"];
-    let short = ["Can start", "Working", "Waiting", "To publish", "Waits #1", "Done", "Cancelled"];
+    let short = ["Can start", "Working", "Your turn", "To publish", "Waits #1", "Done", "Cancelled"];
     for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &short), (60, 24, &short)] {
         let mut term = sized(&mut app, w, h);
         let lines = draw(&mut term, &app);

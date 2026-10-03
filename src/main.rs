@@ -203,7 +203,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, two hooks
                   that hand a project's notes to its sessions and keep them up to date, and
-                  the /to-tickets skill that turns a conversation into tickets
+                  the /to-tickets skill that turns a session into tickets
   setup --remove to-tickets   take the /to-tickets skill out again
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...

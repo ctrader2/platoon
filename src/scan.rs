@@ -135,7 +135,7 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
     if n_active > 0 {
         let _ = writeln!(
             out,
-            "\nSmart names: {n_active} active conversation{} to name, {} (an estimate, made on this computer).",
+            "\nSmart names: {n_active} active session{} to name, {} (an estimate, made on this computer).",
             if n_active == 1 { "" } else { "s" },
             active_estimate.plain()
         );
@@ -150,7 +150,7 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
     if archived_estimate.conversations > 0 && !settings.ai_archived {
         let _ = writeln!(
             out,
-            "\nArchived: {} archived conversation{}, about {} tokens to name (an estimate).",
+            "\nArchived: {} archived session{}, about {} tokens to name (an estimate).",
             archived_estimate.conversations,
             if archived_estimate.conversations == 1 { "" } else { "s" },
             thousands(archived_estimate.tokens)
@@ -169,10 +169,10 @@ pub fn offer_scan(env: &ScanEnv, input: &mut dyn BufRead, out: &mut dyn Write, i
             if !corrupt && settings::save(env.config, &current).is_ok() {
                 let _ = writeln!(
                     out,
-                    "Archived conversations will be named slowly in the background. Change it any time in the settings, on the Sessions tab."
+                    "Archived sessions will be named slowly in the background. Change it any time in the settings, on the Sessions tab."
                 );
             } else {
-                let _ = writeln!(out, "Couldn't save that choice, so archived conversations are skipped.");
+                let _ = writeln!(out, "Couldn't save that choice, so archived sessions are skipped.");
             }
         } else {
             let _ = writeln!(out, "Skipped. You can change this any time in the settings, on the Sessions tab.");
@@ -197,7 +197,7 @@ fn name_active(
     let boosted = HashSet::new();
     let mut named = 0usize;
     let progress = |out: &mut dyn Write, named: usize| {
-        let _ = write!(out, "\r  Naming conversations: {named} of {total}   ");
+        let _ = write!(out, "\r  Naming sessions: {named} of {total}   ");
         let _ = out.flush();
     };
     progress(out, 0);
@@ -367,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn after_yes_the_estimate_is_shown_the_active_conversations_are_named_with_progress_and_archived_are_offered() {
+    fn after_yes_the_estimate_is_shown_the_active_sessions_are_named_with_progress_and_archived_are_offered() {
         let w = World::new("sc-yes");
         fill(&w, 3, 2);
         on(&w, |_| {});
@@ -376,7 +376,7 @@ mod tests {
         assert_eq!(outcome, ScanOutcome::Done { named: 3 });
         // The local estimate first, labelled as one, in plain words.
         assert!(
-            shown.contains("Smart names: 3 active conversations to name, about ")
+            shown.contains("Smart names: 3 active sessions to name, about ")
                 && shown.contains("tokens, roughly 1 call (an estimate, made on this computer)."),
             "{shown}"
         );
@@ -385,7 +385,7 @@ mod tests {
             "{shown}"
         );
         // The one-line progress display: rewritten in place, ending at all of them.
-        assert!(shown.contains("\r  Naming conversations: 0 of 3") && shown.contains("Naming conversations: 3 of 3"), "{shown}");
+        assert!(shown.contains("\r  Naming sessions: 0 of 3") && shown.contains("Naming sessions: 3 of 3"), "{shown}");
         assert!(shown.contains("Used about 450 tokens."), "{shown}");
         // One call for the three, the newest first.
         assert_eq!(fake.calls(), 1);
@@ -394,12 +394,12 @@ mod tests {
         assert!(!sent.contains("archived topic"));
         assert_eq!(summaries(&w).len(), 3);
         // Archived: an estimate, and a default that leaves them alone.
-        assert!(shown.contains("Archived: 2 archived conversations, about ") && shown.contains("tokens to name (an estimate)."), "{shown}");
+        assert!(shown.contains("Archived: 2 archived sessions, about ") && shown.contains("tokens to name (an estimate)."), "{shown}");
         assert!(shown.contains("[S]kip / [b]ackground") && shown.contains("50% of what is left of the day's limit"), "{shown}");
         assert!(shown.contains("Skipped. You can change this any time in the settings, on the Sessions tab."), "{shown}");
         assert!(!settings::load(&w.config).0.ai_archived);
         let lower = shown.to_lowercase();
-        for jargon in ["json", "stdin", "batch", "index", "api"] {
+        for jargon in ["json", "stdin", "batch", "index", "api", "conversation"] {
             assert!(!lower.contains(jargon), "{jargon}: {shown}");
         }
     }
@@ -437,8 +437,8 @@ mod tests {
             n
         };
         let (_, shown) = run(&w, &fake, "", true, &interrupted);
-        let first_line = shown.lines().find(|l| l.contains("active conversations to name")).unwrap();
-        assert!(first_line.contains("61 active conversations") && first_line.contains("roughly 3 calls"), "{first_line}");
+        let first_line = shown.lines().find(|l| l.contains("active sessions to name")).unwrap();
+        assert!(first_line.contains("61 active sessions") && first_line.contains("roughly 3 calls"), "{first_line}");
         // The same figure the function gives for those digests.
         let held = {
             let env = ScanEnv { config: &w.config, cache: &w.cache, root: &w.root, program: fake.script.clone(), interactive: true };
@@ -486,7 +486,7 @@ mod tests {
     }
 
     #[test]
-    fn choosing_background_for_archived_conversations_is_saved_and_nothing_archived_is_sent_now() {
+    fn choosing_background_for_archived_sessions_is_saved_and_nothing_archived_is_sent_now() {
         let w = World::new("sc-bg");
         fill(&w, 1, 3);
         on(&w, |s| s.idle_stop_minutes = 45);
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(outcome, ScanOutcome::Done { named: 1 });
         let s = settings::load(&w.config).0;
         assert!(s.ai_archived && s.tokens_enabled && s.idle_stop_minutes == 45, "the choice is saved and the rest is kept");
-        assert!(shown.contains("Archived conversations will be named slowly in the background."), "{shown}");
+        assert!(shown.contains("Archived sessions will be named slowly in the background."), "{shown}");
         assert_eq!(fake.calls(), 1, "not now: while platoon is open, and within their share");
         assert!(!fake.stdin(1).contains("archived topic"));
         // "background" spelled out works; anything else is skip.

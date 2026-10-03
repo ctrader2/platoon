@@ -631,8 +631,8 @@ fn editors_items() -> Vec<Item> {
     vec![
         editor(
             "Editor for notes and tickets (e)",
-            "Opens a project's notes, a ticket's text and the system prompts (e). It is the one starred in that list, and \
-             choosing another there changes it too.",
+            "Opens a project's notes, a ticket's text and the system prompts (e). It is the one starred in the list of \
+             editors e shows; choosing another there changes it too.",
             EditorFor::Text,
         ),
         editor(

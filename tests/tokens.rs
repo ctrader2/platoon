@@ -326,11 +326,13 @@ fn setup_asks_in_a_terminal_and_yes_saves_the_master_switch_the_features_and_the
         "Find a session by description",
         "your own Claude plan",
         "the prompts you typed",
-        "one line of Claude's last reply",
+        "one line of Claude's last reply for each session",
         "press s in platoon",
     ] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
+    // The word the rest of platoon uses: a session, never a "conversation".
+    assert!(!screen.to_lowercase().contains("conversation"), "{screen}");
     assert!(screen.contains("[✓]") || screen.contains("already done") || screen.contains("added"), "the checklist came first:\n{screen}");
     t.send(b"y\r");
     assert_eq!(t.exit_without_editor_question(), 0);

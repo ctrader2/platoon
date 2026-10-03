@@ -234,13 +234,13 @@ fn setup_env(lab: &Lab, fake: &AiFake) -> Vec<(&'static str, String)> {
 }
 
 #[test]
-fn setup_names_the_active_conversations_after_yes_and_offers_archived_ones_with_skip_as_the_default() {
+fn setup_names_the_active_sessions_after_yes_and_offers_archived_ones_with_skip_as_the_default() {
     let (lab, fake) = setup_lab("setup-yes");
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
     t.wait_for("Turn these features on?");
     t.send(b"y\r");
-    t.wait_for_flat("Smart names: 2 active conversations to name, about");
-    t.wait_for_flat("Naming conversations: 2 of 2");
+    t.wait_for_flat("Smart names: 2 active sessions to name, about");
+    t.wait_for_flat("Naming sessions: 2 of 2");
     assert!(t.flat().contains("(an estimate, made on this computer)"));
     t.wait_for_flat("Used about 450 tokens.");
     assert_eq!(t.exit_without_editor_question(), 0, "{}", t.text());
@@ -252,7 +252,7 @@ fn setup_names_the_active_conversations_after_yes_and_offers_archived_ones_with_
 }
 
 #[test]
-fn setup_asks_about_archived_conversations_and_background_is_remembered() {
+fn setup_asks_about_archived_sessions_and_background_is_remembered() {
     let (lab, fake) = setup_lab("setup-arch");
     lab.save("old1", "please review the old archived thing", 900);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
@@ -260,10 +260,10 @@ fn setup_asks_about_archived_conversations_and_background_is_remembered() {
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
     t.wait_for("Turn these features on?");
     t.send(b"y\r");
-    t.wait_for_flat("Archived: 1 archived conversation, about");
+    t.wait_for_flat("Archived: 1 archived session, about");
     t.wait_for_flat("[S]kip / [b]ackground:");
     t.send(b"b\r");
-    t.wait_for_flat("Archived conversations will be named slowly in the background.");
+    t.wait_for_flat("Archived sessions will be named slowly in the background.");
     assert_eq!(t.exit_without_editor_question(), 0);
     let s: serde_json::Value = serde_json::from_str(&fs::read_to_string(lab.dir("config/settings.json")).unwrap()).unwrap();
     assert_eq!(s["ai_archived"], "background");
@@ -288,7 +288,7 @@ fn ctrl_c_during_the_setup_scan_skips_it_kills_the_call_and_setup_still_succeeds
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
     t.wait_for("Turn these features on?");
     t.send(b"y\r");
-    t.wait_for_flat("Naming conversations: 0 of 2");
+    t.wait_for_flat("Naming sessions: 0 of 2");
     until("the fake to start", || fake.pids().len() == 2);
     t.send(b"\x03");
     t.wait_for_flat("Skipped. platoon will name the rest in the background while it is open.");
@@ -320,7 +320,7 @@ fn setup_again_after_a_yes_with_nothing_named_yet_runs_the_scan_and_then_stays_q
     let (lab, fake) = setup_lab("setup-again");
     lab.on(); // said yes earlier, nothing named
     let mut t = Term::spawn(&["setup"], &setup_env(&lab, &fake), &lab.base, 30, 110);
-    t.wait_for_flat("Smart names: 2 active conversations to name");
+    t.wait_for_flat("Smart names: 2 active sessions to name");
     assert_eq!(t.exit_without_editor_question(), 0);
     assert_eq!(fake.calls(), 1);
     // ...and a third run has nothing to say about it.

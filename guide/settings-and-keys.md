@@ -79,7 +79,7 @@ In two groups:
 
 | Group | Setting | What it does | Choices |
 | --- | --- | --- | --- |
-| Editing platoon's text | Editor for notes and tickets (e) | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in that list. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
+| Editing platoon's text | Editor for notes and tickets (e) | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in the list of editors `e` shows. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
 | Editing files | Editor for folders (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](sessions.md#opening-the-editor-v) found on this computer; the first one found until you choose |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
 

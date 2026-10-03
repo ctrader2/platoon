@@ -107,10 +107,11 @@ impl State {
         }
     }
 
-    /// The label in a pane too narrow for it: the first words that still say it ("Waiting", "To publish").
+    /// The label in a pane too narrow for it: short words that still say it ("Your turn", "To publish"). Not
+    /// "Waiting" for Waiting on you: beside "Waits #1" it would read as waiting for another ticket.
     pub fn short_label(&self) -> &str {
         match self {
-            State::Waiting => "Waiting",
+            State::Waiting => "Your turn",
             State::Ready => "To publish",
             s => s.label(),
         }
@@ -1607,6 +1608,18 @@ mod tests {
 
     fn add(t: &mut Tickets, title: &str) -> u32 {
         t.add(NewTicket { title: title.into(), ..Default::default() }).unwrap()
+    }
+
+    #[test]
+    fn the_short_words_never_read_like_waiting_for_another_ticket_and_are_no_wider_than_to_publish() {
+        use unicode_width::UnicodeWidthStr;
+        assert_eq!(State::Waiting.short_label(), "Your turn");
+        assert_eq!(State::Ready.short_label(), "To publish");
+        let all = [State::New, State::Working, State::Waiting, State::Ready, State::Done, State::Cancelled];
+        for s in &all {
+            assert!(!s.short_label().starts_with("Wait"), "{s:?}: beside \"Waits #1\" it reads as another ticket");
+            assert!(s.short_label().width() <= "To publish".width(), "{s:?}: the short column is sized by the widest");
+        }
     }
 
     #[test]

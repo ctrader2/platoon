@@ -174,6 +174,24 @@ fn the_editor_has_one_name_in_the_settings() {
     assert!(!names.iter().any(|n| n.contains("files") || n.contains("Code editor")), "{names:?}");
 }
 
+#[test]
+fn the_text_editor_setting_says_which_list_its_star_is_in() {
+    let w = World::new("c-ed-list");
+    let mut app = w.app();
+    app.notice = None;
+    ch(&mut app, 's');
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Tab);
+    }
+    assert_eq!(app.items()[0].name, "Editor for notes and tickets (e)");
+    for (w, h) in [(80u16, 24u16), (120, 40)] {
+        let mut term = sized(&mut app, w, h);
+        let f = flat(&draw(&mut term, &app));
+        assert!(f.contains("It is the one starred in the list of editors e shows; choosing another there changes it too."), "{w}x{h}: {f}");
+        assert!(!f.contains("that list"), "a list the screen names, not one it points at: {f}");
+    }
+}
+
 // ---- the Squads tab ------------------------------------------------------------------------------------------------
 
 fn on_the_squads_tab(name: &str) -> (World, App) {

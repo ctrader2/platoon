@@ -149,7 +149,7 @@ pub fn consent_text() -> String {
         t.push_str(&format!("  - {}: {}\n", f.label, f.description));
     }
     t.push_str(
-        "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each conversation (for a \
+        "\nIf you say yes, platoon sends Claude the prompts you typed plus one line of Claude's last reply for each session (for a \
          project's notes, more of that reply), in small batches, and it counts against your Claude plan. Nothing is sent if you say no.\n",
     );
     t.push_str(&format!(

@@ -33,7 +33,7 @@ session you run yourself, and platoon's daily limit does not cover them; the tok
 ## Turning them on
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send
-Claude the prompts you typed plus one line of Claude's last reply for each conversation (for a project's notes, more of that
+Claude the prompts you typed plus one line of Claude's last reply for each session (for a project's notes, more of that
 reply), in small batches, and that you can switch it off any time (`s`, then the Smart features tab, then the master
 switch). Without a terminal setup asks nothing, leaves everything off and prints one line saying how to turn them on.
 
@@ -42,11 +42,11 @@ Turning a switch off stops a call already in progress and throws its answer away
 ### The first pass, in `platoon setup`
 
 After a yes (and also when you said yes earlier and nothing has been named yet), setup shows a local estimate ("3 active
-conversations to name, about 2,100 tokens, roughly 1 call (an estimate, made on this computer)") and names your active
-conversations right there, newest first, with a one-line progress display. `Ctrl+C` skips it: platoon carries on in the
-background while it is open. Setup then asks about archived conversations, showing how many there are and what naming them
+sessions to name, about 2,100 tokens, roughly 1 call (an estimate, made on this computer)") and names your active
+sessions right there, newest first, with a one-line progress display. `Ctrl+C` skips it: platoon carries on in the
+background while it is open. Setup then asks about archived sessions, showing how many there are and what naming them
 would roughly cost, with "skip" as the default and "slowly in the background" as the other choice (the setting `Archived
-conversations`). Without a terminal there is no scan, just one line. None of this ever changes what setup does or its exit
+sessions`). Without a terminal there is no scan, just one line. None of this ever changes what setup does or its exit
 code, or stops platoon from starting.
 
 ## What is sent

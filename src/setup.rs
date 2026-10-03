@@ -39,7 +39,7 @@ pub const STEPS: [Step; 5] = [
     },
     Step {
         name: "Tickets skill",
-        what: "/to-tickets in Claude Code: turns a conversation into tickets",
+        what: "/to-tickets in Claude Code: turns a session into tickets",
         blocking: false,
         missing_note: "not set up yet: tickets are still made in platoon, but not with /to-tickets",
     },
