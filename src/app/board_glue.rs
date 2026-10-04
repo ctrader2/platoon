@@ -329,7 +329,8 @@ impl App {
     /// board keeps its own.
     pub(super) fn sync_board_store(&mut self) {
         self.reread_tickets();
-        if self.tk.open.is_some() {
+        // A task's screen, or a popup about a task (its number is the store's project's), keeps the store it has.
+        if self.tk.open.is_some() || !matches!(self.mode, Mode::List) {
             if let Some(s) = self.tk.store.as_mut() {
                 s.reload_if_changed();
             }

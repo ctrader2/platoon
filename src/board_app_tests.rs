@@ -610,3 +610,16 @@ fn an_empty_board_says_what_to_press_and_enter_on_a_task_opens_it_beside_its_ses
     key(&mut app, KeyCode::Char('q'));
     assert!(app.quit);
 }
+
+#[test]
+fn the_help_on_the_board_lists_every_key_it_has_once_whatever_row_is_picked() {
+    let (_w, mut app, web, _docs) = board_world("board-help");
+    for n in [7, 2, 5] {
+        pick(&mut app, &web, n);
+        let here: Vec<String> =
+            ui::help_for_test(&app).into_iter().filter(|(s, k, _)| s == "On this screen" && !k.is_empty()).map(|(_, k, _)| k).collect();
+        for k in ["y", "enter", "h", "n", "m", "S", "c", "/", "s"] {
+            assert_eq!(here.iter().filter(|x| *x == k).count(), 1, "#{n}: {k} once: {here:?}");
+        }
+    }
+}

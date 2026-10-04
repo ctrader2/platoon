@@ -581,7 +581,6 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
             ("S", "hand to a squad", None),
             ("c", "cancel", None),
             ("m", "move it to another project (or to no project)", None),
-            ("n", "new task", None),
             ("e", "edit its text", None),
             ("p", "let it publish", None),
         ]);

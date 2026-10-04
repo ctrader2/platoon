@@ -868,8 +868,10 @@ impl App {
         let project_name = self.projects.get(project).map(|p| p.name.clone()).unwrap_or_default();
         let first = squads::first_message(&t, &project_name, &body, place, &work.to_string_lossy());
         let where_said = match self.projects.get(project) {
+            // On the Tasks tab it is right there.
+            _ if self.board_showing() => String::new(),
             Some(p) => format!(" Open it from {}'s tasks.", p.name),
-            None => String::new(),
+            None => " Open it from the Tasks tab.".to_string(),
         };
         // Beside the ticket only if the user is still on that project's screen and not in another session, and not
         // for a ticket that waited in the line (it starts by itself, while the user may be doing anything).
