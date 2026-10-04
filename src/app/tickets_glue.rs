@@ -217,6 +217,12 @@ impl App {
     /// Keys of the Tickets pane (the ones it shares with the other panes are handled before this).
     pub(super) fn tickets_pane_key(&mut self, key: KeyEvent) {
         match key.code {
+            // On a plan to approve, `n` asks for a change to it (beside `y`, the go-ahead); elsewhere it is a new task.
+            KeyCode::Char('n') if self.selected_ticket().is_some_and(|t| t.plan_ready) => {
+                if let Some(n) = self.selected_ticket().map(|t| t.number) {
+                    self.ask_plan_change(n);
+                }
+            }
             KeyCode::Char('n') => self.start_new_ticket(),
             KeyCode::Enter => match self.ticket_rows().get(self.ticket_selected()) {
                 Some(TRow::Divider(_)) => self.tk.unfolded = !self.tk.unfolded,
@@ -262,6 +268,7 @@ impl App {
             KeyCode::Char('p') => self.let_it_publish(number),
             KeyCode::Char('w') => self.ask_remove_worktree(number),
             KeyCode::Char('y') => self.answer_squad(number),
+            KeyCode::Char('n') => self.ask_plan_change(number),
             KeyCode::Char('h') => self.toggle_aside(number),
             KeyCode::Char('m') => self.ask_move_task(number),
             _ => {}

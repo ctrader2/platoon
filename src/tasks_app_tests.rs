@@ -174,6 +174,8 @@ fn the_hand_over_popup_lists_the_squads_then_on_its_own_then_one_line_per_folder
     key(&mut app, KeyCode::Char(' '));
     assert!(flat(&draw(&mut term, &app)).contains("On its own: works and publishes"));
     key(&mut app, KeyCode::Char(' '));
+    assert!(flat(&draw(&mut term, &app)).contains("On its own: plans first, then waits for your yes"), "the third level");
+    key(&mut app, KeyCode::Char(' '));
     assert!(flat(&draw(&mut term, &app)).contains("On its own: asks before anything others can see"), "round again");
     // Down to shop: space makes it a new branch in the checkout (nothing else works there), and again a copy.
     key(&mut app, KeyCode::Down);

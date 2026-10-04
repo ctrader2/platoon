@@ -21,9 +21,10 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
   with one key. → [Projects](guide/projects.md)
 - **Tasks and squads**: write down a piece of work as a task (or let Claude turn a conversation into tasks), then
   hand it to a squad: a lead agent and its team, working in a copy of your folder (a git worktree) or on a new branch of
-  your checkout, on the branch you say the work lands on. They ask you before a push or a pull request, unless you let
-  them publish on their own. The Tasks tab shows every task across your projects, what each squad asks you (answer it in
-  place), and what it has done. → [Tasks and squads](guide/tasks-and-squads.md)
+  your checkout, on the branch you say the work lands on. They can show you their plan first and wait for your yes, and
+  they ask you before a push or a pull request unless you let them publish on their own. The Tasks tab shows every task
+  across your projects, what each squad asks you (answer it in place), and what it has done.
+  → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
 - **52 themes**, dark and light, or your own. → [Themes](guide/themes.md)

@@ -63,6 +63,8 @@ pub enum Need {
     Stuck,
     /// It is waiting at Claude's permission prompt for a command.
     Permission,
+    /// Its plan is ready (a task that plans first): the user's yes, or a change.
+    Plan,
 }
 
 impl Need {
@@ -73,6 +75,7 @@ impl Need {
             Need::GoAhead => "a go-ahead",
             Need::Stuck => "stuck",
             Need::Permission => "your OK on a command",
+            Need::Plan => "a plan to approve",
         }
     }
 
@@ -83,6 +86,7 @@ impl Need {
             Need::GoAhead => "The squad wants to publish",
             Need::Stuck => "The squad is stuck",
             Need::Permission => "The squad waits for your OK",
+            Need::Plan => "The plan",
         }
     }
 }
@@ -95,6 +99,8 @@ pub fn need_of(t: &Ticket) -> Option<Need> {
     let r = t.reason.as_str();
     Some(if t.permission {
         Need::Permission
+    } else if t.plan_ready {
+        Need::Plan
     } else if t.publish_wanted {
         Need::GoAhead
     } else if r.starts_with("Stuck") || r.starts_with("The squad is stuck") || r == crate::squads::NO_LINE {
@@ -110,6 +116,9 @@ pub fn squad_words(t: &Ticket) -> String {
     let r = t.reason.trim();
     if t.permission || r == tickets::PERMISSION_REASON {
         return "waits for your OK on a command".into();
+    }
+    if t.plan_ready {
+        return "wrote its plan: y goes ahead, n changes it".into();
     }
     for (lead, says) in [("Asks: ", "asks: "), ("Stuck: ", "is stuck: "), ("Wants to publish: ", "wants to publish: ")] {
         if let Some(rest) = r.strip_prefix(lead) {
@@ -711,6 +720,36 @@ mod tests {
         let words: Vec<&str> = [Need::Question, Need::GoAhead, Need::Stuck, Need::Permission].iter().map(|n| n.words()).collect();
         assert_eq!(words, ["a question", "a go-ahead", "stuck", "your OK on a command"]);
         assert_eq!(need_of(&task(2, "y", State::Working, NOW)), None);
+    }
+
+    #[test]
+    fn a_plan_ready_reads_as_a_plan_to_approve_with_the_keys_that_answer_it() {
+        let mut t = led(task(5, "Order emails in plain text", State::Waiting, NOW - 300), "coding", "L5");
+        t.reason = crate::squads::PLAN_READY.into();
+        t.plan_ready = true;
+        assert_eq!(need_of(&t), Some(Need::Plan));
+        assert_eq!((Need::Plan.words(), Need::Plan.heading()), ("a plan to approve", "The plan"));
+        let all = vec![t];
+        let groups = board(&[In { project: "pweb", archived: false, task: &all[0], siblings: &all }], &Known::default(), false, "");
+        assert_eq!(
+            shape(&groups),
+            [(
+                "Needs you",
+                vec![(
+                    "pweb".to_string(),
+                    5,
+                    "a plan to approve".to_string(),
+                    "Coding squad wrote its plan: y goes ahead, n changes it".to_string()
+                )]
+            )]
+        );
+        assert_eq!(groups[0].rows[0].need, Some(Need::Plan));
+        assert_eq!(groups[0].rows[0].right_tone, Tone::Warn);
+        assert_eq!(need_count(&all), 1, "it needs the user");
+        // A plan mark with a permission prompt over it: the prompt is what the user must answer first.
+        let mut p = all[0].clone();
+        p.permission = true;
+        assert_eq!(need_of(&p), Some(Need::Permission));
     }
 
     #[test]

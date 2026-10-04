@@ -230,6 +230,19 @@ pub const PUBLISH_RULE: &str = "\
 request, publishing a package, a document or a page need no go-ahead. Do them when the task's text asks for them, \
 never otherwise, and say in your result what you published and where.";
 
+/// The rule for a task that plans first (`Autonomy::PlanFirst`), after the one about asking before anything others can
+/// see (which still holds). Only that level's leaders are told about `plan.md` and `SQUAD: plan ready`.
+pub const PLAN_RULE: &str = "\
+- The user wants to see the plan before anything is changed. First get a plan and nothing else: hand the task to the \
+first step of the workflow for it (when that step does the work itself rather than plan it, write the plan yourself \
+from what you have read). The plan is short: what will change and where, in a few steps; the risks; and how each \
+acceptance check will be shown. Put the plan itself, and nothing else, just above your last line, and end that turn \
+with the line `SQUAD: plan ready`: platoon keeps the plan as `plan.md` in the task's own folder and shows it to the \
+user. No member changes anything before the user answers.
+- When the user answers \"Go ahead with the plan.\", run the rest of the workflow to the end without stopping for the \
+plan again (the rule about anything other people can see still holds). When the answer is \"Change the plan: ...\", \
+have the plan made again with that change and end the turn with `SQUAD: plan ready` again.";
+
 /// The rules platoon keeps in every leader's prompt, whatever the squad or the task says (after the ones about
 /// where it works and publishing, `leader_fixed`).
 pub const LEADER_RULES: &str = "\
@@ -269,6 +282,10 @@ pub fn leader_fixed(place: Place, terms: &Terms) -> String {
     }
     out.push_str(if terms.autonomy.publishes() { PUBLISH_RULE } else { ASK_RULE });
     out.push('\n');
+    if terms.autonomy.plans_first() {
+        out.push_str(PLAN_RULE);
+        out.push('\n');
+    }
     out.push_str(LEADER_RULES.trim());
     out
 }
@@ -751,6 +768,9 @@ pub fn how_far(place: Place) -> String {
     }
 }
 
+/// What the first message says about the plan, for a task that plans first (the rules say the rest).
+pub const PLAN_FIRST_MESSAGE: &str = "The user wants to see the plan before anything is changed: get the plan, put it just above your last line and end the turn with `SQUAD: plan ready`. platoon keeps it as plan.md in the task's own folder. Wait for the user's answer before any member changes anything.";
+
 /// The leader's first message: the task (number, title, body), how far to take it, where to work (`work`: the
 /// task's own folder, kept by platoon), with each git folder's branch and what it lands on. The project's notes are
 /// not in it: they arrive separately (the SessionStart hook).
@@ -765,6 +785,10 @@ pub fn first_message(t: &Ticket, project: &str, body: &str, place: Place, work: 
     out.push_str(if body.is_empty() { "(The task has no description beyond its title.)" } else { body });
     out.push_str("\n\n## How far to take it\n\n");
     out.push_str(&how_far(place));
+    if t.autonomy().plans_first() {
+        out.push_str("\n\n## First, the plan\n\n");
+        out.push_str(PLAN_FIRST_MESSAGE);
+    }
     out.push_str("\n\n## Where to work\n\n");
     match place {
         Place::Folders { .. } => {
@@ -819,6 +843,8 @@ pub enum EndLine {
     Question(String),
     Blocked(String),
     ReadyToPublish(String),
+    /// The plan is above the line, for the user's yes (a task that plans first).
+    PlanReady,
     /// No `SQUAD:` line as the last line.
     Missing,
 }
@@ -848,6 +874,9 @@ pub fn parse_end_line(message: &str) -> EndLine {
     if let Some(r) = reason_after("ready to publish") {
         return EndLine::ReadyToPublish(r);
     }
+    if bare == "plan ready" || reason_after("plan ready").is_some() {
+        return EndLine::PlanReady;
+    }
     if let Some(r) = reason_after("question") {
         return EndLine::Question(r);
     }
@@ -870,13 +899,27 @@ pub struct StopOutcome {
     pub reason: String,
     /// Needs you because the squad wants to publish (`p` lets it).
     pub publish_wanted: bool,
+    /// Needs you because the squad's plan is ready (`y` goes ahead, `n` asks for a change).
+    pub plan_ready: bool,
     /// On Done: the leader's result (its message without the last line).
     pub result: Option<String>,
+    /// With the plan ready: the plan (its message without the last line), kept as `plan.md`.
+    pub plan: Option<String>,
 }
 
 /// The longest reason kept, in characters (one line on the ticket's screen).
 pub const REASON_MAX: usize = 300;
 pub const NO_LINE: &str = "The squad stopped without saying why.";
+/// What a task whose plan is ready says.
+pub const PLAN_READY: &str = "The plan is ready";
+
+/// A message without its last line (the `SQUAD:` line), trimmed: the result above `done`, the plan above `plan ready`.
+fn above_last_line(message: &str) -> Option<String> {
+    let mut lines: Vec<&str> = message.trim_end().lines().collect();
+    lines.pop();
+    let text = lines.join("\n").trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
 
 /// The squad-stop decision table. `members_running`: Claude Code said background tasks are still running.
 pub fn decide_stop(members_running: bool, message: &str) -> StopOutcome {
@@ -885,7 +928,9 @@ pub fn decide_stop(members_running: bool, message: &str) -> StopOutcome {
         state,
         reason: tickets::clean(&reason, REASON_MAX),
         publish_wanted: false,
+        plan_ready: false,
         result: None,
+        plan: None,
     };
     if members_running {
         return out(State::Working, String::new());
@@ -893,11 +938,9 @@ pub fn decide_stop(members_running: bool, message: &str) -> StopOutcome {
     let or = |r: &str, fallback: &str, lead: &str| if r.is_empty() { fallback.to_string() } else { format!("{lead}{r}") };
     match line {
         EndLine::Working => out(State::Working, String::new()),
-        EndLine::Done => {
-            let mut lines: Vec<&str> = message.trim_end().lines().collect();
-            lines.pop();
-            let result = lines.join("\n").trim().to_string();
-            StopOutcome { state: State::Done, reason: String::new(), publish_wanted: false, result: (!result.is_empty()).then_some(result) }
+        EndLine::Done => StopOutcome { result: above_last_line(message), ..out(State::Done, String::new()) },
+        EndLine::PlanReady => {
+            StopOutcome { plan_ready: true, plan: above_last_line(message), ..out(State::Waiting, PLAN_READY.to_string()) }
         }
         EndLine::ReadyToPublish(r) => StopOutcome {
             publish_wanted: true,
@@ -1583,6 +1626,8 @@ pub fn squad_stop(input: &str, config: &Path) -> Option<(String, u32, State)> {
     let o = decide_stop(members_running(v.get("background_tasks")), message);
     if o.publish_wanted {
         store.squad_wants_to_publish(number, &o.reason).ok()?;
+    } else if o.plan_ready {
+        store.squad_plan_ready(number, &o.reason, o.plan.as_deref()).ok()?;
     } else {
         store.squad_says(number, &o.state, &o.reason, o.result.as_deref()).ok()?;
     }
@@ -2155,6 +2200,7 @@ mod tests {
             from: None,
             aside: None,
             publish_wanted: false,
+            plan_ready: false,
             autonomy: None,
             works_on: vec![],
             old_number: None,
@@ -2469,6 +2515,10 @@ mod tests {
             EndLine::ReadyToPublish("push task/7 and open a merge request".into())
         );
         assert_eq!(parse_end_line("SQUAD: Ready To Publish – the page"), EndLine::ReadyToPublish("the page".into()));
+        assert_eq!(parse_end_line("The plan.\nSQUAD: plan ready"), EndLine::PlanReady);
+        assert_eq!(parse_end_line("**SQUAD: Plan ready.**"), EndLine::PlanReady);
+        assert_eq!(parse_end_line("SQUAD: plan ready - see above"), EndLine::PlanReady);
+        assert_eq!(parse_end_line("SQUAD: plan readyish"), EndLine::Missing);
     }
 
     #[test]
@@ -2489,7 +2539,14 @@ mod tests {
         for m in ["SQUAD: done", "", "SQUAD: question - x", "The builder is still running."] {
             assert_eq!(
                 w(true, m),
-                StopOutcome { state: State::Working, reason: String::new(), publish_wanted: false, result: None },
+                StopOutcome {
+                    state: State::Working,
+                    reason: String::new(),
+                    publish_wanted: false,
+                    plan_ready: false,
+                    result: None,
+                    plan: None
+                },
                 "{m}"
             );
         }
@@ -2501,9 +2558,27 @@ mod tests {
                 state: State::Done,
                 reason: String::new(),
                 publish_wanted: false,
-                result: Some("Added the page on task/7.\nTests pass.".into())
+                plan_ready: false,
+                result: Some("Added the page on task/7.\nTests pass.".into()),
+                plan: None
             }
         );
+        // The plan: Needs you with "The plan is ready", the plan itself (everything above the line) kept for plan.md.
+        let plan = w(false, "1. Add a text part beside the HTML one.\n2. Test it.\n\nRisk: the date format.\nSQUAD: plan ready");
+        assert_eq!(
+            plan,
+            StopOutcome {
+                state: State::Waiting,
+                reason: PLAN_READY.into(),
+                publish_wanted: false,
+                plan_ready: true,
+                result: None,
+                plan: Some("1. Add a text part beside the HTML one.\n2. Test it.\n\nRisk: the date format.".into())
+            }
+        );
+        assert_eq!(PLAN_READY, "The plan is ready");
+        assert_eq!(w(false, "SQUAD: plan ready").plan, None, "nothing above the line: plan.md is left as the squad wrote it");
+        assert!(!w(true, "1. x\nSQUAD: plan ready").plan_ready, "members still running: Working");
         assert_eq!(w(false, "SQUAD: done").result, None, "nothing above the line: no result");
         let ready = w(false, "Committed.\nSQUAD: ready to publish - push task/7");
         assert_eq!((ready.state, ready.reason.as_str(), ready.publish_wanted), (State::Waiting, "Wants to publish: push task/7", true));
@@ -2657,6 +2732,75 @@ mod tests {
         assert_eq!(squad_stop(&stop_input(&s, "SQUAD: done", json!([])), &c), None);
         let t = Tickets::open(&c, "p1");
         assert!(t.get(n).unwrap().state == State::Working && t.get(n).unwrap().queued.is_some());
+    }
+
+    #[test]
+    fn a_plan_stop_makes_the_task_need_you_with_its_plan_in_plan_md_and_the_answer_makes_it_working() {
+        let c = dir("plan-stop");
+        let (s, n) = with_leader(&c, State::Working);
+        Tickets::open(&c, "p1").set_terms(n, &tickets::Autonomy::PlanFirst, &[]).unwrap();
+        let msg = "## Plan\n\n1. Add a text part.\n2. Test it.\n\nSQUAD: plan ready";
+        assert_eq!(squad_stop(&stop_input(&s, msg, json!([])), &c).map(|x| x.2), Some(State::Waiting));
+        let t = Tickets::open(&c, "p1");
+        let x = t.get(n).unwrap();
+        assert_eq!((&x.state, x.reason.as_str(), x.plan_ready, x.publish_wanted), (&State::Waiting, PLAN_READY, true, false));
+        assert_eq!(t.plan(n).as_deref(), Some("## Plan\n\n1. Add a text part.\n2. Test it.\n"));
+        assert!(c.join("projects/p1/tasks/01-work/plan.md").is_file(), "in the task's own folder");
+        let saved: Value = serde_json::from_str(&fs::read_to_string(c.join("projects/p1/tasks.json")).unwrap()).unwrap();
+        assert_eq!(saved["tickets"][0]["plan_ready"], json!(true));
+        // A bare line keeps the plan the squad wrote; the mark is set again.
+        squad_stop(&stop_input(&s, "SQUAD: plan ready", json!([])), &c);
+        assert!(Tickets::open(&c, "p1").plan(n).unwrap().contains("Add a text part"));
+        // The user's answer (y or n in platoon): Working, the mark gone, the plan kept.
+        Tickets::open(&c, "p1").plan_answered(n).unwrap();
+        let t = Tickets::open(&c, "p1");
+        let x = t.get(n).unwrap();
+        assert_eq!((&x.state, x.reason.as_str(), x.plan_ready), (&State::Working, "", false));
+        assert!(t.plan(n).is_some(), "the plan stays with the task");
+        assert!(Tickets::open(&c, "p1").plan_answered(n).is_err(), "nothing waits any more");
+        // A message typed in the squad's session (the prompt hook) clears it too; so does the next turn's end.
+        squad_stop(&stop_input(&s, "Plan v2.\nSQUAD: plan ready", json!([])), &c);
+        assert!(Tickets::open(&c, "p1").user_typed(n).unwrap());
+        assert!(!Tickets::open(&c, "p1").get(n).unwrap().plan_ready);
+        squad_stop(&stop_input(&s, "Plan v3.\nSQUAD: plan ready", json!([])), &c);
+        squad_stop(&stop_input(&s, "SQUAD: question - Which page?", json!([])), &c);
+        let x = Tickets::open(&c, "p1").get(n).cloned().unwrap();
+        assert_eq!((x.reason.as_str(), x.plan_ready), ("Asks: Which page?", false));
+        // Going ahead under plan first never opens the publish gate.
+        let bash = json!({"session_id": s, "tool_name": "Bash", "tool_input": {"command": "git push"}, "hook_event_name": "PreToolUse"});
+        Tickets::open(&c, "p1").squad_says(n, &State::Working, "", None).unwrap();
+        assert_eq!(squad_gate(&bash.to_string(), &c), Some(REFUSAL));
+    }
+
+    #[test]
+    fn only_a_task_that_plans_first_is_told_about_plan_md_and_the_plan_line() {
+        let terms = |a: tickets::Autonomy| Terms { autonomy: a, ..Terms::default() };
+        let plan = leader_fixed(Place::WORKTREE, &terms(tickets::Autonomy::PlanFirst));
+        assert!(plan.contains("`plan.md` in the task's own folder") && plan.contains("`SQUAD: plan ready`"), "{plan}");
+        assert!(plan.contains(tickets::PLAN_FILE));
+        for want in [
+            "what will change and where",
+            "the risks",
+            "how each acceptance check will be shown",
+            "Go ahead with the plan.",
+            "Change the plan: ",
+        ] {
+            assert!(plan.contains(want), "{want:?}");
+        }
+        // The ask level's rule still holds under plan first, before the plan's, and the rules for every squad come last.
+        assert!(plan.contains(ASK_RULE.trim()) && !plan.contains(PUBLISH_RULE.trim()));
+        assert!(plan.find(ASK_RULE.trim()) < plan.find(PLAN_RULE.trim()) && plan.ends_with(LEADER_RULES.trim()));
+        for other in [tickets::Autonomy::Ask, tickets::Autonomy::Publish, tickets::Autonomy::Other("later".into())] {
+            let fixed = leader_fixed(Place::WORKTREE, &terms(other.clone()));
+            assert!(!fixed.contains("plan.md") && !fixed.contains("plan ready"), "{other:?}: {fixed}");
+        }
+        // The first message says it too, only then.
+        let mut t = ticket(&["/w/shop"], &[]);
+        let ask = first_message(&t, "Shop", "Do it.", Place::WORKTREE, "/w/work");
+        assert!(!ask.contains("plan.md") && !ask.contains("plan ready"), "{ask}");
+        t.autonomy = Some(tickets::Autonomy::PlanFirst);
+        let first = first_message(&t, "Shop", "Do it.", Place::WORKTREE, "/w/work");
+        assert!(first.contains("## First, the plan") && first.contains("SQUAD: plan ready") && first.contains("plan.md"), "{first}");
     }
 
     fn prompt_input(session: &str) -> String {

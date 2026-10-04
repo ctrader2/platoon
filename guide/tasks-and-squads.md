@@ -12,8 +12,8 @@ the `/to-tickets` skill keeps its name.)
 The second tab, `2` **Tasks**, lists every task in play, in every project and outside any project, grouped by what it
 needs from you, each group with how many it has:
 
-- **Needs you**: its squad stopped for you. It has a question, it is stuck, it is waiting for your OK on a command, or it
-  wants to publish something. The one that has waited longest comes first.
+- **Needs you**: its squad stopped for you. It has a question, its plan is ready for your yes, it is stuck, it is waiting
+  for your OK on a command, or it wants to publish something. The one that has waited longest comes first.
 - **Working**: a squad is at it (or it is being handed to one, or waits for a free one).
 - **Can start**: nobody has it yet and nothing it waits for is left; also the ones that **Need a folder**.
 - **Waits for**: it waits for another task to be Done.
@@ -26,16 +26,18 @@ are left out.
 
 Each task takes two lines. The first says what it is: its project's badge (none for a task in no project), its number in
 its project (so `#5` can show twice, with different badges), its title, and at the right the word for it: what it needs
-(**a question**, **a go-ahead**, **stuck**, **your OK on a command**), how long since its squad last wrote, **Needs a
-folder**, or when it finished. The second, quieter, says who has it and what it needs from you: the squad's own words (its
-question, what it wants to publish), the squad and its steps as marks (`planner ✓  builder ✓  reviewer ●  verifier ·`:
+(**a question**, **a plan to approve**, **a go-ahead**, **stuck**, **your OK on a command**), how long since its squad last
+wrote, **Needs a folder**, or when it finished. The second, quieter, says who has it and what it needs from you: the squad's
+own words (its question, what it wants to publish, "wrote its plan: y goes ahead, n changes it"), the squad and its steps as
+marks (`planner ✓  builder ✓  reviewer ●  verifier ·`:
 done, at work now, not yet; `✗` for a run that stopped without its result) and the tokens it used, `New · S hands it to a
 squad`, which tasks it waits for, or, once finished, the squad, whether its result is on the task, the branch its work is on
 and the tokens. A line too long for the screen ends with "…" after a whole word.
 
 On a terminal 100 columns wide or more, the picked task's details are beside the list: its title, where it is, which squad
-has it and for how long; what the squad asks (or wants to publish, or why it is stuck) with the keys that answer; **What it
-has done**, a timeline with a line per run of a member (its agent, a bar for when it ran within the squad's time so far, how
+has it and for how long; what the squad asks (or wants to publish, or why it is stuck) with the keys that answer, or **The
+plan** when its plan waits for your yes (drawn from its `plan.md`, as much as fits; the task's own screen shows all of it);
+**What it has done**, a timeline with a line per run of a member (its agent, a bar for when it ran within the squad's time so far, how
 long it took, and **done**, **now** or **stopped**), then the steps of the squad's workflow that haven't run yet; and **What
 ran**: the last eight things that ran for it, each with its time and grouped by run: the commands the squad ran in the shell
 (the leader's and its members', such as git, the tests, a build) and platoon's own steps (the copy of a folder it made and
@@ -47,10 +49,10 @@ With nothing in play, the tab says: "Nothing in play. Press n to write a task, o
 
 | Key (Tasks tab) | Does |
 | --- | --- |
-| `y` | answer the squad. On a question (or a squad that is stuck): a one-line box, **Answer the Docs squad on #6**, with what it asks above it. `enter` types your words into the squad's session as your reply, as if you had written them there (the task goes back to Working once the session takes them, as described in [Writing to the squad](#writing-to-the-squad)); `ctrl+o` opens the session instead; `esc` cancels. On a task that wants to publish, `y` is the go-ahead (what `p` does). On one waiting for your OK on a command, it opens the squad's session, where that question is. When the squad's session isn't running, `y` continues it, beside the task, and says so: type your answer there |
+| `y` | answer the squad. On a question (or a squad that is stuck): a one-line box, **Answer the Docs squad on #6**, with what it asks above it. `enter` types your words into the squad's session as your reply, as if you had written them there (the task goes back to Working once the session takes them, as described in [Writing to the squad](#writing-to-the-squad)); `ctrl+o` opens the session instead; `esc` cancels. On a plan to approve, `y` types "Go ahead with the plan." into the squad's session and the task is Working again (see [The plan step](#the-plan-step)). On a task that wants to publish, `y` is the go-ahead (what `p` does). On one waiting for your OK on a command, it opens the squad's session, where that question is. When the squad's session isn't running, `y` continues it, beside the task, and says so: type your answer there |
 | `enter` | open the task, beside its squad's session when that runs (on the fold under Finished today: show or hide the rest) |
 | `h` | later: put a task that needs you aside, under **Later**, until its squad says something new (then it is back under Needs you). `h` on one under Later brings it back now |
-| `n` | a new task: first which project it is in, or **No project**, then its title; then its text opens in your editor. In a project it works in the folder of the project's most recently used session, as the [pane's](#the-tasks-pane) `n` does. A task in no project needs a folder to work in: the folder picker opens before it is written (leave it, and nothing is made) |
+| `n` | a new task: first which project it is in, or **No project**, then its title; then its text opens in your editor. In a project it works in the folder of the project's most recently used session, as the [pane's](#the-tasks-pane) `n` does. A task in no project needs a folder to work in: the folder picker opens before it is written (leave it, and nothing is made). On a plan to approve, `n` is the change instead: a one-line box, **Change the Coding squad's plan for #5**; `enter` types "Change the plan: " and your words into the squad's session, and the squad plans again |
 | `m` | move it to another project, or out of any (**No project**). It gets that project's next number and keeps the one it had for its branch (`task/5` stays `task/5`); its text, its result, its own folder and what its squads were started with go with it; its copies of folders and its branch stay as they are; what it waited for is dropped (those were the other project's tasks). Not while its squad's session is running, or while it waits for a free squad: the line says why |
 | `S` | hand it to a squad (see [The hand-over](#the-hand-over)) |
 | `c` | cancel it, after asking |
@@ -80,7 +82,7 @@ whole word. When the pane is too short for them all it says how many more lines 
 | --- | --- |
 | `n` | new task: type its title, then the text opens in your editor (the same list of editors as the [notes](projects.md#editing-the-notes)). An archived project takes no new tasks |
 | `enter` | open the task (on the Done and cancelled line: show or hide them) |
-| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead), put it aside for later, move it to another project |
+| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead, or go ahead with its plan), put it aside for later, move it to another project. On a plan to approve, `n` is the change to it, as on the Tasks tab |
 | `c` `e` `r` `f` `b` `S` `p` `w` | as on the task's own screen, for the task picked |
 
 ### A new task
@@ -107,9 +109,11 @@ in with [`/to-tickets`](#making-tasks-from-a-conversation): its name as the Sess
 what the squad said when it stopped, the squad that has it (**Squad** Coding squad), how much the squad does **on its
 own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
 lands on main", or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it
-waits for, and the tokens its squads used. Under a line: its squad's result (when it has one), **What the squad has done**
-(the same timeline as beside the Tasks tab, for each squad it has had), **What ran** (all of it, grouped by run), and then
-its text, drawn the way the notes are; `↑` `↓` scroll them (on a short terminal the tokens scroll with them).
+waits for, and the tokens its squads used. Under a line: its squad's result (when it has one), **The plan** (when its
+squad wrote one: a task that plans first; with `y go ahead   n change the plan` under it while it waits for you, and kept
+there after the go-ahead), **What the squad has done** (the same timeline as beside the Tasks tab, for each squad it has
+had), **What ran** (all of it, grouped by run), and then its text, drawn the way the notes are; `↑` `↓` scroll them (on a
+short terminal the tokens scroll with them).
 
 | Key (a task's screen) | Does |
 | --- | --- |
@@ -121,7 +125,8 @@ its text, drawn the way the notes are; `↑` `↓` scroll them (on a short termi
 | `b` | what it waits for: tick the project's other tasks (`enter` or `space`). A task can't wait for itself, and a wait that would go round in a circle is refused |
 | `S` (shift+s) | hand it to a squad (see [below](#handing-a-task-to-a-squad)). `a` does nothing on a task: it says `S` does this |
 | `p` | let its squad publish, when it needs you for that |
-| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead), put it aside for later, move it |
+| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead, or go ahead with its plan), put it aside for later, move it |
+| `n` | when its plan waits for you: say what should change in it (see [The plan step](#the-plan-step)) |
 | `w` | remove its copy of the folder anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a task a squad has: its squad's session, beside the task. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
 | `o` | the session the task was made from (the **From** line), also when `enter` is the squad's |
@@ -136,9 +141,9 @@ A task is in one of five states, each said in plain words:
   task's own folder), and one that still waits reads **Waits for #N**.
 - **Working**: a squad has it (the commander is checking, its copy of the folder is being made, it is in the line for a
   free squad, or its agents are at work).
-- **Needs you**: the squad stopped for you: it has a question, it is stuck, it is waiting for your OK on a command, or it
-  wants to publish something (push, open a merge request, a page), which `p` lets it do. The reason is on the task's
-  screen.
+- **Needs you**: the squad stopped for you: it has a question, its plan is ready for your yes (a task that plans first),
+  it is stuck, it is waiting for your OK on a command, or it wants to publish something (push, open a merge request, a
+  page), which `p` lets it do. The reason is on the task's screen.
 - **Done**, and **Cancelled** (listed together under Done and cancelled).
 
 You never set a state by hand except **Cancelled** (`c`): handing a task to a squad makes it Working, the squad sets the
@@ -187,8 +192,9 @@ a folder that doesn't exist is refused with one plain line and nothing is made. 
 the text (`--how-far` is refused with a line that says so). A running platoon shows the new task within a second.
 
 `list --json` gives each task's `number`, `title`, `state` (the words the screen shows), `folders`, `blocked_by`,
-`can_start`, `publish_wanted`, `autonomy` (`ask` or `publish`), `works_on` when it has been set, `reason` when the squad
-left one, `from` when it came from a session, and `file`. `project` and `project_id` are `null` for a task in no project.
+`can_start`, `publish_wanted`, `autonomy` (`plan`, `ask` or `publish`), `plan_ready` when its plan waits for you,
+`works_on` when it has been set, `reason` when the squad left one, `from` when it came from a session, and `file`.
+`project` and `project_id` are `null` for a task in no project.
 
 ## Making tasks from a conversation
 
@@ -260,11 +266,13 @@ squad** opens, with:
 
 - **The squads**, by name, with what the picked one can do under it. A squad that has something to fix on the Squads
   tab says so, and can't be picked.
-- **On its own**: how much the squad does without asking. `space` on the line switches between **asks before anything
-  others can see** (the usual: a push, a merge request or a page waits for your `p`) and **works and publishes** (the
-  squad pushes, opens and merges merge requests and publishes when the task's text asks for it, and says what it
-  published in its result). It is asked at every hand-over and kept on the task; a project's default for new tasks can be
-  set as `autonomy_default` (`ask` or `publish`) on the project in `projects.json`.
+- **On its own**: how much the squad does without asking. `space` on the line goes round three levels: **plans first,
+  then waits for your yes** (the squad makes a plan and stops with it before anything is changed; see
+  [The plan step](#the-plan-step); after your yes it works to the end and still asks before anything others can see),
+  **asks before anything others can see** (the usual: a push, a merge request or a page waits for your `p`) and **works
+  and publishes** (the squad pushes, opens and merges merge requests and publishes when the task's text asks for it, and
+  says what it published in its result). It is asked at every hand-over and kept on the task; the popup starts from the
+  project's default (`autonomy_default`, `plan`, `ask` or `publish`, on the project in `projects.json`).
 - **One line per folder.** A folder in git says how the squad works there and which branch the work lands on: "shop: a
   copy on task/5, lands on main". `space` switches between **a copy** (a git worktree beside the repository, the usual)
   and **a new branch in your checkout** (`git switch -c task/5 main` run in your own folder). The branch is offered only
@@ -357,9 +365,9 @@ Tasks tab every task on it.
 ### How the task's state follows the squad
 
 At the end of each of its turns the leader says in one last line whether it is done, still working (members running), has
-a question, is stuck, or wants to publish, and platoon sets **Working**, **Done** or **Needs you** (with its question, why
-it is stuck, or what it wants to publish; a turn that ends without that line counts as "the squad stopped without saying
-why").
+a question, is stuck, wants to publish, or (a task that plans first) has its plan ready, and platoon sets **Working**,
+**Done** or **Needs you** (with its question, why it is stuck, what it wants to publish, or "The plan is ready"; a turn
+that ends without that line counts as "the squad stopped without saying why").
 
 **The squad never closes a task unasked**: when the work is finished it writes its short result (what was done, where,
 what was not checked) and asks "Shall I close this task?", so the task shows Needs you with that question; only after
@@ -371,6 +379,26 @@ While the leader is stuck on Claude's permission prompt, the task shows **Needs 
 command"); once you answer and it carries on, the task is Working again. The leader's session is not stopped for being
 idle while its task is Working (its members may be at work while nobody watches); once the task needs you, is Done or
 Cancelled, it is stopped like any idle session.
+
+### The plan step
+
+A task handed over as **plans first, then waits for your yes** stops once before anything is changed. The leader has the
+workflow's first step (the planner, in Coding) make a short plan: what will change and where, in steps, the risks, and how
+each acceptance check will be shown. It ends its turn with the plan just above its last line, `SQUAD: plan ready`, and
+platoon keeps the plan as `plan.md` in the task's own folder (`tasks/<NN>-work/plan.md`). The task is **Needs you** with
+"The plan is ready": its row on the Tasks tab says **a plan to approve**, and the plan shows under **The plan** beside the
+board and on the task's own screen.
+
+- `y` types "Go ahead with the plan." into the squad's session: the task is Working again, and the squad runs the rest of
+  its workflow to the end without stopping for the plan again. It still asks before anything others can see, as **asks
+  before anything others can see** does.
+- `n` opens a one-line box for what should change; `enter` types "Change the plan: " and your words into the squad's
+  session. The squad plans again and stops again with the new plan.
+- You can also say either in the squad's session yourself (`enter` on the task), in any words.
+
+When the squad's session isn't running, `y` and `n` continue it beside the task and say so: tell it there. The plan file
+stays with the task: its screen keeps showing it after the go-ahead, under the result once there is one. With the other
+two levels there is no plan stop.
 
 ### Anything other people can see asks you first
 
@@ -402,7 +430,7 @@ kept).
 A squad's workflow and its agents (their models, switches, skills, MCP servers and system prompts) are on the
 [Squads tab](#the-squads-tab); the leader's system prompt and model are in the settings. The rules platoon keeps - where
 the squad works and that what it writes for the task goes in the task's own folder, which branch the work lands on,
-whether it may publish on its own or asks first, the last line of each turn, and "report back to the leader, never push"
+whether it plans first, may publish on its own or asks first, the last line of each turn, and "report back to the leader, never push"
 for the members - are always sent after your text.
 
 The leader may hand work to its members, read, search and run commands; it never edits a file itself (its members do).
@@ -524,8 +552,8 @@ Projects tab of the settings, next to the commander's.
 ### A running task keeps its squad
 
 When a squad's leader starts on a task, platoon keeps what it was started with beside the task
-(`tasks/<NN>-squad-<k>.json`), its rules included (where it works, what the work lands on, whether it publishes on its
-own). Changing the squad or its agents afterwards doesn't change that leader, also when it is continued later: it goes on
+(`tasks/<NN>-squad-<k>.json`), its rules included (where it works, what the work lands on, whether it plans first or
+publishes on its own). Changing the squad or its agents afterwards doesn't change that leader, also when it is continued later: it goes on
 with the squad as it was. The next task gets them as they are then.
 
 ### Where squads and agents are kept

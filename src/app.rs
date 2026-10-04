@@ -51,7 +51,9 @@ mod squadtab_glue;
 mod squadwork_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
-pub use board_glue::{BRow, BoardState, ListItem, PickFor};
+#[cfg(test)]
+pub use board_glue::GO_AHEAD_WITH_PLAN;
+pub use board_glue::{AnswerFor, BRow, BoardState, CHANGE_THE_PLAN, ListItem, PickFor};
 #[cfg(test)]
 pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};

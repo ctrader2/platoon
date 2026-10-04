@@ -433,6 +433,12 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
         if let Some(t) = app.selected_ticket() {
             match crate::board::need_of(t) {
                 Some(crate::board::Need::GoAhead) => out.push(("y", "go ahead", None)),
+                // On a plan to approve, `n` is the change to it rather than a new task.
+                Some(crate::board::Need::Plan) => {
+                    out.retain(|(k, _, _)| *k != "n");
+                    out.push(("y", "go ahead", None));
+                    out.push(("n", "change the plan", None));
+                }
                 Some(crate::board::Need::Permission) => out.push(("y", "its session", None)),
                 Some(_) => out.push(("y", "answer", None)),
                 None if handable(app, t) => out.push(("S", "hand to a squad", None)),
@@ -491,6 +497,9 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
     }
     if t.is_some_and(wants_to_publish) {
         out.push(("p", "let it publish", None));
+    } else if t.is_some_and(|t| crate::board::need_of(t) == Some(crate::board::Need::Plan)) {
+        out.push(("y", "go ahead", None));
+        out.push(("n", "change the plan", None));
     } else if let Some(t) = t.filter(|t| t.state == State::Waiting) {
         out.push(("y", if crate::board::need_of(t) == Some(crate::board::Need::Permission) { "its session" } else { "answer" }, None));
     }
@@ -1084,9 +1093,25 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         lines.extend(crate::mdview::render(&format!("## Result\n\n{}\n", result.trim_end()), w, t, app.plain_marker));
         lines.push(Line::raw(""));
     }
+    let bold = Style::new().fg(t.text).add_modifier(Modifier::BOLD);
+    // The plan (a task that plans first): while it waits for the user, with the keys that answer it; after the
+    // go-ahead it stays, under the result once there is one.
+    if let Some(store) = app.tickets_store().filter(|s| x.plan_ready || s.plan(x.number).is_some()) {
+        lines.push(Line::styled("The plan", bold));
+        lines.extend(tasks_view::plan_lines(app, store.project(), x, w, None));
+        if x.plan_ready {
+            lines.push(Line::raw(""));
+            lines.push(Line::from(vec![
+                Span::styled("y", Style::new().fg(t.accent)),
+                Span::styled(" go ahead   ", Style::new().fg(hint_fg(t))),
+                Span::styled("n", Style::new().fg(t.accent)),
+                Span::styled(" change the plan", Style::new().fg(hint_fg(t))),
+            ]));
+        }
+        lines.push(Line::raw(""));
+    }
     // What its squads did: each leader's timeline (named by its squad when the task has had more than one), and
     // everything that ran.
-    let bold = Style::new().fg(t.text).add_modifier(Modifier::BOLD);
     let several = x.leaders.len() > 1;
     let mut timeline: Vec<Line> = Vec::new();
     for l in &x.leaders {

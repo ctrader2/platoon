@@ -62,12 +62,28 @@ pub enum PickFor {
     Move(String, u32),
 }
 
-/// The one-line answer to a squad's question (`y`).
+/// What the one-line box is for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AnswerFor {
+    /// An answer to the squad's question (`y`), typed into its session as it is.
+    #[default]
+    Question,
+    /// A change to the squad's plan (`n` on a plan to approve), typed as "Change the plan: <the note>".
+    PlanChange,
+}
+
+/// What `y` types into the squad's session on a plan to approve.
+pub const GO_AHEAD_WITH_PLAN: &str = "Go ahead with the plan.";
+/// What `n` types before the user's note.
+pub const CHANGE_THE_PLAN: &str = "Change the plan: ";
+
+/// The one-line answer to a squad's question (`y`), or a change to its plan (`n`).
 #[derive(Clone, Debug, Default)]
 pub struct AnswerBox {
     pub project: String,
     pub number: u32,
     pub input: String,
+    pub purpose: AnswerFor,
 }
 
 /// Everything about the board the app keeps.
@@ -368,6 +384,13 @@ impl App {
     pub(super) fn board_key(&mut self, key: KeyEvent) {
         self.sync_board_store();
         match key.code {
+            // On a plan to approve, `n` asks for a change to it (beside `y`, the go-ahead); elsewhere it is a new task.
+            KeyCode::Char('n') if self.board_task().is_some_and(|(p, n)| self.plan_waits(&p, n)) => {
+                if let Some((p, n)) = self.board_task() {
+                    self.set_task_store(&p);
+                    self.ask_plan_change(n);
+                }
+            }
             KeyCode::Char('n') => self.ask_task_project(PickFor::NewTask),
             KeyCode::Char('/') => self.open_name_box(NamePurpose::TaskFilter),
             KeyCode::Esc => self.filter.clear(),
@@ -420,6 +443,7 @@ impl App {
         };
         let place = self.board_selected();
         match need {
+            board::Need::Plan => self.go_ahead_with_plan(number),
             board::Need::GoAhead => {
                 self.let_it_publish(number);
                 if self.board_showing() {
@@ -438,10 +462,61 @@ impl App {
                     return;
                 }
                 let project = self.task_scope().unwrap_or_default();
-                self.bd.answer = AnswerBox { project, number, input: String::new() };
+                self.bd.answer = AnswerBox { project, number, input: String::new(), purpose: AnswerFor::Question };
                 self.mode = Mode::Answer;
             }
         }
+    }
+
+    /// Task `number` of `project` waits for the user's yes to its squad's plan (as the board read it last).
+    pub(super) fn plan_waits(&self, project: &str, number: u32) -> bool {
+        self.all_tasks().iter().filter(|(p, _)| p == project).flat_map(|(_, l)| l.iter()).any(|t| t.number == number && t.plan_ready)
+    }
+
+    /// `y` on a plan to approve: "Go ahead with the plan." is typed into the squad's session, and the task is Working
+    /// again. A squad whose session isn't running is continued beside the task, to be told there.
+    pub(super) fn go_ahead_with_plan(&mut self, number: u32) {
+        let Some(t) = self.ticket(number).cloned() else { return };
+        if !t.plan_ready {
+            self.notify(format!("#{number} has no plan waiting for you."));
+            return;
+        }
+        let session = t.leader().map(|l| l.session.clone()).unwrap_or_default();
+        let Some(sock) = self.leader_host(&session).map(|h| h.sock.clone()) else {
+            self.open_ticket_screen_for_session(number);
+            self.notify(format!("#{number}'s squad is running again: tell it to go ahead with the plan there."));
+            return;
+        };
+        let place = self.board_selected();
+        let Some(store) = self.tk.store.as_mut() else { return };
+        if let Err(e) = store.plan_answered(number) {
+            return self.report_task_error(e);
+        }
+        let (rows, cols) = split_size(self.size);
+        thread::spawn(move || type_into(&sock, rows, cols, GO_AHEAD_WITH_PLAN));
+        self.notify(format!("#{number}'s squad goes ahead with the plan."));
+        if self.board_showing() {
+            self.keep_board_place(place);
+        }
+    }
+
+    /// `n` on a plan to approve: the one-line box for what should change. Its squad's session must be running to take
+    /// it (one that isn't is continued beside the task, to be told there).
+    pub(super) fn ask_plan_change(&mut self, number: u32) {
+        let Some(t) = self.ticket(number).cloned() else { return };
+        if !t.plan_ready {
+            self.notify(format!("#{number} has no plan waiting for you: n changes a squad's plan once it is ready."));
+            return;
+        }
+        let running = t.leader().is_some_and(|l| self.leader_host(&l.session).is_some());
+        if !running {
+            self.open_ticket_screen_for_session(number);
+            self.notify(format!("#{number}'s squad is running again: say what to change in the plan there."));
+            return;
+        }
+        let project = self.task_scope().unwrap_or_default();
+        self.bd.answer = AnswerBox { project, number, input: String::new(), purpose: AnswerFor::PlanChange };
+        self.mode = Mode::Answer;
     }
 
     /// The task's screen with its squad's session beside it (continued when it isn't running).
@@ -488,9 +563,14 @@ impl App {
     /// Enter in the answer box: the words are typed into the squad's session, as a message of the user's own (its
     /// prompt hook makes the task Working again).
     pub(super) fn send_answer(&mut self) {
+        let plan = self.bd.answer.purpose == AnswerFor::PlanChange;
         let text = self.bd.answer.input.trim().to_string();
         if text.is_empty() {
-            self.notify("Type your answer first, or esc to leave it.");
+            self.notify(if plan {
+                "Say what should change first, or esc to leave it."
+            } else {
+                "Type your answer first, or esc to leave it."
+            });
             return;
         }
         let (project, number) = (self.bd.answer.project.clone(), self.bd.answer.number);
@@ -498,13 +578,27 @@ impl App {
         self.set_task_store(&project);
         let session = self.ticket(number).and_then(|t| t.leader()).map(|l| l.session.clone()).unwrap_or_default();
         let Some(sock) = self.leader_host(&session).map(|h| h.sock.clone()) else {
-            self.notify(format!("#{number}'s squad stopped meanwhile, so nothing was sent. Press y to continue it."));
+            let again = if plan { "Press n to continue it." } else { "Press y to continue it." };
+            self.notify(format!("#{number}'s squad stopped meanwhile, so nothing was sent. {again}"));
             return;
         };
         let place = self.board_selected();
+        let text = if plan {
+            // Working again at once: the squad plans again, and says so with its next plan.
+            if let Some(Err(e)) = self.tk.store.as_mut().map(|s| s.plan_answered(number)) {
+                return self.report_task_error(e);
+            }
+            format!("{CHANGE_THE_PLAN}{text}")
+        } else {
+            text
+        };
         let (rows, cols) = split_size(self.size);
         thread::spawn(move || type_into(&sock, rows, cols, &text));
-        self.notify(format!("Answer sent to #{number}."));
+        self.notify(if plan {
+            format!("Sent the change to #{number}'s squad: it plans again.")
+        } else {
+            format!("Answer sent to #{number}.")
+        });
         if self.board_showing() {
             self.keep_board_place(place);
         }

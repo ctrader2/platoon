@@ -53,6 +53,8 @@ mod open;
 #[cfg(test)]
 mod perf;
 #[cfg(test)]
+mod plan_app_tests;
+#[cfg(test)]
 mod polish_app_tests;
 mod procs;
 mod projects;

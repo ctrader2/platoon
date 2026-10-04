@@ -129,11 +129,15 @@ impl State {
 
 // ---- how much a squad does on its own -------------------------------------------------------------------------
 
-/// How much a squad does on a task without asking: asked at every hand-over (the project holds only a default). A third
-/// level, "plans first and waits for your yes", is planned; a value this platoon doesn't know is kept as written and
-/// treated as asking.
+/// How much a squad does on a task without asking: asked at every hand-over (the project holds only a default). Three
+/// levels, from the most careful: it plans first and waits for the user's yes, then works and asks before anything
+/// others can see; it works and asks before anything others can see; it works and publishes. A value this platoon
+/// doesn't know is kept as written and treated as asking.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum Autonomy {
+    /// Plans first (the workflow's first step), stops with the plan for the user's yes, then works to the end and
+    /// still asks before anything others can see.
+    PlanFirst,
     /// Works, and asks before anything others can see (a push, a merge request, a page).
     #[default]
     Ask,
@@ -142,9 +146,13 @@ pub enum Autonomy {
     Other(String),
 }
 
+/// The levels in the order the hand-over popup's `space` goes through them (and round again).
+pub const AUTONOMY_LEVELS: [Autonomy; 3] = [Autonomy::PlanFirst, Autonomy::Ask, Autonomy::Publish];
+
 impl Autonomy {
     pub fn from_id(id: &str) -> Autonomy {
         match id {
+            "plan" => Autonomy::PlanFirst,
             "ask" => Autonomy::Ask,
             "publish" => Autonomy::Publish,
             other => Autonomy::Other(other.to_string()),
@@ -154,6 +162,7 @@ impl Autonomy {
     /// What the file holds.
     pub fn id(&self) -> &str {
         match self {
+            Autonomy::PlanFirst => "plan",
             Autonomy::Ask => "ask",
             Autonomy::Publish => "publish",
             Autonomy::Other(s) => s,
@@ -163,6 +172,7 @@ impl Autonomy {
     /// What the screen says after "On its own".
     pub fn label(&self) -> &str {
         match self {
+            Autonomy::PlanFirst => "plans first, then waits for your yes",
             Autonomy::Ask => "asks before anything others can see",
             Autonomy::Publish => "works and publishes",
             Autonomy::Other(s) => s,
@@ -174,11 +184,17 @@ impl Autonomy {
         matches!(self, Autonomy::Publish)
     }
 
-    /// The next level, round again: what one key in the hand-over popup does.
+    /// The squad stops once with its plan, for the user's yes, before any member changes anything.
+    pub fn plans_first(&self) -> bool {
+        matches!(self, Autonomy::PlanFirst)
+    }
+
+    /// The next level, round again: what one key in the hand-over popup does (plan first, asks before anything others
+    /// can see, works and publishes). A level this platoon doesn't know goes to the usual one.
     pub fn next(&self) -> Autonomy {
-        match self {
-            Autonomy::Ask => Autonomy::Publish,
-            _ => Autonomy::Ask,
+        match AUTONOMY_LEVELS.iter().position(|a| a == self) {
+            Some(i) => AUTONOMY_LEVELS[(i + 1) % AUTONOMY_LEVELS.len()].clone(),
+            None => Autonomy::Ask,
         }
     }
 }
@@ -468,6 +484,9 @@ pub struct Ticket {
     /// Needs you because the squad wants to publish (push, merge request, a page): `p` lets it. Read from a file that
     /// says `"state": "ready"` too (what that state meant).
     pub publish_wanted: bool,
+    /// Needs you because the squad's plan is ready (a task that plans first): `y` goes ahead with it, `n` asks for a
+    /// change. The plan is `plan.md` in the task's own folder (`plan_file`).
+    pub plan_ready: bool,
     /// The user let the squad publish: lasts while the task is Working, or Needs you to publish (`keeps_go_ahead`).
     pub go_ahead: bool,
     /// How much its squad does on its own. None: never set (the hand-over popup starts from the project's default,
@@ -696,6 +715,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
             .unwrap_or_default(),
         reason: if was_ready && reason.is_empty() { "Wants to publish.".to_string() } else { reason },
         publish_wanted: was_ready || o.get("publish_wanted").and_then(Value::as_bool).unwrap_or(false),
+        plan_ready: !was_ready && o.get("plan_ready").and_then(Value::as_bool).unwrap_or(false),
         go_ahead: o.get("go_ahead").and_then(Value::as_bool).unwrap_or(false),
         autonomy: o.get("autonomy").and_then(Value::as_str).filter(|a| !a.is_empty()).map(Autonomy::from_id),
         works_on: o
@@ -1089,6 +1109,7 @@ impl Tickets {
             t.insert("state".into(), json!(id));
             t.remove("reason");
             t.remove("publish_wanted");
+            t.remove("plan_ready");
             t.remove("handover");
             t.remove("permission");
             // Any state the user picks takes it out of the line for a free squad.
@@ -1135,6 +1156,7 @@ impl Tickets {
             t.remove("queued");
             t.remove("reason");
             t.remove("publish_wanted");
+            t.remove("plan_ready");
             t.remove("permission");
             t.remove("go_ahead");
             Ok(())
@@ -1188,6 +1210,7 @@ impl Tickets {
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
             t.remove("publish_wanted");
+            t.remove("plan_ready");
             t.remove("permission");
             if !keeps_go_ahead(&state, wanted) {
                 t.remove("go_ahead");
@@ -1244,6 +1267,7 @@ impl Tickets {
             t.remove("queued");
             t.remove("reason");
             t.remove("publish_wanted");
+            t.remove("plan_ready");
             t.remove("go_ahead");
             t.remove("handover");
             t.remove("permission");
@@ -1341,22 +1365,62 @@ impl Tickets {
     /// written beside the body as `tasks/<NN>-result.md`. The go-ahead goes once the task leaves Working. (A squad
     /// that stopped to ask to publish: `squad_wants_to_publish`.)
     pub fn squad_says(&mut self, number: u32, state: &State, reason: &str, result: Option<&str>) -> io::Result<()> {
-        self.squad_said(number, state, reason, false, result)
+        self.squad_said(number, state, reason, Wants::Nothing, result)
     }
 
     /// The squad's turn ended asking to publish (push, merge request, a page): Needs you, with what it wants to
     /// publish, until `p` gives the go-ahead (one given already stays: the gate lets it through).
     pub fn squad_wants_to_publish(&mut self, number: u32, reason: &str) -> io::Result<()> {
-        self.squad_said(number, &State::Waiting, reason, true, None)
+        self.squad_said(number, &State::Waiting, reason, Wants::Publish, None)
     }
 
-    fn squad_said(&mut self, number: u32, state: &State, reason: &str, publish_wanted: bool, result: Option<&str>) -> io::Result<()> {
+    /// The squad's turn ended with its plan (a task that plans first): the plan is written as `plan.md` in the task's
+    /// own folder (when the leader's message held one; otherwise whatever the squad wrote there stays), and the task
+    /// Needs you, with `reason`, until the user goes ahead (`y`) or asks for a change (`n`).
+    pub fn squad_plan_ready(&mut self, number: u32, reason: &str, plan: Option<&str>) -> io::Result<()> {
+        if let Some(text) = plan.map(str::trim).filter(|p| !p.is_empty()) {
+            let path = plan_file(&self.config, &self.project, number);
+            if let Some(dir) = path.parent() {
+                fs::create_dir_all(dir)?;
+            }
+            write_atomic(&path, &format!("{text}\n"))?;
+        }
+        self.squad_said(number, &State::Waiting, reason, Wants::Plan, None)
+    }
+
+    /// `y` or `n` on a task whose plan is ready: the user's answer is on its way to the squad, so it is Working again
+    /// (what the squad said goes, and so does the plan's mark; the plan file stays). Refused when the plan isn't
+    /// waiting any more (the squad or another window moved it on).
+    pub fn plan_answered(&mut self, number: u32) -> io::Result<()> {
+        self.edit(number, |t, _| {
+            if t.get("plan_ready").and_then(Value::as_bool) != Some(true)
+                || t.get("state").and_then(Value::as_str) != Some(State::Waiting.id())
+            {
+                return Err(format!("#{number}'s plan isn't waiting for you any more"));
+            }
+            t.insert("state".into(), json!(State::Working.id()));
+            t.remove("reason");
+            t.remove("plan_ready");
+            t.remove("permission");
+            Ok(())
+        })
+    }
+
+    /// The squad's plan for task `number`, if it has written one (`plan.md` in its own folder).
+    pub fn plan(&self, number: u32) -> Option<String> {
+        let text = fs::read_to_string(plan_file(&self.config, &self.project, number)).ok()?;
+        (!text.trim().is_empty()).then_some(text)
+    }
+
+    fn squad_said(&mut self, number: u32, state: &State, reason: &str, wants: Wants, result: Option<&str>) -> io::Result<()> {
         if let Some(text) = result {
             let dir = bodies_dir(&self.config, &self.project);
             fs::create_dir_all(&dir)?;
             write_atomic(&dir.join(result_file(number)), &format!("{}\n", text.trim_end()))?;
         }
-        let publish_wanted = publish_wanted && *state == State::Waiting;
+        let waiting = *state == State::Waiting;
+        let publish_wanted = wants == Wants::Publish && waiting;
+        let plan_ready = wants == Wants::Plan && waiting;
         let (id, reason, keep) = (state.id().to_string(), reason.to_string(), keeps_go_ahead(state, publish_wanted));
         self.edit(number, move |t, _| {
             t.insert("state".into(), json!(id));
@@ -1369,6 +1433,11 @@ impl Tickets {
                 t.insert("publish_wanted".into(), json!(true));
             } else {
                 t.remove("publish_wanted");
+            }
+            if plan_ready {
+                t.insert("plan_ready".into(), json!(true));
+            } else {
+                t.remove("plan_ready");
             }
             t.remove("permission");
             t.remove("queued");
@@ -1426,6 +1495,7 @@ impl Tickets {
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
             t.remove("publish_wanted");
+            t.remove("plan_ready");
             t.remove("permission");
             Ok(())
         })
@@ -1643,6 +1713,24 @@ pub fn work_dir(config: &Path, project: &str, number: u32) -> PathBuf {
 /// The name of the file a squad's result for task `number` is kept in, beside the bodies.
 pub fn result_file(number: u32) -> String {
     format!("{number:02}-result.md")
+}
+
+/// The plan's file name, in the task's own folder: the leader's rules name it.
+pub const PLAN_FILE: &str = "plan.md";
+
+/// Where a task's plan is kept: `plan.md` in its own folder (`tasks/<NN>-work/plan.md`). It stays with the task.
+pub fn plan_file(config: &Path, project: &str, number: u32) -> PathBuf {
+    work_dir(config, project, number).join(PLAN_FILE)
+}
+
+/// What a squad's turn ended wanting from the user, besides its state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wants {
+    Nothing,
+    /// The go-ahead to publish (`publish_wanted`).
+    Publish,
+    /// A yes to its plan (`plan_ready`).
+    Plan,
 }
 
 // ---- leaders across every project ---------------------------------------------------------------------------------
@@ -2133,6 +2221,9 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
                 if !t.reason.is_empty() {
                     o.insert("reason".into(), json!(t.reason));
                 }
+                if t.plan_ready {
+                    o.insert("plan_ready".into(), json!(true));
+                }
                 if !t.works_on.is_empty() {
                     o.insert(
                         "works_on".into(),
@@ -2388,6 +2479,7 @@ mod tests {
             from: None,
             aside: None,
             publish_wanted: false,
+            plan_ready: false,
             autonomy: None,
             works_on: vec![],
             old_number: None,
@@ -3211,15 +3303,31 @@ mod tests {
         assert_eq!(v["tickets"][0]["autonomy"], "ask");
         // A value a later platoon writes is kept as written, and treated as asking.
         let mut v = saved(&d);
-        v["tickets"][0]["autonomy"] = json!("plan");
+        v["tickets"][0]["autonomy"] = json!("later");
         v["tickets"][0]["old_number"] = json!(9);
         fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
         let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
-        assert_eq!((x.autonomy(), x.autonomy().publishes(), x.autonomy().label()), (Autonomy::Other("plan".into()), false, "plan"));
+        assert_eq!((x.autonomy(), x.autonomy().publishes(), x.autonomy().label()), (Autonomy::Other("later".into()), false, "later"));
+        assert!(!x.autonomy().plans_first());
         assert_eq!((x.old_number, x.branch()), (Some(9), "task/9".to_string()), "a task moved into this project keeps its branch");
+        // The third level: plans first, its own id and words; it asks before publishing too.
+        let mut v = saved(&d);
+        v["tickets"][0]["autonomy"] = json!("plan");
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!(
+            (x.autonomy(), x.autonomy().id(), x.autonomy().label(), x.autonomy().publishes(), x.autonomy().plans_first()),
+            (Autonomy::PlanFirst, "plan", "plans first, then waits for your yes", false, true)
+        );
+        Tickets::open(&d, "p1").set_terms(n, &Autonomy::PlanFirst, &[]).unwrap();
+        assert_eq!(saved(&d)["tickets"][0]["autonomy"], "plan");
+        // `space` in the hand-over popup goes round the three, most careful first.
+        assert_eq!(AUTONOMY_LEVELS, [Autonomy::PlanFirst, Autonomy::Ask, Autonomy::Publish]);
+        assert_eq!(Autonomy::PlanFirst.next(), Autonomy::Ask);
         assert_eq!(Autonomy::Ask.next(), Autonomy::Publish);
-        assert_eq!(Autonomy::Publish.next(), Autonomy::Ask);
-        assert_eq!(Autonomy::Other("plan".into()).next(), Autonomy::Ask);
+        assert_eq!(Autonomy::Publish.next(), Autonomy::PlanFirst);
+        assert_eq!(Autonomy::Other("later".into()).next(), Autonomy::Ask);
+        assert_eq!(Autonomy::default(), Autonomy::Ask, "the usual level stays the default");
         // The project's default pre-fills the popup: read from projects.json (absent: ask).
         let mut p = crate::projects::Projects::open(&d);
         let id = p.create("Web").unwrap();
@@ -3228,6 +3336,9 @@ mod tests {
         pj["projects"][&id]["autonomy_default"] = json!("publish");
         fs::write(p.path(), pj.to_string()).unwrap();
         assert_eq!(crate::projects::Projects::open(&d).get(&id).unwrap().autonomy_default, Autonomy::Publish);
+        pj["projects"][&id]["autonomy_default"] = json!("plan");
+        fs::write(p.path(), pj.to_string()).unwrap();
+        assert_eq!(crate::projects::Projects::open(&d).get(&id).unwrap().autonomy_default, Autonomy::PlanFirst, "any of the three");
     }
 
     #[test]

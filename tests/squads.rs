@@ -630,6 +630,61 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
 }
 
 #[test]
+fn a_task_that_plans_first_stops_with_the_plan_and_y_types_the_go_ahead_into_the_squads_session() {
+    let lab = Lab::new("sq-plan");
+    // The project's default for new hand-overs: plans first (the popup starts from it).
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects.json")).unwrap()).unwrap();
+    v["projects"]["pweb"]["autonomy_default"] = json!("plan");
+    fs::write(lab.config.join("projects.json"), v.to_string()).unwrap();
+    lab.ticket(json!({}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    lab.open_tickets(&mut t);
+    t.send(b"S");
+    t.wait_for_all(&["hand to a squad", "On its own: plans first, then waits for your yes", "enter hand it over"]);
+    t.send(b"\r");
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+    let tk = lab.ticket_now();
+    assert_eq!(tk["autonomy"], "plan", "{tk}");
+    // The leader is told to plan first: in its rules, and in its first message.
+    let args = lab.args(1);
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    let rules = agents["coding-leader"]["prompt"].as_str().unwrap();
+    assert!(rules.contains("`SQUAD: plan ready`") && rules.contains("`plan.md` in the task's own folder"), "{rules}");
+    assert!(args.last().unwrap().contains("## First, the plan"), "{:?}", args.last());
+    // The leader's turn ends with the plan: the task needs the user, and shows the plan beside the session.
+    let sid = tk["leaders"][0]["session"].as_str().unwrap().to_string();
+    let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
+    let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let plan = "1. Add a basket page that lists what was picked.\n2. Test it with two items.\n\nRisk: none known.\nSQUAD: plan ready";
+    let input = json!({"session_id": sid, "last_assistant_message": plan, "background_tasks": [], "stop_hook_active": false, "transcript_path": "/x.jsonl", "cwd": "/tmp", "hook_event_name": "Stop"});
+    assert_eq!(lab.run_hook_command(&stop, &input), 0);
+    let tk = lab.ticket_now();
+    assert_eq!(
+        (tk["state"].as_str(), tk["reason"].as_str(), tk["plan_ready"].as_bool()),
+        (Some("waiting"), Some("The plan is ready"), Some(true)),
+        "{tk}"
+    );
+    let file = lab.config.join("projects/pweb/tasks/01-work/plan.md");
+    assert_eq!(
+        fs::read_to_string(&file).unwrap(),
+        "1. Add a basket page that lists what was picked.\n2. Test it with two items.\n\nRisk: none known.\n"
+    );
+    t.wait_for_all(&["The plan is ready", "The plan", "1. Add a basket page that lists what was picked."]);
+    // Back on the project's screen, the pane offers the go-ahead and the change; y types the go-ahead.
+    t.send(&[0]);
+    t.wait_for_all(&["a plan to approve", "y go ahead", "n change the plan"]);
+    t.send(b"y");
+    until("the go-ahead to reach the squad's session", || lab.rec(1, "typed").contains("Go ahead with the plan."));
+    assert_eq!(lab.rec(1, "typed"), "Go ahead with the plan.\n", "the words, then Enter");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk.get("plan_ready"), tk.get("reason")), (Some("working"), None, None), "{tk}");
+    assert!(file.exists(), "the plan stays with the task");
+    t.wait_gone("a plan to approve");
+    t.send(&[3]);
+    t.wait_exit();
+}
+
+#[test]
 fn the_hooks_read_real_shaped_input_and_leave_everything_else_alone() {
     let lab = Lab::new("sq-hooks");
     lab.ticket(json!({"state": "working", "leaders": [{"squad": "coding", "session": "lead-1", "started": 1}]}));

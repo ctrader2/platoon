@@ -81,6 +81,7 @@ mod tests {
             from: None,
             aside: None,
             publish_wanted: false,
+            plan_ready: false,
             autonomy: None,
             works_on: vec![],
             old_number: None,

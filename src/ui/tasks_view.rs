@@ -390,18 +390,27 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
     if let Some(need) = board::need_of(&x) {
         let aside = x.is_aside();
         lines.push(Line::styled(need.heading(), bold));
-        for l in wrap(&board::squad_said(&x), w).into_iter().take(8) {
-            lines.push(Line::styled(l, Style::new().fg(if aside { t.subtext } else { t.warn })));
-        }
-        lines.push(Line::raw(""));
-        let y = match need {
-            board::Need::GoAhead => "go ahead",
-            board::Need::Permission => "open its session",
-            _ => "answer",
-        };
         let h = if aside { "bring it back" } else { "later" };
-        lines.push(keys_line(&[("y", y), ("enter", "open the session"), ("h", h)]));
-        lines.push(Line::raw(""));
+        if need == board::Need::Plan {
+            // The plan itself, as much as leaves room for the keys under it (all of it on the task's own screen).
+            let most = (area.height as usize / 2).max(6);
+            lines.extend(plan_lines(app, &project, &x, w, Some(most)));
+            lines.push(Line::raw(""));
+            lines.push(keys_line(&[("y", "go ahead"), ("n", "change the plan"), ("enter", "open the session"), ("h", h)]));
+            lines.push(Line::raw(""));
+        } else {
+            for l in wrap(&board::squad_said(&x), w).into_iter().take(8) {
+                lines.push(Line::styled(l, Style::new().fg(if aside { t.subtext } else { t.warn })));
+            }
+            lines.push(Line::raw(""));
+            let y = match need {
+                board::Need::GoAhead => "go ahead",
+                board::Need::Permission => "open its session",
+                _ => "answer",
+            };
+            lines.push(keys_line(&[("y", y), ("enter", "open the session"), ("h", h)]));
+            lines.push(Line::raw(""));
+        }
     } else {
         let says = tickets::words(&x, &siblings);
         let color = super::words_color(t, &x, &says);
@@ -469,6 +478,27 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.truncate(area.height as usize);
     f.render_widget(Paragraph::new(lines), area);
+}
+
+/// A task's plan (`plan.md` in its own folder) drawn from its Markdown in `w` cells; `most`: at most that many lines,
+/// with a last one saying how many more there are (the task's own screen shows all of it). When the squad wrote none
+/// down, one line says where to read it.
+pub(super) fn plan_lines(app: &App, project: &str, x: &Ticket, w: usize, most: Option<usize>) -> Vec<Line<'static>> {
+    let t = app.effective_theme();
+    let Some(text) = std::fs::read_to_string(tickets::plan_file(&app.config, project, x.number)).ok().filter(|s| !s.trim().is_empty())
+    else {
+        return wrap("The squad didn't write its plan down here: open its session to read it.", w)
+            .into_iter()
+            .map(|l| Line::styled(l, Style::new().fg(t.subtext)))
+            .collect();
+    };
+    let mut lines = crate::mdview::render(text.trim(), w, t, app.plain_marker);
+    if let Some(most) = most.filter(|m| lines.len() > *m) {
+        let more = lines.len() - (most - 1);
+        lines.truncate(most - 1);
+        lines.push(Line::styled(fit_end(&format!("… {more} more lines: enter opens the task"), w), Style::new().fg(t.dim)));
+    }
+    lines
 }
 
 /// A clock time in the user's own time zone: "13:40" ("" when unknown).
@@ -575,7 +605,8 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
     let fold = !all && matches!(app.board_pick(), Some(crate::app::BRow::Fold));
     if all {
         out.extend([
-            ("y", "answer the squad (on a go-ahead: let it publish)", None),
+            ("y", "answer the squad (on a go-ahead: let it publish; on a plan: go ahead with it)", None),
+            ("n", "a new task; on a plan to approve: say what should change in it", None),
             ("enter", "open the task, beside its squad's session when it runs", None),
             ("h", "later: put a task that needs you aside until its squad says something new (h again brings it back)", None),
             ("S", "hand to a squad", None),
@@ -590,11 +621,14 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
         match r.section {
             Section::NeedsYou | Section::Later => {
                 let y = match r.need {
-                    Some(board::Need::GoAhead) => "go ahead",
+                    Some(board::Need::GoAhead | board::Need::Plan) => "go ahead",
                     Some(board::Need::Permission) => "its session",
                     _ => "answer",
                 };
                 out.push(("y", y, None));
+                if r.need == Some(board::Need::Plan) {
+                    out.push(("n", "change the plan", None));
+                }
                 out.push(("enter", "open", Some(Action::Jump)));
                 out.push(("h", if r.section == Section::Later { "bring back" } else { "later" }, None));
             }
@@ -612,7 +646,10 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
         }
         out.push(("m", "move", None));
     }
-    out.push(("n", "new task", None));
+    // On a plan to approve, `n` is the change (above).
+    if !all && row.as_ref().is_none_or(|r| r.need != Some(board::Need::Plan)) {
+        out.push(("n", "new task", None));
+    }
     out.extend([
         ("/", "filter", None),
         ("1-4", "tabs", None),
@@ -629,7 +666,8 @@ pub(super) fn at_work_line(app: &App) -> Option<String> {
     (n > 0).then(|| format!("{n} of {} squads at work", app.settings().get().squads_at_once))
 }
 
-/// The answer box: "Answer the Docs squad on #6", the question above, one line typed into the squad's session.
+/// The answer box: "Answer the Docs squad on #6", the question above, one line typed into the squad's session. For a
+/// change to a plan: "Change the Coding squad's plan for #5", typed as "Change the plan: <the note>".
 pub(super) fn draw_answer(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     app.hits.borrow_mut().clear();
@@ -637,13 +675,26 @@ pub(super) fn draw_answer(f: &mut Frame, app: &App, area: Rect) {
     let Some(x) = app.ticket(a.number) else { return };
     let w = area.width.saturating_sub(8).clamp(30, 76);
     let inner_w = w.saturating_sub(4) as usize;
-    let question: Vec<String> = wrap(&board::squad_said(x), inner_w).into_iter().take(5).collect();
-    let note = "Sent to the squad's session as your reply; the task goes back to Working.";
-    let notes = wrap(note, inner_w);
+    let plan = a.purpose == crate::app::AnswerFor::PlanChange;
+    let above = if plan { "What should change in the plan?".to_string() } else { board::squad_said(x) };
+    let question: Vec<String> = wrap(&above, inner_w).into_iter().take(5).collect();
+    let note = if plan {
+        format!(
+            "Sent to the squad's session as \"{}…\"; it plans again and stops with the new plan.",
+            crate::app::CHANGE_THE_PLAN.trim_end()
+        )
+    } else {
+        "Sent to the squad's session as your reply; the task goes back to Working.".to_string()
+    };
+    let notes = wrap(&note, inner_w);
     let h = (question.len() + notes.len() + 7) as u16;
     let r = centered(area, w, h.min(area.height.saturating_sub(2)));
     popup_ground(f, t, area, r, true);
-    let title = format!("Answer the {} squad on #{}", app.answer_squad_name(), a.number);
+    let title = if plan {
+        format!("Change the {} squad's plan for #{}", app.answer_squad_name(), a.number)
+    } else {
+        format!("Answer the {} squad on #{}", app.answer_squad_name(), a.number)
+    };
     let block = modal_block(t, &title);
     let inner = block.inner(r).inner(Margin::new(1, 0));
     f.render_widget(block, r);
@@ -658,7 +709,11 @@ pub(super) fn draw_answer(f: &mut Frame, app: &App, area: Rect) {
         Constraint::Length(1),
     ])
     .areas(inner);
-    f.render_widget(Paragraph::new(question.into_iter().map(|l| Line::styled(l, Style::new().fg(t.warn))).collect::<Vec<_>>()), q_area);
+    let above_color = if plan { t.text } else { t.warn };
+    f.render_widget(
+        Paragraph::new(question.into_iter().map(|l| Line::styled(l, Style::new().fg(above_color))).collect::<Vec<_>>()),
+        q_area,
+    );
     // A long answer shows its end, where the typing is.
     let room = (input.width as usize).saturating_sub(3);
     let len = a.input.chars().count();
