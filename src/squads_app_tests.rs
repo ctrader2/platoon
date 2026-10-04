@@ -49,7 +49,7 @@ fn on_the_project(name: &str) -> (World, App, String) {
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("user-1", Some(&id)).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     (w, app, id)
@@ -91,7 +91,7 @@ fn leader_sessions_are_left_out_of_every_list_counts_and_search() {
     assert_eq!(found, ["user-1"]);
     key(&mut app, KeyCode::Esc);
     // The project's own list and its counts.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     let st = app.pstats.get(&id).cloned().unwrap();
     assert_eq!((st.active, st.archived), (1, 0), "the project counts only the user's session");
     key(&mut app, KeyCode::Enter);
@@ -173,7 +173,8 @@ fn s_hands_only_a_new_ready_ticket_with_folders_and_says_why_not_otherwise() {
     let shown = flat(&draw(&mut term, &app));
     // The picked squad's "what it can do" under it, and only the picked one's; a task with no folder works in its own.
     assert!(shown.contains("▎ ● Coding") && shown.contains("Makes a change to code") && !shown.contains("Finds things out"), "{shown}");
-    assert!(shown.contains("Research") && !shown.contains("Needs a folder"), "no squad needs a folder any more: {shown}");
+    // (The task's own row behind the popup says it has no folder; no squad in the popup says it needs one.)
+    assert!(shown.contains("○ Research ○ Docs") && !shown.contains("Research Needs"), "no squad needs a folder any more: {shown}");
     // Moving onto a squad doesn't pick it; space does.
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Char(' '));
@@ -218,7 +219,8 @@ fn p_lets_a_ready_ticket_publish_and_nothing_else() {
     app.reload_for_test();
     app.notice = None;
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("p let it publish"));
+    // The pane offers `y` for it (the go-ahead, as on the Tasks tab); `p` does the same.
+    assert!(flat(&draw(&mut term, &app)).contains("y go ahead"));
     key(&mut app, KeyCode::Char('p'));
     let t = app.ticket(n).unwrap();
     assert!(t.go_ahead && t.state == State::Working && t.reason.is_empty(), "{t:?}");
@@ -384,7 +386,7 @@ fn with_commander(name: &str, spent: u64, folder: &std::path::Path) -> (World, A
         .add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
@@ -581,7 +583,7 @@ fn handing(name: &str, folders: &[Vec<String>]) -> (World, App, String, crate::t
         t.add(NewTicket { title: format!("Ticket {}", i + 1), folders: f.clone(), ..Default::default() }).unwrap();
     }
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);

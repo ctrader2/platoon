@@ -271,8 +271,8 @@ impl App {
         let Some(t) = self.ticket(number).cloned() else { return };
         let why = if let Some(busy) = &t.busy {
             Some(format!("#{number}: {busy}"))
-        } else if self.open_project().is_some_and(|p| p.archived) {
-            Some(crate::tickets::archived_refusal(&self.open_project().map(|p| p.name.clone()).unwrap_or_default()))
+        } else if let Some(p) = self.task_scope().and_then(|id| self.projects.get(&id)).filter(|p| p.archived) {
+            Some(crate::tickets::archived_refusal(&p.name))
         } else if t.queued.is_some() {
             Some(format!("#{number} is waiting for a free squad already. To take it out of the line, cancel it with c."))
         } else if t.state != State::New {
@@ -306,7 +306,7 @@ impl App {
     /// A folder of `t` that isn't in git and that another open task (Working or Needs you, in any project) already
     /// works in: the refusal, naming that task.
     fn folder_taken(&self, number: u32, t: &Ticket) -> Option<String> {
-        let mine = self.open_project.clone().unwrap_or_default();
+        let mine = self.task_scope().unwrap_or_default();
         for f in t.folders.iter().filter(|f| !squads::in_git(Path::new(f))) {
             let other = self
                 .every_ticket()
@@ -339,7 +339,9 @@ impl App {
     fn hand_form(&self, number: u32, t: &Ticket) -> HandForm {
         let deadline = Instant::now() + HAND_BUDGET;
         let git = self.git_program.clone();
-        let autonomy = t.autonomy.clone().unwrap_or_else(|| self.open_project().map(|p| p.autonomy_default.clone()).unwrap_or_default());
+        let scope = self.task_scope().unwrap_or_default();
+        let autonomy =
+            t.autonomy.clone().unwrap_or_else(|| self.projects.get(&scope).map(|p| p.autonomy_default.clone()).unwrap_or_default());
         let folders = t
             .folders
             .iter()
@@ -371,7 +373,7 @@ impl App {
             Some(false) => return Some(format!("{name} has changes not yet committed")),
             None => return Some(format!("git couldn't say in time whether {name} has changes not yet committed")),
         }
-        let mine = self.open_project.clone().unwrap_or_default();
+        let mine = self.task_scope().unwrap_or_default();
         if let Some((p, o)) = self
             .every_ticket()
             .iter()
@@ -538,7 +540,7 @@ impl App {
     /// Yes to "Hand it anyway?": the worktrees and the leader, without a new check.
     pub(super) fn hand_anyway(&mut self, number: u32, squad: &str) {
         self.mode = Mode::List;
-        let (Some(squad), Some(project)) = (crate::squadfile::get(&self.config, squad), self.open_project.clone()) else { return };
+        let (Some(squad), Some(project)) = (crate::squadfile::get(&self.config, squad), self.task_scope()) else { return };
         if !self.ticket(number).is_some_and(|t| t.state == State::New && t.busy.is_none()) {
             return;
         }
@@ -549,7 +551,7 @@ impl App {
     /// The commander's check, off the UI thread (the ticket shows Working, "Commander is checking…"). If the gate
     /// says no there is no call at all: the ticket stays New, with why.
     fn ask_commander(&mut self, number: u32, squad: Squad) {
-        let Some(project) = self.open_project.clone() else { return };
+        let Some(project) = self.task_scope() else { return };
         self.sq.from_line.remove(&(project.clone(), number));
         let Some(t) = self.ticket(number).cloned() else { return };
         let settings = self.settings.get();
@@ -603,6 +605,11 @@ impl App {
         for st in self.sq.starting.iter().filter(|st| st.project == project) {
             store.set_busy(st.number, Some(st.stage.words()));
         }
+    }
+
+    /// What the app is doing for task `number` of `project` while it is being handed to a squad, if it is.
+    pub fn starting_words(&self, project: &str, number: u32) -> Option<&'static str> {
+        self.sq.starting.iter().find(|st| st.project == project && st.number == number).map(|st| st.stage.words())
     }
 
     fn done_starting(&mut self, project: &str, number: u32) {
@@ -685,7 +692,7 @@ impl App {
     }
 
     /// Read the tickets files again if they changed (the places taken and the line come from them).
-    fn reread_tickets(&mut self) {
+    pub(super) fn reread_tickets(&mut self) {
         if self.refresh_leaders() {
             self.built.0 = u64::MAX;
         }
@@ -891,7 +898,7 @@ impl App {
     /// Continue ticket `number`'s current leader (the open project's) in a platoon host, beside the ticket. False,
     /// said in a notice, when it couldn't start.
     fn launch_leader(&mut self, number: u32, first: Option<&str>) -> bool {
-        let Some(project) = self.open_project.clone() else { return false };
+        let Some(project) = self.task_scope() else { return false };
         match self.launch_leader_in(&project, number, first, true) {
             Ok(()) => true,
             Err(e) => {
@@ -1069,7 +1076,7 @@ pub fn split_size(size: (u16, u16)) -> (u16, u16) {
 
 /// Type `text` into a hosted session and press Enter, as a window of its own would: the words first, Enter a moment
 /// later (sent together, Claude would take the Enter as part of a paste).
-fn type_into(sock: &Path, rows: u16, cols: u16, text: &str) {
+pub(super) fn type_into(sock: &Path, rows: u16, cols: u16, text: &str) {
     use crate::host::{F_INPUT, F_RESIZE, size_payload, write_frame};
     let Ok(mut s) = std::os::unix::net::UnixStream::connect(sock) else { return };
     if write_frame(&mut s, F_RESIZE, &size_payload(rows, cols)).is_err() {

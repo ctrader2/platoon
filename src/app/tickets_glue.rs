@@ -84,18 +84,17 @@ impl App {
         self.tk.store.as_ref().and_then(|s| s.get(number))
     }
 
-    /// The rows of the Tickets pane: the open tickets, then the divider, then (when unfolded) the Done and
-    /// Cancelled ones.
+    /// The rows of the Tasks pane that can be picked: the board's rows of the open project's tasks, in its sections,
+    /// then the divider ("Done and cancelled · N"), then (when unfolded) the Done and Cancelled ones.
     pub fn ticket_rows(&self) -> Vec<TRow> {
-        let (open, closed) = tickets::grouped(self.tickets());
-        let mut rows: Vec<TRow> = open.iter().map(|t| TRow::Ticket(t.number)).collect();
-        if !closed.is_empty() {
-            rows.push(TRow::Divider(closed.len()));
-            if self.tk.unfolded {
-                rows.extend(closed.iter().map(|t| TRow::Ticket(t.number)));
-            }
-        }
-        rows
+        self.pane_items()
+            .into_iter()
+            .filter_map(|i| match i {
+                super::ListItem::Task(r) => Some(TRow::Ticket(r.number)),
+                super::ListItem::Fold { count, .. } => Some(TRow::Divider(count)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Index into `ticket_rows()` of the picked row.
@@ -143,8 +142,22 @@ impl App {
     }
 
     /// Pick up a ticket added by `platoon ticket add` (or changed in another window). One `stat` when nothing changed.
+    /// On the Tasks tab the store is the picked task's project's.
     pub(super) fn refresh_tickets(&mut self) {
         let open = self.open_project.clone();
+        if open.is_none() && self.board_showing() {
+            self.sync_board_store();
+        } else {
+            self.sync_project_store(open);
+        }
+        if self.tk.open.is_some_and(|n| self.ticket(n).is_none()) {
+            self.tk.open = None;
+        }
+        // Tickets being handed to a squad show Working, with what is happening (a store opened again forgets).
+        self.show_starting();
+    }
+
+    fn sync_project_store(&mut self, open: Option<String>) {
         match (&mut self.tk.store, open) {
             (Some(s), Some(p)) if s.project() == p => {
                 s.reload_if_changed();
@@ -153,11 +166,6 @@ impl App {
             (Some(_), None) => self.close_tickets(),
             (None, None) => {}
         }
-        if self.tk.open.is_some_and(|n| self.ticket(n).is_none()) {
-            self.tk.open = None;
-        }
-        // Tickets being handed to a squad show Working, with what is happening (a store opened again forgets).
-        self.show_starting();
     }
 
     /// Give a pane of the project's screen the focus. The left column remembers which of its two was used last.
@@ -232,11 +240,11 @@ impl App {
         }
     }
 
-    /// The keys that act on one ticket, the same on its screen and on its row.
-    fn ticket_key(&mut self, number: u32, key: KeyEvent) {
+    /// The keys that act on one ticket, the same on its screen, on its row in a project's pane and on the board.
+    pub(super) fn ticket_key(&mut self, number: u32, key: KeyEvent) {
         // While it is being handed to a squad, what would change that waits.
         if let Some(busy) = self.ticket(number).and_then(|t| t.busy.clone())
-            && matches!(key.code, KeyCode::Char('c' | 'f' | 'S' | 'p' | 'w'))
+            && matches!(key.code, KeyCode::Char('c' | 'f' | 'S' | 'p' | 'w' | 'm' | 'y'))
         {
             self.notify(format!("#{number}: {busy} Wait a moment."));
             return;
@@ -253,6 +261,9 @@ impl App {
             KeyCode::Char('a') => self.notify("S (shift+s) hands a task to a squad."),
             KeyCode::Char('p') => self.let_it_publish(number),
             KeyCode::Char('w') => self.ask_remove_worktree(number),
+            KeyCode::Char('y') => self.answer_squad(number),
+            KeyCode::Char('h') => self.toggle_aside(number),
+            KeyCode::Char('m') => self.ask_move_task(number),
             _ => {}
         }
     }
@@ -318,9 +329,16 @@ impl App {
         }
     }
 
-    /// Esc on a ticket's screen: back to the project's screen, with the same ticket picked.
+    /// Esc on a ticket's screen: back to the project's screen (or the board it was opened from), with the same ticket
+    /// picked.
     pub(super) fn close_ticket_screen(&mut self) {
         let Some(n) = self.tk.open.take() else { return };
+        if self.open_project.is_none() {
+            if let Some(p) = self.task_scope() {
+                self.bd.selected = Some(super::BRow::Task(p, n));
+            }
+            return;
+        }
         self.focus_pane(Pane::Tickets);
         self.show_ticket_row(n);
     }
@@ -362,9 +380,10 @@ impl App {
         }
     }
 
-    /// The open project is archived: say so (the same line as `platoon ticket add`) and return true.
+    /// The tasks' project is archived: say so (the same line as `platoon ticket add`) and return true.
     fn refuse_ticket_if_archived(&mut self) -> bool {
-        let Some(name) = self.open_project().filter(|p| p.archived).map(|p| p.name.clone()) else { return false };
+        let scope = self.task_scope().unwrap_or_default();
+        let Some(name) = self.projects.get(&scope).filter(|p| p.archived).map(|p| p.name.clone()) else { return false };
         self.notify(tickets::archived_refusal(&name));
         true
     }
@@ -528,7 +547,7 @@ impl App {
 
     /// The folder picker, to add a folder to ticket `number`: the project's folders first, as for a new session.
     fn open_ticket_folder_picker(&mut self, number: u32) {
-        let project = self.open_project.clone();
+        let project = self.task_scope().filter(|p| self.projects.get(p).is_some());
         self.open_picker_in(project);
         self.picker.ticket = Some(number);
     }

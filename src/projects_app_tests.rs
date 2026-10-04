@@ -71,7 +71,7 @@ fn four(name: &str) -> World {
 
 /// Make a project through the keys, from wherever the app is: returns its id.
 fn make_project(app: &mut App, name: &str) -> String {
-    key(app, KeyCode::Char('2'));
+    key(app, KeyCode::Char('3'));
     key(app, KeyCode::Char('n'));
     assert!(matches!(app.mode, Mode::ProjectName));
     type_str(app, name);
@@ -96,7 +96,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     let w = four("p-crud");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
     // An empty name is refused and the box stays open.
     key(&mut app, KeyCode::Char('n'));
@@ -108,7 +108,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     assert_eq!(app.selected_project().map(|p| p.name.as_str()), Some("Web shop"));
     let shown = flat(&draw(&mut term, &app));
     assert!(
-        shown.contains("1 Sessions 2 Projects 3 Squads")
+        shown.contains("1 Sessions 2 Tasks 3 Projects 4 Squads")
             && shown.contains("Active 1")
             && shown.contains("WS Web shop")
             && shown.contains("no sessions"),
@@ -129,7 +129,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     assert_eq!(app.projects.get(&id).unwrap().name, "Web store");
 
     put_in(&mut app, "alpha-1", &id);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Char('d'));
     let Mode::Confirm(Confirm::DeleteProject { sessions, .. }) = app.mode.clone() else { panic!("asks first") };
     assert_eq!(sessions, 1);
@@ -279,7 +279,7 @@ fn a_session_in_a_project_shows_the_project_as_a_pill_in_its_own_column() {
     assert!(lines[other][proj_x..dir_x].iter().all(|c| c.symbol() == " "));
 
     // Color and badge can be changed: the pill follows the color; the name stays the name.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Char('c'));
     assert!(matches!(app.mode, Mode::Look));
     key(&mut app, KeyCode::Right);
@@ -500,7 +500,7 @@ fn left_and_right_switch_active_and_archived_on_both_tabs() {
     draw(&mut term, &app);
     click_hit(&mut app, |h| matches!(h, Hit::Tab(0)));
     assert_eq!(app.tab, 0);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     draw(&mut term, &app);
     click_hit(&mut app, |h| matches!(h, Hit::Tab(1)));
     assert_eq!(app.ptab, 1);
@@ -522,7 +522,7 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     key(&mut app, KeyCode::Char('m'));
     app.assign.selected = 0;
     key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.open_project().map(|p| p.name.as_str()), Some("Fruit"));
     assert_eq!(ids(&app), ["alpha-1", "gamma-3", "delta-4"], "active first, then archived");
@@ -576,7 +576,7 @@ fn search_on_a_projects_screen_only_finds_its_sessions() {
     let a = make_project(&mut app, "Fruit");
     put_in(&mut app, "alpha-1", &a);
     put_in(&mut app, "delta-4", &a);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     // Quick filter: narrows the project's own list.
     key(&mut app, KeyCode::Char('/'));
@@ -626,7 +626,7 @@ fn describe_it_on_a_projects_screen_sends_only_its_sessions() {
     app.set_ai_program_for_test(&fake.script);
     let a = make_project(&mut app, "Fruit");
     put_in(&mut app, "gamma-3", &a);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Char('/'));
     key(&mut app, KeyCode::Tab);
@@ -664,7 +664,7 @@ fn archiving_a_project_archives_its_active_sessions_stopping_a_live_one_and_rest
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Left);
     // alpha runs under platoon and is idle: no question, it is stopped in the background.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Char('a'));
     assert!(matches!(app.mode, Mode::List), "nothing destructive to ask about");
     assert!(app.projects.get(&a).unwrap().archived);
@@ -695,7 +695,7 @@ fn a_session_of_an_archived_project_can_be_restored_on_its_own_and_stays_in_it()
     for s in ["alpha-1", "beta-2"] {
         put_in(&mut app, s, &a);
     }
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Char('a'));
     // From the project's screen (on the Archived projects): restore beta alone.
     key(&mut app, KeyCode::Right);
@@ -744,7 +744,7 @@ fn a_session_started_under_a_project_is_put_in_it_once_its_id_shows_up() {
     app.refresh_for_test();
     assert_eq!(app.projects.project_id_of("brand-new"), Some(a.as_str()));
     // It shows up on the project's screen.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert_eq!(ids(&app), ["brand-new"]);
     let mut child = child;
@@ -767,7 +767,7 @@ fn n_on_a_projects_screen_offers_the_projects_folders_first() {
     let a = make_project(&mut app, "Two folders");
     put_in(&mut app, "s1", &a);
     put_in(&mut app, "s2", &a);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Char('n'));
     assert!(matches!(app.mode, Mode::Picker));
@@ -790,7 +790,7 @@ fn the_projects_file_is_shared_with_other_windows_and_the_hook() {
     assert_eq!(app.pcounts, [1, 0]);
     assert_eq!(app.projects.project_id_of("beta-2"), Some(id.as_str()));
     // Deleted there while its screen is open here: the screen closes.
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project.is_some());
     other.delete(&id, &w.cache).unwrap();
@@ -808,7 +808,7 @@ fn the_new_screens_fit_small_terminals() {
         let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
         key(&mut app, KeyCode::Char('1'));
         assert!(draw(&mut term, &app).contains("platoon"));
-        key(&mut app, KeyCode::Char('2'));
+        key(&mut app, KeyCode::Char('3'));
         draw(&mut term, &app);
         key(&mut app, KeyCode::Enter);
         draw(&mut term, &app);
@@ -870,7 +870,7 @@ fn a_long_description_on_the_projects_list_wraps_and_the_next_row_starts_after_i
     for n in ["Alpha", "Bravo", "Charlie"] {
         make_project(&mut app, n);
     }
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     app.notice = None;
     // The long description goes on the middle row, so there is a row above it and one after it.
     let order: Vec<(String, String)> = app.project_rows().iter().map(|&i| app.projects.all()[i].clone()).map(|p| (p.id, p.name)).collect();
@@ -919,7 +919,7 @@ fn with_rows_of_different_heights_the_selected_project_is_always_fully_on_screen
     for id in ids.iter().skip(1).step_by(2) {
         app.projects.set_description(id, "Short.", 1).unwrap();
     }
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     app.notice = None;
     // Too short for all six rows at once.
     let mut term = Terminal::new(TestBackend::new(60, 16)).unwrap();
@@ -961,7 +961,7 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     let mut app = w.app();
     let a = make_project(&mut app, "Fruit");
     put_in(&mut app, "alpha-1", &a);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
     // Without a description: one empty line between the title and the panes, as always.
@@ -1007,7 +1007,7 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
         app.projects.assign(s, Some(&id)).unwrap();
     }
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     let t = app.effective_theme().clone();
     let row_of = |lines: &str| lines.lines().find(|l| l.contains(" Fruit ")).expect("the row").to_string();
 
@@ -1117,7 +1117,7 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     // With a session in it (even an archived one would do), no notes reads as it always did.
     key(&mut app, KeyCode::Esc);
     put_in(&mut app, "alpha-1", &id);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.open_project().map(|p| p.id.as_str()), Some(id.as_str()));
     let f = flat(&draw(&mut term, &app));

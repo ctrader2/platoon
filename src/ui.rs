@@ -13,6 +13,7 @@ use crate::usage::Usage;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod help_view;
 mod squads_view;
+mod tasks_view;
 
 use ratatui::{
     Frame,
@@ -143,7 +144,7 @@ fn draw_all(f: &mut Frame, app: &App) {
 
     // The Active/Archived switch of the Sessions and Projects lists sits at the right of the rule when it fits there
     // (clear of the current tab's mark); otherwise it has the row under the rule to itself.
-    let lists = app.open_project.is_none() && !app.squads_tab_showing();
+    let lists = app.open_project.is_none() && !app.squads_tab_showing() && !app.board_showing();
     let (labels, counts, current): (Vec<&str>, &[usize], usize) = if app.projects_list_showing() {
         (PTABS.iter().map(|(l, _)| *l).collect(), &app.pcounts, app.ptab)
     } else {
@@ -161,7 +162,7 @@ fn draw_all(f: &mut Frame, app: &App) {
     let summary = app
         .selected_session()
         .map(|s| s.summary.as_str())
-        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing());
+        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.squads_tab_showing() && !app.board_showing());
     // A newer Claude Code or platoon (`versions.rs`): its own lines above the footer, in the summary's place.
     let news = app.news_showing().map(|text| news_lines(text, rest.width as usize, full.height));
     let news_h = news.as_ref().map_or(0, |l| l.len() as u16);
@@ -188,7 +189,7 @@ fn draw_all(f: &mut Frame, app: &App) {
 
     // Everything between the rule and the footer: a screen that isn't a list with column titles takes all of it.
     let screen = Rect::new(rest.x, rest.y, rest.width, list.bottom() - rest.y);
-    if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+    if let (true, Some(n)) = (app.task_screen_showing(), app.tk.open) {
         // A ticket's own screen takes the whole body; one with a squad has its session's place beside it.
         // In the line for a free squad, its squad's place beside it is not there yet (an earlier squad's isn't its).
         if app.ticket(n).is_some_and(|t| t.leader().is_some() && t.queued.is_none()) {
@@ -200,6 +201,8 @@ fn draw_all(f: &mut Frame, app: &App) {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
     } else if app.squads_tab_showing() {
         squads_view::draw_squads_tab(f, app, screen);
+    } else if app.board_showing() {
+        tasks_view::draw_board(f, app, screen);
     } else if app.projects_list_showing() {
         if shelf_on_rule.is_none() {
             draw_shelf(f, app, shelf, &labels, counts, current, true);
@@ -270,15 +273,24 @@ fn draw_all(f: &mut Frame, app: &App) {
         "details",
     ];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
-    if app.open_project.is_some() && app.tk.open.is_some() {
+    if app.task_screen_showing() {
         droppable.retain(|d| *d != "editor");
         let at = droppable.iter().position(|d| *d == "waits for").map_or(droppable.len(), |i| i + 1);
         droppable.insert(at, "editor");
     }
     let hints = fit_hints(hints, room, &droppable);
     // Still too long once the droppable ones are gone: the last ones go, but never `? help`, the way to all of them. A
-    // notice that still doesn't fit beside it is cut with "…" (`draw_footer`) rather than take help's place.
-    draw_footer(f, app, footer, &keep_help(hints, room), notice.map(|n| (n.to_string(), t.warn)));
+    // notice that still doesn't fit beside it is cut with "…" (`draw_footer`) rather than take help's place. On the
+    // Tasks tab, with nothing to say, how many squads are at work, where it fits whole.
+    let hints = keep_help(hints, room);
+    let right = match notice {
+        Some(n) => Some((n.to_string(), t.warn)),
+        None if app.board_showing() && app.tk.open.is_none() => {
+            tasks_view::at_work_line(app).filter(|l| l.width() <= footer_room(footer.width, &hints)).map(|l| (l, t.dim))
+        }
+        None => None,
+    };
+    draw_footer(f, app, footer, &hints, right);
 
     match &app.mode {
         Mode::Picker => draw_picker(f, app, full),
@@ -307,6 +319,8 @@ fn draw_all(f: &mut Frame, app: &App) {
         Mode::SquadPick => draw_squad_pick(f, app, full),
         Mode::SquadChoice => squads_view::draw_squad_choice(f, app, full),
         Mode::SquadText => squads_view::draw_squad_text(f, app, full),
+        Mode::TaskProject => tasks_view::draw_task_project(f, app, full),
+        Mode::Answer => tasks_view::draw_answer(f, app, full),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, full),
         _ => {}
@@ -318,10 +332,12 @@ fn draw_all(f: &mut Frame, app: &App) {
 
 /// The keys of the screen showing, as its footer lists them (and the help popup, from the same table).
 fn screen_hints(app: &App) -> Vec<Hint<'_>> {
-    if let (Some(_), Some(n)) = (&app.open_project, app.tk.open) {
+    if let (true, Some(n)) = (app.task_screen_showing(), app.tk.open) {
         ticket_screen_hints(app, n)
     } else if app.open_project.is_some() {
         project_screen_hints(app)
+    } else if app.board_showing() {
+        tasks_view::board_hints(app, false)
     } else if app.squads_tab_showing() {
         squads_view::squads_tab_hints(app)
     } else if app.projects_list_showing() {
@@ -376,7 +392,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
         ("←→", "active/archived", None),
-        ("1-3", "tabs", None),
+        ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("?", "help", Some(Action::Help)),
@@ -395,7 +411,7 @@ fn projects_hints(app: &App) -> Vec<Hint<'_>> {
         ("d", "delete", Some(Action::Delete)),
         ("/", "search", Some(Action::Search)),
         ("←→", "active/archived", None),
-        ("1-3", "tabs", None),
+        ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("s", "settings", Some(Action::Settings)),
         ("?", "help", Some(Action::Help)),
@@ -415,15 +431,21 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
         let on_divider = matches!(app.ticket_rows().get(app.ticket_selected()), Some(TRow::Divider(_)));
         out = vec![("enter", if on_divider { "show/hide" } else { "open" }, None), ("n", "new task", None)];
         if let Some(t) = app.selected_ticket() {
-            if wants_to_publish(t) {
-                out.push(("p", "let it publish", None));
-            } else if handable(app, t) {
-                out.push(("S", "hand to a squad", None));
+            match crate::board::need_of(t) {
+                Some(crate::board::Need::GoAhead) => out.push(("y", "go ahead", None)),
+                Some(crate::board::Need::Permission) => out.push(("y", "its session", None)),
+                Some(_) => out.push(("y", "answer", None)),
+                None if handable(app, t) => out.push(("S", "hand to a squad", None)),
+                None => {}
+            }
+            if t.state == State::Waiting {
+                out.push(("h", if t.is_aside() { "bring back" } else { "later" }, None));
             }
             if t.state != State::Cancelled {
                 out.push(("c", "cancel", None));
             }
             out.push(("e", "edit", None));
+            out.push(("m", "move", None));
             out.push(("v", "editor", Some(Action::Editor)));
         }
     } else {
@@ -469,6 +491,8 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
     }
     if t.is_some_and(wants_to_publish) {
         out.push(("p", "let it publish", None));
+    } else if let Some(t) = t.filter(|t| t.state == State::Waiting) {
+        out.push(("y", if crate::board::need_of(t) == Some(crate::board::Need::Permission) { "its session" } else { "answer" }, None));
     }
     if t.is_some_and(|t| t.state != State::Cancelled) {
         out.push(("c", "cancel", None));
@@ -481,6 +505,7 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
         ("r", "rename", None),
         ("f", "folders", None),
         ("b", "waits for", None),
+        ("m", "move", None),
         ("v", "editor", Some(Action::Editor)),
         ("↑↓", "scroll", None),
         ("?", "help", Some(Action::Help)),
@@ -828,65 +853,6 @@ pub fn words_color(t: &Theme, x: &Ticket, says: &str) -> Color {
     }
 }
 
-/// The widths of the Tickets pane's columns. Zero means the column is left out.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) struct TCols {
-    pub num: usize,
-    pub title: usize,
-    /// The state's words (`tickets::words`: Needs you, Working, Can start, Waits for #1, ...), or (when `merged`) what
-    /// the row says most: what is happening to it, else those words.
-    pub state: usize,
-    /// What is happening to it (handed over, in the line) and the tokens its squads spent; only beside a state column
-    /// of its own.
-    pub tail: usize,
-    /// One column for the state and what is happening (a pane too narrow for two).
-    pub merged: bool,
-    /// The words in that one column are their short forms (`Waits #1`, `No folder`, `In line`).
-    pub short: bool,
-}
-
-/// The state and what a ticket waits for have a column each only where that leaves the title this many cells; the
-/// one column they share says the same with fewer words to repeat ("New").
-const TICKET_TITLE_WIDE: usize = 24;
-/// The title gets at least this many cells (or as many as the longest title needs, but never fewer than
-/// `TICKET_TITLE_SHORTEST`) before that one column says its short words: the room goes to the titles, which say
-/// which ticket it is, as long as there is a title it would cut.
-const TICKET_TITLE_MIN: usize = 20;
-const TICKET_TITLE_SHORTEST: usize = 12;
-/// ... and at least this many in the narrowest pane, where that column says its short words; only below this is that
-/// column cut.
-const TICKET_TITLE_FLOOR: usize = 6;
-
-/// How the Tickets pane's `width` is shared: the number, the title (whatever is left), then the state and what the
-/// ticket waits for, each as wide as its longest value, never cut. `want_state`/`want_tail`: the longest state and tail;
-/// `want_merged`/`want_short`: the longest of the one column that holds both, in full and in short words. Where the
-/// title would get fewer than `TICKET_TITLE_WIDE` cells, the two share one column; where that leaves it fewer than
-/// `TICKET_TITLE_MIN` (fewer than the longest title wants, `want_title`), the column says its short words; and only where even those leave the title fewer than `TICKET_TITLE_FLOOR` cells is that column cut.
-pub(crate) fn ticket_cols(
-    width: usize,
-    num: usize,
-    want: (usize, usize),
-    want_merged: usize,
-    want_short: usize,
-    want_title: usize,
-) -> TCols {
-    let (want_state, want_tail) = want;
-    let title_min = want_title.clamp(TICKET_TITLE_SHORTEST, TICKET_TITLE_MIN);
-    let fixed = 1 + num + 1;
-    let gap = |w: usize| if w > 0 { w + 2 } else { 0 };
-    let title = |cols: usize| width.saturating_sub(fixed + cols);
-    if title(gap(want_state) + gap(want_tail)) >= TICKET_TITLE_WIDE {
-        let t = title(gap(want_state) + gap(want_tail));
-        return TCols { num, title: t, state: want_state, tail: want_tail, merged: false, short: false };
-    }
-    if title(gap(want_merged)) >= title_min {
-        return TCols { num, title: title(gap(want_merged)), state: want_merged, tail: 0, merged: true, short: false };
-    }
-    let room = width.saturating_sub(fixed + 2 + TICKET_TITLE_FLOOR);
-    let state = want_short.min(room);
-    TCols { num, title: title(gap(state)), state, tail: 0, merged: true, short: true }
-}
-
 /// What a task's row says after its state's words: what is happening to it (being handed to a squad, in the line for
 /// a free one). `merged`: the state has no column of its own (a narrow pane), so a row with nothing happening says its
 /// state's words there. `short`: the words of the narrowest pane.
@@ -904,7 +870,8 @@ fn ticket_tail(t: &Ticket, all: &[Ticket], merged: bool, short: bool) -> String 
     String::new()
 }
 
-/// The Tasks pane: the open tasks, then "Done and cancelled · N" (folded until enter opens it).
+/// The Tasks pane: the board's rows of the project's tasks under their sections, then "Done and cancelled · N"
+/// (folded until enter opens it).
 fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     if area.height == 0 || area.width == 0 {
@@ -914,90 +881,12 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(tickets::CORRUPT).wrap(Wrap { trim: true }).style(Style::new().fg(t.warn)), area);
         return;
     }
-    let all = app.tickets();
-    let rows = app.ticket_rows();
-    if rows.is_empty() {
+    let items = app.pane_items();
+    if items.is_empty() {
         f.render_widget(Paragraph::new("No tasks yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(hint_fg(t))), area);
         return;
     }
-    let shown: Vec<&Ticket> =
-        rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
-    let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
-    let want_state = shown.iter().map(|x| tickets::words(x, all).width()).max().unwrap_or(0);
-    // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
-    let tokens: std::collections::HashMap<u32, String> =
-        shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
-    // What is happening to it (or, in one column with the state, what it says most), then the tokens; in the short
-    // words of the narrowest pane, no tokens.
-    let tail_of = |x: &Ticket, merged: bool, short: bool| -> String {
-        let tail = ticket_tail(x, all, merged, short);
-        match tokens.get(&x.number) {
-            _ if short => tail,
-            Some(n) if tail.is_empty() => n.clone(),
-            Some(n) => format!("{tail} · {n}"),
-            None => tail,
-        }
-    };
-    let longest = |merged: bool, short: bool| shown.iter().map(|x| tail_of(x, merged, short).width()).max().unwrap_or(0);
-    let want_title = shown.iter().map(|x| x.title.width()).max().unwrap_or(0);
-    let c =
-        ticket_cols(area.width as usize, num, (want_state, longest(false, false)), longest(true, false), longest(true, true), want_title);
-    let selected = app.ticket_selected();
-    let height = area.height as usize;
-    app.pages.tickets.set(height.max(1));
-    let top = selected.saturating_sub(height.saturating_sub(1)).min(rows.len().saturating_sub(height));
-    let plain = app.plain_marker;
-    for (i, row) in rows.iter().enumerate().skip(top).take(height) {
-        let rect = Rect::new(area.x, area.y + (i - top) as u16, area.width, 1);
-        app.hits.borrow_mut().push((rect, Hit::TicketRow(i)));
-        let sel = i == selected;
-        let focused = app.pane == Pane::Tickets;
-        let bg = if (sel && focused) || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
-        let base = Style::new().bg(bg);
-        let lead = Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent));
-        let line = match row {
-            TRow::Divider(n) => {
-                let mark = match (app.tk.unfolded, plain) {
-                    (true, false) => "▾",
-                    (false, false) => "▸",
-                    (true, true) => "-",
-                    (false, true) => "+",
-                };
-                Line::from(vec![
-                    lead,
-                    Span::styled(
-                        fit_end(&format!("{mark} Done and cancelled · {n}"), rect.width as usize - 1),
-                        base.fg(t.subtext).add_modifier(Modifier::BOLD),
-                    ),
-                ])
-            }
-            TRow::Ticket(n) => {
-                let Some(x) = all.iter().find(|x| x.number == *n) else { continue };
-                let closed = x.state.closed();
-                let mut spans = vec![
-                    lead,
-                    Span::styled(format!("{:<w$} ", format!("#{}", x.number), w = c.num), base.fg(t.dim)),
-                    Span::styled(fit(&x.title, c.title), base.fg(if closed { t.dim } else { t.text })),
-                ];
-                let tail_color = |tail: &str| {
-                    if tokens.get(&x.number).is_some_and(|n| n == tail) { t.subtext } else { words_color(t, x, tail) }
-                };
-                if c.merged {
-                    let says = tail_of(x, true, c.short);
-                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(tail_color(&says))));
-                } else {
-                    let says = tickets::words(x, all);
-                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(words_color(t, x, &says))));
-                    if c.tail > 0 {
-                        let tail = tail_of(x, false, false);
-                        spans.push(Span::styled(format!("  {}", fit(&tail, c.tail)), base.fg(tail_color(&tail))));
-                    }
-                }
-                Line::from(spans)
-            }
-        };
-        f.render_widget(Paragraph::new(line).style(base), rect);
-    }
+    tasks_view::draw_task_list(f, app, area, &items, app.ticket_selected(), app.pane == Pane::Tickets, false, &app.bd.top);
 }
 
 /// A task's own screen, in `area`: its number and title, its state, its squad, how much it does on its own, where it
@@ -1020,12 +909,13 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::styled(l, style));
         }
     }
-    if let Some(p) = app.open_project() {
-        head.push(Line::from(vec![
+    match app.task_scope().and_then(|id| app.projects.get(&id)) {
+        Some(p) => head.push(Line::from(vec![
             Span::styled("in ", Style::new().fg(t.dim)),
             badge_span(t, p),
             Span::styled(format!(" {}", p.name), Style::new().fg(t.subtext)),
-        ]));
+        ])),
+        None => head.push(Line::styled(tickets::NO_PROJECT_NAME, Style::new().fg(t.subtext))),
     }
     head.push(Line::raw(""));
     const LABEL: usize = 16;
@@ -1160,8 +1050,15 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             Span::styled(fit_end(&what, w.saturating_sub(LABEL)), Style::new().fg(if done { t.dim } else { t.text })),
         ]));
     }
-    // What its squads spent and what they did, from their leaders' transcripts.
-    ticket_work_lines(app, x, w, &mut head);
+    // What its squads spent, from their leaders' transcripts: with the fields above, unless that would leave the part
+    // that scrolls (what the squad has done, what ran, the text) fewer than a few lines; then it scrolls with them.
+    let mut tokens: Vec<Line> = Vec::new();
+    ticket_work_lines(app, x, w, &mut tokens);
+    const SCROLL_MIN: usize = 8;
+    let tokens_scroll = head.len() + tokens.len() + 2 + SCROLL_MIN > area.height as usize;
+    if !tokens_scroll {
+        head.append(&mut tokens);
+    }
     if let Some(name) = app.ticket_window_open(number) {
         head.push(Line::styled(
             format!("Open in {name}, in a window of its own. platoon reads it again when you are done."),
@@ -1175,16 +1072,46 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     if body.height == 0 {
         return;
     }
-    let mut text = app.tickets_store().map(|s| s.body(x)).unwrap_or_default();
+    let text = app.tickets_store().map(|s| s.body(x)).unwrap_or_default();
+    let mut lines: Vec<Line> = Vec::new();
+    if tokens_scroll && !tokens.is_empty() {
+        // (It starts with a blank line of its own, above the fields' rule; here it follows the rule.)
+        lines.extend(tokens.into_iter().skip_while(|l| l.width() == 0));
+        lines.push(Line::raw(""));
+    }
     // The squad's result comes first: on a Done task it is what the user opened it for.
     if let Some(result) = app.tickets_store().and_then(|s| s.result(x.number)) {
-        text = format!("## Result\n\n{}\n\n{text}", result.trim_end());
+        lines.extend(crate::mdview::render(&format!("## Result\n\n{}\n", result.trim_end()), w, t, app.plain_marker));
+        lines.push(Line::raw(""));
+    }
+    // What its squads did: each leader's timeline (named by its squad when the task has had more than one), and
+    // everything that ran.
+    let bold = Style::new().fg(t.text).add_modifier(Modifier::BOLD);
+    let several = x.leaders.len() > 1;
+    let mut timeline: Vec<Line> = Vec::new();
+    for l in &x.leaders {
+        let lanes = tasks_view::timeline_lines(app, x, l, w, true);
+        if !lanes.is_empty() && several {
+            timeline.push(Line::styled(format!("{} squad", app.squad_name(&l.squad)), Style::new().fg(t.subtext)));
+        }
+        timeline.extend(lanes);
+    }
+    if !timeline.is_empty() {
+        lines.push(Line::styled("What the squad has done", bold));
+        lines.extend(timeline);
+        lines.push(Line::raw(""));
+    }
+    let ran = tasks_view::ran_lines(app, x, w, None);
+    if !ran.is_empty() {
+        lines.push(Line::styled("What ran", bold));
+        lines.extend(ran);
+        lines.push(Line::raw(""));
     }
     if text.trim().is_empty() {
-        f.render_widget(Paragraph::new("Nothing written yet. Press e to write it.").style(Style::new().fg(t.subtext)), body);
-        return;
+        lines.push(Line::styled("Nothing written yet. Press e to write it.", Style::new().fg(t.subtext)));
+    } else {
+        lines.extend(crate::mdview::render(&text, w, t, app.plain_marker));
     }
-    let lines = crate::mdview::render(&text, w, t, app.plain_marker);
     let (top, rows, below) = scroll_view(lines.len(), app.tk.body_top.get(), body.height as usize);
     app.tk.body_top.set(top);
     for (n, l) in lines.into_iter().skip(top).take(rows).enumerate() {
@@ -1193,12 +1120,10 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     draw_more_below(f, t, Rect::new(body.x, body.bottom().saturating_sub(1), body.width, 1), below);
 }
 
-/// The ticket screen's two parts about its squads' work: the tokens they used (in all, what that counts, and a line per
-/// agent), and what the squad has done (each member's run, in order, and who is at work now). Nothing until a
-/// leader's transcript has been read.
+/// The tokens a task's squads used, on its screen: in all, what that counts, and a line per agent. Nothing until a
+/// leader's transcript has been read. (What the squad has done and what ran are in the scrolling part, under it.)
 fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'static>>) {
     let t = app.effective_theme();
-    let heading = |s: &str| Line::styled(s.to_string(), Style::new().fg(t.subtext).add_modifier(Modifier::BOLD));
     if let Some(tk) = app.ticket_tokens(x) {
         head.push(Line::raw(""));
         // "Tokens used  84K sent and written, plus 1.9M read again from Claude's cache", wrapped under itself.
@@ -1228,44 +1153,6 @@ fn ticket_work_lines(app: &App, x: &Ticket, w: usize, head: &mut Vec<Line<'stati
                 spans.push(Span::styled(format!("  + {} from cache", crate::squadwork::short(s.cache_read)), Style::new().fg(t.dim)));
             }
             head.push(Line::from(spans));
-        }
-    }
-    // The members' runs, per leader (with its squad's name when the ticket has had more than one): the last
-    // `RUNS_SHOWN` of them in all, with a line for how many came before.
-    let current = x.leader().map(|l| l.session.clone());
-    let several = x.leaders.len() > 1;
-    let logs: Vec<_> =
-        x.leaders.iter().filter_map(|l| app.leader_log(&l.session).filter(|log| !log.runs.is_empty()).map(|log| (l, log))).collect();
-    let (mut skip, earlier) = crate::squadwork::earlier(logs.iter().map(|(_, log)| log.runs.len()).sum());
-    if !logs.is_empty() {
-        head.push(Line::raw(""));
-        head.push(heading("What the squad has done"));
-    }
-    if let Some(e) = earlier {
-        head.push(Line::styled(format!("  {e}"), Style::new().fg(t.dim)));
-    }
-    for (l, log) in logs {
-        // Only the current leader, while it runs, has members at work; an earlier one's are over.
-        let running = current.as_deref() == Some(l.session.as_str()) && x.queued.is_none() && app.leader_session_running(&l.session);
-        let hidden = skip.min(log.runs.len());
-        skip -= hidden;
-        if hidden < log.runs.len() && several {
-            head.push(Line::styled(format!("  {} squad", app.squad_name(&l.squad)), Style::new().fg(t.subtext)));
-        }
-        for r in &log.runs[hidden..] {
-            let (st, line) = crate::squadwork::run_line(r, running);
-            let color = match st {
-                crate::squadwork::RunState::Finished => t.text,
-                crate::squadwork::RunState::Running => t.busy,
-                crate::squadwork::RunState::Failed | crate::squadwork::RunState::Unfinished => t.warn,
-            };
-            // Wrapped under its own text: the description is the leader's words, and says the most at its end too.
-            for (i, part) in wrap(&line, w.saturating_sub(6).max(10)).into_iter().enumerate() {
-                head.push(Line::styled(format!("{}{part}", if i == 0 { "  " } else { "      " }), Style::new().fg(color)));
-            }
-        }
-        if let Some(now) = crate::squadwork::now_line(&log.runs, running) {
-            head.push(Line::styled(fit_end(&format!("  {now}"), w), Style::new().fg(t.busy).add_modifier(Modifier::BOLD)));
         }
     }
 }
@@ -1540,8 +1427,19 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         chip.truncate(3);
         left.extend(chip);
     }
+    // How many tasks need the user, and how many sessions have news: each whole or not at all (the tabs matter more).
+    let room = |left: &[Span]| (area.width as usize).saturating_sub(left.iter().map(|s| s.content.width()).sum::<usize>());
+    if let Some(words) = crate::board::need_words(app.need_you_count()) {
+        let item = format!("   {words}");
+        if item.width() <= room(&left) {
+            left.push(Span::styled(item, Style::new().fg(t.warn)));
+        }
+    }
     if unread > 0 {
-        left.push(Span::styled(format!("   ● {unread} unread"), Style::new().fg(t.ok)));
+        let item = format!("   ● {unread} unread");
+        if item.width() <= room(&left) {
+            left.push(Span::styled(item, Style::new().fg(t.ok)));
+        }
     }
     // The filter the list is narrowed to, while the Search popup (which shows what is typed) is closed. It shows
     // whole or not at all: first "(esc clears)" goes, then the filter itself, never cut in the middle of a word.
@@ -3347,10 +3245,21 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let nb = &app.name_box;
     app.hits.borrow_mut().clear();
-    let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_));
+    let wide =
+        matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::NewTask(_) | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_));
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
     popup_ground(f, t, area, r, true);
+    let new_task_title = match &nb.purpose {
+        NamePurpose::NewTask(p) if p.is_empty() => "New task in no project".to_string(),
+        NamePurpose::NewTask(p) => format!("New task in {}", app.task_project_name(p)),
+        _ => String::new(),
+    };
     let (title, note) = match nb.purpose {
+        NamePurpose::NewTask(ref p) if p.is_empty() => {
+            (new_task_title.as_str(), "Its title. Then pick the folder it works in, and the text opens in your editor.")
+        }
+        NamePurpose::NewTask(_) => (new_task_title.as_str(), "Its title. The text opens in your editor next."),
+        NamePurpose::TaskFilter => ("Filter tasks", "By title, project or squad. The board narrows as you type."),
         NamePurpose::Rename(_) => ("Rename project", "The project's notes and sessions stay as they are."),
         NamePurpose::NewFor(_) => ("New project", "The session goes into it. Its color and badge can be changed later (c)."),
         NamePurpose::New => ("New project", "Give it a name. Its color and badge can be changed later (c)."),
@@ -3783,6 +3692,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     popup_ground(f, t, area, r, true);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
         _ if p.editor => "Pick a folder to open in your editor".to_string(),
+        _ if p.new_task.is_some() => "The folder the new task works in".to_string(),
         (Some(n), _) => format!("A folder for task #{n}"),
         (None, Some(pr)) => format!("New session in {}: pick a folder", pr.name),
         (None, None) => "New session: pick a folder".to_string(),
@@ -3827,6 +3737,8 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
             "enter",
             if p.ticket.is_some() {
                 "add"
+            } else if p.new_task.is_some() {
+                "make the task"
             } else if p.editor {
                 "open"
             } else {
@@ -4075,7 +3987,8 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
     } else {
         app.ticket(number).map(|x| format!("#{} · {}", x.number, tickets::words(x, app.tickets()))).unwrap_or_default()
     };
-    let hints: [Hint; 1] = [(app.back_label(), "back to the project", Some(Action::Back))];
+    let back = if app.open_project.is_some() { "back to the project" } else { "back to the tasks" };
+    let hints: [Hint; 1] = [(app.back_label(), back, Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, a.bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }

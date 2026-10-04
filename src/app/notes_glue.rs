@@ -13,6 +13,7 @@ use crate::instructions;
 use crate::notes;
 use crate::notesrun;
 use crate::notesupdate;
+use crate::tickets::Tickets;
 
 /// A terminal editor running inside platoon's window on a project's notes, or on the instructions of an AI action.
 pub struct NotesEdit {
@@ -104,9 +105,9 @@ impl App {
         self.notes_window.as_ref().filter(|w| w.project == project && w.ticket.is_none()).map(|w| w.name.as_str())
     }
 
-    /// The name of the editor with a window of its own that platoon has open on this ticket of the open project.
+    /// The name of the editor with a window of its own that platoon has open on this task of the tasks showing.
     pub fn ticket_window_open(&self, number: u32) -> Option<&str> {
-        let project = self.open_project.as_deref()?;
+        let project = self.tk.store.as_ref()?.project();
         self.notes_window.as_ref().filter(|w| w.project == project && w.ticket == Some(number)).map(|w| w.name.as_str())
     }
 
@@ -222,9 +223,10 @@ impl App {
         self.mode = Mode::PickEditor;
     }
 
-    /// The same list of editors, for the body of ticket `number` of the open project.
+    /// The same list of editors, for the body of task `number` of the tasks showing (the open project's, or the board's
+    /// picked task's).
     pub(super) fn pick_ticket_editor(&mut self, number: u32) {
-        let Some(project) = self.open_project.clone() else { return };
+        let Some(project) = self.task_scope() else { return };
         if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
             self.notify(format!("{name} is still open on something else. Close it first."));
             return;
@@ -469,12 +471,11 @@ impl App {
 
     /// Open the body of ticket `number` in `e`. A body file that has gone is started again from the template.
     fn run_ticket_editor(&mut self, project: &str, number: u32, e: &Editor) {
-        let Some((path, before)) =
-            self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| (s.body_path(t), s.body(t))))
-        else {
+        let store = Tickets::open(&self.config, project);
+        let Some((path, before)) = store.get(number).map(|t| (store.body_path(t), store.body(t))) else {
             return;
         };
-        if self.ticket(number).is_some_and(|t| t.file.is_empty()) {
+        if store.get(number).is_some_and(|t| t.file.is_empty()) {
             self.notify(format!("#{number} has no body file, so there is nothing to open."));
             return;
         }
@@ -528,14 +529,19 @@ impl App {
 
     /// What to say once an editor has been and gone from a ticket's body: by its words, not the file's time.
     fn after_ticket_edit(&mut self, project: &str, number: u32, before: &str, name: &str) {
-        let now = self.tk.store.as_ref().filter(|s| s.project() == project).and_then(|s| s.get(number).map(|t| s.body(t)));
-        let Some(now) = now else { return };
+        let mut fresh = Tickets::open(&self.config, project);
+        let Some(now) = fresh.get(number).map(|t| fresh.body(t)) else { return };
         if now == before {
             self.notify(format!("#{number} is unchanged ({name} left it as it was)."));
             return;
         }
-        if let Some(store) = self.tk.store.as_mut() {
-            let _ = store.touch(number);
+        match self.tk.store.as_mut().filter(|s| s.project() == project) {
+            Some(store) => {
+                let _ = store.touch(number);
+            }
+            None => {
+                let _ = fresh.touch(number);
+            }
         }
         self.tk.body_top.set(0);
         self.notify(format!("Saved the body of #{number}."));
@@ -639,12 +645,8 @@ impl App {
                         && match (w.instructions, w.ticket) {
                             (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
                             (None, Some(n)) => {
-                                let path = self
-                                    .tk
-                                    .store
-                                    .as_ref()
-                                    .filter(|s| s.project() == w.project)
-                                    .and_then(|s| s.get(n).map(|t| s.body_path(t)));
+                                let store = Tickets::open(&self.config, &w.project);
+                                let path = store.get(n).map(|t| store.body_path(t));
                                 path.is_some_and(|p| file_stamp(&p) != w.stamp)
                             }
                             (None, None) => notes::changed_on_disk(&self.config, &w.project, w.stamp),

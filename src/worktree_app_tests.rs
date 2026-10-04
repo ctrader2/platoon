@@ -93,7 +93,7 @@ fn lab(name: &str, state: State) -> Lab {
         t.squad_says(n, &state, "", None).unwrap();
     }
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     Lab { w, app, project, shop, made, wt, tip }

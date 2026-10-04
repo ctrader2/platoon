@@ -2,7 +2,7 @@
 //! with the settings and the search where they work; the keys that work the same all over platoon (with the user's own
 //! back and quit keys from `keys.json`); and a few things worth knowing. It scrolls when it is longer than the screen.
 
-use super::{centered, hint_fg, modal_block, popup_ground, screen_hints, wrap};
+use super::{centered, hint_fg, modal_block, popup_ground, screen_hints, tasks_view, wrap};
 use crate::app::{App, Hit, TOPS};
 use ratatui::{
     Frame,
@@ -30,7 +30,7 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
     vec![
         (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
         (app.back_label().to_string(), "back one level (esc does the same)".into()),
-        (app.quit_label().to_string(), "quit platoon, on the Sessions, Projects and Squads lists (elsewhere it goes back)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Squads lists (elsewhere it goes back)".into()),
         ("?".into(), "this help".into()),
     ]
 }
@@ -38,8 +38,10 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
 /// Everything the help says for the screen showing.
 pub(super) fn entries(app: &App) -> Vec<Entry> {
     let mut out = vec![Entry::Heading("On this screen")];
+    // The Tasks tab's footer has the keys of the row picked; the help has all of them.
+    let hints = if app.board_showing() && app.tk.open.is_none() { tasks_view::board_hints(app, true) } else { screen_hints(app) };
     let mut screen: Vec<(String, String)> =
-        screen_hints(app).into_iter().filter(|(_, d, _)| !GLOBAL.contains(d)).map(|(k, d, _)| (k.to_string(), d.to_string())).collect();
+        hints.into_iter().filter(|(_, d, _)| !GLOBAL.contains(d)).map(|(k, d, _)| (k.to_string(), d.to_string())).collect();
     // The settings and the search open from most screens but not all: listed here, on the screens where they work.
     for (works, k, d) in [(app.slash_searches(), "/", "search"), (app.s_opens_settings(), "s", "settings")] {
         if works && !screen.iter().any(|(_, have)| have == d) {
@@ -61,7 +63,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     ));
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
-    if !app.squads_tab_showing() && !app.projects_list_showing() && app.tk.open.is_none() {
+    if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {
         out.push(Entry::Note(
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));

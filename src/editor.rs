@@ -304,6 +304,7 @@ mod tests {
             busy: None,
             queued: None,
             from: None,
+            aside: None,
             publish_wanted: false,
             autonomy: None,
             works_on: vec![],

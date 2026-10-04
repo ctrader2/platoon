@@ -6,11 +6,12 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1`, `2`, `3`.
-pub const TOPS: &[&str] = &["Sessions", "Projects", "Squads"];
+/// The top-level tabs, on `1` to `4`.
+pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Squads"];
 pub const TOP_SESSIONS: usize = 0;
-pub const TOP_PROJECTS: usize = 1;
-pub const TOP_SQUADS: usize = 2;
+pub const TOP_TASKS: usize = 1;
+pub const TOP_PROJECTS: usize = 2;
+pub const TOP_SQUADS: usize = 3;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
 pub const PTABS: &[(&str, &str)] =
@@ -33,6 +34,10 @@ pub enum NamePurpose {
     Rename(String),
     /// A new task in the open project: its title.
     NewTicket,
+    /// A new task made on the Tasks tab, in this project (`NO_PROJECT_ID`: in none): its title.
+    NewTask(String),
+    /// What the Tasks tab is narrowed to.
+    TaskFilter,
     /// A new title for this task.
     TicketTitle(u32),
     /// Something on the Squads tab: a squad's name, a member's.
@@ -167,13 +172,16 @@ impl App {
         self.pview.get(self.pselected).map(|&i| &self.projects.all()[i])
     }
 
-    /// `1`, `2`: a top-level tab. From a project's screen, `2` goes back to the Projects tab's list.
+    /// `1` to `4`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
+    /// opened on the Tasks tab, `2` goes back to the board.
     pub fn switch_top(&mut self, i: usize) {
         if i >= TOPS.len() {
             return;
         }
         if self.open_project.is_some() {
             self.close_project_screen();
+        } else if self.board_showing() && self.tk.open.is_some() {
+            self.close_ticket_screen();
         } else if i == self.top {
             return;
         }
@@ -274,10 +282,12 @@ impl App {
             KeyCode::Char(c @ '1'..='9') if !ctrl && !alt => return self.switch_top(c as usize - '1' as usize),
             _ => {}
         }
-        if self.open_project.is_some() && self.tk.open.is_some() {
+        if self.task_screen_showing() {
             self.ticket_screen_key(key);
         } else if self.open_project.is_some() {
             self.project_screen_key(key);
+        } else if self.top == TOP_TASKS {
+            self.board_key(key);
         } else if self.top == TOP_PROJECTS {
             self.projects_key(key);
         } else if self.top == TOP_SQUADS {
@@ -287,9 +297,11 @@ impl App {
         }
     }
 
-    /// One of the top-level lists (Sessions, Projects, Squads) with nothing open over it: where quit quits.
+    /// One of the top-level lists (Sessions, Tasks, Projects, Squads) with nothing open over it: where quit quits.
     pub fn at_top_level(&self) -> bool {
-        self.open_project.is_none() && !(self.top == TOP_SQUADS && self.sqt.focus == super::SqFocus::Detail)
+        self.open_project.is_none()
+            && !(self.top == TOP_SQUADS && self.sqt.focus == super::SqFocus::Detail)
+            && !(self.top == TOP_TASKS && self.tk.open.is_some())
     }
 
     fn sessions_key(&mut self, key: KeyEvent) {
@@ -340,10 +352,10 @@ impl App {
         }
     }
 
-    /// `/` opens the search on the screen showing: everywhere on platoon's own screens but a ticket's and the Squads tab
-    /// (it looks for sessions and projects).
+    /// `/` opens the search on the screen showing: everywhere on platoon's own screens but a ticket's, the Tasks tab
+    /// (where it narrows the board) and the Squads tab (it looks for sessions and projects).
     pub fn slash_searches(&self) -> bool {
-        matches!(self.mode, Mode::List) && self.tk.open.is_none() && !self.squads_tab_showing()
+        matches!(self.mode, Mode::List) && self.tk.open.is_none() && !self.squads_tab_showing() && !self.board_showing()
     }
 
     /// `s` opens the settings on the screen showing. On a ticket (its screen, or its row in the Tickets pane) it does
@@ -355,7 +367,7 @@ impl App {
 
     /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is not the settings.
     pub(crate) fn ticket_has_keys(&self) -> bool {
-        self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets)
+        self.task_screen_showing() || (self.open_project.is_some() && self.pane == Pane::Tickets)
     }
 
     fn project_screen_key(&mut self, key: KeyEvent) {
@@ -416,6 +428,10 @@ impl App {
         let d = if up { -1 } else { 1 };
         if self.squads_tab_showing() {
             self.wheel_squads(up);
+        } else if self.board_showing() && self.tk.open.is_some() {
+            self.wheel_ticket(up);
+        } else if self.board_showing() {
+            self.board_key(KeyEvent::new(if up { KeyCode::Up } else { KeyCode::Down }, KeyModifiers::NONE));
         } else if self.projects_list_showing() {
             self.move_project(d);
         } else if self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets) {
@@ -432,6 +448,7 @@ impl App {
     pub(super) fn open_name_box(&mut self, purpose: NamePurpose) {
         let input = match &purpose {
             NamePurpose::Rename(id) => self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
+            NamePurpose::TaskFilter => self.filter.clone(),
             NamePurpose::TicketTitle(n) => self.ticket(*n).map(|t| t.title.clone()).unwrap_or_default(),
             NamePurpose::LandsOn(i) => self.sq.form.folders.get(*i).map(|l| l.lands_on.clone()).unwrap_or_default(),
             _ => String::new(),
@@ -450,7 +467,10 @@ impl App {
     pub(super) fn type_project_name(&mut self, text: &str) {
         let max = match &self.name_box.purpose {
             NamePurpose::Squad(p) => Self::squad_name_max(p),
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_) => crate::tickets::TITLE_MAX,
+            NamePurpose::NewTicket | NamePurpose::NewTask(_) | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_) => {
+                crate::tickets::TITLE_MAX
+            }
+            NamePurpose::TaskFilter => 200,
             _ => projects_mod::NAME_MAX,
         };
         let room = max.saturating_sub(self.name_box.input.chars().count());
@@ -462,6 +482,20 @@ impl App {
         match self.name_box.purpose.clone() {
             NamePurpose::Squad(p) => return self.save_squad_name(p),
             NamePurpose::LandsOn(i) => return self.save_lands_on(i),
+            NamePurpose::TaskFilter => {
+                self.filter = self.name_box.input.trim().to_string();
+                self.mode = Mode::List;
+                return;
+            }
+            NamePurpose::NewTask(project) => {
+                let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
+                if title.is_empty() {
+                    self.notify("A task needs a title");
+                    return; // the box stays open
+                }
+                self.mode = Mode::List;
+                return self.make_board_task(&project, &title);
+            }
             NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {
                 let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
                 if title.is_empty() {
@@ -489,7 +523,12 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::Squad(_) | NamePurpose::LandsOn(_) => {}
+            NamePurpose::NewTicket
+            | NamePurpose::NewTask(_)
+            | NamePurpose::TaskFilter
+            | NamePurpose::TicketTitle(_)
+            | NamePurpose::Squad(_)
+            | NamePurpose::LandsOn(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

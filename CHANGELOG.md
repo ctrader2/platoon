@@ -25,7 +25,11 @@ The first public release. platoon works with Claude Code (last checked with 2.1.
   themselves up to date as you work, and a long conversation can be handed on to a fresh session with one key.
 - **Tasks**: write down a piece of work, from platoon, from the command line (`platoon task`; `platoon ticket` still
   works), or by letting Claude turn a conversation into tasks with the `/to-tickets` skill. Tasks can wait for each other,
-  and can live outside any project.
+  can live outside any project, and move between projects.
+- **The Tasks tab**: every task in play across your projects, grouped by what it needs from you (Needs you, Working, Can
+  start, Waits for, Finished today), with the picked task's details beside it on a wide terminal: what its squad asks,
+  a timeline of what the squad has done, and the commands it ran. Answer a squad's question in place (`y`), put a task
+  aside until its squad says something new (`h`), and see in the header how many tasks need you.
 - **Squads**: hand a task to a squad, a lead agent and its team of agents, working in a copy of your folder (a git
   worktree made from the branch the work lands on) or, when you choose it, on a new branch of your own checkout. Four squads
   and twelve agents come built in, and you can change them or make your own. At each hand-over you say how much the squad

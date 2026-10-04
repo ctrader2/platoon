@@ -199,7 +199,7 @@ fn on_the_squads_tab(name: &str) -> (World, App) {
     w.transcript("alpha-1", "/srv/alpha", "fix the login page", 10);
     let mut app = w.app();
     app.notice = None;
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     assert!(app.squads_tab_showing());
     (w, app)
 }
@@ -297,7 +297,7 @@ fn a_help_heading_is_never_the_last_line_in_view() {
         .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Enter);

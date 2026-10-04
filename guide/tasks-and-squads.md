@@ -7,6 +7,59 @@ you tell it otherwise, asks you before anything other people can see.
 (Tasks were called tickets until platoon 1.0: `platoon ticket ...` still works, the same way as `platoon task ...`, and
 the `/to-tickets` skill keeps its name.)
 
+## The Tasks tab
+
+The second tab, `2` **Tasks**, lists every task in play, in every project and outside any project, grouped by what it
+needs from you, each group with how many it has:
+
+- **Needs you**: its squad stopped for you. It has a question, it is stuck, it is waiting for your OK on a command, or it
+  wants to publish something. The one that has waited longest comes first.
+- **Working**: a squad is at it (or it is being handed to one, or waits for a free one).
+- **Can start**: nobody has it yet and nothing it waits for is left; also the ones that **Need a folder**.
+- **Waits for**: it waits for another task to be Done.
+- **Later**: the ones you put aside with `h` until their squad says something new.
+- **Finished today**: Done or Cancelled in the last 24 hours. After five, the rest are folded: `enter` on the fold shows
+  them.
+
+Inside a group the latest change comes first (but for Needs you). The tasks of an archived project that nobody has started
+are left out.
+
+Each task takes two lines. The first says what it is: its project's badge (none for a task in no project), its number in
+its project (so `#5` can show twice, with different badges), its title, and at the right the word for it: what it needs
+(**a question**, **a go-ahead**, **stuck**, **your OK on a command**), how long since its squad last wrote, **Needs a
+folder**, or when it finished. The second, quieter, says who has it and what it needs from you: the squad's own words (its
+question, what it wants to publish), the squad and its steps as marks (`planner ✓  builder ✓  reviewer ●  verifier ·`:
+done, at work now, not yet; `✗` for a run that stopped without its result) and the tokens it used, `New · S hands it to a
+squad`, which tasks it waits for, or, once finished, the squad, whether its result is on the task, the branch its work is on
+and the tokens. A line too long for the screen ends with "…" after a whole word.
+
+On a terminal 100 columns wide or more, the picked task's details are beside the list: its title, where it is, which squad
+has it and for how long; what the squad asks (or wants to publish, or why it is stuck) with the keys that answer; **What it
+has done**, a timeline with a line per run of a member (its agent, a bar for when it ran within the squad's time so far, how
+long it took, and **done**, **now** or **stopped**), then the steps of the squad's workflow that haven't run yet; and **What
+ran**: the last eight things that ran for it, each with its time and grouped by run: the commands the squad ran in the shell
+(the leader's and its members', such as git, the tests, a build) and platoon's own steps (the copy of a folder it made and
+from which branch, the squad started). Narrower, the list has the whole width, and `enter` opens the task.
+
+On every tab the header says how many tasks need you, **● 2 need you**, when any do (the ones under Later don't count).
+While nothing else is said there, the footer of the Tasks tab says how many squads are at work, **1 of 3 squads at work**.
+With nothing in play, the tab says: "Nothing in play. Press n to write a task, or S on a task that can start."
+
+| Key (Tasks tab) | Does |
+| --- | --- |
+| `y` | answer the squad. On a question (or a squad that is stuck): a one-line box, **Answer the Docs squad on #6**, with what it asks above it. `enter` types your words into the squad's session as your reply, as if you had written them there (the task goes back to Working once the session takes them, as described in [Writing to the squad](#writing-to-the-squad)); `ctrl+o` opens the session instead; `esc` cancels. On a task that wants to publish, `y` is the go-ahead (what `p` does). On one waiting for your OK on a command, it opens the squad's session, where that question is. When the squad's session isn't running, `y` continues it, beside the task, and says so: type your answer there |
+| `enter` | open the task, beside its squad's session when that runs (on the fold under Finished today: show or hide the rest) |
+| `h` | later: put a task that needs you aside, under **Later**, until its squad says something new (then it is back under Needs you). `h` on one under Later brings it back now |
+| `n` | a new task: first which project it is in, or **No project**, then its title; then its text opens in your editor. In a project it works in the folder of the project's most recently used session, as the [pane's](#the-tasks-pane) `n` does. A task in no project needs a folder to work in: the folder picker opens before it is written (leave it, and nothing is made) |
+| `m` | move it to another project, or out of any (**No project**). It gets that project's next number and keeps the one it had for its branch (`task/5` stays `task/5`); its text, its result, its own folder and what its squads were started with go with it; its copies of folders and its branch stay as they are; what it waited for is dropped (those were the other project's tasks). Not while its squad's session is running, or while it waits for a free squad: the line says why |
+| `S` | hand it to a squad (see [The hand-over](#the-hand-over)) |
+| `c` | cancel it, after asking |
+| `p` `e` `r` `f` `b` `w` `v` | as on the [task's own screen](#a-tasks-own-screen) |
+| `/` | narrow the board to the tasks whose title, project or squad has what you type (it narrows as you type); `esc` clears it |
+| `↑` `↓` | move (`j` `k`, `PgUp` `PgDn`, `g` `G` too) |
+
+`1` to `4` switch tabs, `?` lists every key, and `q` quits from here as from the other top-level lists.
+
 ## Tasks
 
 A task has a title, a text you write in Markdown (which also says how far to take the work), the folder or folders it
@@ -16,18 +69,18 @@ the squad does **on its own**, and for each of its git folders how the squad **w
 
 ### The Tasks pane
 
-The **Tasks** pane sits under Sessions on a project's screen. Open tasks come first; the Done and Cancelled ones are kept
-apart under a line that says **Done and cancelled · N**, folded until you press `enter` on it. Each row says the number,
-the title and the task's [state](#states) in plain words: **Can start**, **Waits for #2, #4**, **Needs a folder**,
-**Working**, **Needs you**, **Done** or **Cancelled** (a Cancelled task still holds up the ones waiting for it: only Done
-lets them go). These words are never cut: on a narrow terminal the title is. Narrower still, what is happening to the task
-(handed over, in the line for a free squad) shares the column with them, and on the narrowest that column uses short words
-(**Waits #1**, **No folder**, **In line**).
+The **Tasks** pane sits under Sessions on a project's screen. It shows the same rows as the [Tasks tab](#the-tasks-tab),
+that project's tasks only (without its badge), under the same headings, with the same two lines each; all of its Done and
+Cancelled tasks are kept apart at the end under a line that says **Done and cancelled · N**, folded until you press
+`enter` on it (there, each says **Done** or **Cancelled** at its right). A Cancelled task still holds up the ones waiting
+for it: only Done lets them go. The word at the right of a row is never cut: on a narrow terminal the title is, after a
+whole word. When the pane is too short for them all it says how many more lines are below, and scrolls as you move.
 
 | Key (Tasks pane) | Does |
 | --- | --- |
 | `n` | new task: type its title, then the text opens in your editor (the same list of editors as the [notes](projects.md#editing-the-notes)). An archived project takes no new tasks |
 | `enter` | open the task (on the Done and cancelled line: show or hide them) |
+| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead), put it aside for later, move it to another project |
 | `c` `e` `r` `f` `b` `S` `p` `w` | as on the task's own screen, for the task picked |
 
 ### A new task
@@ -49,12 +102,14 @@ folder.
 
 ### A task's own screen
 
-`enter` on a task shows its number and title, its state, **From** (the session it was made in with
-[`/to-tickets`](#making-tasks-from-a-conversation): its name as the Sessions tab shows it, else its first prompt), what the
-squad said when it stopped, the squad that has it (**Squad** Coding squad), how much the squad does **on its own**, where
-it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 · lands on main",
-or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it waits for, and
-then its text, drawn the way the notes are; `↑` `↓` scroll it.
+`enter` on a task shows its number and title, its project (or **No project**), its state, **From** (the session it was made
+in with [`/to-tickets`](#making-tasks-from-a-conversation): its name as the Sessions tab shows it, else its first prompt),
+what the squad said when it stopped, the squad that has it (**Squad** Coding squad), how much the squad does **on its
+own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
+lands on main", or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it
+waits for, and the tokens its squads used. Under a line: its squad's result (when it has one), **What the squad has done**
+(the same timeline as beside the Tasks tab, for each squad it has had), **What ran** (all of it, grouped by run), and then
+its text, drawn the way the notes are; `↑` `↓` scroll them (on a short terminal the tokens scroll with them).
 
 | Key (a task's screen) | Does |
 | --- | --- |
@@ -66,10 +121,11 @@ then its text, drawn the way the notes are; `↑` `↓` scroll it.
 | `b` | what it waits for: tick the project's other tasks (`enter` or `space`). A task can't wait for itself, and a wait that would go round in a circle is refused |
 | `S` (shift+s) | hand it to a squad (see [below](#handing-a-task-to-a-squad)). `a` does nothing on a task: it says `S` does this |
 | `p` | let its squad publish, when it needs you for that |
+| `y` `h` `m` | as on the [Tasks tab](#the-tasks-tab): answer the squad (or give the go-ahead), put it aside for later, move it |
 | `w` | remove its copy of the folder anyway, when it was kept because it has changes not yet committed (Done or Cancelled, its squad's session not running): asks first, says the changes will be lost; the branch is kept |
 | `enter` | on a task a squad has: its squad's session, beside the task. On one made from a session that no squad has yet: that session, opened the way `enter` opens it on the Sessions tab |
 | `o` | the session the task was made from (the **From** line), also when `enter` is the squad's |
-| `ctrl+space`, `esc` or `q` | back to the project, on the same task (the [back key](settings-and-keys.md#keys-back-and-quit)) |
+| `ctrl+space`, `esc` or `q` | back to the project (or the Tasks tab), on the same task (the [back key](settings-and-keys.md#keys-back-and-quit)) |
 
 ### States
 
@@ -100,8 +156,9 @@ squad of that project is running, then moves them to the new names once (keeping
 status line: "Moved Web shop's tickets to tasks.json." A task that already had a branch keeps it (`ticket/<N>`); new ones
 get `task/<N>`.
 
-Tasks made outside any project (see below) are in `~/.config/platoon/tasks.json` and `~/.config/platoon/tasks/`, with a
-number space of their own. They show in `platoon task list` under "No project"; the app's screens for them come later.
+Tasks made outside any project (`n` on the [Tasks tab](#the-tasks-tab), or `platoon task add` below) are in
+`~/.config/platoon/tasks.json` and `~/.config/platoon/tasks/`, with a number space of their own. They are on the Tasks tab
+without a badge, and in `platoon task list` under "No project". `m` moves a task between projects, or out of them.
 
 ### From the command line
 
@@ -278,16 +335,24 @@ stops a squad; new ones just wait.
 
 ### What the squad has done, and the tokens it used
 
-A task's screen lists the members' runs in the order the leader started them, as its session shows them (not the
-workflow on paper): each member by its agent name, with the short description the leader gave it, `[x]` once its result
-has come back and `[>]` while it runs (`[-]` for a run whose leader stopped before it reported), and "Now: coding-reviewer"
-while one is at work.
+A task's screen (and the details beside the [Tasks tab](#the-tasks-tab)) shows the members' runs in the order the leader
+started them, as its session shows them (not the workflow on paper), as a timeline: one line per run, its agent's name (the
+squad's own part of it: `planner` for `coding-planner`), a bar for when it ran within the squad's time so far (from the
+leader's first line to now while it runs, else to its last line), how long it took, and **done** once its result has come
+back, **now** while it runs, **stopped** for one that failed or whose leader stopped before it reported. While the task is
+open, the steps of the squad's workflow that haven't run yet follow, saying **not yet**.
+
+**What ran** lists the commands the squad ran in the shell, the leader's and each member's, with the time each was asked
+for, beside platoon's own steps for the task (each copy of a folder it made and the branch it came from, each squad it
+started), grouped by the run they belong to: the Tasks tab shows the latest eight, a task's screen all of them (the latest
+50 commands a task's squads ran are kept).
 
 Below the task's details it also shows the tokens its squads used: the total, what that counts (what was sent to Claude,
 what Claude wrote, and what was read again from Claude's cache, each answer once, the members' own work included), and a
-line per agent - the leader and each member - added up over every squad the task has had. The Tasks pane shows the
-short total ("1.2M tokens") on each task that has one. platoon reads this from the squad's session files in the
-background, every couple of seconds, only for the open project's tasks that have had a squad.
+line per agent - the leader and each member - added up over every squad the task has had. The Tasks tab and pane show the
+short total ("1.2M tokens") on a working or finished task's second line. platoon reads all this from the squad's session
+files in the background, every couple of seconds, only for the tasks that have had a squad: the open project's, or on the
+Tasks tab every task on it.
 
 ### How the task's state follows the squad
 
@@ -367,7 +432,7 @@ Only Research's researcher and checker and the summarizer can use the web. Every
 
 ## The Squads tab
 
-The third tab, `3` **Squads**, has two lists: the **squads** and the **agents** they are made of. The title of the left
+The fourth tab, `4` **Squads**, has two lists: the **squads** and the **agents** they are made of. The title of the left
 pane shows which one you are looking at (`[Squads]  Agents`); `←` and `→` on the list switch between them (or click the
 title). An agent is its own thing, shared by squads: the same planner can do a step in several squads.
 

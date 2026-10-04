@@ -94,7 +94,7 @@ fn with_task(name: &str, folders: &[PathBuf]) -> (World, App, String, crate::tes
     let folders: Vec<String> = folders.iter().map(|f| f.to_string_lossy().into_owned()).collect();
     Tickets::open(&w.config, &id).add(NewTicket { title: "Basket".into(), folders, ..Default::default() }).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
@@ -361,6 +361,8 @@ fn a_new_branch_in_the_checkout_is_offered_only_when_nothing_else_works_there() 
     repo(&shop);
     let (mut w, mut app, id, _fake) = with_task("hand-blocked", std::slice::from_ref(&shop));
     let line = |app: &mut App| {
+        // #1 (other tasks may come before it in the pane: a Working one does).
+        app.tk.selected = Some(crate::app::TRow::Ticket(1));
         key(app, KeyCode::Char('S'));
         assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
         let l = app.sq.form.folders[0].clone();
@@ -379,8 +381,10 @@ fn a_new_branch_in_the_checkout_is_offered_only_when_nothing_else_works_there() 
     }
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let f = flat(&draw(&mut term, &app));
+    // (The pane's rows behind the popup share its lines, so the two parts are looked for apart.)
     assert!(
-        f.contains("shop: a copy on task/1, lands on main a new branch in your checkout: not now, shop has changes not yet committed"),
+        f.contains("shop: a copy on task/1, lands on main")
+            && f.contains("a new branch in your checkout: not now, shop has changes not yet committed"),
         "{f}"
     );
     key(&mut app, KeyCode::Char(' '));
@@ -472,49 +476,51 @@ fn the_tasks_pane_says_the_five_states_in_their_colors_wide_and_narrow() {
     store.squad_wants_to_publish(4, "Wants to publish: push task/4").unwrap();
     store.set_state(7, &State::Done).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     app.tk.unfolded = true;
     // (The picked row is drawn on the selection fill, with its colors held readable: the divider is picked instead.)
     app.tk.selected = Some(crate::app::TRow::Divider(1));
     let t = app.effective_theme().clone();
-    // Wide: the full words, each in its color; never "New" or "Ready".
-    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
-    let shown = draw(&mut term, &app);
-    let f = flat(&shown);
-    for (words, color) in [
-        ("#1 Can start one Can start", t.ok),
-        ("#2 Working one Working", t.busy),
-        ("#3 Needs you one Needs you", t.warn),
-        ("#4 Publish one Needs you", t.warn),
-        ("#5 Waits one Waits for #1", t.warn),
-        ("#6 No folder one Needs a folder", t.subtext),
-        ("#7 Done one Done", t.ok),
-    ] {
-        assert!(f.contains(words), "{words}: {shown}");
-        let state = words.rsplit(" one ").next().unwrap();
-        let row = shown.lines().find(|l| l.contains(words.split(" one").next().unwrap())).unwrap();
-        let y = shown.lines().position(|l| l == row).unwrap() as u16;
-        let x = row.rfind(state).unwrap();
-        let x = row[..x].chars().count() as u16;
-        assert_eq!(term.backend().buffer()[(x, y)].fg, color, "{words}");
+    // The board's rows: under each section's heading in its color, each row's word at its right in its color.
+    let color_at = |term: &Terminal<TestBackend>, shown: &str, row_has: &str, word: &str| {
+        let y = shown.lines().position(|l| l.contains(row_has)).unwrap_or_else(|| panic!("{row_has}: {shown}"));
+        let row = shown.lines().nth(y).unwrap();
+        let x = row[..row.rfind(word).unwrap_or_else(|| panic!("{word} on {row_has}: {shown}"))].chars().count() as u16;
+        term.backend().buffer()[(x, y as u16)].fg
+    };
+    for (w, h) in [(140u16, 60u16), (60, 60)] {
+        let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let shown = draw(&mut term, &app);
+        let f = flat(&shown);
+        for (heading, color) in [("Needs you · 2", t.warn), ("Working · 1", t.busy), ("Can start · 2", t.ok), ("Waits for · 1", t.subtext)]
+        {
+            assert!(f.contains(heading), "{w}: {heading}: {shown}");
+            assert_eq!(color_at(&term, &shown, heading, heading), color, "{w}: {heading}");
+        }
+        // (Narrow, the titles are cut with "…"; the words at the right never are.)
+        for (row, word, color) in
+            [("#3 ", "a question", t.warn), ("#4 ", "a go-ahead", t.warn), ("#6 ", "Needs a folder", t.subtext), ("#7 ", "Done", t.ok)]
+        {
+            assert_eq!(color_at(&term, &shown, row, word), color, "{w}: {row}");
+        }
+        if w >= 100 {
+            // Their second lines: what each needs, in plain words.
+            assert!(f.contains("#5 Waits one Waits for #1 Can start one"), "{w}: {shown}");
+            assert!(f.contains("#1 Can start one New · S hands it to a squad"), "{w}: {shown}");
+            assert!(f.contains("Coding squad wants to publish: push task/4"), "{w}: {shown}");
+        }
+        assert!(f.contains("▸ Done and cancelled · 1") || f.contains("▾ Done and cancelled · 1"), "{w}: {shown}");
+        assert!(!f.contains("Ready") && !f.contains("Waiting on you"), "{f}");
     }
-    assert!(!f.contains(" New ") && !f.contains("Ready") && !f.contains("Waiting on you"), "{f}");
-    // Narrow: the short words, whole.
-    let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
-    let shown = draw(&mut term, &app);
-    let f = flat(&shown);
-    for words in ["Can start", "Working", "Needs you", "Waits #1", "No folder", "Done"] {
-        assert!(f.contains(words), "{words}: {shown}");
-    }
-    assert!(!f.contains("Waits for") && !f.contains("Needs a folder"), "{f}");
-    // `p` offered on the one that wants to publish, `S` on the one that can start.
+    // `y` offered on the one that wants to publish (the go-ahead), `S` on the one that can start.
+    let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     app.tk.selected = Some(crate::app::TRow::Ticket(4));
-    assert!(flat(&draw(&mut term, &app)).contains("p let it publish"));
+    assert!(flat(&draw(&mut term, &app)).contains("y go ahead"));
     app.tk.selected = Some(crate::app::TRow::Ticket(1));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("S hand to a squad") && !f.contains("let it publish"), "{f}");
+    assert!(f.contains("S hand to a squad") && !f.contains("go ahead"), "{f}");
     key(&mut app, KeyCode::Enter);
     let f = flat(&draw(&mut Terminal::new(TestBackend::new(120, 30)).unwrap(), &app));
     assert!(f.contains("State Can start") && f.contains("Works in /tmp") && !f.contains("On its own"), "nothing set yet: {f}");
@@ -541,7 +547,7 @@ fn a_projects_old_task_files_are_moved_once_no_leader_of_it_runs_and_said_once()
     let pid = w.live("lead-1", "/tmp", 1, "idle");
     app.refresh_for_test();
     assert!(dir.join("tickets.json").exists() && !dir.join("tasks.json").exists(), "a running leader was given the old paths");
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.ticket(1).map(|t| t.title.as_str()), Some("Basket"));
     assert!(app.active_notice().is_none_or(|n| !n.contains("Moved")), "{:?}", app.active_notice());

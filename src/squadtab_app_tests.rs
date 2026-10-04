@@ -73,7 +73,7 @@ fn right(text: &str) -> String {
 fn on_the_tab(name: &str) -> (World, App) {
     let w = World::new(name);
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     assert!(app.squads_tab_showing());
     (w, app)
 }
@@ -190,7 +190,7 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("3 Squads") && !f.contains("3 Squads 4"), "the tab, without a count: {f}");
+    assert!(f.contains("4 Squads") && !f.contains("4 Squads 4"), "the tab, without a count: {f}");
     assert!(f.contains("[Squads] Agents"), "the switch, in the list's title: {f}");
     let l = left(&shown);
     // A built-in squad as platoon has it says nothing under its name: a marker on every row would mark nothing.
@@ -585,7 +585,7 @@ fn deleting_an_agent_a_squad_uses_is_refused_naming_the_squads() {
     let careful = squadfile::copy_of(&w.config, &coding, "Careful coding", &[]);
     squadfile::save(&w.config, &careful).unwrap();
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     key(&mut app, KeyCode::Right);
     key(&mut app, KeyCode::End);
     key(&mut app, KeyCode::Up);
@@ -1043,7 +1043,7 @@ fn a_file_that_cant_be_read_is_shown_as_such_and_left_alone() {
     fs::create_dir_all(agentfile::dir(&w.config)).unwrap();
     fs::write(agentfile::path(&w.config, "helper"), "[1]").unwrap();
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     key(&mut app, KeyCode::Char('G'));
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
@@ -1098,7 +1098,7 @@ fn s_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
         .add(NewTicket { title: "Basket".into(), folders: vec![folder.to_string_lossy().into_owned()], ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Char('S'));
@@ -1287,7 +1287,7 @@ fn twelve_steps_with_five_send_backs_scroll_at_80_columns() {
     let s = twelve_steps(&w);
     squadfile::save(&w.config, &s).unwrap();
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     key(&mut app, KeyCode::End);
     assert_eq!(app.sqt.listed().map(|l| l.id.as_str()), Some("long-haul"));
     let mut term = Terminal::new(TestBackend::new(80, 30)).unwrap();
@@ -1333,7 +1333,7 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     fs::write(w.root.join(".claude.json"), r#"{"mcpServers":{"sentry":{"command":"npx","env":{"TOKEN":"secret-token"}},"github":{}}}"#)
         .unwrap();
     let mut app = w.app();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     go_agent(&mut app, "builder");
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let f = right(&draw(&mut term, &app));

@@ -1,6 +1,7 @@
-//! What the open project's squads have done, for the ticket screen and the Tickets pane: each leader's transcript
-//! (and its members' beside it) read by `claude::read_leader` on a thread of its own, every couple of seconds, and
-//! only again when a file changed (by size and time). Only tickets that have leaders are read. What is shown from it
+//! What the squads have done, for a task's screen, the Tasks pane and the Tasks tab: each leader's transcript (and its
+//! members' beside it) read by `claude::read_leader` on a thread of its own, every couple of seconds, and only again
+//! when a file changed (by size and time). Only tasks that have leaders are read: the open project's, or on the Tasks
+//! tab every task on the board, across projects. What is shown from it
 //! (tokens per ticket and per agent, the members' runs) is worked out in `squadwork.rs`.
 
 use super::*;
@@ -83,7 +84,7 @@ impl App {
         if self.sw.last.is_some_and(|t| t.elapsed() < EVERY) {
             return;
         }
-        let sessions: Vec<String> = self.tickets().iter().flat_map(|t| t.leaders.iter().map(|l| l.session.clone())).collect();
+        let sessions = self.sessions_to_read();
         if sessions.is_empty() {
             return;
         }
@@ -95,6 +96,26 @@ impl App {
             let _ = tx.send(read_all(&root, &sessions, &prev));
         });
         self.sw.rx = Some(rx);
+    }
+
+    /// The leader sessions whose transcripts are read: on the Tasks tab, those of every task on the board (in play
+    /// or finished today, across projects); elsewhere, those of the open project's tasks.
+    fn sessions_to_read(&self) -> Vec<String> {
+        if !self.board_showing() {
+            return self.tickets().iter().flat_map(|t| t.leaders.iter().map(|l| l.session.clone())).collect();
+        }
+        let now = usage::now();
+        let on_board = |t: &Ticket| match t.state {
+            crate::tickets::State::New => false,
+            crate::tickets::State::Done | crate::tickets::State::Cancelled => now.saturating_sub(t.updated) < crate::board::FINISHED_FOR,
+            _ => true,
+        };
+        self.all_tasks()
+            .iter()
+            .flat_map(|(_, list)| list.iter())
+            .filter(|t| on_board(t))
+            .flat_map(|t| t.leaders.iter().map(|l| l.session.clone()))
+            .collect()
     }
 
     /// What was last read of this leader session's transcript.

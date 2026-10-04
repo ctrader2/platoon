@@ -83,7 +83,7 @@ fn on_the_project(name: &str) -> (World, App, String) {
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
     (w, app, id)
@@ -252,7 +252,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // The row is picked, in the Tickets pane.
     assert_eq!((app.pane, app.selected_ticket().map(|t| t.number)), (Pane::Tickets, Some(1)));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#1 Log in with a link Can start"), "{shown}");
+    assert!(shown.contains("Can start · 1 ▎#1 Log in with a link New · S hands it to a squad"), "{shown}");
 }
 
 #[test]
@@ -269,7 +269,7 @@ fn a_new_tickets_folder_is_the_projects_most_recent_sessions_folder() {
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     app.projects.assign("bbb-2", Some(&id)).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     app.set_editors_for_test(Vec::new());
     key(&mut app, KeyCode::Tab);
@@ -289,7 +289,7 @@ fn a_project_with_no_sessions_makes_tickets_with_no_folder_yet() {
     let mut app = w.app();
     app.projects.create("Empty").unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     app.set_editors_for_test(Vec::new());
     key(&mut app, KeyCode::Tab);
@@ -388,14 +388,14 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     key(&mut app, KeyCode::Tab);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#2 Middle Can start"), "{shown}");
-    assert!(shown.contains("#3 Top Waits for #2"), "only the unfinished blocker: {shown}");
+    assert!(shown.contains("Can start · 1 ▎#2 Middle New · S hands it to a squad"), "{shown}");
+    assert!(shown.contains("Waits for · 1 #3 Top Waits for #2 Middle"), "only the unfinished blocker: {shown}");
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
-    let (ry, rx) = find(&term, "Can start").unwrap();
+    let (ry, rx) = find(&term, "Can start ·").unwrap();
     assert_eq!(buf[(rx, ry)].fg, t.ok, "ready is quiet green");
     let (by, bx) = find(&term, "Waits for #2").unwrap();
-    assert_eq!(buf[(bx, by)].fg, t.warn);
+    assert_eq!(buf[(bx, by)].fg, t.dim, "what it waits for, quiet");
     // The picked row (the first) has the highlight and the bar; the other rows don't.
     let (my, mx) = find(&term, "#2 ").unwrap();
     assert_eq!(buf[(mx, my)].bg, t.surface, "the picked row");
@@ -408,7 +408,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     draw(&mut term, &app);
     let buf = buffer(&term);
     let (wy, wx) = find(&term, "Needs you").unwrap();
-    assert_eq!((buf[(wx, wy)].fg, buf[(wx, wy)].bg), (t.warn, t.bg), "a squad's state, shown with its words");
+    assert_eq!((buf[(wx, wy)].fg, buf[(wx, wy)].bg), (t.warn, t.bg), "a squad's state, as its section's heading");
     // A click on a row picks it; a click on the picked row opens it.
     let click = |app: &mut App, i: usize| {
         let r = app.hits.borrow().iter().find(|(_, h)| matches!(h, Hit::TicketRow(x) if *x == i)).map(|(r, _)| *r).expect("drawn");
@@ -432,7 +432,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     // Once #2 is Done too, #3 is ready.
     set_state(&w, &mut app, &id, 2, State::Done);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#3 Top Can start"), "{shown}");
+    assert!(shown.contains("Can start · 1 ▎#3 Top New · S hands it to a squad"), "{shown}");
 }
 
 #[test]
@@ -575,57 +575,29 @@ fn a_ticket_added_from_outside_shows_on_the_next_refresh_and_a_corrupt_file_is_s
 #[test]
 fn eighty_columns_keep_the_number_what_matters_most_whole_and_cut_the_title() {
     let (w, mut app, id) = on_the_project("t-80");
-    add(&w, &mut app, &id, "A rather long title for a ticket", &[]);
+    add(&w, &mut app, &id, "A rather long title for a task that goes on", &[]);
     add(&w, &mut app, &id, "Second", &[1]);
-    add(&w, &mut app, &id, "Third", &[]);
+    add(&w, &mut app, &id, "Third, with a title as long as the first one", &[]);
     set_state(&w, &mut app, &id, 3, State::Cancelled);
-    Tickets::open(&w.config, &id).set_folders(1, &["/tmp".into()]).unwrap();
     app.reload_for_test();
     app.tk.unfolded = true;
+    key(&mut app, KeyCode::Tab);
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
-    let shown = draw(&mut term, &app);
-    let f = flat(&shown);
-    assert!(f.contains("Sessions") && f.contains("Tasks") && f.contains("Notes"), "{shown}");
-    assert!(f.contains("#1 A rather long") && f.contains("… Can start"), "the title is cut, not what it says: {shown}");
-    assert!(f.contains("#2 Second Waits #1"), "the short words, so the title keeps room: {shown}");
-    assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state shares one column with the rest: {shown}");
-    assert!(f.contains("#3 Third Cancelled"), "a row with nothing else to say says its state: {shown}");
-    // No row runs past its pane.
-    let (y, x) = find(&term, "#2").unwrap();
-    let buf = buffer(&term);
-    let border = (x..80).find(|c| buf[(*c, y)].symbol() == "│").expect("the pane's right border");
-    assert!(border < 40, "{shown}");
-}
-
-#[test]
-fn ticket_columns_never_cut_the_state_and_share_one_column_then_short_words_before_the_title_goes() {
-    // (state, tail, the two in one column, the same in short words), and titles longer than any pane
-    let want = ((16, 12), 16, 10);
-    for width in 0..200usize {
-        let c = ui::ticket_cols(width, 2, want.0, want.1, want.2, 60);
-        let used = 1 + c.num + 1 + c.title + [c.state, c.tail].iter().filter(|w| **w > 0).map(|w| w + 2).sum::<usize>();
-        assert!(used <= width.max(4 + 2 + 6), "{width}: {c:?}");
-        match (c.merged, c.short) {
-            (false, _) => assert!((c.state, c.tail) == want.0 && c.title >= 24, "{width}: {c:?}"),
-            (true, false) => assert!(c.state == want.1 && c.tail == 0 && c.title >= 20, "{width}: {c:?}"),
-            // The short words are cut only when the title would be shorter than six cells.
-            (true, true) => assert!(c.state == want.2 || (width < 4 + 2 + 6 + want.2 && c.title <= 8), "{width}: {c:?}"),
-        }
+    // The pane scrolls to the picked row; its word at the right is whole, its title cut with "…".
+    for (n, word) in [(1, "Needs a folder"), (3, "Cancelled")] {
+        app.tk.selected = Some(TRow::Ticket(n));
+        let shown = draw(&mut term, &app);
+        let f = flat(&shown);
+        assert!(f.contains("Sessions") && f.contains("Tasks") && f.contains("Notes"), "{shown}");
+        let row = shown.lines().find(|l| l.contains(&format!("#{n} "))).unwrap_or_else(|| panic!("#{n}: {shown}"));
+        let in_pane = row.split('│').nth(1).unwrap_or_default();
+        assert!(in_pane.trim_end().ends_with(word) && in_pane.contains('…'), "#{n}: the title is cut, not what it says: {shown}");
+        // No row runs past its pane.
+        let (y, x) = find(&term, &format!("#{n} ")).unwrap();
+        let buf = buffer(&term);
+        let border = (x..80).find(|c| buf[(*c, y)].symbol() == "│").expect("the pane's right border");
+        assert!(border < 40, "{shown}");
     }
-    let c = ui::ticket_cols(120, 2, (3, 5), 5, 5, 60);
-    assert_eq!((c.state, c.tail, c.title, c.merged), (3, 5, 120 - 4 - 5 - 7, false));
-    // The Tickets pane at 80 columns is 35 wide: one column for the state, in short words, so a long title keeps room.
-    let c = ui::ticket_cols(35, 2, (16, 12), 16, 10, 60);
-    assert_eq!((c.merged, c.short, c.state, c.title), (true, true, 10, 19));
-    // At 42 the full words leave the title 20 cells: they show.
-    let c = ui::ticket_cols(42, 2, (16, 12), 16, 10, 60);
-    assert_eq!((c.merged, c.short, c.state, c.title), (true, false, 16, 20));
-    // Titles that fit beside the full words keep them: nothing would be gained by the short ones.
-    let c = ui::ticket_cols(35, 2, (16, 12), 16, 10, 12);
-    assert_eq!((c.merged, c.short, c.state, c.title), (true, false, 16, 13));
-    // At 60 columns it is 25 wide: the short words.
-    let c = ui::ticket_cols(25, 2, (16, 12), 16, 10, 60);
-    assert_eq!((c.merged, c.short, c.state, c.title), (true, true, 10, 9));
 }
 
 #[test]

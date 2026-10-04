@@ -168,9 +168,12 @@ impl App {
 
     fn start_removing(&mut self, project: String, number: u32, todo: Vec<Worktree>, anyway: bool) {
         let git = self.git_program.clone();
+        // A task moved to another project keeps the number its branch was made with.
+        let branch_no = Tickets::open(&self.config, &project).get(number).map_or(number, Ticket::branch_number);
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let out: Vec<(String, Removal)> = todo.iter().map(|w| (w.path.clone(), worktrees::remove(&git, w, number, anyway))).collect();
+            let out: Vec<(String, Removal)> =
+                todo.iter().map(|w| (w.path.clone(), worktrees::remove(&git, w, branch_no, anyway))).collect();
             let _ = tx.send(out);
         });
         self.wt.removing = Some((Out { project, number, rx }, anyway));
@@ -236,7 +239,7 @@ impl App {
 
     /// `bring_worktrees_back`, then `then`.
     pub(super) fn bring_worktrees_back_then(&mut self, number: u32, then: After) -> bool {
-        let Some(project) = self.open_project.clone() else { return false };
+        let Some(project) = self.task_scope() else { return false };
         let Some(t) = self.ticket(number).cloned() else { return false };
         let gone: Vec<String> = t.worktrees.iter().filter(|w| w.is_gone()).map(|w| w.folder.clone()).collect();
         if gone.is_empty() {
@@ -313,7 +316,7 @@ impl App {
             return;
         }
         let show =
-            self.open_project.as_deref() == Some(project.as_str()) && self.tk.open == Some(number) && matches!(self.mode, Mode::List);
+            self.task_scope().as_deref() == Some(project.as_str()) && self.tk.open == Some(number) && matches!(self.mode, Mode::List);
         if let Err(e) = self.launch_leader_in(&project, number, None, show) {
             self.notify(format!("Couldn't start the squad: {e}"));
         }
@@ -376,7 +379,7 @@ impl App {
     /// Yes to "Remove #N's worktree anyway?": removed with its changes (the branch kept), off the UI thread.
     pub(super) fn remove_worktree_anyway(&mut self, number: u32) {
         self.mode = Mode::List;
-        let Some(project) = self.open_project.clone() else { return };
+        let Some(project) = self.task_scope() else { return };
         let todo: Vec<Worktree> = self.kept_worktrees(number);
         if todo.is_empty() || !self.can_remove_worktree(number) {
             return;

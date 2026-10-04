@@ -134,7 +134,7 @@ impl Lab {
     /// Open the project's screen.
     fn open_project(&self, t: &mut Term) {
         t.wait_for("enter open");
-        t.send(b"2");
+        t.send(b"3");
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -247,7 +247,7 @@ fn n_in_the_tickets_pane_makes_a_ticket_and_opens_its_body_in_the_editor() {
     t.wait_for("nano · task #1");
     t.send(b"A link by email logs you in.\r");
     t.wait_for("Saved the body of #1.");
-    t.wait_for_flat("#1 Log in with a link Can start");
+    t.wait_for_all(&["#1 Log in with a link", "New · S hands it to a squad"]);
     let v = lab.tickets();
     let one = &v["tickets"][0];
     assert_eq!(
@@ -276,21 +276,23 @@ fn done_and_cancelled_are_folded_apart_and_a_ticket_moves_there_with_c_after_ask
     t.wait_for_all(&["#2 Middle", "#3 Top", "▸ Done and cancelled · 1"]);
     let screen = t.stable();
     assert!(!screen.contains("#1 Base"), "folded:\n{screen}");
-    let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("#2 Middle Can start") && flat.contains("#3 Top Waits for #2"), "{screen}");
-    // Colors, by cell: the picked row has the highlight, ready is green, waits for is yellow.
+    // Under the board's headings: what each is, then what it needs.
+    for want in ["Can start · 1", "#2 Middle", "New · S hands it to a squad", "Waits for · 1", "#3 Top", "Waits for #2 Middle"] {
+        assert!(screen.contains(want), "{want}: {screen}");
+    }
+    // Colors, by cell: the picked row has the highlight, Can start is green, what a task waits for is quiet.
     let (r2, c2) = find(&mut t, "#2 Middle");
     let (r3, c3) = find(&mut t, "#3 Top");
     t.wait_bg(r2, c2, SURFACE);
     assert_eq!(t.bg_at(r3, c3), BG, "another row");
-    let (ry, rx) = find(&mut t, "Can start");
+    let (ry, rx) = find(&mut t, "Can start ·");
     assert_eq!(t.fg_at(ry, rx), OK);
     let (by, bx) = find(&mut t, "Waits for #2");
-    assert_eq!(t.fg_at(by, bx), WARN);
+    assert_ne!(t.fg_at(by, bx), WARN);
     // Enter on the divider unfolds it.
     t.send(b"G\r");
     t.wait_for_all(&["▾ Done and cancelled · 1", "#1 Base"]);
-    let (dy, dx) = find(&mut t, "Done  ");
+    let (dy, dx) = find(&mut t, "Done │");
     assert_eq!(t.fg_at(dy, dx), OK, "Done in green");
     t.send(b"\r");
     t.wait_gone("#1 Base");
@@ -397,10 +399,10 @@ fn platoon_ticket_add_while_the_app_is_open_shows_up_without_a_restart() {
         "## Body\npiped in\n\nHow far: a local commit.\n",
     );
     assert_eq!((code, out.as_str(), err.as_str()), (0, "#1\n", ""));
-    t.wait_for_flat("#1 From the command line Can start");
+    t.wait_for_all(&["#1 From the command line", "New · S hands it to a squad"]);
     let (code, out, _) = lab.cli(&["add", "--project", "pweb", "--title", "Second", "--waits-for", "1"], "");
     assert_eq!((code, out.as_str()), (0, "#2\n"));
-    t.wait_for_flat("#2 Second Waits for #1");
+    t.wait_for_all(&["#2 Second", "Waits for #1 From the command line"]);
     // Refusals say one plain line and make nothing.
     let (code, out, err) = lab.cli(&["add", "--project", "Nope", "--title", "x"], "");
     assert!(code != 0 && out.is_empty() && err.trim() == "platoon task add: there is no project called \"Nope\"", "{err}");
@@ -432,21 +434,25 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 24, 80);
     lab.open_project(&mut t);
     t.send(b"\t");
-    // The short words (`Waits #1`), so the long title keeps 20 cells.
-    t.wait_for_all(&["#1 A rather long title…", "Can start", "#2 Second", "Waits #1", "Done and cancelled · 1"]);
+    // The long title is cut with "…"; what each row needs is under it.
+    t.wait_for_all(&["#1 A rather long title for a…", "Can start ·", "#2 Second", "Waits for #1 A rather", "Done and cancelled · 1"]);
+    // Unfolded, and the last row picked: the pane scrolls to it.
     t.send(b"G\r");
+    t.wait_for("▾ Done and cancelled · 1");
+    t.send(b"G");
     t.wait_for("#3 Third");
     let screen = t.stable();
-    let flat = screen.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(flat.contains("#3 Third Cancelled"), "{screen}");
-    assert!(!flat.contains("local"), "no how far:\n{screen}");
+    let (row, _) = find(&mut t, "#3 Third");
+    let three = screen.lines().nth(row as usize).unwrap().split('│').nth(1).unwrap_or("").trim_end().to_string();
+    assert!(three.ends_with("Cancelled"), "its word at the right of its row, whole: {screen}");
+    assert!(!screen.contains("local"), "no how far:\n{screen}");
     for line in screen.lines() {
         assert!(line.chars().count() <= 80, "{line}");
     }
     let (row, _) = find(&mut t, "#2 Second");
-    let line = screen.lines().nth(row as usize).unwrap();
+    let line = screen.lines().nth(row as usize + 1).unwrap();
     let pane = line.split('│').nth(1).unwrap_or("");
-    assert!(pane.contains("Waits #1"), "inside its own pane: {line}");
+    assert!(pane.contains("Waits for #1"), "inside its own pane: {line}");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

@@ -112,11 +112,11 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     assert_eq!(opened(&mut app), vec![s(&w.base)]);
 
     // The Squads tab and the Projects list ask too.
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
     key(&mut app, KeyCode::Esc);
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
     key(&mut app, KeyCode::Esc);
@@ -166,7 +166,7 @@ fn lab(name: &str, state: State) -> Lab {
         t.squad_says(n, &state, "", None).unwrap();
     }
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     // The Tickets pane, on #1.

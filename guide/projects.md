@@ -43,8 +43,9 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 ## A project's screen
 
 A project's screen shows its name and its description across the top (in full, wrapped when it is long), its sessions at
-the top left (active ones first, then an `Archived (N)` group, dimmed), its
-[tasks](tasks-and-squads.md#tasks) under them and its notes on the right.
+the top left (active ones first, then an `Archived (N)` group, dimmed), its [tasks](tasks-and-squads.md#the-tasks-pane)
+under them (the same rows as the [Tasks tab](tasks-and-squads.md#the-tasks-tab), this project's only) and its notes on the
+right.
 
 - `tab` and `shift+tab` go round the three panes. `shift` with an arrow moves between them too: `shift+↑` to Sessions,
   `shift+↓` to Tasks, `shift+→` to the notes and `shift+←` back to whichever of Sessions and Tasks you used last.

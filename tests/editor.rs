@@ -216,7 +216,7 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     assert!(!screen.contains("STAND-IN HELIX RUNNING"), "the editor's screen is gone:\n{screen}");
     assert!(lab.cache.join("editor-open").read_dir().unwrap().next().is_none(), "and the note that it had the folder open");
     // And platoon answers keys again.
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("No projects yet");
     t.send(b"q");
     assert_eq!(t.wait_exit(), 0);
@@ -248,7 +248,7 @@ fn ticket_lab(name: &str, state: &str) -> (Lab, PathBuf, String) {
 /// The project's screen, the Tickets pane in focus on #1.
 fn to_tickets(t: &mut Term) {
     t.wait_for("enter open");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -388,7 +388,7 @@ fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() 
     let env = lab.own_editors(json!({"files_editor": "code"}));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 130);
     t.wait_for("enter open");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);

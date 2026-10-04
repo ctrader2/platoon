@@ -216,7 +216,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     let lab = Lab::new("sqtab-draft");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
-    t.send(b"3");
+    t.send(b"4");
     t.wait_for_all(&["╭ [Squads]", "╭ Coding", "n describe a new squad"]);
     t.send(b"n");
     t.wait_for_all(&["What to describe for Claude to draft:", "A new squad", "A new agent"]);
@@ -238,7 +238,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.wait_for_all(&["Your own"]);
 
     // Hand the ticket to it: the picker lists every squad by name.
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -281,7 +281,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     // The squad changes on the tab (what it can do), and every leader runs on Opus from now on (the settings file).
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.send(b"3");
+    t.send(b"4");
     t.wait_for_all(&["╭ [Squads]", "Careful coding"]);
     // To the list (shift+left), on the new squad, then into its details from the top, down to what it can do.
     t.send(b"\x1b[1;2D");
@@ -299,7 +299,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     let pid = lab.pid(1);
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     until("the fake leader to exit", || !alive(pid));
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for("╭ Tasks");
@@ -327,7 +327,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     // A squad has no leader of its own on the Squads tab any more.
-    t.send(b"3");
+    t.send(b"4");
     t.wait_for_all(&["╭ [Squads]", "Built in", "Every squad has the same leader"]);
     let screen = t.stable();
     assert!(!screen.contains("Needs a folder") && !screen.contains("Use a worktree"), "{screen}");
@@ -368,7 +368,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"\x1b");
     t.wait_gone("Settings file:");
     // Handed a ticket, Coding's leader has both.
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -402,7 +402,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     fs::write(lab.claude.join(".claude.json"), claude_json).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
-    t.send(b"3");
+    t.send(b"4");
     t.wait_for_all(&["╭ [Squads]", "← → agents"]);
     t.send(b"\x1b[C");
     t.wait_for_all(&["[Agents]", "▎ planner"]);
@@ -441,7 +441,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     // Wait for the list's own footer, not for "esc back to the list" to go: the notice about linear can be hiding that
     // hint already, and a `2` sent before the esc is read arrives with it as alt+2.
     t.wait_for("enter details");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -474,7 +474,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     env.push(("NO_COLOR", String::new()));
     let mut t = Term::spawn(&[], &env, &lab.work, 40, 130);
     t.wait_for("enter open");
-    t.send(b"3");
+    t.send(b"4");
     t.wait_for_all(&["[Squads]", "╭ Coding", "← → agents"]);
     t.send(b"c");
     t.wait_for("Copy squad");

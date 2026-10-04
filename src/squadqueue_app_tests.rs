@@ -62,7 +62,7 @@ fn world(name: &str, tickets: u32, at_once: u64) -> (World, App, String, crate::
 
 fn open_project(app: &mut App) {
     app.reload_for_test();
-    key(app, KeyCode::Char('2'));
+    key(app, KeyCode::Char('3'));
     key(app, KeyCode::Enter);
     key(app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
@@ -107,8 +107,8 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     assert_eq!(app.active_notice(), Some(crate::squadqueue::queued_notice(2, "Summarize", 1).as_str()));
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    // (The state and what it is waiting for share one column at this width: the line says it.)
-    assert!(f.contains("#2 Ticket 2 Waiting for a free squad"), "{f}");
+    // Its row says it is in the line, and its second line for which squad.
+    assert!(f.contains("#2 Ticket 2 in line Waiting for a free squad · Summarize squad"), "{f}");
     // A third joins the line behind it.
     hand(&mut app, 3);
     assert!(on_disk(&w, &id, 3).queued.is_some() && app.sq.launched == [1]);
@@ -319,9 +319,10 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     // it 4.3M), and nothing on the one that hasn't.
     let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
     let shown = draw(&mut term, &app);
-    let row = |n: &str| shown.lines().find(|l| l.contains(n)).unwrap().to_string();
-    assert!(row("#1 Ticket 1").contains("2.5M tokens") && !row("#1 Ticket 1").contains("4.3M"), "{shown}");
-    assert!(!row("#2 Ticket 2").contains("tokens"), "{shown}");
+    // (A row's second line is the one under its title.)
+    let second = |n: &str| shown.lines().skip_while(|l| !l.contains(n)).nth(1).unwrap().to_string();
+    assert!(second("#1 Ticket 1").contains("2.5M tokens") && !second("#1 Ticket 1").contains("4.3M"), "{shown}");
+    assert!(!second("#2 Ticket 2").contains("tokens"), "{shown}");
     // The screen (its session isn't running: the checker's run never came back, and says so).
     pick(&mut app, 1);
     key(&mut app, KeyCode::Enter);
@@ -338,24 +339,29 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     );
     assert!(!f.contains("in all"), "{f}");
     assert!(f.contains("summarize-leader 60K + 1.8M from cache summarize-summarizer 2M summarize-checker 400K"), "{f}");
+    // Each leader's timeline, under its squad's name: the checker's run never came back, and its session stopped.
     assert!(
-        f.contains("What the squad has done Summarize squad [x] summarize-summarizer · Sum up the thread [-] summarize-checker · Check the summary (didn't finish) Summarize squad [x]"),
+        f.contains("What the squad has done Summarize squad summarizer · done checker · stopped Summarize squad summarizer · done checker · stopped"),
         "{f}"
     );
-    assert!(!f.contains("Now:"), "nothing runs now: {f}");
+    assert!(!f.contains(" now "), "nothing runs now: {f}");
 }
 
 #[test]
-fn the_ticket_screen_shows_the_last_eight_runs_and_how_many_came_before() {
+fn the_ticket_screen_shows_every_run_on_its_timeline_and_scrolls_to_them() {
     let (w, mut app, id, _fake) = world("sqq-runs", 1, 3);
-    let call = |c: &str, what: &str| {
-        json!({"type":"assistant","message":{"id":format!("m-{c}"),"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":"summarize-summarizer","description":what,"prompt":"go"}}],"usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
+    let call = |c: &str, what: &str, at: u64| {
+        json!({"type":"assistant","timestamp":crate::testkit::iso(at),"message":{"id":format!("m-{c}"),"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":"summarize-summarizer","description":what,"prompt":"go"}}],"usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
     };
-    let done = |c: &str| json!({"type":"user","message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"done"}]}}).to_string();
-    let mut lines = vec![json!({"type":"agent-setting","agentSetting":"summarize-leader"}).to_string()];
-    for k in 1..=12 {
-        lines.push(call(&format!("c{k}"), &format!("Pass {k:02}")));
-        lines.push(done(&format!("c{k}")));
+    let done = |c: &str, at: u64| {
+        json!({"type":"user","timestamp":crate::testkit::iso(at),"message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"done"}]}}).to_string()
+    };
+    let start = crate::testkit::now_ms() - 3_600_000;
+    let mut lines =
+        vec![json!({"type":"agent-setting","agentSetting":"summarize-leader","timestamp":crate::testkit::iso(start)}).to_string()];
+    for k in 1..=12u64 {
+        lines.push(call(&format!("c{k}"), &format!("Pass {k:02}"), start + k * 60_000));
+        lines.push(done(&format!("c{k}"), start + k * 60_000 + 30_000));
     }
     w.transcript_lines("lead-r", &lines);
     let mut t = Tickets::open(&w.config, &id);
@@ -369,35 +375,22 @@ fn the_ticket_screen_shows_the_last_eight_runs_and_how_many_came_before() {
     pick(&mut app, 1);
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(130, 60)).unwrap();
-    let f = flat(&draw(&mut term, &app));
-    // (The note beside the ticket about its session sits between the heading and the runs in this flattened text.)
-    assert!(f.contains("What the squad has done") && f.contains("and 4 earlier [x] summarize-summarizer · Pass 05"), "{f}");
-    for k in 1..=4 {
-        assert!(!f.contains(&format!("Pass {k:02}")), "run {k} is folded: {f}");
+    let shown = draw(&mut term, &app);
+    // Every run, each a line: the agent, its bar, how long it took (30 seconds), done.
+    let lanes: Vec<&str> = shown.lines().filter(|l| l.contains("summarizer") && l.contains("30s  done")).collect();
+    assert_eq!(lanes.len(), 12, "{shown}");
+    assert!(lanes.iter().all(|l| l.contains('━')), "each with its bar: {shown}");
+    // Bars further right for later runs.
+    let bar_at = |l: &str| l.find('━').unwrap();
+    assert!(bar_at(lanes[0]) < bar_at(lanes[11]), "{shown}");
+    // On a short screen they scroll with the text under them.
+    let mut small = Terminal::new(TestBackend::new(130, 30)).unwrap();
+    let first = flat(&draw(&mut small, &app));
+    for _ in 0..20 {
+        key(&mut app, KeyCode::Down);
     }
-    for k in 5..=12 {
-        assert!(f.contains(&format!("[x] summarize-summarizer · Pass {k:02}")), "run {k}: {f}");
-    }
-    assert_eq!(f.matches("[x] summarize-summarizer").count(), 8, "{f}");
-}
-
-#[test]
-fn eight_runs_or_fewer_are_all_shown_with_no_earlier_line() {
-    let (w, mut app, id, _fake) = world("sqq-runs8", 1, 3);
-    leader_transcript(&w, "lead-e", 5);
-    let mut t = Tickets::open(&w.config, &id);
-    t.start_leader(
-        1,
-        &Leader { squad: "summarize".into(), session: "lead-e".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
-        &[],
-    )
-    .unwrap();
-    app.refresh_until_for_test(20, "the transcript to be read", |a| a.leader_log("lead-e").is_some_and(|l| l.runs.len() == 2));
-    pick(&mut app, 1);
-    key(&mut app, KeyCode::Enter);
-    let mut term = Terminal::new(TestBackend::new(130, 60)).unwrap();
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("What the squad has done [x] summarize-summarizer · Sum up the thread") && !f.contains("earlier"), "{f}");
+    let later = flat(&draw(&mut small, &app));
+    assert_ne!(first, later, "it scrolls");
 }
 
 #[test]
@@ -420,8 +413,6 @@ fn while_the_leader_runs_its_open_run_is_running_and_now_names_the_member() {
     app.tk.open = Some(1);
     let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(
-        f.contains("[x] summarize-summarizer · Sum up the thread [>] summarize-checker · Check the summary Now: summarize-checker"),
-        "{f}"
-    );
+    // Its timeline: the summarizer done, the checker at work now.
+    assert!(f.contains("What the squad has done summarizer · done checker · now"), "{f}");
 }

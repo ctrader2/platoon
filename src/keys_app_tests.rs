@@ -69,7 +69,7 @@ fn on_the_project(name: &str) -> (World, App) {
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     Tickets::open(&w.config, &id).add(NewTicket { title: "Basket page".into(), ..Default::default() }).unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
     (w, app)
@@ -136,7 +136,7 @@ fn in_a_squads_details_the_back_key_esc_and_q_go_back_to_the_list_and_q_quits_fr
     let w = World::new("keys-squads");
     let mut app = w.app();
     let mut term = Terminal::new(TestBackend::new(160, 36)).unwrap();
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     for back in [ctrl_space as fn(&mut App), |a: &mut App| key(a, KeyCode::Esc), |a: &mut App| ch(a, 'q')] {
         key(&mut app, KeyCode::Enter);
         assert_eq!(app.sqt.focus, SqFocus::Detail);

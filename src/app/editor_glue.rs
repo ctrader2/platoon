@@ -102,6 +102,13 @@ impl App {
         if self.squads_tab_showing() || self.projects_list_showing() {
             return None;
         }
+        if self.board_showing() {
+            let project = self.task_scope()?;
+            return match self.tk.open {
+                Some(number) => Some(EdTarget::Ticket { project, number }),
+                None => self.board_task().map(|(project, number)| EdTarget::Ticket { project, number }),
+            };
+        }
         if let Some(project) = self.open_project.clone() {
             if let Some(number) = self.tk.open {
                 return Some(EdTarget::Ticket { project, number });
@@ -225,8 +232,8 @@ impl App {
 
     /// The ticket a flow is about, as it is now.
     fn flow_ticket(&self, project: &str, number: u32) -> Option<Ticket> {
-        match (&self.open_project, &self.tk.store) {
-            (Some(p), Some(store)) if p == project => store.get(number).cloned(),
+        match &self.tk.store {
+            Some(store) if store.project() == project => store.get(number).cloned(),
             _ => Tickets::open(&self.config, project).get(number).cloned(),
         }
     }
@@ -256,7 +263,7 @@ impl App {
             let (project, number) = (project.clone(), *number);
             let gone = self.flow_ticket(&project, number).is_some_and(|t| t.worktrees.iter().any(|w| w.is_gone()));
             if gone
-                && self.open_project.as_deref() == Some(project.as_str())
+                && self.task_scope().as_deref() == Some(project.as_str())
                 && self.bring_worktrees_back_then(number, worktree_glue::After::Editor)
             {
                 self.notify(format!("Bringing #{number}'s worktree back from its branch first…"));

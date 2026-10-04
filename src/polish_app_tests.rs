@@ -155,14 +155,15 @@ fn every_popup_fades_the_screen_behind_it() {
         assert_eq!(cell.symbol(), "p");
         cell.fg == t.border
     };
-    let cases: [Opens; 7] = [
+    let cases: [Opens; 8] = [
         ('1', 'r', |m| matches!(m, Mode::Rename)),
         ('1', 'm', |m| matches!(m, Mode::Assign)),
         ('1', 'n', |m| matches!(m, Mode::Picker)),
         ('1', 's', |m| matches!(m, Mode::Settings)),
         ('1', '?', |_| true),
-        ('2', 'n', |m| matches!(m, Mode::ProjectName)),
-        ('2', 'c', |m| matches!(m, Mode::Look)),
+        ('2', 'n', |m| matches!(m, Mode::TaskProject)),
+        ('3', 'n', |m| matches!(m, Mode::ProjectName)),
+        ('3', 'c', |m| matches!(m, Mode::Look)),
     ];
     // Wide enough that the top left corner is never under a popup.
     for (tab, k, is) in cases {
@@ -234,7 +235,7 @@ fn on_a_project(name: &str) -> (World, App, String) {
         .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     (w, app, id)
@@ -255,7 +256,7 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
         let anywhere = section(&help, "Anywhere in platoon");
         assert!(!help.iter().any(|(s, _, _)| s == "Everywhere"), "{place}");
         let keys: Vec<&str> = anywhere.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["1-3", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
+        assert_eq!(keys, ["1-4", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
         assert_eq!(here.iter().any(|(k, d)| k == "s" && d == "settings"), s, "{place}: s {here:?}");
         assert_eq!(here.iter().any(|(k, d)| k == "/" && d == "search"), slash, "{place}: / {here:?}");
         // Never one action twice: the back key's line says esc does the same, so the screen's esc back isn't listed.
@@ -281,9 +282,9 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
     // The three tabs.
     ch(&mut app, '1');
     check(&app, "Sessions", true, true);
-    ch(&mut app, '2');
-    check(&app, "Projects", true, true);
     ch(&mut app, '3');
+    check(&app, "Projects", true, true);
+    ch(&mut app, '4');
     check(&app, "Squads", true, false);
     let first = seen[0].1.clone();
     for (place, anywhere) in &seen {
@@ -332,9 +333,10 @@ fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_senten
     app.reload_for_test();
     let mut term = sized(&mut app, 120, 30);
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("#1 Coupon totals Can start"), "{f}");
-    assert!(f.contains("#2 After it Waits for #1"), "{f}");
-    assert!(!f.contains("ready") && !f.contains(" New "), "the old words are gone: {f}");
+    // The pane's rows under the board's headings: what it is, then what it needs.
+    assert!(f.contains("Can start · 1 ▎#1 Coupon totals New · S hands it to a squad"), "{f}");
+    assert!(f.contains("Waits for · 1 #2 After it Waits for #1 Coupon totals"), "{f}");
+    assert!(!f.contains("ready"), "the old words are gone: {f}");
     // On the Projects tab: how many can start.
     key(&mut app, KeyCode::Esc);
     let f = flat(&draw(&mut term, &app));
@@ -392,7 +394,7 @@ fn the_notes_and_the_squads_tab_say_it_plainly() {
     assert!(f.contains("Every session in this project starts with these notes."), "{f}");
     assert!(!f.contains("context"), "{f}");
     key(&mut app, KeyCode::Esc);
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     key(&mut app, KeyCode::Enter);
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("its system prompt and model are in Settings (s) → Projects."), "{f}");
@@ -438,42 +440,36 @@ fn tickets_pane(lines: &[String]) -> Vec<String> {
 }
 
 #[test]
-fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
+fn the_tasks_pane_never_cuts_a_rows_word_and_cuts_the_title_instead() {
     let (_w, mut app) = a_shop("c-tickets");
-    // (size, the words every row must show whole)
-    let full = ["Needs a folder", "Working", "Needs you", "Needs you", "Waits for #1", "Done", "Cancelled"];
-    let short = ["No folder", "Working", "Needs you", "Needs you", "Waits #1", "Done", "Cancelled"];
-    for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &short), (60, 24, &short)] {
+    // The word at the right of each row: never cut (the title is, with "…").
+    let words = [(1, "Needs a folder"), (3, "a question"), (4, "a go-ahead"), (6, "Done"), (7, "Cancelled")];
+    for (w, h) in [(120u16, 60u16), (80, 60), (60, 60)] {
         let mut term = sized(&mut app, w, h);
         let lines = draw(&mut term, &app);
         let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
         let pane = tickets_pane(&lines);
-        // Every ticket row the pane has room for (a short pane scrolls).
-        let mut seen = 0;
-        for (n, word) in words.iter().enumerate() {
-            let Some(row) = pane.iter().find(|l| l.contains(&format!("#{} ", n + 1))) else { continue };
-            assert!(row.trim_end().ends_with(word), "#{}: {word:?} whole at the end of its row: {row:?}\n{ctx}", n + 1);
-            seen += 1;
+        for (n, word) in words {
+            let Some(row) = pane.iter().find(|l| l.contains(&format!("#{n} "))) else { panic!("#{n} isn't in the pane: {ctx}") };
+            assert!(row.trim_end().ends_with(word), "#{n}: {word:?} whole at the end of its row: {row:?}\n{ctx}");
         }
-        assert!(seen >= 5, "{ctx}");
-        // What is cut is the title, and it says so.
-        let first = pane.iter().find(|l| l.contains("#1 ")).unwrap();
-        assert!(first.contains("Coupon totals") || first.contains('…'), "{ctx}");
+        // Every second line ends at a word, or with "…" after one.
+        for (k, l) in pane.iter().enumerate() {
+            if l.contains("Wants to publish") || l.contains("wants to publish") {
+                let text = l.trim_end();
+                assert!(!text.ends_with(" pu") && !text.ends_with(" pus"), "line {k} cut mid-word: {l:?}\n{ctx}");
+            }
+        }
         if w < 120 {
-            assert!(pane.iter().any(|l| l.contains("#4 Checkout") && l.contains("…")), "a long title is cut with …: {ctx}");
+            assert!(pane.iter().any(|l| l.contains("#4 ") && l.contains('…')), "a long title is cut with …: {ctx}");
         }
     }
-    // Wide, the state has its own column and what a ticket waits for another.
-    let mut term = sized(&mut app, 200, 60);
-    let pane = tickets_pane(&draw(&mut term, &app));
-    let five = pane.iter().find(|l| l.contains("#5 ")).unwrap();
-    assert!(!five.contains("New") && five.trim_end().ends_with("Waits for #1"), "{five}");
 }
 
 #[test]
 fn a_long_agent_name_is_cut_and_keeps_its_model_like_every_other_row() {
     let (_w, mut app) = three("c-agents");
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     key(&mut app, KeyCode::Right);
     for (w, h) in [(80u16, 24u16), (120, 40)] {
         let mut term = sized(&mut app, w, h);
@@ -521,7 +517,7 @@ fn a_pane_cut_at_its_bottom_says_how_much_more_is_below() {
     assert!(lines.iter().any(|l| l.contains("point number 40")), "{}", lines.join("\n"));
     // The Squads tab's workflow, at 80x24, is longer than its pane.
     key(&mut app, KeyCode::Esc);
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     let lines = draw(&mut term, &app);
     assert!(lines.iter().any(|l| l.contains("Workflow")), "{}", lines.join("\n"));
     let more = lines.iter().position(|l| l.contains("more lines below")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
@@ -537,7 +533,7 @@ fn a_session_folder_in_the_project_pane_is_cut_where_a_folder_starts() {
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     let mut term = sized(&mut app, 80, 24);
     let lines = draw(&mut term, &app);
@@ -562,7 +558,7 @@ fn a_notice_stays_with_the_screen_it_was_given_on() {
     assert!(said.starts_with("Renamed to"), "{said}");
     assert!(draw(&mut term, &app).last().unwrap().contains(&said));
     // Another tab: it doesn't follow.
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     assert_eq!(app.active_notice(), None);
     let lines = draw(&mut term, &app);
     assert!(!lines.iter().any(|l| l.contains("Renamed to")), "{}", lines.join("\n"));

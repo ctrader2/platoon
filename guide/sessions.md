@@ -6,9 +6,11 @@ folders in an editor.
 
 ## The list
 
-The header has three tabs, **Sessions**, **Projects** and **Squads** (`1` to `3`, or click them). Under Sessions and
-Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
-narrow terminal, on the row under it): the left and right arrow keys switch them (or click them).
+The header has four tabs, **Sessions**, **Tasks**, **Projects** and **Squads** (`1` to `4`, or click them). Under Sessions
+and Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
+narrow terminal, on the row under it): the left and right arrow keys switch them (or click them). After the tabs, the
+header says how many tasks need you (**● 2 need you**, see [the Tasks tab](tasks-and-squads.md#the-tasks-tab)) and how
+many sessions have a reply you haven't seen (**● 1 unread**), each when there are any and the line has room for it.
 
 `?` shows **every key of the screen you are on** in a popup, with the keys that work everywhere: the line at the bottom of
 the screen keeps only what fits, and `? help` is always in it. The popup scrolls when it is longer than the screen; `esc`,
@@ -73,7 +75,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
-| `1` `2` `3` | switch between the Sessions, Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
+| `1` `2` `3` `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |

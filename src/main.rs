@@ -2,6 +2,9 @@ mod agentfile;
 mod ai;
 mod app;
 mod archive;
+mod board;
+#[cfg(test)]
+mod board_app_tests;
 #[cfg(test)]
 mod clarity_app_tests;
 mod claude;
@@ -716,7 +719,7 @@ mod tests {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
         }
         assert!(
-            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Projects 3 Squads"),
+            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"),
             "{text}"
         );
         // Working then finished while unseen -> "done".
@@ -886,7 +889,9 @@ mod tests {
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
         assert!(
-            shown.contains("1 Sessions 2 Projects 3 Squads ") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"),
+            shown.contains("1 Sessions 2 Tasks 3 Projects 4 Squads ")
+                && !shown.contains("Plugins")
+                && shown.contains("Active 2 Archived 1"),
             "{shown}"
         );
 
@@ -898,16 +903,19 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 to 3: the top-level tabs. A number with no tab does nothing.
+        // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
-        assert!(app.top == 1 && app.projects_list_showing() && app.selected_session().is_none());
-        assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
+        assert!(app.top == 1 && app.board_showing() && app.selected_session().is_none());
+        assert!(flat(&draw(&mut term, &app)).contains(crate::board::EMPTY));
         ch(&mut app, '3');
-        assert!(app.top == 2 && app.squads_tab_showing() && app.selected_session().is_none());
+        assert!(app.top == 2 && app.projects_list_showing() && app.selected_session().is_none());
+        assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '4');
-        assert!(app.top == 2 && matches!(app.mode, Mode::List));
+        assert!(app.top == 3 && app.squads_tab_showing() && app.selected_session().is_none());
         ch(&mut app, '5');
-        assert_eq!(app.top, 2);
+        assert!(app.top == 3 && matches!(app.mode, Mode::List));
+        ch(&mut app, '6');
+        assert_eq!(app.top, 3);
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 
@@ -2053,7 +2061,7 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("1 Sessions 2 Projects 3 Squads"), "{shown}");
+        assert!(flat(&shown).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{shown}");
         let rule = shown.lines().nth(1).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
@@ -2064,12 +2072,12 @@ mod tests {
             text[..text.find(needle).unwrap()].chars().count()
         };
         assert!(a_first <= col_of("1 Sessions") && a_last >= col_of("1 Sessions") + "1 Sessions".len(), "{shown}");
-        assert!(a_last < col_of("2 Projects"), "the other tab is not underlined: {shown}");
+        assert!(a_last < col_of("3 Projects"), "the other tab is not underlined: {shown}");
 
-        ch(&mut app, '2');
+        ch(&mut app, '3');
         let shown2 = draw(&mut term, &app);
         let (b_first, _) = underline(&shown2).unwrap();
-        assert!(b_first >= col_of("2 Projects") - 1, "the underline moved to the Projects tab: {shown2}");
+        assert!(b_first >= col_of("3 Projects") - 1, "the underline moved to the Projects tab: {shown2}");
         assert!(b_first > a_last, "{shown2}");
     }
 
@@ -2093,8 +2101,8 @@ mod tests {
         let cells = row_cells(&term, 0);
         let header: String = cells.iter().map(|c| c.symbol()).collect();
         // The counts are on the Active/Archived switch under them, so the tabs are just a key and a name.
-        assert!(header.contains("1 Sessions   2 Projects   3 Squads"), "{header}");
-        for (key, name) in [("1", "1 Sessions"), ("2", "2 Projects"), ("3", "3 Squads")] {
+        assert!(header.contains("1 Sessions   2 Tasks   3 Projects   4 Squads"), "{header}");
+        for (key, name) in [("1", "1 Sessions"), ("2", "2 Tasks"), ("3", "3 Projects"), ("4", "4 Squads")] {
             let at = cell_index(&cells, name);
             let hint = if cells[at].bg == t.surface { t.readable_on(t.subtext, t.surface, crate::theme::MIN_SUBTEXT) } else { t.subtext };
             assert_eq!((cells[at].symbol(), cells[at].fg), (key, hint), "{name}: the key reads as a hint, current or not");
@@ -2211,7 +2219,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
             let header = shown.lines().next().unwrap();
-            assert!(flat(header).contains("1 Sessions 2 Projects 3 Squads"), "{cols}: {header}");
+            assert!(flat(header).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{cols}: {header}");
             assert!(!header.contains("1234") && !header.contains("5678"), "{cols}: no counts in the tabs: {header}");
             assert!(flat(shown.lines().nth(1).unwrap()).contains("Active 1234 Archived 3"), "{cols}: the counts are on the rule: {shown}");
             assert!(
@@ -2224,7 +2232,7 @@ mod tests {
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
         let header = draw(&mut term, &app).lines().next().unwrap().to_string();
-        assert!(flat(&header).contains("1 Sessions 2 Projects 3 Squads"), "{header}");
+        assert!(flat(&header).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{header}");
     }
 
     #[test]

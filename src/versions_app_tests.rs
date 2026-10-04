@@ -3,15 +3,15 @@
 //! announced only once it has shown, and put away by the next key or click. Every directory is a temp dir (`World`);
 //! nothing here starts a process or reaches the network.
 
-use crate::app::{App, TOP_SESSIONS, TOPS};
+use crate::app::{App, TOP_SESSIONS, TOP_TASKS, TOPS};
 
 /// The Projects and Squads tabs, as `app.top` numbers them (`TOPS`).
-const TOP_PROJECTS: usize = 1;
-const TOP_SQUADS: usize = 2;
+const TOP_PROJECTS: usize = 2;
+const TOP_SQUADS: usize = 3;
 
 #[test]
 fn the_tab_numbers_here_are_the_apps() {
-    assert_eq!((TOPS[TOP_PROJECTS], TOPS[TOP_SQUADS]), ("Projects", "Squads"));
+    assert_eq!((TOPS[TOP_TASKS], TOPS[TOP_PROJECTS], TOPS[TOP_SQUADS]), ("Tasks", "Projects", "Squads"));
 }
 use crate::testkit::World;
 use crate::ui;
@@ -110,9 +110,13 @@ fn it_shows_on_the_two_lists_only_and_is_remembered_once_it_has_shown() {
     let state = w.cache.join("version-check.json");
     let mut app = w.app();
     app.notice = None;
-    // The checks answer while the Squads tab shows: nothing is drawn, nothing is remembered yet.
-    app.top = TOP_SQUADS;
+    // The checks answer while the Squads tab shows: nothing is drawn, nothing is remembered yet. Nor on the Tasks tab,
+    // whose details have the room beside the list.
+    app.top = TOP_TASKS;
     app.set_news_for_test(CLAUDE);
+    app.refresh();
+    assert_eq!(app.news_showing(), None);
+    app.top = TOP_SQUADS;
     app.refresh();
     assert_eq!(app.news_showing(), None);
     assert!(!words(&shown(&app, 110, 24)).contains("Claude Code 2.2.0"));
@@ -137,7 +141,7 @@ fn the_next_key_or_click_puts_it_away_and_still_does_what_it_does() {
     let w = world("vn-key");
     let mut app = with_news(&w, CLAUDE);
     assert_eq!(app.news_showing(), Some(CLAUDE));
-    app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
     assert_eq!(app.news_showing(), None);
     assert_eq!(app.top, TOP_PROJECTS, "the key went to the Projects tab as well");
     app.on_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));

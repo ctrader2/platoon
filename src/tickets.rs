@@ -52,8 +52,9 @@ How far: local changes only (say if you want a commit, or a push and merge reque
 /// kept as it is. The screen never says "New": a New task reads **Can start**, **Waits for #N** or **Needs a folder**
 /// (`words`), and Waiting reads **Needs you**. A file that says `ready` (the state Ready to publish, until 2026-10)
 /// reads as Waiting with `Ticket::publish_wanted`; nothing writes `ready` again.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum State {
+    #[default]
     New,
     Working,
     Waiting,
@@ -444,7 +445,7 @@ fn is_commit_id(s: &str) -> bool {
     (4..=64).contains(&s.len()) && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Ticket {
     pub number: u32,
     pub title: String,
@@ -489,6 +490,17 @@ pub struct Ticket {
     pub queued: Option<Queued>,
     /// The session it was made from (`platoon ticket add --from-session`, the `/to-tickets` skill).
     pub from: Option<Source>,
+    /// The user put it aside (`h` on the Tasks board) while it needed them; it counts only while nothing has changed
+    /// since (`is_aside`).
+    pub aside: Option<Aside>,
+}
+
+/// A task the user put aside while it needed them: its `updated` time and what the squad had said, as they were then.
+/// The squad saying something new (a new time, or other words) brings it back.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Aside {
+    pub updated: u64,
+    pub reason: String,
 }
 
 /// Where a ticket came from: the Claude Code session it was made in, and that session's project then.
@@ -531,6 +543,16 @@ impl Ticket {
     /// Does the task work in `folder` as a new branch in the user's own checkout?
     pub fn branch_in_checkout(&self, folder: &str) -> bool {
         self.works_on_in(folder).is_some_and(|w| w.how == How::Branch)
+    }
+
+    /// The number its branch and worktree folders are named with: the one it was made with, before any move.
+    pub fn branch_number(&self) -> u32 {
+        self.old_number.unwrap_or(self.number)
+    }
+
+    /// Put aside by the user and nothing new since: it Needs you, and its time and the squad's words are as they were.
+    pub fn is_aside(&self) -> bool {
+        self.state == State::Waiting && self.aside.as_ref().is_some_and(|a| a.updated == self.updated && a.reason == self.reason)
     }
 }
 
@@ -707,6 +729,12 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         from: o.get("from").and_then(|f| {
             let session = f.get("session")?.as_str().filter(|s| !s.is_empty())?.to_string();
             Some(Source { session, project: f.get("project").and_then(Value::as_str).unwrap_or_default().to_string() })
+        }),
+        aside: o.get("aside").and_then(|a| {
+            Some(Aside {
+                updated: a.get("updated")?.as_u64()?,
+                reason: a.get("reason").and_then(Value::as_str).unwrap_or_default().to_string(),
+            })
         }),
     })
 }
@@ -1457,6 +1485,142 @@ impl Tickets {
     pub fn touch(&mut self, number: u32) -> io::Result<()> {
         self.edit(number, |_, _| Ok(()))
     }
+
+    /// `h` on the Tasks board: put a task that Needs you aside (`on`), with its time and what the squad said as they are
+    /// now, or bring it back. Its own `updated` time stays as it is: that is what tells something new from nothing.
+    pub fn set_aside(&mut self, number: u32, on: bool) -> io::Result<()> {
+        self.change(|root, _| {
+            let t = root
+                .get_mut("tickets")
+                .and_then(Value::as_array_mut)
+                .and_then(|a| a.iter_mut().find(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number))))
+                .and_then(Value::as_object_mut)
+                .ok_or_else(|| format!("there is no task #{number} any more"))?;
+            if on {
+                let updated = t.get("updated").and_then(Value::as_u64).unwrap_or(0);
+                let reason = t.get("reason").and_then(Value::as_str).unwrap_or_default().to_string();
+                t.insert("aside".into(), json!({"updated": updated, "reason": reason}));
+            } else {
+                t.remove("aside");
+            }
+            Ok(())
+        })
+    }
+}
+
+/// A tasks file's top-level object for a move: an empty one when there is no file, Err when there is one that can't be
+/// understood (it is never written over).
+fn read_root(path: &Path) -> io::Result<Map<String, Value>> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Map::new()),
+        Err(e) => return Err(e),
+    };
+    match serde_json::from_str::<Value>(&text) {
+        Ok(Value::Object(o)) if o.get("tickets").is_none_or(Value::is_array) && o.get("next").is_none_or(Value::is_u64) => Ok(o),
+        _ => Err(io::Error::other(CORRUPT)),
+    }
+}
+
+/// Move task `number` of project `from` into project `to` (either may be `NO_PROJECT_ID`). It gets `to`'s next number
+/// and keeps the one it was made with as `old_number` (its branch and worktree folders are named with that one, so
+/// they stay as they are). Its files go with it, named for the new number: its body, its result, its own folder and
+/// what its leaders were started with. What it waits for is dropped (those were the old project's tasks). Under both
+/// files' locks; the files are moved before either list is written, and put back if a list can't be written. Returns
+/// the new number. The caller refuses a task whose squad's session is running.
+pub fn move_task(config: &Path, from: &str, number: u32, to: &str) -> io::Result<u32> {
+    if from == to {
+        return Err(io::Error::other(format!("#{number} is there already")));
+    }
+    let (src_path, dst_path) = (path_in(config, from), path_in(config, to));
+    // The two locks always in the same order, so two moves the other way round can't wait for each other.
+    let (first, second) = if src_path <= dst_path { (&src_path, &dst_path) } else { (&dst_path, &src_path) };
+    let _a = lock(first)?;
+    let _b = lock(second)?;
+    let mut src = read_root(&src_path)?;
+    let mut dst = read_root(&dst_path)?;
+    let list = src.get("tickets").and_then(Value::as_array).cloned().unwrap_or_default();
+    let pos = list
+        .iter()
+        .position(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number)))
+        .ok_or_else(|| io::Error::other(format!("there is no task #{number} any more")))?;
+    let mut task = list[pos].as_object().cloned().ok_or_else(|| io::Error::other(format!("#{number} can't be read")))?;
+    if !dst.get("tickets").is_some_and(Value::is_array) {
+        dst.insert("tickets".into(), json!([]));
+    }
+    let new = next_number(&dst);
+    let (sdir, ddir) = (bodies_dir(config, from), bodies_dir(config, to));
+    fs::create_dir_all(&ddir)?;
+    // What moves where: the body (named for the new number and the title), the result, the task's own folder, and the
+    // leaders' snapshots.
+    let mut plan: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let file = task.get("file").and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut new_file = String::new();
+    if !file.is_empty() {
+        let title = task.get("title").and_then(Value::as_str).unwrap_or_default();
+        let stem = format!("{new:02}-{}", slug(title));
+        new_file = format!("{stem}.md");
+        let mut k = 2;
+        while ddir.join(&new_file).exists() {
+            new_file = format!("{stem}-{k}.md");
+            k += 1;
+        }
+        plan.push((sdir.join(&file), ddir.join(&new_file)));
+    }
+    plan.push((sdir.join(result_file(number)), ddir.join(result_file(new))));
+    plan.push((work_dir(config, from, number), work_dir(config, to, new)));
+    let renamed = |name: &str| format!("{new:02}-{}", name.strip_prefix(&format!("{number:02}-")).unwrap_or(name));
+    if let Some(leaders) = task.get_mut("leaders").and_then(Value::as_array_mut) {
+        for l in leaders.iter_mut().filter_map(Value::as_object_mut) {
+            let Some(name) = l.get("snapshot").and_then(Value::as_str).filter(|f| is_snapshot_file(f)).map(String::from) else {
+                continue;
+            };
+            plan.push((sdir.join(&name), ddir.join(renamed(&name))));
+            l.insert("snapshot".into(), json!(renamed(&name)));
+        }
+    }
+    let mut done: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let undo = |done: &[(PathBuf, PathBuf)]| {
+        for (a, b) in done.iter().rev() {
+            let _ = fs::rename(b, a);
+        }
+    };
+    for (a, b) in plan {
+        if !a.exists() {
+            continue;
+        }
+        if b.exists() {
+            undo(&done);
+            return Err(io::Error::other(format!("{} is already there, so #{number} wasn't moved", b.display())));
+        }
+        if let Err(e) = fs::rename(&a, &b) {
+            undo(&done);
+            return Err(e);
+        }
+        done.push((a, b));
+    }
+    task.insert("number".into(), json!(new));
+    if !file.is_empty() {
+        task.insert("file".into(), json!(new_file));
+    }
+    if !task.get("old_number").and_then(Value::as_u64).is_some_and(|n| n > 0) {
+        task.insert("old_number".into(), json!(number));
+    }
+    task.insert("blocked_by".into(), json!([]));
+    task.insert("updated".into(), json!(now_secs()));
+    if let Some(a) = dst.get_mut("tickets").and_then(Value::as_array_mut) {
+        a.push(Value::Object(task));
+    }
+    dst.insert("next".into(), json!(new + 1));
+    if let Err(e) = write_atomic(&dst_path, &serde_json::to_string_pretty(&Value::Object(dst)).unwrap_or_default()) {
+        undo(&done);
+        return Err(e);
+    }
+    if let Some(a) = src.get_mut("tickets").and_then(Value::as_array_mut) {
+        a.remove(pos);
+    }
+    write_atomic(&src_path, &serde_json::to_string_pretty(&Value::Object(src)).unwrap_or_default())?;
+    Ok(new)
 }
 
 /// The name of the file the `k`th leader of ticket `number` keeps what it was started with in, beside the bodies.
@@ -2222,6 +2386,7 @@ mod tests {
             busy: None,
             queued: None,
             from: None,
+            aside: None,
             publish_wanted: false,
             autonomy: None,
             works_on: vec![],
@@ -3090,5 +3255,118 @@ mod tests {
         assert_eq!(task_branch(12), "task/12");
         let m = add(&mut t, "New one");
         assert_eq!(Tickets::open(&d, "p1").get(m).unwrap().branch(), "task/2");
+    }
+
+    #[test]
+    fn a_task_put_aside_stays_aside_until_the_squad_says_something_new_and_the_mark_keeps_its_time() {
+        let d = dir("aside");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "L".into(), started: 1, names: AgentNames::SquadRole, snapshot: None },
+            &[],
+        )
+        .unwrap();
+        t.squad_says(n, &State::Waiting, "Asks: Which colour?", None).unwrap();
+        let before = t.get(n).cloned().unwrap();
+        assert!(!before.is_aside());
+        t.set_aside(n, true).unwrap();
+        let now = t.get(n).cloned().unwrap();
+        assert!(now.is_aside());
+        assert_eq!(now.updated, before.updated, "putting it aside is not news: its time stays");
+        assert_eq!(saved(&d)["tickets"][0]["aside"], json!({"updated": before.updated, "reason": "Asks: Which colour?"}));
+        // The squad says something new (other words): it needs the user again, the mark stays in the file.
+        let mut v = saved(&d);
+        v["tickets"][0].as_object_mut().unwrap().insert("reason".into(), json!("Asks: Which size?"));
+        write_atomic(&path_in(&d, "p1"), &v.to_string()).unwrap();
+        t.reload_if_changed();
+        assert!(!t.get(n).unwrap().is_aside());
+        // ... or the same words at a new time.
+        t.set_aside(n, true).unwrap();
+        assert!(t.get(n).unwrap().is_aside());
+        let mut v = saved(&d);
+        v["tickets"][0].as_object_mut().unwrap().insert("updated".into(), json!(before.updated + 100));
+        write_atomic(&path_in(&d, "p1"), &v.to_string()).unwrap();
+        t.reload_if_changed();
+        assert!(!t.get(n).unwrap().is_aside());
+        // `h` again brings it back; a task that doesn't need the user is never aside.
+        t.set_aside(n, true).unwrap();
+        t.set_aside(n, false).unwrap();
+        assert!(!t.get(n).unwrap().is_aside() && saved(&d)["tickets"][0].get("aside").is_none());
+        t.set_aside(n, true).unwrap();
+        t.squad_says(n, &State::Working, "", None).unwrap();
+        assert!(!t.get(n).unwrap().is_aside());
+    }
+
+    #[test]
+    fn moving_a_task_gives_it_the_next_number_there_keeps_its_first_number_and_takes_its_files_along() {
+        let d = dir("move-task");
+        let mut a = Tickets::open(&d, "pa");
+        let one = add(&mut a, "First");
+        let n = a
+            .add(NewTicket {
+                title: "Basket page".into(),
+                folders: vec!["/home/u/shop".into()],
+                blocked_by: vec![one],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(n, 2);
+        let wt = Worktree {
+            folder: "/home/u/shop".into(),
+            path: "/home/u/shop-worktrees/task-2".into(),
+            branch: "task/2".into(),
+            ..Default::default()
+        };
+        let snapshot = a.save_snapshot(n, 1, "{}").unwrap();
+        a.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "L".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(snapshot) },
+            &[wt],
+        )
+        .unwrap();
+        a.squad_says(n, &State::Done, "", Some("Made the basket page.")).unwrap();
+        fs::create_dir_all(work_dir(&d, "pa", n)).unwrap();
+        fs::write(work_dir(&d, "pa", n).join("notes.md"), "kept").unwrap();
+        // The other project has tasks of its own, so the moved one gets a new number.
+        let mut b = Tickets::open(&d, "pb");
+        for k in 1..=4 {
+            add(&mut b, &format!("B{k}"));
+        }
+        let new = move_task(&d, "pa", n, "pb").unwrap();
+        assert_eq!(new, 5);
+        a.reload_if_changed();
+        b.reload_if_changed();
+        assert!(a.get(n).is_none() && a.get(one).is_some(), "gone from where it was, the others stay");
+        let moved = b.get(new).cloned().unwrap();
+        assert_eq!((moved.title.as_str(), moved.old_number, moved.branch().as_str()), ("Basket page", Some(2), "task/2"));
+        assert_eq!(moved.branch_number(), 2, "its branch and worktree folders keep the number they were made with");
+        assert!(moved.blocked_by.is_empty(), "what it waited for were the old project's tasks");
+        assert_eq!(moved.worktrees.len(), 1, "its worktree stays as it is");
+        assert_eq!(moved.file, "05-basket-page.md");
+        assert_eq!(b.body(&moved), TEMPLATE, "its body came along");
+        assert_eq!(b.result(new).as_deref(), Some("Made the basket page.\n"));
+        assert_eq!(fs::read_to_string(work_dir(&d, "pb", new).join("notes.md")).unwrap(), "kept");
+        assert!(!work_dir(&d, "pa", n).exists() && !bodies_dir(&d, "pa").join("02-basket-page.md").exists());
+        let l = moved.leader().unwrap();
+        assert_eq!(l.snapshot.as_deref(), Some("05-squad-1.json"));
+        assert_eq!(b.snapshot(l).as_deref(), Some("{}"));
+        // Out of any project and into another: it keeps the first number it had.
+        let loose = move_task(&d, "pb", new, NO_PROJECT_ID).unwrap();
+        let back = move_task(&d, NO_PROJECT_ID, loose, "pa").unwrap();
+        a.reload_if_changed();
+        assert_eq!(back, 3, "pa's numbers are never used twice");
+        assert_eq!(a.get(back).map(|t| (t.old_number, t.branch())), Some((Some(2), "task/2".to_string())));
+        // A move to where it is, or of a task that isn't there, is refused and changes nothing.
+        assert!(move_task(&d, "pa", back, "pa").is_err());
+        assert!(move_task(&d, "pa", 99, "pb").is_err());
+        // A destination file that can't be read is never written over.
+        fs::create_dir_all(d.join("projects/pc")).unwrap();
+        fs::write(path_in(&d, "pc"), "{ not json").unwrap();
+        assert!(move_task(&d, "pa", back, "pc").is_err());
+        a.reload_if_changed();
+        assert!(a.get(back).is_some_and(|t| !a.body(t).is_empty()), "nothing moved: the task and its body are where they were");
+        assert_eq!(fs::read_to_string(path_in(&d, "pc")).unwrap(), "{ not json");
     }
 }

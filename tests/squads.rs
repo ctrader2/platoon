@@ -219,7 +219,7 @@ impl Lab {
     /// Open the project's screen and move to its Tickets pane.
     fn open_tickets(&self, t: &mut Term) {
         t.wait_for("enter open");
-        t.send(b"2");
+        t.send(b"3");
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
@@ -435,7 +435,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let screen = t.stable();
     assert!(!screen.contains("task-1"), "not on the Sessions tab:\n{screen}");
     // Enter on the ticket again: straight back into its running session (no second one started).
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for("╭ Tasks");
@@ -565,9 +565,10 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     );
     t.wait_for_all(&["Needs you", "Wants to publish: push task/1"]);
 
-    // Back on the project's screen, p on the ticket: the go-ahead, Working, and the words typed into the session.
+    // Back on the project's screen, p on the ticket (the pane offers y for it, which does the same): the go-ahead,
+    // Working, and the words typed into the session.
     t.send(&[0]);
-    t.wait_for_flat("p let it publish");
+    t.wait_for_flat("y go ahead");
     t.send(b"p");
     until("the go-ahead to reach the squad's session", || lab.rec(1, "typed").contains("Go ahead and publish."));
     assert_eq!(lab.rec(1, "typed"), "Go ahead and publish.\n", "the words, then Enter");
@@ -1076,8 +1077,9 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     t.wait_gone("ctrl+space back to the project");
     t.wait_for_flat("n new task");
     // #2 and #3: checked by the commander, then in the line.
+    // (The pane lists Working before Can start: #2 is under #1, and once #2 is in the line #3 is the last row.)
     for k in [2, 3] {
-        t.send(b"\x1b[B");
+        t.send(if k == 2 { b"\x1b[B" } else { b"G" });
         t.send(b"S");
         t.wait_for_all(&["hand to a squad", "enter hand it over"]);
         t.send(b"\r");
@@ -1170,23 +1172,16 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     }
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 44, 130);
     lab.open_tickets(&mut t);
-    // The pane: the short total on the ticket's row: sent and written only (915,000; with the 300,000 read again
-    // from the cache it would be 1.2M).
-    t.wait_for("915K tokens");
+    // The pane: a task that needs the user says what the squad asks (the tokens are on its screen).
+    t.wait_for_all(&["#1 Basket", "a question", "Coding squad asks: which colour?"]);
     let screen = t.stable();
     let row = screen.lines().find(|l| l.contains("#1 Basket")).unwrap();
-    assert!(row.contains("Needs you") && row.contains("915K tokens") && !row.contains("1.2M"), "{screen}");
-    // Its screen: the total, what it counts, a line per agent, and the members' runs in order. Its session isn't
-    // running, so the reviewer's run that never came back says it didn't finish, and nothing is "Now".
+    assert!(row.contains("a question") && !row.contains("tokens"), "{screen}");
+    // Its screen: the total (sent and written only: 915,000; with the 300,000 read again from the cache it would be
+    // 1.2M), what it counts, a line per agent, and the members' runs in order on its timeline. Its session isn't
+    // running, so the reviewer's run that never came back says it stopped, and nothing is "now".
     t.send(b"\r");
-    t.wait_for_all(&[
-        "Tokens used",
-        "915K sent and written",
-        "What the squad has done",
-        "[x] coding-planner · Plan the basket page",
-        "[x] coding-builder · Build the basket page",
-        "[-] coding-reviewer",
-    ]);
+    t.wait_for_all(&["Tokens used", "915K sent and written", "What the squad has done", "planner", "builder", "reviewer"]);
     let screen = t.stable();
     // The ticket's side only (the session's place is on the right).
     let left: Vec<String> =
@@ -1205,9 +1200,9 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     // The same number as the pane, said as what it is, with the cache reads beside it and the parts explained.
     assert!(said.starts_with("Tokens used 915K sent and written, plus 300K read again from Claude's cache"), "{said}");
     assert!(said.contains("910K sent to Claude and 5K written by Claude: the number the Tasks list shows."), "{said}");
-    assert!(at("[x] coding-planner") < at("[x] coding-builder") && at("[x] coding-builder") < at("[-] coding-reviewer"), "{screen}");
-    assert!(left[at("[-] coding-reviewer")..].join(" ").contains("Review the basket page (didn't finish)"), "{screen}");
-    assert!(!screen.contains("Now:"), "{screen}");
+    let (planner, builder, reviewer) = (at("planner · done"), at("builder · done"), at("reviewer · stopped"));
+    assert!(planner < builder && builder < reviewer, "{screen}");
+    assert!(!left.iter().any(|l| l.ends_with(" now")), "{screen}");
     assert_eq!(lab.started(), 0);
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();

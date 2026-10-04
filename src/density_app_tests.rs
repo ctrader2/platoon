@@ -158,7 +158,7 @@ fn the_context_column_is_blank_for_a_conversation_nothing_is_known_about() {
 fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     let w = World::new("d-squads");
     let mut app = w.app();
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     // 100 columns: the list and the details side by side.
     let (lines, _) = shown(&app, 100, 24);
     assert!(lines.iter().any(|l| l.contains("╮╭")), "two panes at 100:\n{}", lines.join("\n"));
@@ -251,7 +251,7 @@ fn on_the_tickets(name: &str) -> (World, App) {
     store.add(NewTicket { title: "Basket page".into(), ..Default::default() }).unwrap();
     store.add(NewTicket { title: "Checkout".into(), ..Default::default() }).unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
@@ -306,13 +306,13 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
         app.projects.create(name).unwrap();
     }
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     ch(&mut app, 'j');
     assert_eq!(app.pselected, 1);
     ch(&mut app, 'k');
     assert_eq!(app.pselected, 0);
     // Squads and Agents.
-    ch(&mut app, '3');
+    ch(&mut app, '4');
     ch(&mut app, 'j');
     assert_eq!(app.sqt.selected, 1);
     key(&mut app, KeyCode::PageDown);

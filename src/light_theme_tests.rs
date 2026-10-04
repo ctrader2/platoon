@@ -407,7 +407,7 @@ fn a_projects_notes_in_a_light_theme() {
     let path = crate::projects::notes_path(&w.config, &project);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "## Summary\n\nThe **shop** takes `orders` now.\n\n- first point\n- second point\n\n> a quote\n").unwrap();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     shift(&mut app, KeyCode::Right);
@@ -457,7 +457,7 @@ fn the_attached_views_footer_and_session_in_a_light_theme() {
 fn a_squads_workflow_rail_in_a_light_theme() {
     let (_w, mut app, _) = light_world("light-rail", "Rosé Pine Dawn");
     let t = app.theme.clone();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('4'));
     assert!(app.squads_tab_showing());
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let shown = draw(&mut term, &app);
@@ -502,10 +502,10 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
             (&[c('m')], "the project picker", "╭ Project"),
             (&[c('r')], "rename", "╭ Rename session"),
             (&[c('/')], "search", "╭ Search"),
-            (&[c('2')], "projects", "Web shop"),
-            (&[c('2'), c('c')], "a project's color", "╭ Color and badge"),
-            (&[c('2'), c('d')], "deleting a project", "╭ Delete project"),
-            (&[c('3')], "squads", "[Squads]"),
+            (&[c('3')], "projects", "Web shop"),
+            (&[c('3'), c('c')], "a project's color", "╭ Color and badge"),
+            (&[c('3'), c('d')], "deleting a project", "╭ Delete project"),
+            (&[c('4')], "squads", "[Squads]"),
         ];
         for (keys, what, sign) in screens {
             app.mode = Mode::List;
@@ -522,7 +522,7 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
             }
         }
         app.mode = Mode::List;
-        key(&mut app, KeyCode::Char('2'));
+        key(&mut app, KeyCode::Char('3'));
         key(&mut app, KeyCode::Enter);
         shift(&mut app, KeyCode::Right);
         let mut term = Terminal::new(TestBackend::new(130, 30)).unwrap();
@@ -563,7 +563,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
         (&[c('s')], "settings", "╭ Settings"),
         (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
         (&[c('n')], "the folder picker", "pick a folder"),
-        (&[c('3')], "squads", "[Squads]"),
+        (&[c('4')], "squads", "[Squads]"),
     ];
     for (keys, what, sign) in screens {
         app.mode = Mode::List;

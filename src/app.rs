@@ -40,6 +40,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod board_glue;
 mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
@@ -50,11 +51,12 @@ mod squadtab_glue;
 mod squadwork_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
+pub use board_glue::{BRow, BoardState, ListItem, PickFor};
 #[cfg(test)]
 pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
-pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOPS};
+pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_TASKS, TOPS};
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
 pub use squads_glue::{SPLIT_MIN_WIDTH, SquadState, split_areas};
 pub use squadtab_glue::{
@@ -230,6 +232,8 @@ pub enum Hit {
     SquadChoiceRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
+    /// An entry of the project picker of a task (`n` on the Tasks tab, `m` on a task).
+    ProjectPickRow(usize),
     /// An entry of the editor list.
     EditorRow(usize),
     /// A row of `v`'s list of editors.
@@ -377,6 +381,10 @@ pub enum Mode {
     /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
     /// (`sqt.text`).
     SquadText,
+    /// Which project a new task goes in, or where a task moves to (`bd.pick`).
+    TaskProject,
+    /// The one-line answer to a squad's question (`bd.answer`).
+    Answer,
 }
 
 pub struct Picker {
@@ -391,6 +399,8 @@ pub struct Picker {
     pub ticket: Option<u32>,
     /// Picking a folder to open the code editor in (`v` with nothing selected).
     pub editor: bool,
+    /// Picking the folder of a new task in no project, with this title (it is written once the folder is picked).
+    pub new_task: Option<String>,
 }
 
 impl Picker {
@@ -585,6 +595,8 @@ pub struct App {
     pub left_pane: Pane,
     /// The open project's tickets, the Tickets pane and a ticket's own screen.
     pub tk: TicketsState,
+    /// The Tasks tab.
+    pub bd: BoardState,
     /// Squads: the picker, the split view, and which sessions are squads' leaders.
     pub sq: SquadState,
     /// What the open project's squads have done (tokens, members' runs), read off the UI thread.
@@ -776,6 +788,7 @@ impl App {
                 project: None,
                 ticket: None,
                 editor: false,
+                new_task: None,
             },
             hosts: Vec::new(),
             client: None,
@@ -800,6 +813,7 @@ impl App {
             pane: Pane::Sessions,
             left_pane: Pane::Sessions,
             tk: TicketsState::new(),
+            bd: BoardState::new(),
             sq: SquadState::new(),
             sw: squadwork_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
@@ -1070,7 +1084,11 @@ impl App {
 
     /// Where a version notice shows: the Sessions and Projects lists, with nothing over them.
     fn news_place(&self) -> bool {
-        matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.squads_tab_showing()
+        matches!(self.mode, Mode::List)
+            && !self.help_open
+            && self.open_project.is_none()
+            && !self.squads_tab_showing()
+            && !self.board_showing()
     }
 
     /// The version notice on screen now, if any.
@@ -1624,6 +1642,8 @@ impl App {
             (Action::Leave, Mode::List) if self.tk.open.is_some() => self.close_ticket_screen(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
+            (Action::Confirm, Mode::TaskProject) => self.take_task_project(),
+            (Action::Confirm, Mode::Answer) => self.send_answer(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
             (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
             (Action::Confirm, Mode::Confirm(Confirm::RemoveWorktree { number, .. })) => self.remove_worktree_anyway(number),
@@ -1676,6 +1696,16 @@ impl App {
                 self.adopt(&pids, &id, &name, cwd, restore);
             }
             (Action::Confirm, Mode::Picker) if self.picker.editor => self.take_editor_folder(),
+            (Action::Confirm, Mode::Picker) if self.picker.new_task.is_some() => {
+                if let (Some(dir), Some(title)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.new_task.clone()) {
+                    self.new_task_folder(&title, dir);
+                }
+            }
+            // Leaving the folder picker of a new task in no project: nothing is written (a task needs a folder).
+            (Action::Cancel, Mode::Picker) if self.picker.new_task.is_some() => {
+                self.mode = Mode::List;
+                self.notify("No task was made: a task in no project needs a folder to work in.");
+            }
             (Action::Confirm, Mode::Picker) if self.picker.ticket.is_some() => {
                 if let (Some(dir), Some(n)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.ticket) {
                     self.add_ticket_folder(n, dir);
@@ -1972,7 +2002,8 @@ impl App {
         all.extend(dirs::candidates(self.reader.root(), &self.home));
         let mut seen = std::collections::HashSet::new();
         all.retain(|p| seen.insert(p.clone()));
-        self.picker = Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None, editor: false };
+        self.picker =
+            Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None, editor: false, new_task: None };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
     }
@@ -2795,6 +2826,8 @@ impl App {
                 _ => {}
             },
             Mode::TicketPick => self.ticket_pick_key(key),
+            Mode::TaskProject => self.task_project_key(key),
+            Mode::Answer => self.answer_key(key),
             Mode::SquadPick => self.squad_pick_key(key),
             Mode::SquadChoice => self.squad_choice_key(key),
             Mode::SquadText => self.squad_text_key(key),
@@ -2925,6 +2958,7 @@ impl App {
             Mode::EditNotes => self.editor_paste(text),
             Mode::Handoff => self.handoff_paste(text),
             Mode::SquadText => self.squad_type(text),
+            Mode::Answer => self.type_answer(text),
             _ => {}
         }
         self.update_view();
@@ -2999,6 +3033,8 @@ impl App {
                     Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
                     Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
                     Mode::SquadText => {}
+                    Mode::TaskProject => self.move_task_project_pick(if up { -1 } else { 1 }),
+                    Mode::Answer => {}
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
@@ -3030,7 +3066,10 @@ impl App {
                     Some(Hit::FileEditorRow(i)) => self.move_file_editor_pick(i as i32 - self.file_pick().selected as i32),
                     Some(Hit::Slot(i)) => self.look.slot = i,
                     Some(Hit::Pane(p)) => self.focus_pane(p),
+                    Some(Hit::TicketRow(i)) if self.board_showing() && self.tk.open.is_none() => self.click_board_row(i),
                     Some(Hit::TicketRow(i)) => self.click_ticket_row(i),
+                    Some(Hit::ProjectPickRow(i)) if i == self.bd.pick_selected => self.act(Action::Confirm),
+                    Some(Hit::ProjectPickRow(i)) => self.bd.pick_selected = i,
                     Some(Hit::TicketPickRow(i)) if i == self.tk.pick.selected => self.act(Action::Confirm),
                     Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
                     Some(Hit::SquadRow(i)) => self.click_hand_row(i),
