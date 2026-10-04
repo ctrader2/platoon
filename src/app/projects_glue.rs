@@ -311,6 +311,7 @@ impl App {
             KeyCode::Char('r') => self.act(Action::Rename),
             KeyCode::Char('m') => self.act(Action::Assign),
             KeyCode::Char('h') => self.act(Action::HandOff),
+            KeyCode::Char('t') => self.draft_tasks_key(),
             KeyCode::Enter => self.act(Action::Jump),
             KeyCode::Esc => {
                 self.filter.clear();
@@ -411,6 +412,7 @@ impl App {
                 KeyCode::Char('r') => self.act(Action::Rename),
                 KeyCode::Char('m') => self.act(Action::Assign),
                 KeyCode::Char('h') => self.act(Action::HandOff),
+                KeyCode::Char('t') => self.draft_tasks_key(),
                 KeyCode::Enter => self.act(Action::Jump),
                 KeyCode::Down | KeyCode::Char('j') => self.move_selection(1),
                 KeyCode::Up | KeyCode::Char('k') => self.move_selection(-1),

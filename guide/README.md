@@ -8,7 +8,7 @@ Claude Code. These pages explain everything it does.
 | [Install and set up](install-and-setup.md) | What you need, the ways to install and update, `platoon setup` and each of its steps, the notices when Claude Code or platoon is newer, and uninstalling |
 | [Sessions](sessions.md) | The list, search, renaming, background sessions, archive, automatic clean-up, sessions that keep running, copying text, `platoon open`, and opening the work in your code editor (`v`) |
 | [Projects](projects.md) | Grouping conversations into projects, their notes, editing them, notes that keep themselves up to date, the description line, and handing work on to a new session (`h`) |
-| [Tasks and squads](tasks-and-squads.md) | Tasks, `/to-tickets`, handing a task to a squad of agents (how much it does on its own, where it works, what the work lands on), the built-in squads, and the Squads tab |
+| [Tasks and squads](tasks-and-squads.md) | Tasks, tasks drafted from a conversation (`t`), handing a task to a squad of agents (how much it does on its own, where it works, what the work lands on), the built-in squads, and the Squads tab |
 | [Themes](themes.md) | The 52 built-in themes, light themes, your own theme files, and terminals with 256 colors |
 | [Settings and keys](settings-and-keys.md) | Every setting, the settings file, system prompts for each smart feature, the back and quit keys, environment variables |
 | [Features that use tokens](tokens.md) | What asks Claude through your plan, how to turn it on, what is sent, the limits, and `platoon tokens` |

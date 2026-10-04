@@ -22,6 +22,7 @@ A few more have no switch, because they only ever run when you ask for them then
 switch on and still count against the daily limit, like everything else:
 
 - The [hand-off](projects.md#handing-work-on-to-a-new-session) (`h`).
+- [Tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation) (`t`, or `alt+n` in a session).
 - The [squad commander](tasks-and-squads.md#handing-a-task-to-a-squad)'s check when you hand a task to a squad.
 - [Drafting a squad or an agent](tasks-and-squads.md#making-your-own) from your description.
 - `platoon tokens test` (see [below](#platoon-tokens)).
@@ -65,7 +66,9 @@ summaries to 300) and every control character and escape sequence is removed bef
 the model skips is tried in a later batch at most twice, then left until it changes.
 
 What the project notes, the project description and the hand-off send is described with each of them on the
-[Projects](projects.md) page.
+[Projects](projects.md) page. Tasks from a conversation send what the hand-off sends of it (its first message, the last
+twelve, each cut to 300 characters, and a line of Claude's last reply), its folders' own names, and your squads' names
+with what each can do: see [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
 
 ## When
 
@@ -114,7 +117,7 @@ what platoon asks Claude for each feature can be changed too: see
 ## `platoon tokens`
 
 `platoon tokens` shows whether the features are on (the master switch and each feature's switch) and today's total, and
-under it how many tokens each one used and in how many calls (the hand-off, the squad commander, drafting and
+under it how many tokens each one used and in how many calls (the hand-off, tasks from a conversation, the squad commander, drafting and
 `platoon tokens test` appear there too, by name).
 
 `platoon tokens test` makes one tiny call the same way a feature would (master switch on, the daily limit, the plan pause

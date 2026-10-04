@@ -165,6 +165,9 @@ pub struct SquadState {
     line_lock: Option<std::fs::File>,
     /// Tickets taken from the line and being started: they start without taking the screen (nobody asked just now).
     from_line: HashSet<(String, u32)>,
+    /// Tasks handed over one after the other (just made from a conversation): they start without taking the screen
+    /// either, since the next hand-over may be up by then.
+    pub(super) quiet: HashSet<(String, u32)>,
     /// In unit tests no session is ever started (the program would be the test binary): the leaders that would
     /// have been, by ticket number.
     #[cfg(test)]
@@ -189,6 +192,7 @@ impl SquadState {
             running: HashSet::new(),
             line_lock: None,
             from_line: HashSet::new(),
+            quiet: HashSet::new(),
             #[cfg(test)]
             launched: Vec::new(),
             #[cfg(test)]
@@ -876,7 +880,8 @@ impl App {
         // Beside the ticket only if the user is still on that project's screen and not in another session, and not
         // for a ticket that waited in the line (it starts by itself, while the user may be doing anything).
         let from_line = self.sq.from_line.remove(&(project.to_string(), number));
-        let show = !from_line && self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
+        let quiet = self.sq.quiet.remove(&(project.to_string(), number));
+        let show = !from_line && !quiet && self.open_project.as_deref() == Some(project) && matches!(self.mode, Mode::List);
         match self.launch_leader_in(project, number, Some(&first), show) {
             Ok(()) if show => {
                 self.notify(format!("#{number} is with the {} squad now. {} goes back to the project.", squad.name, self.back_label()))

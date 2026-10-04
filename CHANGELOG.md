@@ -23,8 +23,9 @@ The first public release. platoon works with Claude Code (last checked with 2.1.
 - **One writer per conversation**: a guard stops a second copy of a running conversation from overwriting it.
 - **Projects** group conversations from any number of folders. A project's notes reach every one of its sessions, can keep
   themselves up to date as you work, and a long conversation can be handed on to a fresh session with one key.
-- **Tasks**: write down a piece of work, from platoon, from the command line (`platoon task`; `platoon ticket` still
-  works), or by letting Claude turn a conversation into tasks with the `/to-tickets` skill. Tasks can wait for each other,
+- **Tasks**: write down a piece of work, from platoon or from the command line (`platoon task`; `platoon ticket` still
+  works), or press `t` on a session (`alt+n` inside it) and Claude drafts tasks from the conversation, shaped to your
+  squads: you change them, take some out, make them and hand each to a squad in one popup. Tasks can wait for each other,
   can live outside any project, and move between projects.
 - **The Tasks tab**: every task in play across your projects, grouped by what it needs from you (Needs you, Working, Can
   start, Waits for, Finished today), with the picked task's details beside it on a wide terminal: what its squad asks,

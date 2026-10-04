@@ -1405,6 +1405,9 @@ impl App {
 
     /// After an editor has been and gone from a system prompt: keep what it says now.
     pub(super) fn after_squad_prompt_edit(&mut self, edit: &SquadPromptEdit) {
+        if let PromptOf::DraftTask(i) = edit.target {
+            return self.after_draft_edit(i, edit);
+        }
         let text = std::fs::read_to_string(&edit.path).unwrap_or_default();
         let _ = std::fs::remove_file(&edit.path);
         let text = text.trim();
@@ -1446,6 +1449,8 @@ impl App {
                     Err(e) => self.notify(format!("Couldn't save the agent: {e}")),
                 }
             }
+            // Taken care of above.
+            PromptOf::DraftTask(_) => {}
         }
     }
 
@@ -1801,6 +1806,16 @@ impl App {
 pub enum PromptOf {
     /// An agent (`draft`: the unsaved draft agent).
     Agent { id: String, draft: bool },
+    /// Not a system prompt: a task of the draft made from a conversation (its place in the draft), in the same
+    /// editors (`app/taskdraft_glue.rs`).
+    DraftTask(usize),
+}
+
+impl SquadPromptEdit {
+    /// It is a drafted task, not a system prompt.
+    pub fn is_draft(&self) -> bool {
+        matches!(self.target, PromptOf::DraftTask(_))
+    }
 }
 
 /// A system prompt open in an editor: it is written to a file of its own, and read back into the squad or agent.

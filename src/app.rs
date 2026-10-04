@@ -49,6 +49,7 @@ mod smart_glue;
 mod squads_glue;
 mod squadtab_glue;
 mod squadwork_glue;
+mod taskdraft_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
 #[cfg(test)]
@@ -222,6 +223,8 @@ pub enum Hit {
     TicketRow(usize),
     /// An entry of a list open over a task (its folders, what it waits for).
     TicketPickRow(usize),
+    /// A task in the popup of tasks drafted from a conversation.
+    DraftTask(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
     /// An entry of the Squads tab's list (of squads or of agents, whichever it shows).
@@ -387,6 +390,8 @@ pub enum Mode {
     TaskProject,
     /// The one-line answer to a squad's question (`bd.answer`).
     Answer,
+    /// The tasks drafted from a conversation, before any is made (`td.draft`).
+    TaskDraft,
 }
 
 pub struct Picker {
@@ -605,6 +610,8 @@ pub struct App {
     pub sw: squadwork_glue::WorkState,
     /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
     pub wt: worktree_glue::WtState,
+    /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup, the hand-overs that follow.
+    pub td: taskdraft_glue::DraftState,
     /// The code editor (`v`): the questions before it opens, the request the event loop takes.
     pub ed: editor_glue::EdState,
     /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
@@ -819,6 +826,7 @@ impl App {
             sq: SquadState::new(),
             sw: squadwork_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
+            td: taskdraft_glue::DraftState::default(),
             ed: editor_glue::EdState::new(),
             sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
@@ -1186,6 +1194,7 @@ impl App {
             || self.settling()
             || self.smart_busy()
             || self.handoff_busy()
+            || self.draft_busy()
             || self.squads_busy()
             || !self.stopping.is_empty()
     }
@@ -1438,6 +1447,7 @@ impl App {
         self.poll_notes_status();
         self.refresh_prompts();
         self.poll_handoff();
+        self.poll_task_draft();
         self.poll_squad_starts();
         self.start_from_line();
         self.poll_squad_work();
@@ -1646,7 +1656,22 @@ impl App {
             (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::TaskProject) => self.take_task_project(),
             (Action::Confirm, Mode::Answer) => self.send_answer(),
-            (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
+            (Action::Confirm, Mode::SquadPick) => {
+                self.take_squad_pick();
+                self.after_hand_over_popup();
+            }
+            (Action::Cancel, Mode::SquadPick) => {
+                self.mode = Mode::List;
+                self.after_hand_over_popup();
+            }
+            (Action::Confirm, Mode::TaskDraft) => self.make_drafted(true),
+            (Action::Cancel, Mode::TaskDraft) => self.drop_draft(),
+            (Action::Cancel, Mode::PickEditor) if self.epick.squad.as_ref().is_some_and(|e| e.is_draft()) => {
+                if let Some(e) = self.epick.squad.take() {
+                    let _ = std::fs::remove_file(&e.path);
+                }
+                self.mode = Mode::TaskDraft;
+            }
             (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
             (Action::Confirm, Mode::Confirm(Confirm::RemoveWorktree { number, .. })) => self.remove_worktree_anyway(number),
             (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, &squad),
@@ -2707,9 +2732,13 @@ impl App {
             Mode::Attached(_) => {
                 // Typing moves the screen on (and the highlight would no longer be over what was selected).
                 self.clear_selection();
-                // The back key: everything else goes to Claude.
+                // The back key, and the one that drafts tasks from this conversation: everything else goes to Claude.
                 if back {
                     self.detach();
+                } else if let Mode::Attached(pid) = self.mode
+                    && self.keys.get().draft.matches(&key)
+                {
+                    self.draft_tasks_from_attached(pid);
                 } else if self.attached_paused() {
                     // Paused: nothing is forwarded, so this copy can't write to the conversation.
                 } else if let Some(c) = self.client.as_mut() {
@@ -2830,6 +2859,7 @@ impl App {
             Mode::TicketPick => self.ticket_pick_key(key),
             Mode::TaskProject => self.task_project_key(key),
             Mode::Answer => self.answer_key(key),
+            Mode::TaskDraft => self.task_draft_key(key),
             Mode::SquadPick => self.squad_pick_key(key),
             Mode::SquadChoice => self.squad_choice_key(key),
             Mode::SquadText => self.squad_text_key(key),
@@ -3037,6 +3067,7 @@ impl App {
                     Mode::SquadText => {}
                     Mode::TaskProject => self.move_task_project_pick(if up { -1 } else { 1 }),
                     Mode::Answer => {}
+                    Mode::TaskDraft => self.scroll_draft(if up { -3 } else { 3 }),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
                     Mode::Changes => self.scroll_changes(if up { -3 } else { 3 }),
@@ -3105,6 +3136,7 @@ impl App {
                     // The previewed entry is the one that gets kept: clicking it again is "use this".
                     Some(Hit::ThemeRow(i)) if i == self.tpick.selected => self.act(Action::Confirm),
                     Some(Hit::ThemeRow(i)) => self.select_theme(i),
+                    Some(Hit::DraftTask(i)) => self.click_draft(i),
                     Some(Hit::Inert) => {}
                     // Nothing clickable here: in the attached view that is the session's own text.
                     None => self.begin_selection(m),

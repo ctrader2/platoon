@@ -61,6 +61,13 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
+    // Where sessions are listed, the chord that does in a session what `t` does on its row.
+    if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {
+        out.push(Entry::Note(format!(
+            "Inside a session, {} drafts tasks from the conversation, as t does on its row.",
+            app.keys.get().draft_label()
+        )));
+    }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
     if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {

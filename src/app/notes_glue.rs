@@ -75,6 +75,12 @@ fn file_stamp(path: &Path) -> notes::Stamp {
     Some((m.modified().ok()?, m.len()))
 }
 
+/// "The task" from "the task".
+fn capital(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
 fn plain(e: &io::Error) -> String {
     let why = e.to_string();
     why.split(" (os error").next().unwrap_or(&why).to_string()
@@ -256,6 +262,8 @@ impl App {
     /// Open a squad's system prompt, written to its own file, in `e`.
     fn run_squad_editor(&mut self, edit: SquadPromptEdit, e: &Editor) {
         let stamp = file_stamp(&edit.path);
+        // (A task of a draft goes the same way, in the same editors.)
+        let what = if edit.is_draft() { "the task" } else { "the system prompt" };
         if e.terminal {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &edit.path, rows, cols) {
@@ -276,14 +284,14 @@ impl App {
                 }
                 Err(err) => {
                     let _ = std::fs::remove_file(&edit.path);
-                    self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
+                    self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
                 }
             }
             return;
         }
         match editors::launch_window(e, &edit.path) {
             Ok(child) => {
-                self.notify(format!("The system prompt opened in {}, in a window of its own.", e.name));
+                self.notify(format!("{} opened in {}, in a window of its own.", capital(what), e.name));
                 self.notes_window = Some(NotesWindow {
                     project: String::new(),
                     instructions: None,
@@ -297,7 +305,7 @@ impl App {
             }
             Err(err) => {
                 let _ = std::fs::remove_file(&edit.path);
-                self.notify(format!("Couldn't open the system prompt in {}: {}", e.name, plain(&err)));
+                self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
             }
         }
     }
@@ -314,7 +322,12 @@ impl App {
 
     /// Enter in the editor list: use that editor, and remember it as the one to offer first next time.
     pub(super) fn take_editor_pick(&mut self) {
-        let back = Self::after_pick_mode(self.epick.instructions);
+        // A task of a draft goes back to the draft's popup, which stays open while a windowed editor has it.
+        let back = if self.epick.squad.as_ref().is_some_and(|e| e.is_draft()) {
+            Mode::TaskDraft
+        } else {
+            Self::after_pick_mode(self.epick.instructions)
+        };
         let Some(e) = self.epick.options.get(self.epick.selected).cloned() else {
             self.mode = back;
             return;

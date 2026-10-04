@@ -74,6 +74,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
+| `t` | [draft tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from this conversation: Claude reads it in the background (the row says **Drafting tasks…**) and the tasks it suggests open in a popup, where you change them, make them and hand them to squads, or make nothing (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
 | `1` `2` `3` `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
@@ -216,6 +217,13 @@ Each one runs under a small background host, so quitting platoon (or closing its
 has looked at for a while does stop itself (see [Automatic clean-up](#automatic-clean-up)); `enter` picks the conversation
 up again.
 
+Inside a session, every key goes to Claude but two: the back key, and **`alt+n`**, which goes back to the list and
+[drafts tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from that conversation, as `t` does on its row. The
+line under the session says both (`ctrl+space back to list   alt+n tasks from this conversation`; on a narrow terminal
+only the first). Both keys can be changed in [`keys.json`](settings-and-keys.md#keys-back-and-quit). In a macOS terminal,
+an `alt` key works only when the terminal's Option key is set to send it (Terminal: "Use Option as Meta key"; iTerm2:
+Left Option key "Esc+"; Ghostty: `macos-option-as-alt = true`); `t` on the row works everywhere.
+
 ## Copying text from a session
 
 platoon takes over the mouse while you look at a session (that is what makes the wheel scroll it and the
@@ -282,7 +290,7 @@ Press `v` anywhere in platoon's lists to look at the work in a code editor of yo
 | a task's row or its screen | the task's copies of its folders (every repository the squad works in), its folders that aren't in git as they are, and its own folder when there is something in it |
 | anywhere else (the Squads tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 
-In a session's live view every key goes to Claude: press the [back key](settings-and-keys.md#keys-back-and-quit)
+In a session's live view every key goes to Claude (but the back key and `alt+n`): press the [back key](settings-and-keys.md#keys-back-and-quit)
 (`ctrl+space`) to go back to the list, then `v`. Typed into a box (search, a name, the folder picker), `v` is just a
 letter.
 

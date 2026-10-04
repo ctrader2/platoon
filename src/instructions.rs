@@ -46,6 +46,7 @@ pub const FIND: &str = "describe-it";
 pub const NOTES: &str = "project-notes";
 pub const DESCRIPTION: &str = "project-description";
 pub const HANDOFF: &str = "hand-off";
+pub const TASK_DRAFT: &str = "tasks-from-conversation";
 pub const COMMANDER: &str = "squad-commander";
 pub const SQUAD_LEADER: &str = "squad-leader";
 pub const SQUAD_DRAFT: &str = "squad-draft";
@@ -55,7 +56,7 @@ pub const AGENT_DRAFT: &str = "agent-draft";
 // leaders' is one for every squad, and is an entry here: its fixed part is platoon's rules for leaders rather than a
 // reply's shape (see `squads::leader_fixed`).
 
-pub static ACTIONS: [Action; 9] = [
+pub static ACTIONS: [Action; 10] = [
     Action {
         id: NAMES,
         entry: "System prompt for naming",
@@ -95,6 +96,14 @@ pub static ACTIONS: [Action; 9] = [
         explain: "What platoon asks Claude for when it writes a hand-off to a new session.",
         builtin: crate::handoff::GUIDANCE,
         fixed: || crate::handoff::FIXED.to_string(),
+    },
+    Action {
+        id: TASK_DRAFT,
+        entry: "System prompt for tasks from a conversation",
+        what: "tasks from a conversation",
+        explain: "What platoon asks Claude for when it drafts tasks from one of your sessions.",
+        builtin: crate::taskdraft::GUIDANCE,
+        fixed: crate::taskdraft::fixed,
     },
     Action {
         id: COMMANDER,
@@ -340,6 +349,7 @@ mod tests {
                 "project-notes",
                 "project-description",
                 "hand-off",
+                "tasks-from-conversation",
                 "squad-commander",
                 "squad-leader",
                 "squad-draft",
@@ -385,6 +395,7 @@ mod tests {
                 "System prompt for project notes",
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
+                "System prompt for tasks from a conversation",
                 "System prompt for the squad commander",
                 "System prompt for squad leaders",
                 "System prompt for drafting a squad",

@@ -1,7 +1,8 @@
 //! The keys the user can change, in `<config dir>/keys.json` beside `settings.json`: an object of action name -> key,
-//! like `{ "back": "ctrl+space", "quit": "q" }`. Only `back` (one level back, everywhere: a session, `platoon open`,
-//! the notes editor, every screen and popup) and `quit` (from the top-level lists) for now; the table
-//! (`ACTIONS`) is where others join later, one screen at a time, without the file changing shape.
+//! like `{ "back": "ctrl+space", "quit": "q", "draft_tasks": "alt+n" }`. `back` (one level back, everywhere: a session,
+//! `platoon open`, the notes editor, every screen and popup), `quit` (from the top-level lists) and `draft_tasks` (inside
+//! an open session: tasks drafted from that conversation, as `t` does on its row); the table (`ACTIONS`) is where others
+//! join later, one screen at a time, without the file changing shape.
 //!
 //! platoon never writes this file. A missing file is the defaults; one that can't be read or isn't a JSON object is the
 //! defaults with one notice; an entry that isn't a key platoon can use is ignored with one notice saying which entry and
@@ -233,7 +234,15 @@ const CLAUDE_ALT: &str = "bdfmpt";
 
 /// Whether `c` can be the back key. Ok(Some(warning)) when it can but something else uses it too; Err(why) when it
 /// can't, in words that finish "\"back\" is \"...\", which ...".
+#[cfg(test)]
 pub fn check_back(c: &Chord) -> Result<Option<String>, String> {
+    check_chord(c, "goes back")
+}
+
+/// Whether `c` can be a key that works inside a session (a ctrl or alt chord platoon can tell apart from typing, both
+/// in its own window and in the bytes `platoon open` reads). `does`: what the key does there, for the warning when
+/// Claude Code uses it too ("in a session it now `does` instead").
+pub fn check_chord(c: &Chord, does: &str) -> Result<Option<String>, String> {
     if !c.ctrl && !c.alt {
         return Err("would be typed rather than go back (it needs ctrl or alt)".into());
     }
@@ -255,7 +264,7 @@ pub fn check_back(c: &Chord) -> Result<Option<String>, String> {
             }
             Name::Char('[') => Err("is the same as esc to a terminal".into()),
             Name::Char(ch) if ch.is_ascii_lowercase() && CLAUDE_CTRL.contains(ch) => {
-                Ok(Some(format!("Claude Code uses ctrl+{ch} itself: in a session it now goes back instead")))
+                Ok(Some(format!("Claude Code uses ctrl+{ch} itself: in a session it now {does} instead")))
             }
             Name::Space | Name::Char('a'..='z') => Ok(None),
             _ => Err("can't be told apart from other keys everywhere it is needed (use ctrl with space or a letter)".into()),
@@ -263,7 +272,7 @@ pub fn check_back(c: &Chord) -> Result<Option<String>, String> {
     }
     match c.key {
         Name::Char(ch) if CLAUDE_ALT.contains(ch) => {
-            Ok(Some(format!("Claude Code uses alt+{ch} itself: in a session it now goes back instead")))
+            Ok(Some(format!("Claude Code uses alt+{ch} itself: in a session it now {does} instead")))
         }
         Name::Space | Name::Char('a'..='z' | '0'..='9') => Ok(None),
         _ => Err("can't be told apart from other keys everywhere it is needed (use alt with space, a letter or a digit)".into()),
@@ -284,11 +293,21 @@ pub struct Def {
     pub name: &'static str,
     pub default: &'static str,
     pub rule: Rule,
+    /// What it does in a session, for the warning about a chord Claude Code uses too (a `Rule::Chord` key).
+    pub does: &'static str,
 }
 
 /// Every action with a key of its own, in the order notices are given. Another action joins here (and in `Keys`).
-pub const ACTIONS: &[Def] =
-    &[Def { name: "back", default: "ctrl+space", rule: Rule::Chord }, Def { name: "quit", default: "q", rule: Rule::Any }];
+///
+/// `draft_tasks` defaults to `alt+n`: a chord platoon tells apart in both places, that Claude Code doesn't use (alt+t,
+/// the first thought, toggles its thinking), nor the menus of the usual Linux terminals (Xfce Terminal's and GNOME
+/// Terminal's take alt with f, e, v, s, t, a and h). macOS terminals send it only with Option set to act as Alt (Meta);
+/// `t` on the session's row does the same everywhere.
+pub const ACTIONS: &[Def] = &[
+    Def { name: "back", default: "ctrl+space", rule: Rule::Chord, does: "goes back" },
+    Def { name: "quit", default: "q", rule: Rule::Any, does: "" },
+    Def { name: "draft_tasks", default: "alt+n", rule: Rule::Chord, does: "drafts tasks from the conversation" },
+];
 
 fn default_of(name: &str) -> Chord {
     let d = ACTIONS.iter().find(|d| d.name == name).map_or("", |d| d.default);
@@ -300,19 +319,22 @@ fn default_of(name: &str) -> Chord {
 pub struct Keys {
     pub back: Chord,
     pub quit: Chord,
+    /// Inside a session: draft tasks from that conversation (`t` on its row does the same).
+    pub draft: Chord,
     back_label: String,
     quit_label: String,
+    draft_label: String,
 }
 
 impl Default for Keys {
     fn default() -> Self {
-        Keys::new(default_of("back"), default_of("quit"))
+        Keys::new(default_of("back"), default_of("quit"), default_of("draft_tasks"))
     }
 }
 
 impl Keys {
-    fn new(back: Chord, quit: Chord) -> Keys {
-        Keys { back_label: back.label(), quit_label: quit.label(), back, quit }
+    fn new(back: Chord, quit: Chord, draft: Chord) -> Keys {
+        Keys { back_label: back.label(), quit_label: quit.label(), draft_label: draft.label(), back, quit, draft }
     }
 
     pub fn back_label(&self) -> &str {
@@ -321,6 +343,10 @@ impl Keys {
 
     pub fn quit_label(&self) -> &str {
         &self.quit_label
+    }
+
+    pub fn draft_label(&self) -> &str {
+        &self.draft_label
     }
 
     /// The keys a file's text gives, and a notice for each entry that was ignored or needs saying. Never fails.
@@ -343,9 +369,9 @@ impl Keys {
                 notes.push(format!("keys.json: \"{name}\" should be a key written like \"{}\". Using {}.", d.label(), d.label()));
                 return d;
             };
-            let rule = ACTIONS.iter().find(|a| a.name == name).map_or(Rule::Any, |a| a.rule);
-            let checked = |c: &Chord| match rule {
-                Rule::Chord => check_back(c),
+            let def = ACTIONS.iter().find(|a| a.name == name);
+            let checked = |c: &Chord| match def.map_or(Rule::Any, |d| d.rule) {
+                Rule::Chord => check_chord(c, def.map_or("", |d| d.does)),
                 Rule::Any => Ok(None),
             };
             let why = match Chord::parse(text) {
@@ -364,7 +390,9 @@ impl Keys {
         };
         let back = take("back", &|_| Ok(None));
         let quit = take("quit", &|c| if *c == back { Err("is the back key too".to_string()) } else { Ok(None) });
-        (Keys::new(back, quit), notes)
+        // In a session the back key is looked at first: the same chord can't do both.
+        let draft = take("draft_tasks", &|c| if *c == back { Err("is the back key too".to_string()) } else { Ok(None) });
+        (Keys::new(back, quit, draft), notes)
     }
 
     /// The keys in `<dir>/keys.json`: a missing file is the defaults, with nothing to say.
@@ -547,6 +575,39 @@ mod tests {
         for ok in ["ctrl+space", "ctrl+q", "alt+x", "alt+1", "alt+space"] {
             assert!(!p(ok).raw_forms().is_empty(), "{ok}");
         }
+    }
+
+    #[test]
+    fn the_draft_tasks_chord_is_one_a_session_can_tell_apart_and_claude_code_doesnt_use() {
+        let d = Keys::default();
+        assert_eq!((d.draft, d.draft_label()), (p("alt+n"), "alt+n"));
+        let def = ACTIONS.iter().find(|a| a.name == "draft_tasks").unwrap();
+        assert_eq!(def.rule, Rule::Chord);
+        assert_eq!(check_chord(&d.draft, def.does), Ok(None), "the default passes the rules with nothing to say");
+        assert!(!d.draft.raw_forms().is_empty(), "its bytes can be told apart");
+        assert!(d.draft != d.back && d.draft != d.quit);
+        // alt+t, the first thought, is Claude Code's own: kept if the user wants it, with a warning that says what it does.
+        assert_eq!(
+            check_chord(&p("alt+t"), def.does),
+            Ok(Some("Claude Code uses alt+t itself: in a session it now drafts tasks from the conversation instead".into()))
+        );
+        let (k, n) = Keys::parse(r#"{ "draft_tasks": "alt+t" }"#);
+        assert_eq!(k.draft, p("alt+t"));
+        assert_eq!(
+            n,
+            [
+                "keys.json: \"draft_tasks\" is \"alt+t\". Claude Code uses alt+t itself: in a session it now drafts tasks from the conversation instead."
+            ]
+        );
+        let (k, n) = Keys::parse(r#"{ "draft_tasks": "ctrl+q" }"#);
+        assert_eq!((k.draft, n.len()), (p("ctrl+q"), 0));
+        // Not a chord, or the back key: refused, the default kept, said once.
+        let (k, n) = Keys::parse(r#"{ "draft_tasks": "t" }"#);
+        assert_eq!(k.draft, p("alt+n"));
+        assert!(n[0].contains("\"draft_tasks\" is \"t\", which would be typed") && n[0].ends_with("Using alt+n."), "{n:?}");
+        let (k, n) = Keys::parse(r#"{ "back": "alt+x", "draft_tasks": "alt+x" }"#);
+        assert_eq!((k.back, k.draft), (p("alt+x"), p("alt+n")));
+        assert!(n[0].contains("is the back key too"), "{n:?}");
     }
 
     #[test]

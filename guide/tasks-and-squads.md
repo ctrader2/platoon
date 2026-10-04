@@ -105,7 +105,7 @@ folder.
 ### A task's own screen
 
 `enter` on a task shows its number and title, its project (or **No project**), its state, **From** (the session it was made
-in with [`/to-tickets`](#making-tasks-from-a-conversation): its name as the Sessions tab shows it, else its first prompt),
+from (a task [drafted from a conversation](#making-tasks-from-a-conversation)): its name as the Sessions tab shows it, else its first prompt),
 what the squad said when it stopped, the squad that has it (**Squad** Coding squad), how much the squad does **on its
 own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
 lands on main", or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it
@@ -198,34 +198,57 @@ the text (`--how-far` is refused with a line that says so). A running platoon sh
 
 ## Making tasks from a conversation
 
+When a conversation has agreed on some work and left it for later, platoon can turn it into tasks for you: press **`t`**
+on the session's row (on the Sessions tab, or in a project's Sessions pane), or **`alt+n`** inside the open session (it
+goes back to the list first; the session keeps running). Both do the same. The chord can be changed: `draft_tasks` in
+[`keys.json`](settings-and-keys.md#keys-back-and-quit). The session may be in a project or in none, and it needs a folder
+platoon can find (its own, or one added to it).
+
+1. platoon asks Claude once, in the background, over the conversation, read the way the [hand-off](projects.md#handing-work-on-to-a-new-session)
+   reads it (its first message and the last twelve you sent, each cut to 300 characters, and a line of Claude's last
+   reply), together with the name of each of your squads and what it can do. Meanwhile the session's row says
+   **Drafting tasks…** and platoon keeps going. One conversation at a time.
+2. The draft opens in a popup, **Tasks from this conversation**, as soon as you are on platoon's lists (if you are in a
+   session then, a line says it is ready and the back key shows it). Each task is a block: its title, the squad
+   suggested for it (one of yours that fits its kind of work, or none), the folders it works in (the session's), which
+   of the new tasks it waits for, and its text: **What it should do**, a **How far:** line, and **Acceptance** checks.
+   **Nothing is made until you say so.**
+
+| Key (the draft) | Does |
+| --- | --- |
+| `↑` `↓` | move between the tasks (the blocks scroll; `PgUp` `PgDn` and the wheel too) |
+| `x` | take the picked task out of the draft (the others that waited for it don't any more) |
+| `e` | open the picked task in your editor (the same list of editors as the [notes](projects.md#editing-the-notes)): its title as the first heading, then its text. What the file says when the editor is done replaces it in the draft |
+| `enter` | make every task left, then open the [hand-over](#the-hand-over) popup for each one that can start, in turn, with its suggested squad picked and its terms pre-filled. `esc` there leaves that task as **Can start** and goes on to the next; a task that waits for another of them is left for later. A line at the end says what was made |
+| `k` | make every task left, as **Can start**, and stop there |
+| `esc` | make nothing |
+
+The tasks go in the session's project, or in no project when it is in none, each after the ones it waits for, and each
+remembers the session it came from: its screen shows **From** with the session's name, and `enter` there (or `o`) opens
+that session. After they are made, the Tasks tab (or the project's Tasks pane, when you are on its screen) shows them.
+
+What Claude is asked for, as platoon comes: one thin, complete piece per task that fits in one fresh session (whoever picks
+it up has never seen the conversation), what should work when it is done rather than which files change, acceptance
+checks that would fail before the work, a **How far:** line (local changes only, unless the conversation asked for a
+commit, a push or a merge request), no file paths or code, the tasks shaped to the kinds of work your squads do (a coding
+part apart from a documentation part), and preparation first. You can change that in the settings: **System prompt for
+tasks from a conversation**, on the [Projects tab](settings-and-keys.md#projects). platoon checks the answer (a title and
+what each task should do; which of the new tasks it waits for, never in a circle; a suggested squad you have) and says in
+one line when it can't use it; nothing is written then.
+
+It uses your plan's tokens like the hand-off does: it needs the [smart features](tokens.md) on, counts toward the daily
+limit, and says in one line why when it can't run. A session whose project is archived, or with no folder platoon can
+find, is refused with one line too, and nothing is asked.
+
+### From inside Claude Code: `/to-tickets`
+
 Type **`/to-tickets`** in a Claude Code session that is in a project (the **Tasks skill** step of
-[`platoon setup`](install-and-setup.md#the-tasks-skill) adds it). Claude never starts it unasked: when a session in a
-project leaves agreed work for later, Claude may offer it once, and uses it only after you say yes (after a no, it says
-you can type `/to-tickets` any time and doesn't offer again in that conversation). You can add what to turn into tasks
-after it, such as a plan file; without that it uses what the conversation has agreed on. It goes like this:
-
-1. It asks platoon which project the session is in (`platoon task where`). If the session isn't in one, it says so in
-   one line and stops: add the session to a project first (`m` on the Sessions tab), then type `/to-tickets` again.
-2. It reads what kinds of work your squads do (`platoon squads --kinds`) and shapes the tasks to fit, for example a
-   coding part apart from a documentation part. It never picks a squad: you do that on the task (`S`).
-3. It drafts the tasks. Each is one thin, complete piece that fits in one fresh session (whoever picks it up has never
-   seen the conversation), says what should work when it is done rather than which files change, has acceptance checks
-   that would fail before the work, a **How far:** line (local changes only, unless the conversation asked for more), no
-   file paths or code, and which of the new tasks it waits for. Preparation work comes first.
-4. It shows them as a numbered list (title, what it waits for, what it delivers) and asks whether the sizes are right,
-   whether the waits are real, and what to merge or split. **Nothing is written until you approve the list.**
-5. It makes them through platoon, the ones others wait for first: one `platoon task add --from-session ...` per task,
-   with the task's text piped in, and every working folder the session has (or `--no-folder` for a task that needs
-   none, such as research). Then it lists the numbers platoon gave them. They are on the project's screen, in the Tasks
-   pane.
-
-The skill only runs `platoon task` and `platoon squads` commands, and it lists those two in its `allowed-tools`, so Claude
-Code doesn't ask before running them. Claude Code clears that permission when you send your next message, so the tasks it
-writes after you approve the list may still ask. (A copy of the skill installed by an earlier platoon runs `platoon ticket`
-instead, which works the same way.)
-
-Each task remembers the session it came from: its screen shows **From** with the session's name, and `enter` there (or
-`o`) opens that session. The commands it uses work on their own too:
+[`platoon setup`](install-and-setup.md#the-tasks-skill) adds it) for the same thing done by Claude in the conversation
+itself: it reads what kinds of work your squads do (`platoon squads --kinds`), drafts the tasks, shows them as a numbered
+list for you to approve (nothing is written before that), and makes them with `platoon task add --from-session ...`.
+Claude never starts it unasked: when a session in a project leaves agreed work for later, Claude may offer it once, and
+uses it only after you say yes. The skill only runs `platoon task` and `platoon squads` commands, and lists them in its
+`allowed-tools`. The commands it uses work on their own too:
 
 ```
 platoon task where --session <session id>       # "Web shop (id …)", or one line and exit 1 when it's in no project

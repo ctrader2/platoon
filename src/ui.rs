@@ -11,6 +11,7 @@ use crate::theme::Theme;
 use crate::tickets::{self, State, Ticket};
 use crate::usage::Usage;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+mod draft_view;
 mod help_view;
 mod squads_view;
 mod tasks_view;
@@ -254,6 +255,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         "active/archived",
         "move",
         "editor",
+        "draft tasks",
         "hand-off",
         "project",
         "next pane",
@@ -321,6 +323,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         Mode::SquadText => squads_view::draw_squad_text(f, app, full),
         Mode::TaskProject => tasks_view::draw_task_project(f, app, full),
         Mode::Answer => tasks_view::draw_answer(f, app, full),
+        Mode::TaskDraft => draft_view::draw_task_draft(f, app, full),
         // No fade here: the point is to see the real screen in the colors being tried.
         Mode::Themes => draw_theme_list(f, app, full),
         _ => {}
@@ -388,6 +391,7 @@ fn sessions_hints(app: &App) -> Vec<Hint<'_>> {
         ("a", archive_verb, Some(Action::Archive)),
         ("m", "project", Some(Action::Assign)),
         ("h", "hand-off", Some(Action::HandOff)),
+        ("t", "draft tasks", None),
         ("v", "editor", Some(Action::Editor)),
         ("/", "search", Some(Action::Search)),
         ("r", "rename", Some(Action::Rename)),
@@ -426,6 +430,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
         out.push(("h", "hand-off", Some(Action::HandOff)));
+        out.push(("t", "draft tasks", None));
         out.push(("v", "editor", Some(Action::Editor)));
     } else if app.pane == Pane::Tickets {
         let on_divider = matches!(app.ticket_rows().get(app.ticket_selected()), Some(TRow::Divider(_)));
@@ -1299,11 +1304,13 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
         let base = Style::new().bg(bg);
         let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, app.session_running(s), app.tick);
         let text = if s.archived { t.dim } else { t.text };
+        let drafting = app.drafting_from() == Some(s.id.as_str());
+        let dir = if drafting { fit(DRAFTING, dir_w) } else { fit_dirs(&s.dir, &s.extra_dirs, dir_w) };
         let spans = vec![
             Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
             Span::styled(format!("{marker} "), base.fg(if s.archived { t.dim } else { marker_color })),
             Span::styled(cell(&s.name, name_w), base.fg(text)),
-            Span::styled(fit_dirs(&s.dir, &s.extra_dirs, dir_w), base.fg(t.dim)),
+            Span::styled(dir, base.fg(if drafting { t.busy } else { t.dim })),
             Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)),
         ];
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
@@ -1923,12 +1930,17 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
     // The description spans the columns that say what the session is (NAME to MODEL) and ends where STATUS starts,
     // its last cell blank like every column's, so STATUS, CONTEXT and LAST stand clear under their titles.
     let desc_w = c.status_at().min(area.width as usize).saturating_sub(3);
-    let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(&s.description, desc_w.saturating_sub(1)), base.fg(t.dim))];
+    // While tasks are drafted from it, the line says so (platoon keeps going meanwhile).
+    let (desc, desc_fg) = if app.drafting_from() == Some(s.id.as_str()) { (DRAFTING, t.busy) } else { (s.description.as_str(), t.dim) };
+    let l2 = vec![lead, Span::styled("  ", base), Span::styled(fit(desc, desc_w.saturating_sub(1)), base.fg(desc_fg))];
 
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Length(1)]).split(area);
     f.render_widget(Paragraph::new(Line::from(l1)).style(base), rows[0]);
     f.render_widget(Paragraph::new(Line::from(l2)).style(base), rows[1]);
 }
+
+/// What a session's row says while tasks are drafted from it.
+pub(crate) const DRAFTING: &str = "Drafting tasks…";
 
 /// Is anything known about how full this conversation's context is: Claude's own figure, or an estimate above 0?
 /// (A conversation with nothing read from it yet has neither: its CONTEXT column stays blank.)
@@ -3618,6 +3630,7 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
         None => match (edit.instructions, edit.ticket) {
             (Some(id), _) => format!("{} · the system prompt for {}", edit.name, crate::instructions::action(id).what),
             (None, Some(n)) => format!("{} · task #{n}", edit.name),
+            (None, None) if edit.squad.as_ref().is_some_and(|e| e.is_draft()) => format!("{} · a drafted task", edit.name),
             (None, None) if edit.squad.is_some() => format!("{} · a squad's system prompt", edit.name),
             (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
         },
@@ -4189,8 +4202,8 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, extra: &[
         draw_paused_banner(f, app, term);
     }
     let scrolled = client.parser.lock().map(|p| p.screen().scrollback()).unwrap_or(0);
-    let hints: [Hint; 1] = [(app.back_label(), "back to list", Some(Action::Back))];
     let bar = bar.inner(Margin::new(1, 0));
+    let hints = attached_hints(app, bar.width);
     let right = if let Some(notice) = app.active_notice() {
         // "Copied 3 lines": what just happened wins over the standing text.
         notice.to_string()
@@ -4203,6 +4216,20 @@ fn draw_attached(f: &mut Frame, app: &App, client: &Client, dir: &str, extra: &[
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, bar, &hints, Some((right, color)));
 }
+
+/// The keys under a session (not a squad's: that has the split view's own line): the back key, then the chord that
+/// drafts tasks from the conversation, whole or not at all (it goes when it would leave the folders too little room).
+pub(crate) fn attached_hints(app: &App, width: u16) -> Vec<Hint<'_>> {
+    let mut hints: Vec<Hint> = vec![(app.back_label(), "back to list", Some(Action::Back))];
+    let with: Vec<Hint> = vec![hints[0], (app.keys.get().draft_label(), "tasks from this conversation", None)];
+    if footer_room(width, &with) >= ATTACHED_DIRS_MIN {
+        hints = with;
+    }
+    hints
+}
+
+/// The least room the folders keep beside the keys under a session.
+const ATTACHED_DIRS_MIN: usize = 16;
 
 /// Covers the session when this copy is no longer safe to write to. Keys aren't forwarded while it shows.
 pub fn draw_paused_banner(f: &mut Frame, app: &App, area: Rect) {

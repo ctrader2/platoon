@@ -92,6 +92,7 @@ pub const FEATURES: &[Feature] = &[
 pub const SWITCHLESS: &[(&str, &str)] = &[
     (TEST_FEATURE, "Token test"),
     (crate::handoff::FEATURE, "Hand-off"),
+    (crate::taskdraft::FEATURE, "Tasks from a conversation"),
     (crate::squads::COMMANDER_FEATURE, "Squad commander"),
     (crate::squadfile::DRAFT_FEATURE, "Drafting a squad"),
     (crate::agentfile::DRAFT_FEATURE, "Drafting an agent"),

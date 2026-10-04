@@ -70,7 +70,7 @@ What naming and summarizing your conversations reads, and how often. Under the e
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](projects.md#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
 | Squads at work at once | How many [squads](tasks-and-squads.md#handing-a-task-to-a-squad) may work on tasks at the same time, in all projects. One more handed over waits for a free squad and starts by itself, oldest first. Lowering it never stops a squad at work. | 1 to 10 squads (default 3) |
-| System prompt for project notes, for project descriptions, for the hand-off | How platoon asks Claude to write a project's notes, the line under a project's name, and a hand-off (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
+| System prompt for project notes, for project descriptions, for the hand-off, for tasks from a conversation | How platoon asks Claude to write a project's notes, the line under a project's name, a hand-off, and the tasks it drafts from a session (`t`; see [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation) and [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 | System prompt for the squad commander, for squad leaders, for drafting a squad, for drafting an agent | How the commander checks a squad fits a task, how every squad's leader leads its agents (platoon adds what the squad can do, its workflow and the rules it keeps), and how a squad or an agent is drafted from your description. | Enter to change, User Modified |
 | Model for squad leaders | The model every squad's leader runs on; its agents each run on their own. A squad already at work keeps the model it started with. | Opus, Sonnet (default), Haiku |
 
@@ -141,7 +141,7 @@ is never replaced without keeping a `.bak` copy first.
 ## System prompts for each smart feature
 
 Each thing platoon asks Claude for - names and summaries, Describe it, a project's notes, a project's description, the
-hand-off, and for squads the commander, the leaders and the drafting of a squad or an agent - comes with a system prompt,
+hand-off, tasks from a conversation, and for squads the commander, the leaders and the drafting of a squad or an agent - comes with a system prompt,
 and each has an entry on the tab it belongs to. It reads **Enter to change** while it is platoon's default, and **User
 Modified** once you have changed it. Only the part that says what to aim for is yours to change: the tone, what to put in
 and what to leave out. The exact shape of Claude's answer, which platoon checks, and the rule that what Claude is shown is
@@ -157,7 +157,7 @@ data and never orders, are kept by platoon and always sent after your text, so a
   **User Modified · default updated** (in the warning color) until you edit it again or restore the default.
 
 The files are `~/.config/platoon/prompts/<name>.md` (`names`, `describe-it`, `project-notes`, `project-description`,
-`hand-off`, `squad-commander`, `squad-leader`, `squad-draft`, `agent-draft`), only once you have changed something, with
+`hand-off`, `tasks-from-conversation`, `squad-commander`, `squad-leader`, `squad-draft`, `agent-draft`), only once you have changed something, with
 `built-in.json` beside them remembering which default each started from. Every part of platoon reads them, the notes helper
 and `platoon setup`'s first naming pass included. A file that is missing, can't be read or is empty means platoon's
 default, and at most the first 8,000 characters of one are sent.
@@ -176,11 +176,16 @@ filter) and never quits.
 `q` quits, but only from the top-level lists (Sessions, Tasks, Projects, Squads with nothing open). On a project's or a task's
 screen or in a squad's details, it goes back one level instead. In a box you type in, `q` is just a letter.
 
-Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
+`alt+n` inside a session goes back to the list and [drafts tasks](tasks-and-squads.md#making-tasks-from-a-conversation)
+from that conversation, as `t` does on its row. It is the one other key a session doesn't get; the line under the session
+says it (`alt+n tasks from this conversation`) when there is room for it whole. (In a macOS terminal the Option key must
+be set to send alt for it to work; `t` on the row works everywhere.)
+
+All three can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
 platoon never writes this file; there is no entry for it on the settings screen. For example:
 
 ```json
-{ "back": "alt+b", "quit": "x" }
+{ "back": "alt+b", "quit": "x", "draft_tasks": "ctrl+q" }
 ```
 
 A key is written in lower case: `ctrl+`, `alt+` or `shift+`, then the key (`space`, `esc`, `enter`, `tab`, `f1` to `f12`,
@@ -192,6 +197,9 @@ A key is written in lower case: `ctrl+`, `alt+` or `shift+`, then the key (`spac
   refused too. A key Claude Code uses itself (`ctrl+c`, `ctrl+r`, `ctrl+o`, `alt+b`, ...) is accepted with a notice: in a
   session it then goes back instead of doing what Claude does with it.
 - **`quit`** may be any key other than the back key; it only matters on the top-level lists.
+- **`draft_tasks`** follows the same rules as `back` (it works inside a session too) and may not be the back key. A key
+  Claude Code uses itself is accepted with a notice: in a session it then drafts tasks instead of doing what Claude does
+  with it (`alt+t`, for one, is Claude Code's).
 - A missing file means the defaults. An entry that breaks the rules is left out with one notice at the bottom of the
   screen, saying which entry and which key is used instead; a file that isn't JSON means the defaults, also said once.
   Names platoon doesn't know are left alone. An edit applies at once, without restarting (`platoon open` reads the file as

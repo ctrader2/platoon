@@ -17,6 +17,8 @@ mod contrast_app_tests;
 mod density_app_tests;
 mod describe;
 mod dirs;
+#[cfg(test)]
+mod draft_app_tests;
 mod editor;
 #[cfg(test)]
 mod editor_app_tests;
@@ -86,6 +88,7 @@ mod squadwork;
 #[cfg(test)]
 mod stop_app_tests;
 mod summaries;
+mod taskdraft;
 #[cfg(test)]
 mod tasks_app_tests;
 #[cfg(test)]
@@ -2200,7 +2203,7 @@ mod tests {
         assert_eq!(app.filter, "j");
         // The footer keeps the arrows' hint (j/k are the arrows' aliases, not a hint of their own).
         key(&mut app, KeyCode::Esc);
-        let mut term = Terminal::new(TestBackend::new(140, 24)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(160, 24)).unwrap();
         let shown = draw(&mut term, &app);
         assert!(!shown.contains("j/k") && shown.contains("↑↓"), "{shown}");
     }
