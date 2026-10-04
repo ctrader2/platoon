@@ -517,7 +517,7 @@ fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
     v(&mut l.app);
     assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {}", s(&l.wt))]);
     assert_eq!(l.ticket().worktrees[0].opened_in.as_deref(), Some("VS Code"), "written on the ticket: it survives a restart");
-    assert!(notice(&l.app).contains("#1's worktree stays after the work until w on the ticket removes it"), "{}", notice(&l.app));
+    assert!(notice(&l.app).contains("#1's copy of the folder stays after the work until w on the task removes it"), "{}", notice(&l.app));
 
     // Done, its squad not running: the clean-up leaves it (platoon can't tell when VS Code closes).
     Tickets::open(&l.w.config, &l.project).squad_says(1, &State::Done, "", None).unwrap();
@@ -542,7 +542,7 @@ fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
     assert!(!l.wt.exists());
     let wt = &l.ticket().worktrees[0];
     assert!(wt.removed.is_some() && wt.opened_in.is_none(), "{wt:?}");
-    assert!(git(&l.shop, &["branch", "--list", "ticket/1"]).contains("ticket/1"), "the branch is kept");
+    assert!(git(&l.shop, &["branch", "--list", "task/1"]).contains("task/1"), "the branch is kept");
 }
 
 #[test]
@@ -577,7 +577,7 @@ fn the_settings_step_through_the_editors_this_computer_has() {
     for _ in 0..5 {
         key(&mut app, KeyCode::Tab);
     }
-    assert_eq!(app.items()[0].name, "Editor for notes and tickets (e)");
+    assert_eq!(app.items()[0].name, "Editor for notes and tasks (e)");
     key(&mut app, KeyCode::Right);
     assert_eq!(settings::load(&w.config).0.notes_editor, "nano");
     key(&mut app, KeyCode::Right);

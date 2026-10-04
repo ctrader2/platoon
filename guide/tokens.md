@@ -1,6 +1,6 @@
 # Features that use tokens
 
-Most of platoon spends nothing: the list, search by words, projects, notes you write yourself, tickets and themes all work
+Most of platoon spends nothing: the list, search by words, projects, notes you write yourself, tasks and themes all work
 without asking Claude anything. A few features do ask Claude, which uses your own Claude plan. They are **off by default**.
 
 ## The features
@@ -22,13 +22,13 @@ A few more have no switch, because they only ever run when you ask for them then
 switch on and still count against the daily limit, like everything else:
 
 - The [hand-off](projects.md#handing-work-on-to-a-new-session) (`h`).
-- The [squad commander](tickets-and-squads.md#handing-a-ticket-to-a-squad)'s check when you hand a ticket to a squad.
-- [Drafting a squad or an agent](tickets-and-squads.md#making-your-own) from your description.
+- The [squad commander](tasks-and-squads.md#handing-a-task-to-a-squad)'s check when you hand a task to a squad.
+- [Drafting a squad or an agent](tasks-and-squads.md#making-your-own) from your description.
 - `platoon tokens test` (see [below](#platoon-tokens)).
 
 A squad's own work is different: its leader and agents are ordinary Claude Code sessions. They use your plan like any
-session you run yourself, and platoon's daily limit does not cover them; the tokens a squad used show on its ticket (see
-[What the squad has done](tickets-and-squads.md#what-the-squad-has-done-and-the-tokens-it-used)).
+session you run yourself, and platoon's daily limit does not cover them; the tokens a squad used show on its task (see
+[What the squad has done](tasks-and-squads.md#what-the-squad-has-done-and-the-tokens-it-used)).
 
 ## Turning them on
 

@@ -1,16 +1,26 @@
-//! Tickets: one piece of work in a project. A ticket has a number (per project, from 1, never used twice), a title,
-//! a body in Markdown (a file of its own the user edits; it also says how far to take the work), the folders it works
-//! in, the tickets it waits for (`blocked_by`) and a state. Only platoon ever writes a ticket's state (for the user, or
-//! for the squad working on it).
+//! Tasks (the user's word; the code still says "ticket" in most places, from the name they had first): one piece of
+//! work, usually in a project. A task has a number (per project, from 1, never used twice), a title, a body in
+//! Markdown (a file of its own the user edits; it also says how far to take the work), the folders it works in, the
+//! tasks it waits for (`blocked_by`), a state, and once it has been handed to a squad: how much the squad does on its
+//! own (`autonomy`), and for each git folder how it works there (`works_on`: a worktree, or a new branch in the user's
+//! own checkout) and which branch the work lands on. Only platoon ever writes a task's state (for the user, or for the
+//! squad working on it).
 //!
-//! A project's tickets live beside its notes:
-//! `<config>/projects/<id>/tickets.json` = `{"next": 4, "tickets": [{"number", "title", "file", "state", "folders",
-//! "blocked_by", "created", "updated", ...}]}` and the bodies in `<config>/projects/<id>/tickets/<NN>-<slug>.md`
-//! (`file` holds that name; a rename of the title keeps the file).
+//! A project's tasks live beside its notes:
+//! `<config>/projects/<id>/tasks.json` = `{"next": 4, "tickets": [{"number", "title", "file", "state", "folders",
+//! "blocked_by", "created", "updated", ...}]}` and the bodies in `<config>/projects/<id>/tasks/<NN>-<slug>.md`
+//! (`file` holds that name; a rename of the title keeps the file). The list's key stays `tickets`, as the files were
+//! written before the rename. Tasks in no project (`platoon task add` outside any project) live in `<config>/tasks.json`
+//! and `<config>/tasks/`, with a number space of their own (the project id `""` here, `NO_PROJECT_ID`).
 //!
-//! Like platoon's other files: writes are atomic (temp file + rename) and happen under a lock (`tickets.lock` beside
-//! the file: the app and `platoon ticket add` can both write), keys platoon doesn't know are kept (on the file and on
-//! each ticket; a newer platoon will add some), a state it doesn't know is kept and shown as written, and a file that
+//! Before 2026-10 the files were `tickets.json` and `tickets/`: a project that still has those is read and written under
+//! the old names until the app moves them (`move_to_new_names`, once no leader of the project is running, keeping
+//! `tickets.json.bak`). A task record's branch is whatever it was made with: `task/<N>` for new ones, `ticket/<N>` kept
+//! for the old.
+//!
+//! Like platoon's other files: writes are atomic (temp file + rename) and happen under a lock (`tasks.lock` beside
+//! the file: the app and `platoon task add` can both write), keys platoon doesn't know are kept (on the file and on
+//! each task; a newer platoon will add some), a state it doesn't know is kept and shown as written, and a file that
 //! can't be understood is never written over: every change is refused until the user has looked at it.
 
 use crate::projects::{lock, write_atomic};
@@ -38,32 +48,36 @@ How far: local changes only (say if you want a commit, or a push and merge reque
 
 // ---- states -------------------------------------------------------------------------------------------------------
 
-/// Where a ticket is. The first six are platoon's (in this order); anything else is a state a newer platoon wrote,
-/// kept as it is.
+/// Where a task is. The first five are platoon's (in this order); anything else is a state a newer platoon wrote,
+/// kept as it is. The screen never says "New": a New task reads **Can start**, **Waits for #N** or **Needs a folder**
+/// (`words`), and Waiting reads **Needs you**. A file that says `ready` (the state Ready to publish, until 2026-10)
+/// reads as Waiting with `Ticket::publish_wanted`; nothing writes `ready` again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum State {
     New,
     Working,
     Waiting,
-    Ready,
     Done,
     Cancelled,
     Other(String),
 }
 
-/// (what the file holds, what the screen says), in the order the states come in.
-const STATE_NAMES: [(&str, &str); 6] = [
-    ("new", "New"),
-    ("working", "Working"),
-    ("waiting", "Waiting on you"),
-    ("ready", "Ready to publish"),
-    ("done", "Done"),
-    ("cancelled", "Cancelled"),
-];
+/// What the file held for Ready to publish, read as Needs you that wants to publish.
+const READY_ID: &str = "ready";
 
-/// The states a message from the user to the ticket's current leader turns into Working (`Tickets::user_typed`).
+/// (what the file holds, what the screen says), in the order the states come in.
+const STATE_NAMES: [(&str, &str); 5] =
+    [("new", "New"), ("working", "Working"), ("waiting", "Needs you"), ("done", "Done"), ("cancelled", "Cancelled")];
+
+/// The states a message from the user to the task's current leader turns into Working (`Tickets::user_typed`).
 pub fn reopened_by_typing(s: &State) -> bool {
-    matches!(s, State::Waiting | State::Ready | State::Done | State::Cancelled)
+    matches!(s, State::Waiting | State::Done | State::Cancelled)
+}
+
+/// The user's go-ahead to publish lasts only while the squad is at it: Working, or Needs you because it wants to
+/// publish (the go-ahead is what answers that).
+pub fn keeps_go_ahead(state: &State, publish_wanted: bool) -> bool {
+    matches!(state, State::Working) || (matches!(state, State::Waiting) && publish_wanted)
 }
 
 impl State {
@@ -71,8 +85,7 @@ impl State {
         match id {
             "new" => State::New,
             "working" => State::Working,
-            "waiting" => State::Waiting,
-            "ready" => State::Ready,
+            "waiting" | READY_ID => State::Waiting,
             "done" => State::Done,
             "cancelled" => State::Cancelled,
             other => State::Other(other.to_string()),
@@ -84,9 +97,8 @@ impl State {
             State::New => Some(0),
             State::Working => Some(1),
             State::Waiting => Some(2),
-            State::Ready => Some(3),
-            State::Done => Some(4),
-            State::Cancelled => Some(5),
+            State::Done => Some(3),
+            State::Cancelled => Some(4),
             State::Other(_) => None,
         }
     }
@@ -99,7 +111,8 @@ impl State {
         }
     }
 
-    /// What the screen says: platoon's words, or a state it doesn't know as it was written.
+    /// What the screen says for a state that reads the same whatever the task: platoon's words, or a state it doesn't
+    /// know as it was written. For New the screen says `words` instead (it depends on the task's folders and waits).
     pub fn label(&self) -> &str {
         match self {
             State::Other(s) => s,
@@ -107,25 +120,101 @@ impl State {
         }
     }
 
-    /// The label in a pane too narrow for it: short words that still say it ("Your turn", "To publish"). Not
-    /// "Waiting" for Waiting on you: beside "Waits #1" it would read as waiting for another ticket.
-    pub fn short_label(&self) -> &str {
-        match self {
-            State::Waiting => "Your turn",
-            State::Ready => "To publish",
-            s => s.label(),
-        }
-    }
-
     /// Done and Cancelled are listed apart from the rest.
     pub fn closed(&self) -> bool {
         matches!(self, State::Done | State::Cancelled)
     }
+}
 
-    /// The user's go-ahead to publish lasts only while the squad is at it: Working or Ready.
-    pub fn keeps_go_ahead(&self) -> bool {
-        matches!(self, State::Working | State::Ready)
+// ---- how much a squad does on its own -------------------------------------------------------------------------
+
+/// How much a squad does on a task without asking: asked at every hand-over (the project holds only a default). A third
+/// level, "plans first and waits for your yes", is planned; a value this platoon doesn't know is kept as written and
+/// treated as asking.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub enum Autonomy {
+    /// Works, and asks before anything others can see (a push, a merge request, a page).
+    #[default]
+    Ask,
+    /// Works and publishes on its own.
+    Publish,
+    Other(String),
+}
+
+impl Autonomy {
+    pub fn from_id(id: &str) -> Autonomy {
+        match id {
+            "ask" => Autonomy::Ask,
+            "publish" => Autonomy::Publish,
+            other => Autonomy::Other(other.to_string()),
+        }
     }
+
+    /// What the file holds.
+    pub fn id(&self) -> &str {
+        match self {
+            Autonomy::Ask => "ask",
+            Autonomy::Publish => "publish",
+            Autonomy::Other(s) => s,
+        }
+    }
+
+    /// What the screen says after "On its own".
+    pub fn label(&self) -> &str {
+        match self {
+            Autonomy::Ask => "asks before anything others can see",
+            Autonomy::Publish => "works and publishes",
+            Autonomy::Other(s) => s,
+        }
+    }
+
+    /// The squad may push, open and merge merge requests and publish without the user's go-ahead.
+    pub fn publishes(&self) -> bool {
+        matches!(self, Autonomy::Publish)
+    }
+
+    /// The next level, round again: what one key in the hand-over popup does.
+    pub fn next(&self) -> Autonomy {
+        match self {
+            Autonomy::Ask => Autonomy::Publish,
+            _ => Autonomy::Ask,
+        }
+    }
+}
+
+/// How a squad works in one of a task's git folders.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum How {
+    /// A git worktree of the repository beside it (`<repo>-worktrees/task-<N>`), on the task's branch: the default.
+    #[default]
+    Worktree,
+    /// A new branch in the user's own checkout (`git switch -c task/<N> <lands on>` run there): offered only when
+    /// nothing else works in that checkout.
+    Branch,
+}
+
+impl How {
+    pub fn from_id(id: &str) -> How {
+        if id == "branch" { How::Branch } else { How::Worktree }
+    }
+
+    pub fn id(self) -> &'static str {
+        match self {
+            How::Worktree => "worktree",
+            How::Branch => "branch",
+        }
+    }
+}
+
+/// What a task says about one of its git folders: how the squad works there, and the branch the work is meant for
+/// (the worktree's or the new branch's base, the merge request's target, and what "merged" will mean).
+///
+/// In the file: `"works_on": [{"folder", "how", "lands_on"}]`. Keys platoon doesn't know are kept.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct WorksOn {
+    pub folder: String,
+    pub how: How,
+    pub lands_on: String,
 }
 
 // ---- a ticket -----------------------------------------------------------------------------------------------------
@@ -221,9 +310,13 @@ pub const PERMISSION_REASON: &str = "Waiting for your OK on a command";
 /// What a ticket in the line for a free squad says (the file too, beside Working).
 pub const QUEUED_WORDS: &str = "Waiting for a free squad";
 
-/// What a New ticket with nothing left to wait for says beside its state: it can be handed to a squad now. (Not to be
-/// mixed up with the state Ready to publish.)
+/// What a New task with a folder and nothing left to wait for reads as: it can be handed to a squad now.
 pub const CAN_START: &str = "Can start";
+
+/// What a New task with no folder of its own reads as (it can still be handed over: the squad works in the task's own
+/// folder then), and its short form.
+pub const NEEDS_FOLDER: &str = "Needs a folder";
+pub const NEEDS_FOLDER_SHORT: &str = "No folder";
 
 /// `QUEUED_WORDS` where a narrow pane has room for a word or two.
 pub const QUEUED_SHORT: &str = "In line";
@@ -233,9 +326,34 @@ pub fn waits_short(wait: &[u32]) -> String {
     format!("Waits {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
 }
 
-/// "Waits for #1, #3": the tickets one still waits for, as a ticket's row says it.
+/// "Waits for #1, #3": the tasks one still waits for, as a task's row says it.
 pub fn waits_for_words(wait: &[u32]) -> String {
     format!("Waits for {}", wait.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", "))
+}
+
+/// The state's words on a task's row and screen: a New task reads **Waits for #N** while it waits, else **Can start**
+/// (it has a folder) or **Needs a folder**; the other states read their label (**Needs you**, **Working**, ...).
+pub fn words(t: &Ticket, all: &[Ticket]) -> String {
+    if t.state != State::New {
+        return t.state.label().to_string();
+    }
+    let wait = waiting_for(t, all);
+    if !wait.is_empty() {
+        return waits_for_words(&wait);
+    }
+    if t.folders.is_empty() { NEEDS_FOLDER.into() } else { CAN_START.into() }
+}
+
+/// `words` in the narrowest pane: "Waits #1", "No folder"; the rest are short already ("Needs you", "Can start").
+pub fn short_words(t: &Ticket, all: &[Ticket]) -> String {
+    if t.state != State::New {
+        return t.state.label().to_string();
+    }
+    let wait = waiting_for(t, all);
+    if !wait.is_empty() {
+        return waits_short(&wait);
+    }
+    if t.folders.is_empty() { NEEDS_FOLDER_SHORT.into() } else { CAN_START.into() }
 }
 
 /// A ticket in the line for a free squad: handed over (the commander said it fits, or the user said "hand it anyway")
@@ -346,8 +464,19 @@ pub struct Ticket {
     /// What the squad said when it stopped (its question, why it is stuck, what it wants to publish), in the words
     /// the screen shows. Empty when there is nothing to say.
     pub reason: String,
-    /// The user let the squad publish (push, merge request, a page): lasts while the ticket is Working or Ready.
+    /// Needs you because the squad wants to publish (push, merge request, a page): `p` lets it. Read from a file that
+    /// says `"state": "ready"` too (what that state meant).
+    pub publish_wanted: bool,
+    /// The user let the squad publish: lasts while the task is Working, or Needs you to publish (`keeps_go_ahead`).
     pub go_ahead: bool,
+    /// How much its squad does on its own. None: never set (the hand-over popup starts from the project's default,
+    /// and the squad asks before anything others can see).
+    pub autonomy: Option<Autonomy>,
+    /// How the squad works in each of its git folders, and where the work lands, as set at the hand-over (kept across a
+    /// refused one, so the next try starts from it). A folder with no entry gets a worktree from the repository's HEAD.
+    pub works_on: Vec<WorksOn>,
+    /// The number it had before it was moved into this project (a task moved later keeps its branch `task/<old>`).
+    pub old_number: Option<u32>,
     /// The last hand-over to a squad that didn't happen, and why (cleared when a leader starts).
     pub handover: Option<Handover>,
     /// Waiting on you because the leader is stuck on Claude's permission prompt (not a question: the next tool it
@@ -379,6 +508,40 @@ impl Ticket {
     pub fn work_folders(&self) -> Vec<String> {
         self.folders.iter().map(|f| self.worktrees.iter().find(|w| w.folder == *f).map_or_else(|| f.clone(), |w| w.path.clone())).collect()
     }
+
+    /// How much its squad does on its own: as set, else it asks.
+    pub fn autonomy(&self) -> Autonomy {
+        self.autonomy.clone().unwrap_or_default()
+    }
+
+    /// What it says about working in `folder`, if it has been set.
+    pub fn works_on_in(&self, folder: &str) -> Option<&WorksOn> {
+        self.works_on.iter().find(|w| w.folder == folder)
+    }
+
+    /// The branch its work goes on: the one its worktrees were made with (`ticket/<N>` for a task from before the
+    /// rename), else `task/<N>`, with the number it had where it was made.
+    pub fn branch(&self) -> String {
+        self.worktrees
+            .iter()
+            .find(|w| !w.branch.is_empty())
+            .map_or_else(|| task_branch(self.old_number.unwrap_or(self.number)), |w| w.branch.clone())
+    }
+
+    /// Does the task work in `folder` as a new branch in the user's own checkout?
+    pub fn branch_in_checkout(&self, folder: &str) -> bool {
+        self.works_on_in(folder).is_some_and(|w| w.how == How::Branch)
+    }
+}
+
+/// The branch a new task's work goes on.
+pub fn task_branch(number: u32) -> String {
+    format!("task/{number}")
+}
+
+/// Is `branch` one platoon makes for task `number`: `task/<N>`, or `ticket/<N>` from before the rename?
+pub fn is_task_branch(branch: &str, number: u32) -> bool {
+    branch == task_branch(number) || branch == format!("ticket/{number}")
 }
 
 /// One line, trimmed, at most `max` characters.
@@ -401,7 +564,7 @@ pub fn slug(title: &str) -> String {
         }
     }
     let out = out.trim_end_matches('-').to_string();
-    if out.is_empty() { "ticket".into() } else { out }
+    if out.is_empty() { "task".into() } else { out }
 }
 
 /// The tickets `t` still waits for: those it is blocked by that exist and are not Done.
@@ -454,11 +617,15 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
     let strings = |k: &str| -> Vec<String> {
         o.get(k).and_then(Value::as_array).map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default()
     };
+    let state_id = o.get("state").and_then(Value::as_str).unwrap_or("new");
+    // "ready" was the state Ready to publish: Needs you, wanting to publish, with what the squad said (or that much).
+    let was_ready = state_id == READY_ID;
+    let reason = o.get("reason").and_then(Value::as_str).unwrap_or_default().to_string();
     Some(Ticket {
         number,
         title: o.get("title").and_then(Value::as_str).map(|t| clean(t, TITLE_MAX)).unwrap_or_default(),
         file: o.get("file").and_then(Value::as_str).unwrap_or_default().to_string(),
-        state: State::from_id(o.get("state").and_then(Value::as_str).unwrap_or("new")),
+        state: State::from_id(state_id),
         folders: strings("folders"),
         blocked_by: o
             .get("blocked_by")
@@ -505,8 +672,27 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                     .collect()
             })
             .unwrap_or_default(),
-        reason: o.get("reason").and_then(Value::as_str).unwrap_or_default().to_string(),
+        reason: if was_ready && reason.is_empty() { "Wants to publish.".to_string() } else { reason },
+        publish_wanted: was_ready || o.get("publish_wanted").and_then(Value::as_bool).unwrap_or(false),
         go_ahead: o.get("go_ahead").and_then(Value::as_bool).unwrap_or(false),
+        autonomy: o.get("autonomy").and_then(Value::as_str).filter(|a| !a.is_empty()).map(Autonomy::from_id),
+        works_on: o
+            .get("works_on")
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(|w| {
+                        let s = |k: &str| w.get(k).and_then(Value::as_str).map(String::from);
+                        Some(WorksOn {
+                            folder: s("folder")?,
+                            how: How::from_id(&s("how").unwrap_or_default()),
+                            lands_on: s("lands_on").unwrap_or_default(),
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        old_number: o.get("old_number").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).filter(|n| *n > 0),
         handover: o.get("handover").and_then(|h| {
             Some(Handover {
                 squad: h.get("squad")?.as_str()?.to_string(),
@@ -546,20 +732,73 @@ pub struct NewTicket {
     pub from: Option<Source>,
 }
 
-/// Where a project's tickets file is.
+/// The project id of the tasks in no project (`<config>/tasks.json`).
+pub const NO_PROJECT_ID: &str = "";
+
+/// What the tasks in no project are listed under.
+pub const NO_PROJECT_NAME: &str = "No project";
+
+/// The list's file name, and the one it had before the rename (2026-10).
+pub const FILE: &str = "tasks.json";
+pub const OLD_FILE: &str = "tickets.json";
+const BODIES: &str = "tasks";
+const OLD_BODIES: &str = "tickets";
+
+/// The folder a project's task files are in (the config folder itself for the tasks in no project).
+fn folder_of(config: &Path, project: &str) -> PathBuf {
+    if project == NO_PROJECT_ID { config.to_path_buf() } else { config.join("projects").join(project) }
+}
+
+/// A project still keeps its tasks under the old names (`tickets.json`, `tickets/`): the new list isn't there and the
+/// old one is. Everything reads and writes the old names until `move_to_new_names`.
+pub fn uses_old_names(config: &Path, project: &str) -> bool {
+    let dir = folder_of(config, project);
+    project != NO_PROJECT_ID && !dir.join(FILE).exists() && dir.join(OLD_FILE).exists()
+}
+
+/// Where a project's tasks file is: `tasks.json`, or `tickets.json` while the project still has the old names.
 pub fn path_in(config: &Path, project: &str) -> PathBuf {
-    config.join("projects").join(project).join("tickets.json")
+    folder_of(config, project).join(if uses_old_names(config, project) { OLD_FILE } else { FILE })
 }
 
-/// Where a project's ticket bodies are.
+/// Where a project's task bodies are: `tasks/`, or `tickets/` while the project still has the old names.
 pub fn bodies_dir(config: &Path, project: &str) -> PathBuf {
-    config.join("projects").join(project).join("tickets")
+    folder_of(config, project).join(if uses_old_names(config, project) { OLD_BODIES } else { BODIES })
 }
 
-/// What `tickets.json` says the user must look at, in the words the pane shows.
-pub const CORRUPT: &str = "tickets.json can't be read, so platoon leaves it alone. Fix or move the file to go on.";
+/// Move a project's tasks from the old names to the new ones, once: `tickets/` becomes `tasks/`, `tickets.json` is
+/// written as `tasks.json` and kept as `tickets.json.bak`. Only when no leader of the project is running (a running
+/// leader was given the old work folder's path): the caller knows that, this doesn't. Under both locks, so a writer
+/// in another process finds the new names when it gets its turn. Ok(false) when there was nothing to move; Err leaves
+/// whatever was moved so far readable (the old list is only renamed last, once the new one is there).
+pub fn move_to_new_names(config: &Path, project: &str) -> io::Result<bool> {
+    if !uses_old_names(config, project) {
+        return Ok(false);
+    }
+    let dir = folder_of(config, project);
+    let _old_lock = lock(&dir.join(OLD_FILE))?;
+    let _new_lock = lock(&dir.join(FILE))?;
+    // Another process may have moved it while we waited for the locks.
+    if !uses_old_names(config, project) {
+        return Ok(false);
+    }
+    let (old_bodies, new_bodies) = (dir.join(OLD_BODIES), dir.join(BODIES));
+    if old_bodies.is_dir() {
+        if new_bodies.exists() {
+            return Err(io::Error::other(format!("{} is already there, so the tasks weren't moved", new_bodies.display())));
+        }
+        fs::rename(&old_bodies, &new_bodies)?;
+    }
+    let text = fs::read_to_string(dir.join(OLD_FILE))?;
+    write_atomic(&dir.join(FILE), &text)?;
+    fs::rename(dir.join(OLD_FILE), dir.join(format!("{OLD_FILE}.bak")))?;
+    Ok(true)
+}
 
-/// The tickets of one project, as the file says.
+/// What the tasks file says the user must look at, in the words the pane shows.
+pub const CORRUPT: &str = "The tasks file can't be read, so platoon leaves it alone. Fix or move the file to go on.";
+
+/// The tasks of one project (or of none: `NO_PROJECT_ID`), as the file says.
 pub struct Tickets {
     config: PathBuf,
     project: String,
@@ -569,7 +808,7 @@ pub struct Tickets {
     corrupt: bool,
     /// Bumped whenever what is in memory changed.
     pub generation: u64,
-    /// Tickets the app is busy handing to a squad (see `Ticket::busy`): shown Working, never written.
+    /// Tasks the app is busy handing to a squad (see `Ticket::busy`): shown Working, never written.
     busy: std::collections::BTreeMap<u32, String>,
 }
 
@@ -593,6 +832,7 @@ impl Tickets {
         &self.project
     }
 
+    /// Where the list is now (the old name until the project's tasks are moved).
     pub fn path(&self) -> PathBuf {
         path_in(&self.config, &self.project)
     }
@@ -695,7 +935,16 @@ impl Tickets {
     /// Change the file: under the lock, from what is on disk now, keeping everything else in it. `f` returns Err to
     /// change nothing. A file that can't be understood is never replaced.
     fn change<T>(&mut self, f: impl FnOnce(&mut Map<String, Value>, &[Ticket]) -> Result<T, String>) -> io::Result<T> {
-        let _lock = lock(&self.path())?;
+        let mut path = self.path();
+        let mut _lock = lock(&path)?;
+        // The project's tasks may have been moved to the new names while we waited (the lock held is the old file's):
+        // then the new file's lock, and the new file.
+        let now = self.path();
+        if now != path {
+            drop(_lock);
+            _lock = lock(&now)?;
+            path = now;
+        }
         let mut root = match self.read() {
             Ok(o) => o.unwrap_or_default(),
             Err(()) => {
@@ -715,16 +964,16 @@ impl Tickets {
             }
         };
         let text = serde_json::to_string_pretty(&Value::Object(root)).unwrap_or_default();
-        let written = write_atomic(&self.path(), &text);
+        let written = write_atomic(&path, &text);
         self.load();
         written.map(|()| out)
     }
 
-    /// A new ticket: the next number, state New, its body file written. Returns the number.
+    /// A new task: the next number, state New, its body file written. Returns the number.
     pub fn add(&mut self, new: NewTicket) -> io::Result<u32> {
         let title = clean(&new.title, TITLE_MAX);
         if title.is_empty() {
-            return Err(io::Error::other("a ticket needs a title"));
+            return Err(io::Error::other("a task needs a title"));
         }
         let dir = bodies_dir(&self.config, &self.project);
         let body = new.body.unwrap_or_else(|| TEMPLATE.to_string());
@@ -733,7 +982,7 @@ impl Tickets {
         let result = self.change(|root, all| {
             for b in &new.blocked_by {
                 if !all.iter().any(|t| t.number == *b) {
-                    return Err(format!("there is no ticket #{b} in this project"));
+                    return Err(format!("there is no task #{b} in this project"));
                 }
             }
             let number = next_number(root).max(all.iter().map(|t| t.number + 1).max().unwrap_or(1));
@@ -744,8 +993,8 @@ impl Tickets {
                 file = format!("{stem}-{k}.md");
                 k += 1;
             }
-            fs::create_dir_all(&dir).map_err(|e| format!("couldn't make the tickets folder: {e}"))?;
-            write_atomic(&dir.join(&file), &body).map_err(|e| format!("couldn't write the ticket: {e}"))?;
+            fs::create_dir_all(&dir).map_err(|e| format!("couldn't make the tasks folder: {e}"))?;
+            write_atomic(&dir.join(&file), &body).map_err(|e| format!("couldn't write the task: {e}"))?;
             *written_file.borrow_mut() = Some(dir.join(&file));
             let mut blocked = new.blocked_by.clone();
             blocked.sort_unstable();
@@ -785,7 +1034,7 @@ impl Tickets {
                 .and_then(Value::as_array_mut)
                 .and_then(|a| a.iter_mut().find(|t| t.get("number").and_then(Value::as_u64) == Some(u64::from(number))))
                 .and_then(Value::as_object_mut)
-                .ok_or_else(|| format!("there is no ticket #{number} any more"))?;
+                .ok_or_else(|| format!("there is no task #{number} any more"))?;
             f(t, all)?;
             t.insert("updated".into(), json!(now));
             Ok(())
@@ -795,7 +1044,7 @@ impl Tickets {
     pub fn rename(&mut self, number: u32, title: &str) -> io::Result<()> {
         let title = clean(title, TITLE_MAX);
         if title.is_empty() {
-            return Err(io::Error::other("a ticket needs a title"));
+            return Err(io::Error::other("a task needs a title"));
         }
         self.edit(number, |t, _| {
             t.insert("title".into(), json!(title));
@@ -803,14 +1052,15 @@ impl Tickets {
         })
     }
 
-    /// The user moves a ticket along. What the squad last said goes (it was about the state being left), and so
-    /// does the go-ahead to publish unless the ticket stays with the squad (Working or Ready).
+    /// The user moves a task along. What the squad last said goes (it was about the state being left), and so
+    /// does the go-ahead to publish unless the task stays with the squad (Working).
     pub fn set_state(&mut self, number: u32, state: &State) -> io::Result<()> {
         let id = state.id().to_string();
-        let keep = state.keeps_go_ahead();
+        let keep = keeps_go_ahead(state, false);
         self.edit(number, |t, _| {
             t.insert("state".into(), json!(id));
             t.remove("reason");
+            t.remove("publish_wanted");
             t.remove("handover");
             t.remove("permission");
             // Any state the user picks takes it out of the line for a free squad.
@@ -822,7 +1072,33 @@ impl Tickets {
         })
     }
 
-    /// A hand-over to `squad` didn't happen: the ticket is New, with why not written on it.
+    /// What the hand-over popup set before the squad is asked for: how much the squad does on its own, and how it works
+    /// in each git folder and where that lands. Kept across a hand-over that doesn't happen, so the next try starts
+    /// from it.
+    pub fn set_terms(&mut self, number: u32, autonomy: &Autonomy, works_on: &[WorksOn]) -> io::Result<()> {
+        let a = autonomy.id().to_string();
+        let list: Vec<Value> = works_on.iter().map(|w| json!({"folder": w.folder, "how": w.how.id(), "lands_on": w.lands_on})).collect();
+        self.edit(number, move |t, _| {
+            t.insert("autonomy".into(), json!(a));
+            // The old entries' other keys are kept: a newer platoon may have added some.
+            let old: Vec<Map<String, Value>> =
+                t.get("works_on").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_object().cloned()).collect();
+            let merged: Vec<Value> = list
+                .into_iter()
+                .map(|v| {
+                    let mut o = old.iter().find(|o| o.get("folder") == v.get("folder")).cloned().unwrap_or_default();
+                    for (k, x) in v.as_object().into_iter().flatten() {
+                        o.insert(k.clone(), x.clone());
+                    }
+                    Value::Object(o)
+                })
+                .collect();
+            t.insert("works_on".into(), Value::Array(merged));
+            Ok(())
+        })
+    }
+
+    /// A hand-over to `squad` didn't happen: the task is New, with why not written on it.
     pub fn handover_failed(&mut self, number: u32, squad: &str, kind: HandoverKind, says: &str) -> io::Result<()> {
         let h = json!({"squad": squad, "kind": kind.id(), "says": says});
         self.edit(number, move |t, _| {
@@ -830,6 +1106,7 @@ impl Tickets {
             t.insert("handover".into(), h);
             t.remove("queued");
             t.remove("reason");
+            t.remove("publish_wanted");
             t.remove("permission");
             t.remove("go_ahead");
             Ok(())
@@ -867,21 +1144,24 @@ impl Tickets {
         })
     }
 
-    /// `platoon hook squad-prompt`: the user sent the ticket's current leader a message, so the squad is at work
-    /// again. A ticket Waiting on you, Ready, Done or Cancelled becomes Working (a Done or Cancelled one is opened
-    /// again, with the same leader); what the squad last said goes. A go-ahead stays (it can only be there on a
-    /// Ready ticket, and Working keeps it). New, Working, a ticket in the line for a free squad and a state platoon
-    /// doesn't know are left alone. True when it changed.
+    /// `platoon hook squad-prompt`: the user sent the task's current leader a message, so the squad is at work
+    /// again. A task that Needs you, is Done or Cancelled becomes Working (a Done or Cancelled one is opened again,
+    /// with the same leader); what the squad last said goes. A go-ahead stays when the task needed the user to publish
+    /// (the message is the answer), and goes otherwise. New, Working, a task in the line for a free squad and a state
+    /// platoon doesn't know are left alone. True when it changed.
     pub fn user_typed(&mut self, number: u32) -> io::Result<bool> {
         self.edit_when(number, |t| {
-            let state = State::from_id(t.get("state").and_then(Value::as_str).unwrap_or("new"));
+            let state_id = t.get("state").and_then(Value::as_str).unwrap_or("new");
+            let state = State::from_id(state_id);
             if !reopened_by_typing(&state) || t.contains_key("queued") {
                 return false;
             }
+            let wanted = state_id == READY_ID || t.get("publish_wanted").and_then(Value::as_bool) == Some(true);
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
+            t.remove("publish_wanted");
             t.remove("permission");
-            if !state.keeps_go_ahead() {
+            if !keeps_go_ahead(&state, wanted) {
                 t.remove("go_ahead");
             }
             true
@@ -935,6 +1215,7 @@ impl Tickets {
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("queued");
             t.remove("reason");
+            t.remove("publish_wanted");
             t.remove("go_ahead");
             t.remove("handover");
             t.remove("permission");
@@ -1029,20 +1310,37 @@ impl Tickets {
     }
 
     /// What a squad's turn ended with (`platoon hook squad-stop`): the state, what it said, and on Done its result,
-    /// written beside the body as `tickets/<NN>-result.md`. The go-ahead goes once the ticket leaves Working/Ready.
+    /// written beside the body as `tasks/<NN>-result.md`. The go-ahead goes once the task leaves Working. (A squad
+    /// that stopped to ask to publish: `squad_wants_to_publish`.)
     pub fn squad_says(&mut self, number: u32, state: &State, reason: &str, result: Option<&str>) -> io::Result<()> {
+        self.squad_said(number, state, reason, false, result)
+    }
+
+    /// The squad's turn ended asking to publish (push, merge request, a page): Needs you, with what it wants to
+    /// publish, until `p` gives the go-ahead (one given already stays: the gate lets it through).
+    pub fn squad_wants_to_publish(&mut self, number: u32, reason: &str) -> io::Result<()> {
+        self.squad_said(number, &State::Waiting, reason, true, None)
+    }
+
+    fn squad_said(&mut self, number: u32, state: &State, reason: &str, publish_wanted: bool, result: Option<&str>) -> io::Result<()> {
         if let Some(text) = result {
             let dir = bodies_dir(&self.config, &self.project);
             fs::create_dir_all(&dir)?;
             write_atomic(&dir.join(result_file(number)), &format!("{}\n", text.trim_end()))?;
         }
-        let (id, reason, keep) = (state.id().to_string(), reason.to_string(), state.keeps_go_ahead());
+        let publish_wanted = publish_wanted && *state == State::Waiting;
+        let (id, reason, keep) = (state.id().to_string(), reason.to_string(), keeps_go_ahead(state, publish_wanted));
         self.edit(number, move |t, _| {
             t.insert("state".into(), json!(id));
             if reason.is_empty() {
                 t.remove("reason");
             } else {
                 t.insert("reason".into(), json!(reason));
+            }
+            if publish_wanted {
+                t.insert("publish_wanted".into(), json!(true));
+            } else {
+                t.remove("publish_wanted");
             }
             t.remove("permission");
             t.remove("queued");
@@ -1093,12 +1391,13 @@ impl Tickets {
         Ok(if changed { taken } else { None })
     }
 
-    /// `p` on a Ready ticket: the user lets the squad publish. The ticket is Working again.
+    /// `p` on a task that Needs you to publish: the user lets the squad publish. The task is Working again.
     pub fn give_go_ahead(&mut self, number: u32) -> io::Result<()> {
         self.edit(number, |t, _| {
             t.insert("go_ahead".into(), json!(true));
             t.insert("state".into(), json!(State::Working.id()));
             t.remove("reason");
+            t.remove("publish_wanted");
             t.remove("permission");
             Ok(())
         })
@@ -1170,21 +1469,22 @@ fn is_snapshot_file(name: &str) -> bool {
     name.ends_with(".json") && !name.contains('/') && !name.contains('\\') && !name.starts_with('.')
 }
 
-/// The private work folder platoon keeps for ticket `number`, beside its body (`tickets/<NN>-work/`): a squad that
-/// doesn't work in the ticket's folders works there, and every squad may keep notes and drafts there. Made when a
-/// squad is handed the ticket; platoon never removes it.
+/// The task's own folder, kept by platoon beside its body (`tasks/<NN>-work/`): a squad that doesn't work in the
+/// task's folders works there, and every squad may keep notes and drafts there. Made when a squad is handed the task;
+/// platoon never removes it.
 pub fn work_dir(config: &Path, project: &str, number: u32) -> PathBuf {
     bodies_dir(config, project).join(format!("{number:02}-work"))
 }
 
-/// The name of the file a squad's result for ticket `number` is kept in, beside the bodies.
+/// The name of the file a squad's result for task `number` is kept in, beside the bodies.
 pub fn result_file(number: u32) -> String {
     format!("{number:02}-result.md")
 }
 
 // ---- leaders across every project ---------------------------------------------------------------------------------
 
-/// Every project's tickets file there is (`<config>/projects/<id>/tickets.json`), with its project id.
+/// Every tasks file there is (`<config>/projects/<id>/tasks.json`, or `tickets.json` until it is moved), with its
+/// project id; the tasks in no project (`<config>/tasks.json`, id `NO_PROJECT_ID`) first.
 pub fn all_files(config: &Path) -> Vec<(String, PathBuf)> {
     let mut out: Vec<(String, PathBuf)> = fs::read_dir(config.join("projects"))
         .into_iter()
@@ -1192,8 +1492,27 @@ pub fn all_files(config: &Path) -> Vec<(String, PathBuf)> {
         .flatten()
         .filter_map(|e| {
             let id = e.file_name().to_str()?.to_string();
-            let p = e.path().join("tickets.json");
+            let p = path_in(config, &id);
             p.is_file().then_some((id, p))
+        })
+        .collect();
+    out.sort();
+    let loose = path_in(config, NO_PROJECT_ID);
+    if loose.is_file() {
+        out.insert(0, (NO_PROJECT_ID.to_string(), loose));
+    }
+    out
+}
+
+/// The projects (by id) that still keep their tasks under the old names, oldest project folder first.
+pub fn projects_with_old_names(config: &Path) -> Vec<String> {
+    let mut out: Vec<String> = fs::read_dir(config.join("projects"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let id = e.file_name().to_str()?.to_string();
+            uses_old_names(config, &id).then_some(id)
         })
         .collect();
     out.sort();
@@ -1238,11 +1557,17 @@ pub fn find_leader(config: &Path, session: &str) -> Option<(String, u32, bool)> 
     None
 }
 
-/// Is `session` the current leader of a ticket that is Working? Such a session is never idle-stopped: its members
-/// may be at work while nobody watches it. Waiting on you, Ready, Done and Cancelled don't hold it.
+/// Is `session` the current leader of a task that is Working? Such a session is never idle-stopped: its members
+/// may be at work while nobody watches it. Needs you, Done and Cancelled don't hold it.
 pub fn leader_at_work(config: &Path, session: &str) -> bool {
     let Some((project, number, true)) = find_leader(config, session) else { return false };
     Tickets::open(config, &project).get(number).is_some_and(|t| t.state == State::Working && t.queued.is_none())
+}
+
+/// A task is open when a squad may be at it or the user is wanted: Working or Needs you (not New, not in the line,
+/// not finished). What "another task already works there" means.
+pub fn is_open(t: &Ticket) -> bool {
+    matches!(t.state, State::Working | State::Waiting) && t.queued.is_none()
 }
 
 /// Why `ticket` can't be blocked by `blocker`, or Ok.
@@ -1251,7 +1576,7 @@ pub fn refuse_blocker(all: &[Ticket], ticket: u32, blocker: u32) -> Result<(), S
         return Err(format!("#{ticket} can't wait for itself"));
     }
     if !all.iter().any(|t| t.number == blocker) {
-        return Err(format!("there is no ticket #{blocker} in this project"));
+        return Err(format!("there is no task #{blocker} in this project"));
     }
     if would_loop(all, ticket, blocker) {
         return Err(format!("#{blocker} already waits for #{ticket}, so #{ticket} can't wait for #{blocker}"));
@@ -1303,27 +1628,42 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     }
 }
 
-const USAGE: &str = "usage: platoon ticket add (--project <name or id> | --from-session <session id>) --title <text>
-                           [--body-file <path>] [--folder <path>... | --no-folder] [--waits-for <number>]...
-       platoon ticket list [--project <name or id>] [--json]
-       platoon ticket where --session <session id>
-  add    make a ticket and print its number (#N). The body comes from --body-file, else from what is piped
-         in, else the template. Without --folder the ticket works in the current folder; --no-folder makes one
+const USAGE: &str = "usage: platoon task add [--project <name or id> | --from-session <session id>] --title <text>
+                         [--body-file <path>] [--folder <path>... | --no-folder] [--waits-for <number>]...
+       platoon task list [--project <name or id>] [--json]
+       platoon task where --session <session id>
+  add    make a task and print its number (#N). The body comes from --body-file, else from what is piped
+         in, else the template. Without --folder the task works in the current folder; --no-folder makes one
          without a folder (for a squad that needs none: research, a summary). Say in the body how
          far to take the work (\"How far: a local commit\", say); a squad stops at local changes when it doesn't say.
-         --from-session puts it in the project that Claude Code session belongs to, and the ticket shows
-         where it came from
-  list   the tickets, open ones first, then the Done and Cancelled ones
-  where  the project a Claude Code session belongs to (exit 1 when it belongs to none)";
+         --from-session puts it in the project that Claude Code session belongs to, and the task shows
+         where it came from. With neither --project nor --from-session, the task goes in the project whose
+         sessions worked in the current folder, or in no project (\"No project\" in the list) outside any
+  list   the tasks, open ones first, then the Done and Cancelled ones
+  where  the project a Claude Code session belongs to (exit 1 when it belongs to none)
+  (platoon ticket ... still works, the same way)";
 
-/// What `platoon ticket add --how-far` says: the flag is gone, and where "how far" goes now.
+/// What `platoon task add --how-far` says: the flag is gone, and where "how far" goes now.
 pub const HOW_FAR_GONE: &str =
-    "don't know \"--how-far\": say how far to take the work in the ticket's text instead (for example \"How far: a local commit\")";
+    "don't know \"--how-far\": say how far to take the work in the task's text instead (for example \"How far: a local commit\")";
 
-/// `platoon ticket ...`. Returns the exit code; what it prints goes to `out`, problems to `err`.
+/// Where the command line looks when no project is named: the sessions' folders (the index platoon keeps in its
+/// cache, read as it is), to find the project whose sessions worked in the current folder. None (a unit test, or no
+/// cache): no lookup, and the task goes in no project.
+#[derive(Clone, Copy)]
+pub struct Roots<'a> {
+    pub claude_root: &'a Path,
+    pub cache: &'a Path,
+}
+
+/// `platoon task ...` (and `platoon ticket ...`, the name it had: the same in every way). Returns the exit code;
+/// what it prints goes to `out`, problems to `err`. (The plumbing of a command line: where to look, what came in,
+/// where to write; one argument each.)
+#[allow(clippy::too_many_arguments)]
 pub fn cli(
     args: &[String],
     config: &Path,
+    roots: Option<Roots>,
     stdin: &mut dyn io::Read,
     stdin_is_terminal: bool,
     cwd: &Path,
@@ -1331,13 +1671,13 @@ pub fn cli(
     err: &mut dyn io::Write,
 ) -> i32 {
     match args.first().map(String::as_str) {
-        Some("add") => match cli_add(&args[1..], config, stdin, stdin_is_terminal, cwd) {
+        Some("add") => match cli_add(&args[1..], config, roots, stdin, stdin_is_terminal, cwd) {
             Ok(n) => {
                 let _ = writeln!(out, "#{n}");
                 0
             }
             Err(why) => {
-                let _ = writeln!(err, "platoon ticket add: {why}");
+                let _ = writeln!(err, "platoon task add: {why}");
                 1
             }
         },
@@ -1357,7 +1697,7 @@ pub fn cli(
                 0
             }
             Err(why) => {
-                let _ = writeln!(err, "platoon ticket list: {why}");
+                let _ = writeln!(err, "platoon task list: {why}");
                 1
             }
         },
@@ -1374,7 +1714,42 @@ fn value<'a>(args: &'a [String], i: &mut usize, flag: &str) -> Result<&'a str, S
     args.get(*i).map(String::as_str).ok_or_else(|| format!("{flag} needs a value"))
 }
 
-fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_terminal: bool, cwd: &Path) -> Result<u32, String> {
+/// The project the folder `cwd` belongs to, by the sessions that worked in it (or in a folder above it), as the
+/// index says: Ok(Some) for one project, Ok(None) for none, Err when sessions of more than one project did.
+pub fn project_of_folder(projects: &crate::projects::Projects, roots: Option<Roots>, cwd: &Path) -> Result<Option<String>, String> {
+    let Some(r) = roots else { return Ok(None) };
+    let here = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    let mut found: Vec<String> = Vec::new();
+    for e in crate::index::Scanner::load(r.claude_root, r.cache).entries() {
+        let Some(dir) = e.t.cwd.as_deref().filter(|d| !d.is_empty()) else { continue };
+        if !here.starts_with(Path::new(dir)) {
+            continue;
+        }
+        if let Some(p) = projects.project_id_of(&e.id).map(String::from)
+            && !found.contains(&p)
+        {
+            found.push(p);
+        }
+    }
+    match found.as_slice() {
+        [] => Ok(None),
+        [one] => Ok(Some(one.clone())),
+        many => {
+            let names: Vec<String> =
+                many.iter().map(|id| format!("\"{}\"", projects.get(id).map_or(id.as_str(), |p| p.name.as_str()))).collect();
+            Err(format!("sessions of more than one project worked in this folder ({}); say which with --project", names.join(", ")))
+        }
+    }
+}
+
+fn cli_add(
+    args: &[String],
+    config: &Path,
+    roots: Option<Roots>,
+    stdin: &mut dyn io::Read,
+    stdin_is_terminal: bool,
+    cwd: &Path,
+) -> Result<u32, String> {
     let (mut project, mut title, mut body_file, mut from_session) = (None, None, None, None);
     let (mut folders, mut blocked): (Vec<String>, Vec<u32>) = (Vec::new(), Vec::new());
     let mut no_folder = false;
@@ -1385,9 +1760,9 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
             "--from-session" => from_session = Some(value(args, &mut i, "--from-session")?.trim().to_string()),
             "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
             "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
-            // A ticket for a squad that needs no folder (research, a summary).
+            // A task for a squad that needs no folder (research, a summary).
             "--no-folder" => no_folder = true,
-            // How far to take the work is no field any more: the ticket's own text says it.
+            // How far to take the work is no field any more: the task's own text says it.
             f if f == "--how-far" || f.starts_with("--how-far=") => return Err(HOW_FAR_GONE.into()),
             "--folder" => {
                 let f = value(args, &mut i, "--folder")?;
@@ -1404,18 +1779,14 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
             flag @ ("--waits-for" | "--blocked-by") => {
                 let flag = flag.to_string();
                 let b = value(args, &mut i, &flag)?;
-                let n =
-                    b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("{flag} takes a ticket number, not \"{b}\""))?;
+                let n = b.trim().trim_start_matches('#').parse::<u32>().map_err(|_| format!("{flag} takes a task number, not \"{b}\""))?;
                 blocked.push(n);
             }
-            other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
+            other => return Err(format!("don't know \"{other}\" (see platoon task)")),
         }
         i += 1;
     }
-    if project.is_none() && from_session.is_none() {
-        return Err("say which project with --project <name>".into());
-    }
-    let title = title.filter(|t| !clean(t, TITLE_MAX).is_empty()).ok_or("give the ticket a title with --title <text>")?;
+    let title = title.filter(|t| !clean(t, TITLE_MAX).is_empty()).ok_or("give the task a title with --title <text>")?;
     let body = match body_file {
         Some(f) => {
             let p = if Path::new(&f).is_absolute() { PathBuf::from(&f) } else { cwd.join(&f) };
@@ -1429,33 +1800,38 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
         None => None,
     };
     let projects = crate::projects::Projects::open(config);
-    let p = match (&from_session, &project) {
+    // Which project (None: no project at all).
+    let p: Option<&crate::projects::Project> = match (&from_session, &project) {
         (Some(session), named) => {
             let theirs = session_project(&projects, session)?;
-            // Both given: they must agree, or the ticket would land somewhere the session isn't.
+            // Both given: they must agree, or the task would land somewhere the session isn't.
             if let Some(want) = named {
                 let named = find_project(&projects, want)?;
                 if named.id != theirs.id {
                     return Err(format!("that session belongs to the project \"{}\", not \"{}\"", theirs.name, named.name));
                 }
             }
-            theirs
+            Some(theirs)
         }
-        (None, Some(want)) => find_project(&projects, want)?,
-        (None, None) => unreachable!(),
+        (None, Some(want)) => Some(find_project(&projects, want)?),
+        // Neither: the project whose sessions worked here, else none.
+        (None, None) => project_of_folder(&projects, roots, cwd)?.and_then(|id| projects.get(&id)),
     };
-    if p.archived {
+    if let Some(p) = p
+        && p.archived
+    {
         return Err(archived_refusal(&p.name));
     }
-    let from = from_session.map(|session| Source { session, project: p.id.clone() });
+    let project_id = p.map_or(NO_PROJECT_ID.to_string(), |p| p.id.clone());
+    let from = from_session.map(|session| Source { session, project: project_id.clone() });
     if no_folder && !folders.is_empty() {
         return Err("--no-folder and --folder don't go together".into());
     }
-    // No --folder: the folder it was run in (where a session asking for the ticket is working).
+    // No --folder: the folder it was run in (where a session asking for the task is working).
     if folders.is_empty() && !no_folder {
         folders.push(cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()).to_string_lossy().into_owned());
     }
-    let mut tickets = Tickets::open(config, &p.id);
+    let mut tickets = Tickets::open(config, &project_id);
     if tickets.is_corrupt() {
         return Err(CORRUPT.into());
     }
@@ -1463,8 +1839,8 @@ fn cli_add(args: &[String], config: &Path, stdin: &mut dyn io::Read, stdin_is_te
     tickets.add(new).map_err(|e| plain(&e))
 }
 
-/// What `platoon ticket where` and `--from-session` say when a session belongs to no project.
-pub const NO_PROJECT: &str = "this session isn't in a project, so it can't make tickets. Add it to a project first: in platoon, pick the session on the Sessions tab and press m.";
+/// What `platoon task where` and `--from-session` say when a session belongs to no project.
+pub const NO_PROJECT: &str = "this session isn't in a project, so it can't make tasks. Add it to a project first: in platoon, pick the session on the Sessions tab and press m.";
 
 /// The project `session` belongs to. A session id that can't be one, and a session in no project, are refused.
 pub fn session_project<'a>(projects: &'a crate::projects::Projects, session: &str) -> Result<&'a crate::projects::Project, String> {
@@ -1481,15 +1857,15 @@ pub fn session_project<'a>(projects: &'a crate::projects::Projects, session: &st
     projects.of(session).ok_or_else(|| NO_PROJECT.to_string())
 }
 
-/// `platoon ticket where --session <id>`: the project a session belongs to, as `<name> (id <id>)`.
+/// `platoon task where --session <id>`: the project a session belongs to, as `<name> (id <id>)`.
 fn cli_where(args: &[String], config: &Path) -> Result<String, String> {
     let mut session = None;
     let mut i = 0;
-    let fail = |why: String| format!("platoon ticket where: {why}");
+    let fail = |why: String| format!("platoon task where: {why}");
     while i < args.len() {
         match args[i].as_str() {
             "--session" => session = Some(value(args, &mut i, "--session").map_err(fail)?.to_string()),
-            other => return Err(fail(format!("don't know \"{other}\" (see platoon ticket)"))),
+            other => return Err(fail(format!("don't know \"{other}\" (see platoon task)"))),
         }
         i += 1;
     }
@@ -1514,24 +1890,33 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         match args[i].as_str() {
             "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
             "--json" => as_json = true,
-            other => return Err(format!("don't know \"{other}\" (see platoon ticket)")),
+            other => return Err(format!("don't know \"{other}\" (see platoon task)")),
         }
         i += 1;
     }
     let projects = crate::projects::Projects::open(config);
-    let chosen: Vec<&crate::projects::Project> = match &project {
-        Some(want) => vec![find_project(&projects, want)?],
-        None => projects.all().iter().collect(),
+    // (name, id): every project, then the tasks in no project; or the one asked for.
+    let chosen: Vec<(String, String)> = match &project {
+        Some(want) => {
+            let p = find_project(&projects, want)?;
+            vec![(p.name.clone(), p.id.clone())]
+        }
+        None => projects
+            .all()
+            .iter()
+            .map(|p| (p.name.clone(), p.id.clone()))
+            .chain(std::iter::once((NO_PROJECT_NAME.to_string(), NO_PROJECT_ID.to_string())))
+            .collect(),
     };
     let mut text = String::new();
     let mut rows: Vec<Value> = Vec::new();
-    for p in chosen {
-        let tickets = Tickets::open(config, &p.id);
+    for (name, id) in chosen {
+        let tickets = Tickets::open(config, &id);
         if tickets.is_corrupt() {
             if project.is_some() {
                 return Err(CORRUPT.into());
             }
-            text.push_str(&format!("{}\n  {CORRUPT}\n\n", p.name));
+            text.push_str(&format!("{name}\n  {CORRUPT}\n\n"));
             continue;
         }
         if tickets.all().is_empty() && project.is_none() {
@@ -1539,22 +1924,19 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         }
         let all = tickets.all();
         let (open, closed) = grouped(all);
-        text.push_str(&format!("{}\n", p.name));
+        text.push_str(&format!("{name}\n"));
         if all.is_empty() {
-            text.push_str("  No tickets yet.\n");
+            text.push_str("  No tasks yet.\n");
         }
         let line = |t: &Ticket| {
-            let wait = waiting_for(t, all);
             let tail = if t.queued.is_some() {
                 format!("  {QUEUED_WORDS}")
-            } else if !wait.is_empty() && !t.state.closed() {
-                format!("  {}", waits_for_words(&wait))
-            } else if is_ready(t, all) {
-                format!("  {CAN_START}")
+            } else if t.state == State::Waiting && !t.reason.is_empty() {
+                format!("  {}", t.reason)
             } else {
                 String::new()
             };
-            format!("  #{:<3} {}  ·  {}{tail}\n", t.number, t.title, t.state.label())
+            format!("  #{:<3} {}  ·  {}{tail}\n", t.number, t.title, words(t, all))
         };
         for t in &open {
             text.push_str(&line(t));
@@ -1568,18 +1950,33 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         text.push('\n');
         for t in open.iter().chain(closed.iter()) {
             rows.push(json!({
-                "project": p.name,
-                "project_id": p.id,
+                "project": if id == NO_PROJECT_ID { Value::Null } else { json!(name) },
+                "project_id": if id == NO_PROJECT_ID { Value::Null } else { json!(id) },
                 "number": t.number,
                 "title": t.title,
-                "state": t.state.label(),
+                "state": words(t, all),
                 "folders": t.folders,
                 "blocked_by": t.blocked_by,
-                "ready": is_ready(t, all),
+                "can_start": is_ready(t, all) && !t.folders.is_empty(),
+                "publish_wanted": t.publish_wanted,
+                "autonomy": t.autonomy().id(),
                 "file": tickets.body_path(t).to_string_lossy(),
             }));
-            if let (Some(f), Some(o)) = (&t.from, rows.last_mut().and_then(Value::as_object_mut)) {
-                o.insert("from".into(), json!({"session": f.session, "project": f.project}));
+            if let Some(o) = rows.last_mut().and_then(Value::as_object_mut) {
+                if let Some(f) = &t.from {
+                    o.insert("from".into(), json!({"session": f.session, "project": f.project}));
+                }
+                if !t.reason.is_empty() {
+                    o.insert("reason".into(), json!(t.reason));
+                }
+                if !t.works_on.is_empty() {
+                    o.insert(
+                        "works_on".into(),
+                        Value::Array(
+                            t.works_on.iter().map(|w| json!({"folder": w.folder, "how": w.how.id(), "lands_on": w.lands_on})).collect(),
+                        ),
+                    );
+                }
             }
         }
     }
@@ -1587,7 +1984,7 @@ fn cli_list(args: &[String], config: &Path) -> Result<String, String> {
         return Ok(serde_json::to_string_pretty(&Value::Array(rows)).unwrap_or_default() + "\n");
     }
     if text.is_empty() {
-        text = "No tickets yet.\n".into();
+        text = "No tasks yet.\n".into();
     }
     Ok(text)
 }
@@ -1611,15 +2008,24 @@ mod tests {
     }
 
     #[test]
-    fn the_short_words_never_read_like_waiting_for_another_ticket_and_are_no_wider_than_to_publish() {
+    fn the_words_say_what_a_task_needs_and_the_short_ones_are_no_wider_than_needs_you() {
         use unicode_width::UnicodeWidthStr;
-        assert_eq!(State::Waiting.short_label(), "Your turn");
-        assert_eq!(State::Ready.short_label(), "To publish");
-        let all = [State::New, State::Working, State::Waiting, State::Ready, State::Done, State::Cancelled];
-        for s in &all {
-            assert!(!s.short_label().starts_with("Wait"), "{s:?}: beside \"Waits #1\" it reads as another ticket");
-            assert!(s.short_label().width() <= "To publish".width(), "{s:?}: the short column is sized by the widest");
+        let all = vec![tk(1, State::Done, &[]), tk(2, State::New, &[1]), tk(3, State::New, &[2]), tk(4, State::Waiting, &[])];
+        let mut with_folder = tk(5, State::New, &[]);
+        with_folder.folders = vec!["/tmp".into()];
+        // New reads as what it needs: waiting, a folder, or nothing (it can start).
+        assert_eq!(words(&all[1], &all), NEEDS_FOLDER, "waits only for a Done one, and has no folder");
+        assert_eq!(words(&all[2], &all), "Waits for #2");
+        assert_eq!(words(&with_folder, &all), "Can start");
+        assert_eq!(words(&all[3], &all), "Needs you");
+        assert_eq!(short_words(&all[2], &all), "Waits #2");
+        assert_eq!(short_words(&all[1], &all), NEEDS_FOLDER_SHORT);
+        for s in [State::New, State::Working, State::Waiting, State::Done, State::Cancelled] {
+            assert!(!s.label().starts_with("Wait"), "{s:?}: beside \"Waits #1\" it reads as another task");
+            assert!(s.label().width() <= "Needs you".width(), "{s:?}: the short column is sized by the widest");
         }
+        assert!(NEEDS_FOLDER_SHORT.width() <= "Needs you".width() && CAN_START.width() <= "Needs you".width());
+        assert_eq!(words(&tk(6, State::Other("later".into()), &[]), &all), "later", "a state platoon doesn't know, as written");
     }
 
     #[test]
@@ -1668,7 +2074,7 @@ mod tests {
     #[test]
     fn a_renamed_ticket_keeps_its_file_and_slugs_are_plain() {
         assert_eq!(slug("Fix the Login page!"), "fix-the-login-page");
-        assert_eq!(slug("  ☃ "), "ticket");
+        assert_eq!(slug("  ☃ "), "task");
         assert_eq!(slug("café au lait"), "caf-au-lait");
         assert!(slug(&"word ".repeat(30)).len() <= 40);
         let d = dir("rename");
@@ -1749,7 +2155,7 @@ mod tests {
         let names: Vec<String> =
             fs::read_dir(d.join("projects/p1")).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         assert!(!names.iter().any(|n| n.ends_with(".tmp")), "{names:?}");
-        assert!(names.contains(&"tickets.lock".to_string()), "the lock sits beside the file: {names:?}");
+        assert!(names.contains(&"tasks.lock".to_string()), "the lock sits beside the file: {names:?}");
         // Whatever is read at any moment is a whole file: a reader in a loop never sees half of one.
         let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let (d2, s2) = (d.clone(), stop.clone());
@@ -1816,6 +2222,10 @@ mod tests {
             busy: None,
             queued: None,
             from: None,
+            publish_wanted: false,
+            autonomy: None,
+            works_on: vec![],
+            old_number: None,
         }
     }
 
@@ -1855,7 +2265,7 @@ mod tests {
         let e = t.toggle_blocker(1, 3).unwrap_err().to_string();
         assert_eq!(e, "#3 already waits for #1, so #1 can't wait for #3");
         assert_eq!(t.toggle_blocker(4, 4).unwrap_err().to_string(), "#4 can't wait for itself");
-        assert!(t.toggle_blocker(4, 9).unwrap_err().to_string().contains("no ticket #9"));
+        assert!(t.toggle_blocker(4, 9).unwrap_err().to_string().contains("no task #9"));
         assert!(t.get(1).unwrap().blocked_by.is_empty(), "nothing changed");
         // Toggling again takes it away.
         assert!(!t.toggle_blocker(3, 2).unwrap());
@@ -1867,18 +2277,59 @@ mod tests {
             t.add(NewTicket { title: "e".into(), blocked_by: vec![7], ..Default::default() })
                 .unwrap_err()
                 .to_string()
-                .contains("no ticket #7")
+                .contains("no task #7")
         );
         assert_eq!(t.add(NewTicket { title: "e".into(), blocked_by: vec![2, 1, 2], ..Default::default() }).unwrap(), 5);
         assert_eq!(t.get(5).unwrap().blocked_by, [1, 2]);
     }
 
     #[test]
-    fn states_have_the_words_of_the_screen() {
+    fn states_have_the_words_of_the_screen_and_ready_reads_as_needs_you_wanting_to_publish() {
         let words: Vec<String> =
             ["new", "working", "waiting", "ready", "done", "cancelled"].iter().map(|s| State::from_id(s).label().to_string()).collect();
-        assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to publish", "Done", "Cancelled"]);
+        assert_eq!(words, ["New", "Working", "Needs you", "Needs you", "Done", "Cancelled"]);
         assert!(State::Done.closed() && State::Cancelled.closed() && !State::Working.closed());
+        // A file from before: "ready" was Ready to publish. It reads as Needs you that wants to publish, and the next
+        // write of that task says so in the new shape (never "ready" again).
+        let d = dir("ready");
+        fs::create_dir_all(d.join("projects/p1")).unwrap();
+        fs::write(
+            path_in(&d, "p1"),
+            r#"{"next":3,"tickets":[
+                {"number":1,"title":"One","file":"01-one.md","state":"ready","reason":"Wants to publish: push ticket/1","go_ahead":true,"folders":[],"blocked_by":[],"created":1,"updated":1},
+                {"number":2,"title":"Two","file":"02-two.md","state":"ready","folders":[],"blocked_by":[],"created":1,"updated":1}]}"#,
+        )
+        .unwrap();
+        let mut t = Tickets::open(&d, "p1");
+        let one = t.get(1).unwrap();
+        assert_eq!(
+            (&one.state, one.reason.as_str(), one.publish_wanted, one.go_ahead),
+            (&State::Waiting, "Wants to publish: push ticket/1", true, true)
+        );
+        let two = t.get(2).unwrap();
+        assert_eq!((&two.state, two.reason.as_str(), two.publish_wanted), (&State::Waiting, "Wants to publish.", true));
+        assert!(keeps_go_ahead(&one.state, one.publish_wanted) && !keeps_go_ahead(&State::Waiting, false));
+        assert!(reopened_by_typing(&one.state));
+        // `p` answers it: Working, the go-ahead on, the file in the new shape.
+        t.give_go_ahead(1).unwrap();
+        let v = saved(&d);
+        assert_eq!(
+            (v["tickets"][0]["state"].as_str(), v["tickets"][0].get("publish_wanted"), v["tickets"][0]["go_ahead"].as_bool()),
+            (Some("working"), None, Some(true))
+        );
+        assert_eq!(v["tickets"][1]["state"], "ready", "the other one is left as it was until it is written");
+        // The user's message to the leader keeps the go-ahead on a task that only asked to publish; a plain question's goes.
+        t.squad_wants_to_publish(1, "Wants to publish: the MR").unwrap();
+        assert_eq!(
+            (saved(&d)["tickets"][0]["state"].as_str(), saved(&d)["tickets"][0]["publish_wanted"].as_bool()),
+            (Some("waiting"), Some(true))
+        );
+        assert!(t.user_typed(1).unwrap() && t.get(1).unwrap().go_ahead && !t.get(1).unwrap().publish_wanted);
+        t.squad_says(1, &State::Waiting, "Asks: which?", None).unwrap();
+        assert!(!t.get(1).unwrap().go_ahead, "a question drops the go-ahead");
+        assert!(t.user_typed(2).unwrap(), "the old-shaped one too");
+        assert_eq!((saved(&d)["tickets"][1]["state"].as_str(), saved(&d)["tickets"][1].get("publish_wanted")), (Some("working"), None));
+        assert!(!saved(&d).to_string().contains("\"ready\""), "nothing writes ready again");
     }
 
     #[test]
@@ -1900,7 +2351,7 @@ mod tests {
     fn run(d: &Path, args: &[&str], stdin: &str, terminal: bool) -> (i32, String, String) {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        let code = cli(&args, d, &mut stdin.as_bytes(), terminal, d, &mut out, &mut err);
+        let code = cli(&args, d, None, &mut stdin.as_bytes(), terminal, d, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
     }
 
@@ -1932,13 +2383,12 @@ mod tests {
         // Refusals: one plain line each, and nothing made.
         for (args, says) in [
             (vec!["add", "--project", "Nope", "--title", "x"], "no project called"),
-            (vec!["add", "--project", "Web shop", "--title", "x", "--blocked-by", "9"], "no ticket #9"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--blocked-by", "9"], "no task #9"),
             (vec!["add", "--project", "Web shop", "--title", "x", "--folder", "/no/such/folder"], "does not exist"),
             (vec!["add", "--project", "Web shop"], "title"),
-            (vec!["add", "--title", "x"], "--project"),
-            (vec!["add", "--project", "Web shop", "--title", "x", "--waits-for", "two"], "--waits-for takes a ticket number"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--waits-for", "two"], "--waits-for takes a task number"),
             // How far is said in the ticket's text now: the flag is refused, with where it goes instead.
-            (vec!["add", "--project", "Web shop", "--title", "x", "--how-far", "local commit"], "in the ticket's text instead"),
+            (vec!["add", "--project", "Web shop", "--title", "x", "--how-far", "local commit"], "in the task's text instead"),
             (vec!["add", "--project", "Web shop", "--title", "x", "--how-far=local commit"], "don't know \"--how-far\""),
         ] {
             let (code, out, err) = run(&d, &args, "", true);
@@ -1954,18 +2404,24 @@ mod tests {
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(lines[0], "Web shop");
         assert!(lines[1].contains("#2") && lines[1].contains("Can start"), "{out}");
-        assert_eq!(lines[2], "  #3   Own  ·  New  Can start", "{out}");
-        assert!(lines[1].starts_with("  #2   Basket  ·  New  Can start"), "number, title, state, then what it waits for: {out}");
+        assert_eq!(lines[2], "  #3   Own  ·  Can start", "{out}");
+        assert!(lines[1].starts_with("  #2   Basket  ·  Can start"), "number, title, then the state's words: {out}");
         assert_eq!(lines[3], "  Done and cancelled · 1");
         assert!(lines[4].contains("#1") && lines[4].contains("Done"), "{out}");
+        assert!(!out.contains(" New "), "the screen's words, never New: {out}");
         let (_, out, _) = run(&d, &["list", "--json"], "", true);
         let v: Value = serde_json::from_str(&out).unwrap();
         let first = &v[0];
-        assert_eq!((first["number"].as_u64(), first["state"].as_str(), first["ready"].as_bool()), (Some(2), Some("New"), Some(true)));
+        assert_eq!(
+            (first["number"].as_u64(), first["state"].as_str(), first["can_start"].as_bool(), first["publish_wanted"].as_bool()),
+            (Some(2), Some("Can start"), Some(true), Some(false))
+        );
+        assert_eq!(first["autonomy"], "ask");
+        assert!(!out.contains("ready"), "no \"ready\" anywhere in the JSON: {out}");
         assert!(v.as_array().unwrap().iter().all(|t| t.get("how_far").is_none()), "no how far in the JSON: {out}");
         assert_eq!(first["blocked_by"], json!([1]));
         assert!(
-            first["file"].as_str().unwrap().ends_with("/tickets/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute()
+            first["file"].as_str().unwrap().ends_with("/tasks/02-basket.md") && Path::new(first["file"].as_str().unwrap()).is_absolute()
         );
         assert_eq!(v[2]["number"], 1, "the Done one last");
     }
@@ -2002,7 +2458,7 @@ mod tests {
             let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
             let (mut out, mut err) = (Vec::new(), Vec::new());
             // Run "in" `here`, given as a path with a `..` in it: the ticket keeps the full, plain path.
-            let code = cli(&args, &d, &mut "".as_bytes(), true, &here.join("..").join("here"), &mut out, &mut err);
+            let code = cli(&args, &d, None, &mut "".as_bytes(), true, &here.join("..").join("here"), &mut out, &mut err);
             assert_eq!(code, 0, "{}", String::from_utf8_lossy(&err));
         };
         call(&["add", "--project", "Web", "--title", "Here"]);
@@ -2019,8 +2475,8 @@ mod tests {
             .map(|s| s.to_string())
             .collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert_eq!(cli(&args, &d, &mut "".as_bytes(), true, &here, &mut out, &mut err), 1);
-        assert_eq!(String::from_utf8(err).unwrap(), "platoon ticket add: --no-folder and --folder don't go together\n");
+        assert_eq!(cli(&args, &d, None, &mut "".as_bytes(), true, &here, &mut out, &mut err), 1);
+        assert_eq!(String::from_utf8(err).unwrap(), "platoon task add: --no-folder and --folder don't go together\n");
         assert!(Tickets::open(&d, &id).get(4).is_none(), "nothing made");
         assert!(USAGE.contains("--no-folder"));
     }
@@ -2033,7 +2489,7 @@ mod tests {
         assert_eq!(run(&d, &["add", "--project", "Web shop", "--title", "Before"], "", true).0, 0);
         p.archive(&id, &[]).unwrap();
         let (code, out, err) = run(&d, &["add", "--project", "web shop", "--title", "After"], "", true);
-        assert_eq!((code, out.as_str(), err.as_str()), (1, "", "platoon ticket add: \"Web shop\" is archived; restore it first\n"));
+        assert_eq!((code, out.as_str(), err.as_str()), (1, "", "platoon task add: \"Web shop\" is archived; restore it first\n"));
         assert_eq!(Tickets::open(&d, &id).all().len(), 1, "nothing made");
         // Its tickets can still be listed and changed.
         assert!(run(&d, &["list", "--project", "Web shop"], "", true).1.contains("#1"));
@@ -2052,7 +2508,7 @@ mod tests {
         assert_eq!(run(&d, &["add", "--project", "Web", "--title", "Three", "--waits-for", "1", "--blocked-by", "#2"], "", true).0, 0);
         assert_eq!(Tickets::open(&d, &id).get(3).unwrap().blocked_by, [1, 2]);
         let (code, _, err) = run(&d, &["add", "--project", "Web", "--title", "x", "--blocked-by", "nine"], "", true);
-        assert!(code == 1 && err.contains("--blocked-by takes a ticket number"), "the flag it was given: {err}");
+        assert!(code == 1 && err.contains("--blocked-by takes a task number"), "the flag it was given: {err}");
         let (code, _, err) = run(&d, &["add", "--project", "Web", "--title", "x", "--waits-for"], "", true);
         assert!(code == 1 && err.contains("--waits-for needs a value"), "{err}");
         // The usage text shows only the new name.
@@ -2071,7 +2527,7 @@ mod tests {
         // In no project: one plain line that says what to do, exit 1.
         let (code, out, err) = run(&d, &["where", "--session", "sess-2"], "", true);
         assert_eq!((code, out.as_str()), (1, ""));
-        assert_eq!(err, format!("platoon ticket where: {NO_PROJECT}\n"));
+        assert_eq!(err, format!("platoon task where: {NO_PROJECT}\n"));
         assert!(err.contains("press m") && err.lines().count() == 1, "{err}");
         // No id (the variable was empty), an id that can't be one, no --session.
         for (args, says) in [
@@ -2083,7 +2539,7 @@ mod tests {
         ] {
             let (code, out, err) = run(&d, &args, "", true);
             assert!(
-                code == 1 && out.is_empty() && err.starts_with("platoon ticket where: ") && err.contains(says) && err.lines().count() == 1,
+                code == 1 && out.is_empty() && err.starts_with("platoon task where: ") && err.contains(says) && err.lines().count() == 1,
                 "{args:?}: {err}"
             );
         }
@@ -2108,10 +2564,10 @@ mod tests {
         assert_eq!(run(&d, &["add", "--from-session", "sess-1", "--project", "web shop", "--title", "Two"], "", true).0, 0);
         let (code, out, err) = run(&d, &["add", "--from-session", "sess-1", "--project", "Docs", "--title", "Three"], "", true);
         assert_eq!((code, out.as_str()), (1, ""));
-        assert_eq!(err, "platoon ticket add: that session belongs to the project \"Web shop\", not \"Docs\"\n");
+        assert_eq!(err, "platoon task add: that session belongs to the project \"Web shop\", not \"Docs\"\n");
         // A session in no project: refused with the line `where` gives, nothing made anywhere.
         let (code, _, err) = run(&d, &["add", "--from-session", "sess-9", "--title", "Four"], "", true);
-        assert_eq!((code, err), (1, format!("platoon ticket add: {NO_PROJECT}\n")));
+        assert_eq!((code, err), (1, format!("platoon task add: {NO_PROJECT}\n")));
         let (code, _, err) = run(&d, &["add", "--from-session", "sess-9", "--project", "Docs", "--title", "Four"], "", true);
         assert!(code == 1 && err.contains("isn't in a project"), "a project named beside it doesn't make up for it: {err}");
         assert_eq!((Tickets::open(&d, &web).all().len(), Tickets::open(&d, &docs).all().len()), (2, 0));
@@ -2171,7 +2627,7 @@ mod tests {
         let v: Value = serde_json::from_str(&out).unwrap();
         assert!(v.as_array().unwrap().iter().find(|t| t["number"] == 4).unwrap().get("from").is_none());
         assert!(Tickets::open(&d, &web).get(4).unwrap().from.is_none());
-        assert!(USAGE.contains("--from-session") && USAGE.contains("ticket where --session"));
+        assert!(USAGE.contains("--from-session") && USAGE.contains("task where --session"));
     }
 
     #[test]
@@ -2224,8 +2680,8 @@ mod tests {
         assert!(!t.permission_answered(n).unwrap());
         assert_eq!(Tickets::open(&d, "p1").get(n).unwrap().state, State::Waiting);
         assert!(!t.permission_wait(n).unwrap(), "only a Working ticket starts waiting for a permission");
-        // Ready and Done are left alone too.
-        t.squad_says(n, &State::Ready, "Wants to publish: x", None).unwrap();
+        // Wanting to publish, and Done, are left alone too.
+        t.squad_wants_to_publish(n, "Wants to publish: x").unwrap();
         assert!(!t.permission_wait(n).unwrap());
         // A permission wait that the leader's turn ends: the Stop hook's word counts, and the mark goes.
         t.set_state(n, &State::Working).unwrap();
@@ -2322,10 +2778,12 @@ mod tests {
         .unwrap();
         assert!(leader_at_work(&d, "lead-1"));
         assert!(!leader_at_work(&d, "someone"));
-        for s in [State::Waiting, State::Ready, State::Done, State::Cancelled, State::New] {
+        for s in [State::Waiting, State::Done, State::Cancelled, State::New] {
             t.set_state(n, &s).unwrap();
             assert!(!leader_at_work(&d, "lead-1"), "{s:?}");
         }
+        t.squad_wants_to_publish(n, "Wants to publish: push").unwrap();
+        assert!(!leader_at_work(&d, "lead-1"), "asking to publish");
         t.set_state(n, &State::Working).unwrap();
         t.start_leader(
             n,
@@ -2411,5 +2869,226 @@ mod tests {
         assert!(!leader_at_work(&d, "old-1"), "the ticket waits for a new squad: the old leader may be idle-stopped");
         assert!(!t.permission_wait(n).unwrap(), "an old leader's permission prompt doesn't move it");
         assert!(t.get(n).unwrap().queued.is_some());
+    }
+
+    #[test]
+    fn old_file_names_are_read_until_the_move_which_keeps_a_backup_and_happens_once() {
+        let d = dir("move");
+        fs::create_dir_all(d.join("projects/p1/tickets")).unwrap();
+        fs::write(d.join("projects/p1/tickets/01-one.md"), "body").unwrap();
+        fs::write(
+            d.join("projects/p1/tickets.json"),
+            r#"{"next":2,"extra":true,"tickets":[{"number":1,"title":"One","file":"01-one.md","state":"new","folders":[],"blocked_by":[],"created":1,"updated":1}]}"#,
+        )
+        .unwrap();
+        // Read and written under the old names until the move.
+        assert!(uses_old_names(&d, "p1"));
+        assert_eq!(path_in(&d, "p1"), d.join("projects/p1/tickets.json"));
+        assert_eq!(bodies_dir(&d, "p1"), d.join("projects/p1/tickets"));
+        assert_eq!(work_dir(&d, "p1", 1), d.join("projects/p1/tickets/01-work"));
+        let mut old = Tickets::open(&d, "p1");
+        assert_eq!(old.body(old.get(1).unwrap()), "body");
+        assert_eq!(add(&mut old, "Two"), 2);
+        assert!(d.join("projects/p1/tickets/02-two.md").exists() && !d.join("projects/p1/tasks.json").exists());
+        assert_eq!(projects_with_old_names(&d), ["p1"]);
+        assert_eq!(all_files(&d), [("p1".to_string(), d.join("projects/p1/tickets.json"))]);
+        // The move: the bodies' folder renamed, the list copied, the old list kept as a backup.
+        assert!(move_to_new_names(&d, "p1").unwrap());
+        assert!(!uses_old_names(&d, "p1") && projects_with_old_names(&d).is_empty());
+        assert!(!d.join("projects/p1/tickets.json").exists() && !d.join("projects/p1/tickets").exists());
+        let moved: Value = serde_json::from_str(&fs::read_to_string(d.join("projects/p1/tasks.json")).unwrap()).unwrap();
+        assert_eq!((moved["extra"].as_bool(), moved["tickets"].as_array().map(Vec::len)), (Some(true), Some(2)), "as it was: {moved}");
+        assert_eq!(fs::read_to_string(d.join("projects/p1/tickets.json.bak")).unwrap(), serde_json::to_string_pretty(&moved).unwrap());
+        assert_eq!(fs::read_to_string(d.join("projects/p1/tasks/01-one.md")).unwrap(), "body");
+        assert_eq!(work_dir(&d, "p1", 1), d.join("projects/p1/tasks/01-work"));
+        assert!(!move_to_new_names(&d, "p1").unwrap(), "once");
+        // The store opened before the move follows it: it reads and writes the new file.
+        assert!(old.reload_if_changed());
+        assert_eq!(add(&mut old, "Three"), 3);
+        assert!(d.join("projects/p1/tasks/03-three.md").exists() && !d.join("projects/p1/tickets.json").exists());
+        assert_eq!(Tickets::open(&d, "p1").all().len(), 3);
+        // A project that never had the old names: nothing to move, and the new names from the start.
+        assert!(!move_to_new_names(&d, "p2").unwrap());
+        assert_eq!(path_in(&d, "p2"), d.join("projects/p2/tasks.json"));
+        // Both names there (someone made `tasks/` by hand): the old ones stay in use, and the move says why not.
+        fs::create_dir_all(d.join("projects/p3/tickets")).unwrap();
+        fs::create_dir_all(d.join("projects/p3/tasks")).unwrap();
+        fs::write(d.join("projects/p3/tickets.json"), r#"{"next":1,"tickets":[]}"#).unwrap();
+        assert!(move_to_new_names(&d, "p3").unwrap_err().to_string().contains("is already there"));
+        assert!(uses_old_names(&d, "p3") && d.join("projects/p3/tickets.json").exists());
+    }
+
+    #[test]
+    fn tasks_in_no_project_have_a_file_and_numbers_of_their_own() {
+        let d = dir("loose");
+        let mut loose = Tickets::open(&d, NO_PROJECT_ID);
+        assert_eq!(loose.path(), d.join("tasks.json"));
+        assert_eq!(add(&mut loose, "Try the linter"), 1);
+        assert_eq!(add(&mut loose, "Read the paper"), 2);
+        assert!(d.join("tasks/01-try-the-linter.md").exists());
+        assert_eq!(work_dir(&d, NO_PROJECT_ID, 2), d.join("tasks/02-work"));
+        // A project's numbers start at one too: the two files don't share a number space.
+        let mut p = Tickets::open(&d, "p1");
+        assert_eq!(add(&mut p, "In a project"), 1);
+        assert_eq!(
+            all_files(&d),
+            [(NO_PROJECT_ID.to_string(), d.join("tasks.json")), ("p1".to_string(), d.join("projects/p1/tasks.json"))]
+        );
+        assert_eq!(every_ticket(&d).len(), 3);
+        assert!(!uses_old_names(&d, NO_PROJECT_ID), "the tasks in no project never had old names");
+        // A leader of one is found like any other.
+        loose
+            .start_leader(
+                2,
+                &Leader { squad: "research".into(), session: "lead-l".into(), started: 1, names: Default::default(), snapshot: None },
+                &[],
+            )
+            .unwrap();
+        assert_eq!(find_leader(&d, "lead-l"), Some((NO_PROJECT_ID.to_string(), 2, true)));
+        assert!(leader_ids(&d).contains("lead-l"));
+        // The command line: with no project named and nowhere to look, the task goes in no project, and `list` shows it.
+        let projects_dir = d.join("elsewhere");
+        fs::create_dir_all(&projects_dir).unwrap();
+        let (code, out, err) = run(&d, &["add", "--title", "Loose one"], "", true);
+        assert_eq!((code, out.as_str(), err.as_str()), (0, "#3\n", ""));
+        let (_, out, _) = run(&d, &["list"], "", true);
+        assert!(
+            out.contains("No project\n  #1   Try the linter  ·  Needs a folder") && out.contains("#3   Loose one  ·  Can start"),
+            "{out}"
+        );
+        let (_, out, _) = run(&d, &["list", "--json"], "", true);
+        let v: Value = serde_json::from_str(&out).unwrap();
+        let loose_rows: Vec<&Value> = v.as_array().unwrap().iter().filter(|t| t["project"].is_null()).collect();
+        assert_eq!(loose_rows.len(), 3);
+        assert!(loose_rows[0]["project_id"].is_null() && loose_rows[0]["file"].as_str().unwrap().contains("/tasks/01-"));
+    }
+
+    #[test]
+    fn with_no_project_named_the_task_goes_where_the_folders_sessions_worked_or_in_no_project() {
+        let d = dir("where-folder");
+        let (claude, cache) = (d.join("claude"), d.join("cache"));
+        fs::create_dir_all(claude.join("projects/-x")).unwrap();
+        fs::create_dir_all(&cache).unwrap();
+        let (shop, docs, free) = (d.join("shop"), d.join("docs"), d.join("free"));
+        for f in [&shop, &docs, &free] {
+            fs::create_dir_all(f.join("sub")).unwrap();
+        }
+        let mut projects = crate::projects::Projects::open(&d);
+        let web = projects.create("Web shop").unwrap();
+        let writing = projects.create("Writing").unwrap();
+        projects.assign("s-shop", Some(&web)).unwrap();
+        projects.assign("s-docs", Some(&writing)).unwrap();
+        projects.assign("s-docs2", Some(&web)).unwrap();
+        // The index as platoon keeps it: each session's folder.
+        let entry = |cwd: &Path| json!({"m": 1, "s": 1, "cwd": cwd.to_string_lossy(), "dirs": [], "active": 1});
+        let files = json!({
+            claude.join("projects/-x/s-shop.jsonl").to_string_lossy(): entry(&shop),
+            claude.join("projects/-x/s-docs.jsonl").to_string_lossy(): entry(&docs),
+            claude.join("projects/-x/s-docs2.jsonl").to_string_lossy(): entry(&docs),
+            claude.join("projects/-x/s-none.jsonl").to_string_lossy(): entry(&free),
+        });
+        fs::write(cache.join("index.json"), json!({"version": 2, "files": files}).to_string()).unwrap();
+        let roots = Roots { claude_root: &claude, cache: &cache };
+        let run_in = |cwd: &Path, args: &[&str]| {
+            let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let code = cli(&args, &d, Some(roots), &mut "".as_bytes(), true, cwd, &mut out, &mut err);
+            (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
+        };
+        // In the shop (or a folder inside it): Web shop's.
+        assert_eq!(run_in(&shop.join("sub"), &["add", "--title", "Linter"]), (0, "#1\n".into(), String::new()));
+        assert_eq!(Tickets::open(&d, &web).get(1).map(|t| t.title.as_str()), Some("Linter"));
+        assert!(Tickets::open(&d, NO_PROJECT_ID).all().is_empty());
+        // Sessions of two projects worked in docs: say which.
+        let (code, _, err) = run_in(&docs, &["add", "--title", "Ambiguous"]);
+        assert!(code == 1 && err.contains("sessions of more than one project worked in this folder") && err.contains("--project"), "{err}");
+        // A folder no project's session worked in: no project.
+        assert_eq!(run_in(&free, &["add", "--title", "Loose"]), (0, "#1\n".into(), String::new()));
+        assert_eq!(
+            Tickets::open(&d, NO_PROJECT_ID).get(1).map(|t| t.folders.clone()),
+            Some(vec![free.canonicalize().unwrap().to_string_lossy().into_owned()])
+        );
+        assert_eq!(project_of_folder(&projects, Some(roots), &shop).unwrap(), Some(web.clone()));
+        assert_eq!(project_of_folder(&projects, None, &shop).unwrap(), None, "nowhere to look: no project");
+    }
+
+    #[test]
+    fn the_hand_over_terms_are_written_on_the_task_and_read_back_with_the_projects_default_for_new_ones() {
+        let d = dir("terms");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        let x = t.get(n).unwrap();
+        assert_eq!((x.autonomy.clone(), x.autonomy(), x.works_on.len(), x.old_number), (None, Autonomy::Ask, 0, None));
+        assert_eq!(x.branch(), "task/1");
+        let works = vec![
+            WorksOn { folder: "/w/shop".into(), how: How::Branch, lands_on: "main".into() },
+            WorksOn { folder: "/w/api".into(), how: How::Worktree, lands_on: "develop".into() },
+        ];
+        t.set_terms(n, &Autonomy::Publish, &works).unwrap();
+        let v = saved(&d);
+        assert_eq!(v["tickets"][0]["autonomy"], "publish");
+        assert_eq!(
+            v["tickets"][0]["works_on"],
+            json!([{"folder": "/w/shop", "how": "branch", "lands_on": "main"}, {"folder": "/w/api", "how": "worktree", "lands_on": "develop"}])
+        );
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!((x.autonomy(), x.autonomy().publishes(), x.works_on.clone()), (Autonomy::Publish, true, works.clone()));
+        assert!(x.branch_in_checkout("/w/shop") && !x.branch_in_checkout("/w/api"));
+        assert_eq!(x.works_on_in("/w/api").map(|w| w.lands_on.as_str()), Some("develop"));
+        // Set again: an entry's unknown keys are kept, a folder no longer on the list goes.
+        let mut v = saved(&d);
+        v["tickets"][0]["works_on"][0]["note"] = json!("kept");
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        let mut t = Tickets::open(&d, "p1");
+        t.set_terms(n, &Autonomy::Ask, &works[..1]).unwrap();
+        let v = saved(&d);
+        assert_eq!(v["tickets"][0]["works_on"], json!([{"folder": "/w/shop", "how": "branch", "lands_on": "main", "note": "kept"}]));
+        assert_eq!(v["tickets"][0]["autonomy"], "ask");
+        // A value a later platoon writes is kept as written, and treated as asking.
+        let mut v = saved(&d);
+        v["tickets"][0]["autonomy"] = json!("plan");
+        v["tickets"][0]["old_number"] = json!(9);
+        fs::write(path_in(&d, "p1"), v.to_string()).unwrap();
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!((x.autonomy(), x.autonomy().publishes(), x.autonomy().label()), (Autonomy::Other("plan".into()), false, "plan"));
+        assert_eq!((x.old_number, x.branch()), (Some(9), "task/9".to_string()), "a task moved into this project keeps its branch");
+        assert_eq!(Autonomy::Ask.next(), Autonomy::Publish);
+        assert_eq!(Autonomy::Publish.next(), Autonomy::Ask);
+        assert_eq!(Autonomy::Other("plan".into()).next(), Autonomy::Ask);
+        // The project's default pre-fills the popup: read from projects.json (absent: ask).
+        let mut p = crate::projects::Projects::open(&d);
+        let id = p.create("Web").unwrap();
+        assert_eq!(p.get(&id).unwrap().autonomy_default, Autonomy::Ask);
+        let mut pj: Value = serde_json::from_str(&fs::read_to_string(p.path()).unwrap()).unwrap();
+        pj["projects"][&id]["autonomy_default"] = json!("publish");
+        fs::write(p.path(), pj.to_string()).unwrap();
+        assert_eq!(crate::projects::Projects::open(&d).get(&id).unwrap().autonomy_default, Autonomy::Publish);
+    }
+
+    #[test]
+    fn a_tasks_branch_is_the_one_its_worktrees_were_made_with_and_old_records_keep_theirs() {
+        let d = dir("branch-names");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Old one");
+        let old = Worktree {
+            folder: "/w/shop".into(),
+            path: "/w/shop-worktrees/ticket-1".into(),
+            branch: "ticket/1".into(),
+            ..Default::default()
+        };
+        t.start_leader(
+            n,
+            &Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None },
+            &[old],
+        )
+        .unwrap();
+        let x = Tickets::open(&d, "p1").get(n).cloned().unwrap();
+        assert_eq!(x.branch(), "ticket/1", "a task from before the rename keeps its branch");
+        assert!(
+            is_task_branch("ticket/1", 1) && is_task_branch("task/1", 1) && !is_task_branch("task/2", 1) && !is_task_branch("feature/1", 1)
+        );
+        assert_eq!(task_branch(12), "task/12");
+        let m = add(&mut t, "New one");
+        assert_eq!(Tickets::open(&d, "p1").get(m).unwrap().branch(), "task/2");
     }
 }

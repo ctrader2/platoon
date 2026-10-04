@@ -1,7 +1,8 @@
 //! What git can say about a folder, for the hand-off document: its branch and how it stands against its upstream,
-//! what is not committed yet, the last commit, and what was committed since a moment (the session's start).
-//! Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never `fetch`: the
-//! upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
+//! what is not committed yet, the last commit, and what was committed since a moment (the session's start); and for a
+//! task's hand-over: the repository's default branch (`default_branch`), whether a branch exists and whether the
+//! checkout is clean. Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never
+//! `fetch`: the upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
 //! refresh is written, and every command shares one short time budget.
 //!
 //! Nothing here is ever guessed: no `git`, a folder that is not a repository, or a git that fails gives `None`,
@@ -196,6 +197,41 @@ pub fn gather(program: &str, dir: &Path, since_ms: Option<u64>, budget: Duration
         run(program, dir, &["log", &since, &max, "--format=@@commit %h%x00%s", "--name-only"], deadline).map(|o| parse_log(&o))
     });
     Some(GitFacts { top, branch, upstream, changes, last, since })
+}
+
+/// The branch a repository's work is meant for, found read-only: the branch `origin/HEAD` points at, else `main` or
+/// `master` when one of them exists, else the branch checked out. None when `dir` is no repository, git can't say in
+/// time, or none of those is there (a detached HEAD in a repository with neither).
+pub fn default_branch(program: &str, dir: &Path, deadline: Instant) -> Option<String> {
+    if let Some(head) = run(program, dir, &["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], deadline) {
+        let head = head.trim();
+        let name = head.strip_prefix("origin/").unwrap_or(head);
+        if !name.is_empty() {
+            return Some(clean_path(name));
+        }
+    }
+    for name in ["main", "master"] {
+        if branch_exists(program, dir, name, deadline) {
+            return Some(name.into());
+        }
+    }
+    run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| clean_path(b.trim())).filter(|b| !b.is_empty())
+}
+
+/// Is `name` a branch (or anything else git finds a commit by) in `dir`'s repository? Checked with
+/// `git rev-parse --verify <name>^{commit}`; a name that could be taken for an option, or an empty one, is not.
+pub fn branch_exists(program: &str, dir: &Path, name: &str, deadline: Instant) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name.starts_with('-') || name.chars().any(char::is_whitespace) {
+        return false;
+    }
+    run(program, dir, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")], deadline).is_some_and(|o| !o.trim().is_empty())
+}
+
+/// Has the checkout in `dir` nothing uncommitted (no changed, staged or new files git doesn't ignore)? None when git
+/// can't say in time: never taken to mean clean.
+pub fn is_clean(program: &str, dir: &Path, deadline: Instant) -> Option<bool> {
+    run(program, dir, &["status", "--porcelain", "--untracked-files=normal"], deadline).map(|o| o.trim().is_empty())
 }
 
 /// `git status --porcelain=v1 -z`: `XY path\0`, and for a rename or copy `XY new\0old\0`.
@@ -584,5 +620,56 @@ mod tests {
         for bad in ["", "1", "a\tb", "1\t2\t3", "-1\t2"] {
             assert_eq!(parse_counts(bad), None, "{bad:?}");
         }
+    }
+
+    #[test]
+    fn the_default_branch_is_origin_head_else_main_or_master_else_the_one_checked_out() {
+        let d = Repo::new("default-branch").dir.clone();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        let soon = || Instant::now() + Duration::from_secs(10);
+        // Only `trunk`: the branch checked out.
+        let a = d.join("a");
+        fs::create_dir_all(&a).unwrap();
+        run(&a, &["init", "-q", "--initial-branch=trunk"]);
+        fs::write(a.join("f"), "1").unwrap();
+        run(&a, &["add", "."]);
+        run(&a, &["commit", "-q", "-m", "one"]);
+        assert_eq!(default_branch("git", &a, soon()).as_deref(), Some("trunk"));
+        assert!(branch_exists("git", &a, "trunk", soon()) && !branch_exists("git", &a, "nope", soon()));
+        assert!(
+            !branch_exists("git", &a, "", soon())
+                && !branch_exists("git", &a, "--help", soon())
+                && !branch_exists("git", &a, "a b", soon())
+        );
+        assert_eq!(is_clean("git", &a, soon()), Some(true));
+        fs::write(a.join("g"), "new").unwrap();
+        assert_eq!(is_clean("git", &a, soon()), Some(false), "a new file git doesn't ignore");
+        // With a `main`: main, even from another branch.
+        run(&a, &["branch", "main"]);
+        assert_eq!(default_branch("git", &a, soon()).as_deref(), Some("main"));
+        // A clone: what origin/HEAD points at wins, whatever is checked out.
+        let b = d.join("b");
+        run(&d, &["clone", "-q", "--branch", "trunk", a.to_str().unwrap(), b.to_str().unwrap()]);
+        run(&b, &["remote", "set-head", "origin", "trunk"]);
+        assert_eq!(default_branch("git", &b, soon()).as_deref(), Some("trunk"));
+        run(&b, &["remote", "set-head", "origin", "main"]);
+        assert_eq!(default_branch("git", &b, soon()).as_deref(), Some("main"));
+        // Not a repository, or no time: nothing, never a guess.
+        let plain = d.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(default_branch("git", &plain, soon()), None);
+        assert_eq!(default_branch("git", &a, Instant::now()), None);
+        assert_eq!(is_clean("git", &plain, soon()), None);
     }
 }

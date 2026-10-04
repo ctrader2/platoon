@@ -61,7 +61,7 @@ pub fn context_text(project_name: &str, notes: &str) -> String {
 /// The same, for a squad's leader: the notes of the project its ticket is in.
 pub fn ticket_context_text(project_name: &str, notes: &str) -> String {
     format!(
-        "These are the notes of the project \"{project_name}\" that your ticket belongs to (kept in platoon by the user):\n\n{}",
+        "These are the notes of the project \"{project_name}\" that your task belongs to (kept in platoon by the user):\n\n{}",
         notes.trim_end()
     )
 }
@@ -254,9 +254,9 @@ mod tests {
         .unwrap();
         let before = fs::read_to_string(Projects::open(&r.config).path()).unwrap();
         // Even with PLATOON_PROJECT naming the other project (it must never get that far, but if it did).
-        let text = context(&r.run("lead-1", "startup", Some(&b)).expect("the ticket's project's notes"));
+        let text = context(&r.run("lead-1", "startup", Some(&b)).expect("the task's project's notes"));
         assert!(
-            text.starts_with("These are the notes of the project \"a\" that your ticket belongs to") && text.ends_with("notes of a"),
+            text.starts_with("These are the notes of the project \"a\" that your task belongs to") && text.ends_with("notes of a"),
             "{text}"
         );
         assert_eq!(fs::read_to_string(Projects::open(&r.config).path()).unwrap(), before, "projects.json is untouched");

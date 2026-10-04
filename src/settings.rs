@@ -635,14 +635,14 @@ fn editors_items() -> Vec<Item> {
     };
     vec![
         editor(
-            "Editor for notes and tickets (e)",
-            "Opens a project's notes, a ticket's text and the system prompts (e). It is the one starred in the list of \
+            "Editor for notes and tasks (e)",
+            "Opens a project's notes, a task's text and the system prompts (e). It is the one starred in the list of \
              editors e shows; choosing another there changes it too.",
             EditorFor::Text,
         ),
         editor(
             "Editor for folders (v)",
-            "Opens a ticket's or a session's folders (v): one of the editors this computer has that show a file tree. \
+            "Opens a task's or a session's folders (v): one of the editors this computer has that show a file tree. \
              Choosing another from v's list changes it too.",
             EditorFor::Files,
         ),
@@ -985,7 +985,7 @@ fn projects_items() -> Vec<Item> {
         },
         Item {
             name: "Squads at work at once",
-            explain: "How many squads may work on tickets at the same time, in all projects. One more handed over waits for a \
+            explain: "How many squads may work on tasks at the same time, in all projects. One more handed over waits for a \
                       free squad and starts by itself, oldest first. A squad waiting for you doesn't count. Lowering it never stops a squad at work.",
             kind: Kind::Steps,
             choices: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
@@ -1257,7 +1257,7 @@ mod tests {
         let tab = &TABS[TAB_EDITORS];
         assert_eq!(tab.title, "Editors");
         let names: Vec<&str> = tab.items.iter().map(|i| i.name).collect();
-        assert_eq!(names, ["Editor for notes and tickets (e)", "Editor for folders (v)", "Always ask which editor"]);
+        assert_eq!(names, ["Editor for notes and tasks (e)", "Editor for folders (v)", "Always ask which editor"]);
         assert_eq!(tab.heading(0), Some("Editing platoon's text"));
         assert_eq!(tab.heading(1), Some("Editing files"));
         assert_eq!(tab.heading(2), None, "the switch belongs with the files editor");
@@ -1545,7 +1545,7 @@ mod tests {
         assert_eq!(titles, ["General", "Search", "Smart features", "Sessions", "Projects", "Editors"]);
         assert_eq!(
             tab("Editors").iter().map(|i| i.name).collect::<Vec<_>>(),
-            ["Editor for notes and tickets (e)", "Editor for folders (v)", "Always ask which editor"]
+            ["Editor for notes and tasks (e)", "Editor for folders (v)", "Always ask which editor"]
         );
         assert_eq!((TABS[TAB_SMART].title, TABS[TAB_SESSIONS].title), ("Smart features", "Sessions"));
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();

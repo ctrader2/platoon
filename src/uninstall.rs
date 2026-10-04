@@ -195,13 +195,13 @@ impl KeptWorktree {
     }
 }
 
-/// The worktree folder platoon made for ticket `number` that `path` (the squad's place inside it) is in:
-/// `<parent>/<repo>-worktrees/ticket-<N>` (`squads::worktree_dir`).
+/// The worktree folder platoon made for task `number` that `path` (the squad's place inside it) is in:
+/// `<parent>/<repo>-worktrees/task-<N>`, or `ticket-<N>` from before the rename (`squads::worktree_dir`).
 fn worktree_root(path: &Path, number: u32) -> Option<PathBuf> {
-    let want = format!("ticket-{number}");
+    let want = [format!("task-{number}"), format!("ticket-{number}")];
     path.ancestors()
         .find(|a| {
-            a.file_name().is_some_and(|n| n.to_string_lossy() == want)
+            a.file_name().is_some_and(|n| want.iter().any(|w| *w == n.to_string_lossy()))
                 && a.parent().and_then(Path::file_name).is_some_and(|p| p.to_string_lossy().ends_with("-worktrees"))
         })
         .map(Path::to_path_buf)
@@ -418,8 +418,8 @@ pub fn run(
     } else if opts.all {
         true
     } else if let Some(i) = input {
-        let _ = writeln!(out, "Your projects, notes, tickets, squads and settings are in {}.", places.config.display());
-        let _ = write!(out, "Also delete your projects, notes, tickets and settings? [y/N] ");
+        let _ = writeln!(out, "Your projects, notes, tasks, squads and settings are in {}.", places.config.display());
+        let _ = write!(out, "Also delete your projects, notes, tasks and settings? [y/N] ");
         let _ = out.flush();
         let a = answer(i);
         if a.is_none() {
@@ -521,11 +521,11 @@ pub fn run(
     };
     remove_dir(&places.cache, "platoon's cache folder", &mut removed, &mut failed);
     if delete_config {
-        remove_dir(&places.config, "your projects, notes, tickets and settings", &mut removed, &mut failed);
+        remove_dir(&places.config, "your projects, notes, tasks and settings", &mut removed, &mut failed);
     } else if plan.config_there {
         let why = if interactive || opts.all { "" } else { " (there was no terminal to ask in; --all deletes it)" };
         kept.push(format!(
-            "your projects, notes, tickets and settings in {}{why}. To delete them later: rm -rf {}",
+            "your projects, notes, tasks and settings in {}{why}. To delete them later: rm -rf {}",
             places.config.display(),
             sh_quote(&places.config.to_string_lossy())
         ));
@@ -567,7 +567,7 @@ pub fn run(
         let _ = writeln!(out, "  - {k}");
     }
     if !plan.worktrees.is_empty() {
-        let _ = writeln!(out, "Ticket worktrees and branches (never deleted: remove each once you no longer need its work):");
+        let _ = writeln!(out, "Task worktrees and branches (never deleted: remove each once you no longer need its work):");
         for w in &plan.worktrees {
             let _ = writeln!(out, "  #{} ({}):", w.number, w.project);
             for c in w.commands() {
@@ -805,7 +805,7 @@ mod tests {
             assert_eq!(code, 0, "{said}");
             assert!(!p.cache.exists() && !p.leftovers[0].0.exists(), "{said}");
             assert_eq!(!p.config.exists(), gone, "{opts:?} {typed:?}: {said}");
-            let asked = said.contains("Also delete your projects, notes, tickets and settings? [y/N]");
+            let asked = said.contains("Also delete your projects, notes, tasks and settings? [y/N]");
             assert_eq!(asked, typed.is_some() && !opts.all, "{said}");
             if !gone {
                 assert!(said.contains("To delete them later: rm -rf"), "{said}");
@@ -996,6 +996,7 @@ mod tests {
         assert!(program_line(&versions::Install::Homebrew, Path::new("/x")).ends_with("brew uninstall platoon"));
         assert!(program_line(&versions::Install::Other, Path::new("/a b/platoon")).contains("rm '/a b/platoon'"));
         assert_eq!(worktree_root(Path::new("/r-worktrees/ticket-3/sub/x"), 3), Some(PathBuf::from("/r-worktrees/ticket-3")));
+        assert_eq!(worktree_root(Path::new("/r-worktrees/task-3/sub/x"), 3), Some(PathBuf::from("/r-worktrees/task-3")));
         assert_eq!(worktree_root(Path::new("/r/ticket-3/sub"), 3), None);
     }
 }

@@ -1,9 +1,9 @@
 # platoon
 
 Every AI coding session you have, in one terminal app. See them all at a glance, pick up any one where you left it,
-group them into projects with shared notes, and hand tickets to squads of agents.
+group them into projects with shared notes, and hand tasks to squads of agents.
 
-![platoon: the Sessions list with running and finished sessions, a project's notes, a ticket handed to a squad of agents, a squad's workflow, and a switch to a light theme](demo/platoon.gif)
+![platoon: the Sessions list with running and finished sessions, a project's notes, a task handed to a squad of agents, a squad's workflow, and a switch to a light theme](demo/platoon.gif)
 
 [Full tour (MP4)](demo/platoon-tour.mp4)
 
@@ -19,10 +19,11 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - **Projects** group conversations from as many folders as you like. A project's notes reach every one of its sessions,
   and can keep themselves up to date as you work. When a conversation gets long, hand the work on to a fresh session
   with one key. → [Projects](guide/projects.md)
-- **Tickets and squads**: write down a piece of work as a ticket (or let Claude turn a conversation into tickets), then
-  hand it to a squad: a lead agent and its team, working in their own git worktree. They ask you before a push or a pull
-  request. → [Tickets and squads](guide/tickets-and-squads.md)
-- **Your own editor** opens a session's or a ticket's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
+- **Tasks and squads**: write down a piece of work as a task (or let Claude turn a conversation into tasks), then
+  hand it to a squad: a lead agent and its team, working in a copy of your folder (a git worktree) or on a new branch of
+  your checkout, on the branch you say the work lands on. They ask you before a push or a pull request, unless you let
+  them publish on their own. → [Tasks and squads](guide/tasks-and-squads.md)
+- **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
 - **52 themes**, dark and light, or your own. → [Themes](guide/themes.md)
 
@@ -60,8 +61,9 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   when a squad works on it.
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
-- **Squads edit files without asking** (Claude Code's "accept edits" mode), inside the ticket's worktree. They still ask
-  before a push, a pull request or a release.
+- **Squads edit files without asking** (Claude Code's "accept edits" mode), inside the task's copy of the folder (or the
+  branch you chose for it). They still ask before a push, a pull request or a release, unless you hand a task over as
+  "works and publishes".
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 
@@ -75,9 +77,9 @@ curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/unins
 ```
 
 It takes platoon's status line, hooks and `/to-tickets` skill out of Claude Code (backing `settings.json` up first),
-deletes platoon's cache, asks before deleting your projects, notes, tickets and settings (`| sh -s -- --all` deletes
+deletes platoon's cache, asks before deleting your projects, notes, tasks and settings (`| sh -s -- --all` deletes
 them without asking) and before stopping any session platoon is running, then removes the program however you
-installed it. Your conversations are Claude Code's and are never touched; ticket worktrees are listed, not deleted.
+installed it. Your conversations are Claude Code's and are never touched; task worktrees are listed, not deleted.
 → [Uninstall](guide/install-and-setup.md#uninstall)
 
 ## Learn more
@@ -86,7 +88,7 @@ The [guide](guide/README.md) covers everything:
 [install and setup](guide/install-and-setup.md),
 [sessions](guide/sessions.md),
 [projects](guide/projects.md),
-[tickets and squads](guide/tickets-and-squads.md),
+[tasks and squads](guide/tasks-and-squads.md),
 [themes](guide/themes.md),
 [settings and keys](guide/settings-and-keys.md),
 [features that use tokens](guide/tokens.md),

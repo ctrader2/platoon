@@ -194,7 +194,7 @@ impl App {
             .map(|e| e.name.clone())
             .or_else(|| self.notes_window.as_ref().filter(|w| w.ticket.is_some()).map(|w| w.name.clone()))
         {
-            self.notify(format!("{name} is still open on a ticket. Close it first."));
+            self.notify(format!("{name} is still open on a task. Close it first."));
             return;
         }
         if self.notes_busy() {
@@ -481,7 +481,7 @@ impl App {
         if !path.exists()
             && let Err(err) = crate::projects::write_atomic(&path, crate::tickets::TEMPLATE)
         {
-            self.notify(format!("Couldn't start the ticket's body: {}", plain(&err)));
+            self.notify(format!("Couldn't start the task's text: {}", plain(&err)));
             return;
         }
         let before = if path.exists() && before.is_empty() { std::fs::read_to_string(&path).unwrap_or_default() } else { before };

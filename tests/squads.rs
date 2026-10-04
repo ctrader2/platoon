@@ -122,7 +122,7 @@ impl Lab {
         // One project, "Web", with the user's own session in it and notes of its own.
         let v = json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": {"s-1": "pweb"}});
         fs::write(lab.config.join("projects.json"), v.to_string()).unwrap();
-        fs::create_dir_all(lab.config.join("projects/pweb/tickets")).unwrap();
+        fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
         fs::write(lab.config.join("projects/pweb/project.md"), "# Overview\n\nSell socks.\n").unwrap();
         let line = json!({"type":"user","cwd":lab.work,"gitBranch":"main","timestamp":"2026-09-24T10:00:00.000Z","message":{"role":"user","content":"make the shop"}}).to_string();
         fs::write(lab.claude.join("projects/-work/s-1.jsonl"), line + "\n").unwrap();
@@ -182,12 +182,12 @@ impl Lab {
         for (k, v) in extra.as_object().cloned().unwrap_or_default() {
             t.as_object_mut().unwrap().insert(k, v);
         }
-        fs::write(self.config.join("projects/pweb/tickets/01-basket.md"), "## What it should do\n\nA basket page.\n").unwrap();
+        fs::write(self.config.join("projects/pweb/tasks/01-basket.md"), "## What it should do\n\nA basket page.\n").unwrap();
         fs::write(self.tickets_path(), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
     }
 
     fn tickets_path(&self) -> PathBuf {
-        self.config.join("projects/pweb/tickets.json")
+        self.config.join("projects/pweb/tasks.json")
     }
 
     fn ticket_now(&self) -> Value {
@@ -222,9 +222,9 @@ impl Lab {
         t.send(b"2");
         t.wait_for_flat("WB Web");
         t.send(b"\r");
-        t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+        t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
         t.send(b"\t");
-        t.wait_for_flat("n new ticket");
+        t.wait_for_flat("n new task");
     }
 
     /// `platoon hook <which>` with this lab's directories and `input` on stdin: (exit code, stderr).
@@ -303,9 +303,9 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     let sid = tk["leaders"][0]["session"].as_str().unwrap().to_string();
     assert_eq!((sid.len(), tk["leaders"][0]["squad"].as_str()), (36, Some("coding")), "{tk}");
     assert_eq!(tk["leaders"][0]["names"], "squad-role", "the names it was started with, for resuming it: {tk}");
-    let wt = lab.base.join("shop-worktrees/ticket-1");
+    let wt = lab.base.join("shop-worktrees/task-1");
     assert_eq!(tk["worktrees"][0]["path"], wt.to_string_lossy().as_ref());
-    assert_eq!(tk["worktrees"][0]["branch"], "ticket/1");
+    assert_eq!(tk["worktrees"][0]["branch"], "task/1");
     assert!(wt.join("README").exists(), "a real worktree of the temp repository");
 
     // How the stand-in claude was started.
@@ -333,12 +333,12 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     );
     let leader_prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
     assert!(
-        leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("\n1. coding-planner: Reads the ticket"),
+        leader_prompt.contains("SQUAD: ready to publish") && leader_prompt.contains("\n1. coding-planner: Reads the task"),
         "{leader_prompt}"
     );
     // What it started with is kept beside the ticket, for continuing it later with the squad as it was.
     assert_eq!(tk["leaders"][0]["snapshot"], "01-squad-1.json", "{tk}");
-    let snap: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tickets/01-squad-1.json")).unwrap()).unwrap();
+    let snap: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tasks/01-squad-1.json")).unwrap()).unwrap();
     assert_eq!(snap["agents"], agents, "the very same agents");
     assert_eq!(
         (snap["agent"].as_str(), snap["model"].as_str(), snap["name"].as_str()),
@@ -356,13 +356,13 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
         settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().ends_with(" hook squad-prompt"),
         "{settings}"
     );
-    assert!(leader_prompt.contains("`SQUAD: question - Shall I close this ticket?`"), "{leader_prompt}");
+    assert!(leader_prompt.contains("`SQUAD: question - Shall I close this task?`"), "{leader_prompt}");
     assert!(stop.starts_with(BIN) || stop.starts_with(&format!("'{BIN}")), "the platoon that is running: {stop}");
     let first = args.last().unwrap();
-    assert!(first.starts_with("Ticket #1: Basket\nProject: Web\n\n## The ticket\n\n## What it should do\n\nA basket page."), "{first}");
+    assert!(first.starts_with("Task #1: Basket\nProject: Web\n\n## The task\n\n## What it should do\n\nA basket page."), "{first}");
     assert!(
         first.contains(
-            "## How far to take it\n\nAs far as the ticket's text says, and no further. When it doesn't say, stop at local changes"
+            "## How far to take it\n\nAs far as the task's text says, and no further. When it doesn't say, stop at local changes"
         ),
         "{first}"
     );
@@ -394,7 +394,7 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
     assert!(argv.contains("\n--model\nhaiku\n"), "{argv}");
     let asked = lab.check_file(1, "stdin");
     assert!(
-        asked.starts_with("The squad: Coding\n") && asked.contains("The ticket: #1 Basket") && asked.contains("A basket page."),
+        asked.starts_with("The squad: Coding\n") && asked.contains("The task: #1 Basket") && asked.contains("A basket page."),
         "{asked}"
     );
     assert!(!asked.contains("How far"), "{asked}");
@@ -424,29 +424,98 @@ fn a_hands_the_ticket_to_the_coding_squad_in_a_worktree_and_shows_it_beside_the_
 
     // ctrl+space: back to the project's screen, on the ticket.
     t.send(&[0]);
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "#1"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "#1"]);
     t.wait_gone("ctrl+space back to the project");
     // The leader is in neither the project's list nor the Sessions tab (it registered itself like any session).
     let screen = t.stable();
-    assert!(!screen.contains("ticket-1 ") && !screen.contains("shop-worktrees"), "not in the project's sessions:\n{screen}");
+    assert!(!screen.contains("task-1 ") && !screen.contains("shop-worktrees"), "not in the project's sessions:\n{screen}");
     t.send(b"1");
-    t.wait_gone("╭ Tickets");
+    t.wait_gone("╭ Tasks");
     t.wait_for("work");
     let screen = t.stable();
-    assert!(!screen.contains("ticket-1"), "not on the Sessions tab:\n{screen}");
+    assert!(!screen.contains("task-1"), "not on the Sessions tab:\n{screen}");
     // Enter on the ticket again: straight back into its running session (no second one started).
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for("╭ Tickets");
+    t.wait_for("╭ Tasks");
     t.send(b"\t");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
     t.send(b"\r");
     t.wait_for_all(&["FAKE LEADER sid:", "GOT:hello squad", "ctrl+space back to the project"]);
     assert_eq!(lab.started(), 1);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
+    t.wait_exit();
+}
+
+#[test]
+fn the_hand_over_popup_lets_the_squad_publish_on_its_own_and_lands_the_work_where_you_say() {
+    let lab = Lab::new("sq-handover");
+    lab.ticket(json!({}));
+    git(&lab.shop, &["branch", "release"]);
+    let main_commit = {
+        let out = Command::new("git").arg("-C").arg(&lab.shop).args(["rev-parse", "main"]).output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    lab.open_tickets(&mut t);
+    t.send(b"S");
+    // The popup: the squads, "On its own", one line per folder, pre-filled.
+    t.wait_for_all(&[
+        "╭ Hand to a squad",
+        "On its own: asks before anything others can see",
+        "shop: a copy on task/1, lands on main",
+        "docs: used as it is (not in git)",
+        "enter hand it over",
+    ]);
+    assert!(!t.text().contains("Finds things out"), "only the picked squad's text:\n{}", t.text());
+    // Down past the four squads to "On its own"; space: works and publishes.
+    for _ in 0..4 {
+        t.send(b"\x1b[B");
+    }
+    t.wait_for_flat("space change");
+    t.send(b" ");
+    t.wait_for("On its own: works and publishes");
+    // Down to shop; l: the branch the work lands on (the box starts from main; ctrl+u clears it).
+    t.send(b"\x1b[B");
+    t.wait_for_flat("l lands on");
+    t.send(b"l");
+    t.wait_for("╭ Lands on");
+    t.send(b"\x15");
+    t.send(b"nope\r");
+    t.wait_for("There is no branch nope in shop.");
+    t.send(b"\x15");
+    t.send(b"release\r");
+    t.wait_gone("╭ Lands on");
+    t.wait_for("shop: a copy on task/1, lands on release");
+    // Enter hands it over: the leader starts in the copy, made from release.
+    t.send(b"\r");
+    t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
+    let tk = lab.ticket_now();
+    assert_eq!(tk["autonomy"], "publish", "{tk}");
+    assert_eq!(tk["works_on"], json!([{"folder": lab.shop.to_string_lossy(), "how": "worktree", "lands_on": "release"}]), "{tk}");
+    assert_eq!(tk["worktrees"][0]["branch"], "task/1");
+    assert_eq!(tk["worktrees"][0]["base"], main_commit, "release is main's commit here");
+    let args = lab.args(1);
+    let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
+    let prompt = agents["coding-leader"]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("The user has let this squad publish on its own"), "{prompt}");
+    assert!(prompt.contains("The work is meant for the branch release of shop"), "{prompt}");
+    let first = args.last().unwrap();
+    assert!(first.contains("on the branch task/1, made from release; the work lands on release"), "{first}");
+    // The gate lets a push through without `p`.
+    let sid = tk["leaders"][0]["session"].as_str().unwrap().to_string();
+    let settings: Value = serde_json::from_str(value_after(&args, "--settings")).unwrap();
+    let gate = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let bash = |cmd: &str| json!({"session_id": sid, "tool_name": "Bash", "tool_input": {"command": cmd}, "hook_event_name": "PreToolUse", "cwd": "/tmp"});
+    assert_eq!(lab.run_hook_command(&gate, &bash("git push origin task/1")), 0, "works and publishes: no go-ahead needed");
+    // The task's screen, beside the session: the new lines in plain words.
+    t.wait_for_all(&["On its own", "works and publishes", "a copy of shop (task/1) · lands on", "Its own folder"]);
+    t.send(&[0]);
+    t.wait_gone("ctrl+space back to the project");
+    t.send(&[3]);
     t.wait_exit();
 }
 
@@ -466,7 +535,7 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     // The gate, run as the settings give it: a push is refused until the user says so; the rest runs.
     assert_eq!(lab.run_hook_command(&gate, &bash("git status")), 0);
     assert_eq!(lab.run_hook_command(&gate, &bash("cd /w && git -C x push origin HEAD")), 2);
-    // Stuck on Claude's permission prompt: Waiting on you, said on the ticket beside the session; the next tool that
+    // Stuck on Claude's permission prompt: Needs you, said on the ticket beside the session; the next tool that
     // runs (the user answered) makes it Working again. Run as the settings give them.
     let notify = settings["hooks"]["Notification"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
     let tool = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
@@ -476,7 +545,7 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
         (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()),
         (Some("waiting"), Some("Waiting for your OK on a command"))
     );
-    t.wait_for_all(&["Waiting on you", "Waiting for your OK on a command"]);
+    t.wait_for_all(&["Needs you", "Waiting for your OK on a command"]);
     let idle = json!({"session_id": sid, "hook_event_name": "Notification", "notification_type": "idle_prompt", "message": "Claude is waiting for your input"});
     assert_eq!(lab.run_hook_command(&notify, &idle), 0);
     let ran = json!({"session_id": sid, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_input": {"command": "cargo test"}, "tool_response": {}});
@@ -488,12 +557,13 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     assert_eq!(lab.run_hook_command(&stop, &stop_input("Handed it to the builder.\nSQUAD: done", json!([{"id": "b1"}]))), 0);
     assert_eq!(lab.ticket_now()["state"], "working");
     // Then it wants to push.
-    assert_eq!(lab.run_hook_command(&stop, &stop_input("Committed on ticket/1.\nSQUAD: ready to publish - push ticket/1", json!([]))), 0);
+    assert_eq!(lab.run_hook_command(&stop, &stop_input("Committed on task/1.\nSQUAD: ready to publish - push task/1", json!([]))), 0);
     assert_eq!(
-        (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str()),
-        (Some("ready"), Some("Wants to publish: push ticket/1"))
+        (lab.ticket_now()["state"].as_str(), lab.ticket_now()["reason"].as_str(), lab.ticket_now()["publish_wanted"].as_bool()),
+        (Some("waiting"), Some("Wants to publish: push task/1"), Some(true)),
+        "Needs you, wanting to publish: never \"ready\" in the file"
     );
-    t.wait_for_all(&["Ready to publish", "Wants to publish: push ticket/1"]);
+    t.wait_for_all(&["Needs you", "Wants to publish: push task/1"]);
 
     // Back on the project's screen, p on the ticket: the go-ahead, Working, and the words typed into the session.
     t.send(&[0]);
@@ -503,7 +573,7 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     assert_eq!(lab.rec(1, "typed"), "Go ahead and publish.\n", "the words, then Enter");
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["go_ahead"].as_bool()), (Some("working"), Some(true)), "{tk}");
-    assert_eq!(lab.run_hook_command(&gate, &bash("git push -u origin ticket/1")), 0, "now it may");
+    assert_eq!(lab.run_hook_command(&gate, &bash("git push -u origin task/1")), 0, "now it may");
     // Its words reach the session as a message from the user: the prompt hook keeps Working and the go-ahead.
     let prompt = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
     let said = |text: &str| json!({"session_id": sid, "transcript_path": "/x.jsonl", "cwd": "/tmp", "permission_mode": "acceptEdits", "hook_event_name": "UserPromptSubmit", "prompt": text});
@@ -511,16 +581,16 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["go_ahead"].as_bool()), (Some("working"), Some(true)), "{tk}");
     // Finished: the leader asks before closing, and the ticket shows its question beside the session.
-    assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed ticket/1.\nSQUAD: question - Shall I close this ticket?", json!([]))), 0);
+    assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed task/1.\nSQUAD: question - Shall I close this task?", json!([]))), 0);
     let tk = lab.ticket_now();
     assert_eq!(
         (tk["state"].as_str(), tk["reason"].as_str(), tk.get("go_ahead")),
-        (Some("waiting"), Some("Asks: Shall I close this ticket?"), None),
+        (Some("waiting"), Some("Asks: Shall I close this task?"), None),
         "{tk}"
     );
-    assert!(!lab.config.join("projects/pweb/tickets/01-result.md").exists(), "not Done yet");
+    assert!(!lab.config.join("projects/pweb/tasks/01-result.md").exists(), "not Done yet");
     t.send(b"\r");
-    t.wait_for_all(&["Asks: Shall I close this ticket?", "ctrl+space back to the project"]);
+    t.wait_for_all(&["Asks: Shall I close this task?", "ctrl+space back to the project"]);
     // The user answers in the session: Working again at once, with nothing added to what was typed.
     t.send(b"yes\r");
     t.wait_for("GOT:yes");
@@ -539,12 +609,12 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
     );
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk.get("reason")), (Some("working"), None), "{tk}");
-    t.wait_gone("Asks: Shall I close this ticket?");
+    t.wait_gone("Asks: Shall I close this task?");
     // Done: the result is kept beside the body, the go-ahead ends, and the gate asks again.
-    assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed ticket/1.\nSQUAD: done", json!([]))), 0);
+    assert_eq!(lab.run_hook_command(&stop, &stop_input("Pushed task/1.\nSQUAD: done", json!([]))), 0);
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk.get("go_ahead")), (Some("done"), None), "{tk}");
-    assert_eq!(fs::read_to_string(lab.config.join("projects/pweb/tickets/01-result.md")).unwrap(), "Pushed ticket/1.\n");
+    assert_eq!(fs::read_to_string(lab.config.join("projects/pweb/tasks/01-result.md")).unwrap(), "Pushed task/1.\n");
     assert_eq!(lab.run_hook_command(&gate, &bash("git push")), 2);
     t.wait_for_flat("State Done");
     // More work after Done: a message to the same leader opens the ticket again, Working, with that leader.
@@ -662,15 +732,15 @@ fn cancelling_a_ticket_whose_squad_runs_asks_and_stops_only_that_session() {
     t.send(&[0]);
     t.wait_for_flat("c cancel");
     t.send(b"c");
-    t.wait_for_all(&["Cancel ticket #1?", "keep it"]);
+    t.wait_for_all(&["Cancel task #1?", "keep it"]);
     t.wait_for("will be stopped");
     // No: nothing changes, the session runs on.
     t.send(b"n");
-    t.wait_gone("Cancel ticket #1?");
+    t.wait_gone("Cancel task #1?");
     assert_eq!(lab.ticket_now()["state"], "working");
     assert!(alive(leader));
     t.send(b"c");
-    t.wait_for("Cancel ticket #1?");
+    t.wait_for("Cancel task #1?");
     t.send(b"y");
     t.wait_for_flat("#1 is Cancelled. Stopping its squad's session (the session itself is kept).");
     assert_eq!(lab.ticket_now()["state"], "cancelled");
@@ -770,13 +840,13 @@ fn the_worktree_is_made_off_the_ui_thread_while_the_screen_keeps_going() {
     t.send(b"\r");
     until("the slow git to start", || lab.fake.join("git-slow").exists());
     // While git sleeps: the ticket says what is happening, and keys are answered at once.
-    t.wait_for("Making the worktree…");
+    t.wait_for("Making its copy of the folder…");
     t.send(b"c");
-    t.wait_for_flat("#1: Making the worktree… Wait a moment.");
+    t.wait_for_flat("#1: Making its copy of the folder… Wait a moment.");
     assert_eq!(lab.ticket_now()["state"], "new", "nothing written until the leader starts");
     assert_eq!(lab.started(), 0);
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
-    assert!(lab.base.join("shop-worktrees/ticket-1/README").exists());
+    assert!(lab.base.join("shop-worktrees/task-1/README").exists());
     assert_eq!(lab.ticket_now()["state"], "working");
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
@@ -818,8 +888,8 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
     t.wait_for_all(&["hand to a squad", "Research", "enter hand it over"]);
     t.send(b"\x1b[B\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
-    let work = lab.config.join("projects/pweb/tickets/01-work");
-    assert!(work.is_dir(), "the ticket's work folder is made");
+    let work = lab.config.join("projects/pweb/tasks/01-work");
+    assert!(work.is_dir(), "the task's own folder is made");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&work).unwrap(), "the leader starts in it");
     let args = lab.args(1);
     assert!(add_dirs(&args).is_empty(), "the ticket has no folder to add: {args:?}");
@@ -846,28 +916,28 @@ fn a_ticket_without_a_folder_goes_to_any_squad_which_starts_in_the_tickets_work_
     );
     let prompt = agents["research-leader"]["prompt"].as_str().unwrap();
     assert!(
-        prompt.contains("The ticket has no folder of its own: you and your members work in its private work folder")
+        prompt.contains("The task has no folder of its own: you and your members work in its own folder, kept by platoon")
             && !prompt.contains("worktree"),
         "{prompt}"
     );
     let first = args.last().unwrap();
     assert!(
-        first.contains("the ticket's private work folder; the session starts here")
-            && first.contains("The ticket has no folder of its own."),
+        first.contains("the task's own folder, kept by platoon; the session starts here")
+            && first.contains("The task has no folder of its own."),
         "{first}"
     );
-    assert!(first.contains("stop once the result is written in your work folder"), "{first}");
+    assert!(first.contains("stop once the result is written in the task's own folder"), "{first}");
     // The commander was told there is no folder of its own; nothing else was made.
     assert!(
         lab.check_file(1, "stdin").starts_with("The squad: Research\n")
-            && lab.check_file(1, "stdin").contains("Where it works: the ticket has no folder of its own;")
+            && lab.check_file(1, "stdin").contains("Where it works: the task has no folder of its own;")
     );
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["leaders"][0]["squad"].as_str()), (Some("working"), Some("research")), "{tk}");
     assert_eq!(tk["worktrees"], json!([]));
     assert!(!lab.base.join("shop-worktrees").exists());
     // The ticket beside the session says which squad has it and where its work folder is.
-    t.wait_for_all(&["Research squad", "Work folder"]);
+    t.wait_for_all(&["Research squad", "Its own folder"]);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
@@ -880,8 +950,8 @@ fn summarize_works_in_a_worktree_of_a_git_folder_with_the_work_folder_beside_it(
     lab.ticket(json!({}));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     hand_to(&lab, &mut t, "Summarize", 3);
-    let work = lab.config.join("projects/pweb/tickets/01-work");
-    let wt = lab.base.join("shop-worktrees/ticket-1");
+    let work = lab.config.join("projects/pweb/tasks/01-work");
+    let wt = lab.base.join("shop-worktrees/task-1");
     assert!(wt.join("README").exists(), "a worktree of the git folder, like every squad");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let args = lab.args(1);
@@ -896,13 +966,13 @@ fn summarize_works_in_a_worktree_of_a_git_folder_with_the_work_folder_beside_it(
     let prompt = agents["summarize-leader"]["prompt"].as_str().unwrap();
     assert!(
         prompt.contains("The result is that summary itself: put it just above your last line")
-            && prompt.contains("goes in the ticket's private work folder"),
+            && prompt.contains("goes in the task's own folder"),
         "{prompt}"
     );
     let first = args.last().unwrap();
     assert!(
         first.contains(&format!(
-            "- {} (a git worktree of {}, on the branch ticket/1; the session starts here)",
+            "- {} (a git worktree of {}, on the branch task/1, made from main; the work lands on main; the session starts here)",
             wt.display(),
             lab.shop.display()
         )),
@@ -920,19 +990,19 @@ fn docs_works_in_a_worktree_of_a_git_folder() {
     lab.ticket(json!({"folders": [lab.shop.to_string_lossy()]}));
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     hand_to(&lab, &mut t, "Docs", 2);
-    let wt = lab.base.join("shop-worktrees/ticket-1");
+    let wt = lab.base.join("shop-worktrees/task-1");
     assert!(wt.join("README").exists(), "a real worktree of the temp repository");
     assert_eq!(fs::canonicalize(lab.rec(1, "cwd").trim()).unwrap(), fs::canonicalize(&wt).unwrap(), "it starts in the worktree");
     let tk = lab.ticket_now();
     assert_eq!(
         (tk["worktrees"][0]["path"].as_str(), tk["worktrees"][0]["branch"].as_str()),
-        (Some(wt.to_string_lossy().as_ref()), Some("ticket/1")),
+        (Some(wt.to_string_lossy().as_ref()), Some("task/1")),
         "{tk}"
     );
     let args = lab.args(1);
     assert_eq!(
         add_dirs(&args),
-        [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()],
+        [lab.config.join("projects/pweb/tasks/01-work").to_string_lossy().into_owned()],
         "only its work folder besides"
     );
     assert_eq!(value_after(&args, "--agent"), "docs-leader");
@@ -941,7 +1011,7 @@ fn docs_works_in_a_worktree_of_a_git_folder() {
     assert_eq!(agents["docs-editor"]["model"], "opus");
     assert!(agents["docs-leader"]["prompt"].as_str().unwrap().contains("the change stays in the worktree, uncommitted"));
     assert!(args.last().unwrap().contains(&format!(
-        "- {} (a git worktree of {}, on the branch ticket/1; the session starts here)",
+        "- {} (a git worktree of {}, on the branch task/1, made from main; the work lands on main; the session starts here)",
         wt.display(),
         lab.shop.display()
     )));
@@ -961,10 +1031,10 @@ fn docs_works_in_a_folder_outside_git_as_it_is() {
     assert_eq!(lab.ticket_now()["worktrees"], json!([]));
     assert!(!lab.base.join("docs-worktrees").exists() && !lab.base.join("shop-worktrees").exists(), "no worktree anywhere");
     let args = lab.args(1);
-    assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tickets/01-work").to_string_lossy().into_owned()]);
+    assert_eq!(add_dirs(&args), [lab.config.join("projects/pweb/tasks/01-work").to_string_lossy().into_owned()]);
     let agents: Value = serde_json::from_str(value_after(&args, "--agents")).unwrap();
     let prompt = agents["docs-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.contains("the change stays in the ticket's folder, uncommitted") && !prompt.contains("worktree"), "{prompt}");
+    assert!(prompt.contains("the change stays in the task's folder, uncommitted") && !prompt.contains("worktree"), "{prompt}");
     assert!(
         args.last().unwrap().contains(&format!("- {} (used as it is, not a git worktree; the session starts here)", lab.docs.display()))
     );
@@ -981,7 +1051,7 @@ fn line_lab(name: &str, n: u32, at_once: u64) -> Lab {
     let lab = Lab::new(name);
     let tickets: Vec<Value> = (1..=n)
         .map(|k| {
-            fs::write(lab.config.join(format!("projects/pweb/tickets/0{k}-t{k}.md")), format!("## What it should do\n\nPart {k}.\n")).unwrap();
+            fs::write(lab.config.join(format!("projects/pweb/tasks/0{k}-t{k}.md")), format!("## What it should do\n\nPart {k}.\n")).unwrap();
             json!({"number": k, "title": format!("Part {k}"), "file": format!("0{k}-t{k}.md"), "state": "new", "folders": [lab.shop.to_string_lossy()], "blocked_by": [], "created": 1, "updated": 1})
         })
         .collect();
@@ -1004,7 +1074,7 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     hand_over(&lab, &mut t);
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
     // #2 and #3: checked by the commander, then in the line.
     for k in [2, 3] {
         t.send(b"\x1b[B");
@@ -1019,7 +1089,7 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     assert_eq!(screen.matches("Waiting for a free squad").count(), 2, "{screen}");
     assert_eq!((lab.started(), lab.checks()), (1, 3), "one squad started; each ticket was checked");
     assert_eq!(ticket_n(&lab, 2)["state"], "working");
-    assert!(!lab.base.join("shop-worktrees/ticket-2").exists(), "worktrees are made when it starts, not when it joins the line");
+    assert!(!lab.base.join("shop-worktrees/task-2").exists(), "worktrees are made when it starts, not when it joins the line");
 
     // #1's leader stops to ask something (its Stop hook, run as its settings give it): the place frees and #2, the
     // oldest in the line, starts by itself (not beside its ticket: the project's screen stays).
@@ -1033,9 +1103,9 @@ fn with_one_squad_at_once_the_next_waits_starts_by_itself_and_the_line_outlasts_
     let two = ticket_n(&lab, 2);
     assert!(two.get("queued").is_none() && two["leaders"][0]["squad"] == "coding", "{two}");
     assert_eq!(value_after(&lab.args(2), "-n"), "Coding squad · #2 Part 2");
-    assert!(lab.base.join("shop-worktrees/ticket-2/README").exists());
+    assert!(lab.base.join("shop-worktrees/task-2/README").exists());
     assert_eq!(lab.checks(), 3, "no second check when it leaves the line");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
     assert!(!t.text().contains("ctrl+space back to the project"), "it didn't take the screen");
     assert_eq!(ticket_n(&lab, 3)["queued"]["squad"], "coding", "#3 still waits: #2 holds the place");
 
@@ -1105,7 +1175,7 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     t.wait_for("915K tokens");
     let screen = t.stable();
     let row = screen.lines().find(|l| l.contains("#1 Basket")).unwrap();
-    assert!(row.contains("Waiting on you") && row.contains("915K tokens") && !row.contains("1.2M"), "{screen}");
+    assert!(row.contains("Needs you") && row.contains("915K tokens") && !row.contains("1.2M"), "{screen}");
     // Its screen: the total, what it counts, a line per agent, and the members' runs in order. Its session isn't
     // running, so the reviewer's run that never came back says it didn't finish, and nothing is "Now".
     t.send(b"\r");
@@ -1134,7 +1204,7 @@ fn the_ticket_shows_the_tokens_its_squad_used_and_what_the_members_did() {
     let said = left[at("Tokens used")..at("coding-leader ")].join(" ");
     // The same number as the pane, said as what it is, with the cache reads beside it and the parts explained.
     assert!(said.starts_with("Tokens used 915K sent and written, plus 300K read again from Claude's cache"), "{said}");
-    assert!(said.contains("910K sent to Claude and 5K written by Claude: the number the Tickets list shows."), "{said}");
+    assert!(said.contains("910K sent to Claude and 5K written by Claude: the number the Tasks list shows."), "{said}");
     assert!(at("[x] coding-planner") < at("[x] coding-builder") && at("[x] coding-builder") < at("[-] coding-reviewer"), "{screen}");
     assert!(left[at("[-] coding-reviewer")..].join(" ").contains("Review the basket page (didn't finish)"), "{screen}");
     assert!(!screen.contains("Now:"), "{screen}");

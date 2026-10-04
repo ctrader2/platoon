@@ -304,6 +304,10 @@ mod tests {
             busy: None,
             queued: None,
             from: None,
+            publish_wanted: false,
+            autonomy: None,
+            works_on: vec![],
+            old_number: None,
         }
     }
 
@@ -357,10 +361,10 @@ mod tests {
     #[test]
     fn open_folders_are_known_while_their_platoon_is_there() {
         let d = tmp("marks");
-        let mine = mark_open(&d, std::process::id(), &["/a/ticket-1".into()]).unwrap();
+        let mine = mark_open(&d, std::process::id(), &["/a/task-1".into()]).unwrap();
         // A platoon that is gone (a pid no process has): its mark is tidied away.
         let gone = mark_open(&d, 0x3fff_fff0, &["/b".into()]).unwrap();
-        assert_eq!(open_now(&d), vec![PathBuf::from("/a/ticket-1")]);
+        assert_eq!(open_now(&d), vec![PathBuf::from("/a/task-1")]);
         assert!(!gone.exists());
         unmark(&mine);
         assert!(open_now(&d).is_empty());

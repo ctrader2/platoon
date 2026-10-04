@@ -1,16 +1,17 @@
-//! A ticket's worktrees after the work: whether one has changes not yet committed, and removing one once its ticket is
+//! A task's worktrees after the work: whether one has changes not yet committed, and removing one once its task is
 //! Done or Cancelled (`remove`). The branch is never touched: removing a worktree keeps every commit, and continuing
 //! the squad makes the worktree again from its branch (`squads::prepare_worktrees`). Making them is in `squads.rs`;
 //! when the app removes them is in `app/worktree_glue.rs`.
 //!
-//! What `remove` will touch, and nothing else: the folder platoon made for this ticket
-//! (`<parent>/<repo>-worktrees/ticket-<N>`, `squads::worktree_dir`), when the ticket's record points there, git lists it
-//! as a worktree of that repository on the ticket's own branch, and it is not the repository's main worktree. It uses
-//! `git worktree remove`, which refuses a worktree with changes by itself; `force` (the user said yes to losing them)
-//! adds `--force` once, which still refuses a locked worktree.
+//! What `remove` will touch, and nothing else: the folder platoon made for this task
+//! (`<parent>/<repo>-worktrees/task-<N>`, or `ticket-<N>` from before the rename; `squads::worktree_dir`), when the
+//! task's record points there, git lists it as a worktree of that repository on the task's own branch (`task/<N>` or
+//! `ticket/<N>`), and it is not the repository's main worktree. It uses `git worktree remove`, which refuses a worktree
+//! with changes by itself; `force` (the user said yes to losing them) adds `--force` once, which still refuses a locked
+//! worktree.
 
-use crate::squads::{branch_name, git, same_place, worktree_dir, worktrees_of};
-use crate::tickets::Worktree;
+use crate::squads::{git, same_place, worktree_dir, worktrees_of};
+use crate::tickets::{Worktree, is_task_branch};
 use std::{
     path::{Component, Path, PathBuf},
     time::{Duration, Instant},
@@ -30,8 +31,8 @@ pub enum Removal {
 /// Where ticket `number`'s worktree `w` is, checked against its record: (its repository's root, the worktree's
 /// folder). Err: why platoon won't touch it.
 fn located(program: &str, w: &Worktree, number: u32) -> Result<(PathBuf, PathBuf), String> {
-    if w.branch != branch_name(number) {
-        return Err(format!("its branch {} isn't this ticket's", w.branch));
+    if !is_task_branch(&w.branch, number) {
+        return Err(format!("its branch {} isn't this task's", w.branch));
     }
     let path = Path::new(&w.path);
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
@@ -43,9 +44,9 @@ fn located(program: &str, w: &Worktree, number: u32) -> Result<(PathBuf, PathBuf
     let top = git(program, Path::new(&w.folder), &["rev-parse", "--show-toplevel"])
         .map_err(|e| format!("{} isn't in a git repository any more: {e}", w.folder))?;
     let root = PathBuf::from(top.trim());
-    let dir = worktree_dir(&root, number);
+    let dir = worktree_dir(&root, &w.branch);
     if !path.starts_with(&dir) || same_place(&dir, &root) {
-        return Err(format!("{} isn't where platoon made this ticket's worktree ({})", w.path, dir.display()));
+        return Err(format!("{} isn't where platoon made this task's worktree ({})", w.path, dir.display()));
     }
     Ok((root, dir))
 }
@@ -206,18 +207,13 @@ mod tests {
         let file = crate::tickets::path_in(&config, "p1");
         fs::create_dir_all(file.parent().unwrap()).unwrap();
         let old = serde_json::json!({"next": 2, "tickets": [{"number": 1, "title": "Old", "file": "01-old.md", "state": "done", "folders": ["/w/shop"], "blocked_by": [], "created": 1, "updated": 5,
-            "worktrees": [{"folder": "/w/shop", "path": "/w/shop-worktrees/ticket-1", "branch": "ticket/1", "colour": "teal"}], "later": {"x": 1}}]});
+            "worktrees": [{"folder": "/w/shop", "path": "/w/shop-worktrees/task-1", "branch": "task/1", "colour": "teal"}], "later": {"x": 1}}]});
         fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
         let mut t = Tickets::open(&config, "p1");
         let w = t.get(1).unwrap().worktrees[0].clone();
         assert_eq!(
             w,
-            Worktree {
-                folder: "/w/shop".into(),
-                path: "/w/shop-worktrees/ticket-1".into(),
-                branch: "ticket/1".into(),
-                ..Default::default()
-            }
+            Worktree { folder: "/w/shop".into(), path: "/w/shop-worktrees/task-1".into(), branch: "task/1".into(), ..Default::default() }
         );
         // A rename rewrites the file: the worktree's entry, and everything platoon doesn't know, as they were.
         t.rename(1, "Old one").unwrap();
@@ -225,17 +221,17 @@ mod tests {
         assert_eq!(v["tickets"][0]["worktrees"], old["tickets"][0]["worktrees"]);
         assert_eq!(v["tickets"][0]["later"], serde_json::json!({"x": 1}));
         // Marks go on that entry alone, keep its unknown key, and never touch `updated`.
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/ticket-1", WtMark::KeptUncommitted).unwrap());
-        assert!(!t.mark_worktree(1, "/w/shop-worktrees/ticket-1", WtMark::KeptUncommitted).unwrap(), "said already: nothing written");
+        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::KeptUncommitted).unwrap());
+        assert!(!t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::KeptUncommitted).unwrap(), "said already: nothing written");
         assert!(!t.mark_worktree(1, "/elsewhere", WtMark::Removed).unwrap(), "no worktree there");
         let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v["tickets"][0]["worktrees"][0]["colour"], "teal");
         assert_eq!(v["tickets"][0]["worktrees"][0]["kept_uncommitted"], true);
         let updated = v["tickets"][0]["updated"].clone();
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/ticket-1", WtMark::Removed).unwrap());
+        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::Removed).unwrap());
         let w = t.get(1).unwrap().worktrees[0].clone();
         assert!(w.removed.is_some() && !w.kept_uncommitted && w.is_gone(), "{w:?}");
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/ticket-1", WtMark::Present).unwrap());
+        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::Present).unwrap());
         let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
         assert_eq!(v["tickets"][0]["worktrees"], old["tickets"][0]["worktrees"], "back as it was");
         assert_eq!(v["tickets"][0]["updated"], updated);
@@ -254,7 +250,7 @@ mod tests {
         let base = dir("clean");
         let shop = repo(&base, "shop");
         let got = prepare_worktrees("git", &[shop.join("src").to_string_lossy().into_owned()], 2, &[]).unwrap();
-        let wt = worktree_dir(&shop, 2);
+        let wt = worktree_dir(&shop, "task/2");
         let tip = commit_in(&wt, "basket.txt", "the basket");
         // Ignored files (a build) don't count as changes, and go with the folder.
         fs::create_dir_all(wt.join("target")).unwrap();
@@ -263,8 +259,8 @@ mod tests {
         assert_eq!(remove("git", &got[0], 2, false), Removal::Removed);
         assert!(!wt.exists());
         assert_eq!(listed(&shop).len(), 1, "git no longer lists it");
-        assert!(branches(&shop).lines().any(|b| b == "ticket/2"));
-        assert_eq!(run(&shop, &["rev-parse", "ticket/2"]), tip, "its commits are on the branch");
+        assert!(branches(&shop).lines().any(|b| b == "task/2"));
+        assert_eq!(run(&shop, &["rev-parse", "task/2"]), tip, "its commits are on the branch");
         // Again: gone already, still fine.
         assert_eq!(remove("git", &got[0], 2, false), Removal::Removed);
         let _ = fs::remove_dir_all(&base);
@@ -276,7 +272,7 @@ mod tests {
         let shop = repo(&base, "shop");
         let folders = vec![shop.to_string_lossy().into_owned()];
         let got = prepare_worktrees("git", &folders, 4, &[]).unwrap();
-        let wt = worktree_dir(&shop, 4);
+        let wt = worktree_dir(&shop, "task/4");
         fs::write(wt.join("README"), "changed\n").unwrap();
         assert_eq!(remove("git", &got[0], 4, false), Removal::Uncommitted);
         assert!(wt.join("README").exists());
@@ -293,7 +289,7 @@ mod tests {
         // The user said yes: removed, changes lost, branch kept.
         assert_eq!(remove("git", &got[0], 4, true), Removal::Removed);
         assert!(!wt.exists());
-        assert!(branches(&shop).lines().any(|b| b == "ticket/4"));
+        assert!(branches(&shop).lines().any(|b| b == "task/4"));
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -303,20 +299,20 @@ mod tests {
         let shop = repo(&base, "shop");
         let folders = vec![shop.to_string_lossy().into_owned()];
         let got = prepare_worktrees("git", &folders, 8, &[]).unwrap();
-        let wt = worktree_dir(&shop, 8);
+        let wt = worktree_dir(&shop, "task/8");
         let refused = |w: &Worktree, n: u32| matches!(remove("git", w, n, true), Removal::Refused(_));
         // Another ticket's number, another branch, a path elsewhere, a path that climbs out, the repository itself.
         assert!(refused(&got[0], 9));
         assert!(refused(&Worktree { branch: "main".into(), ..got[0].clone() }, 8));
         assert!(refused(&Worktree { path: shop.to_string_lossy().into_owned(), ..got[0].clone() }, 8));
         assert!(refused(&Worktree { path: format!("{}/../../shop", wt.display()), ..got[0].clone() }, 8));
-        assert!(refused(&Worktree { path: "relative/ticket-8".into(), ..got[0].clone() }, 8));
+        assert!(refused(&Worktree { path: "relative/task-8".into(), ..got[0].clone() }, 8));
         assert!(wt.is_dir() && shop.join("README").exists());
         // The right place, but not a worktree of this repository (a plain folder someone made): left alone.
-        let fake = worktree_dir(&shop, 11);
+        let fake = worktree_dir(&shop, "task/11");
         fs::create_dir_all(&fake).unwrap();
         fs::write(fake.join("keep.txt"), "x").unwrap();
-        let w11 = Worktree { path: fake.to_string_lossy().into_owned(), branch: "ticket/11".into(), ..got[0].clone() };
+        let w11 = Worktree { path: fake.to_string_lossy().into_owned(), branch: "task/11".into(), ..got[0].clone() };
         assert!(refused(&w11, 11));
         assert!(fake.join("keep.txt").exists());
         // A worktree at the right place that has been switched to another branch: left alone.
@@ -336,20 +332,20 @@ mod tests {
         let shop = repo(&base, "shop");
         let folders = vec![shop.join("src").to_string_lossy().into_owned()];
         let got = prepare_worktrees("git", &folders, 6, &[]).unwrap();
-        let wt = worktree_dir(&shop, 6);
+        let wt = worktree_dir(&shop, "task/6");
         let tip = commit_in(&wt, "basket.txt", "the basket");
         assert_eq!(remove("git", &got[0], 6, false), Removal::Removed);
         commit_in(&shop, "later.txt", "main moves on");
         // Without the ticket's record the branch name is taken, as before.
         let err = prepare_worktrees("git", &folders, 6, &[]).unwrap_err();
-        assert!(err.contains("ticket/6 is already taken"), "{err}");
+        assert!(err.contains("task/6 is already taken"), "{err}");
         assert!(!wt.exists());
         // With it: the same place, on the branch, with its commit and the base it was made from.
         let removed = Worktree { removed: Some(9), ..got[0].clone() };
         let back = prepare_worktrees("git", &folders, 6, &[removed]).unwrap();
         assert_eq!(back, got, "same path, branch and base");
         assert_eq!(run(&wt, &["rev-parse", "HEAD"]), tip);
-        assert_eq!(run(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), "ticket/6");
+        assert_eq!(run(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), "task/6");
         assert!(wt.join("basket.txt").exists());
         // Removed by hand (git still has a note of it): made again too.
         fs::remove_dir_all(&wt).unwrap();

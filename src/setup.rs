@@ -38,10 +38,10 @@ pub const STEPS: [Step; 5] = [
         missing_note: "not set up yet: projects work, but platoon can't keep their notes up to date by itself",
     },
     Step {
-        name: "Tickets skill",
-        what: "/to-tickets in Claude Code: turns a session into tickets",
+        name: "Tasks skill",
+        what: "/to-tickets in Claude Code: turns a session into tasks",
         blocking: false,
-        missing_note: "not set up yet: tickets are still made in platoon, but not with /to-tickets",
+        missing_note: "not set up yet: tasks are still made in platoon, but not with /to-tickets",
     },
 ];
 
@@ -849,12 +849,12 @@ mod tests {
         let root = tmp("skill");
         let skill = root.join("skills/to-tickets/SKILL.md");
         assert_eq!(check(&root, &pc(&root))[4], State::Missing);
-        assert!(render_blocked(&check(&root, &pc(&root)), false).contains("[–] Tickets skill"), "never a cross: it doesn't block starting");
+        assert!(render_blocked(&check(&root, &pc(&root)), false).contains("[–] Tasks skill"), "never a cross: it doesn't block starting");
         let r = run(&root, &pc(&root)).unwrap();
         assert_eq!(r.outcomes[4], Outcome::Added);
         assert_eq!(fs::read_to_string(&skill).unwrap(), crate::totickets::SKILL);
         let shown = render_report(&r, &root, false);
-        assert!(shown.contains("[✓] Tickets skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
+        assert!(shown.contains("[✓] Tasks skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
         assert!(shown.contains("platoon setup --remove to-tickets"), "{shown}");
         // Again: already done, nothing written.
         let r = run(&root, &pc(&root)).unwrap();
@@ -885,7 +885,7 @@ mod tests {
         assert!(r.outcomes[4] == Outcome::Changed && r.skill.is_none());
         let shown = render_report(&r, &root, false);
         assert!(
-            shown.contains("[–] Tickets skill") && shown.contains("changed by you") && shown.contains("platoon setup --replace to-tickets"),
+            shown.contains("[–] Tasks skill") && shown.contains("changed by you") && shown.contains("platoon setup --replace to-tickets"),
             "{shown}"
         );
         assert_eq!(fs::read_to_string(&skill).unwrap(), "my own copy");

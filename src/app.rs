@@ -214,9 +214,9 @@ pub enum Hit {
     Top(usize),
     /// A row of the Projects tab.
     ProjectRow(usize),
-    /// A row of the Tickets pane of a project's screen.
+    /// A row of the Tasks pane of a project's screen.
     TicketRow(usize),
-    /// An entry of a list open over a ticket (its state, folders, what it waits for).
+    /// An entry of a list open over a task (its folders, what it waits for).
     TicketPickRow(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
@@ -367,9 +367,9 @@ pub enum Mode {
     Changes,
     /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
     Handoff,
-    /// A list open over a ticket: its state, its folders or what it waits for (`tk.pick`).
+    /// A list open over a task: its folders or what it waits for (`tk.pick`).
     TicketPick,
-    /// The squads a ticket can be handed to (`sq`).
+    /// The hand-over popup: the squads a task can be handed to, and its terms (`sq`).
     SquadPick,
     /// A small list over the Squads tab: a model, an agent, where a step sends the work back, what to describe
     /// (`sqt.choice`).
@@ -1308,7 +1308,9 @@ impl App {
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
         }
-        // A ticket added by `platoon ticket add` shows without a restart.
+        // A project's tasks still under the old file names are moved once no leader of it runs.
+        self.move_old_task_files();
+        // A task added by `platoon task add` shows without a restart.
         self.refresh_tickets();
 
         // The background sessions running now, by the job id a parked session names (`Proc::moved_to`).
@@ -1681,6 +1683,8 @@ impl App {
             }
             // Leaving the folder picker of a ticket goes back to its folders.
             (Action::Cancel, Mode::Picker) if self.picker.ticket.is_some() => self.mode = Mode::TicketPick,
+            // Leaving the lands-on box goes back to the hand-over popup.
+            (Action::Cancel, Mode::ProjectName) if matches!(self.name_box.purpose, NamePurpose::LandsOn(_)) => self.mode = Mode::SquadPick,
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
                     let project = self.picker.project.clone();
@@ -3029,8 +3033,7 @@ impl App {
                     Some(Hit::TicketRow(i)) => self.click_ticket_row(i),
                     Some(Hit::TicketPickRow(i)) if i == self.tk.pick.selected => self.act(Action::Confirm),
                     Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
-                    Some(Hit::SquadRow(i)) if i == self.sq.pick_selected => self.act(Action::Confirm),
-                    Some(Hit::SquadRow(i)) => self.sq.pick_selected = i,
+                    Some(Hit::SquadRow(i)) => self.click_hand_row(i),
                     Some(Hit::SquadEntry(i)) => self.click_squad(i),
                     Some(Hit::SquadView(agents)) => self.show_squad_view(if agents { SqView::Agents } else { SqView::Squads }),
                     Some(Hit::SquadDetail(i)) => self.click_squad_row(i),

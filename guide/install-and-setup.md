@@ -7,8 +7,8 @@
   your sessions with it and reads its files (see [What platoon changes](what-platoon-changes.md)).
 - Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
-- `git`, for [tickets handed to squads](tickets-and-squads.md#handing-a-ticket-to-a-squad) (they work in git
-  worktrees) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
+- `git`, for [tasks handed to squads](tasks-and-squads.md#handing-a-task-to-a-squad) (they work in git
+  worktrees, or on a branch of your checkout) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
   without it.
 
 ## Install
@@ -49,7 +49,7 @@ first, as `settings.json.platoon-bak` beside it, and leaves everything else in i
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](projects.md) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](projects.md) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions |
 | Notes updates | Lets platoon [keep a project's notes up to date](projects.md#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional |
-| Tickets skill | Adds [`/to-tickets`](tickets-and-squads.md#making-tickets-from-a-conversation) to Claude Code, which turns a session into tickets. Optional. Unlike the others it is a file, not a setting (see [The tickets skill](#the-tickets-skill)) |
+| Tasks skill | Adds [`/to-tickets`](tasks-and-squads.md#making-tasks-from-a-conversation) to Claude Code, which turns a session into tasks. Optional. Unlike the others it is a file, not a setting (see [The tasks skill](#the-tasks-skill)) |
 
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in
@@ -68,9 +68,9 @@ run `platoon setup` once more to add it.
 If you run setup from a build folder (a path with `/target/` in it), it warns you: the hooks would point at a binary
 that moves. Install platoon first, then run `platoon setup` again.
 
-### The tickets skill
+### The tasks skill
 
-The Tickets skill step writes `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or
+The Tasks skill step writes `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or
 `CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder):
 
 - When platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly.
@@ -139,7 +139,7 @@ where it is, so you can run it again.
 2. **Your own data.** If the config folder is there, it asks:
 
    ```
-   Also delete your projects, notes, tickets and settings? [y/N]
+   Also delete your projects, notes, tasks and settings? [y/N]
    ```
 
    The answer is "no" unless you say yes: the folder is kept, and the end says how to delete it later.
@@ -158,14 +158,14 @@ where it is, so you can run it again.
    `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment
    variables as everywhere else decide where these are (`PLATOON_CONFIG_DIR`, `PLATOON_CACHE_DIR`, `XDG_CONFIG_HOME`,
    `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`).
-6. **Ticket worktrees and branches** are never deleted: they may hold work you want. Each one still there is listed
+6. **Task worktrees and branches** are never deleted: they may hold work you want. Each one still there is listed
    with the commands that remove it once you no longer need it, for example:
 
    ```
-   Ticket worktrees and branches (never deleted: remove each once you no longer need its work):
+   Task worktrees and branches (never deleted: remove each once you no longer need its work):
      #3 (app):
-       git -C /home/you/app worktree remove /home/you/app-worktrees/ticket-3
-       git -C /home/you/app branch -D ticket/3
+       git -C /home/you/app worktree remove /home/you/app-worktrees/task-3
+       git -C /home/you/app branch -D task/3
    ```
 
    `git worktree remove` refuses a worktree with changes not yet committed, so nothing is lost by accident.
@@ -176,7 +176,7 @@ Running it again is harmless: it says "Nothing of platoon's was left to remove."
 
 | Flag | What it does |
 | --- | --- |
-| `--all` | Also deletes your projects, notes, tickets and settings, without asking |
+| `--all` | Also deletes your projects, notes, tasks and settings, without asking |
 | `--stop-sessions` | Stops the sessions platoon is running without asking. `--all` doesn't do this: it has to be said |
 | `--help` | Says what it does and its flags |
 

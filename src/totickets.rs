@@ -231,7 +231,7 @@ pub fn remove(root: &Path, config: &Path) -> Result<bool, String> {
 
 const SQUADS_USAGE: &str = "usage: platoon squads --kinds [--json]
   --kinds   each squad's name and what it can do
-            (the /to-tickets skill reads this to shape tickets; it never picks a squad)";
+            (the /to-tickets skill reads this to shape tasks; it never picks a squad)";
 
 /// `platoon squads ...`. Returns the exit code.
 pub fn squads_cli(args: &[String], config: &Path, out: &mut dyn io::Write, err: &mut dyn io::Write) -> i32 {
@@ -304,7 +304,7 @@ mod tests {
             "Never start it unasked.",
             "only when this session belongs to a platoon project (its notes were given at session start)",
             "agreed work is being left for later rather than done in this conversation",
-            "ask once whether they want tickets for it",
+            "ask once whether they want tasks for it",
             "use this skill only after a yes",
             "After a no, say in one line that they can type /to-tickets any time",
             "do not offer again in this conversation",
@@ -313,16 +313,16 @@ mod tests {
         }
         // Its own platoon commands need no permission prompt (Claude Code's `allowed-tools`, as a YAML list), and
         // nothing else is pre-allowed.
-        assert!(front.ends_with("allowed-tools:\n  - \"Bash(platoon ticket:*)\"\n  - \"Bash(platoon squads:*)\""), "{front}");
+        assert!(front.ends_with("allowed-tools:\n  - \"Bash(platoon task:*)\"\n  - \"Bash(platoon squads:*)\""), "{front}");
         assert_eq!(front.matches("Bash(").count(), 2, "{front}");
         // Every command in it is a `platoon ticket` or `platoon squads` one, so those two rules cover them all.
         for block in body.split("```sh\n").skip(1) {
             let cmd = block.lines().next().unwrap();
-            assert!(cmd.starts_with("platoon ticket ") || cmd.starts_with("platoon squads "), "{cmd}");
+            assert!(cmd.starts_with("platoon task ") || cmd.starts_with("platoon squads "), "{cmd}");
         }
         // The first command is the project check, and a failure stops it.
         let first = body.find("```sh\n").unwrap() + 6;
-        assert!(body[first..].starts_with("platoon ticket where --session \"$CLAUDE_CODE_SESSION_ID\"\n"), "{}", &body[first..first + 80]);
+        assert!(body[first..].starts_with("platoon task where --session \"$CLAUDE_CODE_SESSION_ID\"\n"), "{}", &body[first..first + 80]);
         assert!(body.find("## 1.").unwrap() < first && first < body.find("## 2.").unwrap());
         let step1 = &body[body.find("## 1.").unwrap()..body.find("## 2.").unwrap()];
         assert!(step1.contains("If it fails, tell the user the line it printed and stop. Do nothing else"), "{step1}");
@@ -335,7 +335,7 @@ mod tests {
         let body = SKILL;
         // Kinds of work, never a squad.
         assert!(body.contains("platoon squads --kinds") && body.contains("Never pick a squad"), "squads");
-        assert!(body.contains("either should be able to take the ticket"), "two squads of one kind");
+        assert!(body.contains("either should be able to take the task"), "two squads of one kind");
         // The shape.
         for want in [
             "fits in one fresh session",
@@ -362,9 +362,9 @@ mod tests {
         // Writing: through platoon only, blockers first, with the numbers it printed, the session's folders.
         let w = &body[write..];
         for want in [
-            "platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\"",
+            "platoon task add --from-session \"$CLAUDE_CODE_SESSION_ID\"",
             "--waits-for \"3\"",
-            "each ticket after the tickets it waits for",
+            "each task after the tasks it waits for",
             "use those printed numbers",
             "every working folder this session has",
             "--folder",
@@ -379,7 +379,7 @@ mod tests {
         let block = &block[..block.find("```").unwrap()];
         let lines: Vec<&str> = block.lines().collect();
         assert!(
-            lines[0].starts_with("platoon ticket add --from-session \"$CLAUDE_CODE_SESSION_ID\" ")
+            lines[0].starts_with("platoon task add --from-session \"$CLAUDE_CODE_SESSION_ID\" ")
                 && lines[0].ends_with(" <<'PLATOON_TICKET_BODY'"),
             "{block}"
         );
@@ -393,7 +393,7 @@ mod tests {
         }
         assert!(!w.contains("--project \""), "never names a project itself");
         // Every argument quoted: each value after a flag in the example is in double quotes.
-        let line = w.lines().find(|l| l.starts_with("platoon ticket add")).unwrap();
+        let line = w.lines().find(|l| l.starts_with("platoon task add")).unwrap();
         let words: Vec<&str> = line.split(' ').collect();
         for (i, word) in words.iter().enumerate() {
             if word.starts_with("--") && i + 1 < words.len() && !words[i + 1].starts_with("--") {
@@ -403,7 +403,7 @@ mod tests {
         // Stops on an error, and never touches platoon's files.
         assert!(body.contains("If any `platoon` command fails, stop there, show the user what it printed"));
         assert!(body.contains("Never write, edit or\ndelete platoon's own files"));
-        for bad in [".config/platoon", "tickets.json\"", "Edit the", "edit tickets.json", "Write tool"] {
+        for bad in [".config/platoon", "tasks.json\"", "Edit the", "edit tasks.json", "Write tool"] {
             assert!(!body.contains(bad), "{bad:?}");
         }
         // The end: the numbers, where they are, and that a squad is picked there.

@@ -1,20 +1,65 @@
-//! Squads inside the app: handing a ticket to a squad (`a`, a small picker), starting its leader in a platoon host
-//! (with a worktree for each git folder), the split view of a ticket beside its live leader session, continuing a
-//! leader that isn't running, letting a squad publish (`p`), stopping a cancelled ticket's leader, and keeping
-//! leader sessions out of every list of the user's own sessions (`leader_ids`, the one place that decides it).
-//! The squads themselves and everything that can be worked out without the app are in `squads.rs`.
+//! Squads inside the app: handing a task to a squad (`S`: the hand-over popup, with the squads by name, how much the
+//! squad does on its own and, per git folder, how it works there and where the work lands), starting its leader in a
+//! platoon host (with a copy of each git folder: a worktree, or a new branch in the user's own checkout when the task
+//! says so), the split view of a task beside its live leader session, continuing a leader that isn't running, letting
+//! a squad publish (`p`), stopping a cancelled task's leader, and keeping leader sessions out of every list of the
+//! user's own sessions (`leader_ids`, the one place that decides it). The squads themselves and everything that can be
+//! worked out without the app are in `squads.rs`.
 
 use super::*;
 use crate::ai::Request;
 use crate::instructions;
-use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, LeaderSetup, Place, Squad};
-use crate::tickets::{AgentNames, HandoverKind, Leader, State, Ticket, Tickets, Worktree};
+use crate::squads::{self, AfterCheck, Check, FolderFact, Launch, LeaderSetup, Place, Squad, Terms, WorkPlan};
+use crate::tickets::{AgentNames, Autonomy, HandoverKind, How, Leader, State, Ticket, Tickets, WorksOn, Worktree};
 use std::collections::HashSet;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::SystemTime;
 
 /// How long the commander's check may take before it is given up on (and nothing is handed over).
 const COMMANDER_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// How long the hand-over popup gives git, all its folders together, to say each repository's default branch and
+/// whether its checkout is clean (on the UI thread, once, when the popup opens).
+const HAND_BUDGET: Duration = Duration::from_millis(2500);
+
+/// One of the task's folders in the hand-over popup: how the squad works there, and the branch the work lands on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FolderLine {
+    pub folder: String,
+    /// Its name, as the line calls it ("shop").
+    pub name: String,
+    /// In a git repository (else the line only says the folder is used as it is).
+    pub git: bool,
+    pub how: How,
+    pub lands_on: String,
+    /// Why "a new branch in your checkout" isn't offered for it just now (None: it is).
+    pub no_branch: Option<String>,
+}
+
+impl FolderLine {
+    /// The line's words after its name: "a copy on task/5, lands on main".
+    pub fn words(&self, branch: &str) -> String {
+        if !self.git {
+            return "used as it is (not in git)".into();
+        }
+        let how = match self.how {
+            How::Worktree => format!("a copy on {branch}"),
+            How::Branch => format!("a new branch {branch} in your checkout"),
+        };
+        if self.lands_on.is_empty() { how } else { format!("{how}, lands on {}", self.lands_on) }
+    }
+}
+
+/// The hand-over popup's lines as the user has them (the squads are `SquadState::pick`): how much the squad does on
+/// its own, one line per folder, and the row the cursor is on (the squads first, then "On its own", then the folders).
+#[derive(Clone, Debug, Default)]
+pub struct HandForm {
+    pub autonomy: Autonomy,
+    pub folders: Vec<FolderLine>,
+    pub cursor: usize,
+    /// The task's branch, as the lines name it.
+    pub branch: String,
+}
 
 /// What is out while a ticket is being handed to a squad, off the UI thread, in this order: the commander's check,
 /// then the worktrees. Then the leader starts (on the UI thread: it only waits for its host to be ready).
@@ -95,12 +140,14 @@ pub fn split_areas(w: u16, h: u16) -> SplitAreas {
 
 /// Everything about squads the app keeps.
 pub struct SquadState {
-    /// The ticket the squad picker is open for.
+    /// The task the hand-over popup is open for.
     pub pick_ticket: u32,
-    /// The squads the picker lists (every one that can be handed a ticket, as they were when it opened), and the
+    /// The squads the popup lists (every one that can be handed a task, as they were when it opened), and the
     /// picked one.
     pub pick: Vec<Squad>,
     pub pick_selected: usize,
+    /// The popup's other lines.
+    pub form: HandForm,
     /// The ticket whose leader the attached view is showing beside it (the split view).
     pub split: Option<u32>,
     /// Every leader session of every ticket: never shown with the user's own sessions.
@@ -133,6 +180,7 @@ impl SquadState {
             pick_ticket: 0,
             pick: Vec::new(),
             pick_selected: 0,
+            form: HandForm::default(),
             split: None,
             leaders: HashSet::new(),
             stamps: Vec::new(),
@@ -216,11 +264,11 @@ impl App {
         self.ticket(number).and_then(|t| t.leader()).is_some_and(|l| self.leader_host(&l.session).is_some())
     }
 
-    // ---- handing a ticket to a squad --------------------------------------------------------------------------
+    // ---- handing a task to a squad ----------------------------------------------------------------------------
 
-    /// `a` on a ticket: the squad picker, unless the ticket can't go to a squad now (said in one plain line).
+    /// `S` on a task: the hand-over popup, unless the task can't go to a squad now (said in one plain line).
     pub(super) fn ask_hand_to_squad(&mut self, number: u32) {
-        let Some(t) = self.ticket(number) else { return };
+        let Some(t) = self.ticket(number).cloned() else { return };
         let why = if let Some(busy) = &t.busy {
             Some(format!("#{number}: {busy}"))
         } else if self.open_project().is_some_and(|p| p.archived) {
@@ -228,15 +276,15 @@ impl App {
         } else if t.queued.is_some() {
             Some(format!("#{number} is waiting for a free squad already. To take it out of the line, cancel it with c."))
         } else if t.state != State::New {
-            Some(format!("#{number} is {}. Only a New ticket can be handed to a squad.", t.state.label()))
-        } else if let Some(first) = crate::tickets::waiting_for(t, self.tickets()).first() {
+            Some(format!("#{number} is {}. Only a task that hasn't started can be handed to a squad.", t.state.label()))
+        } else if let Some(first) = crate::tickets::waiting_for(&t, self.tickets()).first() {
             Some(format!("#{number} waits for #{first}, which isn't Done yet."))
+        } else if let Some(f) = t.folders.iter().find(|f| !Path::new(f).is_dir()) {
+            Some(format!("{} doesn't exist any more. Press f to change #{number}'s folders.", dirs::tilde(f, &self.home)))
         } else {
-            // No folder at all is fine: the squad works in the ticket's own work folder then.
-            t.folders
-                .iter()
-                .find(|f| !Path::new(f).is_dir())
-                .map(|f| format!("{} doesn't exist any more. Press f to change #{number}'s folders.", dirs::tilde(f, &self.home)))
+            // No folder at all is fine: the squad works in the task's own folder then. A folder not in git takes one
+            // task at a time: two squads in one folder would write over each other.
+            self.folder_taken(number, &t)
         };
         if let Some(why) = why {
             self.notify(why);
@@ -248,15 +296,130 @@ impl App {
             self.notify("There is no squad to hand it to: the squads' files can't be read (see the Squads tab).");
             return;
         }
+        self.sq.form = self.hand_form(number, &t);
         self.sq.pick = pick;
         self.sq.pick_ticket = number;
         self.sq.pick_selected = 0;
         self.mode = Mode::SquadPick;
     }
 
+    /// A folder of `t` that isn't in git and that another open task (Working or Needs you, in any project) already
+    /// works in: the refusal, naming that task.
+    fn folder_taken(&self, number: u32, t: &Ticket) -> Option<String> {
+        let mine = self.open_project.clone().unwrap_or_default();
+        for f in t.folders.iter().filter(|f| !squads::in_git(Path::new(f))) {
+            let other = self
+                .every_ticket()
+                .iter()
+                .find(|(p, o)| !(*p == mine && o.number == number) && crate::tickets::is_open(o) && o.folders.contains(f));
+            if let Some((p, o)) = other {
+                let whose = if *p == mine { String::new() } else { format!(" (in {})", self.project_name_of(p)) };
+                return Some(format!(
+                    "#{}{whose} already works in {}, which isn't in git: one task at a time there. Wait until it is done.",
+                    o.number,
+                    squads::folder_name(f)
+                ));
+            }
+        }
+        None
+    }
+
+    /// A project's name for a notice, by id (the tasks in no project: "no project").
+    fn project_name_of(&self, id: &str) -> String {
+        if id == crate::tickets::NO_PROJECT_ID {
+            return "no project".into();
+        }
+        self.projects.get(id).map(|p| p.name.clone()).unwrap_or_else(|| id.to_string())
+    }
+
+    /// The hand-over popup's lines for task `t`, pre-filled: how much the squad does on its own as the task says (else
+    /// the project's default), and for each git folder how it works there and what the work lands on as the task says
+    /// (else a copy, and the repository's default branch, found read-only), with "a new branch in your checkout" offered
+    /// only when nothing else works in that checkout.
+    fn hand_form(&self, number: u32, t: &Ticket) -> HandForm {
+        let deadline = Instant::now() + HAND_BUDGET;
+        let git = self.git_program.clone();
+        let autonomy = t.autonomy.clone().unwrap_or_else(|| self.open_project().map(|p| p.autonomy_default.clone()).unwrap_or_default());
+        let folders = t
+            .folders
+            .iter()
+            .map(|f| {
+                let name = squads::folder_name(f);
+                let in_git = squads::in_git(Path::new(f));
+                let saved = t.works_on_in(f);
+                let mut lands_on = saved.map(|w| w.lands_on.trim().to_string()).unwrap_or_default();
+                if lands_on.is_empty() && in_git {
+                    lands_on = crate::gitfacts::default_branch(&git, Path::new(f), deadline).unwrap_or_default();
+                }
+                let no_branch = if in_git { self.branch_option_blocked(number, f, &name, deadline) } else { None };
+                let how = match saved.map(|w| w.how).unwrap_or_default() {
+                    How::Branch if no_branch.is_none() => How::Branch,
+                    _ => How::Worktree,
+                };
+                FolderLine { folder: f.clone(), name, git: in_git, how, lands_on, no_branch }
+            })
+            .collect();
+        HandForm { autonomy, folders, cursor: 0, branch: t.branch() }
+    }
+
+    /// Why task `number` can't work in `folder` (a git checkout) as a new branch there: it has changes not yet
+    /// committed, another open task works there as a branch already, or a session of the user's is running in it.
+    /// None: it can.
+    fn branch_option_blocked(&self, number: u32, folder: &str, name: &str, deadline: Instant) -> Option<String> {
+        match crate::gitfacts::is_clean(&self.git_program, Path::new(folder), deadline) {
+            Some(true) => {}
+            Some(false) => return Some(format!("{name} has changes not yet committed")),
+            None => return Some(format!("git couldn't say in time whether {name} has changes not yet committed")),
+        }
+        let mine = self.open_project.clone().unwrap_or_default();
+        if let Some((p, o)) = self
+            .every_ticket()
+            .iter()
+            .find(|(p, o)| !(*p == mine && o.number == number) && crate::tickets::is_open(o) && o.branch_in_checkout(folder))
+        {
+            let whose = if *p == mine { String::new() } else { format!(" (in {})", self.project_name_of(p)) };
+            return Some(format!("#{}{whose} already works in {name} on a branch", o.number));
+        }
+        let in_it = |d: &str| !d.is_empty() && (d == folder || Path::new(d).starts_with(folder));
+        if self.sessions.iter().any(|s| !s.procs.is_empty() && in_it(&s.cwd)) || self.hosts.iter().any(|h| in_it(&h.dir)) {
+            return Some(format!("a session of yours is running in {name}"));
+        }
+        None
+    }
+
+    /// How many rows the hand-over popup has: the squads, "On its own", and one per folder.
+    pub fn hand_rows(&self) -> usize {
+        self.sq.pick.len() + 1 + self.sq.form.folders.len()
+    }
+
+    /// The folder line the cursor is on, if it is on one.
+    pub fn hand_folder_at_cursor(&self) -> Option<usize> {
+        self.sq.form.cursor.checked_sub(self.sq.pick.len() + 1).filter(|i| *i < self.sq.form.folders.len())
+    }
+
+    /// The cursor is on the "On its own" line.
+    pub fn hand_on_autonomy(&self) -> bool {
+        self.sq.form.cursor == self.sq.pick.len()
+    }
+
+    /// Moving the cursor never changes the picked squad: the user may walk down past the squads to the lines and keep
+    /// the one they picked (space on a squad picks it; enter on a squad picks it and hands over).
     pub(super) fn move_squad_pick(&mut self, delta: i32) {
-        let last = self.sq.pick.len().saturating_sub(1) as i32;
-        self.sq.pick_selected = (self.sq.pick_selected as i32 + delta).clamp(0, last) as usize;
+        let last = self.hand_rows().saturating_sub(1) as i32;
+        self.sq.form.cursor = (self.sq.form.cursor as i32 + delta).clamp(0, last) as usize;
+    }
+
+    /// A click on row `i` of the popup: the cursor goes there, and a squad is picked by it; a second click on the same
+    /// row does what enter does on a squad (hands it over) and what space does on a line (changes it).
+    pub(super) fn click_hand_row(&mut self, i: usize) {
+        if i == self.sq.form.cursor {
+            if i < self.sq.pick.len() { self.act(Action::Confirm) } else { self.hand_change() }
+        } else {
+            self.sq.form.cursor = i.min(self.hand_rows().saturating_sub(1));
+            if i < self.sq.pick.len() {
+                self.sq.pick_selected = i;
+            }
+        }
     }
 
     pub(super) fn squad_pick_key(&mut self, key: KeyEvent) {
@@ -265,22 +428,98 @@ impl App {
             KeyCode::Esc => self.act(Action::Cancel),
             KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
             KeyCode::Enter => self.act(Action::Confirm),
-            KeyCode::Up => self.move_squad_pick(-1),
-            KeyCode::Down => self.move_squad_pick(1),
+            KeyCode::Up | KeyCode::Char('k') => self.move_squad_pick(-1),
+            KeyCode::Down | KeyCode::Char('j') => self.move_squad_pick(1),
+            KeyCode::Char(' ') | KeyCode::Left | KeyCode::Right => self.hand_change(),
+            KeyCode::Char('l') => self.edit_lands_on(),
             _ => {}
         }
     }
 
-    /// Enter in the squad picker: the ticket goes to that squad.
+    /// Space on a row of the popup: on a squad, it is picked; the next level of "On its own"; a copy or a new branch
+    /// in the checkout for a folder (when that is offered: otherwise the reason, in one line).
+    fn hand_change(&mut self) {
+        if self.sq.form.cursor < self.sq.pick.len() {
+            self.sq.pick_selected = self.sq.form.cursor;
+            return;
+        }
+        if self.hand_on_autonomy() {
+            self.sq.form.autonomy = self.sq.form.autonomy.next();
+            return;
+        }
+        let Some(i) = self.hand_folder_at_cursor() else { return };
+        let line = &self.sq.form.folders[i];
+        if !line.git {
+            return self.notify(format!("{} isn't in git: it is used as it is.", line.name));
+        }
+        if let Some(why) = &line.no_branch {
+            return self.notify(format!("A new branch in your checkout isn't offered for {} just now: {why}.", line.name));
+        }
+        let line = &mut self.sq.form.folders[i];
+        line.how = match line.how {
+            How::Worktree => How::Branch,
+            How::Branch => How::Worktree,
+        };
+    }
+
+    /// `l` on a folder's line: the box for the branch the work lands on.
+    fn edit_lands_on(&mut self) {
+        let Some(i) = self.hand_folder_at_cursor() else {
+            return self.notify("Move to a folder's line first: l changes the branch its work lands on.");
+        };
+        if !self.sq.form.folders[i].git {
+            return self.notify(format!("{} isn't in git, so its work lands on no branch.", self.sq.form.folders[i].name));
+        }
+        self.open_name_box(NamePurpose::LandsOn(i));
+    }
+
+    /// Enter in the lands-on box: the branch must be one git finds in that repository; the box stays open otherwise.
+    pub(super) fn save_lands_on(&mut self, i: usize) {
+        let typed = self.name_box.input.trim().to_string();
+        let Some(line) = self.sq.form.folders.get(i).cloned() else {
+            self.mode = Mode::SquadPick;
+            return;
+        };
+        if typed.is_empty() {
+            return self.notify("Say which branch the work lands on.");
+        }
+        if !crate::gitfacts::branch_exists(&self.git_program, Path::new(&line.folder), &typed, Instant::now() + HAND_BUDGET) {
+            return self.notify(format!("There is no branch {typed} in {}.", line.name));
+        }
+        self.sq.form.folders[i].lands_on = typed;
+        self.mode = Mode::SquadPick;
+    }
+
+    /// Enter in the hand-over popup (on a squad: that one is picked first): what the lines say is written on the task
+    /// (so a hand-over that doesn't happen keeps it for the next try), then the task goes to the picked squad.
     pub(super) fn take_squad_pick(&mut self) {
+        if self.sq.form.cursor < self.sq.pick.len() {
+            self.sq.pick_selected = self.sq.form.cursor;
+        }
         let Some(squad) = self.sq.pick.get(self.sq.pick_selected).cloned() else { return };
         if let Some(first) = crate::squadfile::problems(&squad, &self.agent_library()).into_iter().next() {
-            // The picker stays open: another squad can be picked.
+            // The popup stays open: another squad can be picked.
             self.notify(format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name));
             return;
         }
+        let number = self.sq.pick_ticket;
+        let autonomy = self.sq.form.autonomy.clone();
+        let works_on: Vec<WorksOn> = self
+            .sq
+            .form
+            .folders
+            .iter()
+            .filter(|l| l.git)
+            .map(|l| WorksOn { folder: l.folder.clone(), how: l.how, lands_on: l.lands_on.clone() })
+            .collect();
+        if let Some(store) = self.tk.store.as_mut()
+            && let Err(e) = store.set_terms(number, &autonomy, &works_on)
+        {
+            self.report_squad_error(e);
+            return;
+        }
         self.mode = Mode::List;
-        self.hand_to_squad(self.sq.pick_ticket, squad);
+        self.hand_to_squad(number, squad);
     }
 
     /// Hand the ticket to `squad`: the commander checks first. When the commander has already said this very squad
@@ -536,9 +775,10 @@ impl App {
         self.reread_tickets();
     }
 
-    /// A worktree for each git folder, off the UI thread (git can be slow on a big repository or a network folder);
-    /// the ticket shows "Making the worktree…" meanwhile. Whatever the squad: a ticket with no folder goes straight on
-    /// to its leader, in its work folder.
+    /// A copy of each git folder (a worktree from the branch the work lands on, or the task's branch made in the user's
+    /// own checkout when the task says so), off the UI thread (git can be slow on a big repository or a network
+    /// folder); the task shows "Making its copy of the folder…" meanwhile. Whatever the squad: a task with no folder
+    /// goes straight on to its leader, in its own folder.
     fn make_worktrees(&mut self, project: &str, number: u32, squad: Squad) {
         let Some(t) = self.ticket_on_disk(project, number) else { return };
         if t.folders.is_empty() {
@@ -547,7 +787,7 @@ impl App {
         let git = self.git_program.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(Step::Worktrees(squads::prepare_worktrees(&git, &t.folders, number, &t.worktrees)));
+            let _ = tx.send(Step::Worktrees(squads::prepare_work(&git, &t.folders, &WorkPlan::of(&t))));
         });
         self.begin_stage(project, number, squad, Stage::Worktrees, rx);
     }
@@ -561,7 +801,7 @@ impl App {
             Ok(w) => w,
             Err(e) => {
                 let notice = format!("Couldn't hand #{number} to the {} squad: {e}", squad.name);
-                self.not_handed(project, number, &squad, HandoverKind::NotStarted, &format!("Couldn't make the worktree: {e}"), notice);
+                self.not_handed(project, number, &squad, HandoverKind::NotStarted, &format!("Couldn't set up where it works: {e}"), notice);
                 return;
             }
         };
@@ -569,17 +809,17 @@ impl App {
             return;
         }
         let session = squads::new_session_id();
-        // Where it works: the worktrees just made, the folders as they are, or the ticket's own work folder.
-        let place = match self.ticket_on_disk(project, number) {
+        // Where it works: the worktrees just made, the folders as they are, or the task's own folder; and its terms.
+        let (place, terms) = match self.ticket_on_disk(project, number) {
             Some(mut t) => {
                 t.worktrees = worktrees.clone();
-                Place::of(&t)
+                (Place::of(&t), Terms::of(&t))
             }
             None => return,
         };
         let work = crate::tickets::work_dir(&self.config, project, number);
         if let Err(e) = std::fs::create_dir_all(&work) {
-            let notice = format!("Couldn't start the squad: couldn't make the ticket's work folder ({e})");
+            let notice = format!("Couldn't start the squad: couldn't make the task's own folder ({e})");
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &notice, notice.clone());
         }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
@@ -591,7 +831,7 @@ impl App {
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &says, format!("#{number} didn't start: {says}"));
         }
         let leader_setup = LeaderSetup::load(&self.config, &self.settings.get());
-        let launch = Launch::of(&crate::squadfile::Crew::of(&squad, &agents), &leader_setup, AgentNames::SquadRole, place);
+        let launch = Launch::of(&crate::squadfile::Crew::of(&squad, &agents), &leader_setup, AgentNames::SquadRole, place, &terms);
         let k = self.ticket_on_disk(project, number).map_or(0, |t| t.leaders.len()) + 1;
         let snapshot = match Tickets::open(&self.config, project).save_snapshot(number, k, &launch.to_json()) {
             Ok(name) => name,
@@ -620,6 +860,10 @@ impl App {
         let body = Tickets::open(&self.config, project).body(&t);
         let project_name = self.projects.get(project).map(|p| p.name.clone()).unwrap_or_default();
         let first = squads::first_message(&t, &project_name, &body, place, &work.to_string_lossy());
+        let where_said = match self.projects.get(project) {
+            Some(p) => format!(" Open it from {}'s tasks.", p.name),
+            None => String::new(),
+        };
         // Beside the ticket only if the user is still on that project's screen and not in another session, and not
         // for a ticket that waited in the line (it starts by itself, while the user may be doing anything).
         let from_line = self.sq.from_line.remove(&(project.to_string(), number));
@@ -628,9 +872,8 @@ impl App {
             Ok(()) if show => {
                 self.notify(format!("#{number} is with the {} squad now. {} goes back to the project.", squad.name, self.back_label()))
             }
-            Ok(()) if from_line => self
-                .notify(format!("A squad is free: #{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
-            Ok(()) => self.notify(format!("#{number} is with the {} squad now. Open it from {project_name}'s tickets.", squad.name)),
+            Ok(()) if from_line => self.notify(format!("A squad is free: #{number} is with the {} squad now.{where_said}", squad.name)),
+            Ok(()) => self.notify(format!("#{number} is with the {} squad now.{where_said}", squad.name)),
             Err(e) => {
                 // Only a New ticket is ever handed to a squad: that is what it goes back to.
                 let _ = self.with_tickets(project, |s| s.forget_leader(number, &session, &State::New));
@@ -642,7 +885,7 @@ impl App {
 
     fn report_squad_error(&mut self, e: io::Error) {
         let why = e.to_string();
-        self.notify(format!("Couldn't save the ticket: {}", why.split(" (os error").next().unwrap_or(&why)));
+        self.notify(format!("Couldn't save the task: {}", why.split(" (os error").next().unwrap_or(&why)));
     }
 
     /// Continue ticket `number`'s current leader (the open project's) in a platoon host, beside the ticket. False,
@@ -665,9 +908,9 @@ impl App {
         let t = self.ticket_on_disk(project, number).ok_or_else(|| format!("#{number} isn't there any more"))?;
         let leader = t.leader().cloned().ok_or_else(|| format!("#{number} has no squad"))?;
         let launch = self.leader_launch(project, &leader, &t)?;
-        // The work folder is made again if it has gone (a leader continued after it was deleted by hand).
+        // The task's own folder is made again if it has gone (a leader continued after it was deleted by hand).
         let work = crate::tickets::work_dir(&self.config, project, number);
-        std::fs::create_dir_all(&work).map_err(|e| format!("couldn't make the ticket's work folder ({e})"))?;
+        std::fs::create_dir_all(&work).map_err(|e| format!("couldn't make the task's own folder ({e})"))?;
         let (dir, add_dirs) = squads::start_dirs(&t, launch.work_folder, &work.to_string_lossy())
             .ok_or_else(|| format!("#{number} has no folder to work in"))?;
         if !Path::new(&dir).is_dir() {
@@ -729,7 +972,7 @@ impl App {
         let squad = crate::squadfile::get(&self.config, &leader.squad)
             .ok_or_else(|| format!("the squad \"{}\" isn't there any more, or its file can't be read", leader.squad))?;
         let setup = LeaderSetup::load(&self.config, &self.settings.get());
-        Ok(Launch::of(&crate::squadfile::Crew::load(&self.config, &squad), &setup, leader.names, Place::of(t)))
+        Ok(Launch::of(&crate::squadfile::Crew::load(&self.config, &squad), &setup, leader.names, Place::of(t), &Terms::of(t)))
     }
 
     /// Enter on a ticket that has a leader: its session beside it, running or continued.
@@ -770,11 +1013,11 @@ impl App {
 
     // ---- letting it publish -----------------------------------------------------------------------------------
 
-    /// `p` on a ticket that is Ready to publish: the user's go-ahead is written on the ticket (Working again) and
-    /// the leader is told to go on.
+    /// `p` on a task that Needs you because its squad wants to publish: the user's go-ahead is written on the task
+    /// (Working again) and the leader is told to go on.
     pub(super) fn let_it_publish(&mut self, number: u32) {
         let Some(t) = self.ticket(number) else { return };
-        if t.state != State::Ready {
+        if !(t.state == State::Waiting && t.publish_wanted) {
             self.notify(format!("#{number} isn't waiting to publish anything."));
             return;
         }

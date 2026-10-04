@@ -1462,7 +1462,7 @@ mod tests {
         assert!(matches!(round, Round::Written { .. }), "{round:?}");
         assert_eq!(r.fake.calls(), 1);
         let sent = r.fake.stdin(1);
-        assert!(sent.contains("Ticket #1 (Coding squad):\n  Added the basket page on ticket/1.\n"), "{sent}");
+        assert!(sent.contains("Task #1 (Coding squad):\n  Added the basket page on ticket/1.\n"), "{sent}");
         assert!(!sent.contains("Socks are in.") && !sent.contains("#2"), "not Done: not sent: {sent}");
         assert!(!sent.contains("SECRET LEADER WORDS"), "the leader's conversation is never read: {sent}");
         // Sent once: the next update has nothing new, and makes no call.
@@ -1475,7 +1475,7 @@ mod tests {
         r.fake.reply_default(r#"{"sections":[{"heading":"Status","body":"The basket page and the socks are in."}]}"#);
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
         assert!(
-            r.fake.stdin(3).contains("Ticket #2 (Coding squad):\n  Socks are in.\n") && !r.fake.stdin(3).contains("Ticket #1"),
+            r.fake.stdin(3).contains("Task #2 (Coding squad):\n  Socks are in.\n") && !r.fake.stdin(3).contains("Task #1"),
             "{}",
             r.fake.stdin(3)
         );

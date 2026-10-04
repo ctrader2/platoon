@@ -438,8 +438,7 @@ mod tests {
         .unwrap();
         let text = r.prompt("lead-1").expect("the leader gets them");
         assert!(
-            text.starts_with("These are the notes of the project \"Web shop\" that your ticket belongs to")
-                && text.ends_with("Sell socks."),
+            text.starts_with("These are the notes of the project \"Web shop\" that your task belongs to") && text.ends_with("Sell socks."),
             "{text}"
         );
         assert_eq!(r.prompt("lead-1"), None);

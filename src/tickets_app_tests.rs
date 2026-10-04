@@ -107,10 +107,10 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     let (_w, mut app, _id) = on_the_project("t-panes");
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = draw(&mut term, &app);
-    let (s, tk, n) = (find(&term, "╭ Sessions ").unwrap(), find(&term, "╭ Tickets ").unwrap(), find(&term, "╭ Notes ").unwrap());
+    let (s, tk, n) = (find(&term, "╭ Sessions ").unwrap(), find(&term, "╭ Tasks ").unwrap(), find(&term, "╭ Notes ").unwrap());
     assert!(s.1 == tk.1 && tk.0 > s.0, "Tickets under Sessions, on the left: {shown}");
     assert!(n.0 == s.0 && n.1 > s.1 + 20, "Notes on the right: {shown}");
-    assert!(flat(&shown).contains("No tickets yet · n to make one"), "{shown}");
+    assert!(flat(&shown).contains("No tasks yet · n to make one"), "{shown}");
     assert_eq!(app.pane, Pane::Sessions);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Tickets);
@@ -170,7 +170,7 @@ fn the_project_screen_has_three_panes_and_tab_and_shift_or_ctrl_arrows_move_betw
     draw(&mut term, &app);
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
-    let tk = find(&term, "╭ Tickets ").unwrap();
+    let tk = find(&term, "╭ Tasks ").unwrap();
     let s = find(&term, "╭ Sessions ").unwrap();
     assert_eq!(buf[(tk.1 + 3, tk.0)].fg, t.accent);
     assert_ne!(buf[(s.1 + 3, s.0)].fg, t.accent);
@@ -228,7 +228,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // An empty title is refused and the box stays.
     key(&mut app, KeyCode::Char('n'));
     key(&mut app, KeyCode::Enter);
-    assert!(matches!(app.mode, Mode::ProjectName) && app.active_notice() == Some("A ticket needs a title"));
+    assert!(matches!(app.mode, Mode::ProjectName) && app.active_notice() == Some("A task needs a title"));
     typed(&mut app, "Log in with a link");
     key(&mut app, KeyCode::Enter);
     // Made: #1, New, the folder of the project's session, the template (which says how far).
@@ -238,7 +238,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // Then the editor list, for the ticket; enter runs the (stand-in) editor on the body.
     assert!(matches!(app.mode, Mode::PickEditor) && app.epick.ticket == Some(1));
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("Edit ticket #1 with"));
+    assert!(flat(&draw(&mut term, &app)).contains("Edit task #1 with"));
     key(&mut app, KeyCode::Enter);
     let start = Instant::now();
     while app.editing.is_some() && start.elapsed() < Duration::from_secs(10) {
@@ -252,7 +252,7 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     // The row is picked, in the Tickets pane.
     assert_eq!((app.pane, app.selected_ticket().map(|t| t.number)), (Pane::Tickets, Some(1)));
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#1 Log in with a link New Can start"), "{shown}");
+    assert!(shown.contains("#1 Log in with a link Can start"), "{shown}");
 }
 
 #[test]
@@ -302,7 +302,10 @@ fn a_project_with_no_sessions_makes_tickets_with_no_folder_yet() {
     assert_eq!(app.tk.open, Some(1));
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(flat(&shown).contains("Folders None: a squad works in its work folder"), "{shown}");
+    assert!(
+        flat(&shown).contains("State Needs a folder") && flat(&shown).contains("Works in its own folder (it has no folder of its own)"),
+        "{shown}"
+    );
 }
 
 #[test]
@@ -338,7 +341,7 @@ fn done_and_cancelled_are_folded_under_a_divider_and_come_back_up_when_new_again
     assert!(matches!(app.mode, Mode::Confirm(Confirm::CancelTicket { number: 3, squad: false, pid: None, .. })));
     let shown = flat(&draw(&mut term, &app));
     assert!(
-        shown.contains("Cancel ticket #3?")
+        shown.contains("Cancel task #3?")
             && shown.contains("No squad has had it, so it")
             && shown.contains("stays cancelled.")
             && shown.contains("y cancel it")
@@ -377,11 +380,16 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     add(&w, &mut app, &id, "Middle", &[]);
     add(&w, &mut app, &id, "Top", &[1, 2]);
     set_state(&w, &mut app, &id, 1, State::Done);
+    // With a folder: a task with none reads "Needs a folder" rather than "Can start".
+    let mut store = Tickets::open(&w.config, &id);
+    store.set_folders(2, &["/tmp".into()]).unwrap();
+    store.set_folders(3, &["/tmp".into()]).unwrap();
+    app.reload_for_test();
     key(&mut app, KeyCode::Tab);
     let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#2 Middle New Can start"), "{shown}");
-    assert!(shown.contains("#3 Top New Waits for #2"), "only the unfinished blocker: {shown}");
+    assert!(shown.contains("#2 Middle Can start"), "{shown}");
+    assert!(shown.contains("#3 Top Waits for #2"), "only the unfinished blocker: {shown}");
     let t = app.effective_theme().clone();
     let buf = buffer(&term);
     let (ry, rx) = find(&term, "Can start").unwrap();
@@ -399,7 +407,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     app.reload_for_test();
     draw(&mut term, &app);
     let buf = buffer(&term);
-    let (wy, wx) = find(&term, "Waiting on you").unwrap();
+    let (wy, wx) = find(&term, "Needs you").unwrap();
     assert_eq!((buf[(wx, wy)].fg, buf[(wx, wy)].bg), (t.warn, t.bg), "a squad's state, shown with its words");
     // A click on a row picks it; a click on the picked row opens it.
     let click = |app: &mut App, i: usize| {
@@ -424,7 +432,7 @@ fn rows_show_waits_for_and_ready_in_their_colors_and_the_picked_row_is_highlight
     // Once #2 is Done too, #3 is ready.
     set_state(&w, &mut app, &id, 2, State::Done);
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("#3 Top New Can start"), "{shown}");
+    assert!(shown.contains("#3 Top Can start"), "{shown}");
 }
 
 #[test]
@@ -438,7 +446,7 @@ fn blocked_by_is_picked_from_the_other_tickets_and_loops_are_refused() {
     assert!(matches!(app.mode, Mode::TicketPick) && app.tk.pick.kind == PickKind::BlockedBy);
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("[ ] #2 B · New") && !shown.contains("#1 A ·"), "{shown}");
+    assert!(shown.contains("[ ] #2 B · Waits for #1") && !shown.contains("#1 A ·"), "{shown}");
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.active_notice(), Some("Can't do that: #2 already waits for #1, so #1 can't wait for #2"));
     assert!(app.ticket(1).unwrap().blocked_by.is_empty());
@@ -447,7 +455,7 @@ fn blocked_by_is_picked_from_the_other_tickets_and_loops_are_refused() {
     // On #2: untick #1, tick it again.
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Char('b'));
-    assert!(flat(&draw(&mut term, &app)).contains("[x] #1 A · New"));
+    assert!(flat(&draw(&mut term, &app)).contains("[x] #1 A · Needs a folder"));
     key(&mut app, KeyCode::Enter);
     assert!(app.ticket(2).unwrap().blocked_by.is_empty());
     key(&mut app, KeyCode::Char(' '));
@@ -485,13 +493,13 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     assert!(f.contains("#2 Basket page"), "{shown}");
-    assert!(f.contains("State New · Waits for #1"), "{shown}");
+    assert!(f.contains("State Waits for #1"), "{shown}");
     assert!(!f.contains("How far") && !f.contains("merge request"), "no how-far line: {shown}");
     assert!(
-        f.contains(&format!("Folders {}", crate::dirs::tilde(&folder.to_string_lossy(), &home))) && f.contains("~/somewhere"),
+        f.contains(&format!("Works in {}", crate::dirs::tilde(&folder.to_string_lossy(), &home))) && f.contains("~/somewhere"),
         "home-abbreviated: {shown}"
     );
-    assert!(f.contains("Waits for #1 Base · New"), "{shown}");
+    assert!(f.contains("Waits for #1 Base · Needs a folder"), "{shown}");
     assert!(
         f.contains("What it should do") && f.contains("The basket keeps its items.") && !f.contains("**"),
         "the Markdown drawn: {shown}"
@@ -508,7 +516,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
         key(&mut app, KeyCode::Down);
     }
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("step 60") && !f.contains("step 1 ") && f.contains("State New"), "the fields stay: {f}");
+    assert!(f.contains("step 60") && !f.contains("step 1 ") && f.contains("State Waits for #1"), "the fields stay: {f}");
     key(&mut app, KeyCode::Char('g'));
     assert!(flat(&draw(&mut term, &app)).contains("The basket keeps its items."));
     // Rename and folders from the screen; `h` (how far, once) does nothing now.
@@ -528,7 +536,7 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
     key(&mut app, KeyCode::Char('G'));
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.ticket == Some(2));
-    assert!(flat(&draw(&mut term, &app)).contains("A folder for ticket #2"));
+    assert!(flat(&draw(&mut term, &app)).contains("A folder for task #2"));
     typed(&mut app, &folder.to_string_lossy());
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::TicketPick), "back in the folders");
@@ -548,14 +556,14 @@ fn the_ticket_screen_shows_every_field_and_scrolls_the_body() {
 fn a_ticket_added_from_outside_shows_on_the_next_refresh_and_a_corrupt_file_is_said_and_left_alone() {
     let (w, mut app, id) = on_the_project("t-outside");
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    assert!(flat(&draw(&mut term, &app)).contains("No tickets yet"));
+    assert!(flat(&draw(&mut term, &app)).contains("No tasks yet"));
     Tickets::open(&w.config, &id).add(NewTicket { title: "From the CLI".into(), ..Default::default() }).unwrap();
     app.refresh_for_test();
     assert!(flat(&draw(&mut term, &app)).contains("#1 From the CLI"));
     fs::write(tickets::path_in(&w.config, &id), "{ broken").unwrap();
     app.refresh_for_test();
     let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("tickets.json can't be read"), "{shown}");
+    assert!(shown.contains("The tasks file can't be read"), "{shown}");
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Char('n'));
     typed(&mut app, "x");
@@ -571,11 +579,13 @@ fn eighty_columns_keep_the_number_what_matters_most_whole_and_cut_the_title() {
     add(&w, &mut app, &id, "Second", &[1]);
     add(&w, &mut app, &id, "Third", &[]);
     set_state(&w, &mut app, &id, 3, State::Cancelled);
+    Tickets::open(&w.config, &id).set_folders(1, &["/tmp".into()]).unwrap();
+    app.reload_for_test();
     app.tk.unfolded = true;
     let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("Sessions") && f.contains("Tickets") && f.contains("Notes"), "{shown}");
+    assert!(f.contains("Sessions") && f.contains("Tasks") && f.contains("Notes"), "{shown}");
     assert!(f.contains("#1 A rather long") && f.contains("… Can start"), "the title is cut, not what it says: {shown}");
     assert!(f.contains("#2 Second Waits #1"), "the short words, so the title keeps room: {shown}");
     assert!(!f.contains("local") && !f.contains(" New"), "no how far, and the state shares one column with the rest: {shown}");

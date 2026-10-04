@@ -62,19 +62,19 @@ pub struct WtState {
     busy_dirs: Vec<PathBuf>,
 }
 
-/// The folder platoon made for ticket `number`'s worktree `w`: the `ticket-<N>` folder its path is in (the path
-/// itself when there is none).
+/// The folder platoon made for task `number`'s worktree `w`: the `task-<N>` (or `ticket-<N>`) folder its path is in
+/// (the path itself when there is none).
 fn worktree_root(w: &Worktree, number: u32) -> PathBuf {
-    let name = format!("ticket-{number}");
+    let names = [format!("task-{number}"), format!("ticket-{number}")];
     let path = Path::new(&w.path);
-    path.ancestors().find(|a| a.file_name().is_some_and(|n| n.to_string_lossy() == name)).unwrap_or(path).to_path_buf()
+    path.ancestors().find(|a| a.file_name().is_some_and(|n| names.iter().any(|x| *x == n.to_string_lossy()))).unwrap_or(path).to_path_buf()
 }
 
-/// The one line said when platoon has, by itself, removed ticket `number`'s worktrees after the work (`removed` of
+/// The one line said when platoon has, by itself, removed task `number`'s worktrees after the work (`removed` of
 /// them), or kept some for the first time because they have changes not yet committed (`kept`). A worktree kept
 /// before is not said again (it is looked at again each time platoon starts, in case the changes were committed).
-pub fn removal_notice(number: u32, removed: usize, kept: usize) -> Option<String> {
-    let branch = crate::squads::branch_name(number);
+/// `branch`: the task's branch, which stays.
+pub fn removal_notice(number: u32, branch: &str, removed: usize, kept: usize) -> Option<String> {
     let removed_part = match removed {
         0 => None,
         1 => Some(format!("Removed #{number}'s worktree (its branch {branch} is kept)")),
@@ -82,10 +82,10 @@ pub fn removal_notice(number: u32, removed: usize, kept: usize) -> Option<String
     };
     let kept_part = match (kept, removed_part.is_some()) {
         (0, _) => None,
-        (1, false) => Some(format!("Kept #{number}'s worktree: it has changes not yet committed (w on the ticket removes it)")),
-        (n, false) => Some(format!("Kept #{number}'s worktrees ({n}): they have changes not yet committed (w on the ticket removes them)")),
-        (1, true) => Some("kept one with changes not yet committed (w on the ticket removes it)".to_string()),
-        (n, true) => Some(format!("kept {n} with changes not yet committed (w on the ticket removes them)")),
+        (1, false) => Some(format!("Kept #{number}'s worktree: it has changes not yet committed (w on the task removes it)")),
+        (n, false) => Some(format!("Kept #{number}'s worktrees ({n}): they have changes not yet committed (w on the task removes them)")),
+        (1, true) => Some("kept one with changes not yet committed (w on the task removes it)".to_string()),
+        (n, true) => Some(format!("kept {n} with changes not yet committed (w on the task removes them)")),
     };
     match (removed_part, kept_part) {
         (None, None) => None,
@@ -188,6 +188,7 @@ impl App {
         let (project, number, anyway) = (out.project.clone(), out.number, *anyway);
         self.wt.removing = None;
         let mut store = Tickets::open(&self.config, &project);
+        let branch = store.get(number).map(Ticket::branch).unwrap_or_else(|| crate::tickets::task_branch(number));
         let mut refused = None;
         let (mut removed, mut newly_kept) = (0, 0);
         for (path, r) in &got {
@@ -214,11 +215,11 @@ impl App {
         if anyway {
             match refused {
                 Some(why) => self.notify(format!("#{number}'s worktree wasn't removed: {why}")),
-                None => self.notify(format!("#{number}'s worktree is removed. Its branch {} is kept.", crate::squads::branch_name(number))),
+                None => self.notify(format!("#{number}'s worktree is removed. Its branch {branch} is kept.")),
             }
         } else if !self.editor_holds(&project, number) {
             // (`v` on the ticket waited for this removal and is about to bring the worktree back: nothing to say.)
-            if let Some(line) = removal_notice(number, removed, newly_kept) {
+            if let Some(line) = removal_notice(number, &branch, removed, newly_kept) {
                 self.notify(line);
             }
         }
@@ -246,7 +247,7 @@ impl App {
             return true;
         }
         if self.wt.back.is_some() {
-            self.notify("platoon is bringing another ticket's worktree back just now. Try again in a moment.");
+            self.notify("platoon is bringing another task's worktree back just now. Try again in a moment.");
             return true;
         }
         let git = self.git_program.clone();
@@ -349,7 +350,7 @@ impl App {
         let Some(t) = self.ticket(number) else { return };
         if self.kept_worktrees(number).is_empty() {
             let why = if t.worktrees.iter().any(|w| w.removed.is_none()) && !t.state.closed() {
-                format!("#{number}'s worktree goes by itself once the ticket is Done or cancelled.")
+                format!("#{number}'s worktree goes by itself once the task is Done or cancelled.")
             } else {
                 format!("#{number} has no worktree kept after the work.")
             };
@@ -368,7 +369,8 @@ impl App {
         let opened_in = kept.iter().find_map(|w| w.opened_in.clone());
         let uncommitted =
             kept.iter().any(|w| w.kept_uncommitted || worktrees::uncommitted_quick(&self.git_program, Path::new(&w.path), ASK_BUDGET));
-        self.mode = Mode::Confirm(Confirm::RemoveWorktree { number, branch: crate::squads::branch_name(number), uncommitted, opened_in });
+        let branch = t.branch();
+        self.mode = Mode::Confirm(Confirm::RemoveWorktree { number, branch, uncommitted, opened_in });
     }
 
     /// Yes to "Remove #N's worktree anyway?": removed with its changes (the branch kept), off the UI thread.

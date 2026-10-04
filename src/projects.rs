@@ -109,6 +109,9 @@ pub struct Project {
     pub description: String,
     /// When that line was written, seconds since the epoch (0: never).
     pub description_at: u64,
+    /// How much a squad does on its own, as the hand-over popup starts for this project's tasks (`autonomy_default`
+    /// in the file; absent: it asks before anything others can see). The task itself keeps what was chosen.
+    pub autonomy_default: crate::tickets::Autonomy,
 }
 
 pub struct Projects {
@@ -281,6 +284,12 @@ impl Projects {
                     .unwrap_or_default(),
                 description: o.get("description").and_then(Value::as_str).map(|d| clean(d, crate::describe::MAX_CHARS)).unwrap_or_default(),
                 description_at: o.get("description_at").and_then(Value::as_u64).unwrap_or(0),
+                autonomy_default: o
+                    .get("autonomy_default")
+                    .and_then(Value::as_str)
+                    .filter(|a| !a.is_empty())
+                    .map(crate::tickets::Autonomy::from_id)
+                    .unwrap_or_default(),
                 name,
             });
         }
@@ -504,17 +513,19 @@ impl Projects {
         if notes.exists() {
             fs::copy(&notes, backup.join("project.md"))?;
         }
-        // The tickets too: the list and every body, as they are.
+        // The tasks too: the list and every body, as they are, under the names the project has them (the old
+        // `tickets.json` and `tickets/` until they are moved).
         let tickets = crate::tickets::path_in(&self.config, id);
         if tickets.exists() {
-            fs::copy(&tickets, backup.join("tickets.json"))?;
+            fs::copy(&tickets, backup.join(tickets.file_name().unwrap_or_default()))?;
         }
         let bodies = crate::tickets::bodies_dir(&self.config, id);
         if bodies.is_dir() {
-            fs::create_dir_all(backup.join("tickets"))?;
+            let name = bodies.file_name().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("tasks"));
+            fs::create_dir_all(backup.join(&name))?;
             for e in fs::read_dir(&bodies)?.flatten() {
                 if e.path().is_file() {
-                    fs::copy(e.path(), backup.join("tickets").join(e.file_name()))?;
+                    fs::copy(e.path(), backup.join(&name).join(e.file_name()))?;
                 }
             }
         }
@@ -750,6 +761,7 @@ mod tests {
         fs::create_dir_all(notes.parent().unwrap()).unwrap();
         fs::write(&notes, "# notes\nkeep me").unwrap();
         fs::write(crate::tickets::path_in(&d, &a), r#"{"next":2,"tickets":[]}"#).unwrap();
+        // (`path_in` names the new file, `tasks.json`, for a project with no old one.)
         fs::create_dir_all(crate::tickets::bodies_dir(&d, &a)).unwrap();
         fs::write(crate::tickets::bodies_dir(&d, &a).join("01-one.md"), "body").unwrap();
         p.delete(&a, &cache).unwrap();
@@ -757,8 +769,8 @@ mod tests {
         assert!(!d.join("projects").join(&a).exists(), "the notes folder is gone");
         let bak = cache.join("deleted-projects").join(&a);
         assert_eq!(fs::read_to_string(bak.join("project.md")).unwrap(), "# notes\nkeep me");
-        assert_eq!(fs::read_to_string(bak.join("tickets.json")).unwrap(), r#"{"next":2,"tickets":[]}"#);
-        assert_eq!(fs::read_to_string(bak.join("tickets").join("01-one.md")).unwrap(), "body");
+        assert_eq!(fs::read_to_string(bak.join("tasks.json")).unwrap(), r#"{"next":2,"tickets":[]}"#);
+        assert_eq!(fs::read_to_string(bak.join("tasks").join("01-one.md")).unwrap(), "body");
         let entry: Value = serde_json::from_str(&fs::read_to_string(bak.join("project.json")).unwrap()).unwrap();
         assert_eq!((entry["project"]["name"].as_str(), entry["sessions"].clone()), (Some("a"), json!(["s1"])));
         assert!(!saved(&d)["sessions"].as_object().unwrap().contains_key("s1"));

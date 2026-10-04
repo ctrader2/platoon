@@ -82,6 +82,8 @@ mod squadwork;
 mod stop_app_tests;
 mod summaries;
 #[cfg(test)]
+mod tasks_app_tests;
+#[cfg(test)]
 mod testkit;
 mod textbox;
 mod theme;
@@ -164,13 +166,16 @@ fn main() -> io::Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(uninstall_cli(&args));
         }
-        Some("ticket") => {
+        // `ticket` is the name it had: it still works, the same in every way.
+        Some("task" | "ticket") => {
             use std::io::IsTerminal;
             let args: Vec<String> = std::env::args().skip(2).collect();
             let cwd = std::env::current_dir().unwrap_or_default();
             let (mut out, mut err) = (io::stdout(), io::stderr());
             let terminal = io::stdin().is_terminal();
-            std::process::exit(tickets::cli(&args, &archive::config_dir(), &mut io::stdin().lock(), terminal, &cwd, &mut out, &mut err));
+            let (claude_root, cache, config) = (claude::claude_root(), usage::cache_dir(), archive::config_dir());
+            let roots = tickets::Roots { claude_root: &claude_root, cache: &cache };
+            std::process::exit(tickets::cli(&args, &config, Some(roots), &mut io::stdin().lock(), terminal, &cwd, &mut out, &mut err));
         }
         Some(_) => {
             eprintln!("{USAGE}");
@@ -220,7 +225,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, two hooks
                   that hand a project's notes to its sessions and keep them up to date, and
-                  the /to-tickets skill that turns a session into tickets
+                  the /to-tickets skill that turns a session into tasks
   setup --remove to-tickets   take the /to-tickets skill out again
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...

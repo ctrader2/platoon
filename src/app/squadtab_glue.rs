@@ -1333,7 +1333,7 @@ impl App {
             let why = match purpose {
                 TextFor::Describe => "Describe the squad first: what it is for, and the work it does.",
                 TextFor::DescribeAgent => "Describe the agent first: the one job it does.",
-                TextFor::CanDo => "Say what the squad can do: the commander reads it before a ticket is handed over.",
+                TextFor::CanDo => "Say what the squad can do: the commander reads it before a task is handed over.",
                 _ => "Say what the step does.",
             };
             return self.notify(why);
@@ -1740,7 +1740,7 @@ impl App {
                 self.notify(if restore {
                     format!("{name} is as platoon has it again. Your version is kept as {id}.json.bak in the squads folder.")
                 } else {
-                    format!("Deleted the squad \"{name}\" (kept as {id}.json.bak in the squads folder). Tickets it already has keep it.")
+                    format!("Deleted the squad \"{name}\" (kept as {id}.json.bak in the squads folder). Tasks it already has keep it.")
                 });
             }
             Err(e) => self.notify(format!("Couldn't change the squad's file: {e}")),

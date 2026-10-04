@@ -461,7 +461,7 @@ fn a_squads_workflow_rail_in_a_light_theme() {
     assert!(app.squads_tab_showing());
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("Done: the result goes on the ticket"), "the rail: {shown}");
+    assert!(shown.contains("Done: the result goes on the task"), "the rail: {shown}");
     let ls = lines(&term);
     let (y, x) = find(&ls, "◉").unwrap();
     assert_eq!((ls[y][x].fg, ls[y][x].bg), (t.subtext, t.bg), "the rail's end");

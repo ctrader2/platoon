@@ -134,10 +134,10 @@ impl Lab {
         git(&lab.shop, &["commit", "-q", "-m", "first"]);
         let v = json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": {}});
         fs::write(lab.config.join("projects.json"), v.to_string()).unwrap();
-        fs::create_dir_all(lab.config.join("projects/pweb/tickets")).unwrap();
+        fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
         let t = json!({"number": 1, "title": "Basket", "file": "01-basket.md", "state": "new", "folders": [lab.shop.to_string_lossy()], "blocked_by": [], "created": 1, "updated": 1});
-        fs::write(lab.config.join("projects/pweb/tickets/01-basket.md"), "A basket page.\n").unwrap();
-        fs::write(lab.config.join("projects/pweb/tickets.json"), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
+        fs::write(lab.config.join("projects/pweb/tasks/01-basket.md"), "A basket page.\n").unwrap();
+        fs::write(lab.config.join("projects/pweb/tasks.json"), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
         lab
     }
 
@@ -161,7 +161,7 @@ impl Lab {
     }
 
     fn ticket_now(&self) -> Value {
-        let v: Value = serde_json::from_str(&fs::read_to_string(self.config.join("projects/pweb/tickets.json")).unwrap()).unwrap();
+        let v: Value = serde_json::from_str(&fs::read_to_string(self.config.join("projects/pweb/tasks.json")).unwrap()).unwrap();
         v["tickets"][0].clone()
     }
 
@@ -241,13 +241,15 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
     t.send(b"\t");
     t.wait_for_flat("S hand to a squad");
     t.send(b"S");
-    t.wait_for_all(&["hand to a squad", "Coding", "Careful coding", "Makes small, careful changes"]);
-    // Coding, Research, Docs and Summarize come first.
-    t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\r");
+    t.wait_for_all(&["hand to a squad", "Coding", "Careful coding"]);
+    // Coding, Research, Docs and Summarize come first; enter on a squad picks it and hands the task to it.
+    t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B");
+    t.wait_for_flat("▎ ○ Careful coding");
+    t.send(b"\r");
     t.wait_for_all(&["FAKE LEADER sid:", "ctrl+space back to the project"]);
     assert!(
         lab.call(2, "stdin").starts_with("The squad: Careful coding\nWhat it can do: Makes small, careful changes"),
@@ -268,7 +270,10 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     assert_eq!(agents["careful-coding-planner"]["model"], "opus", "the built-in planner");
     assert_eq!(agents["careful-coding-planner"]["tools"], json!(["Read", "Grep", "Glob", "Bash"]));
     let prompt = agents["careful-coding-leader"]["prompt"].as_str().unwrap();
-    assert!(prompt.starts_with("You are given one ticket: a piece of work in a project."), "the leaders' shared system prompt: {prompt}");
+    assert!(
+        prompt.starts_with("You are given one task: a piece of work, usually in a project."),
+        "the leaders' shared system prompt: {prompt}"
+    );
     assert!(prompt.contains("You lead the Careful coding squad. Your members are careful-coding-planner and careful-coding-quick-builder.\nWhat the squad can do: Makes small, careful changes"), "{prompt}");
     assert!(prompt.contains("3. careful-coding-planner: Checks the change against the plan. It may send the work back: then give its reasons to careful-coding-quick-builder and go on again from step 2. At most twice;"), "{prompt}");
     assert_eq!(lab.ticket_now()["leaders"][0]["squad"], "careful-coding");
@@ -297,7 +302,7 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for("╭ Tickets");
+    t.wait_for("╭ Tasks");
     t.send(b"\t");
     t.wait_for_flat("c cancel");
     t.send(b"\r");
@@ -348,7 +353,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
         fs::read_to_string(lab.config.join("settings.json")).unwrap_or_default().contains("\"squad_leader_model\": \"opus\"")
     });
     t.send(b"\x1b[A");
-    t.wait_for_all(&["How platoon asks Claude to lead a squad through a ticket", "enter edit"]);
+    t.wait_for_all(&["How platoon asks Claude to lead a squad through a task", "enter edit"]);
     t.send(b"\r");
     t.wait_for("╭ Edit the system prompt with");
     t.send(b"\r");
@@ -357,7 +362,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.wait_for_all(&["Saved: platoon uses your system prompt for squad leaders", "Settings file:"]);
     let g = fs::read_to_string(lab.config.join("prompts/squad-leader.md")).unwrap();
     assert!(
-        g.starts_with("You are given one ticket: a piece of work in a project.") && g.ends_with("Keep the reports to five lines.\n"),
+        g.starts_with("You are given one task: a piece of work, usually in a project.") && g.ends_with("Keep the reports to five lines.\n"),
         "{g}"
     );
     t.send(b"\x1b");
@@ -366,7 +371,7 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
     t.send(b"\t");
     t.wait_for_flat("S hand to a squad");
     t.send(b"S");
@@ -439,7 +444,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
     t.send(b"\t");
     t.wait_for_flat("S hand to a squad");
     t.send(b"S");

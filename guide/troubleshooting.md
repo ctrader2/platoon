@@ -79,9 +79,9 @@ marks. See [Environment variables](settings-and-keys.md#environment-variables).
 **A JetBrains IDE opened the folder in a window it already had.** That is the IDE's own setting ("Open project in"); platoon
 can't ask for a new window. See [Opening the editor](sessions.md#opening-the-editor-v).
 
-**A ticket's worktree wasn't removed.** It has changes not yet committed, or it was opened in an editor with a window of
-its own. `w` on the ticket removes it after asking. See
-[Handing a ticket to a squad](tickets-and-squads.md#handing-a-ticket-to-a-squad).
+**A task's copy of the folder (its worktree) wasn't removed.** It has changes not yet committed, or it was opened in an
+editor with a window of its own. `w` on the task removes it after asking. See
+[Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
 
 ## Projects and notes
 
@@ -99,30 +99,43 @@ failure paused things for a while. The header says which. See [What keeps it saf
 when the day's limit is spent or calls are paused; it says which. See
 [Handing work on to a new session](projects.md#handing-work-on-to-a-new-session).
 
-## Tickets and squads
+## Tasks and squads
 
 **`/to-tickets` says the session isn't in a project.** Add the session to a project (`m` on the Sessions tab), then type
-`/to-tickets` again. See [Making tickets from a conversation](tickets-and-squads.md#making-tickets-from-a-conversation).
+`/to-tickets` again. See [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
 
-**`/to-tickets` asks before running `platoon ticket add`.** Claude Code clears the skill's permission when you send your
-next message, so the tickets written after you approve the list may ask. See
-[Making tickets from a conversation](tickets-and-squads.md#making-tickets-from-a-conversation).
+**`/to-tickets` asks before running `platoon task add`.** Claude Code clears the skill's permission when you send your
+next message, so the tasks written after you approve the list may ask. See
+[Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
 
-**`S` refuses to hand a ticket to a squad.** The ticket must be New and not waiting for another ticket, and the squad must
-have nothing to fix on the Squads tab. If the commander said the squad doesn't fit, pick the same squad again for "Hand it
-anyway?". "Session limit has been reached" means the commander couldn't run (today's token limit, or a pause after a
-failure). See [Handing a ticket to a squad](tickets-and-squads.md#handing-a-ticket-to-a-squad).
+**`S` refuses to hand a task to a squad.** The task must be one nobody has yet (Can start, or Needs a folder) and not
+waiting for another task, its folders that aren't in git must be free (one task at a time there: the line names the
+other task), and the squad must have nothing to fix on the Squads tab. If the commander said the squad doesn't fit, pick
+the same squad again for "Hand it anyway?". "Session limit has been reached" means the commander couldn't run (today's
+token limit, or a pause after a failure). See [Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
 
-**The ticket says its branch name `ticket/<N>` is taken.** Something else already uses that branch name in the repository; platoon
-stops rather than reuse it. Rename or remove that branch, then hand the ticket over again. See
-[Handing a ticket to a squad](tickets-and-squads.md#handing-a-ticket-to-a-squad).
+**"A new branch in your checkout" isn't offered.** The checkout has changes not yet committed, another open task already
+works there on a branch, or a session of yours is running in it; the line under the folder says which. A copy (the
+usual) works regardless. See [The hand-over](tasks-and-squads.md#the-hand-over).
 
-**A ticket says "Waiting for your OK on a command".** The leader is at Claude Code's permission prompt: open the ticket
+**The task says its branch name `task/<N>` is taken.** Something else already uses that branch name in the repository;
+platoon stops rather than reuse it. Rename or remove that branch, then hand the task over again. See
+[Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
+
+**The task says there is no branch called what it lands on.** The branch was renamed or deleted since the hand-over:
+press `S`, `l` on the folder's line, and type one git knows. See [The hand-over](tasks-and-squads.md#the-hand-over).
+
+**A task says "Waiting for your OK on a command".** The leader is at Claude Code's permission prompt: open the task
 and answer it in the squad's session. See
-[How the ticket's state follows the squad](tickets-and-squads.md#how-the-tickets-state-follows-the-squad).
+[How the task's state follows the squad](tasks-and-squads.md#how-the-tasks-state-follows-the-squad).
 
-**A ticket says "Working · waiting for a free squad".** Every place is taken; it starts by itself when one frees. See
-[How many squads work at once](tickets-and-squads.md#how-many-squads-work-at-once).
+**A task says "Working · Waiting for a free squad".** Every place is taken; it starts by itself when one frees. See
+[How many squads work at once](tasks-and-squads.md#how-many-squads-work-at-once).
 
-**A squad stopped at Ready to publish.** It wants to push or publish: press `p` on the ticket to let it. See
-[Anything other people can see asks you first](tickets-and-squads.md#anything-other-people-can-see-asks-you-first).
+**A task Needs you and says it wants to publish.** Press `p` on the task to let it, or hand tasks over as "works and
+publishes" when you don't want to be asked. See
+[Anything other people can see asks you first](tasks-and-squads.md#anything-other-people-can-see-asks-you-first).
+
+**The status line said "Moved Web shop's tickets to tasks.json."** platoon renamed that project's task files once (tasks
+were called tickets before 1.0); the old list is kept beside them as `tickets.json.bak`. See
+[Where tasks are kept](tasks-and-squads.md#where-tasks-are-kept).

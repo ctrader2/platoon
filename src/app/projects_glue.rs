@@ -31,12 +31,14 @@ pub enum NamePurpose {
     /// A new project, with this session put in it (from the project picker).
     NewFor(String),
     Rename(String),
-    /// A new ticket in the open project: its title.
+    /// A new task in the open project: its title.
     NewTicket,
-    /// A new title for this ticket.
+    /// A new title for this task.
     TicketTitle(u32),
     /// Something on the Squads tab: a squad's name, a member's.
     Squad(super::SquadName),
+    /// The branch the work of this folder line of the hand-over popup lands on.
+    LandsOn(usize),
 }
 
 pub struct NameBox {
@@ -76,7 +78,7 @@ pub struct PStat {
     pub last_active: u64,
     /// Its non-archived sessions with a reply the user hasn't seen.
     pub unread: usize,
-    /// Its tickets that aren't Done or Cancelled, and how many of those are ready to be worked on.
+    /// Its tasks that aren't Done or Cancelled, and how many of those can start.
     pub open_tickets: usize,
     pub ready_tickets: usize,
 }
@@ -120,7 +122,7 @@ impl App {
             }
             st.last_active = st.last_active.max(s.last_active);
         }
-        // One small read per project: a missing or corrupt tickets file is simply no tickets, and nothing is written.
+        // One small read per project: a missing or corrupt tasks file is simply no tasks, and nothing is written.
         for p in self.projects.all() {
             let store = crate::tickets::Tickets::open(&self.config, &p.id);
             let all = store.all();
@@ -431,6 +433,7 @@ impl App {
         let input = match &purpose {
             NamePurpose::Rename(id) => self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
             NamePurpose::TicketTitle(n) => self.ticket(*n).map(|t| t.title.clone()).unwrap_or_default(),
+            NamePurpose::LandsOn(i) => self.sq.form.folders.get(*i).map(|l| l.lands_on.clone()).unwrap_or_default(),
             _ => String::new(),
         };
         self.name_box = NameBox { purpose, input };
@@ -447,7 +450,7 @@ impl App {
     pub(super) fn type_project_name(&mut self, text: &str) {
         let max = match &self.name_box.purpose {
             NamePurpose::Squad(p) => Self::squad_name_max(p),
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => crate::tickets::TITLE_MAX,
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_) => crate::tickets::TITLE_MAX,
             _ => projects_mod::NAME_MAX,
         };
         let room = max.saturating_sub(self.name_box.input.chars().count());
@@ -458,10 +461,11 @@ impl App {
     pub(super) fn save_name_box(&mut self) {
         match self.name_box.purpose.clone() {
             NamePurpose::Squad(p) => return self.save_squad_name(p),
+            NamePurpose::LandsOn(i) => return self.save_lands_on(i),
             NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {
                 let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
                 if title.is_empty() {
-                    self.notify("A ticket needs a title");
+                    self.notify("A task needs a title");
                     return; // the box stays open
                 }
                 self.mode = Mode::List;
@@ -485,7 +489,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::Squad(_) => {}
+            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::Squad(_) | NamePurpose::LandsOn(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

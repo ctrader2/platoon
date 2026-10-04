@@ -350,7 +350,7 @@ pub struct SessionMaterial {
 /// conversation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TicketResult {
-    /// "Ticket #N (<squad> squad)".
+    /// "Task #N (<squad> squad)".
     pub label: String,
     /// The result, cut to `RESULT_IN_PROMPT`.
     pub text: String,
@@ -359,9 +359,9 @@ pub struct TicketResult {
 /// The most of one ticket's result that is sent, in characters.
 pub const RESULT_IN_PROMPT: usize = 3000;
 
-/// How a ticket's result is called in the request.
+/// How a task's result is called in the request.
 pub fn result_label(number: u32, squad: &str) -> String {
-    format!("Ticket #{number} ({squad} squad)")
+    format!("Task #{number} ({squad} squad)")
 }
 
 /// A Done ticket with a result, as the notes helper finds it: its number, its squad's name, the result.
@@ -540,7 +540,7 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
         t.push('\n');
     }
     if !m.results.is_empty() {
-        t.push_str("Tickets finished since the last update (what the squad that did each one reported at the end):\n\n");
+        t.push_str("Tasks finished since the last update (what the squad that did each one reported at the end):\n\n");
         for r in &m.results {
             t.push_str(&format!("{}:\n", r.label));
             // Set in like a reply, so no line of it can pass for a heading of the notes.
@@ -1866,13 +1866,13 @@ My own notes, in my own words.
         let (due, sent) = results_due(&state, &[done(3, "Added the basket page on ticket/3.\nTests pass."), done(4, "  \n")]);
         assert_eq!(
             due,
-            [TicketResult { label: "Ticket #3 (Coding squad)".into(), text: "Added the basket page on ticket/3.\nTests pass.".into() }]
+            [TicketResult { label: "Task #3 (Coding squad)".into(), text: "Added the basket page on ticket/3.\nTests pass.".into() }]
         );
         assert_eq!(sent.keys().collect::<Vec<_>>(), ["3"], "an empty result is nothing to send");
         let m = Material { project: "Web".into(), sessions: vec![], results: due.clone() };
         assert!(!m.is_empty(), "a result alone is worth an update");
         let p = prompt(&Doc::parse("# Summary\n\nA shop.\n"), &state, &m);
-        assert!(p.contains("Ticket #3 (Coding squad):\n  Added the basket page on ticket/3.\n  Tests pass.\n"), "{p}");
+        assert!(p.contains("Task #3 (Coding squad):\n  Added the basket page on ticket/3.\n  Tests pass.\n"), "{p}");
         assert!(!p.contains("New in this project's conversations"), "no conversations to speak of: {p}");
         // Once read, it isn't sent again; a new result for the same ticket is.
         state.results.extend(sent);

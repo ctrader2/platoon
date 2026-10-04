@@ -82,7 +82,7 @@ pub fn screen_total(t: &TicketTokens) -> String {
 /// What the numbers count, in plain words, with their parts.
 pub fn explained(t: &TicketTokens) -> String {
     format!(
-        "{} sent to Claude and {} written by Claude: the number the Tickets list shows. Read again from the cache is the \
+        "{} sent to Claude and {} written by Claude: the number the Tasks list shows. Read again from the cache is the \
          conversation so far, sent again each turn, counted apart. Each answer counted once; the members' own work included.",
         short(t.total.input),
         short(t.total.output),
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(screen_total(&t), "84K sent and written, plus 1.9M read again from Claude's cache");
         assert_eq!(
             explained(&t),
-            "40K sent to Claude and 44K written by Claude: the number the Tickets list shows. Read again from the cache is the conversation so far, sent again each turn, counted apart. Each answer counted once; the members' own work included."
+            "40K sent to Claude and 44K written by Claude: the number the Tasks list shows. Read again from the cache is the conversation so far, sent again each turn, counted apart. Each answer counted once; the members' own work included."
         );
         // No cache reads: nothing to add.
         assert_eq!(screen_total(&TicketTokens { total: spent(900, 100, 0), agents: vec![] }), "1K sent and written");

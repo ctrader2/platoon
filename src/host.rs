@@ -894,10 +894,12 @@ mod tests {
         .unwrap();
         let t0 = Instant::now();
         assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::LeaderAtWork));
-        for s in [State::Waiting, State::Ready, State::Done, State::Cancelled] {
+        for s in [State::Waiting, State::Done, State::Cancelled] {
             Tickets::open(&config, "p1").set_state(n, &s).unwrap();
             assert!(rig.dog.should_stop(t0 + 500 * MIN, 0, &mut { t0 }), "{s:?}");
         }
+        Tickets::open(&config, "p1").squad_wants_to_publish(n, "Wants to publish: push").unwrap();
+        assert!(rig.dog.should_stop(t0 + 500 * MIN, 0, &mut { t0 }), "asking to publish");
         // Any other session, and a resumed leader.
         assert_eq!(session_of_args(&["--resume".into(), "lead-1".into(), "--agents".into()]).as_deref(), Some("lead-1"));
         assert_eq!(session_of_args(&[]), None);

@@ -132,7 +132,7 @@ fn with_every_place_taken_a_hand_over_waits_and_starts_by_itself_when_a_place_fr
     assert_eq!((t.state, t.leaders.len(), t.queued), (State::Working, 1, None));
     assert_eq!(t.leaders[0].squad, "summarize");
     assert!(matches!(app.mode, Mode::List) && app.sq.split.is_none());
-    assert_eq!(app.active_notice(), Some("A squad is free: #2 is with the Summarize squad now. Open it from Web shop's tickets."));
+    assert_eq!(app.active_notice(), Some("A squad is free: #2 is with the Summarize squad now. Open it from Web shop's tasks."));
     assert_eq!(fake.calls(), 3, "no second check when it leaves the line");
     // #2 holds the place now: #3 still waits.
     app.refresh_for_test();
@@ -328,11 +328,11 @@ fn the_ticket_screen_shows_tokens_per_agent_over_every_leader_and_what_the_squad
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
     // The screen: the pane's number, said as what it is, and the cache reads beside it.
-    assert!(f.contains("Tokens used 2.5M sent and written, plus 1.8M read again from Claude's cache"), "{f}");
+    assert!(f.contains("Tokens used 2.5M sent and written, plus 1.8M read") && f.contains("again from Claude's cache"), "{f}");
     // (The note about the session sits beside the explanation, so it is checked in pieces.)
     assert!(
         f.contains("2.5M sent to Claude and 10K written by Claude:")
-            && f.contains("the number the Tickets list shows. Read again")
+            && f.contains("the number the Tasks list shows. Read again")
             && f.contains("from the cache is the conversation so far"),
         "{f}"
     );

@@ -170,7 +170,7 @@ fn the_folder_picker_for_the_editor_says_so_and_never_picks_the_whole_home_folde
 #[test]
 fn the_editor_has_one_name_in_the_settings() {
     let names: Vec<&str> = crate::settings::TABS.iter().flat_map(|t| t.items.iter().map(|i| i.name)).collect();
-    assert!(names.contains(&"Editor for folders (v)") && names.contains(&"Editor for notes and tickets (e)"), "{names:?}");
+    assert!(names.contains(&"Editor for folders (v)") && names.contains(&"Editor for notes and tasks (e)"), "{names:?}");
     assert!(!names.iter().any(|n| n.contains("files") || n.contains("Code editor")), "{names:?}");
 }
 
@@ -183,7 +183,7 @@ fn the_text_editor_setting_says_which_list_its_star_is_in() {
     for _ in 0..5 {
         key(&mut app, KeyCode::Tab);
     }
-    assert_eq!(app.items()[0].name, "Editor for notes and tickets (e)");
+    assert_eq!(app.items()[0].name, "Editor for notes and tasks (e)");
     for (w, h) in [(80u16, 24u16), (120, 40)] {
         let mut term = sized(&mut app, w, h);
         let f = flat(&draw(&mut term, &app));

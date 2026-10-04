@@ -79,6 +79,10 @@ mod tests {
             busy: None,
             queued: queued.map(|since| Queued { squad: "coding".into(), since, anyway: false }),
             from: None,
+            publish_wanted: false,
+            autonomy: None,
+            works_on: vec![],
+            old_number: None,
         }
     }
 
@@ -88,7 +92,7 @@ mod tests {
         let running = |s: &str| s == "up";
         // Working with its leader running: yes. Every other state, with the same running leader: no.
         assert!(holds_place(&tk(1, State::Working, Some(("up", 1)), None), &running, now));
-        for s in [State::New, State::Waiting, State::Ready, State::Done, State::Cancelled, State::Other("later".into())] {
+        for s in [State::New, State::Waiting, State::Done, State::Cancelled, State::Other("later".into())] {
             assert!(!holds_place(&tk(1, s.clone(), Some(("up", 1)), None), &running, now), "{s:?}");
         }
         // Working, but its leader isn't running (closed, or never continued): no.

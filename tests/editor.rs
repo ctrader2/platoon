@@ -239,9 +239,9 @@ fn ticket_lab(name: &str, state: &str) -> (Lab, PathBuf, String) {
     let t = json!({"number": 1, "title": "Basket", "file": "01-basket.md", "state": state, "folders": [lab.work], "blocked_by": [], "created": 1, "updated": 1,
         "leaders": [{"squad": "coding", "session": "lead-1", "started": 1}],
         "worktrees": [{"folder": lab.work, "path": wt, "branch": "ticket/1", "base": base}]});
-    fs::create_dir_all(lab.config.join("projects/pweb/tickets")).unwrap();
-    fs::write(lab.config.join("projects/pweb/tickets/01-basket.md"), "# Basket\n").unwrap();
-    fs::write(lab.config.join("projects/pweb/tickets.json"), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
+    fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
+    fs::write(lab.config.join("projects/pweb/tasks/01-basket.md"), "# Basket\n").unwrap();
+    fs::write(lab.config.join("projects/pweb/tasks.json"), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
     (lab, wt, base)
 }
 
@@ -251,10 +251,10 @@ fn to_tickets(t: &mut Term) {
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
     t.wait_for("#1");
     t.send(b"\x1b[1;2B");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
 }
 
 #[test]
@@ -298,7 +298,7 @@ fn v_on_a_ticket_whose_squad_is_working_asks_first() {
     t.send(b"y");
     t.wait_for("STAND-IN HELIX RUNNING");
     t.send(b"\r");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
     assert_eq!(lab.runs().len(), 1);
     let _ = leader.kill();
     let _ = leader.wait();
@@ -391,10 +391,10 @@ fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() 
     t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tickets", "╭ Notes"]);
+    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
     // A Done ticket is under the folded "Done and cancelled" group: into the Tickets pane, open the group, on #1.
     t.send(b"\x1b[1;2B");
-    t.wait_for_flat("n new ticket");
+    t.wait_for_flat("n new task");
     t.send(b"\r");
     t.wait_for("#1");
     t.send(b"\x1b[B\r");
@@ -407,12 +407,12 @@ fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() 
     std::thread::sleep(Duration::from_millis(3000));
     assert!(wt.is_dir());
     t.send(b"w");
-    t.wait_for_flat("Remove #1's worktree anyway?");
+    t.wait_for_flat("Remove #1's copy of the folder anyway?");
     t.wait_for_flat("It was opened in VS Code: close it there first.");
     t.send(b"y");
     t.wait_for_flat("#1's worktree is removed. Its branch ticket/1 is kept.");
     assert!(!wt.exists());
-    let tickets: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tickets.json")).unwrap()).unwrap();
+    let tickets: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tasks.json")).unwrap()).unwrap();
     assert!(tickets["tickets"][0]["worktrees"][0].get("opened_in").is_none());
 }
 
@@ -428,15 +428,15 @@ fn the_settings_show_the_editors_in_two_groups_and_step_through_the_ones_found()
     t.send(b"\x1b[Z"); // shift+tab: from the first tab to the last, Editors
     t.wait_for_all(&[
         "Editing platoon's text",
-        "Editor for notes and tickets",
+        "Editor for notes and tasks",
         "Editing files",
         "Editor for folders (v)",
         "Always ask which editor",
     ]);
     let shown = t.stable();
     let at = |needle: &str| shown.lines().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle}:\n{shown}"));
-    assert!(at("Editing platoon's text") < at("Editor for notes and tickets"));
-    assert!(at("Editor for notes and tickets") < at("Editing files") && at("Editing files") < at("Editor for folders (v)"));
+    assert!(at("Editing platoon's text") < at("Editor for notes and tasks"));
+    assert!(at("Editor for notes and tasks") < at("Editing files") && at("Editing files") < at("Editor for folders (v)"));
     assert!(at("Editor for folders (v)") < at("Always ask which editor"));
     let files_row = shown.lines().nth(at("Editor for folders (v)")).unwrap();
     assert!(files_row.contains("VS Code"), "none chosen yet: the first one found, which v opens: {files_row}");

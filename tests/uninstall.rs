@@ -157,7 +157,7 @@ fn uninstall_takes_out_exactly_what_the_real_setup_added_and_a_second_run_finds_
     assert_eq!(fs::read_to_string(w.claude().join("settings.json.platoon-bak")).unwrap(), set_up);
     assert!(!w.claude().join("skills/to-tickets").exists() && !w.cache().exists() && w.config().exists(), "{said}");
     for want in [
-        "Also delete your projects, notes, tickets and settings? [y/N]",
+        "Also delete your projects, notes, tasks and settings? [y/N]",
         "Removed:",
         "the status line, the session guard hook, the project notes hook, the notes updates hook",
         "the /to-tickets skill",
@@ -318,7 +318,7 @@ fn the_script_removes_an_install_script_install_and_only_its_line_in_the_startup
         );
         assert_eq!(fs::read_to_string(w.home.join(".bashrc")).unwrap(), "alias ll='ls -l'\n");
         assert_eq!(fs::read_to_string(zdot.join(".zshrc")).unwrap(), "\n");
-        assert!(said.contains("Also delete your projects, notes, tickets and settings? [y/N]"), "{sh}: {said}");
+        assert!(said.contains("Also delete your projects, notes, tasks and settings? [y/N]"), "{sh}: {said}");
         assert!(!w.config().exists(), "answered yes: {said}");
         assert!(said.contains("the program, put there by the install script"), "{sh}: {said}");
     }
@@ -386,7 +386,7 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         let said = text(&out);
         assert_eq!(out.status.code(), Some(0), "{sh}: {said}");
         assert!(said.contains(&format!("in /work/app (pid {pid}): `claude --resume sess-42` opens it again")), "{said}");
-        assert!(said.contains("Also delete your projects, notes, tickets and settings? [y/N]"), "{said}");
+        assert!(said.contains("Also delete your projects, notes, tasks and settings? [y/N]"), "{said}");
         assert_eq!(end(pid, waiter), Some(libc::SIGTERM), "{sh}");
         assert!(!w.cache().exists() && !w.config().exists() && !w.home.join(".local/share/platoon").exists(), "{said}");
         let repo_s = repo.display().to_string();
@@ -550,7 +550,7 @@ fn piped_into_sh_without_platoon_the_script_asks_in_the_terminal() {
     // "n": the config folder is kept.
     let (shown, code) = piped_into_sh_in_a_terminal(&w, &[], "", &["n\n"]);
     assert_eq!(code, 0, "{shown}");
-    assert!(shown.contains("Also delete your projects, notes, tickets and settings? [y/N]"), "{shown}");
+    assert!(shown.contains("Also delete your projects, notes, tasks and settings? [y/N]"), "{shown}");
     assert!(w.config().exists() && !w.cache().exists(), "{shown}");
     let (shown, code) = piped_into_sh_in_a_terminal(&w, &[], "", &["y\n"]);
     assert_eq!(code, 0, "{shown}");

@@ -69,9 +69,9 @@ What naming and summarizing your conversations reads, and how often. Under the e
 | --- | --- | --- |
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](projects.md#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
-| Squads at work at once | How many [squads](tickets-and-squads.md#handing-a-ticket-to-a-squad) may work on tickets at the same time, in all projects. One more handed over waits for a free squad and starts by itself, oldest first. Lowering it never stops a squad at work. | 1 to 10 squads (default 3) |
+| Squads at work at once | How many [squads](tasks-and-squads.md#handing-a-task-to-a-squad) may work on tasks at the same time, in all projects. One more handed over waits for a free squad and starts by itself, oldest first. Lowering it never stops a squad at work. | 1 to 10 squads (default 3) |
 | System prompt for project notes, for project descriptions, for the hand-off | How platoon asks Claude to write a project's notes, the line under a project's name, and a hand-off (see [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
-| System prompt for the squad commander, for squad leaders, for drafting a squad, for drafting an agent | How the commander checks a squad fits a ticket, how every squad's leader leads its agents (platoon adds what the squad can do, its workflow and the rules it keeps), and how a squad or an agent is drafted from your description. | Enter to change, User Modified |
+| System prompt for the squad commander, for squad leaders, for drafting a squad, for drafting an agent | How the commander checks a squad fits a task, how every squad's leader leads its agents (platoon adds what the squad can do, its workflow and the rules it keeps), and how a squad or an agent is drafted from your description. | Enter to change, User Modified |
 | Model for squad leaders | The model every squad's leader runs on; its agents each run on their own. A squad already at work keeps the model it started with. | Opus, Sonnet (default), Haiku |
 
 ### Editors
@@ -80,8 +80,8 @@ In two groups:
 
 | Group | Setting | What it does | Choices |
 | --- | --- | --- | --- |
-| Editing platoon's text | Editor for notes and tickets (e) | The editor for a project's notes, a ticket's text and the system prompts (`e`): the one starred in the list of editors `e` shows. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
-| Editing files | Editor for folders (v) | The editor `v` opens a ticket's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](sessions.md#opening-the-editor-v) found on this computer; the first one found until you choose |
+| Editing platoon's text | Editor for notes and tasks (e) | The editor for a project's notes, a task's text and the system prompts (`e`): the one starred in the list of editors `e` shows. Choosing another there changes it too. | The [editors found](projects.md#editing-the-notes) on this computer |
+| Editing files | Editor for folders (v) | The editor `v` opens a task's or a session's folders in. Choosing another from `v`'s list changes it too. | The [editors with a file tree](sessions.md#opening-the-editor-v) found on this computer; the first one found until you choose |
 | Editing files | Always ask which editor | Off: `v` opens the editor above at once. On: `v` shows the list every time, with that one starred and picked. | Off (default), On |
 
 ### Moving around the settings
@@ -166,14 +166,14 @@ default, and at most the first 8,000 characters of one are sent.
 
 One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
 running), detaches `platoon open`, leaves a notes editor running inside platoon (after asking "Leave the editor?": `y` leaves
-and ends it, anything else stays, since what it hasn't saved would be lost), goes from a ticket's screen to its
+and ends it, anything else stays, since what it hasn't saved would be lost), goes from a task's screen to its
 project's screen and from there to the list, leaves a squad's details, the settings, the theme list and the changes view,
 and cancels every question, box and list that pops up. `esc` does the same on platoon's own screens and popups (not in a
 session or an editor, where it is theirs), so the key hints there say `esc back`; in a session's live view and the notes
 editor they name the back key. On the top-level lists, with nothing open, it does what `esc` does there (clears a kept
 filter) and never quits.
 
-`q` quits, but only from the top-level lists (Sessions, Projects, Squads with nothing open). On a project's or a ticket's
+`q` quits, but only from the top-level lists (Sessions, Projects, Squads with nothing open). On a project's or a task's
 screen or in a squad's details, it goes back one level instead. In a box you type in, `q` is just a letter.
 
 Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).

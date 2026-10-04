@@ -226,10 +226,10 @@ fn the_tab_lists_the_built_in_squads_with_about_and_the_workflow_as_a_rail() {
     // The workflow: each step, its agent with the agent's model and switches, and where it may send the work back.
     go(&mut app, DRow::StepAgent(3));
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("● 3 reviewer Opus commands Reads the change against the ticket"), "{f}");
+    assert!(f.contains("● 3 reviewer Opus commands Reads the change against the task"), "{f}");
     assert!(f.contains("↩ back to step 2 (builder), at most twice") && f.contains("↩ back to step 2 (builder), at most once"), "{f}");
     assert!(
-        f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the ticket + Add a step"),
+        f.contains("● 4 verifier Haiku commands Runs the tests") && f.contains("◉ Done: the result goes on the task + Add a step"),
         "{f}"
     );
     assert!(
@@ -363,9 +363,17 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
         let f = flat(&draw(&mut term, &app));
         assert!(f.contains("● 2 builder Opus files · commands"), "{id}: {f}");
         let crew = Crew::load(&w.config, &squadfile::get(&w.config, id).unwrap());
-        let agents: Value =
-            serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents)
-                .unwrap();
+        let agents: Value = serde_json::from_str(
+            &Launch::of(
+                &crew,
+                &LeaderSetup::builtin(),
+                AgentNames::SquadRole,
+                crate::squads::Place::WORKTREE,
+                &crate::squads::Terms::default(),
+            )
+            .agents,
+        )
+        .unwrap();
         assert_eq!(agents[format!("{id}-builder")]["model"], "opus", "{id}");
     }
     // A switch: the tools follow, everywhere.
@@ -483,8 +491,7 @@ fn a_steps_agent_is_picked_from_every_agent_or_a_new_one_made_there() {
     go(&mut app, DRow::Name);
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("User Modified · needs fixing")
-            && f.contains("Can't be handed a ticket until this is fixed: Step 4's agent isn't ready"),
+        f.contains("User Modified · needs fixing") && f.contains("Can't be handed a task until this is fixed: Step 4's agent isn't ready"),
         "{f}"
     );
     // Written in the editor: ready.
@@ -916,7 +923,13 @@ fn steps_are_added_moved_given_an_agent_and_a_send_back() {
     assert_eq!(steps(&w)[3].does, "Checks the plan was followed.");
     // The leader gets it all, in order, with the send-back.
     let crew = Crew::load(&w.config, &squadfile::get(&w.config, "coding").unwrap());
-    let prompt = crate::squads::leader_prompt(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE);
+    let prompt = crate::squads::leader_prompt(
+        &crew,
+        &LeaderSetup::builtin(),
+        AgentNames::SquadRole,
+        crate::squads::Place::WORKTREE,
+        &crate::squads::Terms::default(),
+    );
     assert!(prompt.contains("4. coding-planner: Checks the plan was followed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most 3 times;"), "{prompt}");
     assert!(prompt.contains("5. coding-verifier: "), "{prompt}");
     // Moving a step above the one it sends back to drops that send-back, and says so.
@@ -1098,16 +1111,24 @@ fn s_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     );
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("▎ Coding") && !f.contains("Careful coding"), "six squads don't fit in 30 rows: {f}");
+    // Only the picked squad says what it can do, so six squads and the lines fit in 30 rows.
+    assert!(f.contains("▎ ● Coding") && f.contains("○ Careful coding") && !f.contains("Needs fixing"), "{f}");
     for _ in 0..5 {
         key(&mut app, KeyCode::Down);
     }
+    // The cursor on the last squad; Coding is still the picked one until space or enter says otherwise.
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("▎ Careful coding") && f.contains("Needs fixing on the Squads tab first. Makes a change") && !f.contains("▎ Coding"),
+        f.contains("▎ ○ Careful coding")
+            && f.contains("● Coding Makes a change")
+            && !f.contains("▎ ● Coding")
+            && !f.contains("Needs fixing"),
         "{f}"
     );
     key(&mut app, KeyCode::Up);
+    key(&mut app, KeyCode::Char(' '));
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("▎ ● Broken") && f.contains("Needs fixing on the Squads tab first. Makes a change"), "{f}");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadPick));
     assert_eq!(
@@ -1145,6 +1166,7 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
         &LeaderSetup::builtin(),
         AgentNames::SquadRole,
         crate::squads::Place::WORKTREE,
+        &crate::squads::Terms::default(),
     );
     let snap = store.save_snapshot(n, 1, &at_start.to_json()).unwrap();
     let with = Leader { squad: "coding".into(), session: "s-1".into(), started: 1, names: AgentNames::SquadRole, snapshot: Some(snap) };
@@ -1186,7 +1208,7 @@ fn the_workflow_rail_draws_codings_send_backs_as_nested_loops_in_muted_colours()
         "│└──┤",
         "│   ●  4 verifier",
         "└───┤",
-        "◉  Done: the result goes on the ticket",
+        "◉  Done: the result goes on the task",
         "+  Add a step",
     ] {
         assert!(shown.contains(piece), "{piece}: {shown}");
@@ -1368,9 +1390,17 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     assert_eq!(agentfile::get(&w.config, "builder").unwrap().mcp, ["sentry"]);
     // A squad using it starts it with them: preloaded skills, servers by name, the tools that let it use them.
     let crew = Crew::load(&w.config, &squadfile::builtin("coding").unwrap());
-    let agents: Value =
-        serde_json::from_str(&Launch::of(&crew, &LeaderSetup::builtin(), AgentNames::SquadRole, crate::squads::Place::WORKTREE).agents)
-            .unwrap();
+    let agents: Value = serde_json::from_str(
+        &Launch::of(
+            &crew,
+            &LeaderSetup::builtin(),
+            AgentNames::SquadRole,
+            crate::squads::Place::WORKTREE,
+            &crate::squads::Terms::default(),
+        )
+        .agents,
+    )
+    .unwrap();
     let b = &agents["coding-builder"];
     assert_eq!((b["skills"].clone(), b["mcpServers"].clone()), (serde_json::json!(["pdf"]), serde_json::json!(["sentry"])));
     assert_eq!(b["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry"]));

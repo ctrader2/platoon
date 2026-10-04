@@ -23,12 +23,14 @@ The first public release. platoon works with Claude Code (last checked with 2.1.
 - **One writer per conversation**: a guard stops a second copy of a running conversation from overwriting it.
 - **Projects** group conversations from any number of folders. A project's notes reach every one of its sessions, can keep
   themselves up to date as you work, and a long conversation can be handed on to a fresh session with one key.
-- **Tickets**: write down a piece of work, from platoon, from the command line (`platoon ticket`), or by letting Claude turn
-  a conversation into tickets with the `/to-tickets` skill. Tickets can wait for each other.
-- **Squads**: hand a ticket to a squad, a lead agent and its team of agents, working in its own git worktree. Four squads
-  and twelve agents come built in, and you can change them or make your own. A squad asks you before a push, a pull request
-  or a release, and only a few work at once.
-- **Your own editor**: `v` opens a session's or a ticket's folders in VS Code, Zed, a JetBrains IDE, Helix, Neovim and
+- **Tasks**: write down a piece of work, from platoon, from the command line (`platoon task`; `platoon ticket` still
+  works), or by letting Claude turn a conversation into tasks with the `/to-tickets` skill. Tasks can wait for each other,
+  and can live outside any project.
+- **Squads**: hand a task to a squad, a lead agent and its team of agents, working in a copy of your folder (a git
+  worktree made from the branch the work lands on) or, when you choose it, on a new branch of your own checkout. Four squads
+  and twelve agents come built in, and you can change them or make your own. At each hand-over you say how much the squad
+  does on its own: it asks you before a push, a pull request or a release, or works and publishes. Only a few work at once.
+- **Your own editor**: `v` opens a session's or a task's folders in VS Code, Zed, a JetBrains IDE, Helix, Neovim and
   others found on your computer.
 - **Smart features** that use your Claude plan (smart names and summaries, finding a session by description, notes that
   update themselves), off until you say yes, with a daily token limit and a pause when your plan is nearly used.

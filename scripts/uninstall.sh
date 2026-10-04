@@ -5,14 +5,14 @@
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh -s -- --all
 #
 # 1. When a platoon is found, `platoon uninstall` takes platoon's status line, hooks and /to-tickets skill out of
-#    Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tickets and settings, and
+#    Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
 #    asks before stopping the sessions it runs (a "no" there stops everything, with nothing changed).
 #    When none is found (or one too old to have `uninstall`), this script asks the same questions and deletes the same
 #    folders itself, and says how to take the entries out of Claude Code's settings by hand.
 # 2. Then it removes the program the way it was installed: Homebrew, cargo, or the install script (its receipt in
 #    ~/.config/platoon-tui says where it put platoon). Anything else: it says where the program is.
 #
-# Flags: --all (also delete your projects, notes, tickets and settings, without asking), --stop-sessions (stop the
+# Flags: --all (also delete your projects, notes, tasks and settings, without asking), --stop-sessions (stop the
 # sessions platoon runs without asking), --help.
 #
 # It honours the variables platoon does (HOME, CLAUDE_CONFIG_DIR, PLATOON_CONFIG_DIR, PLATOON_CACHE_DIR,
@@ -34,9 +34,9 @@ say() {
 usage() {
     say "usage: uninstall.sh [--all] [--stop-sessions]"
     say "  Removes platoon: its entries in Claude Code's settings, its /to-tickets skill, its cache folder and the"
-    say "  program itself. Asks before deleting your projects, notes, tickets and settings, and before stopping"
+    say "  program itself. Asks before deleting your projects, notes, tasks and settings, and before stopping"
     say "  the sessions platoon is running. Claude Code's conversations are never touched."
-    say "  --all             also delete your projects, notes, tickets and settings, without asking"
+    say "  --all             also delete your projects, notes, tasks and settings, without asking"
     say "  --stop-sessions   stop the sessions platoon is running without asking"
     say "  With flags through curl: curl -LsSf <url> | sh -s -- --all"
 }
@@ -148,18 +148,21 @@ stop_sessions() {
     return 1
 }
 
-# The ticket worktrees the tickets files record that are still there, with the git commands that remove them.
+# The task worktrees the tasks files record that are still there (`tasks.json`, or `tickets.json` from before the
+# rename; folders `task-N`, or `ticket-N`), with the git commands that remove them.
 list_worktrees() {
     found=""
-    for t in "$CONFIG"/projects/*/tickets.json; do
+    for t in "$CONFIG"/tasks.json "$CONFIG"/projects/*/tasks.json "$CONFIG"/projects/*/tickets.json; do
         [ -f "$t" ] || continue
-        found="$found$(grep -o '"path":[[:space:]]*"[^"]*-worktrees/ticket-[0-9][0-9]*[^"]*"' "$t" |
-            sed 's/^"path":[[:space:]]*"//; s/"$//; s#\(-worktrees/ticket-[0-9][0-9]*\).*#\1#')
+        found="$found$(grep -o '"path":[[:space:]]*"[^"]*-worktrees/t[ai][sc]k[e]*t*-[0-9][0-9]*[^"]*"' "$t" |
+            sed 's/^"path":[[:space:]]*"//; s/"$//; s#\(-worktrees/t[ai][sc]k[e]*t*-[0-9][0-9]*\).*#\1#')
 "
     done
     printf '%s' "$found" | sort -u | while IFS= read -r d; do
         [ -n "$d" ] && [ -d "$d" ] || continue
-        n=${d##*/ticket-}
+        name=${d##*/}
+        n=${name##*-}
+        branch="${name%-*}/$n"
         repo=""
         if [ -f "$d/.git" ]; then
             repo=$(sed -n 's#^gitdir: \(.*\)/\.git/worktrees/.*#\1#p' "$d/.git" | head -n 1)
@@ -167,7 +170,7 @@ list_worktrees() {
         say "  #$n:"
         if [ -n "$repo" ]; then
             say "    git -C $(quote "$repo") worktree remove $(quote "$d")"
-            say "    git -C $(quote "$repo") branch -D ticket/$n"
+            say "    git -C $(quote "$repo") branch -D $branch"
         else
             say "    git worktree remove $(quote "$d")   (in the repository it was made from)"
         fi
@@ -213,8 +216,8 @@ without_platoon() {
         if [ "$ALL" = 1 ]; then
             delete_config=1
         elif [ "$HAVE_TTY" = 1 ]; then
-            say "Your projects, notes, tickets, squads and settings are in $CONFIG."
-            if ask "Also delete your projects, notes, tickets and settings?"; then delete_config=1; fi
+            say "Your projects, notes, tasks, squads and settings are in $CONFIG."
+            if ask "Also delete your projects, notes, tasks and settings?"; then delete_config=1; fi
         fi
     fi
     say ""
@@ -236,11 +239,11 @@ remove_folders() { # after the program
     remove_dir "$CACHE" "platoon's cache folder"
     if [ -d "$CONFIG" ]; then
         if [ "$delete_config" = 1 ]; then
-            remove_dir "$CONFIG" "your projects, notes, tickets and settings"
+            remove_dir "$CONFIG" "your projects, notes, tasks and settings"
         else
             why=""
             [ "$HAVE_TTY" = 1 ] || why=" (there was no terminal to ask in; --all deletes it)"
-            kept "your projects, notes, tickets and settings in $CONFIG$why. To delete them later: rm -rf $(quote "$CONFIG")"
+            kept "your projects, notes, tasks and settings in $CONFIG$why. To delete them later: rm -rf $(quote "$CONFIG")"
         fi
     fi
     remove_dir "$DATA/platoon" "an older platoon's data folder"
@@ -424,7 +427,7 @@ main() {
         [ -z "$FAILED" ] || printf "Couldn't remove:\n%s" "$FAILED"
         printf 'Kept:\n%s' "$KEPT"
         if [ -n "$WORKTREES" ]; then
-            say "Ticket worktrees and branches (never deleted: remove each once you no longer need its work):"
+            say "Task worktrees and branches (never deleted: remove each once you no longer need its work):"
             say "$WORKTREES"
         fi
         by_hand_notes

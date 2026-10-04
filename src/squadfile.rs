@@ -9,7 +9,7 @@
 //! number of times. A squad's agents are the different agents its steps name. Its leader is the same for every squad:
 //! its system prompt and model are in the settings (`squads::LeaderSetup`). A file from before that still has its
 //! own `leader`, `needs_folder` and `use_worktree` (or `worktree`): those are read as keys platoon doesn't know and
-//! ignored, and dropped whenever platoon writes the file (`RETIRED_KEYS`). Every ticket has a folder (its own, or its private work folder) and works in a worktree of each git folder.
+//! ignored, and dropped whenever platoon writes the file (`RETIRED_KEYS`). Every task has a folder (its own, or the folder platoon keeps for it) and works in a worktree of each git folder (or on a new branch in the user's checkout, when the task says so).
 //!
 //! The file of a changed built-in holds the whole definition and says which built-in it came from; restoring the
 //! built-in puts the file aside (`<id>.json.bak`). Keys platoon doesn't know are kept. A file that can't be read is
@@ -206,11 +206,11 @@ fn builtin_coding() -> Squad {
         name: "Coding".into(),
         can_do: CODING_CAN_DO.into(),
         workflow: vec![
-            s("planner", "Reads the ticket and the code it touches and writes a short plan that restates the acceptance checks.", None),
-            s("builder", "Makes the change the plan describes in the ticket's worktree and runs the tests.", None),
+            s("planner", "Reads the task and the code it touches and writes a short plan that restates the acceptance checks.", None),
+            s("builder", "Makes the change the plan describes in the task's folder and runs the tests.", None),
             s(
                 "reviewer",
-                "Reads the change against the ticket and the plan, and checks that each acceptance check could have failed before the change.",
+                "Reads the change against the task and the plan, and checks that each acceptance check could have failed before the change.",
                 Some(Back { to: 1, times: 2 }),
             ),
             s("verifier", "Runs the tests and the build and reports plainly what passed and what failed.", Some(Back { to: 1, times: 1 })),
@@ -227,11 +227,11 @@ fn builtin_research() -> Squad {
         name: "Research".into(),
         can_do: RESEARCH_CAN_DO.into(),
         workflow: vec![
-            s("questioner", "Turns the ticket into a short list of specific questions to answer.", None),
-            s("researcher", "Answers each question with its sources, from the ticket's folders and the web.", None),
+            s("questioner", "Turns the task into a short list of specific questions to answer.", None),
+            s("researcher", "Answers each question with its sources, from the task's folders and the web.", None),
             s(
                 "report-writer",
-                "Writes report.md in the ticket's private work folder (never in the project's folders): the answers, the sources, and what is still unknown.",
+                "Writes report.md in the task's own folder (never in the project's folders): the answers, the sources, and what is still unknown.",
                 None,
             ),
             s("checker", "Checks each claim in the report against its source.", Some(Back { to: 1, times: 1 })),
@@ -248,11 +248,11 @@ fn builtin_docs() -> Squad {
         name: "Docs".into(),
         can_do: DOCS_CAN_DO.into(),
         workflow: vec![
-            s("outliner", "Reads the ticket, the existing docs and the code they describe, and proposes what to write where.", None),
-            s("tech-writer", "Writes or updates the Markdown files the outline names, in the ticket's folder.", None),
+            s("outliner", "Reads the task, the existing docs and the code they describe, and proposes what to write where.", None),
+            s("tech-writer", "Writes or updates the Markdown files the outline names, in the task's folder.", None),
             s(
                 "editor",
-                "Checks the files for accuracy against the code and the ticket, clarity, and the project's style.",
+                "Checks the files for accuracy against the code and the task, clarity, and the project's style.",
                 Some(Back { to: 1, times: 2 }),
             ),
         ],
@@ -850,10 +850,10 @@ pub const DESCRIPTION_MAX: usize = 2000;
 pub const DRAFT_AGENTS_MAX: usize = 60;
 
 pub const DRAFT_GUIDANCE: &str = "\
-You design a squad for the user: a small team of Claude Code agents that carries out one kind of work on a ticket. \
+You design a squad for the user: a small team of Claude Code agents that carries out one kind of work on a task. \
 A leader hands each step of a workflow to an agent, reads what it reports, and decides what happens next; the agents \
 do the work.
-- Give it a short name and say in a sentence or two what kind of work it can do, so someone deciding whether a ticket \
+- Give it a short name and say in a sentence or two what kind of work it can do, so someone deciding whether a task \
 fits can tell.
 - Agents are shared by squads. Use an agent the user has already wherever its job fits a step, and make a new agent \
 only for a job none of them does. Use as few agents as the work needs, each with one clear job.
@@ -865,9 +865,9 @@ it has to run something, use the web only if it has to look something up online.
 - The workflow is the order the leader follows. An agent may do more than one step. A step that checks work may send \
 it back to an earlier step a few times. Each step's line is what the leader reads: say what the step does and, for \
 the last one, what the squad's result is.
-- The squad works in a git worktree of each of the ticket's folders that is in git (other folders as they are), and \
-keeps what it writes for the ticket rather than for the project (a report, say) in a private work folder platoon \
-keeps for the ticket. Every squad has the same leader, set in platoon's settings: don't write one.";
+- The squad works in a git worktree of each of the task's folders that is in git (other folders as they are), and \
+keeps what it writes for the task rather than for the project (a report, say) in a folder of the task's own that \
+platoon keeps. Every squad has the same leader, set in platoon's settings: don't write one.";
 
 /// The part of the drafting instructions platoon keeps: what it is shown is data, and the reply's shape, which
 /// `parse_draft` holds it to.
@@ -1522,11 +1522,7 @@ mod tests {
         let m = |n: &str, model: &str, f: bool, c: bool, w: bool| (n.to_string(), model.to_string(), f, c, w);
         let r = builtin("research").unwrap();
         assert_eq!(r.name, "Research");
-        assert!(
-            r.workflow[2].does.contains("report.md in the ticket's private work folder (never in the project's folders)"),
-            "{:?}",
-            r.workflow[2]
-        );
+        assert!(r.workflow[2].does.contains("report.md in the task's own folder (never in the project's folders)"), "{:?}", r.workflow[2]);
         assert_eq!(
             switches("research"),
             [
@@ -1621,6 +1617,7 @@ mod tests {
             &crate::squads::LeaderSetup::builtin(),
             crate::tickets::AgentNames::SquadRole,
             crate::squads::Place::WORKTREE,
+            &crate::squads::Terms::default(),
         );
         assert_eq!(launch.model, "sonnet");
         assert!(!launch.agents.contains("Lead the scripts squad."));
@@ -1708,7 +1705,7 @@ mod tests {
         let none = agentfile::Installed::default();
         let p = draft_prompt("  a triage squad  ", &agents(), &none);
         assert!(p.ends_with("\na triage squad\n"), "{p}");
-        assert!(p.contains("- planner (Opus; runs commands): Read the ticket and the code it touches"), "{p}");
+        assert!(p.contains("- planner (Opus; runs commands): Read the task and the code it touches"), "{p}");
         assert!(p.contains("- outliner (Sonnet; only reads): "), "{p}");
         // An agent that isn't ready isn't offered.
         let mut lib = agents();
@@ -1724,7 +1721,7 @@ mod tests {
             "no leader and no switches to draft: {fixed}"
         );
         assert!(fixed.contains("\"skills\":[],\"mcp_servers\":[]") && fixed.contains("only names from the installed"), "{fixed}");
-        assert!(DRAFT_GUIDANCE.contains("same leader") && DRAFT_GUIDANCE.contains("private work folder"), "{DRAFT_GUIDANCE}");
+        assert!(DRAFT_GUIDANCE.contains("same leader") && DRAFT_GUIDANCE.contains("a folder of the task's own"), "{DRAFT_GUIDANCE}");
         assert!(p.contains("\nSkills installed: (none)\nMCP servers installed: (none)\n\nThe squad the user wants"), "{p}");
         assert_eq!(draft_prompt(&"x".repeat(5000), &[], &none).matches('x').count(), DESCRIPTION_MAX);
     }

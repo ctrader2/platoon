@@ -413,9 +413,9 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
         out.push(("v", "editor", Some(Action::Editor)));
     } else if app.pane == Pane::Tickets {
         let on_divider = matches!(app.ticket_rows().get(app.ticket_selected()), Some(TRow::Divider(_)));
-        out = vec![("enter", if on_divider { "show/hide" } else { "open" }, None), ("n", "new ticket", None)];
+        out = vec![("enter", if on_divider { "show/hide" } else { "open" }, None), ("n", "new task", None)];
         if let Some(t) = app.selected_ticket() {
-            if t.state == State::Ready {
+            if wants_to_publish(t) {
                 out.push(("p", "let it publish", None));
             } else if handable(app, t) {
                 out.push(("S", "hand to a squad", None));
@@ -444,12 +444,17 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     out
 }
 
-/// A ticket `S` would hand to a squad now (the hint is only offered then; `S` says why not otherwise).
+/// A task `S` would hand to a squad now (the hint is only offered then; `S` says why not otherwise).
 fn handable(app: &App, t: &Ticket) -> bool {
     t.state == State::New && tickets::is_ready(t, app.tickets())
 }
 
-/// The keys of a ticket's own screen.
+/// A task that Needs you because its squad wants to publish: `p` lets it.
+fn wants_to_publish(t: &Ticket) -> bool {
+    t.state == State::Waiting && t.publish_wanted
+}
+
+/// The keys of a task's own screen.
 fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
     let t = app.ticket(n);
     let mut out: Vec<Hint> = Vec::new();
@@ -462,14 +467,14 @@ fn ticket_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
     if t.is_some_and(|t| handable(app, t)) {
         out.push(("S", "hand to a squad", None));
     }
-    if t.is_some_and(|t| t.state == State::Ready) {
+    if t.is_some_and(wants_to_publish) {
         out.push(("p", "let it publish", None));
     }
     if t.is_some_and(|t| t.state != State::Cancelled) {
         out.push(("c", "cancel", None));
     }
     if app.can_remove_worktree(n) {
-        out.push(("w", "remove worktree", None));
+        out.push(("w", "remove the copy", None));
     }
     out.extend([
         ("e", "edit", None),
@@ -571,10 +576,10 @@ fn session_cell(st: &PStat, room: usize) -> (String, String) {
     if full.chars().count() + unread.chars().count() <= room { (full, unread) } else { (format!("{} active · ", st.active), unread) }
 }
 
-/// A Projects row's TICKETS cell: `4 open · 1 can start`, `4 open` when none can start, `no tickets` when none is open.
+/// A Projects row's TASKS cell: `4 open · 1 can start`, `4 open` when none can start, `no tasks` when none is open.
 fn ticket_counts(st: &PStat) -> String {
     match (st.open_tickets, st.ready_tickets) {
-        (0, _) => "no tickets".into(),
+        (0, _) => "no tasks".into(),
         (o, 0) => format!("{o} open"),
         (o, r) => format!("{o} open · {r} can start"),
     }
@@ -634,7 +639,7 @@ fn draw_project_columns(f: &mut Frame, t: &Theme, app: &App, area: Rect) {
         Span::raw("   "),
         Span::styled(fit("PROJECT", c.name + c.pad.name), s),
         Span::styled(fit(if c.sessions > 0 { "SESSIONS" } else { "" }, c.sessions + c.pad.sessions), s),
-        Span::styled(fit(if c.tickets > 0 { "TICKETS" } else { "" }, c.tickets + c.pad.tickets), s),
+        Span::styled(fit(if c.tickets > 0 { "TASKS" } else { "" }, c.tickets + c.pad.tickets), s),
         Span::styled(format!("{:>w$}", "LAST", w = LAST_W - 1 + c.pad.last), s),
     ]);
     f.render_widget(Paragraph::new(line), area);
@@ -763,11 +768,11 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     if !lines.is_empty() {
         f.render_widget(Paragraph::new(lines), desc);
     }
-    // Below 100 columns the left column (sessions and tickets) gets half, so a ticket's row keeps its title and
-    // what it waits for; wider, the notes get a little more.
+    // Below 100 columns the left column (sessions and tasks) gets half, so a task's row keeps its title and
+    // its state's words; wider, the notes get a little more.
     let left_w = if panes.width >= 100 { panes.width * 45 / 100 } else { panes.width / 2 };
     let [left_col, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(panes);
-    // The left column: Sessions over Tickets, half each (Sessions gets the odd line).
+    // The left column: Sessions over Tasks, half each (Sessions gets the odd line).
     let [left, lower] = Layout::vertical([Constraint::Length(left_col.height - left_col.height / 2), Constraint::Min(0)]).areas(left_col);
     let pane_block = |title: &'static str, focused: bool| {
         Block::default()
@@ -781,7 +786,7 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     let li = lb.inner(left).inner(Margin::new(1, 0));
     f.render_widget(lb, left);
     draw_project_sessions(f, app, li);
-    let tb = pane_block("Tickets", app.pane == Pane::Tickets);
+    let tb = pane_block("Tasks", app.pane == Pane::Tickets);
     let ti = tb.inner(lower).inner(Margin::new(1, 0));
     f.render_widget(tb, lower);
     draw_project_tickets(f, app, ti);
@@ -796,16 +801,30 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     hits.push((right, Hit::Pane(Pane::Notes)));
 }
 
-/// A state's color: what is waiting on the user stands out, what is finished steps back.
+/// A state's color: what needs the user stands out, what is finished steps back. (A New task's words have colors of
+/// their own: `words_color`.)
 pub fn state_color(t: &Theme, s: &State) -> Color {
     match s {
         State::New => t.text,
         State::Working => t.busy,
         State::Waiting => t.warn,
-        State::Ready => t.accent,
         State::Done => t.ok,
         State::Cancelled => t.dim,
         State::Other(_) => t.subtext,
+    }
+}
+
+/// The color of a task's state words (`tickets::words`): Can start in the "go" color, Waits for and Needs you as
+/// warnings, Needs a folder quiet, the rest by state.
+pub fn words_color(t: &Theme, x: &Ticket, says: &str) -> Color {
+    if says == tickets::CAN_START {
+        t.ok
+    } else if says.starts_with("Waits") {
+        t.warn
+    } else if says == tickets::NEEDS_FOLDER || says == tickets::NEEDS_FOLDER_SHORT {
+        t.subtext
+    } else {
+        state_color(t, &x.state)
     }
 }
 
@@ -814,13 +833,15 @@ pub fn state_color(t: &Theme, s: &State) -> Color {
 pub(crate) struct TCols {
     pub num: usize,
     pub title: usize,
-    /// The state, or (when `merged`) what the row says most: what it waits for, "Can start", else its state.
+    /// The state's words (`tickets::words`: Needs you, Working, Can start, Waits for #1, ...), or (when `merged`) what
+    /// the row says most: what is happening to it, else those words.
     pub state: usize,
-    /// What it waits for or "Can start", and the tokens its squads spent; only beside a state column of its own.
+    /// What is happening to it (handed over, in the line) and the tokens its squads spent; only beside a state column
+    /// of its own.
     pub tail: usize,
-    /// One column for the state and what the row waits for (a pane too narrow for two).
+    /// One column for the state and what is happening (a pane too narrow for two).
     pub merged: bool,
-    /// The words in that one column are their short forms (`Waiting`, `To publish`, `Waits #1`).
+    /// The words in that one column are their short forms (`Waits #1`, `No folder`, `In line`).
     pub short: bool,
 }
 
@@ -866,35 +887,24 @@ pub(crate) fn ticket_cols(
     TCols { num, title: title(gap(state)), state, tail: 0, merged: true, short: true }
 }
 
-/// What a ticket's row says after its state: what is happening to it, what it waits for, or "Can start".
-/// `merged`: the state has no column of its own (a narrow pane), so a row with nothing else to say there says its state.
-/// `short`: the words of the narrowest pane.
-fn ticket_tail(t: &Ticket, all: &[Ticket], merged: bool, short: bool) -> (String, bool) {
+/// What a task's row says after its state's words: what is happening to it (being handed to a squad, in the line for
+/// a free one). `merged`: the state has no column of its own (a narrow pane), so a row with nothing happening says its
+/// state's words there. `short`: the words of the narrowest pane.
+fn ticket_tail(t: &Ticket, all: &[Ticket], merged: bool, short: bool) -> String {
     // Being handed to a squad: what is happening says the most.
     if let Some(busy) = &t.busy {
-        return (if short { "Working…".to_string() } else { busy.clone() }, false);
+        return if short { "Working…".to_string() } else { busy.clone() };
     }
     if t.queued.is_some() {
-        return ((if short { tickets::QUEUED_SHORT } else { tickets::QUEUED_WORDS }).to_string(), false);
+        return (if short { tickets::QUEUED_SHORT } else { tickets::QUEUED_WORDS }).to_string();
     }
-    let state = || if short { t.state.short_label() } else { t.state.label() }.to_string();
-    if t.state.closed() {
-        return (if merged { state() } else { String::new() }, false);
+    if merged {
+        return if short { tickets::short_words(t, all) } else { tickets::words(t, all) };
     }
-    let wait = tickets::waiting_for(t, all);
-    if !wait.is_empty() {
-        return (if short { tickets::waits_short(&wait) } else { tickets::waits_for_words(&wait) }, false);
-    }
-    if tickets::is_ready(t, all) {
-        return (tickets::CAN_START.into(), true);
-    }
-    if merged && t.state != State::New {
-        return (state(), false);
-    }
-    (String::new(), false)
+    String::new()
 }
 
-/// The Tickets pane: the open tickets, then "Done and cancelled · N" (folded until enter opens it).
+/// The Tasks pane: the open tasks, then "Done and cancelled · N" (folded until enter opens it).
 fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     if area.height == 0 || area.width == 0 {
@@ -907,31 +917,28 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     let all = app.tickets();
     let rows = app.ticket_rows();
     if rows.is_empty() {
-        f.render_widget(
-            Paragraph::new("No tickets yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(hint_fg(t))),
-            area,
-        );
+        f.render_widget(Paragraph::new("No tasks yet · n to make one").wrap(Wrap { trim: true }).style(Style::new().fg(hint_fg(t))), area);
         return;
     }
     let shown: Vec<&Ticket> =
         rows.iter().filter_map(|r| if let TRow::Ticket(n) = r { all.iter().find(|x| x.number == *n) } else { None }).collect();
     let num = shown.iter().map(|x| format!("#{}", x.number).len()).max().unwrap_or(2);
-    let want_state = shown.iter().map(|x| x.state.label().width()).max().unwrap_or(0);
+    let want_state = shown.iter().map(|x| tickets::words(x, all).width()).max().unwrap_or(0);
     // What each row's squads spent, short ("1.2M tokens"), on the rows that have it.
     let tokens: std::collections::HashMap<u32, String> =
         shown.iter().filter_map(|x| Some((x.number, crate::squadwork::pane_total(&app.ticket_tokens(x)?)))).collect();
-    // What it waits for (or, in one column with the state, what it says most), then the tokens; in the short words of
-    // the narrowest pane, no tokens.
-    let tail_of = |x: &Ticket, merged: bool, short: bool| -> (String, bool) {
-        let (tail, ready) = ticket_tail(x, all, merged, short);
+    // What is happening to it (or, in one column with the state, what it says most), then the tokens; in the short
+    // words of the narrowest pane, no tokens.
+    let tail_of = |x: &Ticket, merged: bool, short: bool| -> String {
+        let tail = ticket_tail(x, all, merged, short);
         match tokens.get(&x.number) {
-            _ if short => (tail, ready),
-            Some(n) if tail.is_empty() => (n.clone(), ready),
-            Some(n) => (format!("{tail} · {n}"), ready),
-            None => (tail, ready),
+            _ if short => tail,
+            Some(n) if tail.is_empty() => n.clone(),
+            Some(n) => format!("{tail} · {n}"),
+            None => tail,
         }
     };
-    let longest = |merged: bool, short: bool| shown.iter().map(|x| tail_of(x, merged, short).0.width()).max().unwrap_or(0);
+    let longest = |merged: bool, short: bool| shown.iter().map(|x| tail_of(x, merged, short).width()).max().unwrap_or(0);
     let want_title = shown.iter().map(|x| x.title.width()).max().unwrap_or(0);
     let c =
         ticket_cols(area.width as usize, num, (want_state, longest(false, false)), longest(true, false), longest(true, true), want_title);
@@ -972,25 +979,18 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
                     Span::styled(format!("{:<w$} ", format!("#{}", x.number), w = c.num), base.fg(t.dim)),
                     Span::styled(fit(&x.title, c.title), base.fg(if closed { t.dim } else { t.text })),
                 ];
-                let tail_color = |tail: &str, ready: bool| {
-                    if ready {
-                        t.ok
-                    } else if tail.starts_with("Waits") {
-                        t.warn
-                    } else if tokens.get(&x.number).is_some_and(|n| n == tail) {
-                        t.subtext
-                    } else {
-                        state_color(t, &x.state)
-                    }
+                let tail_color = |tail: &str| {
+                    if tokens.get(&x.number).is_some_and(|n| n == tail) { t.subtext } else { words_color(t, x, tail) }
                 };
                 if c.merged {
-                    let (says, ready) = tail_of(x, true, c.short);
-                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(tail_color(&says, ready))));
+                    let says = tail_of(x, true, c.short);
+                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(tail_color(&says))));
                 } else {
-                    spans.push(Span::styled(format!("  {}", fit(x.state.label(), c.state)), base.fg(state_color(t, &x.state))));
+                    let says = tickets::words(x, all);
+                    spans.push(Span::styled(format!("  {}", fit(&says, c.state)), base.fg(words_color(t, x, &says))));
                     if c.tail > 0 {
-                        let (tail, ready) = tail_of(x, false, false);
-                        spans.push(Span::styled(format!("  {}", fit(&tail, c.tail)), base.fg(tail_color(&tail, ready))));
+                        let tail = tail_of(x, false, false);
+                        spans.push(Span::styled(format!("  {}", fit(&tail, c.tail)), base.fg(tail_color(&tail))));
                     }
                 }
                 Line::from(spans)
@@ -1000,9 +1000,10 @@ fn draw_project_tickets(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
-/// A ticket's own screen, in `area`: its number and title, its state, its squad, its folders and what it
-/// waits for, then its body drawn from the Markdown, scrolled with the arrows. It takes any `area`, so a split view
-/// can put a session beside it.
+/// A task's own screen, in `area`: its number and title, its state, its squad, how much it does on its own, where it
+/// works (a copy of each git folder, or the user's own checkout on a new branch, and what the work lands on), its own
+/// folder, what it waits for, then its text drawn from the Markdown, scrolled with the arrows. It takes any `area`,
+/// so a split view can put a session beside it.
 fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     let t = app.effective_theme();
     let Some(x) = app.ticket(number) else { return };
@@ -1027,15 +1028,14 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         ]));
     }
     head.push(Line::raw(""));
-    const LABEL: usize = 12;
+    const LABEL: usize = 16;
     let label = |s: &str| Span::styled(format!("{s:<LABEL$}"), Style::new().fg(t.dim));
-    let (tail, ready) = ticket_tail(x, all, false, false);
-    let mut state = vec![
-        label("State"),
-        Span::styled(x.state.label().to_string(), Style::new().fg(state_color(t, &x.state)).add_modifier(Modifier::BOLD)),
-    ];
+    let tail = ticket_tail(x, all, false, false);
+    let says = tickets::words(x, all);
+    let mut state =
+        vec![label("State"), Span::styled(says.clone(), Style::new().fg(words_color(t, x, &says)).add_modifier(Modifier::BOLD))];
     if !tail.is_empty() {
-        state.push(Span::styled(format!(" · {tail}"), Style::new().fg(if ready { t.ok } else { t.warn })));
+        state.push(Span::styled(format!(" · {tail}"), Style::new().fg(t.warn)));
     }
     head.push(Line::from(state));
     // The session it was made in (`/to-tickets`): its name, and the key that opens it.
@@ -1061,76 +1061,97 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
     }
-    // Which squad has it: "Coding squad" (whether its session runs shows beside the ticket, or as the enter hint).
+    // Which squad has it: "Coding squad" (whether its session runs shows beside the task, or as the enter hint).
     if let Some(l) = x.leader() {
         let name = app.squad_name(&l.squad);
         let name = name.as_str();
-        let mut spans = vec![Span::styled(fit_end(&format!("{name} squad"), w), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
+        head.push(Line::from(vec![
+            label("Squad"),
+            Span::styled(fit_end(&format!("{name} squad"), w.saturating_sub(LABEL)), Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
+        ]));
         if x.go_ahead {
-            spans.push(Span::styled(fit_end(" · you let it publish", w.saturating_sub(name.chars().count() + 6)), Style::new().fg(t.warn)));
+            head.push(Line::from(vec![label(""), Span::styled("you let it publish", Style::new().fg(t.warn))]));
         }
-        head.push(Line::from(spans));
     }
+    let room = w.saturating_sub(LABEL);
+    // A label, then its words wrapped under themselves (never cut mid-word).
+    let labelled = |head: &mut Vec<Line<'static>>, first: &str, text: &str, color: Color| {
+        for (k, l) in wrap(text, room.max(8)).into_iter().enumerate() {
+            head.push(Line::from(vec![label(if k == 0 { first } else { "" }), Span::styled(l, Style::new().fg(color))]));
+        }
+    };
+    // How much its squad does on its own: once that has been set (the hand-over), or a squad has had it.
+    if x.autonomy.is_some() || x.leader().is_some() {
+        labelled(&mut head, "On its own", x.autonomy().label(), t.text);
+    }
+    // Where it works: for each folder, a copy of it (its worktree, with the branch and what the work lands on), the
+    // user's own checkout on a new branch, or the folder as it is; then its own folder once a squad has had it.
     let removable = app.can_remove_worktree(number);
-    for (i, wt) in x.worktrees.iter().enumerate() {
-        let lead = label(if i == 0 { "Worktree" } else { "" });
-        // Removed after the work: said, with the branch that keeps its commits.
-        if wt.removed.is_some() {
-            let shown = fit_start(&tilde(&wt.path, &app.home), w.saturating_sub(LABEL));
-            head.push(Line::from(vec![lead, Span::styled(shown, Style::new().fg(t.subtext))]));
-            for l in wrap(&format!("Removed; its branch {} is kept.", wt.branch), w.saturating_sub(LABEL)) {
-                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.subtext))]));
-            }
-            continue;
-        }
-        let shown = fit_start(&format!("{} ({})", tilde(&wt.path, &app.home), wt.branch), w.saturating_sub(LABEL));
-        head.push(Line::from(vec![lead, Span::styled(shown, Style::new().fg(t.text))]));
-        if wt.kept_uncommitted {
-            for l in wrap("Kept because it has changes not yet committed.", w.saturating_sub(LABEL)) {
-                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
-            }
-        }
-        // Opened in an editor with a window of its own, which platoon can't tell has closed: the user's to remove.
-        if let Some(name) = &wt.opened_in {
-            let says = if x.state.closed() {
-                format!("Kept: opened in {name}.")
-            } else {
-                format!("Opened in {name}: kept after the work until w removes it.")
-            };
-            for l in wrap(&says, w.saturating_sub(LABEL)) {
-                head.push(Line::from(vec![label(""), Span::styled(l, Style::new().fg(t.warn))]));
-            }
-        }
-        if removable && (wt.kept_uncommitted || wt.opened_in.is_some()) {
-            let what = if wt.kept_uncommitted { " removes it anyway" } else { " removes it" };
-            head.push(Line::from(vec![
-                label(""),
-                Span::styled("w", Style::new().fg(t.accent)),
-                Span::styled(what, Style::new().fg(hint_fg(t))),
-            ]));
-        }
-    }
+    let branch = x.branch();
+    let under = |head: &mut Vec<Line<'static>>, text: &str, color: Color| labelled(head, "", text, color);
     if x.folders.is_empty() {
-        head.push(Line::from(vec![label("Folders"), Span::styled("None: a squad works in its work folder", Style::new().fg(t.subtext))]));
+        labelled(&mut head, "Works in", "its own folder (it has no folder of its own)", t.subtext);
     }
     for (i, folder) in x.folders.iter().enumerate() {
-        let shown = fit_start(&tilde(folder, &app.home), w.saturating_sub(LABEL));
-        head.push(Line::from(vec![label(if i == 0 { "Folders" } else { "" }), Span::styled(shown, Style::new().fg(t.text))]));
+        let first = if i == 0 { "Works in" } else { "" };
+        let name = crate::squads::folder_name(folder);
+        let lands =
+            x.works_on_in(folder).map(|wo| wo.lands_on.trim().to_string()).filter(|l| !l.is_empty()).map(|l| format!(" · lands on {l}"));
+        let lands = lands.unwrap_or_default();
+        if let Some(wt) = x.worktrees.iter().find(|wt| wt.folder == *folder) {
+            // Removed after the work: said, with the branch that keeps its commits.
+            if wt.removed.is_some() {
+                labelled(&mut head, first, &format!("a copy of {name} ({}){lands}", wt.branch), t.subtext);
+                under(&mut head, &format!("The copy is removed; its branch {} is kept.", wt.branch), t.subtext);
+                continue;
+            }
+            labelled(&mut head, first, &format!("a copy of {name} ({}){lands}", wt.branch), t.text);
+            head.push(Line::from(vec![label(""), Span::styled(fit_start(&tilde(&wt.path, &app.home), room), Style::new().fg(t.dim))]));
+            if wt.kept_uncommitted {
+                under(&mut head, "Kept because it has changes not yet committed.", t.warn);
+            }
+            // Opened in an editor with a window of its own, which platoon can't tell has closed: the user's to remove.
+            if let Some(ed) = &wt.opened_in {
+                let says = if x.state.closed() {
+                    format!("Kept: opened in {ed}.")
+                } else {
+                    format!("Opened in {ed}: kept after the work until w removes it.")
+                };
+                under(&mut head, &says, t.warn);
+            }
+            if removable && (wt.kept_uncommitted || wt.opened_in.is_some()) {
+                let what = if wt.kept_uncommitted { " removes it anyway" } else { " removes it" };
+                head.push(Line::from(vec![
+                    label(""),
+                    Span::styled("w", Style::new().fg(t.accent)),
+                    Span::styled(what, Style::new().fg(hint_fg(t))),
+                ]));
+            }
+        } else if x.branch_in_checkout(folder) {
+            labelled(&mut head, first, &format!("{name}, on a new branch {branch}{lands}"), t.text);
+            head.push(Line::from(vec![label(""), Span::styled(fit_start(&tilde(folder, &app.home), room), Style::new().fg(t.dim))]));
+        } else if x.works_on_in(folder).is_some() {
+            // Set at a hand-over that didn't happen: what the next one does.
+            labelled(&mut head, first, &format!("a copy of {name} ({branch}){lands}"), t.text);
+            head.push(Line::from(vec![label(""), Span::styled(fit_start(&tilde(folder, &app.home), room), Style::new().fg(t.dim))]));
+        } else {
+            head.push(Line::from(vec![label(first), Span::styled(fit_start(&tilde(folder, &app.home), room), Style::new().fg(t.text))]));
+        }
     }
-    // The private work folder platoon keeps for the ticket, once a squad has had it.
+    // The task's own folder, kept by platoon, once a squad has had it.
     if x.leader().is_some()
         && let Some(store) = app.tickets_store()
     {
         let work = tickets::work_dir(&app.config, store.project(), x.number);
-        let shown = fit_start(&tilde(&work.to_string_lossy(), &app.home), w.saturating_sub(LABEL));
-        head.push(Line::from(vec![label("Work folder"), Span::styled(shown, Style::new().fg(t.text))]));
+        let shown = fit_start(&tilde(&work.to_string_lossy(), &app.home), room);
+        head.push(Line::from(vec![label("Its own folder"), Span::styled(shown, Style::new().fg(t.text))]));
     }
     if x.blocked_by.is_empty() {
         head.push(Line::from(vec![label("Waits for"), Span::styled("nothing", Style::new().fg(t.subtext))]));
     }
     for (i, b) in x.blocked_by.iter().enumerate() {
         let what = match all.iter().find(|o| o.number == *b) {
-            Some(o) => format!("#{b} {} · {}", o.title, o.state.label()),
+            Some(o) => format!("#{b} {} · {}", o.title, tickets::words(o, all)),
             None => format!("#{b} (not in this project)"),
         };
         let done = all.iter().any(|o| o.number == *b && o.state == State::Done);
@@ -1155,7 +1176,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         return;
     }
     let mut text = app.tickets_store().map(|s| s.body(x)).unwrap_or_default();
-    // The squad's result comes first: on a Done ticket it is what the user opened it for.
+    // The squad's result comes first: on a Done task it is what the user opened it for.
     if let Some(result) = app.tickets_store().and_then(|s| s.result(x.number)) {
         text = format!("## Result\n\n{}\n\n{text}", result.trim_end());
     }
@@ -1302,7 +1323,7 @@ fn draw_ticket_pick(f: &mut Frame, app: &App, area: Rect) {
         let room = (rect.width as usize).saturating_sub(2 + check.chars().count());
         let (text, color) = match opt {
             PickOpt::Blocker(n) => match app.ticket(*n) {
-                Some(o) => (format!("#{n} {} · {}", o.title, o.state.label()), t.text),
+                Some(o) => (format!("#{n} {} · {}", o.title, tickets::words(o, app.tickets())), t.text),
                 None => (format!("#{n}"), t.text),
             },
             PickOpt::Folder(path) => (fit_start(&tilde(path, &app.home), room), t.text),
@@ -3326,15 +3347,18 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let nb = &app.name_box;
     app.hits.borrow_mut().clear();
-    let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_));
+    let wide = matches!(nb.purpose, NamePurpose::NewTicket | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_));
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
     popup_ground(f, t, area, r, true);
     let (title, note) = match nb.purpose {
         NamePurpose::Rename(_) => ("Rename project", "The project's notes and sessions stay as they are."),
         NamePurpose::NewFor(_) => ("New project", "The session goes into it. Its color and badge can be changed later (c)."),
         NamePurpose::New => ("New project", "Give it a name. Its color and badge can be changed later (c)."),
-        NamePurpose::NewTicket => ("New ticket", "Its title. The body opens in your editor next."),
-        NamePurpose::TicketTitle(_) => ("Rename ticket", "The body and its file stay as they are."),
+        NamePurpose::NewTicket => ("New task", "Its title. The text opens in your editor next."),
+        NamePurpose::TicketTitle(_) => ("Rename task", "The text and its file stay as they are."),
+        NamePurpose::LandsOn(_) => {
+            ("Lands on", "The branch the work is meant for: the copy starts from it, and a merge request goes against it.")
+        }
         NamePurpose::Squad(ref p) => match p {
             crate::app::SquadName::Name => ("Squad name", "What the squad is called. Its agents keep their names."),
             crate::app::SquadName::Copy => ("Copy squad", "The copy is yours to change; the squad you copied stays as it is."),
@@ -3344,7 +3368,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
                 ("New agent", "Its name, for the job it does (say, test writer). You write its system prompt next.")
             }
             crate::app::SquadName::AgentSkill => {
-                ("A skill", "Its name, as its SKILL.md calls it: one in the ticket's folder, say. It is looked for where the squad works.")
+                ("A skill", "Its name, as its SKILL.md calls it: one in the task's folder, say. It is looked for where the squad works.")
             }
             crate::app::SquadName::AgentMcp => ("An MCP server", "Its name, as it is configured where the squad works."),
         },
@@ -3429,7 +3453,7 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     popup_ground(f, t, area, r, true);
     let what = match (pick.instructions, pick.ticket) {
         (Some(_), _) => "Edit the system prompt with".to_string(),
-        (None, Some(n)) => format!("Edit ticket #{n} with"),
+        (None, Some(n)) => format!("Edit task #{n} with"),
         (None, None) => "Edit the notes with".to_string(),
     };
     let block = modal_block(t, &what);
@@ -3659,7 +3683,7 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
         Some(n) => n.to_string(),
         None => match (edit.instructions, edit.ticket) {
             (Some(id), _) => format!("{} · the system prompt for {}", edit.name, crate::instructions::action(id).what),
-            (None, Some(n)) => format!("{} · ticket #{n}", edit.name),
+            (None, Some(n)) => format!("{} · task #{n}", edit.name),
             (None, None) if edit.squad.is_some() => format!("{} · a squad's system prompt", edit.name),
             (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
         },
@@ -3759,7 +3783,7 @@ fn draw_picker(f: &mut Frame, app: &App, area: Rect) {
     popup_ground(f, t, area, r, true);
     let title = match (p.ticket, p.project.as_deref().and_then(|id| app.projects.get(id))) {
         _ if p.editor => "Pick a folder to open in your editor".to_string(),
-        (Some(n), _) => format!("A folder for ticket #{n}"),
+        (Some(n), _) => format!("A folder for task #{n}"),
         (None, Some(pr)) => format!("New session in {}: pick a folder", pr.name),
         (None, None) => "New session: pick a folder".to_string(),
     };
@@ -3871,14 +3895,14 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::DeleteSquad { id, name } => (
             "Delete squad",
             format!("Delete the squad \"{name}\"?"),
-            format!("Tickets it already has keep it, as it was when they started. Its file is kept as {id}.json.bak in the squads folder."),
+            format!("Tasks it already has keep it, as it was when they started. Its file is kept as {id}.json.bak in the squads folder."),
             "delete",
         ),
         Confirm::RestoreSquad { id, name } => (
             "Restore squad",
             format!("Put {name} back as platoon has it?"),
             format!(
-                "Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tickets it already has keep what they started with."
+                "Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tasks it already has keep what they started with."
             ),
             "restore",
         ),
@@ -3892,7 +3916,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "Delete agent",
             format!("Delete the agent \"{name}\"?"),
             format!(
-                "No squad uses it. Tickets already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."
+                "No squad uses it. Tasks already started keep what they started with. Its file is kept as {id}.json.bak in the agents folder."
             ),
             "delete",
         ),
@@ -3900,7 +3924,7 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "Restore agent",
             format!("Put {name} back as platoon has it?"),
             format!(
-                "Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tickets already started keep what they started with."
+                "Every squad that uses it gets platoon's version. Your changes are kept as {id}.json.bak in the agents folder, until the next time. Tasks already started keep what they started with."
             ),
             "restore",
         ),
@@ -3917,12 +3941,12 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
             "hand it over",
         ),
         Confirm::CancelTicket { number, title, squad, pid, uncommitted } => (
-            "Cancel ticket",
-            format!("Cancel ticket #{number}?"),
+            "Cancel task",
+            format!("Cancel task #{number}?"),
             {
                 let mut says = match (pid, squad) {
                     (Some(_), _) => format!(
-                        "#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. The session itself is kept: talking to the squad again opens the ticket again."
+                        "#{number} {title} goes under Done and cancelled, and its squad's session, which is running, will be stopped. The session itself is kept: talking to the squad again opens the task again."
                     ),
                     (None, true) => format!("#{number} {title} goes under Done and cancelled. Talking to its squad again opens it again."),
                     (None, false) => {
@@ -3930,15 +3954,21 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                     }
                 };
                 if *uncommitted {
-                    says.push_str(" Its worktree has changes not yet committed, so platoon keeps it: w on the ticket removes it anyway.");
+                    says.push_str(
+                        " Its copy of the folder has changes not yet committed, so platoon keeps it: w on the task removes it anyway.",
+                    );
                 }
                 says
             },
             "cancel it",
         ),
         Confirm::RemoveWorktree { number, branch, uncommitted, opened_in } => (
-            "Remove worktree",
-            if *uncommitted { format!("Remove #{number}'s worktree anyway?") } else { format!("Remove #{number}'s worktree?") },
+            "Remove the copy",
+            if *uncommitted {
+                format!("Remove #{number}'s copy of the folder anyway?")
+            } else {
+                format!("Remove #{number}'s copy of the folder?")
+            },
             {
                 let mut says = String::new();
                 if let Some(name) = opened_in {
@@ -4013,8 +4043,8 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
     draw_footer(f, app, foot, &hints, None);
 }
 
-/// The split view: the ticket on the left, its squad's live session on the right. Too narrow for that, the session
-/// gets the width and the ticket one line above it.
+/// The split view: the task on the left, its squad's live session on the right. Too narrow for that, the session
+/// gets the width and the task one line above it.
 fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
     let t = app.effective_theme();
     let size = f.area();
@@ -4025,7 +4055,7 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
             f.render_widget(Paragraph::new("│").style(Style::new().fg(t.border)), Rect::new(a.rule_x, y, 1, 1));
         }
     } else if let Some(x) = app.ticket(number) {
-        let mut line = format!("#{} {} · {}", x.number, x.title, x.state.label());
+        let mut line = format!("#{} {} · {}", x.number, x.title, tickets::words(x, app.tickets()));
         if !x.reason.is_empty() {
             line.push_str(&format!(" · {}", x.reason));
         }
@@ -4043,14 +4073,14 @@ fn draw_split(f: &mut Frame, app: &App, client: &Client, number: u32) {
     } else if scrolled > 0 {
         format!("↑ scrolled {scrolled} lines · type to return")
     } else {
-        app.ticket(number).map(|x| format!("#{} · {}", x.number, x.state.label())).unwrap_or_default()
+        app.ticket(number).map(|x| format!("#{} · {}", x.number, tickets::words(x, app.tickets()))).unwrap_or_default()
     };
     let hints: [Hint; 1] = [(app.back_label(), "back to the project", Some(Action::Back))];
     let color = if app.active_notice().is_some() { t.warn } else { t.dim };
     draw_footer(f, app, a.bar.inner(Margin::new(1, 0)), &hints, Some((right, color)));
 }
 
-/// A ticket with a squad, while its session isn't showing: the ticket, and beside it (or above it, when narrow) what
+/// A task with a squad, while its session isn't showing: the task, and beside it (or above it, when narrow) what
 /// the session is doing and how to open or continue it.
 fn draw_ticket_with_squad(f: &mut Frame, app: &App, number: u32, area: Rect, term_w: u16) {
     let t = app.effective_theme();
@@ -4085,29 +4115,90 @@ fn draw_ticket_with_squad(f: &mut Frame, app: &App, number: u32, area: Rect, ter
     }
 }
 
-/// The squads a ticket can be handed to, each with what it can do.
+/// The hand-over popup ("Hand to a squad"): the squads by name, with what the picked one can do under it; then the
+/// lines, each pre-filled: how much the squad does on its own, and one per folder (a copy on the task's branch or a new
+/// branch in the user's own checkout, and what the work lands on; a folder not in git is used as it is). The rows scroll
+/// so the one the cursor is on shows; no word is ever cut.
 fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     app.hits.borrow_mut().clear();
     let Some(x) = app.ticket(app.sq.pick_ticket) else { return };
+    let form = &app.sq.form;
     let w = area.width.saturating_sub(8).clamp(30, 76);
-    let inner_w = w.saturating_sub(6) as usize;
+    let inner_w = w.saturating_sub(4) as usize;
     let agents = app.agent_library();
-    let rows: Vec<Vec<String>> = app
-        .sq
-        .pick
-        .iter()
-        .map(|s| {
+    let cursor = form.cursor;
+    let n_squads = app.sq.pick.len();
+    // Each row: its lines (styled for the cursor when it is on it), as one block.
+    let mut rows: Vec<Vec<Line>> = Vec::new();
+    let row_style = |at: usize| Style::new().bg(if at == cursor { t.surface } else { t.bg });
+    let lead = |at: usize| Span::styled(if at == cursor { "▎ " } else { "  " }, row_style(at).fg(t.accent));
+    for (i, s) in app.sq.pick.iter().enumerate() {
+        let base = row_style(i);
+        // The picked squad (the one enter hands the task to) stands out from the rest; the cursor may be elsewhere.
+        let picked = i == app.sq.pick_selected;
+        let mark = Span::styled(if picked { "● " } else { "○ " }, base.fg(if picked { t.accent } else { t.dim }));
+        let name = Span::styled(s.name.clone(), base.fg(if picked { t.accent } else { t.text }).add_modifier(Modifier::BOLD));
+        let mut out = vec![Line::from(vec![lead(i), mark, name])];
+        if picked {
             let text = if !crate::squadfile::problems(s, &agents).is_empty() {
                 format!("Needs fixing on the Squads tab first. {}", s.can_do)
             } else {
                 s.can_do.clone()
             };
-            wrap(&text, inner_w.saturating_sub(2))
-        })
-        .collect();
-    let list_h: u16 = rows.iter().map(|r| r.len() as u16 + 2).sum();
-    let r = centered(area, w, (list_h + 6).min(area.height.saturating_sub(2)).max(8));
+            out.extend(
+                wrap(&text, inner_w.saturating_sub(4))
+                    .into_iter()
+                    .map(|l| Line::from(vec![Span::styled("    ", base), Span::styled(l, base.fg(t.subtext))])),
+            );
+        }
+        rows.push(out);
+    }
+    // "On its own", after a line across.
+    {
+        let at = n_squads;
+        let base = row_style(at);
+        let mut out = vec![Line::styled("─".repeat(inner_w), Style::new().fg(t.border))];
+        let text = format!("On its own: {}", form.autonomy.label());
+        for (k, l) in wrap(&text, inner_w.saturating_sub(2)).into_iter().enumerate() {
+            let first = if k == 0 { lead(at) } else { Span::styled("  ", base) };
+            match l.strip_prefix("On its own:") {
+                Some(rest) if k == 0 => out.push(Line::from(vec![
+                    first,
+                    Span::styled("On its own:", base.fg(t.dim)),
+                    Span::styled(rest.to_string(), base.fg(t.text)),
+                ])),
+                _ => out.push(Line::from(vec![first, Span::styled(l, base.fg(t.text))])),
+            }
+        }
+        rows.push(out);
+    }
+    for (k, line) in form.folders.iter().enumerate() {
+        let at = n_squads + 1 + k;
+        let base = row_style(at);
+        let text = format!("{}: {}", line.name, line.words(&form.branch));
+        let mut out = Vec::new();
+        for (j, l) in wrap(&text, inner_w.saturating_sub(2)).into_iter().enumerate() {
+            let first = if j == 0 { lead(at) } else { Span::styled("  ", base) };
+            let name = format!("{}:", line.name);
+            match l.strip_prefix(name.as_str()) {
+                Some(rest) if j == 0 => out.push(Line::from(vec![
+                    first,
+                    Span::styled(name.clone(), base.fg(t.dim)),
+                    Span::styled(rest.to_string(), base.fg(t.text)),
+                ])),
+                _ => out.push(Line::from(vec![first, Span::styled(l, base.fg(t.text))])),
+            }
+        }
+        if let Some(why) = line.no_branch.as_deref().filter(|_| line.git) {
+            for l in wrap(&format!("a new branch in your checkout: not now, {why}"), inner_w.saturating_sub(4)) {
+                out.push(Line::from(vec![Span::styled("    ", base), Span::styled(l, base.fg(t.dim))]));
+            }
+        }
+        rows.push(out);
+    }
+    let total: u16 = rows.iter().map(|r| r.len() as u16).sum::<u16>() + n_squads.saturating_sub(1) as u16;
+    let r = centered(area, w, (total + 6).min(area.height.saturating_sub(2)).max(8));
     popup_ground(f, t, area, r, true);
     let block = modal_block(t, "Hand to a squad");
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -4120,31 +4211,34 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         head,
     );
     f.render_widget(Paragraph::new("─".repeat(sep.width as usize)).style(Style::new().fg(t.border)), sep);
-    // Scrolled so the picked squad shows: from the first one that leaves room for it.
-    let picked = app.sq.pick_selected.min(rows.len().saturating_sub(1));
-    let fits = |from: usize| rows.get(from..=picked).is_none_or(|r| r.iter().map(|r| r.len() as u16 + 2).sum::<u16>() <= list.height + 1);
+    // A squad's block is followed by a blank line (not the last squad); the lines follow each other.
+    let height_of = |i: usize| rows[i].len() as u16 + u16::from(i + 1 < n_squads);
+    // Scrolled so the cursor's row shows: from the first row that leaves room for it.
+    let picked = cursor.min(rows.len().saturating_sub(1));
+    let fits = |from: usize| (from..=picked).map(height_of).sum::<u16>() <= list.height + u16::from(picked + 1 < n_squads);
     let start = (0..=picked).find(|&k| fits(k)).unwrap_or(picked);
     let mut y = list.y;
-    for (i, (s, lines)) in app.sq.pick.iter().zip(&rows).enumerate().skip(start) {
-        let h = (lines.len() as u16 + 1).min(list.bottom().saturating_sub(y));
+    for (i, lines) in rows.iter().enumerate().skip(start) {
+        let h = (lines.len() as u16).min(list.bottom().saturating_sub(y));
         if h == 0 {
             break;
         }
         let rect = Rect::new(list.x, y, list.width, h);
         app.hits.borrow_mut().push((rect, Hit::SquadRow(i)));
-        let sel = i == app.sq.pick_selected;
-        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
-        let base = Style::new().bg(bg);
-        let mut out = vec![Line::from(vec![
-            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
-            Span::styled(s.name.clone(), base.fg(t.text).add_modifier(Modifier::BOLD)),
-        ])];
-        out.extend(lines.iter().map(|l| Line::from(vec![Span::styled("  ", base), Span::styled(l.clone(), base.fg(t.subtext))])));
-        f.render_widget(Paragraph::new(out).style(base), rect);
-        y += h + 1;
+        f.render_widget(Paragraph::new(lines.clone()).style(row_style(i)), rect);
+        y += height_of(i);
     }
-    let hints: [Hint; 3] =
-        [("enter", "hand it over", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    // (The footer has 68 cells at 80 columns: on a folder's line the arrows go unsaid.)
+    let on_folder = app.hand_folder_at_cursor().is_some();
+    let mut hints: Vec<Hint> = vec![("enter", "hand it over", Some(Action::Confirm))];
+    if app.hand_on_autonomy() {
+        hints.extend([("space", "change", None), ("↑↓", "move", None)]);
+    } else if on_folder {
+        hints.extend([("space", "change", None), ("l", "lands on", None)]);
+    } else {
+        hints.extend([("space", "pick", None), ("↑↓", "move", None)]);
+    }
+    hints.push(("esc", "cancel", Some(Action::Cancel)));
     draw_footer(f, app, foot, &hints, None);
 }
 

@@ -2,7 +2,7 @@
 
 A project is a name, a color and a badge, and the conversations you put in it. It isn't tied to a folder: a project can
 hold conversations from any number of folders, and each keeps its own. Each project has notes that every one of its
-sessions gets in its context, and [tickets](tickets-and-squads.md).
+sessions gets in its context, and [tasks](tasks-and-squads.md).
 
 ## Putting conversations in a project
 
@@ -44,12 +44,12 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 
 A project's screen shows its name and its description across the top (in full, wrapped when it is long), its sessions at
 the top left (active ones first, then an `Archived (N)` group, dimmed), its
-[tickets](tickets-and-squads.md#tickets) under them and its notes on the right.
+[tasks](tasks-and-squads.md#tasks) under them and its notes on the right.
 
 - `tab` and `shift+tab` go round the three panes. `shift` with an arrow moves between them too: `shift+↑` to Sessions,
-  `shift+↓` to Tickets, `shift+→` to the notes and `shift+←` back to whichever of Sessions and Tickets you used last.
+  `shift+↓` to Tasks, `shift+→` to the notes and `shift+←` back to whichever of Sessions and Tasks you used last.
   `ctrl` with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
-  pane: `↑` `↓` move in the sessions or tickets or scroll the notes, and `←` `→` do nothing there.
+  pane: `↑` `↓` move in the sessions or tasks or scroll the notes, and `←` `→` do nothing there.
 - `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too).
 - `n` starts a new session in the project: the folder picker lists the folders the project's other sessions use first.
 - `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search).
@@ -106,7 +106,7 @@ notes and reads them again as soon as you are done or the file changes. There is
 is remembered (as `notes_editor` in `settings.json`, also chosen in Settings, Editors) and offered first, with a star, the
 next time. If platoon finds nothing at all it offers `nano` and `vi`.
 
-The same list of editors is used for a ticket's text and for the
+The same list of editors is used for a task's text and for the
 [system prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).
 
 **A new file starts from a template**: one line saying what platoon keeps up to date, then the two headings that are

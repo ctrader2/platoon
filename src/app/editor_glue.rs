@@ -331,7 +331,7 @@ impl App {
             }
             if kept > 0 {
                 self.reread_all_tickets();
-                line.push_str(&format!(" #{number}'s worktree stays after the work until w on the ticket removes it."));
+                line.push_str(&format!(" #{number}'s copy of the folder stays after the work until w on the task removes it."));
             }
         }
         if let Some(n) = self.ed.note.take() {

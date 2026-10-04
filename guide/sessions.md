@@ -73,14 +73,14 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
-| `1` `2` `3` | switch between the Sessions, Projects and [Squads](tickets-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
+| `1` `2` `3` | switch between the Sessions, Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](settings-and-keys.md) |
 | `?` | every key of the screen you are on |
-| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tickets, Squads and Agents, and the settings |
-| `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a ticket's screen, or in a squad's details, `q` goes back one level |
+| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tasks, Squads and Agents, and the settings |
+| `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a task's screen, or in a squad's details, `q` goes back one level |
 | `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](settings-and-keys.md#keys-back-and-quit) |
 
 Count badges (beside Active and Archived) are drawn with round ends in terminals that ship their own symbol glyphs
@@ -277,7 +277,7 @@ Press `v` anywhere in platoon's lists to look at the work in a code editor of yo
 | Where | What it opens |
 | --- | --- |
 | a conversation's row (Sessions tab, a project's Sessions pane) | its folder, and the folders added to it with `/add-dir` |
-| a ticket's row or its screen | the ticket's worktrees (every repository the squad works in), its folders that aren't in git as they are, and its work folder when there is something in it |
+| a task's row or its screen | the task's copies of its folders (every repository the squad works in), its folders that aren't in git as they are, and its own folder when there is something in it |
 | anywhere else (the Squads tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 
 In a session's live view every key goes to Claude: press the [back key](settings-and-keys.md#keys-back-and-quit)
@@ -310,12 +310,12 @@ choosing another there makes it the favourite. A favourite that is no longer ins
 and platoon says so once. Sessions and squads keep running meanwhile. A few things happen first when needed, whichever
 editor it is:
 
-- **The squad is still working** on the ticket: platoon asks before opening, since what you change may clash with it.
-- **The ticket's worktree was removed** after the work (Done or cancelled): it is made again from its branch first, as
+- **The squad is still working** on the task: platoon asks before opening, since what you change may clash with it.
+- **The task's copy of the folder was removed** after the work (Done or cancelled): it is made again from its branch first, as
   when you continue the squad. While an editor in platoon's terminal is open, platoon never removes a worktree it has
   open.
 
 An editor with a window of its own starts beside platoon and is left alone: platoon stays on screen, and closing platoon
-doesn't close it. platoon can't tell when that window closes, so **a ticket's worktree opened in one is kept** after the
-ticket is Done or cancelled: its screen says "Kept: opened in VS Code", and `w` removes it (after asking). An editor in
+doesn't close it. platoon can't tell when that window closes, so **a task's copy of the folder opened in one is kept** after the
+task is Done or cancelled: its screen says "Kept: opened in VS Code", and `w` removes it (after asking). An editor in
 platoon's terminal needs none of this: platoon waits for it to close.

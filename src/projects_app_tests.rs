@@ -565,8 +565,8 @@ fn a_projects_screen_lists_its_sessions_active_first_and_shows_its_notes() {
     key(&mut app, KeyCode::Esc);
     assert!(app.open_project.is_none() && app.projects_list_showing());
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("2 active · 1 archived") && f.contains("no tickets"), "{f}");
-    assert!(!f.contains("NOTES") && !f.contains("notes now") && f.contains("TICKETS"), "{f}");
+    assert!(f.contains("2 active · 1 archived") && f.contains("no tasks"), "{f}");
+    assert!(!f.contains("NOTES") && !f.contains("notes now") && f.contains("TASKS"), "{f}");
 }
 
 #[test]
@@ -1015,8 +1015,8 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
     let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
     let lines = draw(&mut term, &app);
     let row = row_of(&lines);
-    assert!(row.contains("3 active · 1 archived ") && !row.contains("unread") && row.contains("no tickets"), "{row}");
-    assert!(lines.contains("TICKETS") && !lines.contains("NOTES") && !row.contains("notes"), "{lines}");
+    assert!(row.contains("3 active · 1 archived ") && !row.contains("unread") && row.contains("no tasks"), "{row}");
+    assert!(lines.contains("TASKS") && !lines.contains("NOTES") && !row.contains("notes"), "{lines}");
 
     // One unread among the active sessions (an archived one's mark doesn't count): beside the counts, in the unread green.
     for (s, u) in app.sessions.iter_mut().map(|s| (s.id.clone(), s)) {
@@ -1037,7 +1037,7 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
     let mut term = Terminal::new(TestBackend::new(90, 20)).unwrap();
     let lines = draw(&mut term, &app);
     let row = row_of(&lines);
-    assert!(row.contains("3 active · ● 1 unread") && !row.contains("archived") && row.contains("no tickets"), "{row}");
+    assert!(row.contains("3 active · ● 1 unread") && !row.contains("archived") && row.contains("no tasks"), "{row}");
     assert!(colors_of(&term, &lines, " Fruit ", "● 1 unread").iter().all(|c| *c == t.ok), "{row}");
 
     // Tickets: open ones (not Done or Cancelled), and how many of those are ready.
@@ -1062,13 +1062,13 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
     store.set_state(one, &State::Done).unwrap();
     store.set_state(one + 1, &State::Cancelled).unwrap();
     app.restat_for_test();
-    assert!(row_of(&draw(&mut term, &app)).contains("no tickets"));
+    assert!(row_of(&draw(&mut term, &app)).contains("no tasks"));
 
     // A tickets file that can't be read is no tickets, and is left exactly as it was.
     let path = crate::tickets::path_in(&w.config, &id);
     fs::write(&path, "{ not json").unwrap();
     app.restat_for_test();
-    assert!(row_of(&draw(&mut term, &app)).contains("no tickets"));
+    assert!(row_of(&draw(&mut term, &app)).contains("no tasks"));
     assert_eq!(fs::read_to_string(&path).unwrap(), "{ not json");
 
     // A narrow terminal has no room for the column, as it had none for NOTES.
@@ -1089,7 +1089,7 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     let one = "platoon will keep project notes up to date. Start or add a session to begin.";
     let hint = "Press n to start one, or m on a session in the Sessions tab.";
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains(one) && f.contains(hint) && f.contains("No tickets yet"), "{f}");
+    assert!(f.contains(one) && f.contains(hint) && f.contains("No tasks yet"), "{f}");
     for gone in [
         "Every session in this project starts with these notes",
         "No notes yet",

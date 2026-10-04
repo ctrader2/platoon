@@ -551,7 +551,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     };
     lines.push((None, Line::styled(fit_end(&kind, w), Style::new().fg(if sqt.draft_selected() { t.warn } else { t.dim }))));
     if let Some(first) = squadfile::problems(s, &known).first() {
-        for l in wrap(&format!("Can't be handed a ticket until this is fixed: {first}"), w) {
+        for l in wrap(&format!("Can't be handed a task until this is fixed: {first}"), w) {
             lines.push((None, Line::styled(l, Style::new().fg(t.warn))));
         }
     }
@@ -872,7 +872,7 @@ impl Rail<'_> {
                 Span::raw("  "),
                 Span::raw(lead.clone()),
                 Span::styled("◉", Style::new().fg(t.subtext)),
-                Span::styled(fit_end("  Done: the result goes on the ticket", text_w + 2), Style::new().fg(t.dim)),
+                Span::styled(fit_end("  Done: the result goes on the task", text_w + 2), Style::new().fg(t.dim)),
             ]),
         ));
         if let Some(add) = self.row_of(DRow::AddStep) {
@@ -1071,7 +1071,7 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
             "Describe a new agent".to_string(),
             "The one job it does. Claude drafts it on Sonnet; you change what you like before it is saved.",
         ),
-        TextFor::CanDo => ("What it can do".to_string(), "The commander reads this before a ticket is handed to the squad."),
+        TextFor::CanDo => ("What it can do".to_string(), "The commander reads this before a task is handed to the squad."),
         TextFor::StepDoes(i) => (format!("Step {}", i + 1), "One line: what this step does. The leader reads it."),
         TextFor::NewStep(m) if m == crate::app::NEW_AGENT => {
             ("A new step for a new agent".to_string(), "One line: what this step does. The leader reads it. You name the new agent next.")

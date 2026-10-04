@@ -267,7 +267,7 @@ fn shift_s_hands_a_ticket_to_a_squad_and_a_says_so_instead() {
     // `a` (which archives a session in the pane above) does nothing to a ticket, and says what does.
     ch(&mut app, 'a');
     assert!(matches!(app.mode, Mode::List));
-    assert_eq!(app.active_notice(), Some("S (shift+s) hands a ticket to a squad."));
+    assert_eq!(app.active_notice(), Some("S (shift+s) hands a task to a squad."));
     // Shift+s, as a terminal sends it.
     app.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
     assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
@@ -279,7 +279,7 @@ fn shift_s_hands_a_ticket_to_a_squad_and_a_says_so_instead() {
     assert!(flat(&lines).contains("S hand to a squad"), "{}", lines.join("\n"));
     app.notice = None;
     ch(&mut app, 'a');
-    assert!(matches!(app.mode, Mode::List) && app.active_notice() == Some("S (shift+s) hands a ticket to a squad."));
+    assert!(matches!(app.mode, Mode::List) && app.active_notice() == Some("S (shift+s) hands a task to a squad."));
     app.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
     assert!(matches!(app.mode, Mode::SquadPick));
 }

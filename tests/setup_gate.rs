@@ -82,7 +82,7 @@ fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_
     assert!(out.status.success());
     let shown = text(&out.stdout);
     let skill = claude.join("skills/to-tickets/SKILL.md");
-    assert!(shown.contains("Tickets skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
+    assert!(shown.contains("Tasks skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
     let text_on_disk = fs::read_to_string(&skill).unwrap();
     assert!(text_on_disk.starts_with("---\nname: to-tickets\n") && !text_on_disk.contains("disable-model-invocation"), "{text_on_disk}");
     // Claude may offer it, but only after asking, only in a platoon project, once, and after a no it only says how to
@@ -152,7 +152,7 @@ fn setup_remembers_a_removal_and_leaves_a_skill_the_user_changed_alone() {
     let backup = claude.join("skills/to-tickets/SKILL.md.platoon-bak");
     let setup = || text(&platoon(&claude, &cache, &["setup"]).stdout);
     let tickets_line = |shown: &str| -> String {
-        let at = shown.find("Tickets skill").unwrap_or_else(|| panic!("{shown}"));
+        let at = shown.find("Tasks skill").unwrap_or_else(|| panic!("{shown}"));
         shown[at..].lines().take(2).collect::<Vec<_>>().join("\n")
     };
     // Missing: written.
@@ -172,7 +172,7 @@ fn setup_remembers_a_removal_and_leaves_a_skill_the_user_changed_alone() {
         let shown = setup();
         let line = tickets_line(&shown);
         assert!(
-            line.starts_with("Tickets skill")
+            line.starts_with("Tasks skill")
                 && line.contains("removed by you")
                 && line.contains("`platoon setup --add to-tickets` puts it back"),
             "{shown}"

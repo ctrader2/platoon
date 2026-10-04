@@ -316,24 +316,25 @@ fn flat(lines: &[String]) -> String {
 #[test]
 fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_sentence_case() {
     use crate::tickets::State;
-    let words: Vec<&str> =
-        [State::New, State::Working, State::Waiting, State::Ready, State::Done, State::Cancelled].iter().map(|s| s.label()).collect();
-    assert_eq!(words, ["New", "Working", "Waiting on you", "Ready to publish", "Done", "Cancelled"]);
+    let words: Vec<&str> = [State::Working, State::Waiting, State::Done, State::Cancelled].iter().map(|s| s.label()).collect();
+    assert_eq!(words, ["Working", "Needs you", "Done", "Cancelled"]);
     for w in &words {
         assert!(w.chars().next().unwrap().is_uppercase(), "{w}");
     }
     assert_eq!(crate::tickets::waits_for_words(&[1, 3]), "Waits for #1, #3");
     assert!(crate::tickets::QUEUED_WORDS.starts_with('W'));
     let (w, mut app, id) = on_a_project("w-states");
-    crate::tickets::Tickets::open(&w.config, &id)
-        .add(crate::tickets::NewTicket { title: "After it".into(), blocked_by: vec![1], ..Default::default() })
-        .unwrap();
+    let mut store = crate::tickets::Tickets::open(&w.config, &id);
+    store.add(crate::tickets::NewTicket { title: "After it".into(), blocked_by: vec![1], ..Default::default() }).unwrap();
+    // With a folder each: a task with none reads "Needs a folder" instead of "Can start".
+    store.set_folders(1, &["/tmp".into()]).unwrap();
+    store.set_folders(2, &["/tmp".into()]).unwrap();
     app.reload_for_test();
     let mut term = sized(&mut app, 120, 30);
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("#1 Coupon totals New Can start"), "{f}");
-    assert!(f.contains("#2 After it New Waits for #1"), "{f}");
-    assert!(!f.contains("ready"), "the old word is gone: {f}");
+    assert!(f.contains("#1 Coupon totals Can start"), "{f}");
+    assert!(f.contains("#2 After it Waits for #1"), "{f}");
+    assert!(!f.contains("ready") && !f.contains(" New "), "the old words are gone: {f}");
     // On the Projects tab: how many can start.
     key(&mut app, KeyCode::Esc);
     let f = flat(&draw(&mut term, &app));
@@ -343,7 +344,7 @@ fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_senten
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Enter);
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("State New · Can start"), "{f}");
+    assert!(f.contains("State Can start"), "{f}");
 }
 
 #[test]
@@ -415,9 +416,10 @@ fn a_shop(name: &str) -> (World, App) {
     ] {
         store.add(NewTicket { title: title.into(), blocked_by: blocked, ..Default::default() }).unwrap();
     }
-    for (n, s) in [(2, State::Working), (3, State::Waiting), (4, State::Ready), (6, State::Done), (7, State::Cancelled)] {
+    for (n, s) in [(2, State::Working), (3, State::Waiting), (6, State::Done), (7, State::Cancelled)] {
         store.set_state(n, &s).unwrap();
     }
+    store.squad_wants_to_publish(4, "Wants to publish: push task/4").unwrap();
     app.reload_for_test();
     app.tk.unfolded = true;
     (w, app)
@@ -425,7 +427,7 @@ fn a_shop(name: &str) -> (World, App) {
 
 /// The Tickets pane's rows: the lines between its top and bottom borders, without them.
 fn tickets_pane(lines: &[String]) -> Vec<String> {
-    let top = lines.iter().position(|l| l.contains("╭ Tickets")).expect("the Tickets pane");
+    let top = lines.iter().position(|l| l.contains("╭ Tasks")).expect("the Tasks pane");
     let left = lines[top].chars().position(|c| c == '╭').unwrap();
     let right = left + lines[top].chars().skip(left + 1).position(|c| c == '╮').unwrap() + 1;
     lines[top + 1..]
@@ -439,8 +441,8 @@ fn tickets_pane(lines: &[String]) -> Vec<String> {
 fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
     let (_w, mut app) = a_shop("c-tickets");
     // (size, the words every row must show whole)
-    let full = ["Can start", "Working", "Waiting on you", "Ready to publish", "Waits for #1", "Done", "Cancelled"];
-    let short = ["Can start", "Working", "Your turn", "To publish", "Waits #1", "Done", "Cancelled"];
+    let full = ["Needs a folder", "Working", "Needs you", "Needs you", "Waits for #1", "Done", "Cancelled"];
+    let short = ["No folder", "Working", "Needs you", "Needs you", "Waits #1", "Done", "Cancelled"];
     for (w, h, words) in [(120u16, 40u16, &full), (80, 24, &short), (60, 24, &short)] {
         let mut term = sized(&mut app, w, h);
         let lines = draw(&mut term, &app);
@@ -465,7 +467,7 @@ fn the_tickets_pane_never_cuts_a_state_and_cuts_the_title_instead() {
     let mut term = sized(&mut app, 200, 60);
     let pane = tickets_pane(&draw(&mut term, &app));
     let five = pane.iter().find(|l| l.contains("#5 ")).unwrap();
-    assert!(five.contains("New") && five.trim_end().ends_with("Waits for #1"), "{five}");
+    assert!(!five.contains("New") && five.trim_end().ends_with("Waits for #1"), "{five}");
 }
 
 #[test]

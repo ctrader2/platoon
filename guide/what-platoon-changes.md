@@ -23,9 +23,10 @@ message typed into a second copy of a conversation).
 
 ## A Claude Code skill: `/to-tickets`
 
-The Tickets skill step writes one file: `~/.claude/skills/to-tickets/SKILL.md` (or under `CLAUDE_CONFIG_DIR`). Its
-`allowed-tools` lets it run `platoon ticket` and `platoon squads` commands without asking. See
-[The tickets skill](install-and-setup.md#the-tickets-skill) for how it is kept up to date and how to take it out.
+The Tasks skill step writes one file: `~/.claude/skills/to-tickets/SKILL.md` (or under `CLAUDE_CONFIG_DIR`). Its
+`allowed-tools` lets it run `platoon task` and `platoon squads` commands without asking (a copy written by an earlier
+platoon runs `platoon ticket`, which still works the same way). See
+[The tasks skill](install-and-setup.md#the-tasks-skill) for how it is kept up to date and how to take it out.
 
 ## Your Claude plan: nothing until you say yes
 
@@ -37,22 +38,24 @@ settings and no saved session, under a daily token limit. What each one sends is
 
 ## Squads
 
-A squad's leader is a Claude Code session that platoon starts for a ticket. It is started with:
+A squad's leader is a Claude Code session that platoon starts for a task. It is started with:
 
-- `--permission-mode acceptEdits`: **Claude edits files without asking you first.** It starts in the ticket's first
-  folder, with the ticket's other folders and its work folder added (`--add-dir`). For a folder in a git repository that
-  is a worktree platoon made for the ticket, never your own checkout. **A folder that isn't in git is worked in as it
-  is**, and a ticket with no folder works only in its work folder. Anything else, like running a command, still goes
-  through Claude Code's permission prompt as your own settings decide.
+- `--permission-mode acceptEdits`: **Claude edits files without asking you first.** It starts in the task's first
+  folder, with the task's other folders and its own folder added (`--add-dir`). For a folder in a git repository that
+  is a copy platoon made for the task (a worktree), or, when you chose that at the hand-over, your own checkout on a new
+  branch `task/<N>`. **A folder that isn't in git is worked in as it is**, and a task with no folder works only in its own
+  folder. Anything else, like running a command, still goes through Claude Code's permission prompt as your own settings
+  decide.
 - Its tools: the leader may hand work to its agents, read, search and run commands (`Agent`, `Read`, `Grep`, `Glob`,
   `Bash`); it never edits a file itself. Each agent can always read and search (`Read`, `Grep`, `Glob`); its switches add
   the rest: **can change files** adds `Edit` and `Write`, **can run commands** adds `Bash`, **can use the web** adds
   `WebSearch` and `WebFetch`, and its skills and MCP servers add `Skill` and `mcp__<name>`. The built-in agents' switches
-  are on [The built-in squads](tickets-and-squads.md#the-built-in-squads).
+  are on [The built-in squads](tasks-and-squads.md#the-built-in-squads).
 - Hooks for that session only (`--settings`), never written to your own settings: `platoon hook squad-stop`,
-  `squad-gate`, `squad-notify`, `squad-tool` and `squad-prompt`. They set the ticket's state from what the leader says and
+  `squad-gate`, `squad-notify`, `squad-tool` and `squad-prompt`. They set the task's state from what the leader says and
   does. Your own Claude Code settings and hooks still apply to it too.
-- A gate on publishing: `squad-gate` refuses, until you press `p` on the ticket, the commands it recognises as making
+- A gate on publishing: `squad-gate` refuses, until you press `p` on the task (or always lets through, for a task you
+  handed over as "works and publishes"), the commands it recognises as making
   something others can see: `git push`, `git send-email`, `git subtree push`; `gh` and `glab` commands that create, edit,
   merge, comment on or delete pull/merge requests, issues, releases, gists and repositories, `gh workflow run`, and
   `gh api`/`glab api` calls that change something; `hub push`, `hub pull-request` and `hub release create`;
@@ -60,10 +63,12 @@ A squad's leader is a Claude Code session that platoon starts for a ticket. It i
   `env`, `bash -c` and the like. It is a list, not a sandbox: something it doesn't know (another tool, or an MCP server
   that publishes) is not stopped by it.
 
-In your git repositories, a squad's ticket makes a worktree beside the repository, `<repo>-worktrees/ticket-<N>`, on a new
-branch `ticket/<N>`. platoon removes the worktree folder (with `git worktree remove`) once the ticket is Done or Cancelled
-and its session has stopped, unless it has changes not yet committed. It never deletes the branch. See
-[Handing a ticket to a squad](tickets-and-squads.md#handing-a-ticket-to-a-squad).
+In your git repositories, a squad's task makes a worktree beside the repository, `<repo>-worktrees/task-<N>`, on a new
+branch `task/<N>` made from the branch the work lands on (tasks from before platoon 1.0 keep `ticket-<N>` and
+`ticket/<N>`). platoon removes the worktree folder (with `git worktree remove`) once the task is Done or Cancelled and its
+session has stopped, unless it has changes not yet committed. It never deletes the branch. When you chose "a new branch in
+your checkout" instead, platoon runs `git switch -c task/<N> <lands on>` in your folder, and touches nothing there
+afterwards. See [Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
 
 ## Folders platoon writes
 
@@ -73,8 +78,10 @@ because they would be lost or cost tokens to make again.
 - `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what setup remembers about the skill and
   the token question)
 - `names.json` (names you gave), `archive.json` (archived conversations), `summaries.json` (smart names and summaries)
-- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `notes-state.json`, and the tickets
-  (`tickets.json`, `tickets/` with each ticket's text, result, work folder and the squad it was started with)
+- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `notes-state.json`, and the tasks
+  (`tasks.json`, `tasks/` with each task's text, result, its own folder and the squad it was started with; `tickets.json`
+  and `tickets/` until platoon has moved a project's, keeping `tickets.json.bak`); `tasks.json` and `tasks/` at the top for
+  tasks in no project
 - `squads/` and `agents/` (yours, and built-in ones you changed), `prompts/` (system prompts you changed), `themes/`
   (your own themes)
 
@@ -93,7 +100,7 @@ small marks its parts leave for each other.
 - `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon and
   Claude Code versions it has already told you about (see [below](#one-network-request-no-telemetry))
 
-**Beside your repositories**: the `<repo>-worktrees/` folders for tickets, described [above](#squads).
+**Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#squads).
 
 **In Claude Code's folder**: only the two things setup adds (`settings.json` and the skill), and the backups beside them.
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
@@ -144,7 +151,7 @@ When your Claude Code is newer than that, platoon says so once (it runs `claude 
 ## Removing platoon
 
 `curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh` removes everything above
-but your conversations, after asking about your own data and any running sessions; ticket worktrees are listed, not
+but your conversations, after asking about your own data and any running sessions; task worktrees are listed, not
 deleted. [Uninstall](install-and-setup.md#uninstall) says exactly what it does, and `platoon uninstall` does the same
 but for removing the program.
 
@@ -159,9 +166,9 @@ If you'd rather do it yourself, or the uninstaller can't:
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
 2. **The skill.** `platoon setup --remove to-tickets`, or delete `~/.claude/skills/to-tickets/`.
 3. **platoon's own folders.** Delete `~/.config/platoon` and `~/.cache/platoon`. The config folder holds your projects'
-   notes, tickets, squads and settings: keep a copy if you want them.
-4. **Ticket worktrees and branches.** Any `<repo>-worktrees/ticket-<N>` still there can go with
-   `git worktree remove <path>`, and the `ticket/<N>` branches with `git branch -D ticket/<N>`, once you no longer need the
+   notes, tasks, squads and settings: keep a copy if you want them.
+4. **Task worktrees and branches.** Any `<repo>-worktrees/task-<N>` (or `ticket-<N>`) still there can go with
+   `git worktree remove <path>`, and the `task/<N>` branches with `git branch -D task/<N>`, once you no longer need the
    work on them.
 5. **The program**, the way you installed it: `brew uninstall platoon`; `cargo uninstall platoon-tui`; for the install
    script, delete `~/.local/bin/platoon` (or where it put it), `~/.config/platoon-tui/`, and the line it added to your

@@ -1,7 +1,8 @@
-//! Tickets inside the app: the Tickets pane of a project's screen (open tickets, then "Done and cancelled", folded),
-//! a ticket's own screen, cancelling one (`c`: the only state the user sets by hand; the squad sets the others), the
-//! lists of its folders and what it waits for, and making a new one. The data itself is in `tickets.rs`; editing a body goes through the notes' editor flow
-//! (`notes_glue.rs`).
+//! Tasks inside the app (the code says "ticket" in places, the name they had first): the Tasks pane of a project's
+//! screen (open tasks, then "Done and cancelled", folded), a task's own screen, cancelling one (`c`: the only state
+//! the user sets by hand; the squad sets the others), the lists of its folders and what it waits for, making a new
+//! one, and moving a project's task files from their old names once no leader of it runs. The data itself is in
+//! `tickets.rs`; editing a body goes through the notes' editor flow (`notes_glue.rs`).
 
 use super::*;
 use crate::tickets::{self, State, Ticket, Tickets};
@@ -175,7 +176,32 @@ impl App {
     }
 
     fn report_tickets_error(&mut self, e: io::Error) {
-        self.notify(format!("Couldn't save the tickets: {}", plain(&e)));
+        self.notify(format!("Couldn't save the tasks: {}", plain(&e)));
+    }
+
+    /// A project whose tasks are still under the old names (`tickets.json`, `tickets/`) gets them moved to the new
+    /// ones, once no leader of it is running (a running leader was given the old work folder's path), and the status
+    /// line says so once. Called on every refresh; one directory listing when nothing is left to move.
+    pub(super) fn move_old_task_files(&mut self) {
+        for project in crate::tickets::projects_with_old_names(&self.config) {
+            let leader_runs = self
+                .every_ticket()
+                .iter()
+                .filter(|(p, _)| *p == project)
+                .flat_map(|(_, t)| t.leaders.iter())
+                .any(|l| self.leader_session_running(&l.session));
+            if leader_runs {
+                continue;
+            }
+            match crate::tickets::move_to_new_names(&self.config, &project) {
+                Ok(true) => {
+                    let name = self.projects.get(&project).map(|p| p.name.clone()).unwrap_or_else(|| project.clone());
+                    self.notify(format!("Moved {name}'s tickets to {}.", crate::tickets::FILE));
+                }
+                Ok(false) => {}
+                Err(e) => self.notify(format!("Couldn't move {project}'s tickets to {}: {}", crate::tickets::FILE, plain(&e))),
+            }
+        }
     }
 
     // ---- keys -------------------------------------------------------------------------------------------------
@@ -224,7 +250,7 @@ impl App {
             KeyCode::Char('S') => self.ask_hand_to_squad(number),
             // `a` used to hand a ticket to a squad (and archives a session in the pane above): it does nothing here
             // now, but says where that went rather than ignoring the key.
-            KeyCode::Char('a') => self.notify("S (shift+s) hands a ticket to a squad."),
+            KeyCode::Char('a') => self.notify("S (shift+s) hands a task to a squad."),
             KeyCode::Char('p') => self.let_it_publish(number),
             KeyCode::Char('w') => self.ask_remove_worktree(number),
             _ => {}
@@ -357,7 +383,7 @@ impl App {
             Ok(n) => {
                 self.focus_pane(Pane::Tickets);
                 self.show_ticket_row(n);
-                self.notify(format!("Made ticket #{n}"));
+                self.notify(format!("Made task #{n}"));
                 self.pick_ticket_editor(n);
             }
             Err(e) => self.report_tickets_error(e),
@@ -379,7 +405,7 @@ impl App {
             return;
         }
         if kind == PickKind::BlockedBy && self.tickets().len() < 2 {
-            self.notify("There are no other tickets in this project to wait for.");
+            self.notify("There are no other tasks in this project to wait for.");
             return;
         }
         self.tk.pick = TicketPick { kind, number, selected: 0 };
@@ -512,7 +538,7 @@ impl App {
         self.mode = Mode::TicketPick;
         let Some(t) = self.ticket(number) else { return };
         if t.folders.contains(&dir) {
-            self.notify("That folder is already on the ticket.");
+            self.notify("That folder is already on the task.");
             return;
         }
         let mut list = t.folders.clone();

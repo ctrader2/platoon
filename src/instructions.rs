@@ -100,7 +100,7 @@ pub static ACTIONS: [Action; 9] = [
         id: COMMANDER,
         entry: "System prompt for the squad commander",
         what: "the squad commander",
-        explain: "How platoon asks Claude to check that the squad you picked can handle a ticket, before it is handed over.",
+        explain: "How platoon asks Claude to check that the squad you picked can handle a task, before it is handed over.",
         builtin: crate::squads::COMMANDER_GUIDANCE,
         fixed: crate::squads::commander_fixed,
     },
@@ -108,9 +108,11 @@ pub static ACTIONS: [Action; 9] = [
         id: SQUAD_LEADER,
         entry: "System prompt for squad leaders",
         what: "squad leaders",
-        explain: "How platoon asks Claude to lead a squad through a ticket, for every squad. platoon adds what the squad can do, its workflow and its own rules.",
+        explain: "How platoon asks Claude to lead a squad through a task, for every squad. platoon adds what the squad can do, its workflow and its own rules.",
         builtin: crate::squads::LEADER_GUIDANCE,
-        fixed: || crate::squads::leader_fixed(crate::squads::Place::Folders { worktrees: true, as_is: false }),
+        fixed: || {
+            crate::squads::leader_fixed(crate::squads::Place::Folders { worktrees: true, as_is: false }, &crate::squads::Terms::default())
+        },
     },
     Action {
         id: SQUAD_DRAFT,
