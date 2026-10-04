@@ -677,6 +677,7 @@ impl App {
     /// Nothing is handed over: the ticket stays New with why not on it, and a notice says the same.
     fn not_handed(&mut self, project: &str, number: u32, squad: &Squad, kind: HandoverKind, says: &str, notice: String) {
         self.sq.from_line.remove(&(project.to_string(), number));
+        self.sq.quiet.remove(&(project.to_string(), number));
         if let Err(e) = self.with_tickets(project, |s| s.handover_failed(number, &squad.id, kind, says)) {
             self.report_squad_error(e);
             return;
