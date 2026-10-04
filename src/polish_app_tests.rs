@@ -332,7 +332,9 @@ fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_senten
     store.set_folders(2, &["/tmp".into()]).unwrap();
     app.reload_for_test();
     let mut term = sized(&mut app, 120, 30);
-    let f = flat(&draw(&mut term, &app));
+    // (The left column only: the notes beside it can wrap onto the same rows.)
+    let left: Vec<String> = draw(&mut term, &app).iter().map(|l| l.chars().take(55).collect()).collect();
+    let f = flat(&left);
     // The pane's rows under the board's headings: what it is, then what it needs.
     assert!(f.contains("Can start · 1 ▎#1 Coupon totals New · S hands it to a squad"), "{f}");
     assert!(f.contains("Waits for · 1 #2 After it Waits for #1 Coupon totals"), "{f}");

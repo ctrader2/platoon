@@ -406,6 +406,15 @@ impl Projects {
         })
     }
 
+    /// How much a squad does on its own when one of this project's tasks is handed over: what the hand-over popup
+    /// starts from (`autonomy_default`; the task keeps what was chosen at its own hand-over).
+    pub fn set_autonomy_default(&mut self, id: &str, autonomy: &crate::tickets::Autonomy) -> io::Result<()> {
+        let a = autonomy.id().to_string();
+        self.edit(id, |p| {
+            p.insert("autonomy_default".into(), json!(a));
+        })
+    }
+
     /// The one line that says what the project is, and when it was written. Written by the notes helper, read by
     /// every screen that lists projects; the text is cleaned before it ever gets here.
     pub fn set_description(&mut self, id: &str, text: &str, at: u64) -> io::Result<()> {

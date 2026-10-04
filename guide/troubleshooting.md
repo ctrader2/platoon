@@ -101,12 +101,14 @@ when the day's limit is spent or calls are paused; it says which. See
 
 ## Tasks and squads
 
-**`/to-tickets` says the session isn't in a project.** Add the session to a project (`m` on the Sessions tab), then type
-`/to-tickets` again. See [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
-
-**`/to-tickets` asks before running `platoon task add`.** Claude Code clears the skill's permission when you send your
-next message, so the tasks written after you approve the list may ask. See
+**`t` drafts no tasks.** It says why in one line: the smart features are off, today's limit is spent or calls are
+paused (as for the hand-off); the session has no folder platoon can find; its project is archived (restore it first);
+another conversation's tasks are being drafted (one at a time); or Claude found no work left for later in it. See
 [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
+
+**`alt+n` does nothing in a session.** On macOS the terminal's Option key must be set to send alt (or press the back key
+and `t` on the session's row). Elsewhere, check `keys.json` for a `draft_tasks` of your own, and that the terminal
+doesn't keep alt with that letter for a menu. See [Keys](settings-and-keys.md#keys-back-and-quit).
 
 **`S` refuses to hand a task to a squad.** The task must be one nobody has yet (Can start, or Needs a folder) and not
 waiting for another task, its folders that aren't in git must be free (one task at a time there: the line names the

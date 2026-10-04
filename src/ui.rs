@@ -255,6 +255,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         "active/archived",
         "move",
         "editor",
+        "how squads start",
         "draft tasks",
         "hand-off",
         "project",
@@ -471,6 +472,7 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     out.extend([
         ("/", "search", Some(Action::Search)),
         ("tab", "next pane", None),
+        ("o", "how squads start", None),
         ("?", "help", Some(Action::Help)),
         ("esc", "back", Some(Action::Leave)),
     ]);
@@ -803,10 +805,13 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     // written one for this project, the line stays empty.
     let lines: Vec<Line> =
         wrap(&p.description, body.width as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
-    let [desc, panes] = Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Min(1)]).areas(body);
+    let [desc, start, panes] =
+        Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Length(1), Constraint::Min(1)]).areas(body);
     if !lines.is_empty() {
         f.render_widget(Paragraph::new(lines), desc);
     }
+    // How much a squad does on its own when one of the project's tasks is handed over (the popup starts from it).
+    f.render_widget(Paragraph::new(autonomy_default_line(t, &p.autonomy_default, start.width as usize)), start);
     // Below 100 columns the left column (sessions and tasks) gets half, so a task's row keeps its title and
     // its state's words; wider, the notes get a little more.
     let left_w = if panes.width >= 100 { panes.width * 45 / 100 } else { panes.width / 2 };
@@ -838,6 +843,24 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     hits.push((left, Hit::Pane(Pane::Sessions)));
     hits.push((lower, Hit::Pane(Pane::Tickets)));
     hits.push((right, Hit::Pane(Pane::Notes)));
+}
+
+/// The project screen's line saying how squads start on its tasks, in the screen's label and value shape, with the key
+/// that changes it: "Squads start  asks before anything others can see   o changes". The value is cut after a word
+/// when the line is short; the key goes before it does.
+pub(crate) fn autonomy_default_line(t: &Theme, a: &tickets::Autonomy, w: usize) -> Line<'static> {
+    const LABEL: &str = "Squads start  ";
+    const KEY: &str = "   o changes";
+    let label_w = LABEL.chars().count();
+    let value = a.label();
+    let key = value.chars().count() + label_w + KEY.chars().count() <= w;
+    let room = w.saturating_sub(label_w + if key { KEY.chars().count() } else { 0 });
+    let mut spans = vec![Span::styled(LABEL, Style::new().fg(t.dim)), Span::styled(fit_end(value, room), Style::new().fg(t.text))];
+    if key {
+        spans.push(Span::styled("   o", Style::new().fg(t.accent)));
+        spans.push(Span::styled(" changes", Style::new().fg(hint_fg(t))));
+    }
+    Line::from(spans)
 }
 
 /// A state's color: what needs the user stands out, what is finished steps back. (A New task's words have colors of

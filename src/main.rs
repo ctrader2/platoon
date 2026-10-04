@@ -231,10 +231,9 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   keys.json says otherwise) detaches; it keeps running
   open --project <name>   start a new session here, in that project
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
-                  stops two copies of one session from overwriting each other, two hooks
-                  that hand a project's notes to its sessions and keep them up to date, and
-                  the /to-tickets skill that turns a session into tasks
-  setup --remove to-tickets   take the /to-tickets skill out again
+                  stops two copies of one session from overwriting each other, and two hooks
+                  that hand a project's notes to its sessions and keep them up to date
+  setup --remove to-tickets   take out the /to-tickets skill an earlier platoon installed
   ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...
                   make a ticket in that project and print its number (#N); with no --folder it
@@ -242,7 +241,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   that session belongs to, and the ticket shows where it came from
   ticket list [--project <name>] [--json]   the tickets, open ones first
   ticket where --session <id>   the project a session belongs to (exit 1 when none)
-  squads --kinds [--json]   each squad's name, what it can do, and whether it needs a folder
+  squads --kinds [--json]   each squad's name and what it can do
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   uninstall [--all] [--stop-sessions]   take platoon out of Claude Code and delete its cache;
@@ -265,7 +264,7 @@ fn statusline() -> io::Result<()> {
 /// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
 fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
-        let states = setup::check(&claude::claude_root(), &archive::config_dir());
+        let states = setup::check(&claude::claude_root());
         if !setup::ready(&states) {
             eprintln!("{}", setup::render_blocked(&states, use_color(true)));
             std::process::exit(1);
@@ -289,7 +288,7 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = claude::claude_root();
-    match setup::run(&root, &archive::config_dir()) {
+    match setup::run(&root) {
         Ok(mut report) => {
             // A Claude Code newer than the one this platoon was checked with is said here every time.
             report.notes.extend(versions::setup_line(versions::claude_program().as_deref(), versions::off_by_env()));
@@ -319,18 +318,13 @@ fn setup() -> io::Result<()> {
     Ok(())
 }
 
-/// `platoon setup <args>`: `--remove <step>` (and remember it), `--add <step>` (undo that), `--replace <step>`
-/// (platoon's copy in place of one the user changed).
+/// `platoon setup <args>`: `--remove to-tickets` takes out the `/to-tickets` skill an earlier platoon installed.
 fn setup_with(args: &[String]) -> i32 {
     let (root, config) = (claude::claude_root(), archive::config_dir());
     let done = match args {
         [flag, what] if flag == "--remove" => setup::remove_step(&root, &config, what),
-        [flag, what] if flag == "--add" => setup::add_step(&root, &config, what),
-        [flag, what] if flag == "--replace" => setup::replace_step(&root, &config, what),
         _ => {
-            let steps = setup::REMOVABLE.join(" | ");
-            let replace = setup::REPLACEABLE.join(" | ");
-            eprintln!("usage: platoon setup [--remove {steps} | --add {steps} | --replace {replace}]");
+            eprintln!("usage: platoon setup [--remove {}]", setup::REMOVABLE.join(" | "));
             return 2;
         }
     };

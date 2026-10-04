@@ -640,9 +640,9 @@ mod tests {
             list.push(json!({"hooks": [{"type": "command", "command": format!("/opt/x/bin/platoon {args}")}]}));
         }
         fs::write(p.root.join("settings.json"), serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
-        totickets::setup(&p.root, &p.config).unwrap();
+        totickets::install_for_test(&p.root, &p.config);
         // setup knows each one as its own (pointing at a platoon that isn't on this computer).
-        assert!(setup::check(&p.root, &p.config)[..4].iter().all(|s| matches!(s, setup::State::Broken(_))));
+        assert!(setup::check(&p.root).iter().all(|s| matches!(s, setup::State::Broken(_))));
     }
 
     #[test]

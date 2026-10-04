@@ -1,12 +1,14 @@
-//! The `/to-tickets` skill: a Claude Code skill that turns a conversation (or a plan the user points at) into tickets in
-//! the session's project, after the user approves the list. Its text is platoon's own (`SKILL`, from
-//! `src/skills/to-tickets/SKILL.md`); `platoon setup` writes it to `<claude config dir>/skills/to-tickets/SKILL.md`,
-//! updates its own untouched copy when platoon's changes, leaves a copy the user changed alone (`--replace` puts
-//! platoon's in, keeping theirs), and `platoon setup --remove to-tickets` takes it out and remembers that (`--add`
-//! brings it back). What setup remembers is in `<platoon config>/setup.json`.
+//! The `/to-tickets` skill: a Claude Code skill that turns a conversation (or a plan the user points at) into tasks in
+//! the session's project, after the user approves the list. Until 2026-10 `platoon setup` installed it in
+//! `<claude config dir>/skills/to-tickets/SKILL.md`; platoon drafts tasks itself now (`t` on a session, `taskdraft.rs`),
+//! so nothing installs it any more. A copy an earlier platoon installed keeps working (it runs `platoon task`, or
+//! `platoon ticket` in older copies, which still work) and is left alone; `platoon setup --remove to-tickets` and
+//! `platoon uninstall` take it out. To tell platoon's copy from one the user changed, the text platoon wrote is kept
+//! here (`SKILL`, from `src/skills/to-tickets/SKILL.md`, never changed again) with what the earlier setup remembered in
+//! `<platoon config>/setup.json`.
 //!
-//! Also `platoon squads --kinds`: each squad's name and what it can do, which the skill
-//! reads to shape the tickets (it never picks a squad).
+//! Also `platoon squads --kinds` (each squad's name and what it can do), which the skill read to shape the tasks and
+//! scripts may still use.
 
 use serde_json::{Map, Value, json};
 use std::{
@@ -14,7 +16,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-/// The skill as platoon writes it.
+/// The skill as the last platoon that installed it wrote it: what a copy on disk is compared with.
 pub const SKILL: &str = include_str!("skills/to-tickets/SKILL.md");
 
 /// Its name: the folder under `skills/`, and what the user types after `/`.
@@ -124,12 +126,12 @@ fn written_hash(config: &Path) -> Option<String> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Installed {
     No,
-    /// Not there because the user removed it; setup leaves it out until `--add`.
+    /// Not there because the user took it out (`platoon setup --remove to-tickets`).
     Removed,
     Yes,
-    /// The copy platoon last wrote, untouched, but platoon's own copy has changed since: setup updates it quietly.
+    /// The copy an earlier platoon last wrote, untouched, older than `SKILL`: platoon's own all the same.
     OutOfDate,
-    /// Not the copy platoon last wrote (the user changed it, or it can't be read): setup leaves it alone.
+    /// Not the copy platoon last wrote (the user changed it, or it can't be read): the user's.
     Changed,
 }
 
@@ -156,60 +158,18 @@ pub fn installed(root: &Path, config: &Path) -> Installed {
     }
 }
 
-/// Write platoon's copy and remember it. The caller decides whether it may (see `installed`).
-fn write(root: &Path, config: &Path) -> Result<(), String> {
+/// Put platoon's copy in, with the record an earlier setup kept, as an earlier platoon's setup did (the tests of what
+/// is done with an installed copy start from one).
+#[cfg(test)]
+pub fn install_for_test(root: &Path, config: &Path) {
     let path = skill_path(root);
-    let dir = path.parent().unwrap_or(root);
-    fs::create_dir_all(dir).map_err(|e| format!("couldn't make {}: {e}", dir.display()))?;
-    crate::projects::write_atomic(&path, SKILL).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
-    // The record is what tells a later setup that this copy is platoon's; a failure to keep it only means a later
-    // change of platoon's copy will ask instead of updating quietly.
-    let _ = change_record(config, &[("written", Some(Value::String(hash(SKILL)))), ("removed", None)]);
-    Ok(())
+    fs::create_dir_all(path.parent().unwrap_or(root)).unwrap();
+    fs::write(&path, SKILL).unwrap();
+    change_record(config, &[("written", Some(Value::String(hash(SKILL)))), ("removed", None)]).unwrap();
 }
 
-/// What `platoon setup` does for the skill: write it when it's missing, update platoon's own untouched copy, and leave
-/// a removed or changed one alone. Returns what the file was before.
-pub fn setup(root: &Path, config: &Path) -> Result<Installed, String> {
-    let state = installed(root, config);
-    match state {
-        Installed::No | Installed::OutOfDate => write(root, config)?,
-        // Already right: make sure the record says so (a copy written before setup kept records).
-        Installed::Yes => {
-            if written_hash(config).as_deref() != Some(hash(SKILL).as_str()) {
-                let _ = change_record(config, &[("written", Some(Value::String(hash(SKILL))))]);
-            }
-        }
-        Installed::Removed | Installed::Changed => {}
-    }
-    Ok(state)
-}
-
-/// `platoon setup --replace to-tickets`: platoon's copy in place of whatever is there, the user's kept as
-/// `SKILL.md.platoon-bak`. Returns whether a different copy was kept.
-pub fn replace(root: &Path, config: &Path) -> Result<bool, String> {
-    let path = skill_path(root);
-    let kept = match fs::read_to_string(&path) {
-        Ok(text) if text == SKILL => false,
-        Ok(_) => {
-            fs::copy(&path, backup_path(root)).map_err(|e| format!("couldn't keep your copy of {}: {e}", path.display()))?;
-            true
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => false,
-        Err(e) => return Err(format!("couldn't read {}: {e}", path.display())),
-    };
-    write(root, config)?;
-    Ok(kept)
-}
-
-/// `platoon setup --add to-tickets`: forget a removal, then do what setup does.
-pub fn add(root: &Path, config: &Path) -> Result<Installed, String> {
-    change_record(config, &[("removed", None)])?;
-    setup(root, config)
-}
-
-/// Take the skill out: its `SKILL.md`, and its folder when nothing else is left in it (a backup setup made goes too),
-/// and remember that the user doesn't want it, so setup doesn't put it back. True when it was there.
+/// Take the skill out: its `SKILL.md`, and its folder when nothing else is left in it (a backup an earlier setup made
+/// goes too), and remember that it was taken out. True when it was there.
 pub fn remove(root: &Path, config: &Path) -> Result<bool, String> {
     let path = skill_path(root);
     let was = match fs::remove_file(&path) {
@@ -411,52 +371,37 @@ mod tests {
     }
 
     #[test]
-    fn setup_writes_platoons_copy_updates_its_own_leaves_a_changed_one_and_remembers_a_removal() {
+    fn an_installed_copy_is_told_from_a_changed_one_and_remove_takes_it_out_and_remembers_that() {
         let root = dir("install");
         let config = root.join("platoon-config");
         let rec = || -> Value { serde_json::from_str(&fs::read_to_string(config.join("setup.json")).unwrap()).unwrap() };
         assert_eq!(installed(&root, &config), Installed::No);
-        assert_eq!(setup(&root, &config).unwrap(), Installed::No);
-        assert_eq!(fs::read_to_string(root.join("skills/to-tickets/SKILL.md")).unwrap(), SKILL);
+        // As an earlier platoon's setup left it: platoon's copy, and the record of what it wrote.
+        install_for_test(&root, &config);
         assert_eq!(installed(&root, &config), Installed::Yes);
-        assert_eq!(rec()["to-tickets"]["written"], hash(SKILL), "what it wrote is remembered");
-        // platoon's copy moves on (here: the record says platoon wrote something else): its own untouched copy is
-        // updated quietly, without a backup.
+        assert_eq!(rec()["to-tickets"]["written"], hash(SKILL));
+        // An older copy platoon wrote (the record says so): still platoon's own.
         fs::write(skill_path(&root), "an older skill").unwrap();
         change_record(&config, &[("written", Some(json!(hash("an older skill"))))]).unwrap();
         assert_eq!(installed(&root, &config), Installed::OutOfDate);
-        assert_eq!(setup(&root, &config).unwrap(), Installed::OutOfDate);
-        assert_eq!(installed(&root, &config), Installed::Yes);
-        assert!(!backup_path(&root).exists());
-        // The user changed it: left alone, every time.
+        // The user changed it: theirs.
         fs::write(skill_path(&root), "mine now").unwrap();
         assert_eq!(installed(&root, &config), Installed::Changed);
-        assert_eq!(setup(&root, &config).unwrap(), Installed::Changed);
-        assert_eq!(fs::read_to_string(skill_path(&root)).unwrap(), "mine now");
-        // Until they ask: theirs is kept, platoon's goes in.
-        assert!(replace(&root, &config).unwrap());
-        assert_eq!(fs::read_to_string(backup_path(&root)).unwrap(), "mine now");
-        assert_eq!(installed(&root, &config), Installed::Yes);
-        assert!(!replace(&root, &config).unwrap(), "nothing different to keep the second time");
-        // Removed: the file, the backup and the empty folder go; `skills/` and other skills stay; setup leaves it out.
+        // Removed: the file, the backup and the empty folder go; `skills/` and other skills stay.
         fs::write(
             config.join("setup.json"),
             serde_json::to_string(&json!({"theirs": 1, "to-tickets": {"written": hash(SKILL), "extra": "kept"}})).unwrap(),
         )
         .unwrap();
+        fs::write(backup_path(&root), "an older copy of mine").unwrap();
         fs::create_dir_all(root.join("skills/mine")).unwrap();
         assert!(remove(&root, &config).unwrap());
         assert!(!root.join("skills/to-tickets").exists() && root.join("skills/mine").is_dir());
         assert_eq!(installed(&root, &config), Installed::Removed);
         assert_eq!(rec(), json!({"theirs": 1, "to-tickets": {"extra": "kept", "removed": true}}), "unknown keys kept");
-        assert_eq!(setup(&root, &config).unwrap(), Installed::Removed);
-        assert!(!skill_path(&root).exists(), "not put back");
         assert!(!remove(&root, &config).unwrap(), "nothing to remove the second time");
-        // Asked for again: written, and the mark is gone.
-        assert_eq!(add(&root, &config).unwrap(), Installed::No);
-        assert_eq!(installed(&root, &config), Installed::Yes);
-        assert_eq!(rec(), json!({"theirs": 1, "to-tickets": {"extra": "kept", "written": hash(SKILL)}}));
         // Something of the user's own in the folder stays, and so does the folder.
+        install_for_test(&root, &config);
         fs::write(root.join("skills/to-tickets/notes.txt"), "mine").unwrap();
         assert!(remove(&root, &config).unwrap());
         assert!(root.join("skills/to-tickets/notes.txt").is_file() && !skill_path(&root).exists());

@@ -302,3 +302,43 @@ fn the_hand_over_popup_goes_round_the_three_levels_and_the_project_default_start
     assert_eq!(seen, [Autonomy::Ask, Autonomy::Publish, Autonomy::PlanFirst]);
     key(&mut app, KeyCode::Esc);
 }
+
+#[test]
+fn the_projects_screen_says_how_squads_start_and_o_changes_the_default_the_hand_over_starts_from() {
+    let (w, mut app, web) = plan_world("plan-default");
+    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.open_project.as_deref(), Some(web.as_str()));
+    for (wide, high) in [(120u16, 40u16), (80, 24)] {
+        let mut term = Terminal::new(TestBackend::new(wide, high)).unwrap();
+        let shown = draw(&mut term, &app);
+        let line = shown.lines().find(|l| l.contains("Squads start")).unwrap_or_else(|| panic!("{shown}"));
+        assert!(flat(line).contains("Squads start asks before anything others can see o changes"), "{wide}: {line}");
+        let t = app.effective_theme();
+        assert_eq!(fg_of(&term, "Squads start"), t.dim, "the label is quiet");
+        assert_eq!(fg_of(&term, "asks before anything"), t.text);
+        assert_eq!(fg_of(&term, "o changes"), t.accent, "the key in the key color");
+    }
+    // `o`, from whichever pane: the next level, written as the project's default.
+    let saved = |w: &World| -> Value {
+        let v: Value = serde_json::from_str(&fs::read_to_string(w.config.join("projects.json")).unwrap()).unwrap();
+        v["projects"][&web]["autonomy_default"].clone()
+    };
+    key(&mut app, KeyCode::Char('o'));
+    assert_eq!(saved(&w), json!("publish"));
+    assert_eq!(app.active_notice(), Some("Hand-overs in Web shop now start from \"works and publishes\"."));
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Char('o'));
+    assert_eq!(saved(&w), json!("plan"));
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    assert!(flat(&draw(&mut term, &app)).contains("Squads start plans first, then waits for your yes o changes"));
+    // The hand-over popup of one of its tasks starts from it.
+    app.tk.selected = Some(crate::app::TRow::Ticket(6));
+    key(&mut app, KeyCode::Char('S'));
+    assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
+    assert_eq!(app.sq.form.autonomy, Autonomy::PlanFirst);
+    key(&mut app, KeyCode::Esc);
+    // Round again.
+    key(&mut app, KeyCode::Char('o'));
+    assert_eq!(saved(&w), json!("ask"));
+}

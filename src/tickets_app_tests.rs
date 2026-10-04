@@ -251,7 +251,9 @@ fn making_a_ticket_takes_a_title_then_opens_the_body_in_the_editor() {
     assert!(body.starts_with("## What it should do") && body.ends_with("Login works with a magic link.\n"), "{body}");
     // The row is picked, in the Tickets pane.
     assert_eq!((app.pane, app.selected_ticket().map(|t| t.number)), (Pane::Tickets, Some(1)));
-    let shown = flat(&draw(&mut term, &app));
+    // (The left column only: the notes beside it can wrap onto the same rows.)
+    let left: Vec<String> = draw(&mut term, &app).lines().map(|l| l.chars().take(55).collect()).collect();
+    let shown = flat(&left.join("\n"));
     assert!(shown.contains("Can start · 1 ▎#1 Log in with a link New · S hands it to a squad"), "{shown}");
 }
 

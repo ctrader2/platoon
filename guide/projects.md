@@ -42,20 +42,35 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 
 ## A project's screen
 
-A project's screen shows its name and its description across the top (in full, wrapped when it is long), its sessions at
-the top left (active ones first, then an `Archived (N)` group, dimmed), its [tasks](tasks-and-squads.md#the-tasks-pane)
-under them (the same rows as the [Tasks tab](tasks-and-squads.md#the-tasks-tab), this project's only) and its notes on the
-right.
+A project's screen shows its name and its description across the top (in full, wrapped when it is long), then how squads
+start on its tasks, its sessions at the top left (active ones first, then an `Archived (N)` group, dimmed), its
+[tasks](tasks-and-squads.md#the-tasks-pane) under them (the same rows as the [Tasks tab](tasks-and-squads.md#the-tasks-tab),
+this project's only) and its notes on the right.
 
 - `tab` and `shift+tab` go round the three panes. `shift` with an arrow moves between them too: `shift+↑` to Sessions,
   `shift+↓` to Tasks, `shift+→` to the notes and `shift+←` back to whichever of Sessions and Tasks you used last.
   `ctrl` with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
   pane: `↑` `↓` move in the sessions or tasks or scroll the notes, and `←` `→` do nothing there.
-- `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r` and `h` work there too).
+- `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r`, `h` and `t` work there too).
 - `n` starts a new session in the project: the folder picker lists the folders the project's other sessions use first.
 - `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search).
 - The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back.
 - With the notes in focus, `e` [edits them](#editing-the-notes), `c` shows what changed last and `u` undoes it.
+- `o`, from any of the panes, changes how squads start on this project's tasks (see below).
+
+### How squads start
+
+Under the description, one line says how much a squad does on its own when one of this project's tasks is
+[handed over](tasks-and-squads.md#the-hand-over):
+
+```
+Squads start  asks before anything others can see   o changes
+```
+
+`o` goes round the three levels: **plans first, then waits for your yes**, **asks before anything others can see** (the
+usual) and **works and publishes**. It is the project's default: the hand-over popup starts from it, and you can still
+pick another level there for one task. A task handed over already keeps what was chosen for it. It is kept as
+`autonomy_default` (`plan`, `ask` or `publish`) on the project in `projects.json`.
 
 ## The notes reach every session
 

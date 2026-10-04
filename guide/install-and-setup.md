@@ -49,7 +49,6 @@ first, as `settings.json.platoon-bak` beside it, and leaves everything else in i
 | Session guard | Stops two copies of one conversation from overwriting each other, and keeps a [project's](projects.md) notes in each of its conversations while they run |
 | Project notes | Hands a [project's](projects.md) notes to its sessions when they start or resume. Optional: platoon starts without it, projects still work, but their notes don't reach sessions |
 | Notes updates | Lets platoon [keep a project's notes up to date](projects.md#notes-that-keep-themselves-up-to-date) after its sessions stop. Also optional |
-| Tasks skill | Adds [`/to-tickets`](tasks-and-squads.md#making-tasks-from-a-conversation) to Claude Code, which turns a session into tasks. Optional. Unlike the others it is a file, not a setting (see [The tasks skill](#the-tasks-skill)) |
 
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in
@@ -68,16 +67,12 @@ run `platoon setup` once more to add it.
 If you run setup from a build folder (a path with `/target/` in it), it warns you: the hooks would point at a binary
 that moves. Install platoon first, then run `platoon setup` again.
 
-### The tasks skill
+### The old `/to-tickets` skill
 
-The Tasks skill step writes `skills/to-tickets/SKILL.md` in Claude Code's folder (`~/.claude`, or
-`CLAUDE_CONFIG_DIR`). platoon remembers the copy it last wrote (in `setup.json` in its own config folder):
-
-- When platoon's copy changes and yours is still the one it wrote, `platoon setup` updates it quietly.
-- If you changed the file, setup leaves it alone and says "changed by you". `platoon setup --replace to-tickets` puts
-  platoon's copy in (yours is kept as `SKILL.md.platoon-bak`).
-- `platoon setup --remove to-tickets` takes it out and remembers that, so later runs leave it out (the line says
-  "removed by you"). `platoon setup --add to-tickets` puts it back.
+Earlier platoons also installed a Claude Code skill, `/to-tickets` (`skills/to-tickets/SKILL.md` in Claude Code's
+folder). platoon now drafts tasks from a conversation itself ([`t` on a session](tasks-and-squads.md#making-tasks-from-a-conversation)),
+so setup no longer installs it and says nothing about it. A copy you have keeps working and is left alone;
+`platoon setup --remove to-tickets` takes it out (and so does the [uninstall](#uninstall)).
 
 ## When Claude Code or platoon is newer
 
@@ -149,8 +144,8 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
-4. **The `/to-tickets` skill.** It removes `skills/to-tickets/SKILL.md` from Claude Code's folder (and the folder, if
-   nothing else is in it). If you changed the file, your copy is kept beside it as `SKILL.md.platoon-bak` (or
+4. **The `/to-tickets` skill**, if an earlier platoon installed it. It removes `skills/to-tickets/SKILL.md` from Claude
+   Code's folder (and the folder, if nothing else is in it). If you changed the file, your copy is kept beside it as `SKILL.md.platoon-bak` (or
    `SKILL.md.platoon-bak.2` if that name is taken), so Claude Code no longer offers the skill but nothing of yours is
    lost.
 5. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you

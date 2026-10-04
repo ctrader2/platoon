@@ -389,6 +389,8 @@ impl App {
                 self.selected = 0;
             }
             KeyCode::Esc => self.act(Action::Leave),
+            // How squads start on this project's tasks (the line under its description), whichever pane has the keys.
+            KeyCode::Char('o') => self.cycle_autonomy_default(),
             // The Tickets pane has keys of its own (`n` there is a new ticket).
             _ if self.pane == Pane::Tickets => self.tickets_pane_key(key),
             KeyCode::Char('n') => self.act(Action::New),
@@ -423,6 +425,21 @@ impl App {
                 _ => {}
             },
             _ => {}
+        }
+    }
+
+    /// `o` on a project's screen: the next level of how much a squad does on its own when one of its tasks is handed
+    /// over (plans first, asks before anything others can see, works and publishes), written as the project's default.
+    /// The hand-over popup starts from it; a task handed over already keeps its own.
+    pub(super) fn cycle_autonomy_default(&mut self) {
+        let Some(p) = self.open_project().cloned() else { return };
+        let next = p.autonomy_default.next();
+        match self.projects.set_autonomy_default(&p.id, &next) {
+            Ok(()) => self.notify(format!("Hand-overs in {} now start from \"{}\".", p.name, next.label())),
+            Err(e) => {
+                let why = e.to_string();
+                self.notify(format!("Couldn't save the project: {}", why.split(" (os error").next().unwrap_or(&why)));
+            }
         }
     }
 

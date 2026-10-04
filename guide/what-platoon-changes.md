@@ -21,18 +21,17 @@ as it was, including your own hooks. A status line of your own is never replaced
 The hooks are quick and quiet. Each one finishes in a moment, and the guard is the only one that ever stops anything (a
 message typed into a second copy of a conversation).
 
-## A Claude Code skill: `/to-tickets`
+## No Claude Code skill
 
-The Tasks skill step writes one file: `~/.claude/skills/to-tickets/SKILL.md` (or under `CLAUDE_CONFIG_DIR`). Its
-`allowed-tools` lets it run `platoon task` and `platoon squads` commands without asking (a copy written by an earlier
-platoon runs `platoon ticket`, which still works the same way). See
-[The tasks skill](install-and-setup.md#the-tasks-skill) for how it is kept up to date and how to take it out.
+platoon adds no skill to Claude Code. Earlier platoons installed one, `/to-tickets` (`~/.claude/skills/to-tickets/`);
+a copy you have keeps working and is left alone, and `platoon setup --remove to-tickets` or the uninstall takes it out
+(see [The old `/to-tickets` skill](install-and-setup.md#the-old-to-tickets-skill)).
 
 ## Your Claude plan: nothing until you say yes
 
 The features that ask Claude through your plan (`claude -p`) are **off until you say yes**, in `platoon setup` or in the
 settings: smart names and summaries, find a session by description, project notes, project descriptions, and, only when you
-ask for them, the hand-off, the squad commander and drafting a squad or an agent. Each call runs with no tools, no
+ask for them, the hand-off, tasks from a conversation, the squad commander and drafting a squad or an agent. Each call runs with no tools, no
 settings and no saved session, under a daily token limit. What each one sends is on
 [Features that use tokens](tokens.md).
 
@@ -75,8 +74,8 @@ afterwards. See [Handing a task to a squad](tasks-and-squads.md#handing-a-task-t
 **Config** (`~/.config/platoon`, or `$XDG_CONFIG_HOME/platoon`, or `$PLATOON_CONFIG_DIR`): things you made or chose, kept
 because they would be lost or cost tokens to make again.
 
-- `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what setup remembers about the skill and
-  the token question)
+- `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what an earlier setup remembered about
+  the `/to-tickets` skill it installed)
 - `names.json` (names you gave), `archive.json` (archived conversations), `summaries.json` (smart names and summaries)
 - `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `notes-state.json`, and the tasks
   (`tasks.json`, `tasks/` with each task's text, result, its own folder and the squad it was started with; `tickets.json`
@@ -102,7 +101,7 @@ small marks its parts leave for each other.
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#squads).
 
-**In Claude Code's folder**: only the two things setup adds (`settings.json` and the skill), and the backups beside them.
+**In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it.
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
 `~/.claude/projects` for platoon's `claude -p` calls, and the sessions platoon starts are ordinary Claude Code sessions,
 saved by Claude Code like any other.
@@ -164,7 +163,8 @@ If you'd rather do it yourself, or the uninstaller can't:
    `platoon hook stop`. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
    copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
-2. **The skill.** `platoon setup --remove to-tickets`, or delete `~/.claude/skills/to-tickets/`.
+2. **The skill**, if an earlier platoon installed it. `platoon setup --remove to-tickets`, or delete
+   `~/.claude/skills/to-tickets/`.
 3. **platoon's own folders.** Delete `~/.config/platoon` and `~/.cache/platoon`. The config folder holds your projects'
    notes, tasks, squads and settings: keep a copy if you want them.
 4. **Task worktrees and branches.** Any `<repo>-worktrees/task-<N>` (or `ticket-<N>`) still there can go with

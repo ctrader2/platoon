@@ -35,7 +35,8 @@ The first public release. platoon works with Claude Code (last checked with 2.1.
   worktree made from the branch the work lands on) or, when you choose it, on a new branch of your own checkout. Four squads
   and twelve agents come built in, and you can change them or make your own. At each hand-over you say how much the squad
   does on its own: it plans first and waits for your yes (the plan shows on the task; `y` goes ahead, `n` asks for a
-  change), it asks you before a push, a pull request or a release, or it works and publishes. Only a few work at once.
+  change), it asks you before a push, a pull request or a release, or it works and publishes; a project's screen sets
+  where that starts (`o`). Only a few work at once.
 - **Your own editor**: `v` opens a session's or a task's folders in VS Code, Zed, a JetBrains IDE, Helix, Neovim and
   others found on your computer.
 - **Smart features** that use your Claude plan (smart names and summaries, finding a session by description, notes that

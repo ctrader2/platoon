@@ -85,8 +85,8 @@ Check it on your own machine (your Pro plan is enough):
   - [ ] the status line (plan usage)
   - [ ] a project's notes reaching a new session
   - [ ] a hand-off (\`h\`)
-  - [ ] a squad run on a small ticket
-  - [ ] \`/to-tickets\` in a project session
+  - [ ] a squad run on a small task
+  - [ ] tasks drafted from a session (\`t\`), and a plan-first squad stopping with its plan
 - [ ] Read [Claude Code's changelog](https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md) from $checked to $latest for changes to: transcripts, \`settings.json\` hooks, the status line input, skills, \`--agents\` and \`--permission-mode\`.
 - [ ] When it all works: in one commit, change \`checked-with/claude-code\` to $latest and the "last checked with Claude Code" line in README.md and the guide (\`scripts/check-claude-version.sh\` checks they agree), then close this issue.
 

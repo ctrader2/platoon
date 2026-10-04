@@ -77,6 +77,14 @@ impl World {
         assert!(out.status.success(), "{}", text(&out));
         fs::create_dir_all(self.config().join("projects")).unwrap();
         fs::create_dir_all(self.cache().join("status")).unwrap();
+        // The /to-tickets skill, as an earlier platoon's setup installed it (with the record it kept): setup no longer
+        // does, and the uninstall still takes it out.
+        let skill = include_str!("../src/skills/to-tickets/SKILL.md");
+        let dir = self.claude().join("skills/to-tickets");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), skill).unwrap();
+        let fnv = skill.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+        fs::write(self.config().join("setup.json"), json!({"to-tickets": {"written": format!("{fnv:016x}")}}).to_string()).unwrap();
     }
 
     fn stub(&self, name: &str, body: &str) {

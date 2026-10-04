@@ -48,6 +48,20 @@ fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
         .join("\n")
 }
 
+/// What is inside the hand-over popup, read top to bottom (the screen faded behind it can't run into its rows).
+fn in_popup(shown: &str) -> String {
+    let lines: Vec<&str> = shown.lines().collect();
+    let Some(top) = lines.iter().position(|l| l.contains("╭ Hand to a squad")) else { return shown.to_string() };
+    let left = lines[top].chars().position(|c| c == '╭').unwrap_or(0);
+    let right = left + lines[top].chars().skip(left + 1).position(|c| c == '╮').unwrap_or(0) + 1;
+    lines[top..]
+        .iter()
+        .take_while(|l| !l.chars().nth(left).is_some_and(|c| c == '╰'))
+        .map(|l| l.chars().skip(left).take(right - left + 1).collect::<String>())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn flat(text: &str) -> String {
     text.replace(['│', '╭', '╮', '╰', '╯', '─'], " ").split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -1110,14 +1124,14 @@ fn s_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
         "every squad, by name: built-ins first, then the user's own"
     );
     let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
-    let f = flat(&draw(&mut term, &app));
+    let f = flat(&in_popup(&draw(&mut term, &app)));
     // Only the picked squad says what it can do, so six squads and the lines fit in 30 rows.
     assert!(f.contains("▎ ● Coding") && f.contains("○ Careful coding") && !f.contains("Needs fixing"), "{f}");
     for _ in 0..5 {
         key(&mut app, KeyCode::Down);
     }
     // The cursor on the last squad; Coding is still the picked one until space or enter says otherwise.
-    let f = flat(&draw(&mut term, &app));
+    let f = flat(&in_popup(&draw(&mut term, &app)));
     assert!(
         f.contains("▎ ○ Careful coding")
             && f.contains("● Coding Makes a change")
@@ -1127,7 +1141,7 @@ fn s_on_a_ticket_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     );
     key(&mut app, KeyCode::Up);
     key(&mut app, KeyCode::Char(' '));
-    let f = flat(&draw(&mut term, &app));
+    let f = flat(&in_popup(&draw(&mut term, &app)));
     assert!(f.contains("▎ ● Broken") && f.contains("Needs fixing on the Squads tab first. Makes a change"), "{f}");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadPick));

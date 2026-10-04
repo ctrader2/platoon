@@ -4,8 +4,7 @@ A **task** is one piece of work, usually in a [project](projects.md). You can ke
 **squad**: a small team of Claude agents that does the work for you in a copy of your folder (a git worktree) and, unless
 you tell it otherwise, asks you before anything other people can see.
 
-(Tasks were called tickets until platoon 1.0: `platoon ticket ...` still works, the same way as `platoon task ...`, and
-the `/to-tickets` skill keeps its name.)
+(Tasks were called tickets until platoon 1.0: `platoon ticket ...` still works, the same way as `platoon task ...`.)
 
 ## The Tasks tab
 
@@ -88,7 +87,8 @@ whole word. When the pane is too short for them all it says how many more lines 
 ### A new task
 
 A new task works in the folder of the project's most recently used session (one made with `platoon task add`: the folder
-it was run in, which for `/to-tickets` is the session's own), and its text starts from a short template. When the project
+it was run in; one [drafted from a conversation](#making-tasks-from-a-conversation): that session's folders), and its
+text starts from a short template. When the project
 has no sessions it has no folder of its own yet, and its row says **Needs a folder**; `f` changes a task's folders. A task
 without a folder of its own can still go to any squad, which then works in the task's own folder, kept by platoon (see
 [Handing a task to a squad](#handing-a-task-to-a-squad)).
@@ -167,8 +167,7 @@ without a badge, and in `platoon task list` under "No project". `m` moves a task
 
 ### From the command line
 
-The [`/to-tickets`](#making-tasks-from-a-conversation) skill uses the same command, so tasks are always made through
-platoon:
+Tasks are always made through platoon, also from a script or another program:
 
 ```
 platoon task add --project "Web shop" --title "Log in with a link" --folder ~/code/web
@@ -190,6 +189,20 @@ A project that is archived takes no new tasks (restore it first; its tasks can s
 project that isn't there (or a name two projects share), a task to wait for that isn't there or would make a circle, or
 a folder that doesn't exist is refused with one plain line and nothing is made. There is no `--how-far`: say how far in
 the text (`--how-far` is refused with a line that says so). A running platoon shows the new task within a second.
+
+A task can remember the session it came from, as the ones [drafted from a conversation](#making-tasks-from-a-conversation)
+do:
+
+```
+platoon task where --session <session id>       # "Web shop (id …)", or one line and exit 1 when it's in no project
+platoon squads --kinds [--json]                 # each squad: its name and what it can do
+platoon task add --from-session <session id> --title "…" [--project "…"]   # in that session's project
+```
+
+`--from-session` puts the task in the project that session belongs to and records where it came from (`"from":
+{"session", "project"}` in `tasks.json` and in `task list --json`). A session in no project, or a `--project` that
+names a different project, is refused with one line and nothing is made. Inside Claude Code a session's own id is in
+`$CLAUDE_CODE_SESSION_ID`.
 
 `list --json` gives each task's `number`, `title`, `state` (the words the screen shows), `folders`, `blocked_by`,
 `can_start`, `publish_wanted`, `autonomy` (`plan`, `ask` or `publish`), `plan_ready` when its plan waits for you,
@@ -240,26 +253,8 @@ It uses your plan's tokens like the hand-off does: it needs the [smart features]
 limit, and says in one line why when it can't run. A session whose project is archived, or with no folder platoon can
 find, is refused with one line too, and nothing is asked.
 
-### From inside Claude Code: `/to-tickets`
-
-Type **`/to-tickets`** in a Claude Code session that is in a project (the **Tasks skill** step of
-[`platoon setup`](install-and-setup.md#the-tasks-skill) adds it) for the same thing done by Claude in the conversation
-itself: it reads what kinds of work your squads do (`platoon squads --kinds`), drafts the tasks, shows them as a numbered
-list for you to approve (nothing is written before that), and makes them with `platoon task add --from-session ...`.
-Claude never starts it unasked: when a session in a project leaves agreed work for later, Claude may offer it once, and
-uses it only after you say yes. The skill only runs `platoon task` and `platoon squads` commands, and lists them in its
-`allowed-tools`. The commands it uses work on their own too:
-
-```
-platoon task where --session <session id>       # "Web shop (id …)", or one line and exit 1 when it's in no project
-platoon squads --kinds [--json]                 # each squad: its name and what it can do
-platoon task add --from-session <session id> --title "…" [--project "…"]   # in that session's project
-```
-
-`--from-session` puts the task in the project that session belongs to and records where it came from (`"from":
-{"session", "project"}` in `tasks.json` and in `task list --json`). A session in no project, or a `--project` that
-names a different project, is refused with one line and nothing is made. Inside Claude Code a session's own id is in
-`$CLAUDE_CODE_SESSION_ID`.
+An older `/to-tickets` skill (which earlier platoons installed in Claude Code) keeps working, but platoon no longer
+installs it: see [The old `/to-tickets` skill](install-and-setup.md#the-old-to-tickets-skill).
 
 ## Handing a task to a squad
 
@@ -295,7 +290,8 @@ squad** opens, with:
   **asks before anything others can see** (the usual: a push, a merge request or a page waits for your `p`) and **works
   and publishes** (the squad pushes, opens and merges merge requests and publishes when the task's text asks for it, and
   says what it published in its result). It is asked at every hand-over and kept on the task; the popup starts from the
-  project's default (`autonomy_default`, `plan`, `ask` or `publish`, on the project in `projects.json`).
+  project's default, which `o` changes on the [project's screen](projects.md#how-squads-start) (for a task in no project:
+  asks before anything others can see).
 - **One line per folder.** A folder in git says how the squad works there and which branch the work lands on: "shop: a
   copy on task/5, lands on main". `space` switches between **a copy** (a git worktree beside the repository, the usual)
   and **a new branch in your checkout** (`git switch -c task/5 main` run in your own folder). The branch is offered only

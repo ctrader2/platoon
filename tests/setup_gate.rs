@@ -59,7 +59,7 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let first = platoon(&claude, &cache, &["setup"]);
     assert!(first.status.success());
     let shown = text(&first.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 5, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
     assert!(
         shown.contains("added") && shown.contains("Saved") && shown.contains("Project notes") && shown.contains("Notes updates"),
         "{shown}"
@@ -69,156 +69,61 @@ fn setup_lists_each_step_and_running_it_again_marks_everything_already_done() {
     let second = platoon(&claude, &cache, &["setup"]);
     assert!(second.status.success());
     let shown = text(&second.stdout);
-    assert_eq!(shown.matches("[✓]").count(), 5, "{shown}");
-    assert_eq!(shown.matches("already done").count(), 5, "{shown}");
+    assert_eq!(shown.matches("[✓]").count(), 4, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
     assert!(shown.contains("Nothing to change"), "{shown}");
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings, "a repeat run must not touch the file");
 }
 
+/// platoon drafts tasks itself now (`t` on a session): setup installs no `/to-tickets` skill and says nothing about one.
+/// A copy an earlier platoon installed is left exactly as it is (it keeps working), and `--remove to-tickets` takes it
+/// out; `--add` and `--replace` are gone.
 #[test]
-fn setup_writes_the_to_tickets_skill_into_claudes_config_folder_and_can_take_it_out_again() {
+fn setup_installs_no_skill_leaves_an_earlier_copy_alone_and_can_take_it_out() {
     let (claude, cache) = dirs("skill");
     let out = platoon(&claude, &cache, &["setup"]);
     assert!(out.status.success());
     let shown = text(&out.stdout);
+    assert!(!shown.contains("Tasks skill") && !shown.contains("to-tickets") && !shown.contains("Wrote"), "{shown}");
+    assert!(!claude.join("skills").exists(), "nothing written there");
+    // A copy an earlier platoon installed, with the record its setup kept: left alone, never mentioned.
     let skill = claude.join("skills/to-tickets/SKILL.md");
-    assert!(shown.contains("Tasks skill") && shown.contains(&format!("Wrote {}", skill.display())), "{shown}");
-    let text_on_disk = fs::read_to_string(&skill).unwrap();
-    assert!(text_on_disk.starts_with("---\nname: to-tickets\n") && !text_on_disk.contains("disable-model-invocation"), "{text_on_disk}");
-    // Claude may offer it, but only after asking, only in a platoon project, once, and after a no it only says how to
-    // type it.
-    let desc = text_on_disk.lines().find(|l| l.starts_with("description: ")).unwrap();
-    for want in [
-        "Never start it unasked",
-        "only after a yes",
-        "belongs to a platoon project",
-        "ask once",
-        "After a no",
-        "type /to-tickets any time",
-        "do not offer again",
-    ] {
-        assert!(desc.contains(want), "{want:?} in {desc}");
-    }
-    // Written by the platoon before this one, which kept no record (so there is none): platoon's own, so it is updated
-    // quietly.
+    let earlier = include_str!("../src/skills/to-tickets/SKILL.md");
+    fs::create_dir_all(skill.parent().unwrap()).unwrap();
+    fs::create_dir_all(cache.parent().unwrap().join("config")).unwrap();
+    fs::write(&skill, earlier).unwrap();
+    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(earlier)}}).to_string())
+        .unwrap();
+    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
+    assert!(!shown.contains("to-tickets") && shown.contains("Nothing to change"), "{shown}");
+    assert_eq!(fs::read_to_string(&skill).unwrap(), earlier);
+    // An older copy (an earlier platoon's, kept no record): left as it is too.
     fs::remove_file(cache.parent().unwrap().join("config/setup.json")).unwrap();
     fs::write(&skill, include_str!("fixtures/to-tickets-skill-1623a0e.md")).unwrap();
-    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
-    assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
-    assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
-    assert!(!claude.join("skills/to-tickets/SKILL.md.platoon-bak").exists());
-    // Written by the platoon before this one (`d8e7d22`, typed only), which did keep a record: the record says so, so
-    // it is updated quietly too.
-    let before = include_str!("fixtures/to-tickets-skill-d8e7d22.md");
-    assert_ne!(before, text_on_disk, "platoon's copy has moved on since");
-    fs::write(&skill, before).unwrap();
-    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string())
-        .unwrap();
-    let shown = text(&platoon(&claude, &cache, &["setup"]).stdout);
-    assert!(shown.contains("updated: platoon's copy had changed"), "{shown}");
-    assert_eq!(fs::read_to_string(&skill).unwrap(), text_on_disk);
-    assert!(!claude.join("skills/to-tickets/SKILL.md.platoon-bak").exists());
-    // The same old copy with a line of the user's: theirs, left alone.
-    fs::write(&skill, format!("{before}\nMy line.\n")).unwrap();
-    fs::write(cache.parent().unwrap().join("config/setup.json"), serde_json::json!({"to-tickets": {"written": fnv(before)}}).to_string())
-        .unwrap();
-    assert!(text(&platoon(&claude, &cache, &["setup"]).stdout).contains("changed by you"));
-    assert!(fs::read_to_string(&skill).unwrap().ends_with("My line.\n"));
-    fs::write(&skill, &text_on_disk).unwrap();
+    platoon(&claude, &cache, &["setup"]);
+    assert_eq!(fs::read_to_string(&skill).unwrap(), include_str!("fixtures/to-tickets-skill-1623a0e.md"));
     // Taken out on request: only it.
     let settings = fs::read_to_string(claude.join("settings.json")).unwrap();
     let out = platoon(&claude, &cache, &["setup", "--remove", "to-tickets"]);
     assert!(out.status.success(), "{out:?}");
-    let said = text(&out.stdout);
-    assert!(said.starts_with("Removed the /to-tickets skill") && said.contains("platoon setup --add to-tickets"), "{said}");
+    assert_eq!(text(&out.stdout).trim(), format!("Removed the /to-tickets skill ({}).", skill.display()));
     assert!(!claude.join("skills/to-tickets").exists());
     assert_eq!(fs::read_to_string(claude.join("settings.json")).unwrap(), settings);
-    // Without it platoon still starts.
+    let out = platoon(&claude, &cache, &["setup", "--remove", "to-tickets"]);
+    assert!(out.status.success() && text(&out.stdout).contains("isn't installed"), "{out:?}");
+    // Setup doesn't put it back, and platoon starts without it.
+    platoon(&claude, &cache, &["setup"]);
+    assert!(!skill.exists());
     let screen = run_in_terminal(&claude, &cache, "No sessions yet");
     assert!(screen.contains("No sessions yet"), "{screen}");
     let out = platoon(&claude, &cache, &["setup", "--remove", "everything"]);
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("can remove: to-tickets"));
-    assert_eq!(platoon(&claude, &cache, &["setup", "--nope"]).status.code(), Some(2));
-    assert_eq!(platoon(&claude, &cache, &["setup", "--add"]).status.code(), Some(2));
-}
-
-/// Every place the skill can be in, through the real binary: what `platoon setup` says and does, and the three options.
-#[test]
-fn setup_remembers_a_removal_and_leaves_a_skill_the_user_changed_alone() {
-    let (claude, cache) = dirs("skill-choices");
-    let config = cache.parent().unwrap().join("config");
-    let skill = claude.join("skills/to-tickets/SKILL.md");
-    let backup = claude.join("skills/to-tickets/SKILL.md.platoon-bak");
-    let setup = || text(&platoon(&claude, &cache, &["setup"]).stdout);
-    let tickets_line = |shown: &str| -> String {
-        let at = shown.find("Tasks skill").unwrap_or_else(|| panic!("{shown}"));
-        shown[at..].lines().take(2).collect::<Vec<_>>().join("\n")
-    };
-    // Missing: written.
-    assert!(tickets_line(&setup()).contains("added"));
-    let ours = fs::read_to_string(&skill).unwrap();
-    // Unchanged: already done.
-    assert!(tickets_line(&setup()).contains("already done"));
-
-    // Removed by the user: gone, remembered in platoon's own config (other keys kept), and setup leaves it out.
-    fs::create_dir_all(&config).unwrap();
-    let choices = config.join("setup.json");
-    fs::write(&choices, "{\"someone-elses\": [1, 2]}").unwrap();
-    assert!(platoon(&claude, &cache, &["setup", "--remove", "to-tickets"]).status.success());
-    let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&choices).unwrap()).unwrap();
-    assert_eq!(saved, serde_json::json!({"someone-elses": [1, 2], "to-tickets": {"removed": true}}));
-    for _ in 0..2 {
-        let shown = setup();
-        let line = tickets_line(&shown);
-        assert!(
-            line.starts_with("Tasks skill")
-                && line.contains("removed by you")
-                && line.contains("`platoon setup --add to-tickets` puts it back"),
-            "{shown}"
-        );
-        assert!(!skill.exists() && shown.contains("Nothing to change"), "{shown}");
+    for gone in [&["setup", "--add", "to-tickets"][..], &["setup", "--replace", "to-tickets"], &["setup", "--nope"], &["setup", "--add"]] {
+        let out = platoon(&claude, &cache, gone);
+        assert_eq!(out.status.code(), Some(2), "{gone:?}");
+        assert!(text(&out.stderr).starts_with("usage: platoon setup [--remove to-tickets]"), "{gone:?}: {out:?}");
     }
-    // Put back: written, and the mark is gone.
-    let out = platoon(&claude, &cache, &["setup", "--add", "to-tickets"]);
-    assert!(out.status.success() && text(&out.stdout).starts_with("Added the /to-tickets skill"), "{out:?}");
-    assert_eq!(fs::read_to_string(&skill).unwrap(), ours);
-    let saved: serde_json::Value = serde_json::from_str(&fs::read_to_string(&choices).unwrap()).unwrap();
-    assert_eq!(saved["someone-elses"], serde_json::json!([1, 2]));
-    assert!(saved["to-tickets"].get("removed").is_none() && saved["to-tickets"]["written"].is_string(), "{saved}");
-    assert!(tickets_line(&setup()).contains("already done"));
-
-    // What platoon last wrote, untouched, while platoon's copy has moved on: updated quietly.
-    let older = "---\nname: to-tickets\n---\nan older copy platoon wrote\n";
-    fs::write(&skill, older).unwrap();
-    let mut rec = saved.clone();
-    rec["to-tickets"]["written"] = serde_json::json!(fnv(older));
-    fs::write(&choices, rec.to_string()).unwrap();
-    assert!(tickets_line(&setup()).contains("updated: platoon's copy had changed"));
-    assert_eq!(fs::read_to_string(&skill).unwrap(), ours);
-    assert!(!backup.exists());
-
-    // Changed by the user: left alone every time, with how to replace it; never blocking.
-    fs::write(&skill, format!("{ours}\nMy own line.\n")).unwrap();
-    for _ in 0..2 {
-        let line = tickets_line(&setup());
-        assert!(line.contains("changed by you") && line.contains("`platoon setup --replace to-tickets`"), "{line}");
-        assert!(fs::read_to_string(&skill).unwrap().ends_with("My own line.\n"));
-    }
-    let screen = run_in_terminal(&claude, &cache, "No sessions yet");
-    assert!(screen.contains("No sessions yet"), "{screen}");
-    // Replaced on request: theirs kept beside it.
-    let out = platoon(&claude, &cache, &["setup", "--replace", "to-tickets"]);
-    assert!(out.status.success() && text(&out.stdout).contains("yours is kept as"), "{out:?}");
-    assert_eq!(fs::read_to_string(&skill).unwrap(), ours);
-    assert!(fs::read_to_string(&backup).unwrap().ends_with("My own line.\n"));
-    assert!(tickets_line(&setup()).contains("already done"));
-
-    // No record at all (a copy from somewhere else) that differs from platoon's: the user's.
-    fs::remove_file(&choices).unwrap();
-    fs::write(&skill, "---\nname: to-tickets\n---\nsomething else\n").unwrap();
-    assert!(tickets_line(&setup()).contains("changed by you"));
-    assert_eq!(fs::read_to_string(&skill).unwrap(), "---\nname: to-tickets\n---\nsomething else\n");
 }
 
 /// The hash setup keeps (FNV-1a over the exact bytes), to write a record by hand.
@@ -298,7 +203,7 @@ fn without_the_project_notes_hook_platoon_still_starts_and_setup_adds_only_that(
     assert!(screen.contains("No sessions yet"), "the missing notes hook must not block starting:\n{screen}");
     let out = platoon(&claude, &cache, &["setup"]);
     let shown = text(&out.stdout);
-    assert_eq!(shown.matches("already done").count(), 4, "{shown}");
+    assert_eq!(shown.matches("already done").count(), 3, "{shown}");
     assert!(shown.contains("Project notes") && shown.contains("added"), "{shown}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     let cmd = v["hooks"]["SessionStart"][0]["hooks"][0]["command"].as_str().unwrap();
@@ -476,15 +381,16 @@ fn there_is_no_editor_step_and_no_plugin_command() {
     let choices: serde_json::Value = serde_json::from_str(&fs::read_to_string(base.join("config/setup.json")).unwrap()).unwrap();
     assert_eq!(choices["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is left alone");
 
-    for (verb, args) in [("add", ["setup", "--add", "editor"]), ("remove", ["setup", "--remove", "editor"])] {
+    let out = platoon(&claude, &cache, &["setup", "--remove", "editor"]);
+    assert_eq!(out.status.code(), Some(1), "{out:?}");
+    assert!(out.stdout.is_empty(), "{out:?}");
+    assert_eq!(text(&out.stderr).trim(), "platoon setup can't remove \"editor\"; it can remove: to-tickets");
+    // `--add` and `--replace` are gone: how to use setup.
+    for args in [["setup", "--add", "editor"], ["setup", "--replace", "editor"]] {
         let out = platoon(&claude, &cache, &args);
-        assert_eq!(out.status.code(), Some(1), "{out:?}");
-        assert!(out.stdout.is_empty(), "{out:?}");
-        assert_eq!(text(&out.stderr).trim(), format!("platoon setup can't {verb} \"editor\"; it can {verb}: to-tickets"));
+        assert_eq!(out.status.code(), Some(2), "{out:?}");
+        assert!(text(&out.stderr).starts_with("usage: platoon setup"), "{out:?}");
     }
-    let out = platoon(&claude, &cache, &["setup", "--replace", "editor"]);
-    assert_eq!(out.status.code(), Some(1));
-    assert!(text(&out.stderr).contains("can replace: to-tickets"), "{out:?}");
     // `platoon plugin ...` is unknown, exactly as a made-up command is.
     let unknown = platoon(&claude, &cache, &["no-such-command"]);
     for args in [&["plugin", "list"][..], &["plugin", "add", "editor"], &["plugin"]] {
