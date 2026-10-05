@@ -203,9 +203,21 @@ fn cut(s: &str) -> String {
     out
 }
 
-/// The last `n` lines of the output that have something on them at the end (blank ones before them stay).
+/// The longest line of output typed into the squad's session, in characters (a minified file on one line stays short).
+const LINE_MAX: usize = 400;
+
+/// The last `n` lines of the output that have something on them at the end (blank ones before them stay), each cut to
+/// `LINE_MAX` characters.
 pub fn tail(output: &str, n: usize) -> String {
-    let lines: Vec<String> = output.trim_end().lines().map(|l| plain(l).trim_end().to_string()).collect();
+    let lines: Vec<String> = output
+        .trim_end()
+        .lines()
+        .map(|l| {
+            let l = plain(l);
+            let l = l.trim_end();
+            if l.chars().count() > LINE_MAX { format!("{}…", l.chars().take(LINE_MAX - 1).collect::<String>()) } else { l.to_string() }
+        })
+        .collect();
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
@@ -597,6 +609,10 @@ mod tests {
         assert!(typed_message("make", "/w", &late).contains("```\nwaiting\n```\n(timed out after 10 minutes)\n"));
         let quiet = Ran { summary: "failed with exit code 1, with nothing to say".into(), ..Ran::default() };
         assert!(typed_message("make", "/w", &quiet).contains(":\n\n(failed with exit code 1, with nothing to say)\n"));
+        // A very long line is cut; colors are taken out.
+        let long = Ran { output: format!("\u{1b}[31m{}\u{1b}[0m\n", "x".repeat(5000)), ..Ran::default() };
+        let m = typed_message("make", "/w", &long);
+        assert!(m.contains(&format!("```\n{}…\n```", "x".repeat(399))), "{}", m.len());
     }
 
     fn task(folders: &[&str]) -> Ticket {

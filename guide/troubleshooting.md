@@ -141,3 +141,16 @@ publishes" when you don't want to be asked. See
 **The status line said "Moved Web shop's tickets to tasks.json."** platoon renamed that project's task files once (tasks
 were called tickets before 1.0); the old list is kept beside them as `tickets.json.bak`. See
 [Where tasks are kept](tasks-and-squads.md#where-tasks-are-kept).
+
+**A task's tests never run.** The project needs a test command (`T` on its screen; a suggestion from `CLAUDE.md` is never
+run until you save it), the task a copy of a folder in git or a branch in your checkout, and a platoon window open: they
+run when the squad says it is finished (asks to close the task, wants to publish, or is done), not before. See
+[Checks](tasks-and-squads.md#checks).
+
+**A task's tests say "not run".** A session of yours was open in the folder they would run in, or your checkout was no
+longer on the task's branch. They run again the next time the squad finishes; the line says which. See
+[Checks](tasks-and-squads.md#checks).
+
+**A task says "The tests still fail after the squad tried twice".** platoon handed the failure back to the squad twice and
+they still fail: read `tests-<try>.log` in the task's own folder (`v` opens it), then tell the squad what to do with `y`.
+See [Checks](tasks-and-squads.md#checks).
