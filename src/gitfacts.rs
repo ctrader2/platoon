@@ -1,7 +1,8 @@
 //! What git can say about a folder, for the hand-off document: its branch and how it stands against its upstream,
 //! what is not committed yet, the last commit, and what was committed since a moment (the session's start); and for a
 //! task's hand-over: the repository's default branch (`default_branch`), whether a branch exists and whether the
-//! checkout is clean. Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never
+//! checkout is clean, and which branch a checkout is on (`current_branch`, before platoon runs a task's tests there).
+//! Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never
 //! `fetch`: the upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
 //! refresh is written, and every command shares one short time budget.
 //!
@@ -216,6 +217,11 @@ pub fn default_branch(program: &str, dir: &Path, deadline: Instant) -> Option<St
         }
     }
     run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| clean_path(b.trim())).filter(|b| !b.is_empty())
+}
+
+/// The branch checked out in `dir` (None on a detached HEAD, outside a repository, or when git can't say in time).
+pub fn current_branch(program: &str, dir: &Path, deadline: Instant) -> Option<String> {
+    run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| b.trim().to_string()).filter(|b| !b.is_empty())
 }
 
 /// Is `name` a branch (or anything else git finds a commit by) in `dir`'s repository? Checked with

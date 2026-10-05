@@ -37,6 +37,9 @@ The first public release. platoon works with Claude Code (last checked with 2.1.
   does on its own: it plans first and waits for your yes (the plan shows on the task; `y` goes ahead, `n` asks for a
   change), it asks you before a push, a pull request or a release, or it works and publishes; a project's screen sets
   where that starts (`o`). Only a few work at once.
+- **Tests platoon runs itself**: a project can name its test command (`T` on its screen; a `CLAUDE.md` with a "Build and
+  test" block suggests one). Each time a squad says it is finished, platoon runs the command in the squad's copy of the
+  folder, types a failure back into the squad's session for it to fix (twice at most), and otherwise tells you.
 - **Your own editor**: `v` opens a session's or a task's folders in VS Code, Zed, a JetBrains IDE, Helix, Neovim and
   others found on your computer.
 - **Smart features** that use your Claude plan (smart names and summaries, finding a session by description, notes that

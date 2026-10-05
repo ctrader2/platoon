@@ -62,6 +62,14 @@ A squad's leader is a Claude Code session that platoon starts for a task. It is 
   `env`, `bash -c` and the like. It is a list, not a sandbox: something it doesn't know (another tool, or an MCP server
   that publishes) is not stopped by it.
 
+**A command of yours runs when a squad finishes.** When a project has a [test command](projects.md#the-test-command),
+platoon runs it (`sh -c <your command>`) each time a squad of that project stops at the end of the work: in the task's
+copy of its folder, or on the task's branch in your own checkout while the checkout is still on it, never where another
+session of yours is open. It runs in the background from the platoon window that is open, with the squad leader's
+environment, no terminal, for 10 minutes at most (then it is stopped with everything it started), and what it writes is
+kept as `tests-<try>.log` in the task's own folder. It is your command: platoon adds nothing to what it does, network
+included. A project without a test command runs nothing. See [Checks](tasks-and-squads.md#checks).
+
 In your git repositories, a squad's task makes a worktree beside the repository, `<repo>-worktrees/task-<N>`, on a new
 branch `task/<N>` made from the branch the work lands on (tasks from before platoon 1.0 keep `ticket-<N>` and
 `ticket/<N>`). platoon removes the worktree folder (with `git worktree remove`) once the task is Done or Cancelled and its
@@ -115,6 +123,8 @@ saved by Claude Code like any other.
 - After stopping a session, platoon asks the MCP servers that session had started to exit too, and never any other
   process.
 - The project notes helper runs in the background, one per project, for at most half an hour.
+- A project's test command runs when one of its squads finishes (see [Squads](#squads)); platoon stops it, and
+  everything it started, when its time is up or platoon closes, and nothing else.
 
 ## One network request, no telemetry
 

@@ -399,6 +399,37 @@ command"); once you answer and it carries on, the task is Working again. The lea
 idle while its task is Working (its members may be at work while nobody watches); once the task needs you, is Done or
 Cancelled, it is stopped like any idle session.
 
+### Checks
+
+A squad says when it is finished, and it can be wrong. When the task's project has a [test command](projects.md#the-test-command)
+(`cargo test`, `npm test`, `make check`: whatever tests your code), **platoon runs it itself** each time the squad stops at
+the end of the work: when its leader asks "Shall I close this task?", wants to publish, or is done. Nothing else the squad
+says starts it, and a task outside a project, or in a project without a test command, has no test check.
+
+- **Where**: in the folder the squad works in: the task's copy of its first folder in git, or your own checkout when the
+  task works on a new branch there, and then only while that checkout is still on the task's branch (else it isn't run,
+  and the task says "your checkout of shop isn't on task/5 any more"). Never in a folder where another session of yours
+  is open (the task says "a session of yours is open there"), and never in a folder that isn't the task's. A task whose
+  folders aren't in git has no test check.
+- **How**: `sh -c` with your command, from the platoon window that is open (with two open, the first one opened does
+  it), in the background, one task at a time, with the same environment as the squad's leader (less platoon's own
+  `PLATOON_*` variables), and no terminal. It may run for 10 minutes (`test_timeout_minutes` on the project in
+  `projects.json` changes that); then platoon stops it and everything it started. What it writes is kept in the task's
+  own folder as `tasks/<NN>-work/tests-<try>.log`, for you to read (`v` on the task opens that folder too).
+- **The result** is one line: with cargo's `test result:` lines, their counts added up ("214 passed", or "211 passed, 3
+  failed"); otherwise the last line the command wrote ("sh: 1: cargo: not found"), or "timed out after 10 minutes".
+  platoon keeps the last five on the task, and says each in the status line.
+- **A pass** leaves the task as the squad left it: asking you to close it, wanting to publish, or Done.
+- **A failure** is typed into the squad's session as a message from you: "The tests failed when platoon ran `cargo test`
+  in <folder>:", the last 30 lines of what the command wrote, and "Fix what makes them fail, then end your turn as
+  before: platoon runs them again when you stop." The task goes back to **Working**, the squad fixes what it can and stops
+  again, and the tests run again. That happens **at most twice in a row**: the third failure leaves the task **Needs
+  you**, "The tests still fail after the squad tried twice", and from then on platoon tells you rather than the squad
+  until the tests pass again. When the squad's session isn't running, nothing is typed: the task Needs you, "The tests
+  failed; the squad's session isn't running".
+- A task you have written to meanwhile (it is Working again), or that its squad has stopped again since, keeps the
+  result, and platoon types nothing.
+
 ### The plan step
 
 A task handed over as **plans first, then waits for your yes** stops once before anything is changed. The leader has the

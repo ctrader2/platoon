@@ -23,7 +23,8 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
   the conversation, for you to change and make), then hand it to a squad: a lead agent and its team, working in a copy
   of your folder (a git worktree) or on a new branch of your checkout, on the branch you say the work lands on. They can
   show you their plan first and wait for your yes, and they ask you before a push or a pull request unless you let them
-  publish on their own. The Tasks tab shows every task across your projects, what each squad asks you (answer it in
+  publish on their own. When a squad says it is finished, platoon runs your project's tests itself and hands a failure
+  back to the squad. The Tasks tab shows every task across your projects, what each squad asks you (answer it in
   place), and what it has done. → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
@@ -64,7 +65,7 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
 - **Squads edit files without asking** (Claude Code's "accept edits" mode), inside the task's copy of the folder (or the
   branch you chose for it). They still ask before a push, a pull request or a release, unless you hand a task over as
-  "works and publishes".
+  "works and publishes". A project's test command, once you set one, is run by platoon there when a squad finishes.
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 

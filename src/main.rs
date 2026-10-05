@@ -454,6 +454,8 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     }
     // Stops still running for the archive key get a few seconds to finish, so their records are written.
     app.finish_stops();
+    // A test check still running is stopped; it runs again the next time platoon is open.
+    app.end_checks();
     Ok(app.hosts.len())
 }
 

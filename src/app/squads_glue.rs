@@ -724,7 +724,7 @@ impl App {
 
     /// Take this window's turn at starting the tickets in the line: only the platoon that holds the line's lock does
     /// (the first one opened; another takes over when it closes). True while this one holds it.
-    fn hold_line_lock(&mut self) -> bool {
+    pub(super) fn hold_line_lock(&mut self) -> bool {
         if self.sq.line_lock.is_some() {
             return true;
         }
@@ -1096,6 +1096,12 @@ pub(super) fn type_into(sock: &Path, rows: u16, cols: u16, text: &str) {
     let _ = write_frame(&mut s, F_INPUT, b"\r");
     thread::sleep(Duration::from_millis(200));
     let _ = s.shutdown(std::net::Shutdown::Both);
+}
+
+/// Paste `text` (lines and all) into a hosted session the way a terminal pastes, inside bracketed-paste marks, then
+/// press Enter: one message, however many lines it has.
+pub(super) fn paste_into(sock: &Path, rows: u16, cols: u16, text: &str) {
+    type_into(sock, rows, cols, &format!("\x1b[200~{text}\x1b[201~"));
 }
 
 impl SquadState {

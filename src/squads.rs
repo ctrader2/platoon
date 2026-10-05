@@ -1623,13 +1623,23 @@ pub fn squad_stop(input: &str, config: &Path) -> Option<(String, u32, State)> {
         return None;
     }
     let message = v.get("last_assistant_message").and_then(Value::as_str).unwrap_or("");
-    let o = decide_stop(members_running(v.get("background_tasks")), message);
+    let running = members_running(v.get("background_tasks"));
+    let o = decide_stop(running, message);
+    let has_place = crate::checks::has_place(t);
     if o.publish_wanted {
         store.squad_wants_to_publish(number, &o.reason).ok()?;
     } else if o.plan_ready {
         store.squad_plan_ready(number, &o.reason, o.plan.as_deref()).ok()?;
     } else {
         store.squad_says(number, &o.state, &o.reason, o.result.as_deref()).ok()?;
+    }
+    // At the end of the work, with a test command on the project: a check is due. The hook runs nothing itself (it is a
+    // short-lived process inside the leader's session); the platoon app runs it.
+    if let Some(stop) = crate::checks::stop_of(&parse_end_line(message), running)
+        && has_place
+        && crate::projects::Projects::open(config).get(&project).is_some_and(|p| !p.test_command.is_empty())
+    {
+        let _ = store.mark_check_due(number, stop.id(), crate::notesrun::now_ms());
     }
     Some((project, number, o.state))
 }
@@ -2199,6 +2209,9 @@ mod tests {
             queued: None,
             from: None,
             aside: None,
+            check_due: None,
+            checks: Vec::new(),
+            tests_failing: false,
             publish_wanted: false,
             plan_ready: false,
             autonomy: None,
@@ -2705,6 +2718,70 @@ mod tests {
 
     fn stop_input(session: &str, msg: &str, bg: Value) -> String {
         json!({"session_id": session, "last_assistant_message": msg, "background_tasks": bg, "stop_hook_active": false, "transcript_path": "/x.jsonl", "cwd": "/tmp", "hook_event_name": "Stop"}).to_string()
+    }
+
+    #[test]
+    fn the_stop_hook_marks_a_check_due_only_at_the_end_of_the_work_and_only_with_a_test_command() {
+        let c = dir("check-due");
+        let mut store = Tickets::open(&c, "p1");
+        let n = store.add(NewTicket { title: "Basket".into(), folders: vec!["/home/u/shop".into()], ..Default::default() }).unwrap();
+        let copy = Worktree {
+            folder: "/home/u/shop".into(),
+            path: "/home/u/shop-worktrees/task-1".into(),
+            branch: "task/1".into(),
+            ..Default::default()
+        };
+        let leader = Leader { squad: "coding".into(), session: "lead-1".into(), started: 5, names: Default::default(), snapshot: None };
+        store.start_leader(n, &leader, &[copy]).unwrap();
+        let due = || Tickets::open(&c, "p1").get(n).unwrap().check_due.clone();
+        let stop = |msg: &str| squad_stop(&stop_input("lead-1", msg, json!([])), &c);
+        // No project file, so no command: the stop is as ever, and no check.
+        stop("Done.\nSQUAD: question - Shall I close this task?");
+        assert_eq!((Tickets::open(&c, "p1").get(n).unwrap().state.clone(), due()), (State::Waiting, None));
+        let projects = |command: Option<&str>| {
+            let mut p = json!({"name": "Shop"});
+            if let Some(cmd) = command {
+                p["test_command"] = json!(cmd);
+            }
+            fs::write(c.join("projects.json"), json!({"version": 1, "projects": {"p1": p}, "sessions": {}}).to_string()).unwrap();
+        };
+        projects(Some(""));
+        stop("Done.\nSQUAD: question - Shall I close this task?");
+        assert_eq!(due(), None, "an empty command is none");
+        projects(Some("cargo test"));
+        // The three stops at the end of the work: a check is due, with which stop it was; the state is as ever.
+        for (msg, stop_id, state) in [
+            ("Done on task/1.\nSQUAD: question - Shall I close this task?", "close", State::Waiting),
+            ("Committed.\nSQUAD: ready to publish - push task/1", "publish", State::Waiting),
+            ("Pushed.\nSQUAD: done", "done", State::Done),
+        ] {
+            Tickets::open(&c, "p1").user_typed(n).unwrap();
+            assert_eq!(due(), None, "the user's message takes a due check away");
+            stop(msg);
+            let t = Tickets::open(&c, "p1").get(n).cloned().unwrap();
+            assert_eq!(t.state, state, "{msg}");
+            let d = t.check_due.clone().unwrap_or_else(|| panic!("due after {msg}"));
+            assert_eq!(d.stop, stop_id);
+            assert!(d.at > 1_700_000_000_000, "in ms: {}", d.at);
+        }
+        // Any other stop: none due, and one that was is moot.
+        for msg in ["SQUAD: question - Red or blue?", "SQUAD: blocked - no database", "SQUAD: working", "no line at all"] {
+            stop("SQUAD: done");
+            assert!(due().is_some());
+            stop(msg);
+            assert_eq!(due(), None, "{msg}");
+        }
+        // Members still running: not the end.
+        squad_stop(&stop_input("lead-1", "SQUAD: done", json!([{"id": "b"}])), &c);
+        assert_eq!(due(), None);
+        // A task whose only folder isn't in git (no copy, no branch) has nothing to check.
+        let m = Tickets::open(&c, "p1")
+            .add(NewTicket { title: "Notes".into(), folders: vec!["/home/u/notes".into()], ..Default::default() })
+            .unwrap();
+        let other = Leader { session: "lead-2".into(), ..leader };
+        Tickets::open(&c, "p1").start_leader(m, &other, &[]).unwrap();
+        squad_stop(&stop_input("lead-2", "SQUAD: question - Shall I close this task?", json!([])), &c);
+        assert_eq!(Tickets::open(&c, "p1").get(m).unwrap().check_due, None);
     }
 
     #[test]

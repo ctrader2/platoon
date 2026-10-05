@@ -41,6 +41,7 @@ use std::{
 };
 
 mod board_glue;
+mod checks_glue;
 mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
@@ -610,6 +611,8 @@ pub struct App {
     pub sw: squadwork_glue::WorkState,
     /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
     pub wt: worktree_glue::WtState,
+    /// The test check this window is running (`checks.rs`).
+    ck: checks_glue::CheckState,
     /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup, the hand-overs that follow.
     pub td: taskdraft_glue::DraftState,
     /// The code editor (`v`): the questions before it opens, the request the event loop takes.
@@ -828,6 +831,7 @@ impl App {
             sq: SquadState::new(),
             sw: squadwork_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
+            ck: checks_glue::CheckState::default(),
             td: taskdraft_glue::DraftState::default(),
             ed: editor_glue::EdState::new(),
             sqt: SquadTab::new(&config),
@@ -1455,6 +1459,7 @@ impl App {
         self.start_from_line();
         self.poll_squad_work();
         self.poll_worktrees();
+        self.poll_checks();
         self.poll_squad_files();
         self.poll_squad_draft();
         self.drive_smart();

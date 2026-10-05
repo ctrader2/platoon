@@ -137,8 +137,11 @@ impl App {
         let mut pick: Option<(String, u32, u64, Vec<Worktree>)> = None;
         for (project, t) in self.every_ticket() {
             // (`v` on the ticket is on its way to opening the editor there: left alone until it has.)
+            // (Nor while its tests are due or running there.)
             if !t.state.closed()
                 || t.worktrees.is_empty()
+                || t.check_due.is_some()
+                || self.check_running(project, t.number)
                 || self.squad_running(t)
                 || self.working_on(project, t.number)
                 || self.editor_holds(project, t.number)
