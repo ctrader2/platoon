@@ -435,9 +435,12 @@ fn eighty_columns_keep_each_tickets_number_title_and_what_it_waits_for() {
     lab.open_project(&mut t);
     t.send(b"\t");
     // The long title is cut with "…"; what each row needs is under it.
-    t.wait_for_all(&["#1 A rather long title for a…", "Can start ·", "#2 Second", "Waits for #1 A rather", "Done and cancelled · 1"]);
-    // Unfolded, and the last row picked: the pane scrolls to it.
-    t.send(b"G\r");
+    t.wait_for_all(&["#1 A rather long title for a…", "Can start ·", "#2 Second"]);
+    // The fold is the last row (the pane scrolls to it when it is picked), then unfolded, and the last row picked: the
+    // pane scrolls to that too.
+    t.send(b"G");
+    t.wait_for_all(&["Waits for #1 A rather", "Done and cancelled · 1"]);
+    t.send(b"\r");
     t.wait_for("▾ Done and cancelled · 1");
     t.send(b"G");
     t.wait_for("#3 Third");

@@ -44,6 +44,8 @@ pub enum NamePurpose {
     Squad(super::SquadName),
     /// The branch the work of this folder line of the hand-over popup lands on.
     LandsOn(usize),
+    /// The command that checks a squad's work on this project's tasks (`T` on its screen).
+    TestCommand(String),
 }
 
 pub struct NameBox {
@@ -391,6 +393,8 @@ impl App {
             KeyCode::Esc => self.act(Action::Leave),
             // How squads start on this project's tasks (the line under its description), whichever pane has the keys.
             KeyCode::Char('o') => self.cycle_autonomy_default(),
+            // The command that checks a squad's work (the line under that one), from any pane too.
+            KeyCode::Char('T') => self.edit_test_command(),
             // The Tickets pane has keys of its own (`n` there is a new ticket).
             _ if self.pane == Pane::Tickets => self.tickets_pane_key(key),
             KeyCode::Char('n') => self.act(Action::New),
@@ -443,6 +447,39 @@ impl App {
         }
     }
 
+    /// `T` on a project's screen: the box for its test command, holding the command it has (or, when it has none,
+    /// what its `CLAUDE.md` suggests, for the user to check: nothing is saved, or ever run, until they press enter).
+    pub(super) fn edit_test_command(&mut self) {
+        let Some(p) = self.open_project().cloned() else { return };
+        self.open_name_box(NamePurpose::TestCommand(p.id.clone()));
+    }
+
+    /// Enter in the test command's box: saved on the project (empty takes it away), said in one line.
+    fn save_test_command(&mut self, id: &str) {
+        let command = projects_mod::clean_command(&self.name_box.input);
+        self.mode = Mode::List;
+        let name = self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default();
+        match self.projects.set_test_command(id, &command) {
+            Ok(()) if command.is_empty() => self.notify(format!("{name} has no test command now: platoon runs no tests for its tasks.")),
+            Ok(()) => self.notify(format!("Tests for {name}: platoon runs `{command}` when a squad finishes.")),
+            Err(e) => self.report_projects_error(e),
+        }
+    }
+
+    /// What the project's `CLAUDE.md` gives for testing (`checks::suggestion_for` over its folders), worked out once
+    /// per refresh: the project's screen draws it on every frame.
+    pub fn test_suggestion(&self, id: &str) -> Option<String> {
+        if let Some((p, rev, s)) = self.test_hint.borrow().as_ref()
+            && p == id
+            && *rev == self.rev
+        {
+            return s.clone();
+        }
+        let s = crate::checks::suggestion_for(&self.project_folders(id));
+        *self.test_hint.borrow_mut() = Some((id.to_string(), self.rev, s.clone()));
+        s
+    }
+
     pub(super) fn wheel_list(&mut self, up: bool) {
         let d = if up { -1 } else { 1 };
         if self.squads_tab_showing() {
@@ -470,6 +507,10 @@ impl App {
             NamePurpose::TaskFilter => self.filter.clone(),
             NamePurpose::TicketTitle(n) => self.ticket(*n).map(|t| t.title.clone()).unwrap_or_default(),
             NamePurpose::LandsOn(i) => self.sq.form.folders.get(*i).map(|l| l.lands_on.clone()).unwrap_or_default(),
+            NamePurpose::TestCommand(id) => match self.projects.get(id).map(|p| p.test_command.clone()).filter(|c| !c.is_empty()) {
+                Some(c) => c,
+                None => self.test_suggestion(id).unwrap_or_default(),
+            },
             _ => String::new(),
         };
         self.name_box = NameBox { purpose, input };
@@ -490,6 +531,7 @@ impl App {
                 crate::tickets::TITLE_MAX
             }
             NamePurpose::TaskFilter => 200,
+            NamePurpose::TestCommand(_) => projects_mod::TEST_COMMAND_MAX,
             _ => projects_mod::NAME_MAX,
         };
         let room = max.saturating_sub(self.name_box.input.chars().count());
@@ -501,6 +543,7 @@ impl App {
         match self.name_box.purpose.clone() {
             NamePurpose::Squad(p) => return self.save_squad_name(p),
             NamePurpose::LandsOn(i) => return self.save_lands_on(i),
+            NamePurpose::TestCommand(id) => return self.save_test_command(&id),
             NamePurpose::TaskFilter => {
                 self.filter = self.name_box.input.trim().to_string();
                 self.mode = Mode::List;
@@ -547,7 +590,8 @@ impl App {
             | NamePurpose::TaskFilter
             | NamePurpose::TicketTitle(_)
             | NamePurpose::Squad(_)
-            | NamePurpose::LandsOn(_) => {}
+            | NamePurpose::LandsOn(_)
+            | NamePurpose::TestCommand(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

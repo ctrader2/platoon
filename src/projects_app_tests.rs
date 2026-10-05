@@ -964,13 +964,15 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
-    // Without a description: one empty line between the title and the line saying how squads start, then the panes.
+    // Without a description: one empty line between the title and the line saying how squads start, the test command's
+    // line, then the panes.
     let shown = draw(&mut term, &app);
     let top = |shown: &str| lines_with(shown, "╭ Sessions")[0];
     let title = lines_with(&shown, "Fruit")[0];
     let bare = top(&shown);
     assert_eq!(lines_with(&shown, "Squads start")[0], title + 2, "{shown}");
-    assert_eq!(bare, title + 3, "{shown}");
+    assert_eq!(lines_with(&shown, "Tests")[0], title + 3, "{shown}");
+    assert_eq!(bare, title + 4, "{shown}");
     let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
     app.projects.set_description(&a, &desc, 1).unwrap();
     let shown = draw(&mut term, &app);
@@ -984,7 +986,7 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     assert!(last > first, "wrapped at 60 columns: {shown}");
     assert_eq!(first, title + 1, "{shown}");
     assert_eq!(lines_with(&shown, "Squads start")[0], last + 1, "how squads start, on the line after it: {shown}");
-    assert_eq!(top(&shown), last + 2, "then the panes: {shown}");
+    assert_eq!(top(&shown), last + 3, "then the tests' line and the panes: {shown}");
     assert!(shown.contains("Sessions") && shown.contains("Notes"), "{shown}");
 }
 

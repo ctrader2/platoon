@@ -43,7 +43,7 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 ## A project's screen
 
 A project's screen shows its name and its description across the top (in full, wrapped when it is long), then how squads
-start on its tasks, its sessions at the top left (active ones first, then an `Archived (N)` group, dimmed), its
+start on its tasks and the command that tests their work, its sessions at the top left (active ones first, then an `Archived (N)` group, dimmed), its
 [tasks](tasks-and-squads.md#the-tasks-pane) under them (the same rows as the [Tasks tab](tasks-and-squads.md#the-tasks-tab),
 this project's only) and its notes on the right.
 
@@ -57,6 +57,8 @@ this project's only) and its notes on the right.
 - The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back.
 - With the notes in focus, `e` [edits them](#editing-the-notes), `c` shows what changed last and `u` undoes it.
 - `o`, from any of the panes, changes how squads start on this project's tasks (see below).
+- `T` (shift+t), from any of the panes, sets the command that tests a squad's work on this project's tasks (see
+  [The test command](#the-test-command)).
 
 ### How squads start
 
@@ -71,6 +73,32 @@ Squads start  asks before anything others can see   o changes
 usual) and **works and publishes**. It is the project's default: the hand-over popup starts from it, and you can still
 pick another level there for one task. A task handed over already keeps what was chosen for it. It is kept as
 `autonomy_default` (`plan`, `ask` or `publish`) on the project in `projects.json`.
+
+### The test command
+
+Under it, one more line says which command tests a squad's work on this project's tasks:
+
+```
+Tests         cargo test   T changes
+```
+
+When a squad finishes (it asks to close the task, wants to publish, or is done), platoon runs that command itself where
+the squad works, and tells the squad when it fails: see [Checks](tasks-and-squads.md#checks). `T` opens a one-line box
+for it; `enter` saves what is in the box, and an empty box takes the command away (then no tests are run). It is kept as
+`test_command` on the project in `projects.json`, with `test_timeout_minutes` (10 unless you write another number there):
+how long it may run before platoon stops it.
+
+A project without one says so, `Tests  not set · T sets it`. When the first of its folders that is in git has a
+`CLAUDE.md` (in the folder, or at the top of its repository) with a **Build and test** section holding a block of
+commands, the line adds the first command in that block (lines that only set the shell up, like `export PATH=...` or
+`cd`, are passed over):
+
+```
+Tests         not set · T sets it · CLAUDE.md says: cargo test
+```
+
+Nothing is ever run from that suggestion: `T` puts it in the box for you to check, and only `enter` makes it the
+project's command.
 
 ## The notes reach every session
 

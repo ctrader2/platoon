@@ -5,6 +5,9 @@ mod archive;
 mod board;
 #[cfg(test)]
 mod board_app_tests;
+mod checks;
+#[cfg(test)]
+mod checks_app_tests;
 #[cfg(test)]
 mod clarity_app_tests;
 mod claude;

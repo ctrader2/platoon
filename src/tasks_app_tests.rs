@@ -384,9 +384,11 @@ fn a_new_branch_in_the_checkout_is_offered_only_when_nothing_else_works_there() 
     let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
     let f = flat(&draw(&mut term, &app));
     // (The pane's rows behind the popup share its lines, so the two parts are looked for apart.)
+    // (The reason wraps in the popup, and the pane's row behind it may sit between its two lines.)
     assert!(
         f.contains("shop: a copy on task/1, lands on main")
-            && f.contains("a new branch in your checkout: not now, shop has changes not yet committed"),
+            && f.contains("a new branch in your checkout: not now, shop has changes not yet")
+            && f.contains("committed"),
         "{f}"
     );
     key(&mut app, KeyCode::Char(' '));

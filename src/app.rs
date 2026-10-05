@@ -644,6 +644,8 @@ pub struct App {
     handoff_flight: Option<Receiver<handoff_glue::HandoffAnswer>>,
     /// The `git` the hand-off reads the folder with (a stand-in in tests).
     git_program: String,
+    /// What the open project's `CLAUDE.md` suggests as its test command, as worked out at a refresh (`rev`).
+    test_hint: RefCell<Option<(String, u64, Option<String>)>>,
     /// Draw the mark of a generated name (and the summary strip) as a plain `*`: for terminals whose font may lack `✦`.
     pub plain_marker: bool,
     /// Draw count badges with round caps. Needs glyphs only some terminals have, so it is off unless detected or asked for.
@@ -853,6 +855,7 @@ impl App {
             handoff: HandoffBox::empty(),
             handoff_flight: None,
             git_program: "git".into(),
+            test_hint: RefCell::new(None),
             home: std::env::var("HOME").unwrap_or_default(),
             cache,
             config: config.clone(),
