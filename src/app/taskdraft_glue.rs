@@ -196,7 +196,8 @@ impl App {
         let kinds: Vec<Kind> = crate::squadfile::load_all(&self.config)
             .into_iter()
             .filter_map(|l| l.squad)
-            .map(|s| Kind { id: s.id.clone(), name: s.name.clone(), can_do: s.can_do.clone() })
+            .filter(|s| s.shape.is_empty())
+            .map(|s| Kind { id: s.id.clone(), name: s.name.clone(), can_do: s.can_do_line() })
             .collect();
         let material = Material {
             name: name.clone(),

@@ -83,6 +83,7 @@ pub fn tools_for(m: &Agent) -> Vec<String> {
 
 // ---- the built-in Coding squad's words ------------------------------------------------------------------------------
 
+#[cfg(test)]
 pub const CODING_CAN_DO: &str = "Makes a change to code in a git repository: plans it, builds it in a worktree of its own, reviews it and runs the tests, then takes it as far as the task says.";
 
 /// The part of every squad leader's system prompt the user may change (Settings, "System prompt for squad leaders"):
@@ -326,6 +327,7 @@ and the passed, failed and ignored counts as the run printed them. Don't fix any
 
 // ---- the built-in Research squad's words ----------------------------------------------------------------------------
 
+#[cfg(test)]
 pub const RESEARCH_CAN_DO: &str = "Finds things out and writes them up: answers questions about a technology, a codebase or a decision, with sources, in a report. It reads the task's folders and the web; it doesn't change code or documents.";
 
 pub const QUESTIONER_GUIDANCE: &str = "\
@@ -357,6 +359,7 @@ files.";
 
 // ---- the built-in Docs squad's words --------------------------------------------------------------------------------
 
+#[cfg(test)]
 pub const DOCS_CAN_DO: &str = "Writes or updates documentation as Markdown files in a project's folder: guides, READMEs, reference pages, notes. It reads the code the docs describe but doesn't change code, and it doesn't publish pages anywhere else.";
 
 pub const OUTLINER_GUIDANCE: &str = "\
@@ -380,10 +383,12 @@ why, or \"send it back\" with the changes the tech writer should make, as a shor
 
 // ---- the built-in Summarize squad's words ---------------------------------------------------------------------------
 
+#[cfg(test)]
 pub const SUMMARIZE_CAN_DO: &str = "Reads what the task points at (files, folders, links, notes) and writes a short summary of it for a person. It changes nothing, and it doesn't research beyond what it is pointed at.";
 
 /// The Summarize squad's one step, as its leader reads it: what it once told its own leader (the result is the summary
 /// itself) is said here now that every squad shares one leader.
+#[cfg(test)]
 pub const SUMMARIZE_DOES: &str = "Reads what the task points at (files, folders, links, notes) and writes a short summary for a person. The result is that summary itself: put it just above your last line, as written or tightened up, with what couldn't be read.";
 
 pub const SUMMARIZER_GUIDANCE: &str = "\
@@ -419,7 +424,7 @@ pub fn workflow_text(c: &Crew, names: AgentNames) -> String {
     let members: Vec<String> = c.agents.iter().map(|a| who(&a.id)).collect();
     let mut out = format!("You lead the {} squad. Your members are {}.\n", s.name, and_list(&members));
     if !s.can_do.trim().is_empty() {
-        out.push_str(&format!("What the squad can do: {}\n", s.can_do.trim()));
+        out.push_str(&format!("What the squad can do: {}\n", s.can_do_line()));
     }
     out.push('\n');
     out.push_str("The workflow. Hand each step to the member it names, in this order:\n");
@@ -436,6 +441,52 @@ pub fn workflow_text(c: &Crew, names: AgentNames) -> String {
         out.push('\n');
     }
     out.push_str("When the last step is done, take the work as far as the task's text says, and no further.");
+    out.push_str(&brief_text(c, names));
+    out
+}
+
+/// What the leader is told of the brief beyond its steps: when to ask the user ("Asks you"), the checks platoon runs
+/// itself when the leader stops at the end of the work (so it knows what they look for), and the squad's own checks as
+/// reminders. Empty when the brief has none of them.
+pub fn brief_text(c: &Crew, names: AgentNames) -> String {
+    use crate::brief::CheckKind;
+    let s = &c.squad;
+    let who = |m: &str| agent_name(&s.id, m, names);
+    let mut out = String::new();
+    if !s.asks_you.trim().is_empty() {
+        out.push_str(&format!("\n\nWhen to ask the user, as the brief says: {}", crate::squadfile::one_line(&s.asks_you)));
+    }
+    let kinds = s.check_kinds();
+    let runs: Vec<String> = kinds
+        .iter()
+        .filter_map(|(_, k)| match k {
+            CheckKind::Tests => Some("- the tests pass: platoon runs the project's test command where the squad works.".to_string()),
+            CheckKind::Read(a) => Some(format!(
+                "- {} read the change: platoon checks that {} ran after the last member that changed files. Hand it the work again after any later change.",
+                a,
+                who(a)
+            )),
+            CheckKind::Acceptance => Some(
+                "- every acceptance box is ticked, with how: the result above your last line lists each acceptance check of the task as \
+                 `- [x] <the check>: <how it was shown>`."
+                    .to_string(),
+            ),
+            _ => None,
+        })
+        .collect();
+    if !runs.is_empty() {
+        out.push_str(&format!(
+            "\n\nplatoon checks these itself each time you stop at the end of the work (asking to close the task, wanting to publish, or done), and tells you when one fails:\n{}",
+            runs.join("\n")
+        ));
+    }
+    let own: Vec<String> = kinds.iter().filter(|(_, k)| *k == CheckKind::Prose).map(|(l, _)| format!("- {}", l.trim())).collect();
+    if !own.is_empty() {
+        out.push_str(&format!(
+            "\n\nThe brief also asks the squad to check these itself before it says the work is finished:\n{}",
+            own.join("\n")
+        ));
+    }
     out
 }
 
@@ -480,9 +531,21 @@ pub fn agents_json(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Pla
         json!({"description": format!("Leads the {} squad through one task.", s.name), "prompt": leader_prompt(c, leader, names, place, terms), "model": leader.model, "tools": LEADER_TOOLS}),
     );
     for m in &c.agents {
-        let mut a =
-            json!({"description": member_description(s, &m.id), "prompt": member_prompt(m), "model": m.model, "tools": tools_for(m)});
+        let mut a = json!({"description": member_description(s, &m.id), "prompt": member_prompt(m)});
         if let Some(o) = a.as_object_mut() {
+            // A coding tool's own agent: its model and tools as its file has them (none listed: every tool).
+            if !m.model.is_empty() {
+                o.insert("model".into(), json!(m.model));
+            }
+            match (&m.from_file, &m.own_tools) {
+                (Some(_), None) => {}
+                (Some(_), Some(tools)) => {
+                    o.insert("tools".into(), json!(tools));
+                }
+                (None, _) => {
+                    o.insert("tools".into(), json!(tools_for(m)));
+                }
+            }
             if !m.skills.is_empty() {
                 o.insert("skills".into(), json!(m.skills));
             }
@@ -622,7 +685,7 @@ fn cut_chars(s: &str, n: usize) -> String {
 /// The request: the squad (its name and what it can do) and the ticket (number, title, its folders, its body cut to
 /// `BODY_IN_PROMPT`).
 pub fn commander_prompt(squad: &Squad, t: &Ticket, body: &str, folders: &[FolderFact]) -> String {
-    let mut out = format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do);
+    let mut out = format!("The squad: {}\nWhat it can do: {}\n\n", squad.name, squad.can_do_line());
     out.push_str(&format!("The task: #{} {}\n", t.number, t.title));
     if folders.is_empty() {
         out.push_str(
@@ -1963,7 +2026,7 @@ mod tests {
             agent: "reviewer".into(),
             does: "Reads the whole change once more.".into(),
             back: None,
-            extra: Map::new(),
+            line: 0,
         });
         let p = leader_prompt(&crew(&s), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE, &Terms::default());
         let wf = workflow_text(&crew(&s), AgentNames::SquadRole);
@@ -1983,9 +2046,29 @@ mod tests {
              3. coding-reviewer: Reads the change against the task and the plan, and checks that each acceptance check could have failed before the change. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most twice; after that, stop and tell the user what is still wrong.\n\
              4. coding-verifier: Runs the tests and the build and reports plainly what passed and what failed. It may send the work back: then give its reasons to coding-builder and go on again from step 2. At most once; after that, stop and tell the user what is still wrong.\n\
              5. coding-reviewer: Reads the whole change once more.\n\
-             When the last step is done, take the work as far as the task's text says, and no further."
+             When the last step is done, take the work as far as the task's text says, and no further.{}",
+                brief_text(&crew(&s), AgentNames::SquadRole)
             )
         );
+        // Then what the brief adds: when to ask, what platoon checks itself (so the leader knows what it looks for), and
+        // the squad's own checks as reminders.
+        assert_eq!(
+            brief_text(&crew(&s), AgentNames::SquadRole),
+            "\n\nWhen to ask the user, as the brief says: Before anything others can see, and when it is stuck.\n\n\
+             platoon checks these itself each time you stop at the end of the work (asking to close the task, wanting to publish, or done), and tells you when one fails:\n\
+             - the tests pass: platoon runs the project's test command where the squad works.\n\
+             - reviewer read the change: platoon checks that coding-reviewer ran after the last member that changed files. Hand it the work again after any later change.\n\
+             - every acceptance box is ticked, with how: the result above your last line lists each acceptance check of the task as `- [x] <the check>: <how it was shown>`."
+        );
+        let mut own = s.clone();
+        own.checks = vec!["every claim names its source".into(), "nothing others see without your yes".into()];
+        own.asks_you = String::new();
+        assert_eq!(
+            brief_text(&crew(&own), AgentNames::Plain),
+            "\n\nThe brief also asks the squad to check these itself before it says the work is finished:\n- every claim names its source"
+        );
+        own.checks.clear();
+        assert_eq!(brief_text(&crew(&own), AgentNames::SquadRole), "", "nothing to add");
         // The reviewer does two steps: its description says both.
         assert!(
             member_description(&s, "reviewer").starts_with("Step 3: Reads the change")

@@ -503,7 +503,8 @@ impl App {
             self.sq.pick_selected = self.sq.form.cursor;
         }
         let Some(squad) = self.sq.pick.get(self.sq.pick_selected).cloned() else { return };
-        if let Some(first) = crate::squadfile::problems(&squad, &self.agent_library()).into_iter().next() {
+        let first_folder = self.ticket(self.sq.pick_ticket).and_then(|t| t.folders.first().cloned());
+        if let Some(first) = crate::squadfile::problems(&squad, &self.agents_for(first_folder.as_deref())).into_iter().next() {
             // The popup stays open: another squad can be picked.
             self.notify(format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name));
             return;
@@ -766,7 +767,8 @@ impl App {
             };
             free -= 1;
             let squad = crate::squadfile::get(&self.config, &q.squad);
-            let agents = crate::agentfile::all(&self.config);
+            let first_folder = self.ticket_on_disk(&project, number).and_then(|t| t.folders.first().cloned());
+            let agents = self.agents_for(first_folder.as_deref());
             let broken = squad.as_ref().and_then(|s| crate::squadfile::problems(s, &agents).into_iter().next());
             match (squad, broken) {
                 (Some(squad), None) => {
@@ -836,7 +838,8 @@ impl App {
         }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
         // moment, whatever is changed on the Squads tab meanwhile.
-        let agents = crate::agentfile::all(&self.config);
+        let first_folder = self.ticket_on_disk(project, number).and_then(|t| t.folders.first().cloned());
+        let agents = self.agents_for(first_folder.as_deref());
         if let Some(first) = crate::squadfile::problems(&squad, &agents).into_iter().next() {
             // Changed on the Squads tab while it was being handed over.
             let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);

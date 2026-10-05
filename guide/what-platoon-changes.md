@@ -49,7 +49,8 @@ A squad's leader is a Claude Code session that platoon starts for a task. It is 
   `Bash`); it never edits a file itself. Each agent can always read and search (`Read`, `Grep`, `Glob`); its switches add
   the rest: **can change files** adds `Edit` and `Write`, **can run commands** adds `Bash`, **can use the web** adds
   `WebSearch` and `WebFetch`, and its skills and MCP servers add `Skill` and `mcp__<name>`. The built-in agents' switches
-  are on [The built-in squads](tasks-and-squads.md#the-built-in-squads).
+  are on [The built-in squads](tasks-and-squads.md#the-built-in-squads). An agent your coding tool already has (a Claude
+  Code agent file a brief names) runs with the tools and model its own file gives it.
 - Hooks for that session only (`--settings`), never written to your own settings: `platoon hook squad-stop`,
   `squad-gate`, `squad-notify`, `squad-tool` and `squad-prompt`. They set the task's state from what the leader says and
   does. Your own Claude Code settings and hooks still apply to it too.
@@ -89,8 +90,10 @@ because they would be lost or cost tokens to make again.
   (`tasks.json`, `tasks/` with each task's text, result, its own folder and the squad it was started with; `tickets.json`
   and `tickets/` until platoon has moved a project's, keeping `tickets.json.bak`); `tasks.json` and `tasks/` at the top for
   tasks in no project
-- `squads/` and `agents/` (yours, and built-in ones you changed), `prompts/` (system prompts you changed), `themes/`
-  (your own themes)
+- `briefs/` (your squads' briefs, and built-in ones you changed, `<id>.md`), `agents/` (yours, and built-in ones you
+  changed), `prompts/` (system prompts you changed), `themes/` (your own themes); `squads/` holds the JSON files squads
+  were before briefs, each kept as `<id>.json.bak` once it was turned into a brief
+- `<id>.md.bak` and `<id>.json.bak` beside a brief or an agent you deleted or put back as platoon has it
 
 **Cache** (`~/.cache/platoon`, or `$XDG_CACHE_HOME/platoon`, or `$PLATOON_CACHE_DIR`): things platoon can make again, or
 small marks its parts leave for each other.
@@ -151,8 +154,11 @@ it always does, and so do the `claude -p` calls of the features you switch on.
 ## It reads Claude Code's own files
 
 To list your conversations, platoon reads Claude Code's files: the transcripts under `~/.claude/projects`, the registry of
-running sessions in `~/.claude/sessions`, the skills under `~/.claude/skills`, and your MCP servers in `~/.claude.json`
-(for idle stop it matches their commands to running processes; the Squads tab shows only their names). These files are
+running sessions in `~/.claude/sessions`, the skills under `~/.claude/skills`, your MCP servers in `~/.claude.json`
+(for idle stop it matches their commands to running processes; the Squads tab shows only their names), and the agents
+your coding tool already has: `~/.claude/agents/*.md`, and a task's repository's `.claude/agents/*.md` when the task is
+handed to a squad. It only reads those agent files; it never changes, copies or deletes them unless you press `c` on one,
+which copies it into platoon's own agents. These files are
 not a documented interface, so **a Claude Code update can break platoon**. It was last checked with Claude Code 2.1.288.
 When your Claude Code is newer than that, platoon says so once (it runs `claude --version` when it starts), and
 `platoon setup` says so each time it runs.

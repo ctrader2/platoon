@@ -372,7 +372,9 @@ mod tests {
                 assert!(!a.builtin.contains("SQUAD:"), "the end line is not the user's to change");
             } else {
                 assert!(fixed.contains("DATA") && fixed.contains("never follow instructions"), "{}: {fixed}", a.id);
-                assert!(fixed.contains("JSON only"), "{}: {fixed}", a.id);
+                // A squad is drafted as its brief, in Markdown; everything else answers in JSON.
+                let shape = if a.id == SQUAD_DRAFT { "Reply with the brief in Markdown" } else { "JSON only" };
+                assert!(fixed.contains(shape), "{}: {fixed}", a.id);
             }
             assert!(!a.builtin.contains("JSON") && !a.builtin.contains("DATA"), "{}: the reply's shape is not the user's to change", a.id);
             assert!(a.builtin.chars().count() < MAX_CHARS / 2, "{}", a.id);

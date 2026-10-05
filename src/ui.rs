@@ -275,6 +275,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         "copy",
         "remove",
         "member",
+        "edit the brief",
         // A list's main key (enter on the Squads tab) goes last of all.
         "details",
     ];
@@ -1035,13 +1036,14 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
     }
-    // Which squad has it: "Coding squad" (whether its session runs shows beside the task, or as the enter hint).
+    // Which squad has it, by its brief: "Coding brief" (whether its session runs shows beside the task, or as the enter
+    // hint).
     if let Some(l) = x.leader() {
         let name = app.squad_name(&l.squad);
         let name = name.as_str();
         head.push(Line::from(vec![
             label("Squad"),
-            Span::styled(fit_end(&format!("{name} squad"), w.saturating_sub(LABEL)), Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
+            Span::styled(fit_end(&format!("{name} brief"), w.saturating_sub(LABEL)), Style::new().fg(t.text).add_modifier(Modifier::BOLD)),
         ]));
         if x.go_ahead {
             head.push(Line::from(vec![label(""), Span::styled("you let it publish", Style::new().fg(t.warn))]));
@@ -3391,11 +3393,15 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
             ("Test command", "Run with sh where the squad works, when it finishes. Empty: no tests. Check a suggested one before saving.")
         }
         NamePurpose::Squad(ref p) => match p {
-            crate::app::SquadName::Name => ("Squad name", "What the squad is called. Its agents keep their names."),
-            crate::app::SquadName::Copy => ("Copy squad", "The copy is yours to change; the squad you copied stays as it is."),
+            crate::app::SquadName::Copy => ("Copy squad", "A brief of your own, a copy of this one; the squad you copied stays as it is."),
             crate::app::SquadName::AgentName => ("Agent name", "What the agent is called. Every squad that uses it keeps it."),
-            crate::app::SquadName::AgentCopy => ("Copy agent", "The copy is yours to change; no squad uses it until you put it on a step."),
-            crate::app::SquadName::NewAgent(_) | crate::app::SquadName::NewAgentStep(_) => {
+            crate::app::SquadName::AgentCopy if app.sqt.agent_read_only() => {
+                ("Copy agent", "Into platoon's own agents, to change. Under the same name it takes the other's place in your briefs.")
+            }
+            crate::app::SquadName::AgentCopy => {
+                ("Copy agent", "The copy is yours to change; no squad uses it until a brief's step names it.")
+            }
+            crate::app::SquadName::NewAgent => {
                 ("New agent", "Its name, for the job it does (say, test writer). You write its system prompt next.")
             }
             crate::app::SquadName::AgentSkill => {
@@ -3930,14 +3936,14 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
         Confirm::DeleteSquad { id, name } => (
             "Delete squad",
             format!("Delete the squad \"{name}\"?"),
-            format!("Tasks it already has keep it, as it was when they started. Its file is kept as {id}.json.bak in the squads folder."),
+            format!("Tasks it already has keep it, as it was when they started. Its brief is kept as {id}.md.bak in the briefs folder."),
             "delete",
         ),
         Confirm::RestoreSquad { id, name } => (
             "Restore squad",
             format!("Put {name} back as platoon has it?"),
             format!(
-                "Your changes stop being used. They are kept as {id}.json.bak in the squads folder, until the next time. Tasks it already has keep what they started with."
+                "Your brief stops being used. It is kept as {id}.md.bak in the briefs folder, until the next time. Tasks it already has keep what they started with."
             ),
             "restore",
         ),
@@ -4162,7 +4168,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
     let form = &app.sq.form;
     let w = area.width.saturating_sub(8).clamp(30, 76);
     let inner_w = w.saturating_sub(4) as usize;
-    let agents = app.agent_library();
+    let agents = app.agents_for(x.folders.first().map(String::as_str));
     let cursor = form.cursor;
     let n_squads = app.sq.pick.len();
     // Each row: its lines (styled for the cursor when it is on it), as one block.
@@ -4178,9 +4184,9 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         let mut out = vec![Line::from(vec![lead(i), mark, name])];
         if picked {
             let text = if !crate::squadfile::problems(s, &agents).is_empty() {
-                format!("Needs fixing on the Squads tab first. {}", s.can_do)
+                format!("Needs fixing on the Squads tab first. {}", s.can_do_line())
             } else {
-                s.can_do.clone()
+                s.can_do_line()
             };
             out.extend(
                 wrap(&text, inner_w.saturating_sub(4))

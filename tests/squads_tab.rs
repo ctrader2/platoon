@@ -1,8 +1,10 @@
 //! The Squads tab end to end, in a real terminal with the real binary: a squad described in the text box and drafted
-//! by a stand-in `claude`, saved, handed a ticket with `S` (the leader starts with that squad's own `--agents`), then
-//! changed on the tab (and the leaders' model in the settings) while its leader has stopped: continued, the leader runs
-//! with the squad as it was when it started. The squad leaders' system prompt and model, set in the settings, reaching
-//! a leader. An agent given a skill and an MCP server from what is installed (in a temp Claude config folder).
+//! by a stand-in `claude` as a brief, saved, handed a task with `S` (the leader starts with that brief's own
+//! `--agents`), then its brief changed in a stand-in editor (`e`, and the tab reading it again) and the leaders' model
+//! changed in the settings while its leader has stopped: continued, the leader runs with the squad as it was when it
+//! started. An old JSON squad file shown as the brief it became. The squad leaders' system prompt and model, set in the
+//! settings, reaching a leader. An agent given a skill and an MCP server from what is installed (in a temp Claude
+//! config folder).
 //!
 //! The "claude" is a stand-in script: `claude -p` answers the drafting call and the commander's check from files,
 //! and a session writes down its arguments and echoes what is typed. A real `claude` or editor is never run, every
@@ -30,7 +32,7 @@ if [ "$1" = "-p" ]; then
   else
     text='{"fits":true,"reason":"Coding work."}'
   fi
-  esc=$(printf '%s' "$text" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+  esc=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')
   printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":{"input_tokens":300,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":20}}' "$esc"
   exit 0
 fi
@@ -56,23 +58,41 @@ while IFS= read -r line; do
 done
 "#;
 
-/// Stands in for nano: says which file it has, then adds the line it is given to the end of it.
+/// Stands in for nano: says which file it has, then adds the line it is given to the end of it (or, for a line
+/// that is a `s/.../.../` substitution, makes that change in it).
 const FAKE_NANO: &str = r#"#!/bin/sh
 f=""
 for a in "$@"; do case "$a" in -*) ;; *) f="$a" ;; esac; done
 echo "FAKE NANO EDITING $f"
 read line
-printf '%s\n' "$line" >> "$f"
+case "$line" in
+  s/*) sed "$line" "$f" > "$f.new" && mv "$f.new" "$f" ;;
+  *) printf '%s\n' "$line" >> "$f" ;;
+esac
 "#;
 
-/// A drafted squad that uses the built-in planner and brings a builder of its own.
-const DRAFT: &str = r#"{"name":"Careful coding","can_do":"Makes small, careful changes to code in a git repository.",
- "new_agents":[
-  {"name":"quick-builder","model":"haiku","can_change_files":true,"can_run_commands":true,"can_use_web":false,"guidance":"Make the change."}],
- "workflow":[
-  {"agent":"planner","does":"Writes a short plan.","back_to":null,"times":0},
-  {"agent":"quick-builder","does":"Makes the change and runs the tests.","back_to":null,"times":0},
-  {"agent":"planner","does":"Checks the change against the plan.","back_to":2,"times":2}]}"#;
+/// A drafted brief that uses the built-in planner and brings a builder of its own.
+const DRAFT: &str = r#"---
+name: Careful coding
+---
+# What it does
+Makes small, careful changes to code in a git repository.
+
+# Steps
+1. planner: Writes a short plan.
+2. quick-builder: Makes the change and runs the tests.
+3. planner: Checks the change against the plan. May send the work back to step 2, at most twice.
+
+# Checks
+- the tests pass
+- planner read the change
+
+# Asks you
+Before anything others can see.
+
+```json
+[{"name":"quick-builder","model":"haiku","can_change_files":true,"can_run_commands":true,"can_use_web":false,"guidance":"Make the change."}]
+```"#;
 
 struct Lab {
     base: PathBuf,
@@ -156,8 +176,8 @@ impl Lab {
         ]
     }
 
-    fn squad_file(&self, id: &str) -> Value {
-        serde_json::from_str(&fs::read_to_string(self.config.join("squads").join(format!("{id}.json"))).unwrap()).unwrap()
+    fn brief(&self, id: &str) -> String {
+        fs::read_to_string(self.config.join("briefs").join(format!("{id}.md"))).unwrap()
     }
 
     fn ticket_now(&self) -> Value {
@@ -212,7 +232,7 @@ fn value_after<'a>(args: &'a [String], flag: &str) -> &'a str {
 }
 
 #[test]
-fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squad_it_started_with() {
+fn a_described_squad_is_drafted_as_a_brief_saved_handed_a_task_and_continued_with_the_squad_it_started_with() {
     let lab = Lab::new("sqtab-draft");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
@@ -228,11 +248,12 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     assert!(asked.contains("a squad that codes carefully: a planner and a builder"), "{asked}");
     assert!(asked.contains("- planner (Opus; runs commands): "), "told the agents there are: {asked}");
     assert!(lab.call(1, "argv").contains("\n--model\nsonnet\n"), "drafted on Sonnet: {}", lab.call(1, "argv"));
-    assert!(!lab.config.join("squads/careful-coding.json").exists(), "not saved until the user says so");
+    assert!(!lab.config.join("briefs/careful-coding.md").exists(), "not saved until the user says so");
     t.send(b"\x13");
-    t.wait_for_flat("Saved the squad \"Careful coding\" and its new agent.");
-    let v = lab.squad_file("careful-coding");
-    assert_eq!((v["name"].as_str(), v["workflow"][1]["agent"].as_str()), (Some("Careful coding"), Some("quick-builder")));
+    t.wait_for_flat("Saved the \"Careful coding\" brief and its new agent.");
+    let b = lab.brief("careful-coding");
+    assert!(b.starts_with("---\nid: careful-coding\nname: Careful coding\n---\n# What it does\n"), "{b}");
+    assert!(b.contains("2. quick-builder: Makes the change and runs the tests.\n") && b.contains("- planner read the change\n"), "{b}");
     let a: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("agents/quick-builder.json")).unwrap()).unwrap();
     assert_eq!(a["model"], "haiku");
     t.wait_for_all(&["Your own"]);
@@ -276,21 +297,24 @@ fn a_described_squad_is_drafted_saved_handed_a_ticket_and_continued_with_the_squ
     );
     assert!(prompt.contains("You lead the Careful coding squad. Your members are careful-coding-planner and careful-coding-quick-builder.\nWhat the squad can do: Makes small, careful changes"), "{prompt}");
     assert!(prompt.contains("3. careful-coding-planner: Checks the change against the plan. It may send the work back: then give its reasons to careful-coding-quick-builder and go on again from step 2. At most twice;"), "{prompt}");
+    assert!(prompt.contains("When to ask the user, as the brief says: Before anything others can see."), "{prompt}");
+    assert!(prompt.contains("- planner read the change: platoon checks that careful-coding-planner ran after the last member"), "{prompt}");
     assert_eq!(lab.ticket_now()["leaders"][0]["squad"], "careful-coding");
 
-    // The squad changes on the tab (what it can do), and every leader runs on Opus from now on (the settings file).
+    // The brief changes in the (stand-in) editor (what it does), and every leader runs on Opus from now on (the
+    // settings file).
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(b"4");
     t.wait_for_all(&["╭ [Squads]", "Careful coding"]);
-    // To the list (shift+left), on the new squad, then into its details from the top, down to what it can do.
-    t.send(b"\x1b[1;2D");
-    t.wait_for_all(&["enter details", "╭ Careful coding"]);
-    t.send(b"\rg\x1b[B\r");
-    t.wait_for("What it can do");
-    t.send(b"\x15Makes big, bold changes.\r");
-    t.wait_for_flat("Saved what the squad can do.");
-    assert_eq!(lab.squad_file("careful-coding")["can_do"], "Makes big, bold changes.");
+    t.send(b"e");
+    t.wait_for("nano");
+    t.send(b"\r");
+    t.wait_for_all(&["FAKE NANO EDITING", "briefs/careful-coding.md"]);
+    t.send(b"s/Makes small, careful changes/Makes big, bold changes/\r");
+    t.wait_for_flat("Read the Careful coding brief again: it can be handed tasks.");
+    t.wait_for_all(&["Makes big, bold changes to code"]);
+    assert!(lab.brief("careful-coding").contains("# What it does\nMakes big, bold changes to code in a git repository.\n"));
     let mut settings: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("settings.json")).unwrap()).unwrap();
     settings.as_object_mut().unwrap().insert("squad_leader_model".into(), json!("opus"));
     fs::write(lab.config.join("settings.json"), settings.to_string()).unwrap();
@@ -465,7 +489,29 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
 }
 
 #[test]
-fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_there_reaches_every_squad() {
+fn an_old_squad_file_is_shown_as_the_brief_it_became() {
+    let lab = Lab::new("sqtab-old");
+    fs::create_dir_all(lab.config.join("squads")).unwrap();
+    let old = json!({"version": 1, "id": "handbook", "name": "Handbook", "can_do": "Writes the handbook.", "leader": {"model": "opus"},
+        "workflow": [{"agent": "outliner", "does": "Outlines it."}, {"agent": "tech-writer", "does": "Writes it."},
+                     {"agent": "editor", "does": "Checks it.", "back_to": 2, "times": 1}]});
+    fs::write(lab.config.join("squads/handbook.json"), old.to_string()).unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    t.wait_for("enter open");
+    t.send(b"4");
+    t.wait_for_all(&["╭ [Squads]", "Handbook"]);
+    t.send(b"G");
+    t.wait_for_all(&["╭ Handbook", "A file you own:", "briefs/handbook.md", "Writes the handbook.", "2 tech-writer", "↩ back to step 2"]);
+    t.wait_for_all(&["the tests pass", "platoon runs the project's test command"]);
+    let b = lab.brief("handbook");
+    assert!(b.contains("3. editor: Checks it. May send the work back to step 2, at most once.\n"), "{b}");
+    assert!(lab.config.join("squads/handbook.json.bak").exists() && !lab.config.join("squads/handbook.json").exists());
+    t.send(&[3]);
+    t.wait_exit();
+}
+
+#[test]
+fn the_list_switches_to_the_agents_and_an_edit_there_reaches_every_squad() {
     let lab = Lab::new("sqtab-agents");
     // A copy of Coding of the user's own: it shares Coding's agents.
     fs::create_dir_all(lab.config.join("squads")).unwrap();
@@ -479,7 +525,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     t.send(b"c");
     t.wait_for("Copy squad");
     t.send(b"\x15Careful coding\r");
-    t.wait_for_flat("it uses the same agents");
+    t.wait_for_flat("It uses the same agents");
     // The switch: the label of the list it shows in brackets and in another colour than the other.
     t.send(b"\x1b[C");
     t.wait_for_all(&["[Agents]", "+ New agent", "← → squads"]);
@@ -497,17 +543,10 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     assert_eq!(t.fg_at(pr, pc), accent, "the selection's mark");
     assert_ne!(t.bg_at(pr, pc + 3), t.bg_at(br, bc + 3), "the selected agent has its own background");
     t.wait_for_all(&["Used in", "Coding", "Careful coding", "step 1"]);
-    // Back to the squads, into Coding's workflow, and g on the reviewer's step.
-    t.send(b"\x1b[D");
-    t.wait_for_all(&["[Squads]", "← → agents"]);
-    t.send(b"\x1b[H\r");
-    t.wait_for("esc back to the list");
-    // Down to step 3's agent: past name, what it can do, and steps 1 and 2 (each its agent, then what it does).
-    for _ in 0..6 {
-        t.send(b"\x1b[B");
-    }
-    t.wait_for("enter pick the agent");
-    t.send(b"g");
+    // Down the list to the reviewer, and into its details.
+    t.send(b"\x1b[B\x1b[B");
+    t.wait_for_all(&["▎ reviewer"]);
+    t.send(b"\r");
     t.wait_for_all(&["[Agents]", "Name                reviewer"]);
     // Its system prompt, in the (stand-in) editor: every squad that uses it has it. (Past its model, its three
     // switches, its skills and its MCP servers.)
@@ -524,7 +563,7 @@ fn the_list_switches_to_the_agents_g_goes_from_a_step_to_its_agent_and_an_edit_t
     let a: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("agents/reviewer.json")).unwrap()).unwrap();
     assert_eq!(a["builtin"], "reviewer");
     assert!(a["guidance"].as_str().unwrap().ends_with("Be strict."), "{a}");
-    assert!(!lab.config.join("squads/coding.json").exists(), "the squad itself is as it was");
+    assert!(!lab.config.join("briefs/coding.md").exists(), "the brief itself is as it was");
     t.wait_for_all(&["User Modified"]);
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();

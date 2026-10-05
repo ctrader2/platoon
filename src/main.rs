@@ -5,6 +5,7 @@ mod archive;
 mod board;
 #[cfg(test)]
 mod board_app_tests;
+mod brief;
 mod checks;
 #[cfg(test)]
 mod checks_app_tests;

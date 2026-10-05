@@ -44,6 +44,11 @@ pub struct Agent {
     pub mcp: Vec<String>,
     /// Keys of the file platoon doesn't know, kept as they were.
     pub extra: Map<String, Value>,
+    /// An agent the user's coding tool has (Claude Code's `agents/*.md`): its file, which platoon only reads.
+    pub from_file: Option<PathBuf>,
+    /// Its own list of tools, as its file gives it (a coding tool's agent): passed on as it is; None with `from_file`,
+    /// every tool the session has. Platoon's own agents have none: their tools come from the switches (`tools_for`).
+    pub own_tools: Option<Vec<String>>,
 }
 
 impl Agent {
@@ -105,6 +110,8 @@ fn agent(id: &str, model: &str, guidance: &str, files: bool, commands: bool, web
         skills: Vec::new(),
         mcp: Vec::new(),
         extra: Map::new(),
+        from_file: None,
+        own_tools: None,
     }
 }
 
@@ -155,7 +162,8 @@ pub fn problems(a: &Agent) -> Vec<String> {
     } else if a.name.chars().count() > NAME_MAX {
         out.push(format!("{who}'s name is longer than {NAME_MAX} characters."));
     }
-    if !known_model(&a.model) {
+    // A coding tool's agent runs on what its own file says; that tool checks it.
+    if !known_model(&a.model) && a.from_file.is_none() {
         out.push(format!("{who}'s model \"{}\" isn't one platoon offers (Opus, Sonnet or Haiku).", a.model));
     }
     if a.guidance.trim().is_empty() {
@@ -257,6 +265,8 @@ pub fn from_value(v: &Value, id: &str) -> Result<Agent, String> {
         skills: names_of(o, "skills")?,
         mcp: names_of(o, "mcp_servers")?,
         extra: rest(o, KEYS),
+        from_file: None,
+        own_tools: None,
     })
 }
 
@@ -468,7 +478,7 @@ pub fn new_id(config: &Path, name: &str, taken: &[String]) -> String {
 
 /// Things that change what the list shows: the agents folder's files, as they are now.
 pub fn stamp(config: &Path) -> Vec<(String, Option<(std::time::SystemTime, u64)>)> {
-    crate::squadfile::stamp_of(&dir(config))
+    crate::squadfile::stamp_of(&dir(config), ".json")
 }
 
 /// A copy of `a` under a new name, as one of the user's own agents.
@@ -494,6 +504,109 @@ pub fn blank(config: &Path, name: &str, taken: &[String]) -> Agent {
         skills: Vec::new(),
         mcp: Vec::new(),
         extra: Map::new(),
+        from_file: None,
+        own_tools: None,
+    }
+}
+
+// ---- the agents the user's coding tool has ----------------------------------------------------------------------------
+
+/// The tools that change files, run commands and use the web, as a coding tool's agent file names them.
+const FILE_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
+const WEB_TOOLS: [&str; 2] = ["WebFetch", "WebSearch"];
+
+/// An agent of the user's coding tool (Claude Code's agent file), as platoon uses it: read only, its own tools and
+/// model passed on as they are, its switches what those tools allow (all of them when it lists none).
+pub fn from_claude(f: &crate::claude::AgentFile) -> Agent {
+    let has = |names: &[&str]| f.tools.as_ref().is_none_or(|t| t.iter().any(|x| names.contains(&x.as_str())));
+    let mcp: Vec<String> =
+        f.tools.iter().flatten().filter_map(|t| t.strip_prefix("mcp__")).map(|n| n.split("__").next().unwrap_or(n).to_string()).collect();
+    let mut mcp_once: Vec<String> = Vec::new();
+    for n in mcp {
+        if !mcp_once.contains(&n) {
+            mcp_once.push(n);
+        }
+    }
+    Agent {
+        id: f.name.clone(),
+        name: f.name.clone(),
+        model: f.model.trim().to_lowercase(),
+        guidance: f.prompt.trim().to_string(),
+        files: has(&FILE_TOOLS),
+        commands: has(&["Bash"]),
+        web: has(&WEB_TOOLS),
+        skills: Vec::new(),
+        mcp: mcp_once,
+        extra: Map::new(),
+        from_file: Some(f.path.clone()),
+        own_tools: f.tools.clone(),
+    }
+}
+
+/// The agent files of the user's coding tool in its config folder (`root`: `~/.claude` or `CLAUDE_CONFIG_DIR`):
+/// `root/agents/*.md`, as the Agents list shows them, under their own heading.
+pub fn claude_listed(root: &Path) -> Vec<Listed> {
+    if root.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    crate::claude::agent_files(&root.join("agents"))
+        .iter()
+        .map(|f| Listed { id: f.name.clone(), kind: Kind::Claude, agent: Some(from_claude(f)), corrupt: None })
+        .collect()
+}
+
+/// What changes the coding tool's agents: its agents folder's files.
+pub fn claude_stamp(root: &Path) -> Vec<(String, Option<(std::time::SystemTime, u64)>)> {
+    if root.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    crate::squadfile::stamp_of(&root.join("agents"), ".md")
+}
+
+/// The agents a squad's steps may name, the first of an id winning: platoon's own (built in or the user's), then the
+/// coding tool's in `folder` (a task's first folder: its `.claude/agents`, or the one at the top of its repository),
+/// then the user's own coding tool's (`root/agents`). The coding tool's are read only and nothing is copied.
+pub fn resolve(config: &Path, root: &Path, folder: Option<&Path>) -> Vec<Agent> {
+    let mut out = all(config);
+    let mut add = |a: Agent| {
+        if !out.iter().any(|x| x.id == a.id) {
+            out.push(a);
+        }
+    };
+    if let Some(f) = folder {
+        let top = f.ancestors().find(|d| d.join(".git").exists());
+        for d in std::iter::once(f).chain(top.filter(|t| *t != f)) {
+            for af in crate::claude::agent_files(&d.join(".claude").join("agents")) {
+                add(from_claude(&af));
+            }
+        }
+    }
+    if !root.as_os_str().is_empty() {
+        for af in crate::claude::agent_files(&root.join("agents")) {
+            add(from_claude(&af));
+        }
+    }
+    out
+}
+
+/// platoon's own copy of a coding tool's agent, called `name`: its prompt, its switches from its tools, its MCP
+/// servers, its model when platoon offers it (else Sonnet). Under the same name it takes the other's place (platoon's
+/// own come first).
+pub fn own_copy(config: &Path, a: &Agent, name: &str) -> Agent {
+    let name = one_line(name);
+    Agent {
+        id: new_id(config, &name, &[]),
+        name,
+        model: if known_model(&a.model) { a.model.clone() } else { "sonnet".into() },
+        guidance: a.guidance.clone(),
+        files: a.files,
+        commands: a.commands,
+        web: a.web,
+        skills: Vec::new(),
+        mcp: a.mcp.clone(),
+        extra: Map::new(),
+        from_file: None,
+        own_tools: None,
     }
 }
 

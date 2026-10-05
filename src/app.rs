@@ -63,9 +63,7 @@ pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_TASKS, TOPS};
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
 pub use squads_glue::{SPLIT_MIN_WIDTH, SquadState, split_areas};
-pub use squadtab_glue::{
-    ARow, ChoiceFor, DRow, Drafting, NEW_AGENT, SqFocus, SqView, SquadName, SquadTab, TextFor, agent_rows, detail_rows,
-};
+pub use squadtab_glue::{ARow, ChoiceFor, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, agent_rows};
 pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -232,7 +230,7 @@ pub enum Hit {
     SquadEntry(usize),
     /// The Squads tab's list title: Squads (false) or Agents (true).
     SquadView(bool),
-    /// A row of the selected squad's details.
+    /// A row of the selected squad's or agent's details.
     SquadDetail(usize),
     /// An entry of the small list open over the Squads tab.
     SquadChoiceRow(usize),
@@ -917,6 +915,8 @@ impl App {
         {
             app.sqt.claude_json = app.sqt.claude_root.join(".claude.json");
         }
+        // The agents the user's coding tool has, now that its folder is known.
+        app.reload_agents(None);
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app.say_keys_problems();
@@ -1674,6 +1674,16 @@ impl App {
             }
             (Action::Confirm, Mode::TaskDraft) => self.make_drafted(true),
             (Action::Cancel, Mode::TaskDraft) => self.drop_draft(),
+            // A built-in's brief platoon wrote for the editor that never opened: not needed.
+            (Action::Cancel, Mode::PickEditor)
+                if self.epick.squad.as_ref().is_some_and(|e| matches!(e.target, squadtab_glue::PromptOf::Brief { made: true, .. })) =>
+            {
+                if let Some(e) = self.epick.squad.take() {
+                    let _ = std::fs::remove_file(&e.path);
+                }
+                self.mode = Mode::List;
+                self.poll_squad_files();
+            }
             (Action::Cancel, Mode::PickEditor) if self.epick.squad.as_ref().is_some_and(|e| e.is_draft()) => {
                 if let Some(e) = self.epick.squad.take() {
                     let _ = std::fs::remove_file(&e.path);

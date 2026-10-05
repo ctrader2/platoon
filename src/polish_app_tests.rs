@@ -521,7 +521,7 @@ fn a_pane_cut_at_its_bottom_says_how_much_more_is_below() {
     key(&mut app, KeyCode::Esc);
     ch(&mut app, '4');
     let lines = draw(&mut term, &app);
-    assert!(lines.iter().any(|l| l.contains("Workflow")), "{}", lines.join("\n"));
+    assert!(lines.iter().any(|l| l.contains("Steps")), "{}", lines.join("\n"));
     let more = lines.iter().position(|l| l.contains("more lines below")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
     assert!(lines[more + 1].contains('╰'), "{}", lines.join("\n"));
 }

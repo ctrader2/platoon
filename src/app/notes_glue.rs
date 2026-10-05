@@ -247,7 +247,9 @@ impl App {
     /// The same list of editors, for a squad's system prompt (its file is already written).
     pub(super) fn pick_squad_editor(&mut self, edit: SquadPromptEdit) {
         if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
-            let _ = std::fs::remove_file(&edit.path);
+            if edit.disposable() {
+                let _ = std::fs::remove_file(&edit.path);
+            }
             self.notify(format!("{name} is still open on something else. Close it first."));
             return;
         }
@@ -262,8 +264,8 @@ impl App {
     /// Open a squad's system prompt, written to its own file, in `e`.
     fn run_squad_editor(&mut self, edit: SquadPromptEdit, e: &Editor) {
         let stamp = file_stamp(&edit.path);
-        // (A task of a draft goes the same way, in the same editors.)
-        let what = if edit.is_draft() { "the task" } else { "the system prompt" };
+        // (A task of a draft and a brief go the same way, in the same editors.)
+        let what = edit.what();
         if e.terminal {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &edit.path, rows, cols) {
@@ -283,7 +285,9 @@ impl App {
                     self.clear_selection();
                 }
                 Err(err) => {
-                    let _ = std::fs::remove_file(&edit.path);
+                    if edit.disposable() {
+                        let _ = std::fs::remove_file(&edit.path);
+                    }
                     self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
                 }
             }
@@ -304,7 +308,9 @@ impl App {
                 });
             }
             Err(err) => {
-                let _ = std::fs::remove_file(&edit.path);
+                if edit.disposable() {
+                    let _ = std::fs::remove_file(&edit.path);
+                }
                 self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
             }
         }

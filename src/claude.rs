@@ -83,6 +83,102 @@ fn skill_name(text: &str) -> Option<String> {
     None
 }
 
+/// An agent the user's Claude Code has, from its file (`agents/<name>.md`, the user's or a repository's
+/// `.claude/agents`): read, never written.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentFile {
+    pub path: PathBuf,
+    /// Its front matter's `name` (the file's own name when it has none).
+    pub name: String,
+    pub description: String,
+    /// Its `model` as written ("sonnet", "inherit", a full model name), or empty.
+    pub model: String,
+    /// Its `tools`, when it lists them; None: it may use every tool the session has.
+    pub tools: Option<Vec<String>>,
+    /// What follows the front matter: its system prompt.
+    pub prompt: String,
+}
+
+/// The agent files in `dir` (Claude Code's `agents` folder): each `*.md` with a front matter, by name. A file that
+/// can't be read, or has no front matter, is left out; nothing here fails.
+pub fn agent_files(dir: &Path) -> Vec<AgentFile> {
+    let mut out: Vec<AgentFile> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let file = e.file_name().to_str()?.to_string();
+            let stem = file.strip_suffix(".md")?;
+            if stem.starts_with('.') || !e.path().is_file() {
+                return None;
+            }
+            let text = fs::read_to_string(e.path()).ok()?;
+            agent_file(&e.path(), stem, &text)
+        })
+        .collect();
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    out.dedup_by(|a, b| a.name == b.name);
+    out
+}
+
+/// One agent file's text: its front matter (simple `key: value` lines; `tools` as a comma list, `[a, b]` or a `- a`
+/// list under it; a `|` or `>` description over the indented lines under it) and the prompt after it.
+fn agent_file(path: &Path, stem: &str, text: &str) -> Option<AgentFile> {
+    let lines: Vec<&str> = text.lines().collect();
+    let start = lines.iter().position(|l| !l.trim().is_empty())?;
+    if lines[start].trim() != "---" {
+        return None;
+    }
+    let end = start + 1 + lines[start + 1..].iter().position(|l| l.trim() == "---")?;
+    let unquote = |v: &str| v.trim().trim_matches(|c| c == '"' || c == '\'').trim().to_string();
+    let mut f = AgentFile {
+        path: path.to_path_buf(),
+        name: String::new(),
+        description: String::new(),
+        model: String::new(),
+        tools: None,
+        prompt: lines[end + 1..].join("\n").trim().to_string(),
+    };
+    let mut i = start + 1;
+    while i < end {
+        let line = lines[i];
+        i += 1;
+        let Some((k, v)) = line.split_once(':') else { continue };
+        if line.starts_with([' ', '\t']) {
+            continue;
+        }
+        // The indented lines under a key: a block of text or a list.
+        let mut under: Vec<&str> = Vec::new();
+        while i < end && (lines[i].starts_with([' ', '\t']) || lines[i].trim().is_empty()) {
+            under.push(lines[i].trim());
+            i += 1;
+        }
+        let v = v.trim();
+        match k.trim() {
+            "name" => f.name = unquote(v),
+            "model" => f.model = unquote(v),
+            "description" if v == "|" || v == ">" || v.starts_with("|") || v.starts_with('>') => {
+                f.description = under.iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join(" ");
+            }
+            "description" => f.description = unquote(v),
+            "tools" => {
+                let listed: Vec<String> = if v.is_empty() {
+                    under.iter().filter_map(|l| l.strip_prefix('-')).map(unquote).collect()
+                } else {
+                    v.trim_start_matches('[').trim_end_matches(']').split(',').map(unquote).collect()
+                };
+                let listed: Vec<String> = listed.into_iter().filter(|t| !t.is_empty()).collect();
+                f.tools = (!listed.is_empty()).then_some(listed);
+            }
+            _ => {}
+        }
+    }
+    if f.name.is_empty() {
+        f.name = stem.to_string();
+    }
+    Some(f)
+}
+
 /// The names of the MCP servers the user has added for every folder (`mcpServers` at the top of Claude's user config,
 /// `claude_json_path`). Only the names: what each server is (its command, its keys and tokens) is never kept. Sorted;
 /// an unreadable or odd file gives none.
@@ -1247,6 +1343,41 @@ pub fn parse_iso_ms(s: &str) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn claude_code_agent_files_are_read_with_their_front_matter() {
+        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-agents-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(
+            d.join("code-reviewer.md"),
+            "---\nname: code-reviewer\ndescription: \"Reviews code: kindly.\"\ntools: Read, Grep, Glob, Bash\nmodel: opus\n---\n\nYou review code.\nPlainly.\n",
+        )
+        .unwrap();
+        fs::write(
+            d.join("listed.md"),
+            "---\nname: listed\ndescription: |\n  Line one\n  line two\ntools:\n  - Read\n  - \"Edit\"\n---\nBody.",
+        )
+        .unwrap();
+        fs::write(d.join("nameless.md"), "---\nmodel: inherit\ntools: [WebFetch]\n---\nAll tools? No: one.").unwrap();
+        fs::write(d.join("plain.md"), "No front matter here.").unwrap();
+        fs::write(d.join("notes.txt"), "---\nname: x\n---\n").unwrap();
+        fs::write(d.join("open.md"), "---\nname: open\n").unwrap();
+        let all = agent_files(&d);
+        assert_eq!(all.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["code-reviewer", "listed", "nameless"]);
+        let r = &all[0];
+        assert_eq!(
+            (r.description.as_str(), r.model.as_str(), r.prompt.as_str()),
+            ("Reviews code: kindly.", "opus", "You review code.\nPlainly.")
+        );
+        assert_eq!(r.tools.as_deref(), Some(&["Read".to_string(), "Grep".into(), "Glob".into(), "Bash".into()][..]));
+        assert_eq!(
+            (all[1].description.as_str(), all[1].tools.clone()),
+            ("Line one line two", Some(vec!["Read".to_string(), "Edit".into()]))
+        );
+        assert_eq!((all[2].model.as_str(), all[2].tools.clone()), ("inherit", Some(vec!["WebFetch".to_string()])));
+        assert!(agent_files(&d.join("absent")).is_empty(), "no folder, no agents");
+    }
 
     fn stat(state: &str) -> StatRead {
         StatRead::Text(format!("123 (a b) c) {state} 1 123 123 0 -1"))

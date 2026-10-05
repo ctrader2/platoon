@@ -44,5 +44,6 @@ else
   done
   text="$text]"
 fi
-esc=$(printf '%s' "$text" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
+# The reply as a JSON string, as claude -p writes it: line breaks kept (as \n), quotes and backslashes escaped.
+esc=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')
 printf '{"type":"result","subtype":"success","is_error":false,"result":"%s","total_cost_usd":0.001,"usage":%s}' "$esc" "$usage"

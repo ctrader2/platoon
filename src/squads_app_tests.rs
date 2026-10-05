@@ -229,7 +229,7 @@ fn p_lets_a_ready_ticket_publish_and_nothing_else() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(n));
     let shown = draw(&mut term, &app);
-    let at = shown.lines().position(|l| l.contains("Coding squad")).expect(&shown);
+    let at = shown.lines().position(|l| l.contains("Coding brief")).expect(&shown);
     assert!(shown.lines().nth(at + 1).is_some_and(|l| l.contains("you let it publish")), "under the squad's name: {shown}");
 }
 
@@ -256,10 +256,10 @@ fn a_ticket_whose_squad_isnt_running_shows_how_to_continue_it_and_what_the_squad
     let f = flat(&shown);
     assert!(f.contains("The squad's session isn't running. Enter to continue it."), "{shown}");
     assert!(f.contains("Squad says Asks: Red or blue?"), "{shown}");
-    // The squad by its name, and nothing more: whether its session runs is on the right.
-    let squad_line = shown.lines().find(|l| l.contains("Coding squad")).expect(&shown);
+    // The squad by its brief's name, and nothing more: whether its session runs is on the right.
+    let squad_line = shown.lines().find(|l| l.contains("Coding brief")).expect(&shown);
     let left = squad_line.split('│').next().unwrap().trim();
-    assert!(left.starts_with("Squad") && left.ends_with("Coding squad"), "the squad, and nothing more: {squad_line}");
+    assert!(left.starts_with("Squad") && left.ends_with("Coding brief"), "the squad, and nothing more: {squad_line}");
     assert!(!f.contains("its session isn't running") && !f.contains("let it publish"), "{shown}");
     assert!(f.contains("Works in a copy of tmp (task/1)") && f.contains("shop-worktrees/task-1"), "a copy, and its path: {shown}");
     assert!(f.contains("enter continue the squad"), "{shown}");

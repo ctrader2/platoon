@@ -546,7 +546,7 @@ fn the_tests_line_beside_the_board_and_on_a_tasks_screen_says_each_state_in_its_
             let mut term = Terminal::new(TestBackend::new(wide, high)).unwrap();
             let shown = draw(&mut term, &app);
             let f = if wide >= 100 { left(&shown) } else { flat(&shown) };
-            assert!(f.contains(&format!("Squad Coding squad Tests {says} ")), "#{n} at {wide}: {shown}");
+            assert!(f.contains(&format!("Squad Coding brief Tests {says} ")), "#{n} at {wide}: {shown}");
             assert_eq!(fg_on(&term, verdict, verdict), color, "#{n} on its screen at {wide}");
             if verdict != "running…" {
                 assert_eq!(fg_on(&term, verdict, &says[verdict.len()..says.len().min(verdict.len() + 3)]), t.dim, "the rest is quiet");

@@ -163,7 +163,7 @@ fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     // 100 columns: the list and the details side by side.
     let (lines, _) = shown(&app, 100, 24);
     assert!(lines.iter().any(|l| l.contains("╮╭")), "two panes at 100:\n{}", lines.join("\n"));
-    assert!(flat(&lines).contains("Name Coding"), "{}", lines.join("\n"));
+    assert!(flat(&lines).contains("What it does"), "{}", lines.join("\n"));
     // From an 80-column terminal, two panes; below it, one.
     let (lines, _) = shown(&app, 80, 24);
     println!("Squads tab at 80x24:\n{}\n", lines.join("\n"));
@@ -185,7 +185,7 @@ fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     println!("Squads tab at 60x24, Research's details:\n{}\n", lines.join("\n"));
     let f = flat(&lines);
     assert!(!f.contains("[Squads]"), "the list is not drawn beside them: {f}");
-    assert!(f.contains("Built in") && f.contains("Name Research") && f.contains("What it can do Finds things out"), "{f}");
+    assert!(f.contains("Built in") && f.contains("What it does Finds things out"), "{f}");
     assert!(f.contains("esc back to the list"), "{f}");
     // Esc: the list again, on the same squad.
     key(&mut app, KeyCode::Esc);

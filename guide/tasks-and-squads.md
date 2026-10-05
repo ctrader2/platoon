@@ -112,8 +112,8 @@ folder.
 
 `enter` on a task shows its number and title, its project (or **No project**), its state, **From** (the session it was made
 from (a task [drafted from a conversation](#making-tasks-from-a-conversation)): its name as the Sessions tab shows it, else its first prompt),
-what the squad said when it stopped (or, when the tests fail, what platoon says), the squad that has it (**Squad** Coding
-squad), **Tests** (what platoon's last run of the project's tests said; see [Checks](#checks)), how much the squad does
+what the squad said when it stopped (or, when the tests fail, what platoon says), the squad that has it, by its brief
+(**Squad** Coding brief), **Tests** (what platoon's last run of the project's tests said; see [Checks](#checks)), how much the squad does
 **on its own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
 lands on main", or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it
 waits for, and the tokens its squads used. Under a line: its squad's result (when it has one), **The plan** (when its
@@ -269,9 +269,10 @@ A **squad** is a small team of Claude agents that works on a task for you: a **l
 its own, and the **agents** it hands the pieces to, each with its own job and its own model (agents are shared by squads).
 Every squad has the same kind of leader: its system prompt (**System prompt for squad leaders**) and its model (**Model for
 squad leaders**, Sonnet unless you pick Opus or Haiku) are on the [Projects tab of the settings](settings-and-keys.md#projects),
-and platoon adds to it what the squad can do, the squad's workflow and its own rules. platoon comes with four squads,
-**Coding**, **Research**, **Docs** and **Summarize** (see [The built-in squads](#the-built-in-squads)), and you can change
-them or make your own on the [Squads tab](#the-squads-tab).
+and platoon adds to it what the squad's **brief** says (what it does, its steps, when it asks you and what it checks) and
+its own rules. A brief is a short Markdown file of yours. platoon comes with four squads, **Coding**, **Research**,
+**Docs** and **Summarize** (see [The built-in squads](#the-built-in-squads)), which work as they are; you change one, or
+make your own, by changing its brief on the [Squads tab](#the-squads-tab).
 
 As it comes, the Coding leader (Sonnet) hands the task to the **planner** (Opus), which reads the code and writes a short
 plan; then to the **builder** (Sonnet), which makes the change and runs the tests; then to the **reviewer** (Opus), which
@@ -501,8 +502,8 @@ kept).
 
 ### What you can change, and what platoon keeps
 
-A squad's workflow and its agents (their models, switches, skills, MCP servers and system prompts) are on the
-[Squads tab](#the-squads-tab); the leader's system prompt and model are in the settings. The rules platoon keeps - where
+A squad's brief (its steps, checks and when it asks you) and its agents (their models, switches, skills, MCP servers and
+system prompts) are on the [Squads tab](#the-squads-tab); the leader's system prompt and model are in the settings. The rules platoon keeps - where
 the squad works and that what it writes for the task goes in the task's own folder, which branch the work lands on,
 whether it plans first, may publish on its own or asks first, the last line of each turn, and "report back to the leader, never push"
 for the members - are always sent after your text.
@@ -532,49 +533,108 @@ involved. See [What platoon changes](what-platoon-changes.md#squads) for how a l
 Only Research's researcher and checker and the summarizer can use the web. Every leader runs on the model in the settings
 (Sonnet unless you change it). No built-in agent has skills or MCP servers.
 
+Their checks (see [A squad's brief](#a-squads-brief)): Coding's are the tests pass, the reviewer read the change, every
+acceptance box is ticked with how, and nothing others see without your yes; Docs' the tests pass, the editor read the
+change, and the yes; Research's the checker read the change, every claim in the report names its source (the squad's
+own), and the yes; Summarize's the yes. Each asks you before anything others can see, and when it is stuck (Summarize:
+when it can't read what the task points at).
+
 ## The Squads tab
 
 The fourth tab, `4` **Squads**, has two lists: the **squads** and the **agents** they are made of. The title of the left
 pane shows which one you are looking at (`[Squads]  Agents`); `←` and `→` on the list switch between them (or click the
 title). An agent is its own thing, shared by squads: the same planner can do a step in several squads.
 
-### A squad
+### A squad's brief
 
-On the right, in two parts:
+A squad is a **brief**: a short Markdown file of yours that says what the squad does and how. On the right, the tab shows
+the selected squad's brief as it reads: whether it is built in, **User Modified** or **Your own**, where its file is ("A file
+you own: ~/.config/platoon/briefs/coding.md"; a built-in as platoon has it has no file yet, and says so), and then:
 
-- **About**: its name and **what it can do** in a sentence or two (the commander reads that before a task is handed to
-  the squad, and so does its leader). The leader isn't here: every squad's leader has the same system prompt and model,
-  set in the settings (**System prompt for squad leaders** and **Model for squad leaders**, on the Projects tab).
-- **Workflow**, drawn as a rail: one mark per step down a line (`○` the first, `●` the others), beside it the step's
-  number, its **agent** with that agent's model and switches (`files`, `commands`, `web`, and `skills` or `MCP` when it
-  has them), and under it one line of what the step does. A step may **send the work back** to an earlier step, a set
-  number of times at most: that is drawn as a loop on the left from the step back up to the one it returns to, with "↩ back
-  to step 2 (builder), at most twice" beside it (loops inside others are drawn inside them; on a narrow screen only the
-  words stay). `◉ Done` ends the rail, and **+ Add a step** is under it. The same agent can do more than one step. platoon
-  writes the steps into the leader's system prompt as a numbered list, after what the squad can do and before platoon's
-  own rules, and the leader follows them (platoon can't force the order: the agents run inside the leader's session). A
-  squad's agents are the different agents its steps name: at most 8, and at most 12 steps.
+- **What it does**, in a sentence or two. The commander reads it before a task is handed to the squad, and so do its
+  leader and the drafting of tasks from a conversation.
+- **Steps**, drawn as a rail: one mark per step down a line (`○` the first, `●` the others), beside it the step's number,
+  its **agent** with that agent's model and switches (`files`, `commands`, `web`, and `skills` or `MCP` when it has them),
+  and under it what the step does. A step may **send the work back** to an earlier step, a set number of times at most:
+  that is drawn as a loop on the left from the step back up to the one it returns to, with "↩ back to step 2 (builder), at
+  most twice" beside it (on a narrow screen only the words stay). `◉ Done` ends the rail. platoon writes the steps into the
+  leader's system prompt as a numbered list, and the leader follows them (platoon can't force the order: the agents run
+  inside the leader's session). A squad's agents are the different agents its steps name: at most 8, and at most 12
+  steps.
+- **Checks**: what must be true before the work counts as done, one a line. Four are platoon's own, and it says so beside
+  each: **the tests pass** (platoon runs the project's test command), **<agent> read the change** (platoon checks that
+  agent ran after the last change), **every acceptance box is ticked, with how** (platoon checks the result ticks each of
+  the task's acceptance boxes) and **nothing others see without your yes** (held by platoon: the gate it always keeps).
+  Any other line is one the squad checks itself: its leader is reminded of it. See [Checks](#checks).
+- **Asks you**: when the squad asks you, in your words. Its leader is told.
+- Any section of your own (**Notes**, say), shown as you wrote it.
 
-Each step is two lines you can move to: its agent, and what it does (`enter` there changes the line). On a step, `enter`
-on its agent (or `m`) picks another agent from all of them, or **+ New agent** at the bottom, which asks for a name, makes
-a new agent of your own with no system prompt yet, puts it on the step and opens it on the Agents list for you to write one
-(until it has one, the squad says so and can't be handed a task). `g` goes to the step's agent on the Agents list. `b`
-says whether the step may send the work back and where to, `[` `]` move it up and down, `a` adds a step and `x` takes it
-out.
+A brief with something wrong in it says so at the top, in the warning colour, one line each with where it is ("Steps,
+line 11: no agent called verifer; there are planner, builder, reviewer and verifier"); until it is fixed the squad can't be
+handed a task. The list marks it **needs fixing**. Every squad's leader is the same, set in the settings (**System prompt
+for squad leaders** and **Model for squad leaders**, on the Projects tab): the brief has no leader of its own.
 
-In the Squads list, a built-in squad as platoon has it says nothing under its name; the others say what sets them apart:
-**User Modified** or **Your own**.
+The file looks like this (Coding's, as it comes):
+
+```
+---
+id: coding
+name: Coding
+---
+# What it does
+Makes a change to code in a git repository: plans it, builds it in a worktree of its own, reviews it and runs the
+tests, then takes it as far as the task says.
+
+# Steps
+1. planner: Reads the task and the code it touches and writes a short plan that restates the acceptance checks.
+2. builder: Makes the change the plan describes in the task's folder and runs the tests.
+3. reviewer: Reads the change against the task and the plan, and checks that each acceptance check could have failed
+   before the change. May send the work back to step 2, at most twice.
+4. verifier: Runs the tests and the build and reports plainly what passed and what failed. May send the work back to
+   step 2, at most once.
+
+# Checks
+- the tests pass
+- the reviewer read the change
+- every acceptance box is ticked, with how
+- nothing others see without your yes
+
+# Asks you
+Before anything others can see, and when it is stuck.
+```
+
+A step is its number, the id of the agent that does it, a colon and what it does; it may go on over the lines under it. A
+step that sends the work back says so in a sentence of its own: "May send the work back to step 2, at most once." (or
+"twice", or "3 times", up to 5). Case and spacing don't matter (`## steps` reads as `# Steps`); the meaning does.
+
+**`e` opens the brief in your editor**, the same editors as a project's notes (a built-in as platoon has it is written
+there first, and taken away again if you leave it unchanged). When the editor is done, platoon reads the file again and
+says in one line whether the squad can be handed tasks or what is wrong. A brief you save word for word as platoon has it
+is the built-in again: its file goes.
 
 ### An agent
 
 On the right: its name, its model, three switches - **can change files**, **can run commands** and **can use the web** (an
 agent can always read and search; the switches add the rest, and nothing else) - its **skills** and **MCP servers**, its
-system prompt, and **Used in**: every squad that uses it, with the steps. `enter` on a squad there opens it.
+system prompt, and **Used in**: every squad that uses it, with the steps. `enter` on a squad there opens its brief.
 
 **A change to an agent is a change in every squad that uses it**, so the tab says where it is used; for a variant, copy the
-agent (`c`) and put the copy on the steps you want. The list groups the agents as built in, **User Modified** and your own,
-each with its model and how many squads use it (with only built-in agents there are no headings); **+ New agent** at the
-end makes a blank one of your own.
+agent (`c`) and name the copy in the steps you want. The list groups the agents as built in, **User Modified** and your
+own, each with its model and how many squads use it (with only built-in agents there are no headings); **+ New agent** at
+the end makes a blank one of your own. A brief's step names an agent by its id (the name it was made with).
+
+### Agents your coding tool already has
+
+Agents you made for Claude Code itself (`~/.claude/agents/*.md`, or the `agents` folder in `CLAUDE_CONFIG_DIR`) are listed
+too, under **From Claude Code**, each with the file it comes from. A brief's step may name one by its name. platoon only
+reads them: it never changes, copies or deletes them by itself. To change one for platoon, press `c`: it is copied into
+platoon's own agents under the same name (its system prompt, its model when platoon offers it, else Sonnet, and switches
+from its tools), and from then on briefs use the copy. A task's squad may also use the agents of the task's first folder
+(its `.claude/agents`, or the one at the top of its repository): those are found when the task is handed over.
+
+When an agent of the same name is in several places, platoon's own wins (built in or yours), then the task's folder's,
+then your coding tool's. Such an agent runs with its own tools and model as its file has them (no tools listed: every
+tool; no model: the leader's).
 
 ### Skills and MCP servers
 
@@ -593,35 +653,48 @@ neither are servers from claude.ai connectors or a project's `.mcp.json`.
 
 ### Moving around and changing things
 
-`↑` `↓` move in the list and in the details; `enter` (or `tab`, or `shift+→` / `ctrl+→`) goes into the details, and the
-back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the list. On a terminal under about 80 columns
-the tab shows one pane at a time: the list, and `enter` opens the details in its place, full width; `esc` goes back to the
-list, on the same entry. In the details, `enter` changes the line you are on: a name or a line of text in a small box, a
-model or an agent from a short list, a system prompt in the same editors as a project's notes. `space` turns a switch on
-or off. Every change is saved at once.
+`↑` `↓` move in the list and in the details (a brief scrolls; an agent's rows are picked); `enter` (or `tab`, or `shift+→`
+/ `ctrl+→`) goes into the details, and the back key `ctrl+space`, `esc` or `q` (or `tab`, `shift+←`, `ctrl+←`) back to the
+list. On a terminal under about 80 columns the tab shows one pane at a time: the list, and `enter` opens the details in
+its place, full width; `esc` goes back to the list, on the same entry. On a squad, `e` (or `enter` in its brief) opens the
+brief in your editor. In an agent's details, `enter` changes the line you are on: a name in a small box, a model from a
+short list, a system prompt in the same editors as a project's notes. `space` turns a switch on or off. Every change to an
+agent is saved at once.
+
+| Key | On the Squads list | On the Agents list |
+| --- | --- | --- |
+| `e` | Open the brief in your editor | |
+| `n` | Describe a new squad (or agent) for Claude to draft | The same, an agent first |
+| `c` | Copy the brief under a new name | Copy the agent (one of your coding tool's: into platoon's own) |
+| `d` | Delete one of your own, or discard a draft | Delete one of your own, restore a changed built-in, discard a draft |
+| `r` | Put a changed built-in back as platoon has it | Put a changed built-in back as platoon has it |
+| `ctrl+s` | Save the draft | Save the draft |
 
 ### What is built in
 
-**What platoon comes with is built in**: the four squads and their twelve agents (Coding's planner, builder, reviewer and
-verifier; Research's questioner, researcher, report-writer and checker; Docs' outliner, tech-writer and editor; and the
-summarizer). Everything about them can be changed; the list then says **User Modified**, and `d` puts one back as platoon
-has it, after asking (your version is kept as `<id>.json.bak`). They can't be deleted.
+**What platoon comes with is built in**: the four squads' briefs and their twelve agents (Coding's planner, builder,
+reviewer and verifier; Research's questioner, researcher, report-writer and checker; Docs' outliner, tech-writer and
+editor; and the summarizer). Everything about them can be changed; the list then says **User Modified**, and `r` puts
+one back as platoon has it, after asking (your brief is kept as `<id>.md.bak`, an agent as `<id>.json.bak`; `d` does the
+same on a changed built-in). They can't be deleted.
 
 ### Making your own
 
 Press `n`: platoon asks whether to describe **a new squad** or **a new agent**, and you describe it in your own words ("a
 squad that triages Sentry errors: a reader, a reproducer, a fixer"). One call to Claude, on Sonnet, counted with your
-smart features' tokens, drafts it. A squad's draft uses the agents you have wherever one fits (Claude is shown each agent's
-name, model, switches and a line of what it does) and brings new agents only for jobs none of them does; the draft marks
-those "new with the draft", and saving the squad saves them too. Claude is also told which skills and MCP servers are
-installed, and a new agent may get only those. platoon checks the draft (names, models, steps that name an agent that isn't
-there, a step that sends work back to a later one) and says plainly what was wrong if it can't be used. A good draft opens
-on the tab as **Draft, not saved**: change what you like, then `ctrl+s` saves it, or `d` throws it away.
+smart features' tokens, drafts it: for a squad, its brief, with its steps, checks and when it asks you. A brief's draft
+uses the agents you have wherever one fits (Claude is shown each agent's name, model, switches and a line of what it does)
+and brings new agents only for jobs none of them does; the draft marks those "new with the draft", and saving the squad
+saves them too. Claude is also told which skills and MCP servers are installed, and a new agent may get only those.
+platoon checks the draft (names, models, steps that name an agent that isn't there, a step that sends work back to a
+later one) and says plainly what was wrong if it can't be used. A good draft opens on the tab as **Draft, not saved**:
+`ctrl+s` saves it (then `e` opens it in your editor), or `d` throws it away.
 
-`c` copies a squad or an agent, built in or your own, under a new name. `d` deletes one of your own, after asking (its file
-is kept as `<id>.json.bak`); an agent a squad still uses can't be deleted, and platoon names the squads. The drafting
-calls' system prompts are **System prompt for drafting a squad** and **System prompt for drafting an agent**, on the
-Projects tab of the settings, next to the commander's.
+`c` copies a squad (as a brief of your own) or an agent, built in or your own, under a new name. `d` deletes one of your
+own, after asking (its file is kept as `<id>.md.bak` or `<id>.json.bak`); an agent a squad still uses can't be deleted, and
+platoon names the squads. You can also make a brief by hand: any `<id>.md` in the briefs folder is a squad of yours. The
+drafting calls' system prompts are **System prompt for drafting a squad** and **System prompt for drafting an agent**, on
+the Projects tab of the settings, next to the commander's.
 
 ### A running task keeps its squad
 
@@ -632,7 +705,13 @@ with the squad as it was. The next task gets them as they are then.
 
 ### Where squads and agents are kept
 
-Your squads and agents, and the built-in ones once you change them, are in `~/.config/platoon/squads/<id>.json` and
-`~/.config/platoon/agents/<id>.json`, one file each; a squad's steps name its agents by their id, which is made from the
-name once and never changes. Keys platoon doesn't know are kept, and a file that can't be read is shown as such on the tab
-and never written over.
+Your squads' briefs, and the built-in ones once you change them, are in `~/.config/platoon/briefs/<id>.md`; your agents in
+`~/.config/platoon/agents/<id>.json`, one file each. A brief's file name is its id (the front matter says it too, and the
+two must be the same); a brief's steps name agents by their id, which is made from the name once and never changes.
+Sections and front matter lines platoon doesn't know are kept, an agent's keys too, and a file that can't be read is
+shown as such on the tab and never written over.
+
+Squads were JSON files before (`~/.config/platoon/squads/<id>.json`): each is turned into a brief once, the first time
+platoon reads them, and kept beside where it was as `<id>.json.bak`. A brief that is there already wins over an old
+file. A squad of your own gets the two checks every squad had before (the tests pass, and nothing others see without your
+yes); a changed built-in keeps the built-in's checks. A task a squad has already started keeps what it started with.

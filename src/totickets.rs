@@ -214,12 +214,14 @@ pub fn squads_cli(args: &[String], config: &Path, out: &mut dyn io::Write, err: 
     0
 }
 
-/// Every squad the user has now (built-ins first, then their own), with a readable file: its name and what it can do.
-/// A squad whose file can't be read is left out. (Every ticket has a folder now: its own, or its work folder.)
+/// Every squad the user has now (built-ins first, then their own), each its brief's name and what it does. A squad
+/// whose brief can't be read, or can't be read as a brief, is left out. (Every task has a folder now: its own, or its
+/// work folder.)
 pub fn kinds_text(config: &Path, as_json: bool) -> String {
-    let squads: Vec<crate::squadfile::Squad> = crate::squadfile::load_all(config).into_iter().filter_map(|l| l.squad).collect();
+    let squads: Vec<crate::squadfile::Squad> =
+        crate::squadfile::load_all(config).into_iter().filter_map(|l| l.squad).filter(|s| s.shape.is_empty()).collect();
     if as_json {
-        let rows: Vec<Value> = squads.iter().map(|s| json!({"id": s.id, "name": s.name, "can_do": s.can_do})).collect();
+        let rows: Vec<Value> = squads.iter().map(|s| json!({"id": s.id, "name": s.name, "can_do": s.can_do_line()})).collect();
         return serde_json::to_string_pretty(&Value::Array(rows)).unwrap_or_default() + "\n";
     }
     if squads.is_empty() {

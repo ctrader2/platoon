@@ -6,6 +6,18 @@ here.
 
 ## [Unreleased]
 
+### Changed
+
+- **A squad is a brief**: a short Markdown file of yours, `~/.config/platoon/briefs/<id>.md`, with what the squad does, its
+  steps in order (each an agent and what it does, and when it may send the work back), its checks and when it asks you.
+  The Squads tab shows the brief as it reads, with what is wrong in it at the top, and `e` opens it in your editor; the
+  in-app step editor is gone. The four built-in squads are briefs too, and work as they are. Squads you had as JSON files
+  are turned into briefs once (each old file kept as `.bak`).
+- **The agents your coding tool already has** (Claude Code's `~/.claude/agents`, and a task's repository's
+  `.claude/agents`) can do a brief's steps. The Agents list shows yours under **From Claude Code**; platoon only reads
+  them, and `c` copies one into platoon's own to change it.
+- A task's screen names its squad by its brief ("Coding brief").
+
 ## [1.0.0] - unreleased
 
 <!-- "unreleased" becomes the date (YYYY-MM-DD) in the commit that is tagged v1.0.0. -->
