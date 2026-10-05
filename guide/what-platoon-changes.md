@@ -126,7 +126,7 @@ saved by Claude Code like any other.
 - After stopping a session, platoon asks the MCP servers that session had started to exit too, and never any other
   process.
 - The project notes helper runs in the background, one per project, for at most half an hour.
-- A project's test command runs when one of its squads finishes (see [Squads](#squads)); platoon stops it, and
+- A project's test command runs when one of its squads finishes (see [Briefs](#squads)); platoon stops it, and
   everything it started, when its time is up or platoon closes, and nothing else.
 
 ## One network request, no telemetry
@@ -155,7 +155,7 @@ it always does, and so do the `claude -p` calls of the features you switch on.
 
 To list your conversations, platoon reads Claude Code's files: the transcripts under `~/.claude/projects`, the registry of
 running sessions in `~/.claude/sessions`, the skills under `~/.claude/skills`, your MCP servers in `~/.claude.json`
-(for idle stop it matches their commands to running processes; the Squads tab shows only their names), and the agents
+(for idle stop it matches their commands to running processes; the Briefs tab shows only their names), and the agents
 your coding tool already has: `~/.claude/agents/*.md`, and a task's repository's `.claude/agents/*.md` when the task is
 handed to a squad. It only reads those agent files; it never changes, copies or deletes them unless you press `c` on one,
 which copies it into platoon's own agents. These files are

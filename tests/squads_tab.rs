@@ -1,4 +1,4 @@
-//! The Squads tab end to end, in a real terminal with the real binary: a squad described in the text box and drafted
+//! The Briefs tab end to end, in a real terminal with the real binary: a squad described in the text box and drafted
 //! by a stand-in `claude` as a brief, saved, handed a task with `S` (the leader starts with that brief's own
 //! `--agents`), then its brief changed in a stand-in editor (`e`, and the tab reading it again) and the leaders' model
 //! changed in the settings while its leader has stopped: continued, the leader runs with the squad as it was when it
@@ -237,7 +237,7 @@ fn a_described_squad_is_drafted_as_a_brief_saved_handed_a_task_and_continued_wit
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"4");
-    t.wait_for_all(&["╭ [Squads]", "╭ Coding", "n describe a new squad"]);
+    t.wait_for_all(&["╭ [Briefs]", "╭ Coding", "n describe a new squad"]);
     t.send(b"n");
     t.wait_for_all(&["What to describe for Claude to draft:", "A new squad", "A new agent"]);
     t.send(b"\r");
@@ -306,7 +306,7 @@ fn a_described_squad_is_drafted_as_a_brief_saved_handed_a_task_and_continued_wit
     t.send(&[0]);
     t.wait_gone("ctrl+space back to the project");
     t.send(b"4");
-    t.wait_for_all(&["╭ [Squads]", "Careful coding"]);
+    t.wait_for_all(&["╭ [Briefs]", "Careful coding"]);
     t.send(b"e");
     t.wait_for("nano");
     t.send(b"\r");
@@ -350,9 +350,9 @@ fn the_squad_leaders_system_prompt_and_model_are_set_in_the_settings_and_reach_e
     let lab = Lab::new("sqtab-prompt");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
-    // A squad has no leader of its own on the Squads tab any more.
+    // A squad has no leader of its own on the Briefs tab any more.
     t.send(b"4");
-    t.wait_for_all(&["╭ [Squads]", "Built in", "Every squad has the same leader"]);
+    t.wait_for_all(&["╭ [Briefs]", "Built in", "Every squad has the same leader"]);
     let screen = t.stable();
     assert!(!screen.contains("Needs a folder") && !screen.contains("Use a worktree"), "{screen}");
     t.send(b"\t");
@@ -427,7 +427,7 @@ fn an_agent_is_given_a_skill_and_an_mcp_server_from_what_is_installed_and_a_lead
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"4");
-    t.wait_for_all(&["╭ [Squads]", "← → agents"]);
+    t.wait_for_all(&["╭ [Briefs]", "← → agents"]);
     t.send(b"\x1b[C");
     t.wait_for_all(&["[Agents]", "▎ planner"]);
     t.send(b"\r");
@@ -499,9 +499,16 @@ fn an_old_squad_file_is_shown_as_the_brief_it_became() {
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"4");
-    t.wait_for_all(&["╭ [Squads]", "Handbook"]);
+    t.wait_for_all(&["╭ [Briefs]", "Handbook"]);
     t.send(b"G");
-    t.wait_for_all(&["╭ Handbook", "A file you own:", "briefs/handbook.md", "Writes the handbook.", "2 tech-writer", "↩ back to step 2"]);
+    t.wait_for_all(&[
+        "╭ Handbook",
+        "A file you own:",
+        "briefs/handbook.md",
+        "Writes the handbook.",
+        "2. tech-writer",
+        "May send the work back to step 2",
+    ]);
     t.wait_for_all(&["the tests pass", "platoon runs the project's tests"]);
     let b = lab.brief("handbook");
     assert!(b.contains("3. editor: Checks it. May send the work back to step 2, at most once.\n"), "{b}");
@@ -521,16 +528,16 @@ fn the_list_switches_to_the_agents_and_an_edit_there_reaches_every_squad() {
     let mut t = Term::spawn(&[], &env, &lab.work, 40, 130);
     t.wait_for("enter open");
     t.send(b"4");
-    t.wait_for_all(&["[Squads]", "╭ Coding", "← → agents"]);
+    t.wait_for_all(&["[Briefs]", "╭ Coding", "← → agents"]);
     t.send(b"c");
     t.wait_for("Copy squad");
     t.send(b"\x15Careful coding\r");
     t.wait_for_flat("It uses the same agents");
     // The switch: the label of the list it shows in brackets and in another colour than the other.
     t.send(b"\x1b[C");
-    t.wait_for_all(&["[Agents]", "+ New agent", "← → squads"]);
+    t.wait_for_all(&["[Agents]", "+ New agent", "← → briefs"]);
     let (r, c) = t.find("[Agents]").unwrap();
-    let (r2, c2) = t.find("Squads  [").unwrap();
+    let (r2, c2) = t.find("Briefs  [").unwrap();
     // The theme's accent (Catppuccin Mocha lavender) and its dim text.
     let accent = vt100::Color::Rgb(0xb4, 0xbe, 0xfe);
     for i in 0..8 {

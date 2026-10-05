@@ -22,7 +22,7 @@ pub struct NotesEdit {
     pub instructions: Option<&'static str>,
     /// Editing the body of this ticket of `project` rather than its notes.
     pub ticket: Option<u32>,
-    /// Editing a squad's system prompt (on the Squads tab): `project` is empty.
+    /// Editing a squad's system prompt (on the Briefs tab): `project` is empty.
     pub squad: Option<SquadPromptEdit>,
     /// The instructions (or the ticket's body) as they were before the editor ran.
     before: String,

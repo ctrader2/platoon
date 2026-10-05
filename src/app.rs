@@ -128,7 +128,7 @@ pub struct Pages {
     pub sessions: Cell<usize>,
     pub projects: Cell<usize>,
     pub tickets: Cell<usize>,
-    /// The Squads tab's list, Squads or Agents.
+    /// The Briefs tab's list, Squads or Agents.
     pub squads: Cell<usize>,
     /// The settings' entries.
     pub settings: Cell<usize>,
@@ -226,13 +226,13 @@ pub enum Hit {
     DraftTask(usize),
     /// An entry of the squad picker.
     SquadRow(usize),
-    /// An entry of the Squads tab's list (of squads or of agents, whichever it shows).
+    /// An entry of the Briefs tab's list (of squads or of agents, whichever it shows).
     SquadEntry(usize),
-    /// The Squads tab's list title: Squads (false) or Agents (true).
+    /// The Briefs tab's list title: Squads (false) or Agents (true).
     SquadView(bool),
     /// A row of the selected squad's or agent's details.
     SquadDetail(usize),
-    /// An entry of the small list open over the Squads tab.
+    /// An entry of the small list open over the Briefs tab.
     SquadChoiceRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
@@ -379,10 +379,10 @@ pub enum Mode {
     TicketPick,
     /// The hand-over popup: the squads a task can be handed to, and its terms (`sq`).
     SquadPick,
-    /// A small list over the Squads tab: a model, an agent, where a step sends the work back, what to describe
+    /// A small list over the Briefs tab: a model, an agent, where a step sends the work back, what to describe
     /// (`sqt.choice`).
     SquadChoice,
-    /// A paragraph typed on the Squads tab: a new squad described for Claude, what a squad can do, what a step does
+    /// A paragraph typed on the Briefs tab: a new squad described for Claude, what a squad can do, what a step does
     /// (`sqt.text`).
     SquadText,
     /// Which project a new task goes in, or where a task moves to (`bd.pick`).
@@ -615,7 +615,7 @@ pub struct App {
     pub td: taskdraft_glue::DraftState,
     /// The code editor (`v`): the questions before it opens, the request the event loop takes.
     pub ed: editor_glue::EdState,
-    /// The Squads tab: every squad, the one selected, a draft, and what is being changed.
+    /// The Briefs tab: every squad, the one selected, a draft, and what is being changed.
     pub sqt: SquadTab,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
@@ -2056,7 +2056,7 @@ impl App {
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
         self.refresh_settings();
-        // From the Squads tab, on the tab its "Settings (s) → Projects" points at: the leaders' prompt and model.
+        // From the Briefs tab, on the tab its "Settings (s) → Projects" points at: the leaders' prompt and model.
         self.settings_tab = if self.squads_tab_showing() { crate::settings::TAB_PROJECTS } else { 0 };
         self.setting = 0;
         self.setting_top.set(0);

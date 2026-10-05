@@ -1,6 +1,6 @@
 //! Density and narrow widths, drawn the way a terminal shows them (TestBackend) at 80x24, 60x24 and 60x14: the
 //! Sessions list's two lines a conversation and its selection, the gaps between columns and the order they go in,
-//! the CONTEXT column left blank when nothing is known, the Squads tab as one pane on a narrow terminal, the settings'
+//! the CONTEXT column left blank when nothing is known, the Briefs tab as one pane on a narrow terminal, the settings'
 //! tab strip, `S` handing a ticket to a squad, j/k and PageUp/PageDown in the lists, and which hints the Sessions
 //! footer keeps at 120 and 80 columns. Every directory is a temp dir
 //! (`World`); nothing here starts a process.
@@ -166,13 +166,13 @@ fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     assert!(flat(&lines).contains("What it does"), "{}", lines.join("\n"));
     // From an 80-column terminal, two panes; below it, one.
     let (lines, _) = shown(&app, 80, 24);
-    println!("Squads tab at 80x24:\n{}\n", lines.join("\n"));
+    println!("Briefs tab at 80x24:\n{}\n", lines.join("\n"));
     assert!(lines.iter().any(|l| l.contains("╮╭")), "two panes at 80:\n{}", lines.join("\n"));
     let (lines, _) = shown(&app, 79, 24);
     assert!(!lines.iter().any(|l| l.contains("╮╭")), "one pane at 79:\n{}", lines.join("\n"));
     // 60 columns: only the list, every squad on it, and no "Built in" under each.
     let (lines, _) = shown(&app, 60, 24);
-    println!("Squads tab at 60x24, the list:\n{}\n", lines.join("\n"));
+    println!("Briefs tab at 60x24, the list:\n{}\n", lines.join("\n"));
     let f = flat(&lines);
     assert!(!lines.iter().any(|l| l.contains("╮╭")), "one pane at 60:\n{}", lines.join("\n"));
     assert!(f.contains("▎ Coding 4 agents Research 4 agents Docs 3 agents Summarize 1 agent"), "{f}");
@@ -182,9 +182,9 @@ fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.sqt.focus, SqFocus::Detail);
     let (lines, _) = shown(&app, 60, 24);
-    println!("Squads tab at 60x24, Research's details:\n{}\n", lines.join("\n"));
+    println!("Briefs tab at 60x24, Research's details:\n{}\n", lines.join("\n"));
     let f = flat(&lines);
-    assert!(!f.contains("[Squads]"), "the list is not drawn beside them: {f}");
+    assert!(!f.contains("[Briefs]"), "the list is not drawn beside them: {f}");
     assert!(f.contains("Built in") && f.contains("What it does Finds things out"), "{f}");
     assert!(f.contains("esc back to the list"), "{f}");
     // Esc: the list again, on the same squad.

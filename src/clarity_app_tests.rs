@@ -1,6 +1,6 @@
 //! The second round of small things that make platoon's screens read cleanly: a session's description line ending where
 //! STATUS starts, a session that runs told apart from one that doesn't, `v` with no editor said in one short line, the
-//! Squads tab keeping its main key and pointing at the right settings, one name for the editor, words that wrap
+//! Briefs tab keeping its main key and pointing at the right settings, one name for the editor, words that wrap
 //! together, and a help heading never left alone at the fold. Every directory is a temp dir (`World`); the only process
 //! started is a `sleep` standing in for a running claude.
 
@@ -192,7 +192,7 @@ fn the_text_editor_setting_says_which_list_its_star_is_in() {
     }
 }
 
-// ---- the Squads tab ------------------------------------------------------------------------------------------------
+// ---- the Briefs tab ------------------------------------------------------------------------------------------------
 
 fn on_the_squads_tab(name: &str) -> (World, App) {
     let w = World::new(name);

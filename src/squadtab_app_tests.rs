@@ -1,5 +1,5 @@
-//! The Squads tab at the level of the app: the Squads list and each squad's brief as it reads (what it does, its steps
-//! as a rail, its checks, when it asks you, what is wrong with it), `e` opening the brief in a stand-in editor and the
+//! The Briefs tab at the level of the app: the Squads list and each squad's brief as it reads (what it does, its steps
+//! as the file numbers them, its checks, when it asks you, what is wrong with it), `e` opening the brief in a stand-in editor and the
 //! tab reading it again, the Agents list and its details (a change to an agent shown in every squad that uses it, the
 //! agents the user's coding tool has, read only, under their own heading), drafting a brief or an agent with a
 //! stand-in `claude`, copying, deleting (an agent in use refused) and restoring, a file that can't be read, and `S` on
@@ -17,6 +17,7 @@ use ratatui::{
     Terminal,
     backend::TestBackend,
     crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
+    style::Modifier,
 };
 use serde_json::Value;
 use std::{
@@ -84,7 +85,21 @@ fn right(text: &str) -> String {
     flat(&text.lines().skip(2).map(|l| l.chars().skip(at).collect::<String>()).collect::<Vec<_>>().join("\n"))
 }
 
-/// The app on the Squads tab.
+/// Everything of the selected brief's pane, top to bottom: the details take the keys, scroll to the end (every frame
+/// on the way kept, as flat text) and give the keys back to the list.
+fn whole_pane(app: &mut App, term: &mut Terminal<TestBackend>) -> String {
+    key(app, KeyCode::Enter);
+    let mut seen = String::new();
+    for _ in 0..60 {
+        key(app, KeyCode::Down);
+        seen.push_str(&flat(&draw(term, app)));
+        seen.push(' ');
+    }
+    key(app, KeyCode::Esc);
+    seen
+}
+
+/// The app on the Briefs tab.
 fn on_the_tab(name: &str) -> (World, App) {
     let w = World::new(name);
     let mut app = w.app();
@@ -196,8 +211,8 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("4 Squads") && !f.contains("4 Squads 4"), "the tab, without a count: {f}");
-    assert!(f.contains("[Squads] Agents"), "the switch, in the list's title: {f}");
+    assert!(f.contains("4 Briefs") && !f.contains("4 Briefs 4"), "the tab, without a count: {f}");
+    assert!(f.contains("[Briefs] Agents"), "the switch, in the list's title: {f}");
     let l = left(&shown);
     // A built-in squad as platoon has it says nothing under its name: a marker on every row would mark nothing.
     assert!(l.contains("▎ Coding 4 agents Research 4 agents Docs 3 agents Summarize 1 agent"), "{l}");
@@ -207,7 +222,7 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
         "Built into platoon. e writes it to",
         "briefs/coding.md for you to change.",
         "What it does Makes a change to code in a git repository",
-        "Steps ○ 1 planner Opus commands",
+        "Steps 1. planner: Reads the task and the code it touches",
         "Checks ✓ the tests pass platoon runs the project's tests",
         "✓ the reviewer read the change platoon checks it ran after changes",
         "Every squad has the same leader: its system prompt and model are in Settings (s) → Projects.",
@@ -224,8 +239,8 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
     }
     // The colours: the switch's selected label in the accent, the other dim; headings in the accent; the marks.
     let t = app.effective_theme().clone();
-    assert_eq!(fg(&term, find(&term, "[Squads]")), t.accent);
-    let (x, y) = find(&term, "[Squads]  Agents");
+    assert_eq!(fg(&term, find(&term, "[Briefs]")), t.accent);
+    let (x, y) = find(&term, "[Briefs]  Agents");
     assert_eq!(fg(&term, (x + 10, y)), t.dim, "the other label is dim");
     let (x, y) = find(&term, "▎ Coding");
     assert_eq!((bg(&term, (x + 3, y)), fg(&term, (x, y))), (t.surface, t.accent));
@@ -263,6 +278,8 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
     assert_eq!(app.sqt.view, SqView::Squads);
     key(&mut app, KeyCode::Char('/'));
     assert!(matches!(app.mode, Mode::List), "`/` is the sessions' search: not here");
+    let all = whole_pane(&mut app, &mut term);
+    assert!(all.contains("Agents it may use planner · Opus · commands"), "{all}");
 }
 
 /// A brief of the user's own with things wrong in it.
@@ -293,7 +310,7 @@ fn a_brief_with_problems_says_each_at_the_top_in_the_warning_colour_at_both_size
     let t = app.effective_theme().clone();
     assert_eq!(fg(&term, find(&term, "It can't be handed a task")), t.warn);
     assert_eq!(fg(&term, find(&term, "• Steps, line 9")), t.warn);
-    assert_eq!(fg(&term, find(&term, "verifer · not found")), t.warn, "the step on the rail says so too");
+    assert_eq!(fg(&term, find(&term, "verifer · not found")), t.warn, "the agents it may use say so too");
     assert!((2..8).contains(&find(&term, "It can't be handed a task").1), "near the top, before what it does: {shown}");
     // 80x24: one pane each, every problem still a line of its own that says where, wrapped, never cut.
     let mut small = Terminal::new(TestBackend::new(80, 24)).unwrap();
@@ -351,7 +368,7 @@ fn e_opens_the_brief_in_the_editor_and_the_tab_reads_it_again() {
     app.notice = None;
     let shown = draw(&mut term, &app);
     let r = right(&shown);
-    assert!(r.contains("● 2 reviewer Opus commands") && r.contains("User Modified A file you own:"), "{r}");
+    assert!(r.contains("2. reviewer:") && r.contains("User Modified A file you own:"), "{r}");
     let shown = draw(&mut term, &app);
     assert!(shown.lines().last().unwrap().contains("r restore"), "{shown}");
     // A change that breaks it: read again, and what is wrong said at once.
@@ -393,7 +410,7 @@ fn the_agents_list_shows_every_agent_grouped_with_its_model_and_how_many_squads_
     let shown = draw(&mut term, &app);
     let l = left(&shown);
     // Every agent is built in, as platoon has it: no heading over them (it would tell nothing apart).
-    assert!(l.starts_with("Squads [Agents] ▎ planner"), "{l}");
+    assert!(l.starts_with("Briefs [Agents] ▎ planner"), "{l}");
     assert!(l.contains("▎ planner Opus · 1 squad builder Sonnet · 1 squad reviewer Opus · 1 squad"), "{l}");
     for s in ["report-writer Sonnet · 1 squad checker", "summarizer Sonnet · 1 squad"] {
         assert!(l.contains(s), "{s}: {l}");
@@ -445,7 +462,10 @@ fn the_agents_the_coding_tool_has_are_listed_read_only_under_their_own_heading_a
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     key(&mut app, KeyCode::End);
     let r = right(&draw(&mut term, &app));
-    assert!(r.contains("● 3 code-reviewer Opus reads only · from your coding tool"), "a step may name it: {r}");
+    assert!(
+        r.contains("3. code-reviewer:") && r.contains("code-reviewer · Opus · reads only · from your coding tool"),
+        "a step may name it: {r}"
+    );
     assert!(!r.contains("fixed"), "the brief is fine with it: {r}");
     key(&mut app, KeyCode::Right);
     let shown = draw(&mut term, &app);
@@ -533,8 +553,8 @@ fn an_edit_to_an_agent_shows_in_every_squad_that_uses_it() {
             key(&mut app, KeyCode::Down);
         }
         assert_eq!(app.sqt.listed().map(|l| l.id.as_str()), Some(id));
-        let f = flat(&draw(&mut term, &app));
-        assert!(f.contains("● 2 builder Opus files · commands"), "{id}: {f}");
+        let f = whole_pane(&mut app, &mut term);
+        assert!(f.contains("builder · Opus · files · commands"), "{id}: {f}");
         let crew = Crew::load(&w.config, &squadfile::get(&w.config, id).unwrap());
         let launch = Launch::of(
             &crew,
@@ -698,7 +718,12 @@ fn describe_drafts_a_brief_that_reuses_agents_and_saves_its_new_ones_with_it() {
     let shown = draw(&mut term, &app);
     let r = right(&shown);
     assert!(left(&shown).contains("Sentry triage 2 agents Draft, not saved") && flat(&shown).contains("ctrl+s save draft"), "{shown}");
-    assert!(r.contains("○ 1 reader Haiku web · new with the draft") && r.contains("● 2 builder Sonnet files · commands Fixes it"), "{r}");
+    assert!(
+        r.contains("1. reader: Reads the error")
+            && r.contains("reader · Haiku · web · new with the draft")
+            && r.contains("builder · Sonnet · files · commands"),
+        "{r}"
+    );
     assert!(r.contains("✓ reader read the change") && r.contains("Asks you When it can't reproduce the error."), "{r}");
     assert!(!squadfile::path(&w.config, "sentry-triage").exists() && !agentfile::path(&w.config, "reader").exists(), "not saved yet");
     key(&mut app, KeyCode::Char('e'));
@@ -853,7 +878,10 @@ fn an_old_squad_file_is_shown_as_a_brief() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let r = right(&draw(&mut term, &app));
     assert!(
-        r.contains("Your own A file you own:") && r.contains("briefs/handbook.md") && r.contains("○ 1 outliner Sonnet reads only"),
+        r.contains("Your own A file you own:")
+            && r.contains("briefs/handbook.md")
+            && r.contains("1. outliner:")
+            && r.contains("outliner · Sonnet · reads only"),
         "{r}"
     );
     assert!(r.contains("✓ the tests pass") && r.contains("‖ nothing others see without your yes"), "what every squad had before: {r}");
@@ -901,13 +929,13 @@ fn s_on_a_task_lists_every_squad_by_name_and_hands_it_to_the_users_own() {
     }
     key(&mut app, KeyCode::Char(' '));
     let f = flat(&in_popup(&draw(&mut term, &app)));
-    assert!(f.contains("▎ ● Broken") && f.contains("Needs fixing on the Squads tab first. Makes a change"), "{f}");
+    assert!(f.contains("▎ ● Broken") && f.contains("Needs fixing on the Briefs tab first. Makes a change"), "{f}");
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::SquadPick));
     assert_eq!(
         app.active_notice(),
         Some(
-            "The Broken squad needs fixing on the Squads tab first: Steps, line 9: no agent called nobody; there are builder, reviewer and slow-verifier."
+            "The Broken squad needs fixing on the Briefs tab first: Steps, line 9: no agent called nobody; there are builder, reviewer and slow-verifier."
         )
     );
     key(&mut app, KeyCode::Down);
@@ -984,34 +1012,151 @@ fn a_leader_continued_later_runs_with_the_squad_as_it_was_when_it_started() {
     assert_eq!(app.leader_launch("p1", &gone, &t).unwrap_err(), "what it was started with can't be read any more");
 }
 
+/// The details' pane as plain lines (the list's pane cut off), one string a line.
+fn pane_lines(shown: &str) -> Vec<String> {
+    let at = split(shown);
+    shown
+        .lines()
+        .skip(2)
+        .map(|l| l.chars().skip(at).collect::<String>().replace(['│', '╭', '╮', '╰', '╯', '─'], " ").trim().to_string())
+        .collect()
+}
+
 #[test]
-fn the_steps_rail_draws_codings_send_backs_as_nested_loops_in_muted_colours() {
-    let (_w, app) = on_the_tab("sqt-rail");
+fn the_brief_reads_as_the_file_does_with_numbered_steps_and_the_agents_last_at_120x40() {
+    let (_w, mut app) = on_the_tab("sqt-pane");
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let t = app.effective_theme().clone();
+    let cell = |term: &Terminal<TestBackend>, text: &str| {
+        let p = find(term, text);
+        term.backend().buffer()[p].clone()
+    };
+    let in_order = |pane: &[String], heads: &[&str]| {
+        let at: Vec<usize> =
+            heads.iter().map(|h| pane.iter().position(|l| l.starts_with(h)).unwrap_or_else(|| panic!("{h}: {pane:#?}"))).collect();
+        assert!(at.windows(2).all(|w| w[0] < w[1]), "{at:?}\n{pane:#?}");
+        at
+    };
+    // The top: the sections in the file's order, the steps as a numbered list, the send-back sentence in the step.
+    let shown = draw(&mut term, &app);
+    let pane = pane_lines(&shown);
+    in_order(&pane, &["What it does", "Steps", "1. planner:", "2. builder:", "3. reviewer:", "4. verifier:"]);
+    assert!(flat(&shown).contains("May send the work back to step 2, at most twice."), "the sentence is the step's own text: {shown}");
+    for gone in ["○", "◉", "↩", "▶", "┼", "Done: the result"] {
+        assert!(!shown.contains(gone), "no rail ({gone}): {shown}");
+    }
+    for h in ["What it does", "Steps"] {
+        let c = cell(&term, h);
+        assert_eq!(c.fg, t.accent, "{h}");
+        assert!(c.modifier.contains(Modifier::BOLD), "{h} is bold");
+    }
+    assert_eq!(cell(&term, "1. planner").fg, t.dim, "the number");
+    assert_eq!(cell(&term, "1. planner").bg, t.bg, "nothing on the brief is picked: it is read, and edited in its file");
+    let name = cell(&term, "planner:");
+    assert_eq!(name.fg, t.text);
+    assert!(name.modifier.contains(Modifier::BOLD));
+    assert_eq!(cell(&term, "Reads the task and the code").fg, t.text);
+    // The bottom: Checks, Asks you, and last the agents it may use, each once in the order the steps name them.
+    key(&mut app, KeyCode::Enter);
+    for _ in 0..30 {
+        key(&mut app, KeyCode::Down);
+    }
+    let shown = draw(&mut term, &app);
+    let pane = pane_lines(&shown);
+    let at = in_order(&pane, &["Checks", "Asks you", "Agents it may use"]);
+    let agents = &pane[at[2] + 1..];
+    let want =
+        ["planner · Opus · commands", "builder · Sonnet · files · commands", "reviewer · Opus · commands", "verifier · Haiku · commands"];
+    for (line, w) in agents.iter().zip(want) {
+        assert!(line.starts_with(w), "{line} vs {w}");
+    }
+    assert_eq!(agents.iter().filter(|l| l.contains(" · ")).count(), 4, "{agents:?}");
+    for h in ["Checks", "Asks you", "Agents it may use"] {
+        let c = cell(&term, h);
+        assert_eq!(c.fg, t.accent, "{h}");
+        assert!(c.modifier.contains(Modifier::BOLD), "{h} is bold");
+    }
+    assert_eq!(cell(&term, "✓ the tests pass").fg, t.ok, "the check's mark");
+    assert_eq!(cell(&term, "platoon runs the project's tests").fg, t.subtext);
+    assert_eq!(cell(&term, "‖ nothing others see").fg, t.subtext);
+    let agent = cell(&term, "planner · Opus");
+    assert!(agent.modifier.contains(Modifier::BOLD) && agent.fg == t.text);
+    assert_eq!(cell(&term, "· Opus ·").fg, t.subtext);
+}
+
+#[test]
+fn the_brief_fits_80x24_in_one_pane_and_scrolls_to_the_agents() {
+    let (_w, mut app) = on_the_tab("sqt-pane-small");
+    let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+    key(&mut app, KeyCode::Enter);
+    let first = draw(&mut term, &app);
+    for want in ["Coding", "Built in", "What it does", "Steps", "1. planner: Reads the task", "2. builder:"] {
+        assert!(first.contains(want), "{want}: {first}");
+    }
+    assert!(flat(&first).contains("more lines below"), "{first}");
+    let mut seen = format!("{first}\n");
+    for _ in 0..40 {
+        key(&mut app, KeyCode::Down);
+        seen.push_str(&draw(&mut term, &app));
+        seen.push('\n');
+    }
+    let last = draw(&mut term, &app);
+    for want in ["3. reviewer:", "4. verifier:", "✓ the tests pass", "Asks you", "Agents it may use", "verifier · Haiku"] {
+        assert!(seen.contains(want), "{want}: {seen}");
+    }
+    assert!(last.contains("verifier · Haiku") && !flat(&last).contains("more lines below"), "scrolled to the end: {last}");
+    for l in seen.lines() {
+        assert!(l.chars().count() <= 80, "{l}");
+    }
+    // Nothing cut mid-word: a step wraps under its text.
+    assert!(flat(&seen).contains("at most twice."), "{seen}");
+}
+
+#[test]
+fn a_changed_built_in_shows_the_file_and_the_keys_to_edit_and_restore_it() {
+    let w = World::new("sqt-changed");
+    let text = crate::brief::write(&squadfile::builtin("coding").unwrap()).replace("Makes a change", "Makes a careful change");
+    squadfile::save_text(&w.config, "coding", &text).unwrap();
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('4'));
+    assert_eq!(app.sqt.listed().map(|l| l.kind), Some(Kind::Modified));
+    let mut term = Terminal::new(TestBackend::new(160, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    let line = pane_lines(&shown).into_iter().find(|l| l.starts_with("A file you own:")).expect("the file line");
+    assert!(line.contains("briefs/coding.md") && line.ends_with("e edit   r restore the built-in"), "{line}");
+    let t = app.effective_theme().clone();
+    let at = find(&term, "e edit");
+    assert_eq!(fg(&term, at), t.accent, "the key");
+    assert_eq!(fg(&term, (at.0 + 2, at.1)), ui::hint_fg(&t), "what it does");
+    assert_eq!(fg(&term, find(&term, "r restore")), t.accent);
+    assert!(flat(&shown).contains("User Modified"), "{shown}");
+    // A brief of the user's own has no `r`.
+    let w2 = World::new("sqt-own");
+    squadfile::save_text(&w2.config, "broken", BROKEN).unwrap();
+    let mut app = w2.app();
+    key(&mut app, KeyCode::Char('4'));
+    key(&mut app, KeyCode::End);
+    let line = pane_lines(&draw(&mut term, &app)).into_iter().find(|l| l.starts_with("A file you own:")).unwrap();
+    assert!(line.ends_with("e edit") && !line.contains("restore"), "{line}");
+}
+
+#[test]
+fn a_problem_is_at_the_top_in_the_warning_colour_and_the_agent_it_names_is_not_found() {
+    let w = World::new("sqt-problem-pane");
+    squadfile::save_text(&w.config, "broken", BROKEN).unwrap();
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('4'));
+    key(&mut app, KeyCode::End);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
-    for piece in [
-        "○  1 planner",
-        "┌─▶ ●  2 builder",
-        "│┌▶ │",
-        "││  ●  3 reviewer",
-        "│└──┤",
-        "│   ●  4 verifier",
-        "└───┤",
-        "◉  Done: the result goes on the task",
-    ] {
-        assert!(shown.contains(piece), "{piece}: {shown}");
-    }
-    let row_of = |text: &str| shown.lines().position(|l| l.contains(text)).unwrap_or_else(|| panic!("{text}"));
-    assert!(shown.lines().nth(row_of("│└──┤")).unwrap().contains("↩ back to step 2 (builder), at most twice"));
-    assert!(shown.lines().nth(row_of("└───┤")).unwrap().contains("↩ back to step 2 (builder), at most once"));
+    let pane = pane_lines(&shown);
     let t = app.effective_theme().clone();
-    let (x, y) = find(&term, "┌─▶ ●");
-    for dx in 0..3 {
-        assert_eq!(fg(&term, (x + dx, y)), t.dim, "the loop at {dx}");
-    }
-    assert_eq!(fg(&term, (x + 4, y)), t.subtext, "a step's mark");
-    assert_eq!(bg(&term, (x + 4, y)), t.bg, "nothing on the brief is picked: it is read, and edited in its file");
-    assert_eq!(fg(&term, find(&term, "↩ back to step 2 (builder), at most twice")), t.subtext);
+    let problem = pane.iter().position(|l| l.starts_with("It can't be handed a task")).unwrap();
+    let what = pane.iter().position(|l| l.starts_with("What it does")).unwrap();
+    assert!(problem < what && pane[problem + 1].starts_with("• Steps, line 9"), "{pane:#?}");
+    assert_eq!(fg(&term, find(&term, "• Steps, line 9")), t.warn);
+    assert_eq!(fg(&term, find(&term, "verifer · not found")), t.warn);
+    assert!(pane.iter().any(|l| l.starts_with("2. verifer: Checks.")), "{pane:#?}");
 }
 
 #[test]
@@ -1043,12 +1188,12 @@ fn twelve_steps_with_five_send_backs_scroll_at_80_columns() {
         seen.push_str(&draw(&mut term, &app));
     }
     for n in 1..=12 {
-        assert!(seen.contains(&format!(" {n:>2} ")), "step {n}: {seen}");
+        assert!(seen.contains(&format!("{n}. ")), "step {n}: {seen}");
     }
     let last = draw(&mut term, &app);
-    assert!(seen.contains("◉  Done") && seen.contains("▶") && seen.contains("┼"), "the loops drawn, one crossing another");
-    assert!(last.contains("◉  Done") && !last.contains("more lines below"), "scrolled to the end: {last}");
-    assert!(seen.contains("↩ back to step 1, at most once") && !seen.contains("↩ back to step 1 (planner), a…"), "{seen}");
+    assert!(last.contains("Agents it may use") && !last.contains("more lines below"), "scrolled to the end: {last}");
+    assert!(flat(&seen).matches("May send the work back to step").count() >= 5, "every send-back sentence, as written");
+    assert!(!seen.contains('▶') && !seen.contains('┼') && !seen.contains("◉"), "no rail");
     for l in last.lines().skip(2).take(25) {
         assert!(l.chars().count() <= 80 && l.ends_with(' '), "{l}");
         let l = l.trim_end();
@@ -1086,8 +1231,8 @@ fn an_agent_has_skills_and_mcp_servers_picked_from_what_is_installed_or_typed() 
     let b = &agents["coding-builder"];
     assert_eq!((b["skills"].clone(), b["mcpServers"].clone()), (serde_json::json!(["pdf"]), serde_json::json!(["sentry"])));
     assert_eq!(b["tools"], serde_json::json!(["Read", "Grep", "Glob", "Edit", "Write", "Bash", "Skill", "mcp__sentry"]));
-    // The rail shows it has them.
+    // The brief's agents say they have them.
     key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Left);
-    assert!(flat(&draw(&mut term, &app)).contains("● 2 builder Sonnet files · commands · skills · MCP"));
+    assert!(whole_pane(&mut app, &mut term).contains("builder · Sonnet · files · commands · skills · MCP"));
 }

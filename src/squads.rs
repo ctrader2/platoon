@@ -560,7 +560,7 @@ pub fn agents_json(c: &Crew, leader: &LeaderSetup, names: AgentNames, place: Pla
 
 /// What a leader session is started with, from its squad: kept beside the task when it starts (the snapshot), so a
 /// leader that is continued later runs with the squad as it was (its rules too: where it works, what the work lands
-/// on, whether it may publish on its own), whatever has been changed on the Squads tab since.
+/// on, whether it may publish on its own), whatever has been changed on the Briefs tab since.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Launch {
     /// The squad's id and its name then.

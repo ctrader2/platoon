@@ -112,7 +112,7 @@ doesn't keep alt with that letter for a menu. See [Keys](settings-and-keys.md#ke
 
 **`S` refuses to hand a task to a squad.** The task must be one nobody has yet (Can start, or Needs a folder) and not
 waiting for another task, its folders that aren't in git must be free (one task at a time there: the line names the
-other task), and the squad must have nothing to fix on the Squads tab. If the commander said the squad doesn't fit, pick
+other task), and the squad must have nothing to fix on the Briefs tab. If the commander said the squad doesn't fit, pick
 the same squad again for "Hand it anyway?". "Session limit has been reached" means the commander couldn't run (today's
 token limit, or a pause after a failure). See [Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
 

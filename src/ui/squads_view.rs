@@ -1,4 +1,4 @@
-//! Drawing the Squads tab: the left pane's two lists (Squads or Agents, switched in its title), the selected squad's
+//! Drawing the Briefs tab: the left pane's two lists (Squads or Agents, switched in its title), the selected squad's
 //! brief or agent's details on the right, the key hints, and the small list and the text box that open over it.
 
 use super::*;
@@ -8,7 +8,7 @@ use crate::squadfile::Squad;
 use crate::squadfile::{self, Kind};
 use std::collections::HashMap;
 
-/// The keys of the Squads tab, for the list it shows, the pane that has them and the row the cursor is on.
+/// The keys of the Briefs tab, for the list it shows, the pane that has them and the row the cursor is on.
 pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
     let sqt = &app.sqt;
     let mut out: Vec<Hint> = Vec::new();
@@ -38,7 +38,7 @@ pub(super) fn squads_tab_hints(app: &App) -> Vec<Hint<'_>> {
             if !agents && !draft && sqt.squad().is_some() {
                 out.push(("e", "edit the brief", None));
             }
-            out.push(("← →", if agents { "squads" } else { "agents" }, None));
+            out.push(("← →", if agents { "briefs" } else { "agents" }, None));
             if draft {
                 out.push(("ctrl+s", "save draft", None));
             }
@@ -126,7 +126,7 @@ fn entry_note(app: &App, i: usize, library: &[crate::agentfile::Agent]) -> (Stri
     }
 }
 
-/// Below this width (of the area the tab is given) the Squads tab is one pane: the list, and enter opens the details
+/// Below this width (of the area the tab is given) the Briefs tab is one pane: the list, and enter opens the details
 /// full width in its place (esc goes back to the list, on the same entry). From it, the list and the details side by
 /// side. 78 is what an 80-column terminal gives the tab (a column of air at each side): from 80 columns, two panes.
 pub const TWO_PANES_FROM: u16 = 78;
@@ -163,7 +163,7 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
         let style = if on { Style::new().fg(t.accent).add_modifier(Modifier::BOLD) } else { Style::new().fg(t.dim) };
         Span::styled(text, style)
     };
-    let title = Line::from(vec![Span::raw(" "), seg("Squads", !agents), Span::raw(" "), seg("Agents", agents), Span::raw(" ")]);
+    let title = Line::from(vec![Span::raw(" "), seg("Briefs", !agents), Span::raw(" "), seg("Agents", agents), Span::raw(" ")]);
     if !left.is_empty() {
         let lb = block(focused).title(title);
         let li = lb.inner(left).inner(Margin::new(1, 0));
@@ -545,7 +545,7 @@ fn yes_no(b: bool) -> String {
     if b { "Yes".into() } else { "No".into() }
 }
 
-/// A check of a brief as the Squads tab shows it: its mark, the mark's colour and what platoon does about it.
+/// A check of a brief as the Briefs tab shows it: its mark, the mark's colour and what platoon does about it.
 pub fn check_says(kind: &CheckKind, t: &Theme) -> (&'static str, Color, String) {
     match kind {
         CheckKind::Tests => ("✓", t.ok, "platoon runs the project's tests".to_string()),
@@ -589,7 +589,7 @@ pub fn check_lines(s: &Squad, t: &Theme, w: usize) -> Vec<Line<'static>> {
 }
 
 /// The selected squad's brief, as it reads: what it is and where its file is, what is wrong with it (in the warn
-/// colour, at the top), then What it does, its Steps as a rail, its Checks, Asks you, and the sections platoon doesn't
+/// colour, at the top), then What it does, its Steps as the file numbers them, its Checks, Asks you, and the sections platoon doesn't
 /// know. The arrows scroll it while the details have the keys.
 fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
@@ -617,19 +617,25 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         };
         if l.file.exists() {
             let lead = "A file you own: ";
-            let mut spans = vec![Span::styled(lead, Style::new().fg(t.dim)), Span::styled(shown.clone(), Style::new().fg(t.text))];
             let used = lead.width() + shown.width();
-            let edit = key("e", "edit");
-            if used + 9 <= w {
-                spans.extend(edit);
+            let restore = l.kind == Kind::Modified;
+            let keys_w = 9 + if restore { 23 } else { 0 };
+            let mut keys = key("e", "edit");
+            if restore {
+                keys.extend(key("r", "restore the built-in"));
             }
-            if l.kind == Kind::Modified && used + 9 + 23 <= w {
-                spans.extend(key("r", "restore the built-in"));
-            }
-            if used > w {
-                lines.extend(wrap(&format!("{lead}{shown}"), w).into_iter().map(|p| Line::styled(p, Style::new().fg(t.dim))));
-            } else {
+            if used + keys_w <= w {
+                let mut spans = vec![Span::styled(lead, Style::new().fg(t.dim)), Span::styled(shown.clone(), Style::new().fg(t.text))];
+                spans.extend(keys);
                 lines.push(Line::from(spans));
+            } else {
+                // Too long for the keys beside it: the path wrapped, the keys on a line of their own.
+                lines.extend(wrap(&format!("{lead}{shown}"), w).into_iter().map(|p| Line::styled(p, Style::new().fg(t.dim))));
+                let mut own = keys;
+                if let Some(first) = own.first_mut() {
+                    first.content = first.content.trim_start().to_string().into();
+                }
+                lines.push(Line::from(own));
             }
         } else {
             for p in wrap(&format!("Built into platoon. e writes it to {shown} for you to change."), w) {
@@ -666,8 +672,7 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
     }
     lines.push(Line::raw(""));
     lines.push(heading(crate::brief::STEPS));
-    let rail = Rail { squad: s, known: &known, draft_agent: &|id: &str| sqt.is_draft_agent(id) };
-    lines.extend(rail.lines(t, w));
+    lines.extend(step_lines(s, t, w));
     if !s.checks.is_empty() {
         lines.push(Line::raw(""));
         lines.push(heading(crate::brief::CHECKS));
@@ -685,6 +690,11 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         }
         lines.extend(crate::mdview::render(text, w, t, app.plain_marker));
     }
+    if !s.agent_ids().is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(heading(AGENTS_IT_MAY_USE));
+        lines.extend(agent_lines(s, &known, &|id: &str| sqt.is_draft_agent(id), t, w));
+    }
     let total = lines.len();
     let (top, rows, below) = scroll_view(total, sqt.detail_top.get(), area.height as usize);
     sqt.detail_top.set(top);
@@ -695,93 +705,6 @@ fn draw_squad_detail(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(line), rect);
     }
     draw_more_below(f, t, Rect::new(area.x, area.bottom().saturating_sub(1), area.width, 1), below);
-}
-
-/// The narrowest the text beside the rail may get before the send-back loops give way to their words alone.
-pub const RAIL_TEXT_MIN: usize = 30;
-
-/// A squad's steps as a rail: one mark per step on a line down the left (`○` the first, `●` the others), the step's
-/// agent with its model and switches beside it, what it does under that, the send-back loops drawn on the left from
-/// the step that sends the work back up to the step it goes back to (nested, so they cross only when they must),
-/// each with "↩ back to …", then `◉ Done`.
-pub struct Rail<'a> {
-    pub squad: &'a Squad,
-    /// Every agent a step may name.
-    pub known: &'a [crate::agentfile::Agent],
-    /// Is this agent one the draft brings?
-    pub draft_agent: &'a dyn Fn(&str) -> bool,
-}
-
-/// One send-back loop, from step `from` back to step `to`.
-#[derive(Clone, Copy, Debug)]
-struct Loop {
-    from: usize,
-    to: usize,
-    /// Its place among the loops going back to the same step: the farthest sender comes first (it is outermost).
-    rank: usize,
-    lane: usize,
-}
-
-impl Loop {
-    /// Where it starts and ends, in the order of the lines: it goes in at the `rank`th line of step `to`, and comes
-    /// out at step `from`'s last line.
-    fn span(&self) -> ((usize, usize), (usize, usize)) {
-        ((self.to, self.rank), (self.from, usize::MAX))
-    }
-}
-
-/// The lanes the loops take, left (outermost) to right: longer loops first; a loop inside another goes to its right;
-/// two that share no line may share a lane. The loops of `s`, with their lanes, and how many lanes there are.
-fn loops_of(s: &Squad) -> (Vec<Loop>, usize) {
-    let mut loops: Vec<Loop> = s
-        .workflow
-        .iter()
-        .enumerate()
-        .filter_map(|(from, st)| st.back.filter(|b| b.to < from).map(|b| Loop { from, to: b.to, rank: 0, lane: 0 }))
-        .collect();
-    for to in 0..s.workflow.len() {
-        let mut into: Vec<usize> = (0..loops.len()).filter(|&k| loops[k].to == to).collect();
-        into.sort_by_key(|&k| std::cmp::Reverse(loops[k].from));
-        for (rank, k) in into.into_iter().enumerate() {
-            loops[k].rank = rank;
-        }
-    }
-    let mut order: Vec<usize> = (0..loops.len()).collect();
-    order.sort_by_key(|&k| (std::cmp::Reverse(loops[k].from - loops[k].to), loops[k].rank, loops[k].from));
-    let mut done: Vec<usize> = Vec::new();
-    for k in order {
-        let (a0, a1) = loops[k].span();
-        let inside = done.iter().filter(|&&d| {
-            let (b0, b1) = loops[d].span();
-            b0 <= a0 && a1 <= b1
-        });
-        let min = inside.map(|&d| loops[d].lane + 1).max().unwrap_or(0);
-        let lane = (min..)
-            .find(|&l| {
-                !done.iter().any(|&d| {
-                    let (b0, b1) = loops[d].span();
-                    loops[d].lane == l && a0 <= b1 && b0 <= a1
-                })
-            })
-            .unwrap_or(min);
-        loops[k].lane = lane;
-        done.push(k);
-    }
-    let lanes = loops.iter().map(|l| l.lane + 1).max().unwrap_or(0);
-    (loops, lanes)
-}
-
-/// What a line of the rail is.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum RailLine {
-    /// Step `i`'s first line: its mark and its agent.
-    Head(usize),
-    /// A line of what step `i` does (`k`th).
-    Does(usize, usize),
-    /// A line with only the rail, so every loop going back to step `i` has a line of its own to go in at.
-    Pad(usize),
-    /// Where step `i`'s loop comes out: "↩ back to …".
-    Back(usize),
 }
 
 /// A short word for each thing an agent may do besides reading: "files · commands", or "reads only".
@@ -817,171 +740,66 @@ fn cut_spans(parts: Vec<(String, Style)>, width: usize) -> Vec<Span<'static>> {
     out
 }
 
-impl Rail<'_> {
-    /// The rail's lines, for a pane `w` columns wide.
-    pub fn lines(&self, t: &Theme, w: usize) -> Vec<Line<'static>> {
-        let s = self.squad;
-        let (loops, lanes) = loops_of(s);
-        // The loops' gutter: one column per lane, the arrow's column and a space. Too wide for the text beside it:
-        // no loops drawn, their words stay.
-        let mut gutter = if lanes > 0 { lanes + 2 } else { 0 };
-        if w < 2 + gutter + 3 + RAIL_TEXT_MIN {
-            gutter = 0;
+/// The heading of the last section of a brief's pane: the agents its steps name (not a section of the file).
+pub const AGENTS_IT_MAY_USE: &str = "Agents it may use";
+
+/// A brief's Steps as the file has them: one numbered line per step, "agent: what it does", the send-back sentence
+/// as part of its text, wrapped under the text (not under the number).
+pub fn step_lines(s: &Squad, t: &Theme, w: usize) -> Vec<Line<'static>> {
+    let num_w = s.workflow.len().max(1).to_string().len() + 2;
+    let room = w.saturating_sub(num_w).max(8);
+    let mut out = Vec::new();
+    for (i, st) in s.workflow.iter().enumerate() {
+        let mut text = format!("{}: {}", st.agent, st.does.trim());
+        if let Some(b) = &st.back {
+            text.push(' ');
+            text.push_str(&crate::brief::send_back_sentence(b));
         }
-        let drawn = gutter > 0;
-        let text_w = w.saturating_sub(2 + gutter + 3);
-        let num_w = s.workflow.len().max(1).to_string().len();
-        let under = text_w.saturating_sub(num_w + 1).max(1);
-        let agent = |id: &str| self.known.iter().find(|a| a.id == id);
-        let name_w = s
-            .workflow
-            .iter()
-            .map(|st| agent(&st.agent).map_or(st.agent.chars().count(), |a| a.name.chars().count()))
-            .max()
-            .unwrap_or(0)
-            .min(16);
-        // The plan: which lines there are, in order.
-        let mut plan: Vec<RailLine> = Vec::new();
-        let mut does_text: Vec<Vec<String>> = Vec::new();
-        for (i, st) in s.workflow.iter().enumerate() {
-            plan.push(RailLine::Head(i));
-            let mut d = wrap(&st.does, under);
-            if d.len() > 3 {
-                d.truncate(3);
-                if let Some(last) = d.last_mut() {
-                    *last = fit_end(&format!("{last} …"), under);
+        for (k, part) in wrap(text.trim_end(), room).into_iter().enumerate() {
+            let lead = if k == 0 { format!("{:>w$}", format!("{}. ", i + 1), w = num_w) } else { " ".repeat(num_w) };
+            let mut spans = vec![Span::styled(lead, Style::new().fg(t.dim))];
+            let name = format!("{}:", st.agent);
+            match part.strip_prefix(&name).filter(|_| k == 0) {
+                Some(rest) => {
+                    spans.push(Span::styled(name, Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
+                    spans.push(Span::styled(rest.to_string(), Style::new().fg(t.text)));
                 }
+                None => spans.push(Span::styled(part, Style::new().fg(t.text))),
             }
-            if d.is_empty() {
-                d.push(String::new());
-            }
-            for k in 0..d.len() {
-                plan.push(RailLine::Does(i, k));
-            }
-            let entries = loops.iter().filter(|l| l.to == i).count();
-            for _ in 0..entries.saturating_sub(1 + d.len()) {
-                plan.push(RailLine::Pad(i));
-            }
-            if st.back.is_some_and(|b| b.to < i) {
-                plan.push(RailLine::Back(i));
-            }
-            does_text.push(d);
+            out.push(Line::from(spans));
         }
-        // The loops on the gutter: which line each goes in at and comes out at.
-        let mut grid: Vec<Vec<char>> = vec![vec![' '; gutter]; plan.len()];
-        if drawn {
-            let line_of = |want: RailLine| plan.iter().position(|p| *p == want);
-            let mut vert = vec![vec![false; gutter]; plan.len()];
-            let mut horiz = vec![vec![false; gutter]; plan.len()];
-            let mut ends: Vec<(usize, usize, bool)> = Vec::new();
-            for l in &loops {
-                let first = line_of(RailLine::Head(l.to)).unwrap_or(0);
-                let enter = first + l.rank;
-                let Some(out) = line_of(RailLine::Back(l.from)) else { continue };
-                for row in vert.iter_mut().take(out).skip(enter + 1) {
-                    row[l.lane] = true;
-                }
-                for cell in horiz[enter].iter_mut().take(lanes).skip(l.lane + 1) {
-                    *cell = true;
-                }
-                for cell in horiz[out].iter_mut().take(gutter).skip(l.lane + 1) {
-                    *cell = true;
-                }
-                ends.push((enter, l.lane, true));
-                ends.push((out, l.lane, false));
-            }
-            for (y, row) in grid.iter_mut().enumerate() {
-                for (x, ch) in row.iter_mut().enumerate() {
-                    *ch = match (vert[y][x], horiz[y][x]) {
-                        (true, true) => '┼',
-                        (true, false) => '│',
-                        (false, true) => '─',
-                        _ => ' ',
-                    };
-                }
-            }
-            for (y, lane, enter) in ends {
-                grid[y][lane] = if enter { '┌' } else { '└' };
-                if enter {
-                    grid[y][lanes] = '▶';
-                }
-            }
-        }
-        let base = Style::new().bg(t.bg);
-        let mut out = Vec::new();
-        for (y, p) in plan.iter().enumerate() {
-            let i = match *p {
-                RailLine::Head(i) | RailLine::Does(i, _) | RailLine::Pad(i) | RailLine::Back(i) => i,
-            };
-            let mut spans = vec![Span::styled("  ", base)];
-            spans.push(Span::styled(grid[y].iter().collect::<String>(), base.fg(t.dim)));
-            let st = &s.workflow[i];
-            match *p {
-                RailLine::Head(_) => {
-                    let mark = if i == 0 { "○" } else { "●" };
-                    spans.push(Span::styled(mark, base.fg(t.subtext)));
-                    spans.push(Span::styled("  ", base));
-                    let mut parts = vec![(format!("{:>num_w$} ", i + 1), base.fg(t.dim))];
-                    match agent(&st.agent) {
-                        None => {
-                            let id = if st.agent.is_empty() { "no agent" } else { st.agent.as_str() };
-                            parts.push((format!("{id} · not found"), base.fg(t.warn)));
-                        }
-                        Some(a) => {
-                            let pad = name_w.saturating_sub(a.name.chars().count());
-                            parts.push((format!("{}{}", a.name, " ".repeat(pad)), base.fg(t.text).add_modifier(Modifier::BOLD)));
-                            let model = model_words(a);
-                            parts.push((format!("  {model:<6} "), base.fg(t.subtext)));
-                            parts.push((short_switches(a), base.fg(t.subtext)));
-                            if let Some(first) = crate::agentfile::problems(a).first() {
-                                parts.push((format!(" · needs fixing: {first}"), base.fg(t.warn)));
-                            } else if (self.draft_agent)(&a.id) {
-                                parts.push((" · new with the draft".into(), base.fg(t.subtext)));
-                            } else if a.from_file.is_some() {
-                                parts.push((" · from your coding tool".into(), base.fg(t.subtext)));
-                            }
-                        }
-                    }
-                    spans.extend(cut_spans(parts, text_w));
-                }
-                RailLine::Does(_, k) => {
-                    spans.push(Span::styled("│", base.fg(t.dim)));
-                    spans.push(Span::styled("  ", base));
-                    spans.push(Span::styled(" ".repeat(num_w + 1), base));
-                    spans.push(Span::styled(does_text[i][k].clone(), base.fg(t.text)));
-                }
-                RailLine::Pad(_) => spans.push(Span::styled("│", base.fg(t.dim))),
-                RailLine::Back(_) => {
-                    spans.push(Span::styled(if drawn { "┤" } else { "│" }, base.fg(t.dim)));
-                    spans.push(Span::styled("  ", base));
-                    spans.push(Span::styled(" ".repeat(num_w + 1), base));
-                    if let Some(b) = st.back {
-                        let to =
-                            s.workflow.get(b.to).map(|x| agent(&x.agent).map_or(x.agent.clone(), |a| a.name.clone())).unwrap_or_default();
-                        // As much as fits: which step and its agent, then without the agent, then only how often.
-                        let (n, times) = (b.to + 1, crate::brief::times_words(b.times));
-                        let words = [
-                            format!("↩ back to step {n} ({to}), at most {times}"),
-                            format!("↩ back to step {n}, at most {times}"),
-                            format!("↩ back to step {n}, {times}"),
-                        ]
-                        .into_iter()
-                        .find(|w| w.chars().count() <= under)
-                        .unwrap_or_else(|| fit_end(&format!("↩ step {n}, {times}"), under));
-                        spans.push(Span::styled(words, base.fg(t.subtext)));
-                    }
-                }
-            }
-            out.push(Line::from(spans).style(base));
-        }
-        out.push(Line::from(vec![
-            Span::raw("  "),
-            Span::raw(" ".repeat(gutter)),
-            Span::styled("◉", Style::new().fg(t.subtext)),
-            Span::styled(fit_end("  Done: the result goes on the task", text_w + 2), Style::new().fg(t.dim)),
-        ]));
-        out
     }
+    out
+}
+
+/// The agents a brief's steps name, each once, in the order they first come: "name · model · switches".
+fn agent_lines(
+    s: &Squad,
+    known: &[crate::agentfile::Agent],
+    draft_agent: &dyn Fn(&str) -> bool,
+    t: &Theme,
+    w: usize,
+) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for id in s.agent_ids() {
+        let mut parts: Vec<(String, Style)> = Vec::new();
+        match known.iter().find(|a| a.id == id) {
+            None => parts.push((format!("{id} · not found"), Style::new().fg(t.warn))),
+            Some(a) => {
+                parts.push((a.name.clone(), Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
+                parts.push((format!(" · {} · {}", model_words(a), short_switches(a)), Style::new().fg(t.subtext)));
+                if let Some(first) = crate::agentfile::problems(a).first() {
+                    parts.push((format!(" · needs fixing: {first}"), Style::new().fg(t.warn)));
+                } else if draft_agent(&a.id) {
+                    parts.push((" · new with the draft".into(), Style::new().fg(t.subtext)));
+                } else if a.from_file.is_some() {
+                    parts.push((" · from your coding tool".into(), Style::new().fg(t.subtext)));
+                }
+            }
+        }
+        out.push(Line::from(cut_spans(parts, w)));
+    }
+    out
 }
 
 /// The selected agent's details: what it is, its switches and system prompt, and the squads it is used in. One of the
@@ -1208,84 +1026,25 @@ pub(super) fn draw_squad_text(f: &mut Frame, app: &App, area: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::squadfile::{Back, Step};
-
-    /// Twelve steps, five send-backs: nested ones, and one that crosses another.
-    fn long() -> Squad {
-        let mut s = squadfile::builtin("coding").unwrap();
-        let agents = ["planner", "builder", "reviewer", "verifier"];
-        s.workflow =
-            (0..12).map(|i| Step { agent: agents[i % 4].into(), does: format!("Does part {}.", i + 1), back: None, line: 0 }).collect();
-        for (from, to, times) in [(11, 0, 1), (10, 1, 2), (7, 2, 3), (5, 3, 1), (8, 6, 2)] {
-            s.workflow[from].back = Some(Back { to, times });
-        }
-        s
-    }
+    use crate::squadfile::Back;
 
     fn text(lines: &[Line<'static>]) -> Vec<String> {
         lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect()).collect()
     }
 
-    fn rail_of(s: &Squad, w: usize) -> Vec<String> {
-        let known = crate::agentfile::builtins();
-        let rail = Rail { squad: s, known: &known, draft_agent: &|_| false };
-        text(&rail.lines(&Theme::default(), w))
-    }
-
     #[test]
-    fn five_loops_each_get_a_line_to_go_in_and_come_out_and_never_share_a_cell() {
-        let s = long();
-        let (loops, lanes) = loops_of(&s);
-        assert_eq!((loops.len(), lanes), (5, 4), "{loops:?}");
-        let lines = rail_of(&s, 50);
-        let rail_col = 2 + lanes + 2;
-        assert_eq!(lines.iter().filter(|l| l.contains('▶')).count(), 5, "one way in each");
-        assert_eq!(lines.iter().filter(|l| l.chars().nth(rail_col) == Some('┤')).count(), 5, "one way out each");
-        assert_eq!(lines.iter().filter(|l| l.contains("↩ back to step")).count(), 5);
-        for l in &lines {
-            assert!(l.chars().count() <= 50, "{l}");
-            let rail = l.chars().nth(rail_col).unwrap_or(' ');
-            assert!("○●│┤◉".contains(rail), "the rail runs down one column: {l:?}");
-            // The gutter only ever holds loop pieces; an arrow always sits just left of the rail.
-            let gutter: String = l.chars().skip(2).take(lanes + 2).collect();
-            assert!(gutter.chars().all(|c| " │─┌└┼▶".contains(c)), "{gutter:?}");
-            if let Some(at) = gutter.chars().position(|c| c == '▶') {
-                assert_eq!(at, lanes, "{l:?}");
-            }
-        }
-        // Each loop's vertical stays in its own lane from its way in to its way out: no two loops share a lane where
-        // they overlap, and a loop inside another is to its right.
-        for a in &loops {
-            for b in &loops {
-                let (a0, a1) = a.span();
-                let (b0, b1) = b.span();
-                if a.from != b.from && a0 <= b1 && b0 <= a1 {
-                    assert_ne!(a.lane, b.lane, "{a:?} {b:?}");
-                }
-                if a.from != b.from && a0 <= b0 && b1 <= a1 {
-                    assert!(a.lane < b.lane, "{a:?} holds {b:?}");
-                }
-            }
-        }
-        assert_eq!(lines.iter().filter(|l| l.contains('┼')).count(), 1, "the one crossing that can't be helped");
-        assert!(lines[lines.len() - 1].contains("◉  Done"), "the rail ends at Done: the brief is the editor, no add-a-step row");
-    }
-
-    #[test]
-    fn too_narrow_for_the_loops_keeps_their_words_only() {
-        let s = long();
-        let lines = rail_of(&s, 40);
-        assert!(lines.iter().all(|l| !l.contains('▶') && !l.contains('┤') && !l.contains('┌')), "{lines:#?}");
-        assert_eq!(lines.iter().filter(|l| l.contains("↩ back to step")).count(), 5, "{lines:#?}");
-        for l in &lines {
-            assert!(l.chars().count() <= 40, "{l}");
-            assert!("○●│◉".contains(l.chars().nth(2).unwrap()), "the rail at the left edge: {l:?}");
-        }
-        // No send-backs at all: no gutter, the rail right after the margin.
-        let plain = squadfile::builtin("summarize").unwrap();
-        let lines = rail_of(&plain, 50);
-        assert_eq!(lines[0].chars().nth(2), Some('○'));
-        assert!(lines.iter().all(|l| !l.contains('↩')));
+    fn steps_read_as_the_numbered_list_of_the_file() {
+        let mut s = squadfile::builtin("coding").unwrap();
+        s.workflow[3].back = Some(Back { to: 1, times: 2 });
+        let lines = text(&step_lines(&s, &Theme::default(), 60));
+        assert!(lines[0].starts_with("1. planner: "), "{lines:?}");
+        assert!(lines.iter().all(|l| l.chars().count() <= 60), "{lines:?}");
+        let joined = lines.join(" ").split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(joined.contains("May send the work back to step 2, at most twice."), "{joined}");
+        // A wrapped step goes on under its text, not under its number.
+        let at = lines.iter().position(|l| l.starts_with("2. ")).unwrap();
+        assert!(lines[at + 1].starts_with("   ") && !lines[at + 1].starts_with("    "), "{lines:?}");
+        assert!(lines.iter().all(|l| !l.contains('○') && !l.contains('↩') && !l.contains('◉')), "no rail: {lines:?}");
     }
 
     #[test]

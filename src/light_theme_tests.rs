@@ -2,7 +2,7 @@
 //! the app: each of the twenty is exactly what the plugin made of it (`testdata/theme_pack_colors.tsv`, written by
 //! the plugin route before it was removed), and reads well as it is, in 24-bit and in 256 colors; the screens drawn
 //! in a light theme have the colors they should, cell by cell (the Sessions list with a selected row and a project
-//! badge, a popup, the settings, a project's notes, the attached view's footer, a squad's workflow rail); a saved theme
+//! badge, a popup, the settings, a project's notes, the attached view's footer, a brief); a saved theme
 //! id nobody has any more falls back to the default. Every folder is a temp one (`World`).
 
 use crate::app::{Mode, Pane};
@@ -454,23 +454,22 @@ fn the_attached_views_footer_and_session_in_a_light_theme() {
 }
 
 #[test]
-fn a_squads_workflow_rail_in_a_light_theme() {
+fn a_brief_in_a_light_theme() {
     let (_w, mut app, _) = light_world("light-rail", "Rosé Pine Dawn");
     let t = app.theme.clone();
     key(&mut app, KeyCode::Char('4'));
     assert!(app.squads_tab_showing());
     let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("Done: the result goes on the task"), "the rail: {shown}");
+    assert!(shown.contains("1. planner: Reads the task") && !shown.contains("◉"), "the numbered steps: {shown}");
     let ls = lines(&term);
-    let (y, x) = find(&ls, "◉").unwrap();
-    assert_eq!((ls[y][x].fg, ls[y][x].bg), (t.subtext, t.bg), "the rail's end");
-    let (dy, dx) = find(&ls, "Done: the result").unwrap();
-    assert_eq!(ls[dy][dx].fg, t.dim);
-    assert!(ls[..y].iter().flatten().any(|c| c.symbol() == "│" && c.fg == t.dim && c.bg == t.bg), "the rail itself, in the dim color");
-    assert!(ls[..y].iter().flatten().any(|c| c.symbol() == "│" && c.fg == t.border), "the panes' frames, in the border color");
+    let (y, x) = find(&ls, "1. planner").unwrap();
+    assert_eq!((ls[y][x].fg, ls[y][x].bg), (t.dim, t.bg), "the step's number");
+    let (hy, hx) = find(&ls, "What it does").unwrap();
+    assert_eq!((ls[hy][hx].fg, ls[hy][hx].bg), (t.accent, t.bg), "a heading");
+    assert!(ls.iter().flatten().any(|c| c.symbol() == "│" && c.fg == t.border), "the panes' frames, in the border color");
     assert!(ls.iter().flatten().any(|c| c.symbol() == "▎" && c.fg == t.accent && c.bg == t.surface), "the selected squad");
-    assert_legible(&term, &app.theme, "the Squads tab");
+    assert_legible(&term, &app.theme, "the Briefs tab");
 }
 
 #[test]
@@ -505,7 +504,7 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
             (&[c('3')], "projects", "Web shop"),
             (&[c('3'), c('c')], "a project's color", "╭ Color and badge"),
             (&[c('3'), c('d')], "deleting a project", "╭ Delete project"),
-            (&[c('4')], "squads", "[Squads]"),
+            (&[c('4')], "briefs", "[Briefs]"),
         ];
         for (keys, what, sign) in screens {
             app.mode = Mode::List;
@@ -563,7 +562,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
         (&[c('s')], "settings", "╭ Settings"),
         (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
         (&[c('n')], "the folder picker", "pick a folder"),
-        (&[c('4')], "squads", "[Squads]"),
+        (&[c('4')], "briefs", "[Briefs]"),
     ];
     for (keys, what, sign) in screens {
         app.mode = Mode::List;

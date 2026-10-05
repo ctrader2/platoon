@@ -108,7 +108,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     assert_eq!(app.selected_project().map(|p| p.name.as_str()), Some("Web shop"));
     let shown = flat(&draw(&mut term, &app));
     assert!(
-        shown.contains("1 Sessions 2 Tasks 3 Projects 4 Squads")
+        shown.contains("1 Sessions 2 Tasks 3 Projects 4 Briefs")
             && shown.contains("Active 1")
             && shown.contains("WS Web shop")
             && shown.contains("no sessions"),

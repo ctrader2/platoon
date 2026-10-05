@@ -111,7 +111,7 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(opened(&mut app), vec![s(&w.base)]);
 
-    // The Squads tab and the Projects list ask too.
+    // The Briefs tab and the Projects list ask too.
     key(&mut app, KeyCode::Char('4'));
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);

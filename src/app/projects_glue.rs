@@ -7,7 +7,7 @@ use crate::projects::{Project, SLOTS};
 use std::fs;
 
 /// The top-level tabs, on `1` to `4`.
-pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Squads"];
+pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Briefs"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_TASKS: usize = 1;
 pub const TOP_PROJECTS: usize = 2;
@@ -40,7 +40,7 @@ pub enum NamePurpose {
     TaskFilter,
     /// A new title for this task.
     TicketTitle(u32),
-    /// Something on the Squads tab: a squad's name, a member's.
+    /// Something on the Briefs tab: a squad's name, a member's.
     Squad(super::SquadName),
     /// The branch the work of this folder line of the hand-over popup lands on.
     LandsOn(usize),
@@ -91,7 +91,7 @@ pub struct PStat {
 }
 
 impl App {
-    /// The Squads tab is showing.
+    /// The Briefs tab is showing.
     pub fn squads_tab_showing(&self) -> bool {
         self.top == TOP_SQUADS && self.open_project.is_none()
     }
@@ -356,7 +356,7 @@ impl App {
     }
 
     /// `/` opens the search on the screen showing: everywhere on platoon's own screens but a ticket's, the Tasks tab
-    /// (where it narrows the board) and the Squads tab (it looks for sessions and projects).
+    /// (where it narrows the board) and the Briefs tab (it looks for sessions and projects).
     pub fn slash_searches(&self) -> bool {
         matches!(self.mode, Mode::List) && self.tk.open.is_none() && !self.squads_tab_showing() && !self.board_showing()
     }

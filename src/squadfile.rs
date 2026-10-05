@@ -1,6 +1,6 @@
 //! Squads as the user sees, changes and makes them: each one a **brief**, a Markdown file the user owns,
 //! `<config>/briefs/<id>.md` (read and written by `brief.rs`); the four built-in briefs in the binary
-//! (`src/briefs/*.md`); the rules every squad has to follow (`problems`, shared by the Squads tab, the files and a
+//! (`src/briefs/*.md`); the rules every squad has to follow (`problems`, shared by the Briefs tab, the files and a
 //! drafted squad); the one-time conversion of the JSON files squads were before (`<config>/squads/<id>.json`, each
 //! kept as `.bak`); and the drafting of a new brief from the user's own description (one `claude -p` on Sonnet,
 //! `parse_draft`), which reuses the agents there are where one fits.
@@ -669,7 +669,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// What the Squads tab says about it (the words the system prompts already use for a change).
+    /// What the Briefs tab says about it (the words the system prompts already use for a change).
     pub fn label(self) -> &'static str {
         match self {
             Kind::BuiltIn => "Built in",
@@ -894,7 +894,7 @@ pub(crate) fn stamp_of(dir: &Path, ext: &str) -> Vec<(String, Option<(std::time:
 
 // ---- carrying the old Coding system prompts over --------------------------------------------------------------------
 
-/// Before the Squads tab, the Coding squad's five system prompts were entries in the settings, each in
+/// Before the Briefs tab, the Coding squad's five system prompts were entries in the settings, each in
 /// `<config>/prompts/coding-<role>.md` once changed. The first time the squads or the agents are read, a real change
 /// to a member's is carried over into that built-in agent's file (the old files are left exactly as they are, and a
 /// file the user already has is never written over). The old leader's is not: every squad's leader shares one

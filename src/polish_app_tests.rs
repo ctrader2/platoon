@@ -285,7 +285,7 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
     ch(&mut app, '3');
     check(&app, "Projects", true, true);
     ch(&mut app, '4');
-    check(&app, "Squads", true, false);
+    check(&app, "Briefs", true, false);
     let first = seen[0].1.clone();
     for (place, anywhere) in &seen {
         assert_eq!(anywhere, &first, "{place}: the same everywhere");
@@ -517,7 +517,7 @@ fn a_pane_cut_at_its_bottom_says_how_much_more_is_below() {
     let lines = draw(&mut term, &app);
     assert!(!lines.iter().any(|l| l.contains("more lines below")), "{}", lines.join("\n"));
     assert!(lines.iter().any(|l| l.contains("point number 40")), "{}", lines.join("\n"));
-    // The Squads tab's workflow, at 80x24, is longer than its pane.
+    // The Briefs tab's workflow, at 80x24, is longer than its pane.
     key(&mut app, KeyCode::Esc);
     ch(&mut app, '4');
     let lines = draw(&mut term, &app);

@@ -272,7 +272,7 @@ squad leaders**, Sonnet unless you pick Opus or Haiku) are on the [Projects tab 
 and platoon adds to it what the squad's **brief** says (what it does, its steps, when it asks you and what it checks) and
 its own rules. A brief is a short Markdown file of yours. platoon comes with four squads, **Coding**, **Research**,
 **Docs** and **Summarize** (see [The built-in squads](#the-built-in-squads)), which work as they are; you change one, or
-make your own, by changing its brief on the [Squads tab](#the-squads-tab).
+make your own, by changing its brief on the [Briefs tab](#the-briefs-tab).
 
 As it comes, the Coding leader (Sonnet) hands the task to the **planner** (Opus), which reads the code and writes a short
 plan; then to the **builder** (Sonnet), which makes the change and runs the tests; then to the **reviewer** (Opus), which
@@ -540,7 +540,7 @@ kept).
 ### What you can change, and what platoon keeps
 
 A squad's brief (its steps, checks and when it asks you) and its agents (their models, switches, skills, MCP servers and
-system prompts) are on the [Squads tab](#the-squads-tab); the leader's system prompt and model are in the settings. The rules platoon keeps - where
+system prompts) are on the [Briefs tab](#the-briefs-tab); the leader's system prompt and model are in the settings. The rules platoon keeps - where
 the squad works and that what it writes for the task goes in the task's own folder, which branch the work lands on,
 whether it plans first, may publish on its own or asks first, the last line of each turn, and "report back to the leader, never push"
 for the members - are always sent after your text.
@@ -576,27 +576,27 @@ change, and the yes; Research's the checker read the change, every claim in the 
 own), and the yes; Summarize's the yes. Each asks you before anything others can see, and when it is stuck (Summarize:
 when it can't read what the task points at).
 
-## The Squads tab
+## The Briefs tab
 
-The fourth tab, `4` **Squads**, has two lists: the **squads** and the **agents** they are made of. The title of the left
-pane shows which one you are looking at (`[Squads]  Agents`); `←` and `→` on the list switch between them (or click the
-title). An agent is its own thing, shared by squads: the same planner can do a step in several squads.
+The fourth tab, `4` **Briefs**, has two lists: the **briefs** (one for each kind of squad) and the **agents** they are made
+of. The title of the left pane shows which one you are looking at (`[Briefs]  Agents`); `←` and `→` on the list switch
+between them (or click the title). An agent is its own thing, shared by squads: the same planner can do a step in several
+squads.
 
 ### A squad's brief
 
 A squad is a **brief**: a short Markdown file of yours that says what the squad does and how. On the right, the tab shows
 the selected squad's brief as it reads: whether it is built in, **User Modified** or **Your own**, where its file is ("A file
-you own: ~/.config/platoon/briefs/coding.md"; a built-in as platoon has it has no file yet, and says so), and then:
+you own: ~/.config/platoon/briefs/coding.md   e edit", and `r restore the built-in` on a changed built-in; a built-in as
+platoon has it has no file yet, and says so), and then:
 
 - **What it does**, in a sentence or two. The commander reads it before a task is handed to the squad, and so do its
   leader and the drafting of tasks from a conversation.
-- **Steps**, drawn as a rail: one mark per step down a line (`○` the first, `●` the others), beside it the step's number,
-  its **agent** with that agent's model and switches (`files`, `commands`, `web`, and `skills` or `MCP` when it has them),
-  and under it what the step does. A step may **send the work back** to an earlier step, a set number of times at most:
-  that is drawn as a loop on the left from the step back up to the one it returns to, with "↩ back to step 2 (builder), at
-  most twice" beside it (on a narrow screen only the words stay). `◉ Done` ends the rail. platoon writes the steps into the
-  leader's system prompt as a numbered list, and the leader follows them (platoon can't force the order: the agents run
-  inside the leader's session). A squad's agents are the different agents its steps name: at most 8, and at most 12
+- **Steps**, as the numbered list the file has: a number, the **agent** that does the step, a colon and what it does, wrapped
+  under its text. A step may **send the work back** to an earlier step, a set number of times at most; its sentence
+  ("May send the work back to step 2, at most twice.") is part of the step, as written. platoon writes the steps into
+  the leader's system prompt as a numbered list, and the leader follows them (platoon can't force the order: the agents
+  run inside the leader's session). A squad's agents are the different agents its steps name: at most 8, and at most 12
   steps.
 - **Checks**: what must be true before the work counts as done, one a line. Four are platoon's own, and it says so beside
   each: **the tests pass** (platoon runs the project's test command), **<agent> read the change** (platoon checks that
@@ -605,6 +605,8 @@ you own: ~/.config/platoon/briefs/coding.md"; a built-in as platoon has it has n
   Any other line is one the squad checks itself: its leader is reminded of it. See [Checks](#checks).
 - **Asks you**: when the squad asks you, in your words. Its leader is told.
 - Any section of your own (**Notes**, say), shown as you wrote it.
+- **Agents it may use**, last: what the steps name, one line for each agent once (not a section of the file): its name,
+  its model and its switches (`files`, `commands`, `web`, and `skills` or `MCP` when it has them, or "reads only").
 
 A brief with something wrong in it says so at the top, in the warning colour, one line each with where it is ("Steps,
 line 11: no agent called verifer; there are planner, builder, reviewer and verifier"); until it is fixed the squad can't be
@@ -698,7 +700,7 @@ brief in your editor. In an agent's details, `enter` changes the line you are on
 short list, a system prompt in the same editors as a project's notes. `space` turns a switch on or off. Every change to an
 agent is saved at once.
 
-| Key | On the Squads list | On the Agents list |
+| Key | On the Briefs list | On the Agents list |
 | --- | --- | --- |
 | `e` | Open the brief in your editor | |
 | `n` | Describe a new squad (or agent) for Claude to draft | The same, an agent first |

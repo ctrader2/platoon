@@ -159,7 +159,7 @@ fn the_tabs_switch_on_one_to_four_and_the_board_puts_a_task_aside_and_moves_one(
     let lab = Lab::new("bd-tabs");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
     t.wait_for("enter open");
-    t.wait_for_flat("1 Sessions 2 Tasks 3 Projects 4 Squads");
+    t.wait_for_flat("1 Sessions 2 Tasks 3 Projects 4 Briefs");
     // 2: the board, across both projects, with how many need you in the header.
     t.send(b"2");
     t.wait_for_all(&[
@@ -178,7 +178,7 @@ fn the_tabs_switch_on_one_to_four_and_the_board_puts_a_task_aside_and_moves_one(
     t.send(b"3");
     t.wait_for_all(&["Active", "Web", "Docs", "● 1 needs you"]);
     t.send(b"4");
-    t.wait_for("[Squads]");
+    t.wait_for("[Briefs]");
     t.send(b"1");
     t.wait_for("NAME");
     t.send(b"2");

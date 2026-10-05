@@ -30,7 +30,7 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
     vec![
         (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
         (app.back_label().to_string(), "back one level (esc does the same)".into()),
-        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Squads lists (elsewhere it goes back)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Briefs lists (elsewhere it goes back)".into()),
         ("?".into(), "this help".into()),
     ]
 }
@@ -77,7 +77,7 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "Checks: a squad's brief may also ask that an agent read the change and that every acceptance box be ticked, with how. platoon checks both at the same moments; a failure goes back to the squad once, then to you.".into(),
         ));
     }
-    // On the Squads tab: what a brief is.
+    // On the Briefs tab: what a brief is.
     if app.squads_tab_showing() {
         out.push(Entry::Note(
             "A squad is a brief: a Markdown file of yours with what it does, its steps, its checks and when it asks you. e opens it in your editor; platoon reads it again when you are done.".into(),

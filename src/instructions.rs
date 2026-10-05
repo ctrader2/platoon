@@ -52,7 +52,7 @@ pub const SQUAD_LEADER: &str = "squad-leader";
 pub const SQUAD_DRAFT: &str = "squad-draft";
 pub const AGENT_DRAFT: &str = "agent-draft";
 
-// Each agent's system prompt is part of the agent, on the Squads tab (`agentfile.rs`), not an entry here. The squad
+// Each agent's system prompt is part of the agent, on the Briefs tab (`agentfile.rs`), not an entry here. The squad
 // leaders' is one for every squad, and is an entry here: its fixed part is platoon's rules for leaders rather than a
 // reply's shape (see `squads::leader_fixed`).
 
@@ -127,7 +127,7 @@ pub static ACTIONS: [Action; 10] = [
         id: SQUAD_DRAFT,
         entry: "System prompt for drafting a squad",
         what: "drafting a squad",
-        explain: "How platoon asks Claude to draft a whole squad from your description, on the Squads tab.",
+        explain: "How platoon asks Claude to draft a whole squad from your description, on the Briefs tab.",
         builtin: crate::squadfile::DRAFT_GUIDANCE,
         fixed: crate::squadfile::draft_fixed,
     },
@@ -135,7 +135,7 @@ pub static ACTIONS: [Action; 10] = [
         id: AGENT_DRAFT,
         entry: "System prompt for drafting an agent",
         what: "drafting an agent",
-        explain: "How platoon asks Claude to draft one agent from your description, on the Squads tab.",
+        explain: "How platoon asks Claude to draft one agent from your description, on the Briefs tab.",
         builtin: crate::agentfile::DRAFT_GUIDANCE,
         fixed: crate::agentfile::draft_fixed,
     },

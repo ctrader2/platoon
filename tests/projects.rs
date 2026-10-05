@@ -169,7 +169,7 @@ fn projects_are_made_renamed_given_sessions_shown_as_badges_and_deleted() {
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
     t.wait_for("refactor the widget");
     // The tabs carry no counts; the Active/Archived switch on the rule under them does.
-    t.wait_for_flat("1 Sessions 2 Tasks 3 Projects 4 Squads");
+    t.wait_for_flat("1 Sessions 2 Tasks 3 Projects 4 Briefs");
     t.wait_for_flat("Active 2 Archived 0");
 
     // Left and right: Active and Archived.

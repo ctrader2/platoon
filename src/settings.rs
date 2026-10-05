@@ -592,7 +592,7 @@ impl Tab {
 /// The tabs by position, for the code that treats one of them specially (see `tabs`).
 pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
-/// Where the squad leaders' system prompt and model are: `s` on the Squads tab opens the settings here.
+/// Where the squad leaders' system prompt and model are: `s` on the Briefs tab opens the settings here.
 pub const TAB_PROJECTS: usize = 4;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;

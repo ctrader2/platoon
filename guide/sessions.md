@@ -6,7 +6,7 @@ folders in an editor.
 
 ## The list
 
-The header has four tabs, **Sessions**, **Tasks**, **Projects** and **Squads** (`1` to `4`, or click them). Under Sessions
+The header has four tabs, **Sessions**, **Tasks**, **Projects** and **Briefs** (`1` to `4`, or click them). Under Sessions
 and Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
 narrow terminal, on the row under it): the left and right arrow keys switch them (or click them). After the tabs, the
 header says how many tasks need you (**● 2 need you**, see [the Tasks tab](tasks-and-squads.md#the-tasks-tab)) and how
@@ -76,7 +76,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `t` | [draft tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from this conversation: Claude reads it in the background (the row says **Drafting tasks…**) and the tasks it suggests open in a popup, where you change them, make them and hand them to squads, or make nothing (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
-| `1` `2` `3` `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
+| `1` `2` `3` `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Briefs](tasks-and-squads.md#the-briefs-tab) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
@@ -288,7 +288,7 @@ Press `v` anywhere in platoon's lists to look at the work in a code editor of yo
 | --- | --- |
 | a conversation's row (Sessions tab, a project's Sessions pane) | its folder, and the folders added to it with `/add-dir` |
 | a task's row or its screen | the task's copies of its folders (every repository the squad works in), its folders that aren't in git as they are, and its own folder when there is something in it |
-| anywhere else (the Squads tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
+| anywhere else (the Briefs tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 
 In a session's live view every key goes to Claude (but the back key and `alt+n`): press the [back key](settings-and-keys.md#keys-back-and-quit)
 (`ctrl+space`) to go back to the list, then `v`. Typed into a box (search, a name, the folder picker), `v` is just a

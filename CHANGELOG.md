@@ -10,7 +10,8 @@ here.
 
 - **A squad is a brief**: a short Markdown file of yours, `~/.config/platoon/briefs/<id>.md`, with what the squad does, its
   steps in order (each an agent and what it does, and when it may send the work back), its checks and when it asks you.
-  The Squads tab shows the brief as it reads, with what is wrong in it at the top, and `e` opens it in your editor; the
+  The Briefs tab (it was the Squads tab) shows the brief as it reads, with what is wrong in it at the top and the agents
+  its steps use at the end, and `e` opens it in your editor; the
   in-app step editor is gone. The four built-in squads are briefs too, and work as they are. Squads you had as JSON files
   are turned into briefs once (each old file kept as `.bak`).
 - **The agents your coding tool already has** (Claude Code's `~/.claude/agents`, and a task's repository's

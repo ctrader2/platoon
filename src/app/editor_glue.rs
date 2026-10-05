@@ -6,7 +6,7 @@
 //! Where `v` opens what:
 //! - a session's row (Sessions tab, a project's Sessions pane): its folder and the folders added to it;
 //! - a ticket's row or its screen: its worktrees, its folders not in git, its work folder when it has files;
-//! - anywhere else (the Squads tab, the Projects list, the notes, an empty list): the folder picker asks.
+//! - anywhere else (the Briefs tab, the Projects list, the notes, an empty list): the folder picker asks.
 //!
 //! In the attached view every key is Claude's: the back key (ctrl+space) to the list first, then `v`. Typed into a box, `v` is
 //! a letter (those modes never reach here).

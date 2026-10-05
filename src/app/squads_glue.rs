@@ -297,7 +297,7 @@ impl App {
         // Every squad that can be read, by name; one that has something to fix says what when it is picked.
         let pick: Vec<Squad> = self.squad_list().iter().filter_map(|l| l.squad.clone()).collect();
         if pick.is_empty() {
-            self.notify("There is no squad to hand it to: the squads' files can't be read (see the Squads tab).");
+            self.notify("There is no squad to hand it to: the squads' files can't be read (see the Briefs tab).");
             return;
         }
         self.sq.form = self.hand_form(number, &t);
@@ -506,7 +506,7 @@ impl App {
         let first_folder = self.ticket(self.sq.pick_ticket).and_then(|t| t.folders.first().cloned());
         if let Some(first) = crate::squadfile::problems(&squad, &self.agents_for(first_folder.as_deref())).into_iter().next() {
             // The popup stays open: another squad can be picked.
-            self.notify(format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name));
+            self.notify(format!("The {} squad needs fixing on the Briefs tab first: {first}", squad.name));
             return;
         }
         let number = self.sq.pick_ticket;
@@ -776,7 +776,7 @@ impl App {
                     self.make_worktrees(&project, number, squad);
                 }
                 (Some(squad), Some(first)) => {
-                    let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);
+                    let says = format!("The {} squad needs fixing on the Briefs tab first: {first}", squad.name);
                     self.not_handed(&project, number, &squad, HandoverKind::NotStarted, &says, format!("#{number} didn't start: {says}"));
                 }
                 (None, _) => {
@@ -837,12 +837,12 @@ impl App {
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &notice, notice.clone());
         }
         // What it starts with is kept beside the ticket: continued later, it runs with the squad as it is at this
-        // moment, whatever is changed on the Squads tab meanwhile.
+        // moment, whatever is changed on the Briefs tab meanwhile.
         let first_folder = self.ticket_on_disk(project, number).and_then(|t| t.folders.first().cloned());
         let agents = self.agents_for(first_folder.as_deref());
         if let Some(first) = crate::squadfile::problems(&squad, &agents).into_iter().next() {
-            // Changed on the Squads tab while it was being handed over.
-            let says = format!("The {} squad needs fixing on the Squads tab first: {first}", squad.name);
+            // Changed on the Briefs tab while it was being handed over.
+            let says = format!("The {} squad needs fixing on the Briefs tab first: {first}", squad.name);
             return self.not_handed(project, number, &squad, HandoverKind::NotStarted, &says, format!("#{number} didn't start: {says}"));
         }
         let leader_setup = LeaderSetup::load(&self.config, &self.settings.get());

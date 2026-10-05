@@ -276,7 +276,7 @@ fn draw_all(f: &mut Frame, app: &App) {
         "remove",
         "member",
         "edit the brief",
-        // A list's main key (enter on the Squads tab) goes last of all.
+        // A list's main key (enter on the Briefs tab) goes last of all.
         "details",
     ];
     // On a ticket's own screen, opening its work in the editor is one of the main things to do: it stays longer.
@@ -4194,7 +4194,7 @@ fn draw_squad_pick(f: &mut Frame, app: &App, area: Rect) {
         let mut out = vec![Line::from(vec![lead(i), mark, name])];
         if picked {
             let text = if !crate::squadfile::problems(s, &agents).is_empty() {
-                format!("Needs fixing on the Squads tab first. {}", s.can_do_line())
+                format!("Needs fixing on the Briefs tab first. {}", s.can_do_line())
             } else {
                 s.can_do_line()
             };

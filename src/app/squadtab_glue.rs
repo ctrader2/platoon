@@ -1,4 +1,4 @@
-//! The Squads tab (`4`). Its left pane switches (`←` `→`, or a click on its title) between two lists:
+//! The Briefs tab (`4`). Its left pane switches (`←` `→`, or a click on its title) between two lists:
 //! - **Squads**: built in, changed by the user, or the user's own (and an unsaved draft), the selected one's brief on
 //!   the right, as it reads and with what is wrong with it (`ui/squads_view.rs`). The brief is a file the user owns
 //!   (`squadfile.rs`, `brief.rs`): `e` opens it in the user's editor (a built-in's text is written there first) and
@@ -188,7 +188,7 @@ pub enum Drafting {
     Agent,
 }
 
-/// Everything the Squads tab keeps.
+/// Everything the Briefs tab keeps.
 pub struct SquadTab {
     /// Which list the left pane shows.
     pub view: SqView,
@@ -601,7 +601,7 @@ impl App {
 
     // ---- keys -------------------------------------------------------------------------------------------------
 
-    /// Keys on the Squads tab. Plain ↑↓ move inside a pane; on the list, plain ← → switch between the Squads and the
+    /// Keys on the Briefs tab. Plain ↑↓ move inside a pane; on the list, plain ← → switch between the Briefs and the
     /// Agents lists. Shift or Ctrl with ← and → (and Tab) move between the list and the details, as on a project's
     /// screen.
     pub(super) fn squads_tab_key(&mut self, key: KeyEvent) {
@@ -1590,7 +1590,7 @@ impl App {
     }
 }
 
-/// What is open in an editor through the Squads tab's plumbing.
+/// What is open in an editor through the Briefs tab's plumbing.
 #[derive(Clone, Debug)]
 pub enum PromptOf {
     /// An agent's system prompt (`draft`: the unsaved draft agent), in a file of its own.

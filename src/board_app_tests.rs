@@ -418,7 +418,7 @@ fn the_header_says_how_many_tasks_need_you_on_every_tab() {
     key(&mut app, KeyCode::Char('h'));
     let mut narrow = Terminal::new(TestBackend::new(60, 24)).unwrap();
     let header = draw(&mut narrow, &app).lines().next().unwrap().to_string();
-    assert!(!header.contains("need") && header.contains("4 Squads"), "{header}");
+    assert!(!header.contains("need") && header.contains("4 Briefs"), "{header}");
 }
 
 #[test]

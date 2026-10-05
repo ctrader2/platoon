@@ -227,7 +227,7 @@ fn version_line() -> String {
     format!("platoon {}", versions::running())
 }
 
-const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | ticket add | ticket list | ticket where |
+const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task where |
                squads --kinds | themes | tokens | uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
@@ -238,13 +238,13 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   stops two copies of one session from overwriting each other, and two hooks
                   that hand a project's notes to its sessions and keep them up to date
   setup --remove to-tickets   take out the /to-tickets skill an earlier platoon installed
-  ticket add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
+  task add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
                   [--folder <path>... | --no-folder] [--waits-for <number>]...
-                  make a ticket in that project and print its number (#N); with no --folder it
+                  make a task in that project and print its number (#N); with no --folder it
                   works in the current folder (--no-folder: none). --from-session: in the project
-                  that session belongs to, and the ticket shows where it came from
-  ticket list [--project <name>] [--json]   the tickets, open ones first
-  ticket where --session <id>   the project a session belongs to (exit 1 when none)
+                  that session belongs to, and the task shows where it came from
+  task list [--project <name>] [--json]   the tasks, open ones first
+  task where --session <id>   the project a session belongs to (exit 1 when none)
   squads --kinds [--json]   each squad's name and what it can do
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
@@ -563,6 +563,15 @@ fn hand_over(terminal: &mut ratatui::DefaultTerminal, app: &mut app::App, launch
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_usage_text_names_tasks_not_tickets() {
+        assert!(USAGE.contains("task add | task list | task where"), "{USAGE}");
+        assert!(!USAGE.contains("ticket add") && !USAGE.contains("ticket list") && !USAGE.contains("ticket where"), "{USAGE}");
+        assert!(
+            USAGE.contains("  task add (--project") && USAGE.contains("  task list [--project") && USAGE.contains("  task where --session")
+        );
+    }
     use crate::app::{Action, AdoptKind, App, Confirm, Hit, JumpPlan, Mode};
     use crate::model::Status;
     use crate::testkit::{World, alive};
@@ -724,7 +733,7 @@ mod tests {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
         }
         assert!(
-            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"),
+            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"),
             "{text}"
         );
         // Working then finished while unseen -> "done".
@@ -894,7 +903,7 @@ mod tests {
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
         assert!(
-            shown.contains("1 Sessions 2 Tasks 3 Projects 4 Squads ")
+            shown.contains("1 Sessions 2 Tasks 3 Projects 4 Briefs ")
                 && !shown.contains("Plugins")
                 && shown.contains("Active 2 Archived 1"),
             "{shown}"
@@ -2066,7 +2075,7 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{shown}");
+        assert!(flat(&shown).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{shown}");
         let rule = shown.lines().nth(1).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
@@ -2106,8 +2115,8 @@ mod tests {
         let cells = row_cells(&term, 0);
         let header: String = cells.iter().map(|c| c.symbol()).collect();
         // The counts are on the Active/Archived switch under them, so the tabs are just a key and a name.
-        assert!(header.contains("1 Sessions   2 Tasks   3 Projects   4 Squads"), "{header}");
-        for (key, name) in [("1", "1 Sessions"), ("2", "2 Tasks"), ("3", "3 Projects"), ("4", "4 Squads")] {
+        assert!(header.contains("1 Sessions   2 Tasks   3 Projects   4 Briefs"), "{header}");
+        for (key, name) in [("1", "1 Sessions"), ("2", "2 Tasks"), ("3", "3 Projects"), ("4", "4 Briefs")] {
             let at = cell_index(&cells, name);
             let hint = if cells[at].bg == t.surface { t.readable_on(t.subtext, t.surface, crate::theme::MIN_SUBTEXT) } else { t.subtext };
             assert_eq!((cells[at].symbol(), cells[at].fg), (key, hint), "{name}: the key reads as a hint, current or not");
@@ -2224,7 +2233,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
             let header = shown.lines().next().unwrap();
-            assert!(flat(header).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{cols}: {header}");
+            assert!(flat(header).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{cols}: {header}");
             assert!(!header.contains("1234") && !header.contains("5678"), "{cols}: no counts in the tabs: {header}");
             assert!(flat(shown.lines().nth(1).unwrap()).contains("Active 1234 Archived 3"), "{cols}: the counts are on the rule: {shown}");
             assert!(
@@ -2237,7 +2246,7 @@ mod tests {
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
         let header = draw(&mut term, &app).lines().next().unwrap().to_string();
-        assert!(flat(&header).contains("1 Sessions 2 Tasks 3 Projects 4 Squads"), "{header}");
+        assert!(flat(&header).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{header}");
     }
 
     #[test]
