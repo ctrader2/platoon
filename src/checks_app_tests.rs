@@ -602,3 +602,209 @@ fn a_task_whose_tests_still_fail_needs_you_for_that_on_the_board_and_y_answers_i
     key(&mut app, KeyCode::Char('y'));
     assert_eq!(app.active_notice(), Some("#2's squad is running again: type your answer in its session."));
 }
+
+// ---- the brief's own checks: the change read, the acceptance boxes ---------------------------------------------------
+
+/// A leader transcript where the builder made the change after the reviewer last looked (`reviewed_last`: the
+/// reviewer ran again after it).
+fn leader_lines(reviewed_last: bool) -> Vec<String> {
+    let start = crate::testkit::now_ms() - 3_600_000;
+    let call = |c: &str, agent: &str, at: u64| {
+        json!({"type":"assistant","timestamp":crate::testkit::iso(at),"message":{"id":format!("m-{c}"),"content":[{"type":"tool_use","id":c,"name":"Agent","input":{"subagent_type":agent,"description":"go","prompt":"go"}}],"usage":{"input_tokens":1,"output_tokens":1}}}).to_string()
+    };
+    let done = |c: &str, at: u64| {
+        json!({"type":"user","timestamp":crate::testkit::iso(at),"message":{"content":[{"tool_use_id":c,"type":"tool_result","content":"done"}]}}).to_string()
+    };
+    let mut lines = vec![json!({"type":"agent-setting","agentSetting":"coding-leader","timestamp":crate::testkit::iso(start)}).to_string()];
+    lines.extend([call("c1", "coding-builder", start + 1_000), done("c1", start + 60_000)]);
+    lines.extend([call("c2", "coding-reviewer", start + 70_000), done("c2", start + 90_000)]);
+    lines.extend([call("c3", "coding-builder", start + 100_000), done("c3", start + 160_000)]);
+    if reviewed_last {
+        lines.extend([call("c4", "coding-reviewer", start + 170_000), done("c4", start + 200_000)]);
+    }
+    lines
+}
+
+/// "Web shop" without a test command, #1 handed to Coding with a brief whose checks are the reviewer reading the
+/// change and the acceptance boxes (in its snapshot); its leader `L1` has just asked to close it, with `result` above
+/// that question, and its checks are due.
+fn brief_world(name: &str, reviewed_last: bool, result: &str) -> (World, App, String) {
+    let w = World::new(name);
+    w.transcript("user-1", "/tmp", "make a shop", 10);
+    w.transcript_lines("L1", &leader_lines(reviewed_last));
+    let mut app = w.app();
+    let web = app.projects.create("Web shop").unwrap();
+    let mut squad = crate::squadfile::builtin("coding").unwrap();
+    squad.checks = vec!["the reviewer read the change".into(), "every acceptance box is ticked, with how".into()];
+    let launch = crate::squads::Launch::of(
+        &crate::squadfile::Crew::of(&squad, &crate::agentfile::builtins()),
+        &crate::squads::LeaderSetup::builtin(),
+        crate::tickets::AgentNames::SquadRole,
+        crate::squads::Place::WORKTREE,
+        &crate::squads::Terms::default(),
+    );
+    let mut store = Tickets::open(&w.config, &web);
+    let n = store
+        .add(crate::tickets::NewTicket {
+            title: "Basket".into(),
+            body: Some(
+                "## What it should do\n\nA basket.\n\n## Acceptance\n\n- [ ] The basket shows its total\n- [ ] An empty basket says so\n"
+                    .into(),
+            ),
+            ..Default::default()
+        })
+        .unwrap();
+    let snap = store.save_snapshot(n, 1, &launch.to_json()).unwrap();
+    let leader = crate::tickets::Leader {
+        squad: "coding".into(),
+        session: "L1".into(),
+        started: 1,
+        names: crate::tickets::AgentNames::SquadRole,
+        snapshot: Some(snap),
+    };
+    store.start_leader(n, &leader, &[]).unwrap();
+    store.squad_says(n, &State::Waiting, "Asks: Shall I close this task?", None).unwrap();
+    store.keep_result(n, result).unwrap();
+    store.mark_check_due(n, "close", 1_000).unwrap();
+    app.reload_for_test();
+    app.notice = None;
+    (w, app, web)
+}
+
+const TICKED: &str =
+    "Made the basket.\n\n- [x] The basket shows its total: a test adds two items\n- [x] An empty basket says so: seen by hand\n";
+
+#[test]
+fn a_change_the_reviewer_hasnt_read_is_typed_into_the_squads_session_once_then_the_task_needs_you() {
+    let (w, mut app, web) = brief_world("ck-review", false, TICKED);
+    let squad = Squad::new(&w, 1);
+    settle(&mut app, &w, &web, std::slice::from_ref(&squad.host));
+    let typed = squad.typed();
+    assert!(
+        typed.contains("Your brief asks that the reviewer read the change after the last change; it hasn't since the builder's last run."),
+        "{typed}"
+    );
+    assert!(!typed.contains("acceptance"), "the boxes are ticked: only what failed is said: {typed}");
+    let t = task(&w, &web);
+    assert_eq!((&t.state, t.reason.as_str(), t.check_failing.as_ref()), (&State::Working, "", None), "{t:?}");
+    let kinds: Vec<(&str, bool)> = t.checks.iter().map(|c| (c.kind.as_str(), c.ok)).collect();
+    assert_eq!(kinds, [("review", false), ("acceptance", true)], "both made, no tests (no command)");
+    assert_eq!(
+        app.active_notice(),
+        Some("#1: the change wasn't read (reviewer hasn't run since builder's last change). platoon told its squad, which is on it.")
+    );
+    // It stops again without having the reviewer read it: told once already, so the user is.
+    stops_again(&w, &web, 2_000);
+    let squad = Squad::new(&w, 2);
+    settle(&mut app, &w, &web, std::slice::from_ref(&squad.host));
+    assert!(squad.nothing_typed());
+    let t = task(&w, &web);
+    assert_eq!(
+        (&t.state, t.reason.as_str(), t.check_failing.as_deref()),
+        (&State::Waiting, checks::still_fails(checks::REVIEW).as_str(), Some("review"))
+    );
+    // On the board: a check failing, in platoon's words; y answers the squad.
+    key(&mut app, KeyCode::Char('2'));
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("#1 Basket a check failing"), "{f}");
+    assert!(f.contains("platoon: the change still wasn't read"), "{f}");
+}
+
+#[test]
+fn a_result_that_doesnt_tick_every_acceptance_box_names_the_boxes_once_then_needs_you() {
+    let (w, mut app, web) = brief_world("ck-boxes", true, "Made the basket.\n\n- [x] The basket shows its total: a test adds two items\n");
+    let squad = Squad::new(&w, 1);
+    settle(&mut app, &w, &web, std::slice::from_ref(&squad.host));
+    let typed = squad.typed();
+    assert!(
+        typed.contains("Your brief asks that every acceptance box is ticked, with how. Not ticked in your result, with how it was shown:\n\n- [ ] An empty basket says so\n"),
+        "{typed}"
+    );
+    let t = task(&w, &web);
+    let kinds: Vec<(&str, bool)> = t.checks.iter().map(|c| (c.kind.as_str(), c.ok)).collect();
+    assert_eq!(kinds, [("review", true), ("acceptance", false)]);
+    assert_eq!(t.state, State::Working);
+    stops_again(&w, &web, 2_000);
+    let squad = Squad::new(&w, 2);
+    settle(&mut app, &w, &web, std::slice::from_ref(&squad.host));
+    assert!(squad.nothing_typed());
+    let t = task(&w, &web);
+    assert_eq!((t.reason.as_str(), t.check_failing.as_deref()), (checks::still_fails(checks::ACCEPTANCE).as_str(), Some("acceptance")));
+    // Ticked at last, read last: they pass, and the task is as the leader left it.
+    Tickets::open(&w.config, &web).keep_result(1, TICKED).unwrap();
+    stops_again(&w, &web, 3_000);
+    settle(&mut app, &w, &web, std::slice::from_ref(&squad.host));
+    let t = task(&w, &web);
+    assert_eq!((&t.state, t.reason.as_str(), t.check_failing.as_ref()), (&State::Waiting, "Asks: Shall I close this task?", None));
+    assert_eq!(app.active_notice(), Some("#1's checks passed."));
+}
+
+#[test]
+fn a_tasks_screen_shows_each_check_of_its_brief_in_its_colour() {
+    let (w, mut app, web) = brief_world("ck-brief-screen", false, TICKED);
+    // Another window holds the squad line: nothing is checked here; the results are written as if it had.
+    let _lock = another_window_holds_the_line(&w.config);
+    let mut store = Tickets::open(&w.config, &web);
+    let of = |kind: &str, ok: bool, summary: &str| crate::tickets::CheckRun {
+        kind: kind.into(),
+        ok,
+        summary: summary.into(),
+        at: crate::usage::now() - 120,
+        attempt: 1,
+        ..Default::default()
+    };
+    store
+        .record_checks(
+            1,
+            1_000,
+            &[of("review", false, "reviewer hasn't run since builder's last change"), of("acceptance", true, "2 of 2 ticked, with how")],
+            false,
+        )
+        .unwrap();
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Enter);
+    key(&mut app, KeyCode::Tab);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.tk.open, Some(1));
+    let t = app.effective_theme().clone();
+    for (wide, high) in [(120u16, 40u16), (80, 24)] {
+        let mut term = Terminal::new(TestBackend::new(wide, high)).unwrap();
+        let shown = draw(&mut term, &app);
+        let side = left(&shown);
+        assert!(side.contains("Squad Coding brief Tests none set for this project"), "{wide}: {shown}");
+        assert!(side.contains("Review ✗ reviewer hasn't run since builder's last change"), "{wide}: {shown}");
+        assert!(side.contains("Acceptance ✓ 2 of 2 ticked, with how · at "), "{wide}: {shown}");
+        assert_eq!(fg_on(&term, "Review", "✗"), t.warn, "{wide}");
+        assert_eq!(fg_on(&term, "Acceptance", "✓"), t.ok, "{wide}");
+        assert_eq!(fg_on(&term, "Review", "Review"), t.dim, "{wide}: the label");
+        assert!(
+            side.contains("platoon says The change wasn't read after its last change; the squad's session isn't running"),
+            "{wide}: {shown}"
+        );
+    }
+}
+
+#[test]
+fn the_tests_line_at_120_columns_never_splits_the_command() {
+    let (_w, mut app, web, _docs, _lock) = screens_world("ck-wrap");
+    app.projects.set_test_command(&web, "npm test").unwrap();
+    let path = crate::tickets::path_in(&app.config, &web);
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let mut c = check(true, 1, "214 passed");
+    c["command"] = json!("npm test");
+    v["tickets"][0]["checks"] = json!([c]);
+    fs::write(&path, v.to_string()).unwrap();
+    app.reload_for_test();
+    app.bd.selected = Some(crate::app::BRow::Task(web.clone(), 1));
+    for wide in 100..=130u16 {
+        let mut term = Terminal::new(TestBackend::new(wide, 40)).unwrap();
+        let shown = draw(&mut term, &app);
+        let rows: Vec<&str> = shown.lines().filter(|l| l.contains("`npm") || l.contains("test`")).collect();
+        assert!(!rows.is_empty(), "{wide}: {shown}");
+        for r in rows {
+            assert!(r.contains("`npm test`"), "{wide}: the backtick pair stays on one line: {r}");
+        }
+    }
+}

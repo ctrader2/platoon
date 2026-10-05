@@ -73,6 +73,15 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
         out.push(Entry::Note(
             "Tests: when a squad says it is finished, platoon runs the project's test command itself (T on the project's screen sets it). A failure goes back to the squad twice at most, then to you.".into(),
         ));
+        out.push(Entry::Note(
+            "Checks: a squad's brief may also ask that an agent read the change and that every acceptance box be ticked, with how. platoon checks both at the same moments; a failure goes back to the squad once, then to you.".into(),
+        ));
+    }
+    // On the Squads tab: what a brief is.
+    if app.squads_tab_showing() {
+        out.push(Entry::Note(
+            "A squad is a brief: a Markdown file of yours with what it does, its steps, its checks and when it asks you. e opens it in your editor; platoon reads it again when you are done.".into(),
+        ));
     }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.

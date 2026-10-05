@@ -305,7 +305,7 @@ fn enter_writes_the_terms_on_the_task_before_the_commander_and_the_leader_gets_t
     key(&mut app, KeyCode::Enter);
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("Squad Coding brief Tests none set for this project On its own works and publishes Works in shop, on a new branch task/1 · lands on release"),
+        f.contains("Squad Coding brief Tests none set for this project Review not checked yet · reviewer is to read the change Acceptance not checked yet · every box ticked, with how Publishing you let it publish on its own On its own works and publishes"),
         "{f}"
     );
     assert!(f.contains("Its own folder"), "{f}");
@@ -343,7 +343,9 @@ fn a_copy_is_made_from_the_branch_the_work_lands_on_and_the_screen_says_so() {
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let f = flat(&shown);
-    assert!(f.contains("On its own asks before anything others can see"), "{f}");
+    // The task's side of the screen alone (the squad's session is beside it).
+    let task_side = flat(&shown.lines().map(|l| l.split('│').next().unwrap_or_default()).collect::<Vec<_>>().join("\n"));
+    assert!(task_side.contains("On its own asks before anything others can see"), "{task_side}");
     assert!(f.contains("Works in a copy of shop (task/1) · lands on develop"), "{f}");
     assert!(f.contains("shop-worktrees/task-1"), "the copy's path under it: {f}");
     let t = app.effective_theme().clone();

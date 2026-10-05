@@ -1024,7 +1024,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
     // What the squad said when it stopped: its question, why it is stuck, what it wants to publish. (Or platoon's own
     // words, when the tests fail.)
     if !x.reason.is_empty() {
-        let who = if x.tests_failing { "platoon says" } else { "Squad says" };
+        let who = if x.tests_failing || x.check_failing.is_some() { "platoon says" } else { "Squad says" };
         for (i, l) in wrap(&x.reason, w.saturating_sub(LABEL)).into_iter().enumerate() {
             head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
@@ -1049,11 +1049,21 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             head.push(Line::from(vec![label(""), Span::styled("you let it publish", Style::new().fg(t.warn))]));
         }
     }
-    // What its tests said when platoon last ran them (or that its project has none), wrapped under itself.
+    // What its tests said when platoon last ran them (or that its project has none), wrapped under itself; then its
+    // brief's other checks, each the same way.
     for (k, row) in tasks_view::tests_rows(app, &app.task_scope().unwrap_or_default(), x, w.saturating_sub(LABEL)).into_iter().enumerate() {
         let mut line = vec![label(if k == 0 { "Tests" } else { "" })];
         line.extend(row);
         head.push(Line::from(line));
+    }
+    if x.leader().is_some() {
+        for (name, wrapped) in tasks_view::check_rows(app, x, w.saturating_sub(LABEL)) {
+            for (k, row) in wrapped.into_iter().enumerate() {
+                let mut line = vec![label(if k == 0 { name } else { "" })];
+                line.extend(row);
+                head.push(Line::from(line));
+            }
+        }
     }
     let room = w.saturating_sub(LABEL);
     // A label, then its words wrapped under themselves (never cut mid-word).

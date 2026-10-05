@@ -409,10 +409,14 @@ Cancelled, it is stopped like any idle session.
 
 ### Checks
 
-A squad says when it is finished, and it can be wrong. When the task's project has a [test command](projects.md#the-test-command)
-(`cargo test`, `npm test`, `make check`: whatever tests your code), **platoon runs it itself** each time the squad stops at
-the end of the work: when its leader asks "Shall I close this task?", wants to publish, or is done. Nothing else the squad
-says starts it, and a task outside a project, or in a project without a test command, has no test check.
+A squad says when it is finished, and it can be wrong. Its [brief's](#a-squads-brief) **Checks** say what platoon checks
+itself each time the squad stops at the end of the work (when its leader asks "Shall I close this task?", wants to publish,
+or is done; nothing else the squad says starts them): the tests, an agent reading the change, the acceptance boxes. The
+checks are the ones the brief had when its leader started; a squad started before briefs has the test check alone.
+
+**The tests pass.** When the task's project has a [test command](projects.md#the-test-command) (`cargo test`, `npm test`,
+`make check`: whatever tests your code), **platoon runs it itself**. A task outside a project, or in a project without a
+test command, has no test check (its Tests line says "none set for this project").
 
 - **Where**: in the folder the squad works in: the task's copy of its first folder in git, or your own checkout when the
   task works on a new branch there, and then only while that checkout is still on the task's branch (else it isn't run,
@@ -438,6 +442,32 @@ says starts it, and a task outside a project, or in a project without a test com
 - A task you have written to meanwhile (it is Working again), or that its squad has stopped again since, keeps the
   result, and platoon types nothing.
 
+**<agent> read the change** (say, "the reviewer read the change"). platoon reads the squad's session (as it does for
+the timeline) and checks that the agent ran after the last run of any agent that can change files ("reviewer ran after
+builder's last change"; when nothing was changed there is nothing to read, and it passes). When it didn't, platoon types
+one message into the squad's session as a message from you: "Your brief asks that the reviewer read the change after the
+last change; it hasn't since the builder's last run." The task goes back to **Working**. That happens **once**: when the
+squad stops again without it, the task **Needs you** ("The change still wasn't read after the squad was told once").
+
+**Every acceptance box is ticked, with how.** The task's text lists its acceptance checks as boxes (`- [ ] ...` under
+**Acceptance**); the squad's result (what it says above its last line when it asks to close the task, wants to publish or
+is done: platoon keeps it as the task's result) must list each one ticked, with how it was shown: `- [x] The basket
+shows its total: a test adds two items`. The words are matched loosely (case, punctuation, a word or two). When one is
+missing, or has no "how", platoon types one message naming the boxes not ticked, and the task goes back to **Working**;
+**once**, then the task **Needs you** ("Not every acceptance box is ticked after the squad was told once"). A task with no
+boxes passes.
+
+**Nothing others see without your yes** is the gate platoon always keeps (see
+[Anything other people can see asks you first](#anything-other-people-can-see-asks-you-first)): it never fails. Any other
+line of a brief's Checks is one the squad checks itself: its leader is reminded of it, and the task's screen lists them.
+
+When several fail at one stop, the squad gets them in one message; when one of them needs you, you are told rather than
+the squad. On the Tasks tab a task that needs you for one says **a check failing** (**tests failing** for the tests), and
+its screen says what platoon said (**platoon says**). With the squad's session not running, nothing is typed: the task
+needs you at once.
+
+The rest of this section is about the tests.
+
 What you see: the task's **Tests** line, beside the Tasks tab and on its screen, says what the last run said, in one line:
 
 | It says | When |
@@ -454,6 +484,12 @@ What you see: the task's **Tests** line, beside the Tasks tab and on its screen,
 On the Tasks tab, a task whose tests still fail after the squad's two tries says **tests failing** at the right of its row;
 `y` answers its squad as for a question (to tell it what to do about them), and its screen says what platoon said
 (**platoon says** The tests still fail after the squad tried twice).
+
+Under the Tests line, beside the Tasks tab and on the task's screen, a line for each of its brief's other checks: **Review**
+("✓ reviewer ran after builder's last change", "✗ reviewer hasn't run since builder's last change · the squad is on it",
+or "not checked yet"), **Acceptance** ("✓ 2 of 2 ticked, with how", "✗ 1 of 2 ticked; not ticked: ..."), **Publishing**
+("held by platoon: nothing others see without your yes", or "you let it publish on its own") and **Its own checks** (the
+brief's other lines, which the squad checks itself).
 
 ### The plan step
 

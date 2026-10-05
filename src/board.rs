@@ -7,6 +7,7 @@
 //! has it and what it needs from the user, in the squad's own words where it has some. Pure: the app hands it the
 //! tasks, what the squads' transcripts said and which sessions run.
 
+use crate::brief::CheckKind;
 use crate::claude::LeaderLog;
 use crate::squadwork;
 use crate::tickets::{self, State, Ticket};
@@ -67,6 +68,9 @@ pub enum Need {
     Plan,
     /// Its tests fail, and the squad has had its tries (or its session isn't running to be told).
     Tests,
+    /// Another check of its brief fails (the change wasn't read, an acceptance box isn't ticked), and the squad was
+    /// told once already (or its session isn't running to be told).
+    Check,
 }
 
 impl Need {
@@ -79,6 +83,7 @@ impl Need {
             Need::Permission => "your OK on a command",
             Need::Plan => "a plan to approve",
             Need::Tests => "tests failing",
+            Need::Check => "a check failing",
         }
     }
 
@@ -91,6 +96,7 @@ impl Need {
             Need::Permission => "The squad waits for your OK",
             Need::Plan => "The plan",
             Need::Tests => "The tests fail",
+            Need::Check => "A check fails",
         }
     }
 }
@@ -105,6 +111,8 @@ pub fn need_of(t: &Ticket) -> Option<Need> {
         Need::Permission
     } else if t.tests_failing {
         Need::Tests
+    } else if t.check_failing.is_some() {
+        Need::Check
     } else if t.plan_ready {
         Need::Plan
     } else if t.publish_wanted {
@@ -125,6 +133,12 @@ pub fn squad_words(t: &Ticket) -> String {
     }
     if t.plan_ready {
         return "wrote its plan: y goes ahead, n changes it".into();
+    }
+    // platoon's words, not the squad's: what a check of its brief found.
+    if t.check_failing.is_some() {
+        let mut c = r.chars();
+        let lower = c.next().map(|x| x.to_lowercase().collect::<String>() + c.as_str()).unwrap_or_default();
+        return format!("platoon: {lower}");
     }
     // platoon's words, not the squad's: what the tests did.
     if t.tests_failing {
@@ -384,6 +398,49 @@ pub fn tests_line(t: &Ticket, command: &str, clock: &dyn Fn(u64) -> String) -> V
         ],
         Some(c) => vec![piece("failed", Tone::Warn), piece(format!(" · {}", c.summary), Tone::Dim), ran(c)],
     }
+}
+
+/// A task's lines for its brief's checks other than the tests (`tests_line` has those), each with its label: an agent
+/// reading the change ("Review"), the acceptance boxes ("Acceptance"), the gate ("Publishing") and the squad's own
+/// ("Its own checks"). `checks`: the brief's checks when its leader started (none for a leader from before briefs).
+/// `clock` says a time of day.
+pub fn check_lines(t: &Ticket, checks: &[(String, CheckKind)], clock: &dyn Fn(u64) -> String) -> Vec<(&'static str, Vec<Piece>)> {
+    use crate::checks::{ACCEPTANCE, REVIEW, fixes_for};
+    let at = |c: &tickets::CheckRun| {
+        let at = clock(c.at);
+        piece(if at.is_empty() { String::new() } else { format!(" · at {at}") }, Tone::Dim)
+    };
+    let result = |kind: &str, waiting: String| -> Vec<Piece> {
+        if t.check_due.is_some() {
+            return vec![piece("checking…", Tone::Busy)];
+        }
+        match t.checks.iter().rev().find(|c| c.kind == kind) {
+            None => vec![piece(waiting, Tone::Dim)],
+            Some(c) if c.ok => vec![piece(format!("✓ {}", c.summary), Tone::Ok), at(c)],
+            Some(c) if t.state == State::Working && c.attempt <= fixes_for(kind) => {
+                vec![piece(format!("✗ {}", c.summary), Tone::Warn), piece(" · the squad is on it", Tone::Dim)]
+            }
+            Some(c) => vec![piece(format!("✗ {}", c.summary), Tone::Warn), at(c)],
+        }
+    };
+    let mut out = Vec::new();
+    let mut own: Vec<&str> = Vec::new();
+    for (line, kind) in checks {
+        match kind {
+            CheckKind::Read(a) => out.push(("Review", result(REVIEW, format!("not checked yet · {a} is to read the change")))),
+            CheckKind::Acceptance => out.push(("Acceptance", result(ACCEPTANCE, "not checked yet · every box ticked, with how".into()))),
+            CheckKind::Gate if t.autonomy().publishes() => {
+                out.push(("Publishing", vec![piece("you let it publish on its own", Tone::Warn)]))
+            }
+            CheckKind::Gate => out.push(("Publishing", vec![piece("held by platoon: nothing others see without your yes", Tone::Subtext)])),
+            CheckKind::Prose => own.push(line.trim()),
+            CheckKind::Tests => {}
+        }
+    }
+    if !own.is_empty() {
+        out.push(("Its own checks", vec![piece(own.join("; "), Tone::Subtext), piece(" · the squad checks these itself", Tone::Dim)]));
+    }
+    out
 }
 
 /// One task's row in `section`.

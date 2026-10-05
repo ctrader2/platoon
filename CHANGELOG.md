@@ -18,6 +18,18 @@ here.
   them, and `c` copies one into platoon's own to change it.
 - A task's screen names its squad by its brief ("Coding brief").
 
+### Added
+
+- **Checks from the brief**: besides the project's tests, a brief can ask that an agent read the change ("the reviewer
+  read the change": platoon checks that agent ran after the last change) and that every acceptance box is ticked, with
+  how (in the squad's result). platoon checks them when the squad says it is finished; a failure is typed into the
+  squad's session once, then the task needs you. Other lines are the squad's own, and its leader is reminded of them. A
+  task's screen shows a line for each.
+
+### Fixed
+
+- The Tests line beside the Tasks tab no longer breaks a command such as `npm test` across two lines.
+
 ## [1.0.0] - unreleased
 
 <!-- "unreleased" becomes the date (YYYY-MM-DD) in the commit that is tagged v1.0.0. -->

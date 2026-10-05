@@ -518,6 +518,9 @@ pub struct Ticket {
     pub checks: Vec<CheckRun>,
     /// Needs you because the tests fail and the squad can't be told, or still fail after its tries (`checks.rs`).
     pub tests_failing: bool,
+    /// Needs you because another check of the brief's fails (its kind: `review`, `acceptance`) and the squad can't be
+    /// told, or was told once already.
+    pub check_failing: Option<String>,
 }
 
 /// A task the user put aside while it needed them: its `updated` time and what the squad had said, as they were then.
@@ -571,8 +574,16 @@ pub struct CheckRun {
     pub skipped: bool,
 }
 
-/// How many checks a task keeps.
+/// How many checks of each kind a task keeps.
 pub const CHECKS_KEPT: usize = 5;
+
+/// What came of recording a stop's checks (`Tickets::record_checks`): what it does to the task, and the kinds of check
+/// the squad is to fix (typed into its session).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recorded {
+    pub then: CheckThen,
+    pub fix: Vec<String>,
+}
 
 /// What a finished check does to its task (`Tickets::record_check`).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -824,6 +835,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
         }),
         checks: o.get("checks").and_then(Value::as_array).map(|a| a.iter().filter_map(check_from).collect()).unwrap_or_default(),
         tests_failing: o.get("tests_failing").and_then(Value::as_bool).unwrap_or(false),
+        check_failing: o.get("check_failing").and_then(Value::as_str).filter(|k| !k.is_empty()).map(String::from),
     })
 }
 
@@ -1196,6 +1208,7 @@ impl Tickets {
             t.remove("handover");
             t.remove("permission");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             // Any state the user picks takes it out of the line for a free squad.
             t.remove("queued");
@@ -1245,6 +1258,7 @@ impl Tickets {
             t.remove("permission");
             t.remove("go_ahead");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             Ok(())
         })
@@ -1300,6 +1314,7 @@ impl Tickets {
             t.remove("plan_ready");
             t.remove("permission");
             t.remove("tests_failing");
+            t.remove("check_failing");
             // A check of the stop the user has just answered: its result is kept when it comes, but nothing is typed.
             t.remove("check_due");
             if !keeps_go_ahead(&state, wanted) {
@@ -1362,6 +1377,7 @@ impl Tickets {
             t.remove("handover");
             t.remove("permission");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             Ok(())
         })
@@ -1495,6 +1511,7 @@ impl Tickets {
             t.remove("plan_ready");
             t.remove("permission");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             Ok(())
         })
@@ -1506,11 +1523,16 @@ impl Tickets {
         (!text.trim().is_empty()).then_some(text)
     }
 
+    /// Keep `text` as task `number`'s result (`<NN>-result.md`): what its squad says it has done.
+    pub fn keep_result(&mut self, number: u32, text: &str) -> io::Result<()> {
+        let dir = bodies_dir(&self.config, &self.project);
+        fs::create_dir_all(&dir)?;
+        write_atomic(&dir.join(result_file(number)), &format!("{}\n", text.trim_end()))
+    }
+
     fn squad_said(&mut self, number: u32, state: &State, reason: &str, wants: Wants, result: Option<&str>) -> io::Result<()> {
         if let Some(text) = result {
-            let dir = bodies_dir(&self.config, &self.project);
-            fs::create_dir_all(&dir)?;
-            write_atomic(&dir.join(result_file(number)), &format!("{}\n", text.trim_end()))?;
+            self.keep_result(number, text)?;
         }
         let waiting = *state == State::Waiting;
         let publish_wanted = wants == Wants::Publish && waiting;
@@ -1536,6 +1558,7 @@ impl Tickets {
             t.remove("permission");
             t.remove("queued");
             t.remove("tests_failing");
+            t.remove("check_failing");
             // A new stop: a check of an earlier one is moot (the hook marks a new one when this stop is at the end of
             // the work).
             t.remove("check_due");
@@ -1561,6 +1584,7 @@ impl Tickets {
             t.remove("permission");
             t.remove("go_ahead");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             Ok(())
         })
@@ -1598,6 +1622,7 @@ impl Tickets {
             t.remove("plan_ready");
             t.remove("permission");
             t.remove("tests_failing");
+            t.remove("check_failing");
             t.remove("check_due");
             Ok(())
         })
@@ -1634,24 +1659,35 @@ impl Tickets {
         }
     }
 
-    /// A check of the stop marked at `due_at` has a result (`run`): it is kept on the task (the last `CHECKS_KEPT`),
-    /// the mark goes, and what it means for the task is decided from the task as it is now, under the lock
-    /// (`checks::then`): when the task is still at that stop, a failure makes it Working for the squad to fix
-    /// (`can_type`: its session can be told) or Needs you. A task the user has written to since, or that stopped again,
-    /// keeps the result only.
+    /// A check of the stop marked at `due_at` has a result (`run`): see `record_checks`.
+    #[cfg(test)]
     pub fn record_check(&mut self, number: u32, due_at: u64, run: &CheckRun, can_type: bool) -> io::Result<CheckThen> {
-        let mut entry = json!({
-            "kind": run.kind, "ok": run.ok, "summary": run.summary, "command": run.command, "at": run.at,
-            "folder": run.folder, "try": run.attempt,
-        });
-        if run.skipped
-            && let Some(o) = entry.as_object_mut()
-        {
-            o.insert("skipped".into(), json!(true));
-        }
+        self.record_checks(number, due_at, std::slice::from_ref(run), can_type).map(|r| r.then)
+    }
+
+    /// The checks of the stop marked at `due_at` have results (`runs`): they are kept on the task (the last
+    /// `CHECKS_KEPT` of each kind), the mark goes, and what they mean for the task is decided from the task as it is now,
+    /// under the lock (`checks::then_for`, each kind its own tries): when the task is still at that stop, a failure the
+    /// user needs to know of makes it Needs you (the first one's words); else a failure the squad is to fix makes it
+    /// Working (`can_type`: its session can be told), and `Recorded::fix` says which. A task the user has written to
+    /// since, or that stopped again, keeps the results only.
+    pub fn record_checks(&mut self, number: u32, due_at: u64, runs: &[CheckRun], can_type: bool) -> io::Result<Recorded> {
+        let entries: Vec<(Value, String, bool, u32)> = runs
+            .iter()
+            .map(|run| {
+                let mut entry = json!({
+                    "kind": run.kind, "ok": run.ok, "summary": run.summary, "command": run.command, "at": run.at,
+                    "folder": run.folder, "try": run.attempt,
+                });
+                if run.skipped
+                    && let Some(o) = entry.as_object_mut()
+                {
+                    o.insert("skipped".into(), json!(true));
+                }
+                (entry, run.kind.clone(), !run.ok && !run.skipped, run.attempt)
+            })
+            .collect();
         let now = now_secs();
-        let failed = !run.ok && !run.skipped;
-        let attempt = run.attempt;
         self.change(move |root, _| {
             let t = task_mut(root, number)?;
             let list = match t.get_mut("checks").and_then(Value::as_array_mut) {
@@ -1661,36 +1697,63 @@ impl Tickets {
                     t.get_mut("checks").and_then(Value::as_array_mut).ok_or("checks")?
                 }
             };
-            list.push(entry);
-            let extra = list.len().saturating_sub(CHECKS_KEPT);
-            list.drain(..extra);
+            for (entry, ..) in &entries {
+                list.push(entry.clone());
+            }
+            // The last `CHECKS_KEPT` of each kind: a kind's tries are counted back through them.
+            let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+            let mut keep = vec![true; list.len()];
+            for (i, c) in list.iter().enumerate().rev() {
+                let kind = c.get("kind").and_then(Value::as_str).unwrap_or_default().to_string();
+                let n = seen.entry(kind).or_default();
+                *n += 1;
+                keep[i] = *n <= CHECKS_KEPT;
+            }
+            let mut k = 0;
+            list.retain(|_| {
+                k += 1;
+                keep[k - 1]
+            });
             let ours = t.get("check_due").and_then(|c| c.get("at")).and_then(Value::as_u64) == Some(due_at);
             if ours {
                 t.remove("check_due");
             }
             let state = State::from_id(t.get("state").and_then(Value::as_str).unwrap_or("new"));
             let still = ours && matches!(state, State::Waiting | State::Done);
-            let then = crate::checks::then(failed, attempt, still, can_type);
-            match &then {
-                CheckThen::Keep => {}
-                CheckThen::Fix => {
-                    t.insert("state".into(), json!(State::Working.id()));
-                    for k in ["reason", "publish_wanted", "plan_ready", "permission", "tests_failing", "go_ahead"] {
-                        t.remove(k);
-                    }
-                    t.insert("updated".into(), json!(now));
-                }
-                CheckThen::NeedsYou(why) => {
-                    t.insert("state".into(), json!(State::Waiting.id()));
-                    t.insert("reason".into(), json!(why));
+            let thens: Vec<(String, CheckThen)> = entries
+                .iter()
+                .map(|(_, kind, failed, attempt)| (kind.clone(), crate::checks::then_for(kind, *failed, *attempt, still, can_type)))
+                .collect();
+            let needs = thens.iter().find_map(|(kind, th)| match th {
+                CheckThen::NeedsYou(why) => Some((kind.clone(), why.clone())),
+                _ => None,
+            });
+            let fix: Vec<String> = thens.iter().filter(|(_, th)| *th == CheckThen::Fix).map(|(k, _)| k.clone()).collect();
+            if let Some((kind, why)) = needs {
+                t.insert("state".into(), json!(State::Waiting.id()));
+                t.insert("reason".into(), json!(why));
+                if kind == crate::checks::TESTS {
                     t.insert("tests_failing".into(), json!(true));
-                    for k in ["publish_wanted", "plan_ready", "permission", "go_ahead"] {
-                        t.remove(k);
-                    }
-                    t.insert("updated".into(), json!(now));
+                    t.remove("check_failing");
+                } else {
+                    t.insert("check_failing".into(), json!(kind));
+                    t.remove("tests_failing");
                 }
+                for k in ["publish_wanted", "plan_ready", "permission", "go_ahead"] {
+                    t.remove(k);
+                }
+                t.insert("updated".into(), json!(now));
+                return Ok(Recorded { then: CheckThen::NeedsYou(why), fix: Vec::new() });
             }
-            Ok(then)
+            if !fix.is_empty() {
+                t.insert("state".into(), json!(State::Working.id()));
+                for k in ["reason", "publish_wanted", "plan_ready", "permission", "tests_failing", "check_failing", "go_ahead"] {
+                    t.remove(k);
+                }
+                t.insert("updated".into(), json!(now));
+                return Ok(Recorded { then: CheckThen::Fix, fix });
+            }
+            Ok(Recorded { then: CheckThen::Keep, fix })
         })
     }
 
@@ -2683,6 +2746,7 @@ mod tests {
             check_due: None,
             checks: Vec::new(),
             tests_failing: false,
+            check_failing: None,
             publish_wanted: false,
             plan_ready: false,
             autonomy: None,
@@ -3584,6 +3648,50 @@ mod tests {
             attempt,
             skipped: false,
         }
+    }
+
+    #[test]
+    fn a_stops_checks_are_recorded_together_and_the_user_is_told_before_the_squad() {
+        let d = dir("checks-together");
+        let mut t = Tickets::open(&d, "p1");
+        let n = add(&mut t, "Basket");
+        let of = |kind: &str, ok: bool, attempt: u32| CheckRun {
+            kind: kind.into(),
+            ok,
+            summary: format!("{kind} said"),
+            attempt,
+            ..CheckRun::default()
+        };
+        // The review and the acceptance boxes fail on their first try, the tests pass: the squad is told of both.
+        t.squad_says(n, &State::Waiting, "Asks: Shall I close this task?", None).unwrap();
+        t.mark_check_due(n, "close", 1_000).unwrap();
+        let rec = t.record_checks(n, 1_000, &[of("review", false, 1), of("acceptance", false, 1), of("tests", true, 1)], true).unwrap();
+        assert_eq!(rec, Recorded { then: CheckThen::Fix, fix: vec!["review".into(), "acceptance".into()] });
+        let k = t.get(n).cloned().unwrap();
+        assert_eq!((&k.state, k.checks.len(), k.check_due.as_ref(), k.check_failing.as_ref()), (&State::Working, 3, None, None));
+        // Their second try: the user is told (the first that needs them), and the squad nothing.
+        t.squad_says(n, &State::Waiting, "Asks: Shall I close this task?", None).unwrap();
+        t.mark_check_due(n, "close", 2_000).unwrap();
+        let rec = t.record_checks(n, 2_000, &[of("review", false, 2), of("acceptance", true, 2), of("tests", false, 1)], true).unwrap();
+        assert_eq!(rec.then, CheckThen::NeedsYou(crate::checks::still_fails("review")));
+        let k = t.get(n).cloned().unwrap();
+        assert_eq!((&k.state, k.check_failing.as_deref(), k.tests_failing), (&State::Waiting, Some("review"), false));
+        assert_eq!(saved(&d)["tickets"][0]["check_failing"], json!("review"));
+        // Writing to the squad clears it, as it does the tests' mark.
+        t.user_typed(n).unwrap();
+        assert_eq!(t.get(n).unwrap().check_failing, None);
+        // The last five of each kind are kept, whatever the others did.
+        for at in 3..12u64 {
+            t.squad_says(n, &State::Waiting, "Asks: Shall I close this task?", None).unwrap();
+            t.mark_check_due(n, "close", at * 1_000).unwrap();
+            t.record_checks(n, at * 1_000, &[of("review", true, 1), of("tests", true, 1)], true).unwrap();
+        }
+        t.squad_says(n, &State::Waiting, "Asks: Shall I close this task?", None).unwrap();
+        t.mark_check_due(n, "close", 50_000).unwrap();
+        t.record_checks(n, 50_000, &[of("acceptance", false, 3)], true).unwrap();
+        let k = t.get(n).cloned().unwrap();
+        let count = |kind: &str| k.checks.iter().filter(|c| c.kind == kind).count();
+        assert_eq!((count("review"), count("tests"), count("acceptance")), (5, 5, 3));
     }
 
     #[test]

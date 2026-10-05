@@ -465,7 +465,7 @@ impl App {
                 self.open_ticket_screen_for_session(number);
                 self.notify(format!("#{number}'s squad waits for your OK on a command: answer it in its session."));
             }
-            board::Need::Question | board::Need::Stuck | board::Need::Tests => {
+            board::Need::Question | board::Need::Stuck | board::Need::Tests | board::Need::Check => {
                 let running = t.leader().is_some_and(|l| self.leader_host(&l.session).is_some());
                 if !running {
                     self.open_ticket_screen_for_session(number);

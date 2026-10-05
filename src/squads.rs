@@ -576,6 +576,9 @@ pub struct Launch {
     /// folder of its own (or, for a leader started before every task had one, a squad that worked there and was
     /// given the task's folders to read). A resumed session starts where it began.
     pub work_folder: bool,
+    /// The brief's checks, one line each as written, when it started (`brief::check_kind` says what each is). None: a
+    /// leader started before briefs, whose only check is the project's tests.
+    pub checks: Option<Vec<String>>,
 }
 
 impl Launch {
@@ -588,14 +591,49 @@ impl Launch {
             agent: agent_name(&s.id, LEADER_ROLE, names),
             model: leader.model.clone(),
             work_folder: place.in_work_folder(),
+            checks: Some(s.checks.clone()),
         }
+    }
+
+    /// What the brief's checks are, each line with its kind; a leader from before briefs has the tests alone.
+    pub fn check_kinds(&self) -> Vec<(String, crate::brief::CheckKind)> {
+        match &self.checks {
+            Some(lines) => lines.iter().map(|l| (l.clone(), crate::brief::check_kind(l))).collect(),
+            None => vec![("the tests pass".to_string(), crate::brief::CheckKind::Tests)],
+        }
+    }
+
+    /// The members that can change files, by their names in the session: their tools let them (`Edit`, `Write`, ...),
+    /// or they have no list and may use every tool.
+    pub fn changers(&self) -> Vec<String> {
+        let Ok(Value::Object(agents)) = serde_json::from_str::<Value>(&self.agents) else { return Vec::new() };
+        agents
+            .iter()
+            .filter(|(name, _)| **name != self.agent)
+            .filter(|(_, a)| match a.get("tools").and_then(Value::as_array) {
+                None => true,
+                Some(tools) => tools.iter().filter_map(Value::as_str).any(|t| ["Edit", "Write", "MultiEdit", "NotebookEdit"].contains(&t)),
+            })
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// A member's name in the session, from its agent id ("reviewer": "coding-reviewer", or "reviewer" for a leader
+    /// with plain names).
+    pub fn member_name(&self, id: &str) -> Option<String> {
+        let Ok(Value::Object(agents)) = serde_json::from_str::<Value>(&self.agents) else { return None };
+        let squad = format!("{}-{id}", self.squad);
+        [squad, id.to_string()].into_iter().find(|n| agents.contains_key(n) && *n != self.agent)
     }
 
     /// The snapshot file's text.
     pub fn to_json(&self) -> String {
         let agents: Value = serde_json::from_str(&self.agents).unwrap_or(Value::Null);
         let starts = if self.work_folder { "work-folder" } else { "folder" };
-        let v = json!({"version": 1, "squad": self.squad, "name": self.name, "agent": self.agent, "model": self.model, "starts_in": starts, "agents": agents});
+        let mut v = json!({"version": 1, "squad": self.squad, "name": self.name, "agent": self.agent, "model": self.model, "starts_in": starts, "agents": agents});
+        if let (Some(checks), Some(o)) = (&self.checks, v.as_object_mut()) {
+            o.insert("checks".into(), json!(checks));
+        }
         format!("{}\n", serde_json::to_string_pretty(&v).unwrap_or_default())
     }
 
@@ -605,6 +643,7 @@ impl Launch {
         let s = |k: &str| v.get(k).and_then(Value::as_str).map(String::from);
         let agents = v.get("agents").filter(|a| a.is_object())?.to_string();
         let work_folder = s("starts_in").as_deref() == Some("work-folder");
+        let checks = v.get("checks").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect());
         Some(Launch {
             squad: s("squad")?,
             name: s("name").unwrap_or_default(),
@@ -612,6 +651,7 @@ impl Launch {
             agent: s("agent")?,
             model: s("model")?,
             work_folder,
+            checks,
         })
     }
 }
@@ -1689,6 +1729,12 @@ pub fn squad_stop(input: &str, config: &Path) -> Option<(String, u32, State)> {
     let running = members_running(v.get("background_tasks"));
     let o = decide_stop(running, message);
     let has_place = crate::checks::has_place(t);
+    // The checks this leader was started with (its snapshot); one from before briefs has the tests alone.
+    let kinds: Vec<crate::brief::CheckKind> = t
+        .leader()
+        .and_then(|l| store.snapshot(l))
+        .and_then(|text| Launch::from_json(&text))
+        .map_or_else(|| vec![crate::brief::CheckKind::Tests], |l| l.check_kinds().into_iter().map(|(_, k)| k).collect());
     if o.publish_wanted {
         store.squad_wants_to_publish(number, &o.reason).ok()?;
     } else if o.plan_ready {
@@ -1696,13 +1742,27 @@ pub fn squad_stop(input: &str, config: &Path) -> Option<(String, u32, State)> {
     } else {
         store.squad_says(number, &o.state, &o.reason, o.result.as_deref()).ok()?;
     }
-    // At the end of the work, with a test command on the project: a check is due. The hook runs nothing itself (it is a
-    // short-lived process inside the leader's session); the platoon app runs it.
-    if let Some(stop) = crate::checks::stop_of(&parse_end_line(message), running)
-        && has_place
-        && crate::projects::Projects::open(config).get(&project).is_some_and(|p| !p.test_command.is_empty())
-    {
-        let _ = store.mark_check_due(number, stop.id(), crate::notesrun::now_ms());
+    // At the end of the work, with a check to make: the tests (with a test command on the project and a copy or branch
+    // to run them in), an agent reading the change, the acceptance boxes. The hook runs nothing itself (it is a
+    // short-lived process inside the leader's session); the platoon app makes them.
+    if let Some(stop) = crate::checks::stop_of(&parse_end_line(message), running) {
+        use crate::brief::CheckKind;
+        let tests = kinds.contains(&CheckKind::Tests)
+            && has_place
+            && crate::projects::Projects::open(config).get(&project).is_some_and(|p| !p.test_command.is_empty());
+        let review = kinds.iter().any(|k| matches!(k, CheckKind::Read(_)));
+        let acceptance = kinds.contains(&CheckKind::Acceptance);
+        // The acceptance boxes are checked in the result: what the squad says above its line asking to close the task
+        // or to publish is its result now (as above `done`).
+        if acceptance
+            && stop != crate::checks::Stop::Done
+            && let Some(text) = above_last_line(message)
+        {
+            let _ = store.keep_result(number, &text);
+        }
+        if tests || review || acceptance {
+            let _ = store.mark_check_due(number, stop.id(), crate::notesrun::now_ms());
+        }
     }
     Some((project, number, o.state))
 }
@@ -2295,6 +2355,7 @@ mod tests {
             check_due: None,
             checks: Vec::new(),
             tests_failing: false,
+            check_failing: None,
             publish_wanted: false,
             plan_ready: false,
             autonomy: None,
@@ -2864,6 +2925,48 @@ mod tests {
         let other = Leader { session: "lead-2".into(), ..leader };
         Tickets::open(&c, "p1").start_leader(m, &other, &[]).unwrap();
         squad_stop(&stop_input("lead-2", "SQUAD: question - Shall I close this task?", json!([])), &c);
+        assert_eq!(Tickets::open(&c, "p1").get(m).unwrap().check_due, None);
+    }
+
+    #[test]
+    fn the_stop_hook_marks_the_briefs_own_checks_due_and_keeps_the_result_for_the_acceptance_boxes() {
+        let c = dir("check-due-brief");
+        let mut store = Tickets::open(&c, "p1");
+        // A folder not in git, no test command: before briefs, nothing was due here.
+        let n = store.add(NewTicket { title: "Notes".into(), folders: vec!["/home/u/notes".into()], ..Default::default() }).unwrap();
+        let mut squad = coding();
+        squad.checks = vec!["the reviewer read the change".into(), "every acceptance box is ticked, with how".into()];
+        let launch = Launch::of(&crew(&squad), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE, &Terms::default());
+        assert_eq!(Launch::from_json(&launch.to_json()).unwrap(), launch, "the checks are kept in the snapshot");
+        assert_eq!(launch.changers(), ["coding-builder"], "the members that can change files");
+        assert_eq!(launch.member_name("reviewer").as_deref(), Some("coding-reviewer"));
+        let snap = store.save_snapshot(n, 1, &launch.to_json()).unwrap();
+        let leader =
+            Leader { squad: "coding".into(), session: "lead-b".into(), started: 5, names: Default::default(), snapshot: Some(snap) };
+        store.start_leader(n, &leader, &[]).unwrap();
+        let stop = |msg: &str| squad_stop(&stop_input("lead-b", msg, json!([])), &c);
+        stop("Made it.\n\n- [x] It works: tested by hand\n\nSQUAD: question - Shall I close this task?");
+        let t = Tickets::open(&c, "p1").get(n).cloned().unwrap();
+        assert_eq!(t.check_due.as_ref().map(|d| d.stop.as_str()), Some("close"), "the review and the boxes are due");
+        assert_eq!(
+            Tickets::open(&c, "p1").result(n).as_deref(),
+            Some("Made it.\n\n- [x] It works: tested by hand\n"),
+            "what it says above the close question is its result now"
+        );
+        // A question in the middle of the work: nothing due, the result as it was.
+        Tickets::open(&c, "p1").user_typed(n).unwrap();
+        stop("Which colour?\nSQUAD: question - red or blue?");
+        assert_eq!(Tickets::open(&c, "p1").get(n).unwrap().check_due, None);
+        assert!(Tickets::open(&c, "p1").result(n).unwrap().contains("tested by hand"));
+        // A brief with neither (only the gate and its own words): nothing due.
+        let mut quiet = coding();
+        quiet.checks = vec!["nothing others see without your yes".into(), "every claim names its source".into()];
+        let launch = Launch::of(&crew(&quiet), &LeaderSetup::builtin(), AgentNames::SquadRole, Place::WORKTREE, &Terms::default());
+        let m = Tickets::open(&c, "p1").add(NewTicket { title: "Other".into(), ..Default::default() }).unwrap();
+        let snap = Tickets::open(&c, "p1").save_snapshot(m, 1, &launch.to_json()).unwrap();
+        let other = Leader { session: "lead-q".into(), snapshot: Some(snap), ..leader };
+        Tickets::open(&c, "p1").start_leader(m, &other, &[]).unwrap();
+        squad_stop(&stop_input("lead-q", "Done.\nSQUAD: question - Shall I close this task?", json!([])), &c);
         assert_eq!(Tickets::open(&c, "p1").get(m).unwrap().check_due, None);
     }
 

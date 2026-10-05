@@ -13,6 +13,12 @@
 //! a pass leaves the task as the leader left it; a failure is typed into the squad's session (`typed_message`) and the
 //! task is Working again, at most `FIXES` times in a row; the next failure leaves it Needs you.
 //!
+//! A squad's brief may ask for two more checks platoon makes at the same moments (`brief::CheckKind`): that an agent
+//! read the change (`review`: a run of that agent after the last run of any member that can change files, from the
+//! leader's transcript), and that every acceptance box is ticked, with how (`acceptance`: the squad's result ticks each
+//! acceptance line of the task's text). Each is told to the squad once (`fixes_for`); the next failure needs the user.
+//! A leader started before briefs has no list of checks in its snapshot: it gets the test check alone, as before.
+//!
 //! Also here: the suggestion on the project's screen (the first command of the "Build and test" block in the
 //! `CLAUDE.md` of the project's first git folder; nothing is ever run from a suggestion).
 
@@ -29,8 +35,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The kind of check this platoon runs: the project's test command.
+/// The kinds of check platoon runs: the project's test command, an agent reading the change, the acceptance boxes.
 pub const TESTS: &str = "tests";
+pub const REVIEW: &str = "review";
+pub const ACCEPTANCE: &str = "acceptance";
 
 /// How many times in a row the squad is told its tests fail and given the work back; the next failure needs the user.
 pub const FIXES: u32 = 2;
@@ -105,11 +113,40 @@ pub fn has_place(t: &Ticket) -> bool {
 
 // ---- what a result means ------------------------------------------------------------------------------------------
 
-/// Which of the squad's tries the next run is: 1, plus one for each failure since the tests last passed (a run that
-/// wasn't done counts neither way).
+/// Which of the squad's tries the next test run is: 1, plus one for each failure since the tests last passed (a run
+/// that wasn't done counts neither way).
 pub fn next_try(checks: &[CheckRun]) -> u32 {
-    let failures = checks.iter().rev().filter(|c| c.kind == TESTS && !c.skipped).take_while(|c| !c.ok).count();
+    next_try_of(checks, TESTS)
+}
+
+/// The same for a check of `kind`.
+pub fn next_try_of(checks: &[CheckRun], kind: &str) -> u32 {
+    let failures = checks.iter().rev().filter(|c| c.kind == kind && !c.skipped).take_while(|c| !c.ok).count();
     1 + u32::try_from(failures).unwrap_or(u32::MAX - 1)
+}
+
+/// How many times in a row the squad is told a check of `kind` fails before the user is: the tests twice, the others
+/// once.
+pub fn fixes_for(kind: &str) -> u32 {
+    if kind == TESTS { FIXES } else { 1 }
+}
+
+/// What a task needs the user for when a check of `kind` still fails after the squad was told.
+pub fn still_fails(kind: &str) -> String {
+    match kind {
+        REVIEW => "The change still wasn't read after the squad was told once".into(),
+        ACCEPTANCE => "Not every acceptance box is ticked after the squad was told once".into(),
+        _ => STILL_FAIL.into(),
+    }
+}
+
+/// ... and when it fails with the squad's session not running to be told.
+pub fn failed_not_running(kind: &str) -> String {
+    match kind {
+        REVIEW => "The change wasn't read after its last change; the squad's session isn't running".into(),
+        ACCEPTANCE => "Not every acceptance box is ticked; the squad's session isn't running".into(),
+        _ => FAILED_NOT_RUNNING.into(),
+    }
 }
 
 /// What a check's result does to its task. `failed`: it ran and failed. `attempt`: its try (`next_try`). `still`: the
@@ -119,16 +156,172 @@ pub fn next_try(checks: &[CheckRun]) -> u32 {
 /// A pass, a run that wasn't done, or a task that moved on: kept, nothing else. A failure on try 1 or 2: the squad is
 /// told and the task is Working (or, with nobody to tell, Needs you). On try 3: Needs you, the tests still fail. Later
 /// tries (the user, told already, has had the squad go on): kept, as the leader left the task.
+#[cfg(test)]
 pub fn then(failed: bool, attempt: u32, still: bool, can_type: bool) -> CheckThen {
+    then_for(TESTS, failed, attempt, still, can_type)
+}
+
+/// `then` for a check of `kind`: the squad is told `fixes_for(kind)` times, then the user.
+pub fn then_for(kind: &str, failed: bool, attempt: u32, still: bool, can_type: bool) -> CheckThen {
     if !failed || !still {
         return CheckThen::Keep;
     }
+    let fixes = fixes_for(kind);
     match attempt {
-        n if n <= FIXES && can_type => CheckThen::Fix,
-        n if n <= FIXES => CheckThen::NeedsYou(FAILED_NOT_RUNNING.to_string()),
-        n if n == FIXES + 1 => CheckThen::NeedsYou(STILL_FAIL.to_string()),
+        n if n <= fixes && can_type => CheckThen::Fix,
+        n if n <= fixes => CheckThen::NeedsYou(failed_not_running(kind)),
+        n if n == fixes + 1 => CheckThen::NeedsYou(still_fails(kind)),
         _ => CheckThen::Keep,
     }
+}
+
+// ---- the brief's own checks: an agent read the change, the acceptance boxes ------------------------------------------
+
+/// What a check found: whether it passed, one line that says so, and (on a failure) the message typed into the
+/// squad's session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Judged {
+    pub ok: bool,
+    pub summary: String,
+    pub message: String,
+}
+
+/// The role of an agent in a session's name, as the brief calls it: "builder" for "coding-builder" (`squad` is the
+/// squad's id; a leader started with plain names has the role alone).
+pub fn role_of<'a>(name: &'a str, squad: &str) -> &'a str {
+    name.strip_prefix(squad).and_then(|r| r.strip_prefix('-')).unwrap_or(name)
+}
+
+/// Did `reviewer` (its name in the session) run after the last run of any member that can change files (`changers`,
+/// their names in the session)? From the leader's member runs (`runs`, in the order the leader started them): a
+/// reviewer's run counts when it started after the last change's run ended (or, without times, came after it in the
+/// list). No member changed anything: nothing to read, it passes. `squad`: the squad's id, for the roles in the words.
+pub fn review(runs: &[crate::claude::MemberRun], reviewer: &str, changers: &[String], squad: &str) -> Judged {
+    let who = role_of(reviewer, squad);
+    let last_change = runs.iter().enumerate().rev().find(|(_, r)| changers.contains(&r.agent));
+    let Some((at, change)) = last_change else {
+        return Judged { ok: true, summary: "nothing was changed for it to read".into(), message: String::new() };
+    };
+    let changer = role_of(&change.agent, squad);
+    let change_end = change.ended_at.or(change.started_at);
+    let after = runs.iter().enumerate().any(|(k, r)| {
+        r.agent == reviewer
+            && match (r.started_at, change_end) {
+                (Some(s), Some(e)) => s >= e,
+                _ => k > at,
+            }
+    });
+    if after {
+        return Judged { ok: true, summary: format!("{who} ran after {changer}'s last change"), message: String::new() };
+    }
+    let ever = runs.iter().any(|r| r.agent == reviewer);
+    let summary = if ever { format!("{who} hasn't run since {changer}'s last change") } else { format!("{who} never ran") };
+    let message = format!(
+        "Your brief asks that the {who} read the change after the last change; it hasn't since the {changer}'s last run. Hand the \
+         change to the {who} ({reviewer}), then end your turn as before: platoon checks again when you stop."
+    );
+    Judged { ok: false, summary, message }
+}
+
+/// A line's words as they are compared: lower case letters and digits, one space between.
+fn words_of(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// A checkbox line's text and whether it is ticked: `- [ ] text`, `* [x] text` (any case, any of `-*+`, or numbered).
+fn checkbox(line: &str) -> Option<(bool, &str)> {
+    let t = line.trim_start();
+    let t = t.strip_prefix(['-', '*', '+']).map(str::trim_start).or_else(|| {
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        (digits > 0).then(|| t[digits..].strip_prefix(['.', ')'])).flatten().map(str::trim_start)
+    })?;
+    let ticked = if t.starts_with("[ ]") {
+        false
+    } else if t.starts_with("[x]") || t.starts_with("[X]") {
+        true
+    } else {
+        return None;
+    };
+    Some((ticked, t[3..].trim()))
+}
+
+/// The acceptance boxes of a task's text: the checkbox lines under a heading that says "acceptance" (until the next
+/// heading of the same level or above), or, without such a heading, every checkbox line. Empty ones (the template's)
+/// are left out.
+pub fn acceptance_lines(body: &str) -> Vec<String> {
+    let heading = |l: &str| {
+        let t = l.trim_start();
+        let level = t.chars().take_while(|c| *c == '#').count();
+        ((1..=6).contains(&level) && t[level..].starts_with(' ')).then(|| (level, t[level..].trim().to_lowercase()))
+    };
+    let mut under: Option<usize> = None;
+    let mut found = false;
+    let mut out = Vec::new();
+    for l in body.lines() {
+        if let Some((level, text)) = heading(l) {
+            if text.contains("acceptance") {
+                under = Some(level);
+                found = true;
+            } else if under.is_some_and(|u| level <= u) {
+                under = None;
+            }
+            continue;
+        }
+        if under.is_some()
+            && let Some((_, text)) = checkbox(l)
+            && !words_of(text).is_empty()
+        {
+            out.push(text.to_string());
+        }
+    }
+    if found {
+        return out;
+    }
+    body.lines().filter_map(checkbox).map(|(_, t)| t.to_string()).filter(|t| !words_of(t).is_empty()).collect()
+}
+
+/// Does the ticked result line `got` tick the acceptance line `want`, with words after it saying how? Matched on the
+/// words (case and punctuation aside): `got` holds `want`'s words in order and more after them, or (loosely) holds at
+/// least four in five of `want`'s words and more words than it.
+fn ticks_with_how(want: &str, got: &str) -> bool {
+    let (w, g) = (words_of(want), words_of(got));
+    if w.is_empty() {
+        return false;
+    }
+    if let Some(at) = g.windows(w.len()).position(|win| win == w.as_slice()) {
+        return g.len() > at + w.len();
+    }
+    let held = w.iter().filter(|x| g.contains(x)).count();
+    held * 5 >= w.len() * 4 && g.len() > w.len()
+}
+
+/// Is every acceptance box of the task's text (`body`) ticked in the squad's result, each with how it was shown?
+pub fn acceptance(body: &str, result: Option<&str>) -> Judged {
+    let boxes = acceptance_lines(body);
+    if boxes.is_empty() {
+        return Judged { ok: true, summary: "the task has no acceptance boxes".into(), message: String::new() };
+    }
+    let ticked: Vec<&str> = result.unwrap_or_default().lines().filter_map(checkbox).filter(|(t, _)| *t).map(|(_, l)| l).collect();
+    let missing: Vec<&String> = boxes.iter().filter(|b| !ticked.iter().any(|g| ticks_with_how(b, g))).collect();
+    let n = boxes.len();
+    if missing.is_empty() {
+        return Judged { ok: true, summary: format!("{n} of {n} ticked, with how"), message: String::new() };
+    }
+    let summary = match result {
+        None => "no result yet to tick them in".to_string(),
+        Some(_) => format!(
+            "{} of {n} ticked; not ticked: {}",
+            n - missing.len(),
+            missing.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ")
+        ),
+    };
+    let list: String = missing.iter().map(|m| format!("- [ ] {m}\n")).collect();
+    let message = format!(
+        "Your brief asks that every acceptance box is ticked, with how. Not ticked in your result, with how it was shown:\n\n{list}\n\
+         Show each one, then put your result above your last line with every acceptance check as `- [x] <the check>: <how it was \
+         shown>`, and end your turn as before: platoon checks again when you stop."
+    );
+    Judged { ok: false, summary: cut(&summary), message }
 }
 
 // ---- the summary and the message ----------------------------------------------------------------------------------
@@ -536,6 +729,112 @@ mod tests {
 
     fn check(ok: bool, skipped: bool) -> CheckRun {
         CheckRun { kind: TESTS.into(), ok, skipped, ..CheckRun::default() }
+    }
+
+    fn member(agent: &str, started: Option<u64>, ended: Option<u64>) -> crate::claude::MemberRun {
+        crate::claude::MemberRun {
+            call: format!("c-{agent}-{started:?}"),
+            agent: agent.into(),
+            description: String::new(),
+            ended: ended.map(|_| "completed".into()),
+            started_at: started,
+            ended_at: ended,
+        }
+    }
+
+    #[test]
+    fn the_review_check_passes_when_the_reviewer_ran_after_the_last_change() {
+        let changers = vec!["coding-builder".to_string()];
+        let review_of = |runs: &[crate::claude::MemberRun]| review(runs, "coding-reviewer", &changers, "coding");
+        // Planned, built, reviewed: the review started after the build ended.
+        let good = [
+            member("coding-planner", Some(1), Some(2)),
+            member("coding-builder", Some(3), Some(9)),
+            member("coding-reviewer", Some(10), Some(12)),
+        ];
+        let j = review_of(&good);
+        assert_eq!((j.ok, j.summary.as_str(), j.message.as_str()), (true, "reviewer ran after builder's last change", ""));
+        // Built again after the review (sent back): the review is out of date.
+        let mut again = good.to_vec();
+        again.push(member("coding-builder", Some(13), Some(20)));
+        let j = review_of(&again);
+        assert!(!j.ok, "{j:?}");
+        assert_eq!(j.summary, "reviewer hasn't run since builder's last change");
+        assert_eq!(
+            j.message,
+            "Your brief asks that the reviewer read the change after the last change; it hasn't since the builder's last run. Hand the change to the reviewer (coding-reviewer), then end your turn as before: platoon checks again when you stop."
+        );
+        // A review that started while the build was still running doesn't count.
+        let overlap = [member("coding-builder", Some(3), Some(9)), member("coding-reviewer", Some(5), Some(12))];
+        assert!(!review_of(&overlap).ok);
+        // Never ran at all.
+        let j = review_of(&[member("coding-builder", Some(3), Some(9))]);
+        assert_eq!((j.ok, j.summary.as_str()), (false, "reviewer never ran"));
+        // Nothing was changed: nothing to read.
+        let j = review_of(&[member("coding-planner", Some(1), Some(2))]);
+        assert_eq!((j.ok, j.summary.as_str()), (true, "nothing was changed for it to read"));
+        // Without times, the order of the runs says it.
+        assert!(review_of(&[member("coding-builder", None, None), member("coding-reviewer", None, None)]).ok);
+        assert!(!review_of(&[member("coding-reviewer", None, None), member("coding-builder", None, None)]).ok);
+        // A leader with plain names: the roles are the names.
+        assert!(
+            review(&[member("builder", Some(1), Some(2)), member("reviewer", Some(3), None)], "reviewer", &["builder".into()], "coding").ok
+        );
+        assert_eq!(role_of("coding-report-writer", "coding"), "report-writer");
+    }
+
+    const BODY: &str = "## What it should do\n\nPlain text emails.\n\nHow far: local changes only.\n\n## Acceptance\n\n- [ ] A mail client that shows only text gets the whole order\n- [ ] The HTML part is unchanged\n- [ ] \n\n## Notes\n\n- [ ] not an acceptance box\n";
+
+    #[test]
+    fn the_acceptance_check_wants_every_box_ticked_with_how() {
+        assert_eq!(acceptance_lines(BODY), ["A mail client that shows only text gets the whole order", "The HTML part is unchanged"]);
+        let all = "Done on task/3.\n\n- [x] A mail client that shows only text gets the whole order: a test renders the text part\n- [X] The HTML part is unchanged - its snapshot test still passes\n";
+        let j = acceptance(BODY, Some(all));
+        assert_eq!((j.ok, j.summary.as_str()), (true, "2 of 2 ticked, with how"));
+        // Loose: case, punctuation and a word or two of difference.
+        let loose = "* [x] a mail client showing only text gets the whole order! checked by hand\n1. [x] the html part is unchanged, see the diff\n";
+        assert!(acceptance(BODY, Some(loose)).ok, "{:?}", acceptance(BODY, Some(loose)));
+        // One not ticked, one ticked without how.
+        let one = "- [x] A mail client that shows only text gets the whole order: tested\n- [ ] The HTML part is unchanged: not yet\n";
+        let j = acceptance(BODY, Some(one));
+        assert_eq!((j.ok, j.summary.as_str()), (false, "1 of 2 ticked; not ticked: \"The HTML part is unchanged\""));
+        assert!(j.message.starts_with("Your brief asks that every acceptance box is ticked, with how. Not ticked in your result, with how it was shown:\n\n- [ ] The HTML part is unchanged\n"), "{}", j.message);
+        assert!(j.message.contains("`- [x] <the check>: <how it was shown>`"), "{}", j.message);
+        let no_how = "- [x] A mail client that shows only text gets the whole order\n- [x] The HTML part is unchanged\n";
+        assert_eq!(
+            acceptance(BODY, Some(no_how)).summary,
+            "0 of 2 ticked; not ticked: \"A mail client that shows only text gets the whole order\", \"The HTML part is unchanged\""
+        );
+        assert_eq!(acceptance(BODY, None).summary, "no result yet to tick them in");
+        // No acceptance section: every checkbox counts; none at all (the template's blanks): nothing to check.
+        assert_eq!(acceptance_lines("- [ ] one\n- [x] two\n"), ["one", "two"]);
+        assert!(acceptance(crate::tickets::TEMPLATE, None).ok);
+        assert_eq!(acceptance(crate::tickets::TEMPLATE, None).summary, "the task has no acceptance boxes");
+    }
+
+    #[test]
+    fn each_kind_of_check_is_told_to_the_squad_its_own_number_of_times_then_needs_you() {
+        // The tests: twice, then you. The review and the acceptance boxes: once, then you.
+        assert_eq!((fixes_for(TESTS), fixes_for(REVIEW), fixes_for(ACCEPTANCE)), (2, 1, 1));
+        for kind in [REVIEW, ACCEPTANCE] {
+            assert_eq!(then_for(kind, true, 1, true, true), CheckThen::Fix, "{kind}");
+            assert_eq!(then_for(kind, true, 2, true, true), CheckThen::NeedsYou(still_fails(kind)), "{kind}");
+            assert_eq!(then_for(kind, true, 3, true, true), CheckThen::Keep, "{kind}: told already");
+            assert_eq!(then_for(kind, true, 1, true, false), CheckThen::NeedsYou(failed_not_running(kind)), "{kind}");
+            assert_eq!(then_for(kind, false, 1, true, true), CheckThen::Keep, "{kind}: a pass");
+            assert_eq!(then_for(kind, true, 1, false, true), CheckThen::Keep, "{kind}: moved on");
+        }
+        assert_eq!(then_for(TESTS, true, 2, true, true), CheckThen::Fix);
+        assert_eq!(then_for(TESTS, true, 3, true, true), CheckThen::NeedsYou(STILL_FAIL.into()));
+        let runs = |kinds: &[(&str, bool)]| -> Vec<CheckRun> {
+            kinds.iter().map(|(k, ok)| CheckRun { kind: (*k).into(), ok: *ok, ..CheckRun::default() }).collect()
+        };
+        let mixed = runs(&[(TESTS, false), (REVIEW, false), (TESTS, false), (REVIEW, true), (ACCEPTANCE, false)]);
+        assert_eq!(
+            (next_try_of(&mixed, TESTS), next_try_of(&mixed, REVIEW), next_try_of(&mixed, ACCEPTANCE)),
+            (3, 1, 2),
+            "each kind its own"
+        );
     }
 
     #[test]

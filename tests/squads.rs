@@ -589,7 +589,8 @@ fn the_hooks_move_the_ticket_and_p_types_the_go_ahead_into_the_squads_session() 
         (Some("waiting"), Some("Asks: Shall I close this task?"), None),
         "{tk}"
     );
-    assert!(!lab.config.join("projects/pweb/tasks/01-result.md").exists(), "not Done yet");
+    // Not Done yet; what it said above the question is its result so far (Coding's brief checks the acceptance boxes in it).
+    assert_eq!(fs::read_to_string(lab.config.join("projects/pweb/tasks/01-result.md")).unwrap(), "Pushed task/1.\n");
     t.send(b"\r");
     t.wait_for_all(&["Asks: Shall I close this task?", "ctrl+space back to the project"]);
     // The user answers in the session: Working again at once, with nothing added to what was typed.
@@ -723,9 +724,12 @@ fn when_the_squad_asks_to_close_the_task_platoon_runs_the_tests_and_types_a_fail
     assert!(typed.contains("(failed with exit code 1, with nothing to say)"), "{typed:?}");
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk.get("check_due"), tk.get("reason")), (Some("working"), None, None), "{tk}");
-    assert_eq!(tk["checks"][0]["ok"], false);
-    assert_eq!(tk["checks"][0]["try"], 1);
-    assert_eq!(tk["checks"][0]["folder"], copy.to_string_lossy().as_ref());
+    // Coding's brief has the review and the acceptance boxes too: with no member run and no boxes, they pass.
+    let tests = |tk: &Value| tk["checks"].as_array().unwrap().iter().filter(|c| c["kind"] == "tests").cloned().collect::<Vec<_>>();
+    assert_eq!(tk["checks"][0]["kind"], "review", "{tk}");
+    assert_eq!(tests(&tk)[0]["ok"], false);
+    assert_eq!(tests(&tk)[0]["try"], 1);
+    assert_eq!(tests(&tk)[0]["folder"], copy.to_string_lossy().as_ref());
     assert!(lab.config.join("projects/pweb/tasks/01-work/tests-1.log").exists(), "the output is kept for the user");
     // (Beside the session it wraps under its label.)
     t.wait_for_all(&["Tests           failed · the squad is fixing them", "(try 1 of 2)"]);
@@ -735,7 +739,7 @@ fn when_the_squad_asks_to_close_the_task_platoon_runs_the_tests_and_types_a_fail
     t.wait_for("Tests           3 passed · platoon ran `echo");
     let tk = lab.ticket_now();
     assert_eq!((tk["state"].as_str(), tk["reason"].as_str()), (Some("waiting"), Some("Asks: Shall I close this task?")), "{tk}");
-    assert_eq!((tk["checks"][1]["ok"].as_bool(), tk["checks"][1]["summary"].as_str()), (Some(true), Some("3 passed")));
+    assert_eq!((tests(&tk)[1]["ok"].as_bool(), tests(&tk)[1]["summary"].as_str()), (Some(true), Some("3 passed")));
     assert_eq!(lab.rec(1, "typed").matches("The tests failed").count(), 1, "nothing typed for a pass");
     // On the project's screen, the pane's row says so (the squad's words are cut first to keep it).
     t.send(&[0]);
@@ -758,7 +762,8 @@ fn tests_that_run_past_their_time_are_stopped_with_everything_they_started_and_c
     let typed = lab.rec(1, "typed");
     assert!(typed.contains("started") && typed.contains("(timed out after 1 second)"), "{typed:?}");
     let tk = lab.ticket_now();
-    assert_eq!((tk["state"].as_str(), tk["checks"][0]["summary"].as_str()), (Some("working"), Some("timed out after 1 second")), "{tk}");
+    let tests: Vec<Value> = tk["checks"].as_array().unwrap().iter().filter(|c| c["kind"] == "tests").cloned().collect();
+    assert_eq!((tk["state"].as_str(), tests[0]["summary"].as_str()), (Some("working"), Some("timed out after 1 second")), "{tk}");
     assert!(tk.get("publish_wanted").is_none(), "nothing goes out while the tests fail: {tk}");
     let pid: u32 = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
     until("the stopped command to be gone", || !running(pid));

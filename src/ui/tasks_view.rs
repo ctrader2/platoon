@@ -358,14 +358,48 @@ pub(super) fn where_line(app: &App, project: &str, x: &Ticket, w: usize) -> Line
 /// A task's Tests line after its label, in rows of `room` cells: all of what its last check said and when
 /// (`board::tests_line`), wrapped after whole words, the verdict in its color and the rest quiet.
 pub(super) fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
-    let t = app.effective_theme();
     let command = app.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default();
-    let pieces = board::tests_line(x, &command, &|secs| clock(Some(secs * 1000)));
+    piece_rows(app, board::tests_line(x, &command, &|secs| clock(Some(secs * 1000))), room)
+}
+
+/// A task's lines for its brief's other checks (an agent reading the change, the acceptance boxes, the gate, the
+/// squad's own), each its label and its words wrapped under themselves: what its leader was started with.
+pub(super) fn check_rows(app: &App, x: &Ticket, room: usize) -> Vec<(&'static str, Vec<Vec<Span<'static>>>)> {
+    let checks = app.leader_checks(x);
+    board::check_lines(x, &checks, &|secs| clock(Some(secs * 1000)))
+        .into_iter()
+        .map(|(label, pieces)| (label, piece_rows(app, pieces, room)))
+        .collect()
+}
+
+/// The words of a backtick pair (`npm test`) stay together: a line breaks before it rather than inside it. A pair too
+/// long for a line of `room` columns is broken at its spaces after all.
+fn units(text: &str, room: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut open = false;
+    for word in text.split_inclusive(' ') {
+        match out.last_mut() {
+            Some(last) if open => last.push_str(word),
+            _ => out.push(word.to_string()),
+        }
+        if word.matches('`').count() % 2 == 1 {
+            open = !open;
+        }
+    }
+    out.into_iter()
+        .flat_map(|u| if u.trim_end().width() > room { u.split_inclusive(' ').map(String::from).collect() } else { vec![u] })
+        .collect()
+}
+
+/// Pieces of words in their tones, wrapped to `room` columns at a space (never inside a backtick pair).
+fn piece_rows(app: &App, pieces: Vec<board::Piece>, room: usize) -> Vec<Vec<Span<'static>>> {
+    let t = app.effective_theme();
     let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
     let mut used = 0;
     for p in pieces {
         let style = Style::new().fg(tone(t, p.tone));
-        for word in p.text.split_inclusive(' ') {
+        for word in units(&p.text, room) {
+            let word = word.as_str();
             let w = word.trim_end().width();
             if used > 0 && used + w > room {
                 rows.push(Vec::new());
@@ -412,13 +446,20 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     lines.push(where_line(app, &project, &x, w));
-    // Once a squad has had it: what its tests said (or that the project has none).
+    // Once a squad has had it: what its tests said (or that the project has none), then its brief's other checks.
     if x.leader().is_some() {
-        const LABEL: &str = "Tests ";
-        for (k, row) in tests_rows(app, &project, &x, w.saturating_sub(LABEL.len())).into_iter().enumerate() {
-            let mut spans = vec![Span::styled(if k == 0 { LABEL } else { "      " }, Style::new().fg(t.dim))];
-            spans.extend(row);
-            lines.push(Line::from(spans));
+        // The labels take the room of the longest ("Its own checks") once there are more than the tests.
+        let others = check_rows(app, &x, w.saturating_sub(15));
+        let label_w = if others.is_empty() { 6 } else { 15 };
+        let mut rows = vec![("Tests", tests_rows(app, &project, &x, w.saturating_sub(label_w)))];
+        rows.extend(others);
+        for (label, wrapped) in rows {
+            for (k, row) in wrapped.into_iter().enumerate() {
+                let lead = if k == 0 { format!("{label:<label_w$}") } else { " ".repeat(label_w) };
+                let mut spans = vec![Span::styled(lead, Style::new().fg(t.dim))];
+                spans.extend(row);
+                lines.push(Line::from(spans));
+            }
         }
     }
     lines.push(Line::raw(""));

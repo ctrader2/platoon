@@ -83,6 +83,7 @@ mod tests {
             check_due: None,
             checks: Vec::new(),
             tests_failing: false,
+            check_failing: None,
             publish_wanted: false,
             plan_ready: false,
             autonomy: None,
