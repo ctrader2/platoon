@@ -819,10 +819,15 @@ pub fn save_text(config: &Path, id: &str, text: &str) -> io::Result<()> {
 }
 
 /// Delete one of the user's own briefs, or put a built-in back as platoon has it: either way the file is put aside
-/// as `<id>.md.bak` (one copy, replaced by the next), so a mistake can still be undone by hand.
+/// as `<id>.md.bak` (one copy, replaced by the next), so a mistake can still be undone by hand. An old JSON file that
+/// couldn't be turned into a brief is put aside the same way, as `<id>.json.bak` where it is.
 pub fn remove(config: &Path, id: &str) -> io::Result<()> {
     let p = path(config, id);
     let _lock = lock(&lock_path(config))?;
+    let old = old_path(config, id);
+    if !p.exists() && old.exists() {
+        return fs::rename(&old, free_bak(&old));
+    }
     match fs::rename(&p, p.with_extension("md.bak")) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),

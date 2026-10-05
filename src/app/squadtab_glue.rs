@@ -1511,6 +1511,17 @@ impl App {
     pub(super) fn remove_squad(&mut self, id: &str, restore: bool) {
         self.mode = Mode::List;
         let name = self.squad_name(id);
+        let old = self.sqt.list.iter().find(|l| l.id == id).is_some_and(|l| l.file == squadfile::old_path(&self.config, id));
+        if old {
+            return match squadfile::remove(&self.config, id) {
+                Ok(()) => {
+                    self.reload_squads(None);
+                    self.sqt.focus = SqFocus::List;
+                    self.notify(format!("Put the old file of \"{name}\" aside (kept as {id}.json.bak in the squads folder)."));
+                }
+                Err(e) => self.notify(format!("Couldn't change the old file: {e}")),
+            };
+        }
         match squadfile::remove(&self.config, id) {
             Ok(()) => {
                 self.reload_squads(if restore { Some(id) } else { None });

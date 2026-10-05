@@ -356,6 +356,10 @@ fn each_old_json_file_becomes_a_brief_once_and_is_kept_as_bak() {
     assert!(broken.squad.is_none() && broken.corrupt.as_deref().is_some_and(|w| w.contains("it isn't valid JSON")), "{broken:?}");
     assert_eq!(broken.file, old_path(&c, "broken"));
     assert_eq!(fs::read_to_string(old_path(&c, "broken")).unwrap(), "{ nope", "left where it is");
+    // Deleting it puts it aside, as a brief is.
+    remove(&c, "broken").unwrap();
+    assert!(!old_path(&c, "broken").exists() && old_dir(&c).join("broken.json.bak").exists());
+    assert!(load_all(&c).iter().all(|l| l.id != "broken"));
     // Once: nothing more happens on the next read, and an older .bak is never written over.
     let before = stamp(&c);
     assert_eq!(convert_old_files(&c), 0);

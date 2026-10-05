@@ -17,6 +17,8 @@ here.
   `.claude/agents`) can do a brief's steps. The Agents list shows yours under **From Claude Code**; platoon only reads
   them, and `c` copies one into platoon's own to change it.
 - A task's screen names its squad by its brief ("Coding brief").
+- The built-in Research and Summarize squads no longer have the project's tests run after them: their briefs don't ask
+  for it, since they don't change your code. Coding and Docs still do, and squads of your own keep the tests.
 
 ### Added
 
