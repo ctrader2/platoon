@@ -548,9 +548,9 @@ fn yes_no(b: bool) -> String {
 /// A check of a brief as the Squads tab shows it: its mark, the mark's colour and what platoon does about it.
 pub fn check_says(kind: &CheckKind, t: &Theme) -> (&'static str, Color, String) {
     match kind {
-        CheckKind::Tests => ("✓", t.ok, "platoon runs the project's test command".to_string()),
-        CheckKind::Read(_) => ("✓", t.ok, "platoon checks it ran after the last change".to_string()),
-        CheckKind::Acceptance => ("✓", t.ok, "platoon checks the result ticks each box".to_string()),
+        CheckKind::Tests => ("✓", t.ok, "platoon runs the project's tests".to_string()),
+        CheckKind::Read(_) => ("✓", t.ok, "platoon checks it ran after changes".to_string()),
+        CheckKind::Acceptance => ("✓", t.ok, "platoon checks the squad's result".to_string()),
         CheckKind::Gate => ("‖", t.subtext, "held by platoon".to_string()),
         CheckKind::Prose => ("·", t.dim, "the squad checks this itself".to_string()),
     }
@@ -1295,7 +1295,7 @@ mod tests {
         let wide = text(&check_lines(&s, &t, 100));
         assert_eq!(wide.len(), 3);
         assert!(
-            wide[0].starts_with("✓ the checker read the change") && wide[0].ends_with("platoon checks it ran after the last change"),
+            wide[0].starts_with("✓ the checker read the change") && wide[0].ends_with("platoon checks it ran after changes"),
             "{wide:?}"
         );
         assert!(wide[1].starts_with("· every claim in the report names its source") && wide[1].ends_with("the squad checks this itself"));

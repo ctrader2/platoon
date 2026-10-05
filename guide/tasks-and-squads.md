@@ -479,7 +479,8 @@ What you see: the task's **Tests** line, beside the Tasks tab and on its screen,
 | Tests **not run** · a session of yours is open there | they couldn't be run, and why |
 | Tests not run yet | the project has a command, and the squad hasn't finished yet |
 | Tests not run: its folders aren't in git | the task has no copy of a folder in git, or branch, to run them in |
-| Tests none set for this project (quiet) | the project has no test command (or the task is in no project) |
+| Tests **not run** · none set for this project | the squad's brief asks for the tests, and the project has no test command |
+| Tests none set for this project (quiet) | the project has no test command (or the task is in no project), and the brief doesn't ask for the tests |
 
 On the Tasks tab, a task whose tests still fail after the squad's two tries says **tests failing** at the right of its row;
 `y` answers its squad as for a question (to tell it what to do about them), and its screen says what platoon said

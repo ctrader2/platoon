@@ -1057,7 +1057,7 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         head.push(Line::from(line));
     }
     if x.leader().is_some() {
-        for (name, wrapped) in tasks_view::check_rows(app, x, w.saturating_sub(LABEL)) {
+        for (name, wrapped) in tasks_view::check_rows(app, &app.task_scope().unwrap_or_default(), x, w.saturating_sub(LABEL)) {
             for (k, row) in wrapped.into_iter().enumerate() {
                 let mut line = vec![label(if k == 0 { name } else { "" })];
                 line.extend(row);

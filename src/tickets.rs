@@ -1767,8 +1767,7 @@ impl Tickets {
 
     /// The text of a leader's snapshot, if it has one and it can be read.
     pub fn snapshot(&self, leader: &Leader) -> Option<String> {
-        let name = leader.snapshot.as_deref()?;
-        fs::read_to_string(bodies_dir(&self.config, &self.project).join(name)).ok()
+        snapshot_text(&self.config, &self.project, leader)
     }
 
     /// The squad's result for the ticket, if it has written one.
@@ -1959,6 +1958,12 @@ pub fn move_task(config: &Path, from: &str, number: u32, to: &str) -> io::Result
 }
 
 /// The name of the file the `k`th leader of ticket `number` keeps what it was started with in, beside the bodies.
+/// What a leader of a task of `project` was started with (its snapshot file's text), without opening the task store.
+pub fn snapshot_text(config: &Path, project: &str, leader: &Leader) -> Option<String> {
+    let name = leader.snapshot.as_deref()?;
+    fs::read_to_string(bodies_dir(config, project).join(name)).ok()
+}
+
 pub fn snapshot_file(number: u32, k: usize) -> String {
     format!("{number:02}-squad-{k}.json")
 }

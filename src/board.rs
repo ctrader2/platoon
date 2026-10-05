@@ -443,6 +443,11 @@ pub fn check_lines(t: &Ticket, checks: &[(String, CheckKind)], clock: &dyn Fn(u6
     out
 }
 
+/// The Tests line of a task whose brief asks for the tests while its project has no test command: not run.
+pub fn tests_not_set_but_asked() -> Vec<Piece> {
+    vec![piece("not run", Tone::Warn), piece(" · none set for this project", Tone::Dim)]
+}
+
 /// One task's row in `section`.
 pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
     let t = i.task;

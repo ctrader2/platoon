@@ -359,13 +359,21 @@ pub(super) fn where_line(app: &App, project: &str, x: &Ticket, w: usize) -> Line
 /// (`board::tests_line`), wrapped after whole words, the verdict in its color and the rest quiet.
 pub(super) fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
     let command = app.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default();
-    piece_rows(app, board::tests_line(x, &command, &|secs| clock(Some(secs * 1000))), room)
+    let mut pieces = board::tests_line(x, &command, &|secs| clock(Some(secs * 1000)));
+    // The brief asks for the tests and the project has none to run: the brief's check isn't made, and it says so.
+    if command.is_empty()
+        && x.last_tests().is_none()
+        && app.leader_checks(project, x).iter().any(|(_, k)| *k == crate::brief::CheckKind::Tests)
+    {
+        pieces = board::tests_not_set_but_asked();
+    }
+    piece_rows(app, pieces, room)
 }
 
 /// A task's lines for its brief's other checks (an agent reading the change, the acceptance boxes, the gate, the
 /// squad's own), each its label and its words wrapped under themselves: what its leader was started with.
-pub(super) fn check_rows(app: &App, x: &Ticket, room: usize) -> Vec<(&'static str, Vec<Vec<Span<'static>>>)> {
-    let checks = app.leader_checks(x);
+pub(super) fn check_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<(&'static str, Vec<Vec<Span<'static>>>)> {
+    let checks = app.leader_checks(project, x);
     board::check_lines(x, &checks, &|secs| clock(Some(secs * 1000)))
         .into_iter()
         .map(|(label, pieces)| (label, piece_rows(app, pieces, room)))
@@ -449,7 +457,7 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
     // Once a squad has had it: what its tests said (or that the project has none), then its brief's other checks.
     if x.leader().is_some() {
         // The labels take the room of the longest ("Its own checks") once there are more than the tests.
-        let others = check_rows(app, &x, w.saturating_sub(15));
+        let others = check_rows(app, &project, &x, w.saturating_sub(15));
         let label_w = if others.is_empty() { 6 } else { 15 };
         let mut rows = vec![("Tests", tests_rows(app, &project, &x, w.saturating_sub(label_w)))];
         rows.extend(others);

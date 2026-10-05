@@ -86,12 +86,11 @@ impl App {
         }
     }
 
-    /// The checks task `x`'s current leader was started with (its snapshot, in the task store open now), each line
-    /// with its kind; none for a task with no leader, or a leader from before briefs.
-    pub fn leader_checks(&self, x: &Ticket) -> Vec<(String, CheckKind)> {
-        let Some(store) = self.tickets_store() else { return Vec::new() };
+    /// The checks task `x` of `project`'s current leader was started with (its snapshot), each line with its kind; none
+    /// for a task with no leader, or a leader from before briefs.
+    pub fn leader_checks(&self, project: &str, x: &Ticket) -> Vec<(String, CheckKind)> {
         x.leader()
-            .and_then(|l| store.snapshot(l))
+            .and_then(|l| crate::tickets::snapshot_text(&self.config, project, l))
             .and_then(|text| crate::squads::Launch::from_json(&text))
             .filter(|l| l.checks.is_some())
             .map(|l| l.check_kinds())

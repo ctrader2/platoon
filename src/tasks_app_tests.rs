@@ -303,10 +303,13 @@ fn enter_writes_the_terms_on_the_task_before_the_commander_and_the_leader_gets_t
     assert_eq!(crate::squads::squad_gate(&input, &w.config), None);
     // Its screen: the new lines, in the label/value shape, and the squad.
     key(&mut app, KeyCode::Enter);
-    let f = flat(&draw(&mut term, &app));
+    let shown = draw(&mut term, &app);
+    let f = flat(&shown);
+    // The task's side of the screen alone (the squad's session is beside it).
+    let task_side = flat(&shown.lines().map(|l| l.split('│').next().unwrap_or_default()).collect::<Vec<_>>().join("\n"));
     assert!(
-        f.contains("Squad Coding brief Tests none set for this project Review not checked yet · reviewer is to read the change Acceptance not checked yet · every box ticked, with how Publishing you let it publish on its own On its own works and publishes"),
-        "{f}"
+        task_side.contains("Squad Coding brief Tests not run · none set for this project Review not checked yet · reviewer is to read the change Acceptance not checked yet · every box ticked, with how Publishing you let it publish on its own On its own works and publishes Works in shop, on a new branch task/1 · lands on release"),
+        "{task_side}"
     );
     assert!(f.contains("Its own folder"), "{f}");
 }

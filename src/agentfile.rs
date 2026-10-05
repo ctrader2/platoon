@@ -979,6 +979,59 @@ mod tests {
     }
 
     #[test]
+    fn the_coding_tools_agents_come_after_platoons_own_the_task_folders_before_the_users() {
+        let c = dir("resolve");
+        let root = c.join("claude");
+        let repo = c.join("shop");
+        fs::create_dir_all(repo.join(".git")).unwrap();
+        let write = |d: &Path, name: &str, body: &str, front: &str| {
+            fs::create_dir_all(d).unwrap();
+            fs::write(d.join(format!("{name}.md")), format!("---\nname: {name}\n{front}---\n{body}\n")).unwrap();
+        };
+        write(&root.join("agents"), "tester", "The user's tester.", "tools: Read, Bash\n");
+        write(&root.join("agents"), "planner", "Not platoon's planner.", "model: haiku\n");
+        write(&root.join("agents"), "only-mine", "Mine alone.", "");
+        write(&repo.join(".claude/agents"), "tester", "The shop's tester.", "tools: Read, Bash, Edit\nmodel: opus\n");
+        let find = |all: &[Agent], id: &str| all.iter().find(|a| a.id == id).cloned();
+        // Without a task: platoon's own, then the user's.
+        let all = resolve(&c, &root, None);
+        assert_eq!(find(&all, "planner").unwrap().guidance, crate::squads::PLANNER_GUIDANCE, "platoon's own wins");
+        assert_eq!(find(&all, "tester").unwrap().guidance, "The user's tester.");
+        assert_eq!(all.iter().filter(|a| a.id == "tester").count(), 1, "each id once");
+        // For a task in the shop (a folder inside its repository too): the shop's own before the user's.
+        for folder in [repo.clone(), repo.join("src")] {
+            fs::create_dir_all(&folder).unwrap();
+            let all = resolve(&c, &root, Some(&folder));
+            let t = find(&all, "tester").unwrap();
+            assert_eq!(
+                (t.guidance.as_str(), t.model.as_str(), t.files, t.commands, t.web),
+                ("The shop's tester.", "opus", true, true, false)
+            );
+            assert_eq!(t.own_tools, Some(vec!["Read".to_string(), "Bash".into(), "Edit".into()]));
+            assert!(
+                find(&all, "only-mine").is_some_and(|a| a.from_file.is_some() && a.own_tools.is_none() && a.files && a.web),
+                "no tools: every tool"
+            );
+        }
+        // No folder of the coding tool's at all: platoon's own only.
+        assert_eq!(resolve(&c, &c.join("nowhere"), None).len(), builtins().len());
+        // The Agents list shows the user's, under their own kind; a copy into platoon's own takes the other's place.
+        let listed = claude_listed(&root);
+        assert_eq!(
+            listed.iter().map(|l| (l.id.as_str(), l.kind)).collect::<Vec<_>>(),
+            [("only-mine", Kind::Claude), ("planner", Kind::Claude), ("tester", Kind::Claude)]
+        );
+        let copy = own_copy(&c, listed[2].agent.as_ref().unwrap(), "tester");
+        assert_eq!(
+            (copy.id.as_str(), copy.model.as_str(), copy.commands, copy.files, copy.from_file.as_ref()),
+            ("tester", "sonnet", true, false, None)
+        );
+        save(&c, &copy).unwrap();
+        assert_eq!(find(&resolve(&c, &root, Some(&repo)), "tester").unwrap().from_file, None, "platoon's own now");
+        assert!(fs::read_to_string(root.join("agents/tester.md")).unwrap().contains("The user's tester."), "never written");
+    }
+
+    #[test]
     fn used_in_says_which_squads_and_steps() {
         let s: Vec<Squad> = squadfile::builtins();
         assert_eq!(squadfile::users_of(&s, "planner"), [("coding".to_string(), "Coding".to_string(), vec![1])]);

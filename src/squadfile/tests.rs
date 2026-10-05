@@ -520,6 +520,19 @@ fn the_drafting_prompt_is_guidance_then_platoons_fixed_part() {
 }
 
 #[test]
+fn a_crew_is_loaded_from_a_brief_with_the_agents_its_steps_name() {
+    let c = dir("crew");
+    let mut mine = agentfile::blank(&c, "Test runner", &[]);
+    mine.guidance = "You run the tests.".into();
+    agentfile::save(&c, &mine).unwrap();
+    save_text(&c, "careful", "---\nid: careful\nname: Careful\n---\n# What it does\nCareful work.\n# Steps\n1. planner: Plans.\n2. test-runner: Runs the tests. May send the work back to step 1, at most once.\n").unwrap();
+    let crew = Crew::load(&c, &get(&c, "careful").unwrap());
+    assert_eq!(crew.agents.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(), ["planner", "test-runner"]);
+    assert_eq!(crew.agents[1].guidance, "You run the tests.");
+    assert_eq!(crew.squad.workflow[1].back, Some(Back { to: 0, times: 1 }));
+}
+
+#[test]
 fn research_docs_and_summarize_resolve_to_their_agents() {
     let switches = |id: &str| -> Vec<(String, String, bool, bool, bool)> {
         Crew::of(&builtin(id).unwrap(), &agents())

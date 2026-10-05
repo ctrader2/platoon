@@ -763,12 +763,19 @@ fn a_tasks_screen_shows_each_check_of_its_brief_in_its_colour() {
         )
         .unwrap();
     app.reload_for_test();
+    let t = app.effective_theme().clone();
+    // Beside the board: the same lines under the Tests line.
+    key(&mut app, KeyCode::Char('2'));
+    app.bd.selected = Some(crate::app::BRow::Task(web.clone(), 1));
+    let mut term = Terminal::new(TestBackend::new(130, 40)).unwrap();
+    let d = details(&draw(&mut term, &app));
+    assert!(d.contains("Tests none set for this project Review ✗ reviewer hasn't run since builder's last change"), "{d}");
+    assert!(d.contains("Acceptance ✓ 2 of 2 ticked, with how") && d.contains("A check fails"), "{d}");
     key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(1));
-    let t = app.effective_theme().clone();
     for (wide, high) in [(120u16, 40u16), (80, 24)] {
         let mut term = Terminal::new(TestBackend::new(wide, high)).unwrap();
         let shown = draw(&mut term, &app);

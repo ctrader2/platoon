@@ -208,8 +208,8 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
         "briefs/coding.md for you to change.",
         "What it does Makes a change to code in a git repository",
         "Steps ○ 1 planner Opus commands",
-        "Checks ✓ the tests pass platoon runs the project's test command",
-        "✓ the reviewer read the change platoon checks it ran after the last change",
+        "Checks ✓ the tests pass platoon runs the project's tests",
+        "✓ the reviewer read the change platoon checks it ran after changes",
         "Every squad has the same leader: its system prompt and model are in Settings (s) → Projects.",
     ] {
         assert!(r.contains(s), "{s}: {r}");
@@ -231,7 +231,7 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
     assert_eq!((bg(&term, (x + 3, y)), fg(&term, (x, y))), (t.surface, t.accent));
     assert_eq!(fg(&term, find(&term, "What it does")), t.accent);
     assert_eq!(fg(&term, find(&term, "✓ the tests pass")), t.ok);
-    assert_eq!(fg(&term, find(&term, "platoon runs the project's test command")), t.subtext);
+    assert_eq!(fg(&term, find(&term, "platoon runs the project's tests")), t.subtext);
     // Further down, scrolled with the arrows once the details have the keys: when it asks you, and the leader's note.
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.sqt.focus, SqFocus::Detail);
@@ -241,7 +241,7 @@ fn the_tab_shows_each_squads_brief_as_it_reads() {
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("Asks you Before anything others can see, and when it is stuck."), "{f}");
     assert!(
-        f.contains("✓ every acceptance box is ticked, with how platoon checks the result ticks each box")
+        f.contains("✓ every acceptance box is ticked, with how platoon checks the squad's result")
             && f.contains("‖ nothing others see without your yes held by platoon"),
         "{f}"
     );

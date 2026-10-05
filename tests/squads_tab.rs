@@ -502,7 +502,7 @@ fn an_old_squad_file_is_shown_as_the_brief_it_became() {
     t.wait_for_all(&["╭ [Squads]", "Handbook"]);
     t.send(b"G");
     t.wait_for_all(&["╭ Handbook", "A file you own:", "briefs/handbook.md", "Writes the handbook.", "2 tech-writer", "↩ back to step 2"]);
-    t.wait_for_all(&["the tests pass", "platoon runs the project's test command"]);
+    t.wait_for_all(&["the tests pass", "platoon runs the project's tests"]);
     let b = lab.brief("handbook");
     assert!(b.contains("3. editor: Checks it. May send the work back to step 2, at most once.\n"), "{b}");
     assert!(lab.config.join("squads/handbook.json.bak").exists() && !lab.config.join("squads/handbook.json").exists());
