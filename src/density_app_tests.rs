@@ -1,7 +1,8 @@
 //! Density and narrow widths, drawn the way a terminal shows them (TestBackend) at 80x24, 60x24 and 60x14: the
 //! Sessions list's two lines a conversation and its selection, the gaps between columns and the order they go in,
 //! the CONTEXT column left blank when nothing is known, the Squads tab as one pane on a narrow terminal, the settings'
-//! tab strip, `S` handing a ticket to a squad, and j/k and PageUp/PageDown in the lists. Every directory is a temp dir
+//! tab strip, `S` handing a ticket to a squad, j/k and PageUp/PageDown in the lists, and which hints the Sessions
+//! footer keeps at 120 and 80 columns. Every directory is a temp dir
 //! (`World`); nothing here starts a process.
 
 use crate::app::{App, Mode, Pane, SqFocus, SqView};
@@ -333,4 +334,30 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
     assert_eq!(app.ticket_selected(), first + 1);
     ch(&mut app, 'k');
     assert_eq!(app.ticket_selected(), first);
+}
+
+#[test]
+fn at_120_columns_the_sessions_footer_keeps_t_draft_tasks_and_lets_rename_go_first() {
+    let w = ten("dense-footer");
+    let mut app = w.app();
+    app.reload_for_test();
+    let footer_at = |app: &App, cols: u16| shown(app, cols, 30).0.last().cloned().unwrap();
+    let (lines, term) = shown(&app, 120, 30);
+    let footer = lines.last().unwrap();
+    for want in ["t draft tasks", "h hand-off", "m project", "s settings", "? help", "q quit"] {
+        assert!(footer.contains(want), "{want}: {footer}");
+    }
+    assert!(!footer.contains("r rename"), "rename goes before it: {footer}");
+    let y = lines.len() - 1;
+    assert_eq!(term.backend().buffer()[(col_of(footer, "t draft tasks") as u16, y as u16)].fg, app.effective_theme().accent, "the key");
+    // Wide enough, all of them; at 80 columns the settings are still there (t, h and m have gone by then).
+    let wide = footer_at(&app, 160);
+    assert!(wide.contains("t draft tasks") && wide.contains("r rename") && wide.contains("s settings"), "{wide}");
+    let narrow = footer_at(&app, 80);
+    assert!(narrow.contains("s settings") && !narrow.contains("t draft tasks") && !narrow.contains("r rename"), "{narrow}");
+    // The help lists every one at any width.
+    ch(&mut app, '?');
+    let (lines, _) = shown(&app, 80, 40);
+    let f = flat(&lines);
+    assert!(f.contains("t draft tasks") && f.contains("r rename") && f.contains("s settings"), "{f}");
 }

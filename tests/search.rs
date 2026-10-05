@@ -78,7 +78,7 @@ fn slash_opens_the_dialog_the_quick_filter_narrows_enter_keeps_it_and_esc_clears
     t.wait_for("alpha");
     t.wait_for("beta");
     t.wait_for_flat("/ search"); // (the footer of a frame can arrive after its rows)
-    t.wait_for_flat("r rename");
+    t.wait_for_flat("? help");
 
     t.send(b"/");
     t.wait_for("╭ Search");

@@ -59,11 +59,13 @@ With nothing in play, the tab says: "Nothing in play. Press n to write a task, o
 | `m` | move it to another project, or out of any (**No project**). It gets that project's next number and keeps the one it had for its branch (`task/5` stays `task/5`); its text, its result, its own folder and what its squads were started with go with it; its copies of folders and its branch stay as they are; what it waited for is dropped (those were the other project's tasks). Not while its squad's session is running, or while it waits for a free squad: the line says why |
 | `S` | hand it to a squad (see [The hand-over](#the-hand-over)) |
 | `c` | cancel it, after asking |
-| `p` `e` `r` `f` `b` `w` `v` | as on the [task's own screen](#a-tasks-own-screen) |
+| `p` | let its squad publish, when it needs you for that (as on the [task's own screen](#a-tasks-own-screen)) |
+| `e` `r` `f` `b` `w` `v` | as on the [task's own screen](#a-tasks-own-screen) |
 | `/` | narrow the board to the tasks whose title, project or squad has what you type (it narrows as you type); `esc` clears it |
 | `↑` `↓` | move (`j` `k`, `PgUp` `PgDn`, `g` `G` too) |
 
-`1` to `4` switch tabs, `?` lists every key, and `q` quits from here as from the other top-level lists.
+After `y`, `p` or `h`, the cursor stays where it was, on the next task that needs you, rather than following the task
+to its new group. `1` to `4` switch tabs, `?` lists every key, and `q` quits from here as from the other top-level lists.
 
 ## Tasks
 

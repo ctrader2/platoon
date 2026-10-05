@@ -408,6 +408,17 @@ impl App {
             KeyCode::PageUp => self.move_board(-super::page_of(&self.pages.tickets)),
             KeyCode::Char('g') | KeyCode::Home => self.select_board_row(0),
             KeyCode::Char('G') | KeyCode::End => self.select_board_row(self.board_rows().len().saturating_sub(1)),
+            // The go-ahead to publish: as with `y`, the cursor stays where it was, on the next task that needs the user.
+            KeyCode::Char('p') if self.board_task().is_some() => {
+                let Some((p, n)) = self.board_task() else { return };
+                self.set_task_store(&p);
+                let place = self.board_selected();
+                let wanted = self.ticket(n).is_some_and(|t| t.state == State::Waiting && t.publish_wanted && t.busy.is_none());
+                self.ticket_key(n, key);
+                if wanted {
+                    self.keep_board_place(place);
+                }
+            }
             _ => match self.board_task() {
                 Some((p, n)) => {
                     self.set_task_store(&p);

@@ -701,8 +701,9 @@ fn the_footer_offers_search_and_help_at_80_columns_and_rename_where_it_fits() {
         for want in ["/ search", "s settings", "q quit", "enter open", "a archive", "? help"] {
             assert!(shown.contains(want), "{want:?} at {cols}\n{shown}");
         }
-        // At 80 columns `r rename` gives way to `? help`, which lists it.
-        assert_eq!(shown.contains("r rename"), cols > 80, "at {cols}\n{shown}");
+        // Below about 126 columns `r rename` gives way to the others (`t draft tasks` stays ahead of it from 120 on), and
+        // `? help` lists it.
+        assert_eq!(shown.contains("r rename"), cols > 120, "at {cols}\n{shown}");
         assert!(!shown.contains("/ filter"));
     }
 }

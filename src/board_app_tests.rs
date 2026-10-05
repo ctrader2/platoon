@@ -510,6 +510,21 @@ fn y_types_the_answer_into_the_squads_session_gives_the_go_ahead_or_continues_a_
 }
 
 #[test]
+fn p_gives_the_go_ahead_and_the_cursor_moves_to_the_next_task_that_needs_you_as_y_does() {
+    let (w, mut app, web, _docs) = board_world("board-p");
+    // #7 wants to publish (it has waited longest, so it comes first); #6 asks a question.
+    pick(&mut app, &web, 7);
+    key(&mut app, KeyCode::Char('p'));
+    let t = Tickets::open(&w.config, &web).get(7).cloned().unwrap();
+    assert!(t.go_ahead && t.state == State::Working, "{t:?}");
+    assert_eq!(app.board_task(), Some((web.clone(), 6)), "the cursor stays in place: on the next task that needs you");
+    // p on one that wants nothing published says so, and the cursor stays on it.
+    key(&mut app, KeyCode::Char('p'));
+    assert_eq!(app.active_notice(), Some("#6 isn't waiting to publish anything."));
+    assert_eq!(app.board_task(), Some((web.clone(), 6)));
+}
+
+#[test]
 fn n_makes_a_task_in_a_project_or_in_none_after_its_folder_is_picked() {
     let (w, mut app, web, docs) = board_world("board-new");
     // In no project: the folder picker comes before anything is written.
