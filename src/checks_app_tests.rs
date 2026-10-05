@@ -439,3 +439,166 @@ fn only_the_window_that_holds_the_squad_lines_lock_runs_checks() {
     settle(&mut app, &w, &web, &[]);
     assert_eq!(task(&w, &web).checks.len(), 2);
 }
+
+// ---- what the screens say ---------------------------------------------------------------------------------------------
+
+/// Hold the squad line's lock as another platoon window would: this test's window then runs no check itself.
+fn another_window_holds_the_line(config: &Path) -> fs::File {
+    use std::os::fd::AsRawFd;
+    fs::create_dir_all(config).unwrap();
+    let f = fs::OpenOptions::new().create(true).truncate(false).write(true).open(config.join("squad-line.lock")).unwrap();
+    // SAFETY: an advisory lock on a file this test holds open.
+    assert_eq!(unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0);
+    f
+}
+
+/// What is left of the first line down the screen (a task beside its squad's place), read top to bottom.
+fn left(shown: &str) -> String {
+    flat(&shown.lines().map(|l| l.split('│').next().unwrap_or("")).collect::<Vec<_>>().join("\n"))
+}
+
+/// The board's details: what is right of the line between the list and them, read top to bottom.
+fn details(shown: &str) -> String {
+    flat(&shown.lines().map(|l| l.split_once('│').map_or("", |(_, d)| d)).collect::<Vec<_>>().join("\n"))
+}
+
+fn check(ok: bool, attempt: u32, summary: &str) -> Value {
+    json!({"kind": "tests", "ok": ok, "summary": summary, "command": "cargo test", "at": crate::usage::now() - 120,
+        "folder": "/home/u/shop-worktrees/task-1", "try": attempt})
+}
+
+/// "Web shop" (its test command set) with #1 asking to close it, its tests passed; #2 Working on a fix after they
+/// failed; #3 whose check is due; and "Docs site" (no test command) with #1 asking a question. Another window holds the
+/// squad line, so nothing is run here.
+fn screens_world(name: &str) -> (World, App, String, String, fs::File) {
+    let w = World::new(name);
+    let lock = another_window_holds_the_line(&w.config);
+    w.transcript("user-1", "/tmp", "make a shop", 10);
+    let mut app = w.app();
+    let web = app.projects.create("Web shop").unwrap();
+    app.projects.set_test_command(&web, "cargo test").unwrap();
+    let docs = app.projects.create("Docs site").unwrap();
+    let now = crate::usage::now();
+    let copy = w.base.join("shop-worktrees/task-1");
+    fs::create_dir_all(&copy).unwrap();
+    let led = |n: u32, state: &str, extra: Value| {
+        let mut t = json!({"number": n, "title": format!("Task {n}"), "file": format!("{n:02}-t.md"), "state": state,
+            "folders": ["/home/u/shop"], "blocked_by": [], "created": 1, "updated": now - 60 * u64::from(n),
+            "leaders": [{"squad": "coding", "session": format!("L{n}"), "started": now - 600, "names": "squad-role"}],
+            "worktrees": [{"folder": "/home/u/shop", "path": copy.to_string_lossy(), "branch": format!("task/{n}")}]});
+        for (k, v) in extra.as_object().cloned().unwrap_or_default() {
+            t[k] = v;
+        }
+        t
+    };
+    let write = |project: &str, tasks: Vec<Value>| {
+        let path = crate::tickets::path_in(&w.config, project);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, json!({"next": 9, "tickets": tasks}).to_string()).unwrap();
+    };
+    write(
+        &web,
+        vec![
+            led(1, "waiting", json!({"reason": "Asks: Shall I close this task?", "checks": [check(true, 1, "214 passed")]})),
+            led(2, "working", json!({"checks": [check(false, 1, "3 failed"), check(false, 2, "211 passed, 3 failed")]})),
+            led(3, "waiting", json!({"reason": "Asks: Shall I close this task?", "check_due": {"stop": "close", "at": 1}})),
+        ],
+    );
+    write(&docs, vec![led(1, "waiting", json!({"reason": "Asks: Which page?"}))]);
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('2'));
+    app.notice = None;
+    (w, app, web, docs, lock)
+}
+
+#[test]
+fn the_tests_line_beside_the_board_and_on_a_tasks_screen_says_each_state_in_its_color() {
+    let (_w, mut app, web, docs, _lock) = screens_world("ck-screens");
+    let t = app.effective_theme().clone();
+    let at = crate::handoff::local_time(crate::usage::now() - 120)
+        .map(|s| s.chars().rev().take(5).collect::<String>().chars().rev().collect::<String>())
+        .unwrap_or_default();
+    // (the task, what its Tests line says, its verdict, the verdict's color)
+    let cases: [(&str, u32, String, &str, Color); 4] = [
+        (&web, 1, format!("214 passed · platoon ran `cargo test` at {at}"), "214 passed", t.ok),
+        (&web, 2, "failed · the squad is fixing them (try 2 of 2)".into(), "failed", t.warn),
+        (&web, 3, "running…".into(), "running…", t.busy),
+        (&docs, 1, "none set for this project".into(), "none set", t.dim),
+    ];
+    for (project, n, says, verdict, color) in cases {
+        app.bd.selected = Some(crate::app::BRow::Task(project.to_string(), n));
+        key(&mut app, KeyCode::Char('x'));
+        assert_eq!(app.board_task(), Some((project.to_string(), n)));
+        // Beside the board, under where it is (at 100 columns wrapped under itself).
+        for wide in [120, 100] {
+            let mut term = Terminal::new(TestBackend::new(wide, 40)).unwrap();
+            let shown = draw(&mut term, &app);
+            let d = details(&shown);
+            assert!(d.contains(&format!("Coding squad · 10 min Tests {says}")), "#{n} at {wide}: {d}");
+            assert_eq!(fg_on(&term, verdict, verdict), color, "#{n} beside the board at {wide}");
+            assert_eq!(fg_on(&term, verdict, "Tests"), t.dim, "the label is quiet");
+        }
+        // On its screen, wide (beside its squad's place, wrapped under itself) and narrow (the whole width), in the
+        // label/value shape.
+        key(&mut app, KeyCode::Enter);
+        assert_eq!(app.tk.open, Some(n));
+        for (wide, high) in [(120, 40), (80, 24)] {
+            let mut term = Terminal::new(TestBackend::new(wide, high)).unwrap();
+            let shown = draw(&mut term, &app);
+            let f = if wide >= 100 { left(&shown) } else { flat(&shown) };
+            assert!(f.contains(&format!("Squad Coding squad Tests {says} ")), "#{n} at {wide}: {shown}");
+            assert_eq!(fg_on(&term, verdict, verdict), color, "#{n} on its screen at {wide}");
+            if verdict != "running…" {
+                assert_eq!(fg_on(&term, verdict, &says[verdict.len()..says.len().min(verdict.len() + 3)]), t.dim, "the rest is quiet");
+            }
+        }
+        key(&mut app, KeyCode::Esc);
+    }
+    // The board's rows say it after the squad's words, cutting those first.
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Coding squad asks: Shall I close this task? · tests ✓"), "{shown}");
+    assert!(shown.contains("Coding squad asks: Shall I close… · running the tests"), "{shown}");
+    assert_eq!(fg_on(&term, "· tests ✓", "✓"), t.ok);
+    assert_eq!(fg_on(&term, "running the tests", "running the tests"), t.busy);
+}
+
+#[test]
+fn a_task_whose_tests_still_fail_needs_you_for_that_on_the_board_and_y_answers_its_squad() {
+    let (w, mut app, web, _docs, _lock) = screens_world("ck-need");
+    let path = crate::tickets::path_in(&w.config, &web);
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    v["tickets"][1]["state"] = json!("waiting");
+    v["tickets"][1]["reason"] = json!(checks::STILL_FAIL);
+    v["tickets"][1]["tests_failing"] = json!(true);
+    v["tickets"][1]["checks"] = json!([check(false, 1, "3 failed"), check(false, 2, "3 failed"), check(false, 3, "211 passed, 3 failed")]);
+    fs::write(&path, v.to_string()).unwrap();
+    app.reload_for_test();
+    let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    let f = flat(&shown);
+    assert!(f.contains("#2 Task 2 tests failing"), "{shown}");
+    assert!(f.contains("Coding squad tried twice, and the tests still… · tests ✗"), "{shown}");
+    let t = app.effective_theme().clone();
+    assert_eq!(fg_on(&term, "tests failing", "tests failing"), t.warn);
+    app.bd.selected = Some(crate::app::BRow::Task(web.clone(), 2));
+    key(&mut app, KeyCode::Char('x'));
+    let d = details(&draw(&mut term, &app));
+    assert!(d.contains("Tests failed · 211 passed, 3 failed · platoon ran `cargo test` at "), "{d}");
+    assert!(d.contains("The tests fail The tests still fail after the squad tried twice y answer"), "{d}");
+    // Its screen says it is platoon speaking, not the squad.
+    key(&mut app, KeyCode::Enter);
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("platoon says The tests still fail after the squad tried twice"), "{f}");
+    key(&mut app, KeyCode::Esc);
+    // The help says what the tests are.
+    key(&mut app, KeyCode::Char('?'));
+    let mut term = Terminal::new(TestBackend::new(120, 60)).unwrap();
+    assert!(
+        flat(&draw(&mut term, &app)).contains("Tests: when a squad says it is finished, platoon runs the project's test command itself")
+    );
+    key(&mut app, KeyCode::Esc);
+    // y: the squad's session isn't running, so it is continued for the user to tell it there.
+    key(&mut app, KeyCode::Char('y'));
+    assert_eq!(app.active_notice(), Some("#2's squad is running again: type your answer in its session."));
+}

@@ -266,7 +266,12 @@ fn the_board_lists_every_task_in_play_across_projects_in_its_sections_with_the_d
     // The details of the picked row (the first: #7) beside the list, after a line.
     assert!(shown.lines().nth(5).unwrap().contains('│'), "{shown}");
     let d = details(&shown);
-    assert!(d.starts_with("#7 Rate limit the login form in WS Web shop · Coding squad · 48 min The squad wants to publish"), "{d}");
+    assert!(
+        d.starts_with(
+            "#7 Rate limit the login form in WS Web shop · Coding squad · 48 min Tests none set for this project The squad wants to publish"
+        ),
+        "{d}"
+    );
     assert!(d.contains("y go ahead"), "{d}");
     // At 120 columns the same, the second lines cut after a word where they must be.
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();

@@ -1018,10 +1018,12 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
             Span::styled(hint, Style::new().fg(hint_fg(t))),
         ]));
     }
-    // What the squad said when it stopped: its question, why it is stuck, what it wants to publish.
+    // What the squad said when it stopped: its question, why it is stuck, what it wants to publish. (Or platoon's own
+    // words, when the tests fail.)
     if !x.reason.is_empty() {
+        let who = if x.tests_failing { "platoon says" } else { "Squad says" };
         for (i, l) in wrap(&x.reason, w.saturating_sub(LABEL)).into_iter().enumerate() {
-            head.push(Line::from(vec![label(if i == 0 { "Squad says" } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
+            head.push(Line::from(vec![label(if i == 0 { who } else { "" }), Span::styled(l, Style::new().fg(t.warn))]));
         }
     }
     // Why the last hand-over to a squad didn't happen: the commander's word, or what went wrong after it.
@@ -1042,6 +1044,12 @@ fn draw_ticket_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
         if x.go_ahead {
             head.push(Line::from(vec![label(""), Span::styled("you let it publish", Style::new().fg(t.warn))]));
         }
+    }
+    // What its tests said when platoon last ran them (or that its project has none), wrapped under itself.
+    for (k, row) in tasks_view::tests_rows(app, &app.task_scope().unwrap_or_default(), x, w.saturating_sub(LABEL)).into_iter().enumerate() {
+        let mut line = vec![label(if k == 0 { "Tests" } else { "" })];
+        line.extend(row);
+        head.push(Line::from(line));
     }
     let room = w.saturating_sub(LABEL);
     // A label, then its words wrapped under themselves (never cut mid-word).

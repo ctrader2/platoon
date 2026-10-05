@@ -68,6 +68,12 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             app.keys.get().draft_label()
         )));
     }
+    // Where tasks are: what the Tests line means.
+    if app.board_showing() || app.tk.open.is_some() || app.open_project.is_some() {
+        out.push(Entry::Note(
+            "Tests: when a squad says it is finished, platoon runs the project's test command itself (T on the project's screen sets it). A failure goes back to the squad twice at most, then to you.".into(),
+        ));
+    }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
     if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {

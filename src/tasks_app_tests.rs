@@ -305,7 +305,7 @@ fn enter_writes_the_terms_on_the_task_before_the_commander_and_the_leader_gets_t
     key(&mut app, KeyCode::Enter);
     let f = flat(&draw(&mut term, &app));
     assert!(
-        f.contains("Squad Coding squad On its own works and publishes Works in shop, on a new branch task/1 · lands on release"),
+        f.contains("Squad Coding squad Tests none set for this project On its own works and publishes Works in shop, on a new branch task/1 · lands on release"),
         "{f}"
     );
     assert!(f.contains("Its own folder"), "{f}");

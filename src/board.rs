@@ -65,6 +65,8 @@ pub enum Need {
     Permission,
     /// Its plan is ready (a task that plans first): the user's yes, or a change.
     Plan,
+    /// Its tests fail, and the squad has had its tries (or its session isn't running to be told).
+    Tests,
 }
 
 impl Need {
@@ -76,6 +78,7 @@ impl Need {
             Need::Stuck => "stuck",
             Need::Permission => "your OK on a command",
             Need::Plan => "a plan to approve",
+            Need::Tests => "tests failing",
         }
     }
 
@@ -87,6 +90,7 @@ impl Need {
             Need::Stuck => "The squad is stuck",
             Need::Permission => "The squad waits for your OK",
             Need::Plan => "The plan",
+            Need::Tests => "The tests fail",
         }
     }
 }
@@ -99,6 +103,8 @@ pub fn need_of(t: &Ticket) -> Option<Need> {
     let r = t.reason.as_str();
     Some(if t.permission {
         Need::Permission
+    } else if t.tests_failing {
+        Need::Tests
     } else if t.plan_ready {
         Need::Plan
     } else if t.publish_wanted {
@@ -119,6 +125,14 @@ pub fn squad_words(t: &Ticket) -> String {
     }
     if t.plan_ready {
         return "wrote its plan: y goes ahead, n changes it".into();
+    }
+    // platoon's words, not the squad's: what the tests did.
+    if t.tests_failing {
+        return if r == crate::checks::FAILED_NOT_RUNNING {
+            "stopped, and the tests failed".into()
+        } else {
+            "tried twice, and the tests still fail".into()
+        };
     }
     for (lead, says) in [("Asks: ", "asks: "), ("Stuck: ", "is stuck: "), ("Wants to publish: ", "wants to publish: ")] {
         if let Some(rest) = r.strip_prefix(lead) {
@@ -174,10 +188,16 @@ pub enum Tone {
 pub struct Piece {
     pub text: String,
     pub tone: Tone,
+    /// Shown whatever the room: what comes before it is cut first to leave it room (what the tests said).
+    pub keep: bool,
 }
 
 fn piece(text: impl Into<String>, tone: Tone) -> Piece {
-    Piece { text: text.into(), tone }
+    Piece { text: text.into(), tone, keep: false }
+}
+
+fn kept(text: impl Into<String>, tone: Tone) -> Piece {
+    Piece { text: text.into(), tone, keep: true }
 }
 
 /// One task on the board.
@@ -319,6 +339,53 @@ pub fn last_wrote(t: &Ticket, f: &dyn Facts) -> u64 {
     read.or_else(|| t.leader().map(|l| l.started)).unwrap_or(t.updated)
 }
 
+/// What a task's row says about its tests after the step marks (or the squad's words): "running the tests" while its
+/// check is due or running, "tests ✓" or "tests ✗" once it has a result, "tests not run" when the last one wasn't run
+/// (a session of the user's was open there). Nothing before any.
+/// They are kept on a narrow row: the squad's words before them are cut first.
+pub fn tests_mark(t: &Ticket) -> Vec<Piece> {
+    if t.check_due.is_some() {
+        return vec![kept(" · ", Tone::Dim), kept(crate::checks::RUNNING, Tone::Busy)];
+    }
+    match t.last_tests() {
+        None => Vec::new(),
+        Some(c) if c.skipped => vec![kept(" · tests not run", Tone::Dim)],
+        Some(c) if c.ok => vec![kept(" · tests ", Tone::Subtext), kept("✓", Tone::Ok)],
+        Some(_) => vec![kept(" · tests ", Tone::Subtext), kept("✗", Tone::Warn)],
+    }
+}
+
+/// A task's Tests line, beside the board and on its screen (after the label "Tests"): what its last check said and
+/// when, in one line, the verdict in its tone and the rest quiet. `command`: its project's test command ("" for none,
+/// or a task in no project). `clock` says a time of day ("13:52").
+///
+/// "214 passed · platoon ran `cargo test` at 13:52" (ok), "failed · the squad is fixing them (try 2 of 2)" (warn),
+/// "running…" (busy), "none set for this project" (dim); and "failed · 3 failed · platoon ran ..." once the squad has
+/// had its tries, "not run · a session of yours is open there", "not run yet", "not run: its folders aren't in git".
+pub fn tests_line(t: &Ticket, command: &str, clock: &dyn Fn(u64) -> String) -> Vec<Piece> {
+    let last = t.last_tests();
+    if t.check_due.is_some() {
+        return vec![piece("running…", Tone::Busy)];
+    }
+    let ran = |c: &tickets::CheckRun| {
+        let at = clock(c.at);
+        let at = if at.is_empty() { String::new() } else { format!(" at {at}") };
+        piece(format!(" · platoon ran `{}`{at}", c.command), Tone::Dim)
+    };
+    match last {
+        None if command.is_empty() => vec![piece("none set for this project", Tone::Dim)],
+        None if !crate::checks::has_place(t) && t.leader().is_some() => vec![piece("not run: its folders aren't in git", Tone::Dim)],
+        None => vec![piece("not run yet", Tone::Dim)],
+        Some(c) if c.skipped => vec![piece("not run", Tone::Warn), piece(format!(" · {}", c.summary), Tone::Dim)],
+        Some(c) if c.ok => vec![piece(c.summary.clone(), Tone::Ok), ran(c)],
+        Some(c) if t.state == State::Working && c.attempt <= crate::checks::FIXES => vec![
+            piece("failed", Tone::Warn),
+            piece(format!(" · the squad is fixing them (try {} of {})", c.attempt, crate::checks::FIXES), Tone::Dim),
+        ],
+        Some(c) => vec![piece("failed", Tone::Warn), piece(format!(" · {}", c.summary), Tone::Dim), ran(c)],
+    }
+}
+
 /// One task's row in `section`.
 pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
     let t = i.task;
@@ -342,6 +409,7 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
             let live = section == Section::NeedsYou;
             right_tone = if live { Tone::Warn } else { Tone::Dim };
             second.push(piece(named(squad_words(t)), if live { Tone::Warn } else { Tone::Dim }));
+            second.extend(tests_mark(t));
         }
         Section::Working => {
             if let Some(busy) = &t.busy {
@@ -375,6 +443,7 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
                         second.push(piece(mark, tone));
                     }
                 }
+                second.extend(tests_mark(t));
                 if let Some(n) = tokens_of(t, f) {
                     second.push(piece(format!(" · {n}"), Tone::Dim));
                 }
@@ -425,6 +494,7 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
                 if f.has_result(i.project, t.number) {
                     second.push(piece(" · result on the task", Tone::Subtext));
                 }
+                second.extend(tests_mark(t));
                 if !t.worktrees.is_empty() || t.folders.iter().any(|x| t.branch_in_checkout(x)) {
                     second.push(piece(format!(" · on {}", t.branch()), Tone::Dim));
                 }
@@ -579,6 +649,116 @@ mod tests {
         let mut t = led(task(number, title, State::Waiting, updated), "docs", &format!("L{number}"));
         t.reason = reason.into();
         t
+    }
+
+    fn tested(mut t: Ticket, ok: bool, attempt: u32, summary: &str) -> Ticket {
+        t.checks.push(tickets::CheckRun {
+            kind: "tests".into(),
+            ok,
+            summary: summary.into(),
+            command: "cargo test".into(),
+            at: NOW - 60,
+            folder: "/home/u/shop-worktrees/task-1".into(),
+            attempt,
+            skipped: false,
+        });
+        t
+    }
+
+    fn line_text(pieces: &[Piece]) -> String {
+        pieces.iter().map(|p| p.text.as_str()).collect()
+    }
+
+    #[test]
+    fn the_tests_line_says_what_the_last_check_said_in_each_of_its_states() {
+        let clock = |secs: u64| if secs == NOW - 60 { "13:52".to_string() } else { String::new() };
+        let mut t = led(task(1, "Basket", State::Waiting, NOW), "coding", "L1");
+        // No command: none. A command, no check yet.
+        assert_eq!(tests_line(&t, "", &clock), vec![piece("none set for this project", Tone::Dim)]);
+        t.worktrees.push(tickets::Worktree { folder: "/home/u/shop".into(), path: "/w".into(), ..Default::default() });
+        assert_eq!(line_text(&tests_line(&t, "cargo test", &clock)), "not run yet");
+        // Due or running.
+        t.check_due = Some(tickets::CheckDue { stop: "close".into(), at: 1 });
+        assert_eq!(tests_line(&t, "cargo test", &clock), vec![piece("running…", Tone::Busy)]);
+        t.check_due = None;
+        // Passed: the verdict in the ok color, the rest quiet.
+        let passed = tested(t.clone(), true, 1, "214 passed");
+        assert_eq!(
+            tests_line(&passed, "cargo test", &clock),
+            vec![piece("214 passed", Tone::Ok), piece(" · platoon ran `cargo test` at 13:52", Tone::Dim)]
+        );
+        // Failed, and the squad is fixing them.
+        let mut fixing = tested(t.clone(), false, 2, "211 passed, 3 failed");
+        fixing.state = State::Working;
+        assert_eq!(line_text(&tests_line(&fixing, "cargo test", &clock)), "failed · the squad is fixing them (try 2 of 2)");
+        assert_eq!(tests_line(&fixing, "cargo test", &clock)[0].tone, Tone::Warn);
+        // Failed, with the user now: what they said, and when.
+        let mut still = tested(t.clone(), false, 3, "211 passed, 3 failed");
+        still.tests_failing = true;
+        assert_eq!(
+            line_text(&tests_line(&still, "cargo test", &clock)),
+            "failed · 211 passed, 3 failed · platoon ran `cargo test` at 13:52"
+        );
+        // Not run.
+        let mut skipped = tested(t.clone(), false, 1, crate::checks::SESSION_OPEN);
+        skipped.checks[0].skipped = true;
+        assert_eq!(line_text(&tests_line(&skipped, "cargo test", &clock)), "not run · a session of yours is open there");
+        // A task with no folder in git: nothing to run in.
+        let mut loose = led(task(2, "Notes", State::Waiting, NOW), "coding", "L2");
+        loose.folders = vec!["/home/u/notes".into()];
+        assert_eq!(line_text(&tests_line(&loose, "cargo test", &clock)), "not run: its folders aren't in git");
+    }
+
+    #[test]
+    fn a_row_marks_its_tests_and_a_task_whose_tests_fail_needs_you_for_that() {
+        let mut known = Known::default();
+        known.logs.insert("L1".into(), LeaderLog::default());
+        let rows = |tasks: Vec<Ticket>| -> Vec<Shape> {
+            let list: Vec<In> = tasks.iter().map(|t| In { project: "pweb", archived: false, task: t, siblings: &[] }).collect();
+            board(&list, &known, false, "")
+                .iter()
+                .flat_map(|g| g.rows.iter().map(|r| (r.project.clone(), r.number, r.right.clone(), r.second_text())))
+                .collect()
+        };
+        // Asking to close it, its tests passed.
+        let close = tested(waiting(1, "Basket", NOW - 60, "Asks: Shall I close this task?"), true, 1, "3 passed");
+        assert_eq!(rows(vec![close.clone()])[0].3, "Docs squad asks: Shall I close this task? · tests ✓");
+        // Running: said instead.
+        let mut running = close.clone();
+        running.check_due = Some(tickets::CheckDue { stop: "close".into(), at: 1 });
+        assert_eq!(rows(vec![running])[0].3, "Docs squad asks: Shall I close this task? · running the tests");
+        // Working again to fix them: after the step marks.
+        let fixing = led(tested(task(2, "Login", State::Working, NOW - 60), false, 1, "1 failed"), "coding", "L1");
+        let r = rows(vec![fixing]);
+        assert_eq!(
+            r[0].3, "Coding squad · planner ·  builder ·  reviewer ·  verifier · · tests ✗ · 0 tokens",
+            "after the marks, before the tokens"
+        );
+        // The squad tried twice: Needs you, "tests failing".
+        let mut still = waiting(3, "Search", NOW - 60, crate::checks::STILL_FAIL);
+        still.tests_failing = true;
+        let still = tested(still, false, 3, "1 failed");
+        assert_eq!(need_of(&still), Some(Need::Tests));
+        assert_eq!((Need::Tests.words(), Need::Tests.heading()), ("tests failing", "The tests fail"));
+        assert_eq!(
+            rows(vec![still.clone()])[0],
+            ("pweb".into(), 3, "tests failing".into(), "Docs squad tried twice, and the tests still fail · tests ✗".into())
+        );
+        let mut alone = still.clone();
+        alone.reason = crate::checks::FAILED_NOT_RUNNING.into();
+        assert_eq!(rows(vec![alone])[0].3, "Docs squad stopped, and the tests failed · tests ✗");
+        assert_eq!(squad_said(&still), crate::checks::STILL_FAIL);
+        // Done, with its result and its tests.
+        let done = tested(led(task(4, "Footer", State::Done, NOW - 60), "coding", "L4"), true, 1, "3 passed");
+        assert_eq!(rows(vec![done])[0].3, "Coding squad · tests ✓");
+        // A skipped check, and none.
+        let mut skipped = tested(waiting(5, "Menu", NOW - 60, "Asks: Shall I close this task?"), false, 1, crate::checks::SESSION_OPEN);
+        skipped.checks[0].skipped = true;
+        assert_eq!(rows(vec![skipped])[0].3, "Docs squad asks: Shall I close this task? · tests not run");
+        assert_eq!(
+            rows(vec![waiting(6, "Menu", NOW - 60, "Asks: Shall I close this task?")])[0].3,
+            "Docs squad asks: Shall I close this task?"
+        );
     }
 
     /// A row as (project, number, right word, line two).

@@ -684,6 +684,92 @@ fn a_task_that_plans_first_stops_with_the_plan_and_y_types_the_go_ahead_into_the
     t.wait_exit();
 }
 
+/// Give the lab's project a test command (and, when given, a time limit in minutes).
+fn set_tests(lab: &Lab, command: &str, minutes: Option<f64>) {
+    let mut v: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects.json")).unwrap()).unwrap();
+    let p = v["projects"]["pweb"].as_object_mut().unwrap();
+    p.insert("test_command".into(), json!(command));
+    if let Some(m) = minutes {
+        p.insert("test_timeout_minutes".into(), json!(m));
+    }
+    fs::write(lab.config.join("projects.json"), v.to_string()).unwrap();
+}
+
+/// The leader's turn ends with `msg`: its Stop hook, run as its `--settings` give it.
+fn leader_stops(lab: &Lab, msg: &str) {
+    let tk = lab.ticket_now();
+    let sid = tk["leaders"][0]["session"].as_str().unwrap();
+    let settings: Value = serde_json::from_str(value_after(&lab.args(1), "--settings")).unwrap();
+    let stop = settings["hooks"]["Stop"][0]["hooks"][0]["command"].as_str().unwrap().to_string();
+    let input = json!({"session_id": sid, "last_assistant_message": msg, "background_tasks": [], "stop_hook_active": false, "transcript_path": "/x.jsonl", "cwd": "/tmp", "hook_event_name": "Stop"});
+    assert_eq!(lab.run_hook_command(&stop, &input), 0);
+}
+
+#[test]
+fn when_the_squad_asks_to_close_the_task_platoon_runs_the_tests_and_types_a_failure_into_its_session() {
+    let lab = Lab::new("sq-check");
+    set_tests(&lab, "sh -c 'exit 1'", None);
+    lab.ticket(json!({}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    hand_over(&lab, &mut t);
+    // The squad says it is finished: the hook leaves the task Needs you with its question, and marks the check due.
+    leader_stops(&lab, "Made the basket page.\nSQUAD: question - Shall I close this task?");
+    // platoon runs `sh -c 'exit 1'` in the task's copy, and the failure reaches the squad's session as a message.
+    let copy = lab.base.join("shop-worktrees/task-1");
+    let header = format!("The tests failed when platoon ran `sh -c 'exit 1'` in {}:", copy.to_string_lossy());
+    until("the failure to reach the squad's session", || lab.rec(1, "typed").contains("platoon runs them again when you stop."));
+    let typed = lab.rec(1, "typed");
+    assert!(typed.contains(&header), "{typed:?}");
+    assert!(typed.contains("(failed with exit code 1, with nothing to say)"), "{typed:?}");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk.get("check_due"), tk.get("reason")), (Some("working"), None, None), "{tk}");
+    assert_eq!(tk["checks"][0]["ok"], false);
+    assert_eq!(tk["checks"][0]["try"], 1);
+    assert_eq!(tk["checks"][0]["folder"], copy.to_string_lossy().as_ref());
+    assert!(lab.config.join("projects/pweb/tasks/01-work/tests-1.log").exists(), "the output is kept for the user");
+    // (Beside the session it wraps under its label.)
+    t.wait_for_all(&["Tests           failed · the squad is fixing them", "(try 1 of 2)"]);
+    // The squad fixes it (here: the command now passes) and asks again: the tests pass, and the task waits for the user.
+    set_tests(&lab, "echo 'test result: ok. 3 passed; 0 failed'", None);
+    leader_stops(&lab, "Fixed the basket test.\nSQUAD: question - Shall I close this task?");
+    t.wait_for("Tests           3 passed · platoon ran `echo");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["reason"].as_str()), (Some("waiting"), Some("Asks: Shall I close this task?")), "{tk}");
+    assert_eq!((tk["checks"][1]["ok"].as_bool(), tk["checks"][1]["summary"].as_str()), (Some(true), Some("3 passed")));
+    assert_eq!(lab.rec(1, "typed").matches("The tests failed").count(), 1, "nothing typed for a pass");
+    // On the project's screen, the pane's row says so (the squad's words are cut first to keep it).
+    t.send(&[0]);
+    t.wait_for_flat("Coding squad asks: Shall I close this… · tests ✓");
+    t.send(&[3]);
+    t.wait_exit();
+}
+
+#[test]
+fn tests_that_run_past_their_time_are_stopped_with_everything_they_started_and_count_as_a_failure() {
+    let lab = Lab::new("sq-check-late");
+    let pid_file = lab.base.join("tests.pid");
+    // 0.02 minutes: about a second.
+    set_tests(&lab, &format!("echo $$ > {}; echo started; sleep 30", pid_file.to_string_lossy()), Some(0.02));
+    lab.ticket(json!({}));
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 40, 130);
+    hand_over(&lab, &mut t);
+    leader_stops(&lab, "Done.\nSQUAD: ready to publish - push task/1");
+    until("the time-out to reach the squad's session", || lab.rec(1, "typed").contains("platoon runs them again when you stop."));
+    let typed = lab.rec(1, "typed");
+    assert!(typed.contains("started") && typed.contains("(timed out after 1 second)"), "{typed:?}");
+    let tk = lab.ticket_now();
+    assert_eq!((tk["state"].as_str(), tk["checks"][0]["summary"].as_str()), (Some("working"), Some("timed out after 1 second")), "{tk}");
+    assert!(tk.get("publish_wanted").is_none(), "nothing goes out while the tests fail: {tk}");
+    let pid: u32 = fs::read_to_string(&pid_file).unwrap().trim().parse().unwrap();
+    until("the stopped command to be gone", || !running(pid));
+    // (Beside the session it wraps under its label.)
+    t.wait_for_all(&["Tests           failed · the squad is fixing them", "(try 1 of 2)"]);
+    t.send(&[0]);
+    t.wait_for_flat("tests ✗");
+    t.send(&[3]);
+    t.wait_exit();
+}
+
 #[test]
 fn the_hooks_read_real_shaped_input_and_leave_everything_else_alone() {
     let lab = Lab::new("sq-hooks");

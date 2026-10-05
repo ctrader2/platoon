@@ -47,6 +47,25 @@ fn section_color(t: &Theme, s: Section) -> Color {
 /// "…": the first piece (the squad's words) is cut after a word, never in the middle of one; a later piece (a step's
 /// mark, the tokens) goes whole.
 pub(super) fn fit_pieces(t: &Theme, pieces: &[Piece], room: usize, bg: Color) -> Vec<Span<'static>> {
+    // Pieces that are kept whatever the room (what the tests said): what comes before them is fitted into what they
+    // leave, and what comes after them goes when it doesn't fit.
+    let total: usize = pieces.iter().map(|p| p.text.width()).sum();
+    if total > room
+        && let Some(k) = pieces.iter().position(|p| p.keep)
+    {
+        let end = pieces[k..].iter().position(|p| !p.keep).map_or(pieces.len(), |e| k + e);
+        let kept_w: usize = pieces[k..end].iter().map(|p| p.text.width()).sum();
+        if kept_w < room {
+            let mut out = if k == 0 { Vec::new() } else { fit_pieces(t, &pieces[..k], room - kept_w, bg) };
+            out.extend(pieces[k..end].iter().map(|p| Span::styled(p.text.clone(), Style::new().fg(tone(t, p.tone)).bg(bg))));
+            let used: usize = out.iter().map(|s| s.content.width()).sum();
+            let rest = &pieces[end..];
+            if !rest.is_empty() && rest.iter().map(|p| p.text.width()).sum::<usize>() <= room.saturating_sub(used) {
+                out.extend(rest.iter().map(|p| Span::styled(p.text.clone(), Style::new().fg(tone(t, p.tone)).bg(bg))));
+            }
+            return out;
+        }
+    }
     let mut out = Vec::new();
     let mut used = 0usize;
     for (k, p) in pieces.iter().enumerate() {
@@ -336,6 +355,35 @@ pub(super) fn where_line(app: &App, project: &str, x: &Ticket, w: usize) -> Line
     Line::from(spans)
 }
 
+/// A task's Tests line after its label, in rows of `room` cells: all of what its last check said and when
+/// (`board::tests_line`), wrapped after whole words, the verdict in its color and the rest quiet.
+pub(super) fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
+    let t = app.effective_theme();
+    let command = app.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default();
+    let pieces = board::tests_line(x, &command, &|secs| clock(Some(secs * 1000)));
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    let mut used = 0;
+    for p in pieces {
+        let style = Style::new().fg(tone(t, p.tone));
+        for word in p.text.split_inclusive(' ') {
+            let w = word.trim_end().width();
+            if used > 0 && used + w > room {
+                rows.push(Vec::new());
+                used = 0;
+            }
+            let word = if used == 0 { word.trim_start() } else { word };
+            if word.is_empty() {
+                continue;
+            }
+            used += word.width();
+            if let Some(row) = rows.last_mut() {
+                row.push(Span::styled(word.to_string(), style));
+            }
+        }
+    }
+    rows
+}
+
 /// The details of the board's picked task: its title and where it is, what the squad asks (or wants to publish) and
 /// the keys that answer, what it has done, what ran.
 fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
@@ -364,6 +412,15 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
         }
     }
     lines.push(where_line(app, &project, &x, w));
+    // Once a squad has had it: what its tests said (or that the project has none).
+    if x.leader().is_some() {
+        const LABEL: &str = "Tests ";
+        for (k, row) in tests_rows(app, &project, &x, w.saturating_sub(LABEL.len())).into_iter().enumerate() {
+            let mut spans = vec![Span::styled(if k == 0 { LABEL } else { "      " }, Style::new().fg(t.dim))];
+            spans.extend(row);
+            lines.push(Line::from(spans));
+        }
+    }
     lines.push(Line::raw(""));
     let key = |k: &str, d: &str| {
         vec![Span::styled(k.to_string(), Style::new().fg(t.accent)), Span::styled(format!(" {d}"), Style::new().fg(hint_fg(t)))]

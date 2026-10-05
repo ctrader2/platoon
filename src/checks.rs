@@ -50,6 +50,9 @@ pub const FAILED_NOT_RUNNING: &str = "The tests failed; the squad's session isn'
 /// Why a check wasn't run: someone works in that folder.
 pub const SESSION_OPEN: &str = "a session of yours is open there";
 
+/// What a task's row says while its check runs (or waits to).
+pub const RUNNING: &str = "running the tests";
+
 // ---- when ---------------------------------------------------------------------------------------------------------
 
 /// The leader stopped at the end of the work: one of the three stops a check follows.

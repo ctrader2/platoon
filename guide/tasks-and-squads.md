@@ -12,7 +12,8 @@ The second tab, `2` **Tasks**, lists every task in play, in every project and ou
 needs from you, each group with how many it has:
 
 - **Needs you**: its squad stopped for you. It has a question, its plan is ready for your yes, it is stuck, it is waiting
-  for your OK on a command, or it wants to publish something. The one that has waited longest comes first.
+  for your OK on a command, it wants to publish something, or its tests still fail (see [Checks](#checks)). The one that
+  has waited longest comes first.
 - **Working**: a squad is at it (or it is being handed to one, or waits for a free one).
 - **Can start**: nobody has it yet and nothing it waits for is left; also the ones that **Need a folder**.
 - **Waits for**: it waits for another task to be Done.
@@ -25,16 +26,19 @@ are left out.
 
 Each task takes two lines. The first says what it is: its project's badge (none for a task in no project), its number in
 its project (so `#5` can show twice, with different badges), its title, and at the right the word for it: what it needs
-(**a question**, **a plan to approve**, **a go-ahead**, **stuck**, **your OK on a command**), how long since its squad last
-wrote, **Needs a folder**, or when it finished. The second, quieter, says who has it and what it needs from you: the squad's
+(**a question**, **a plan to approve**, **a go-ahead**, **stuck**, **your OK on a command**, **tests failing**), how long
+since its squad last wrote, **Needs a folder**, or when it finished. The second, quieter, says who has it and what it needs from you: the squad's
 own words (its question, what it wants to publish, "wrote its plan: y goes ahead, n changes it"), the squad and its steps as
 marks (`planner ✓  builder ✓  reviewer ●  verifier ·`:
 done, at work now, not yet; `✗` for a run that stopped without its result) and the tokens it used, `New · S hands it to a
 squad`, which tasks it waits for, or, once finished, the squad, whether its result is on the task, the branch its work is on
-and the tokens. A line too long for the screen ends with "…" after a whole word.
+and the tokens. Once platoon has run the project's tests for it, the line adds **tests ✓** or **tests ✗** (after the steps'
+marks; **running the tests** while they run, **tests not run** when they couldn't be). A line too long for the screen ends
+with "…" after a whole word, and what the tests said is kept: the words before it are cut first.
 
 On a terminal 100 columns wide or more, the picked task's details are beside the list: its title, where it is, which squad
-has it and for how long; what the squad asks (or wants to publish, or why it is stuck) with the keys that answer, or **The
+has it and for how long; once a squad has had it, **Tests** and what platoon's last run of the tests said (see
+[Checks](#checks)); what the squad asks (or wants to publish, or why it is stuck) with the keys that answer, or **The
 plan** when its plan waits for your yes (drawn from its `plan.md`, as much as fits; the task's own screen shows all of it);
 **What it has done**, a timeline with a line per run of a member (its agent, a bar for when it ran within the squad's time so far, how
 long it took, and **done**, **now** or **stopped**), then the steps of the squad's workflow that haven't run yet; and **What
@@ -48,7 +52,7 @@ With nothing in play, the tab says: "Nothing in play. Press n to write a task, o
 
 | Key (Tasks tab) | Does |
 | --- | --- |
-| `y` | answer the squad. On a question (or a squad that is stuck): a one-line box, **Answer the Docs squad on #6**, with what it asks above it. `enter` types your words into the squad's session as your reply, as if you had written them there (the task goes back to Working once the session takes them, as described in [Writing to the squad](#writing-to-the-squad)); `ctrl+o` opens the session instead; `esc` cancels. On a plan to approve, `y` types "Go ahead with the plan." into the squad's session and the task is Working again (see [The plan step](#the-plan-step)). On a task that wants to publish, `y` is the go-ahead (what `p` does). On one waiting for your OK on a command, it opens the squad's session, where that question is. When the squad's session isn't running, `y` continues it, beside the task, and says so: type your answer there |
+| `y` | answer the squad. On a question (or a squad that is stuck, or tests that still fail): a one-line box, **Answer the Docs squad on #6**, with what it asks above it. `enter` types your words into the squad's session as your reply, as if you had written them there (the task goes back to Working once the session takes them, as described in [Writing to the squad](#writing-to-the-squad)); `ctrl+o` opens the session instead; `esc` cancels. On a plan to approve, `y` types "Go ahead with the plan." into the squad's session and the task is Working again (see [The plan step](#the-plan-step)). On a task that wants to publish, `y` is the go-ahead (what `p` does). On one waiting for your OK on a command, it opens the squad's session, where that question is. When the squad's session isn't running, `y` continues it, beside the task, and says so: type your answer there |
 | `enter` | open the task, beside its squad's session when that runs (on the fold under Finished today: show or hide the rest) |
 | `h` | later: put a task that needs you aside, under **Later**, until its squad says something new (then it is back under Needs you). `h` on one under Later brings it back now |
 | `n` | a new task: first which project it is in, or **No project**, then its title; then its text opens in your editor. In a project it works in the folder of the project's most recently used session, as the [pane's](#the-tasks-pane) `n` does. A task in no project needs a folder to work in: the folder picker opens before it is written (leave it, and nothing is made). On a plan to approve, `n` is the change instead: a one-line box, **Change the Coding squad's plan for #5**; `enter` types "Change the plan: " and your words into the squad's session, and the squad plans again |
@@ -106,8 +110,9 @@ folder.
 
 `enter` on a task shows its number and title, its project (or **No project**), its state, **From** (the session it was made
 from (a task [drafted from a conversation](#making-tasks-from-a-conversation)): its name as the Sessions tab shows it, else its first prompt),
-what the squad said when it stopped, the squad that has it (**Squad** Coding squad), how much the squad does **on its
-own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
+what the squad said when it stopped (or, when the tests fail, what platoon says), the squad that has it (**Squad** Coding
+squad), **Tests** (what platoon's last run of the project's tests said; see [Checks](#checks)), how much the squad does
+**on its own**, where it **works in** (for each folder: "a copy of shop (task/5) · lands on main", "shop, on a new branch task/5 ·
 lands on main", or the folder as it is, with the copy's path under it), **its own folder** once a squad has had it, what it
 waits for, and the tokens its squads used. Under a line: its squad's result (when it has one), **The plan** (when its
 squad wrote one: a task that plans first; with `y go ahead   n change the plan` under it while it waits for you, and kept
@@ -429,6 +434,23 @@ says starts it, and a task outside a project, or in a project without a test com
   failed; the squad's session isn't running".
 - A task you have written to meanwhile (it is Working again), or that its squad has stopped again since, keeps the
   result, and platoon types nothing.
+
+What you see: the task's **Tests** line, beside the Tasks tab and on its screen, says what the last run said, in one line:
+
+| It says | When |
+| --- | --- |
+| Tests **214 passed** · platoon ran `cargo test` at 13:52 (green) | they passed |
+| Tests **failed** · the squad is fixing them (try 2 of 2) (warning color) | they failed, and the squad has the work back |
+| Tests **failed** · 211 passed, 3 failed · platoon ran `cargo test` at 13:52 | they failed, and you have been told |
+| Tests **running…** | they are running, or about to |
+| Tests **not run** · a session of yours is open there | they couldn't be run, and why |
+| Tests not run yet | the project has a command, and the squad hasn't finished yet |
+| Tests not run: its folders aren't in git | the task has no copy of a folder in git, or branch, to run them in |
+| Tests none set for this project (quiet) | the project has no test command (or the task is in no project) |
+
+On the Tasks tab, a task whose tests still fail after the squad's two tries says **tests failing** at the right of its row;
+`y` answers its squad as for a question (to tell it what to do about them), and its screen says what platoon said
+(**platoon says** The tests still fail after the squad tried twice).
 
 ### The plan step
 

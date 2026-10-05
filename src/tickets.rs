@@ -627,6 +627,11 @@ impl Ticket {
         self.old_number.unwrap_or(self.number)
     }
 
+    /// The latest test check it has a result of.
+    pub fn last_tests(&self) -> Option<&CheckRun> {
+        self.checks.iter().rev().find(|c| c.kind == crate::checks::TESTS)
+    }
+
     /// Put aside by the user and nothing new since: it Needs you, and its time and the squad's words are as they were.
     pub fn is_aside(&self) -> bool {
         self.state == State::Waiting && self.aside.as_ref().is_some_and(|a| a.updated == self.updated && a.reason == self.reason)
