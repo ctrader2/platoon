@@ -49,6 +49,11 @@ here.
   (`draft_tasks` in `keys.json`), `platoon ticket` (use `platoon task`), `platoon task where`, `--from-session`,
   `platoon squads --kinds` and `platoon setup --remove`. Task files from earlier versions are not read.
 
+### Fixed
+
+- With no sessions yet, the list says so ("No sessions yet. Press n to start one.") as soon as platoon has looked,
+  instead of "Reading your sessions…" and `indexing…` coming back at every once-a-second pass on a busy computer.
+
 ## [1.0.0] - unreleased
 
 <!-- "unreleased" becomes the date (YYYY-MM-DD) in the commit that is tagged v1.0.0. -->

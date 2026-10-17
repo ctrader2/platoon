@@ -644,6 +644,28 @@ mod tests {
     }
 
     #[test]
+    fn with_no_sessions_the_list_says_so_once_the_first_pass_is_done_not_indexing_at_every_later_one() {
+        let w = World::new("empty-index");
+        let mut app = w.app();
+        app.index_in_background_for_test();
+        let start = std::time::Instant::now();
+        while !app.first_scan_done_for_test() {
+            assert!(start.elapsed() < Duration::from_secs(10), "the first pass never finished");
+            app.refresh_for_test();
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // Each refresh starts the next once-a-second pass. A frame drawn before that pass ends (on a busy computer,
+        // nearly every one) is not "indexing", and says there are no sessions.
+        let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
+        for _ in 0..20 {
+            app.poll_index_for_test();
+            assert_eq!(app.indexing(), None, "the first pass is done");
+            let shown = draw(&mut term, &app);
+            assert!(shown.contains("No sessions yet") && !shown.contains("indexing"), "{shown}");
+        }
+    }
+
+    #[test]
     fn a_running_conversation_without_a_saved_transcript_is_still_listed() {
         let mut w = World::new("nofile");
         w.live("fresh-id", "/tmp", 5, "idle");

@@ -1156,7 +1156,8 @@ impl App {
     /// still listing files. None once it's caught up.
     pub fn indexing(&self) -> Option<usize> {
         match self.indexer.remaining {
-            0 if self.sessions.is_empty() && self.indexer.scanning() => Some(0),
+            // The first pass only: every later one (once a second) is running whenever a refresh has just started it.
+            0 if self.sessions.is_empty() && !self.indexer.first_scan_done => Some(0),
             0 => None,
             n => Some(n),
         }
@@ -2584,6 +2585,23 @@ impl App {
     #[cfg(test)]
     pub fn refresh_for_test(&mut self) {
         self.refresh_with(Vec::new(), false);
+    }
+
+    /// The index read on a background thread, as `App::new` has it (`with_dirs` reads it on the calling thread).
+    #[cfg(test)]
+    pub fn index_in_background_for_test(&mut self) {
+        self.indexer = Indexer::spawn(self.reader.root(), &self.cache);
+    }
+
+    #[cfg(test)]
+    pub fn first_scan_done_for_test(&self) -> bool {
+        self.indexer.first_scan_done
+    }
+
+    /// What a refresh does to the index first: take in what it has read and start its next pass.
+    #[cfg(test)]
+    pub fn poll_index_for_test(&mut self) {
+        self.indexer.poll();
     }
 
     #[cfg(test)]

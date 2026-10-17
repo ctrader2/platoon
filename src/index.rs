@@ -326,15 +326,6 @@ impl Indexer {
         self.hidden_memo.get(cwd).copied().unwrap_or_else(|| h.covers(cwd))
     }
 
-    /// True while a scan is reading files (or the first one is still listing them).
-    pub fn scanning(&self) -> bool {
-        match &self.backend {
-            Backend::Thread { busy, .. } => busy.load(Ordering::SeqCst),
-            #[cfg(test)]
-            Backend::Inline(_) => false,
-        }
-    }
-
     /// Take whatever the scan has produced, and make sure another scan follows. Cheap: it never reads
     /// a transcript itself. Returns true when the entries changed.
     pub fn poll(&mut self) -> bool {
