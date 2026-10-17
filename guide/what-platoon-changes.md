@@ -32,7 +32,7 @@ The features that ask Claude through your plan (`claude -p`) are **off until you
 settings: smart names and summaries, find a session by description, project notes, project descriptions, and, only when you
 ask for them, the hand-off and tasks from a conversation. Each call runs with no tools, no
 settings and no saved session, under a daily token limit. What each one sends is on
-[Features that use tokens](tokens.md).
+[Features that use tokens](tokens.md). The one call that is not a smart feature is the check of a task's work, below.
 
 ## Tasks
 
@@ -46,16 +46,25 @@ A task's session is a Claude Code session that platoon starts for the task, in a
 - Hooks for that session only (`--settings`), never written to your own settings: `platoon hook task-plan`,
   `task-question`, `task-notify`, `task-tool`, `task-prompt` and `task-stop`. They set the task's state from what the
   session does. Your own Claude Code settings and hooks still apply to it too.
-- `ask` rules in the same `--settings`: Claude Code asks you before `git push`, `gh pr create`, `gh pr merge`,
+- `ask` rules in the same `--settings`: Claude Code asks you before `git push` (also written `git -C <dir> push`,
+  `git -c ... push`, `git --git-dir ... push` or `git --work-tree ... push`, and inside `cd x && ...`), `gh pr create`, `gh pr merge`,
   `gh release`, `gh api` calls with `-X`, `--method`, `-f`, `-F`, `--field`, `--raw-field` or `--input`, `glab`,
   `cargo publish` and `npm publish`, whatever your own settings allow. They are Claude Code's own permission rules, not a
-  sandbox: something they don't name (another tool, or an MCP server that publishes) is not stopped by them.
+  sandbox: something they don't name (another tool, a script that pushes, `sh -c 'git push'`, `/usr/bin/git push`, or
+  an MCP server that publishes) is not stopped by them.
 
 **A command of yours runs when a task's session stops.** When a project has a [test command](projects.md#the-test-command),
 platoon runs it (`sh -c <your command>`) from the session's `Stop` hook, in the task's worktree, with the session's
 environment, no terminal, for 10 minutes at most (then it is stopped with everything it started), and what it writes
 is kept as `tests.log` in the task's own folder. It is your command: platoon adds nothing to what it does, network
 included. A project without a test command runs nothing.
+
+**When the tests pass (or there are none), Claude checks the work.** From the same `Stop` hook platoon runs
+`claude -p` on the squad's `verdict_model`, in the task's worktree, with only the tools that read files (`Read`, `Grep`,
+`Glob`: no shell, no edits), no settings (`--setting-sources ""`), no saved session, for 10 minutes at most. It is sent
+the task's text, the session's last message and the change on the task's branch (`git diff`), and its answer is kept as
+`verdict.json` in the task's own folder. It runs for every task whatever the smart features' switches say (it is part of
+the task, like its session), and its tokens are counted with the others in `platoon tokens`, as **Task checks**.
 
 In your git repositories, a task makes a worktree beside the repository, `<repo>-worktrees/task-<N>`, on a new branch
 `task/<N>` made from the repository's default branch. platoon removes the worktree folder (with `git worktree remove`)

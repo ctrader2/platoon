@@ -19,8 +19,15 @@ here.
 - **The task's state comes from its session's hooks**: a plan to approve, a question, a permission prompt (Needs you),
   Working again once answered or typed into, and Done when it stops. With a project test command, platoon runs the tests
   when the session stops and hands a failure back to it twice before the task needs you.
-- **Publishing asks you**: Claude Code's own `ask` rules for the session hold `git push`, pull requests, releases,
-  writing `gh api` calls, `glab` and `cargo`/`npm publish` for your yes.
+- **A task is Done only when a check of its work says so.** When its session stops and the tests pass (or there are
+  none), a fresh `claude -p` on the squad's `verdict_model` reads the task, the session's last message and the change,
+  with tools that only read, and judges each "Done when" box with the evidence. Not done goes back to the session once
+  with what it found (`file:line: problem`, each quote checked in the code), then the task needs you; a check that can't
+  run needs you with why. The details show a **Verdict** line, what it found and the boxes ticked or crossed; the whole
+  answer is `verdict.json` in the task's folder. It needs no switch, and its tokens show as **Task checks**.
+- **Publishing asks you**: Claude Code's own `ask` rules for the session hold `git push` (also `git -C <dir> push` and
+  the other forms with git's options before `push`), pull requests, releases, writing `gh api` calls, `glab` and
+  `cargo`/`npm publish` for your yes.
 - **The Tasks tab** has four sections, Needs you, Working, Not started and Done, and few keys: `n` new, `s` start,
   `enter` open, `e` edit, `c` cancel. Tasks drafted from a conversation (`t`) come with a suggested squad and are made
   Not started.

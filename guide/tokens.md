@@ -27,7 +27,9 @@ switch on and still count against the daily limit, like everything else:
 
 A task's own work is different: its session is an ordinary Claude Code session. It uses your plan like any session you
 run yourself, and platoon's daily limit does not cover it; the tokens it used show beside the task on the
-[Tasks tab](tasks-and-squads.md#the-tasks-tab).
+[Tasks tab](tasks-and-squads.md#the-tasks-tab). So does the [check of its work](tasks-and-squads.md#the-check-of-the-work)
+when its session stops: it runs whatever the switches say, the daily limit and the pause don't stop it, and its tokens
+are counted in `platoon tokens` as **Task checks**.
 
 ## Turning them on
 
@@ -115,7 +117,7 @@ what platoon asks Claude for each feature can be changed too: see
 ## `platoon tokens`
 
 `platoon tokens` shows whether the features are on (the master switch and each feature's switch) and today's total, and
-under it how many tokens each one used and in how many calls (the hand-off, tasks from a conversation and
+under it how many tokens each one used and in how many calls (the hand-off, tasks from a conversation, task checks and
 `platoon tokens test` appear there too, by name).
 
 `platoon tokens test` makes one tiny call the same way a feature would (master switch on, the daily limit, the plan pause

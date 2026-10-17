@@ -433,6 +433,29 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
         spans.extend(row);
         lines.push(Line::from(spans));
     }
+    // The check of the work: what it said, then what it found, file:line first.
+    let verdict = board::verdict_line(x, now, &|secs| clock(Some(secs * 1000)));
+    if !verdict.is_empty() {
+        for (k, row) in piece_rows(app, verdict, room).into_iter().enumerate() {
+            let mut spans = vec![if k == 0 { label("Verdict") } else { Span::raw(" ".repeat(LABEL_W)) }];
+            spans.extend(row);
+            lines.push(Line::from(spans));
+        }
+        for f in x.verdict.iter().filter(|v| v.failed.is_none() && !board::checking(x, now)).flat_map(|v| &v.findings) {
+            let place = format!("{}:{}", f.file, f.line);
+            for (k, l) in wrap(&format!("{place}: {}", f.problem), room).into_iter().enumerate() {
+                let mut spans = vec![Span::raw(" ".repeat(LABEL_W))];
+                match l.strip_prefix(&place).filter(|_| k == 0) {
+                    Some(rest) => {
+                        spans.push(Span::styled(place.clone(), Style::new().fg(t.text)));
+                        spans.push(Span::styled(rest.to_string(), Style::new().fg(t.subtext)));
+                    }
+                    None => spans.push(Span::styled(l, Style::new().fg(t.subtext))),
+                }
+                lines.push(Line::from(spans));
+            }
+        }
+    }
     if let Some(s) = x.session.as_deref().and_then(|s| app.session_spent(s)) {
         for (k, l) in wrap(&crate::spent::details_total(&s), room).into_iter().enumerate() {
             lines.push(Line::from(vec![
@@ -447,16 +470,31 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
         lines.push(Line::styled("The plan", bold));
         lines.extend(plan_lines(app, project, x, w, plan_most));
     }
-    // The "Done when" boxes, as its text has them.
-    let body = tickets::Tickets::open(&app.config, project).get(x.number).map(|t| tickets::Tickets::open(&app.config, project).body(t));
-    let boxes = body.as_deref().map(crate::checks::done_when).unwrap_or_default();
+    // The "Done when" boxes: as the last check found them (a tick or a cross), else as its text has them.
+    let checked: Vec<(&str, Color, String)> = x
+        .verdict
+        .iter()
+        .filter(|v| v.failed.is_none())
+        .flat_map(|v| &v.boxes)
+        .map(|b| if b.met { ("✓ ", t.ok, b.text.clone()) } else { ("✗ ", t.warn, b.text.clone()) })
+        .collect();
+    let boxes: Vec<(&str, Color, String)> = if checked.is_empty() {
+        let store = tickets::Tickets::open(&app.config, project);
+        let body = store.get(x.number).map(|t| store.body(t)).unwrap_or_default();
+        crate::checks::done_when(&body)
+            .into_iter()
+            .map(|(ticked, text)| if ticked { ("[x] ", t.ok, text) } else { ("[ ] ", t.subtext, text) })
+            .collect()
+    } else {
+        checked
+    };
     if !boxes.is_empty() {
         lines.push(Line::raw(""));
         lines.push(Line::styled("Done when", bold));
-        for (ticked, text) in boxes {
-            let (mark, c) = if ticked { ("[x] ", t.ok) } else { ("[ ] ", t.subtext) };
+        for (mark, c, text) in boxes {
+            let mark = if mark.width() < 4 { format!("{mark:<4}") } else { mark.to_string() };
             for (k, l) in wrap(&text, w.saturating_sub(4)).into_iter().enumerate() {
-                let lead = if k == 0 { Span::styled(mark, Style::new().fg(c)) } else { Span::raw("    ") };
+                let lead = if k == 0 { Span::styled(mark.clone(), Style::new().fg(c)) } else { Span::raw("    ") };
                 lines.push(Line::from(vec![lead, Span::styled(l, Style::new().fg(t.text))]));
             }
         }

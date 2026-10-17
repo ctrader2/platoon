@@ -54,6 +54,10 @@ pub enum Need {
     Permission(String),
     /// Its tests still fail after it was sent back twice: the summary of the last run.
     Tests(String),
+    /// The check of its work (`verdict.rs`) still found problems after it was sent back once: what it found, short.
+    Check(String),
+    /// The check of its work could not run (timed out, no answer it could read, no `claude`): why.
+    CheckFailed(String),
 }
 
 impl Need {
@@ -63,6 +67,8 @@ impl Need {
             Need::Question(_) => "question",
             Need::Permission(_) => "permission",
             Need::Tests(_) => "tests",
+            Need::Check(_) => "check",
+            Need::CheckFailed(_) => "check_failed",
         }
     }
 
@@ -70,7 +76,7 @@ impl Need {
     pub fn text(&self) -> &str {
         match self {
             Need::Plan => "",
-            Need::Question(s) | Need::Permission(s) | Need::Tests(s) => s,
+            Need::Question(s) | Need::Permission(s) | Need::Tests(s) | Need::Check(s) | Need::CheckFailed(s) => s,
         }
     }
 
@@ -81,6 +87,8 @@ impl Need {
             Need::Question(_) => "a question",
             Need::Permission(_) => "asks permission",
             Need::Tests(_) => "tests failing",
+            Need::Check(_) => "the check found problems",
+            Need::CheckFailed(_) => "the check could not run",
         }
     }
 
@@ -90,6 +98,8 @@ impl Need {
             "plan" => Need::Plan,
             "permission" => Need::Permission(text),
             "tests" => Need::Tests(text),
+            "check" => Need::Check(text),
+            "check_failed" => Need::CheckFailed(text),
             _ => Need::Question(text),
         }
     }
@@ -197,6 +207,116 @@ pub struct TestRun {
     pub at: u64,
 }
 
+/// The last check of a task's work (`verdict.rs`): a fresh read-only `claude -p` judged whether the work does what
+/// the task asked. Kept on the task (the last one only); its whole answer is `verdict.json` in the task's own folder.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Verdict {
+    /// When it ended, seconds since the epoch.
+    pub at: u64,
+    /// The model that checked (the squad's `verdict_model`).
+    pub model: String,
+    /// It could not run, and why. Then nothing below counts.
+    pub failed: Option<String>,
+    /// Done, as platoon counts it: the check said so, or it found nothing that holds up.
+    pub done: bool,
+    /// The task's "Done when" boxes as the check found them.
+    pub boxes: Vec<BoxCheck>,
+    /// What it found wrong, each quote found where it said.
+    pub findings: Vec<Finding>,
+    /// Findings left out because their quote isn't in the file near that line.
+    pub dropped: u32,
+    /// Why it counts as done though the check said no ("the check's findings could not be found in the code").
+    pub note: String,
+    /// What it used.
+    pub tokens: u64,
+}
+
+/// One "Done when" box as the check found it.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct BoxCheck {
+    pub text: String,
+    pub met: bool,
+}
+
+/// One problem the check found: where (relative to the task's folder) and what.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Finding {
+    pub file: String,
+    pub line: u64,
+    pub problem: String,
+}
+
+impl Finding {
+    /// `file:line: problem`.
+    pub fn line_text(&self) -> String {
+        format!("{}:{}: {}", self.file, self.line, self.problem)
+    }
+}
+
+impl Verdict {
+    /// The unmet boxes.
+    pub fn unmet(&self) -> impl Iterator<Item = &BoxCheck> {
+        self.boxes.iter().filter(|b| !b.met)
+    }
+
+    /// How many problems it found: the findings and the unmet boxes.
+    pub fn problems(&self) -> usize {
+        self.findings.len() + self.unmet().count()
+    }
+
+    fn to_json(&self) -> Value {
+        let mut o = json!({
+            "at": self.at,
+            "model": self.model,
+            "done": self.done,
+            "boxes": self.boxes.iter().map(|b| json!({"text": b.text, "met": b.met})).collect::<Vec<_>>(),
+            "findings": self.findings.iter().map(|f| json!({"file": f.file, "line": f.line, "problem": f.problem})).collect::<Vec<_>>(),
+            "tokens": self.tokens,
+        });
+        if let Some(o) = o.as_object_mut() {
+            if let Some(why) = &self.failed {
+                o.insert("failed".into(), json!(why));
+            }
+            if self.dropped > 0 {
+                o.insert("dropped".into(), json!(self.dropped));
+            }
+            if !self.note.is_empty() {
+                o.insert("note".into(), json!(self.note));
+            }
+        }
+        o
+    }
+
+    fn from_json(v: &Value) -> Option<Verdict> {
+        let o = v.as_object()?;
+        let s = |v: &Value, k: &str, max: usize| clean(v.get(k).and_then(Value::as_str).unwrap_or_default(), max);
+        let list = |k: &str| o.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+        Some(Verdict {
+            at: o.get("at").and_then(Value::as_u64).unwrap_or(0),
+            model: s(v, "model", 60),
+            failed: o.get("failed").and_then(Value::as_str).map(|w| clean(w, WHY_MAX)),
+            done: o.get("done").and_then(Value::as_bool).unwrap_or(false),
+            boxes: list("boxes")
+                .iter()
+                .filter_map(|b| Some(BoxCheck { text: s(b, "text", WHY_MAX), met: b.get("met")?.as_bool()? }))
+                .collect(),
+            findings: list("findings")
+                .iter()
+                .filter_map(|f| {
+                    Some(Finding { file: s(f, "file", 300), line: f.get("line")?.as_u64()?, problem: s(f, "problem", WHY_MAX) })
+                })
+                .collect(),
+            dropped: o.get("dropped").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
+            note: s(v, "note", WHY_MAX),
+            tokens: o.get("tokens").and_then(Value::as_u64).unwrap_or(0),
+        })
+    }
+}
+
+/// How many times in a row a turn's end is refused because the check found problems; the next time the task needs
+/// the user.
+pub const CHECKS_REFUSED_MAX: u32 = 1;
+
 /// How many test runs a task keeps.
 pub const TESTS_KEPT: usize = 5;
 
@@ -226,6 +346,12 @@ pub struct Ticket {
     pub tests: Vec<TestRun>,
     /// How many ends of a turn in a row were refused because the tests failed (reset when the user types).
     pub stops_refused: u32,
+    /// The last check of its work.
+    pub verdict: Option<Verdict>,
+    /// How many ends of a turn in a row were refused because the check found problems (reset when the user types).
+    pub checks_refused: u32,
+    /// The check of its work is running, since then (seconds since the epoch). Cleared when it ends or the user types.
+    pub checking: Option<u64>,
 }
 
 impl Ticket {
@@ -339,6 +465,9 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
             })
             .unwrap_or_default(),
         stops_refused: o.get("stops_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
+        verdict: o.get("verdict").and_then(Verdict::from_json),
+        checks_refused: o.get("checks_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
+        checking: o.get("checking").and_then(Value::as_u64),
     })
 }
 
@@ -384,6 +513,9 @@ fn ticket_into(t: &Ticket, o: &mut Map<String, Value>) {
         }),
     );
     set("stops_refused", (t.stops_refused > 0).then(|| json!(t.stops_refused)));
+    set("verdict", t.verdict.as_ref().map(Verdict::to_json));
+    set("checks_refused", (t.checks_refused > 0).then(|| json!(t.checks_refused)));
+    set("checking", t.checking.map(|at| json!(at)));
     let old = o.get("worktree").and_then(Value::as_object).cloned();
     let w = t.worktree.as_ref().map(|w| {
         let mut x = old.unwrap_or_default();
@@ -462,6 +594,9 @@ pub fn bodies_dir(config: &Path, project: &str) -> PathBuf {
 pub fn task_dir(config: &Path, project: &str, number: u32) -> PathBuf {
     bodies_dir(config, project).join(format!("{number:02}-work"))
 }
+
+/// The check's whole answer, in the task's own folder.
+pub const VERDICT_FILE: &str = "verdict.json";
 
 /// The plan's file name, in the task's own folder.
 pub const PLAN_FILE: &str = "plan.md";
@@ -728,6 +863,7 @@ impl Tickets {
             t.worktree = worktree;
             t.state = State::Working;
             t.stops_refused = 0;
+            t.checks_refused = 0;
             true
         })
         .map(|_| ())

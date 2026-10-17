@@ -17,7 +17,7 @@
 //!
 //! `model` is the session's model (a Claude Code alias such as `opus`, `sonnet`, `fable`, or a full model name),
 //! `plan_first` starts it in plan mode, `description` (one line: what kind of work it is for) is what a squad is
-//! suggested by, and `verdict_model` is kept for the check that a task is really done. Each thing wrong with a file is
+//! suggested by, and `verdict_model` is the model of the check of a task's work before it is Done (`verdict.rs`). Each thing wrong with a file is
 //! one line that says where (`problems`); a squad with problems can't be started.
 
 use std::{

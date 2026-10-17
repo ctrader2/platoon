@@ -163,7 +163,46 @@ pub fn need_words(n: &Need) -> String {
         Need::Question(q) => format!("asks: {q}"),
         Need::Permission(m) => format!("waits at a permission prompt: {m}"),
         Need::Tests(s) => format!("the tests still fail: {s}"),
+        Need::Check(s) => format!("the check found {s}"),
+        Need::CheckFailed(s) => format!("the check could not run: {s}"),
     }
+}
+
+/// Is the check of a task's work running now? Its mark, unless it is older than the check can take (a hook that was
+/// ended before it could clear it).
+pub fn checking(t: &Ticket, now: u64) -> bool {
+    t.state == State::Working && t.checking.is_some_and(|at| now.saturating_sub(at) <= crate::verdict::TIMEOUT.as_secs() + 120)
+}
+
+/// A task's Verdict line in its details (after the label "Verdict"): checking now, or what the last check said, who
+/// checked and when. Nothing before its first check.
+pub fn verdict_line(t: &Ticket, now: u64, clock: &dyn Fn(u64) -> String) -> Vec<Piece> {
+    if checking(t, now) {
+        return vec![piece("checking the work…", Tone::Busy)];
+    }
+    let Some(v) = &t.verdict else { return Vec::new() };
+    let at = clock(v.at);
+    let who = format!(" · checked by {}{}", v.model, if at.is_empty() { String::new() } else { format!(" at {at}") });
+    let tokens = if v.tokens > 0 { format!(" · {} tokens", crate::spent::short(v.tokens)) } else { String::new() };
+    let mut out = match (&v.failed, v.done) {
+        (Some(why), _) => vec![piece("could not run", Tone::Warn), piece(format!(" · {why}"), Tone::Dim)],
+        (None, true) => vec![piece("done", Tone::Ok)],
+        (None, false) => {
+            let n = v.problems();
+            let mut p = vec![piece(if n == 1 { "1 problem".to_string() } else { format!("{n} problems") }, Tone::Warn)];
+            if t.state == State::Working {
+                p.push(piece(" · sent back to the session", Tone::Dim));
+            }
+            p
+        }
+    };
+    out.push(piece(who, Tone::Dim));
+    if !v.note.is_empty() && v.failed.is_none() {
+        out.push(piece(format!(" · {}", v.note), Tone::Dim));
+    }
+    out.push(piece(tokens, Tone::Dim));
+    out.retain(|p| !p.text.is_empty());
+    out
 }
 
 /// What a row says about the last test run: "tests ✓" or "tests ✗". Nothing before any. Kept on a narrow row.
@@ -220,6 +259,9 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
             right_tone = Tone::Busy;
             second.push(piece(if squad.is_empty() { "Working".to_string() } else { squad.clone() }, Tone::Subtext));
             second.extend(tests_mark(t));
+            if checking(t, now) {
+                second.push(piece(" · checking the work", Tone::Busy));
+            }
             if let Some(n) = f.tokens(session) {
                 second.push(piece(format!(" · {n}"), Tone::Dim));
             }
@@ -434,6 +476,37 @@ mod tests {
             "failed · 3 failed · sent back to the session · platoon ran `cargo test` at 13:52"
         );
         assert_eq!(tests_mark(&t)[1].tone, Tone::Warn);
+    }
+
+    #[test]
+    fn the_verdict_line_says_checking_then_what_the_check_said_and_a_stale_mark_is_not_checking() {
+        use crate::tickets::Verdict;
+        let clock = |_: u64| "13:52".to_string();
+        let text = |p: Vec<Piece>| p.iter().map(|x| x.text.as_str()).collect::<String>();
+        let mut t = started(task(1, "T", State::Working, NOW), "s-1");
+        assert!(verdict_line(&t, NOW, &clock).is_empty(), "nothing before its first check");
+        t.checking = Some(NOW - 30);
+        assert_eq!(text(verdict_line(&t, NOW, &clock)), "checking the work…");
+        assert!(
+            row(&In { project: "p", archived: false, task: &t, busy: None }, Section::Working, &Known)
+                .second_text()
+                .ends_with(" · checking the work")
+        );
+        t.checking = Some(NOW - crate::verdict::TIMEOUT.as_secs() - 600);
+        assert!(!checking(&t, NOW), "a mark left by a hook that was ended");
+        t.checking = None;
+        t.verdict = Some(Verdict { at: NOW, model: "fable".into(), done: true, tokens: 8_200, ..Default::default() });
+        assert_eq!(text(verdict_line(&t, NOW, &clock)), "done · checked by fable at 13:52 · 8.2K tokens");
+        t.verdict = Some(Verdict {
+            model: "fable".into(),
+            done: true,
+            note: "the check said not done but gave no reason".into(),
+            ..Default::default()
+        });
+        assert_eq!(text(verdict_line(&t, NOW, &clock)), "done · checked by fable at 13:52 · the check said not done but gave no reason");
+        t.verdict = Some(Verdict { model: "opus".into(), failed: Some("no answer within 600 seconds".into()), ..Default::default() });
+        assert_eq!(text(verdict_line(&t, NOW, &clock)), "could not run · no answer within 600 seconds · checked by opus at 13:52");
+        assert_eq!(need_words(&Need::Check("1 problem: a.rs:3: x".into())), "the check found 1 problem: a.rs:3: x");
     }
 
     #[test]

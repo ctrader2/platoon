@@ -34,11 +34,20 @@ fn draw(term: &mut Terminal<TestBackend>, app: &App) -> String {
 
 /// The foreground color of the first cell of `needle` on the screen last drawn.
 fn fg_of(term: &Terminal<TestBackend>, needle: &str) -> Color {
+    fg_of_nth(term, needle, 0)
+}
+
+/// The same, at the `nth` line (from 0) that has `needle`.
+fn fg_of_nth(term: &Terminal<TestBackend>, needle: &str, mut nth: usize) -> Color {
     let buf = term.backend().buffer();
     for y in 0..buf.area.height {
         let row: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
         let line = row.concat();
         if let Some(at) = line.find(needle) {
+            if nth > 0 {
+                nth -= 1;
+                continue;
+            }
             // Cells, not bytes: count the symbols before the match.
             let mut bytes = 0;
             let x = row.iter().position(|s| {
@@ -226,4 +235,87 @@ fn a_tasks_session_is_marked_with_its_number_on_the_sessions_tab() {
     let shown = draw(&mut term, &app);
     assert!(shown.contains("#1 shop"), "{shown}");
     assert_eq!(shown.matches("#1 ").count(), 1, "only the task's session: {shown}");
+}
+
+/// Write the check's answer (and whether it runs now) on task `n`.
+fn checked(w: &World, project: &str, n: u32, v: Option<crate::tickets::Verdict>, checking: bool) {
+    Tickets::open(&w.config, project)
+        .update(n, |t| {
+            t.verdict = v;
+            t.checking = checking.then(crate::usage::now);
+            true
+        })
+        .unwrap();
+}
+
+#[test]
+fn the_check_of_the_work_shows_on_the_row_and_in_the_details_with_what_it_found_in_their_colors() {
+    use crate::tickets::{BoxCheck, Finding, Verdict};
+    let (w, mut app, project, _) = lab(
+        "tasks-verdict",
+        &[
+            ("Text mails", "feature", State::NeedsYou(Need::Check("2 problems: src/mail.rs:2: Only HTML is sent.".into()))),
+            ("Being checked", "feature", State::Working),
+        ],
+    );
+    let v = Verdict {
+        at: crate::usage::now(),
+        model: "fable".into(),
+        boxes: vec![
+            BoxCheck { text: "The guide says so".into(), met: true },
+            BoxCheck { text: "A text-only client gets the order".into(), met: false },
+        ],
+        findings: vec![Finding { file: "src/mail.rs".into(), line: 2, problem: "Only HTML is sent.".into() }],
+        tokens: 12_300,
+        ..Default::default()
+    };
+    checked(&w, &project, 1, Some(v.clone()), false);
+    checked(&w, &project, 2, None, true);
+    app.reload_for_test();
+    let mut term = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    let t = app.effective_theme().clone();
+    // The row: what it needs, in the session's words; the one being checked says so.
+    for want in
+        ["the check found problems", "Feature · the check found 2 problems: src/mail.rs:2: Only HTML", "Feature · checking the work"]
+    {
+        assert!(shown.contains(want), "{want:?}:\n{shown}");
+    }
+    assert_eq!(fg_of(&term, "checking the work"), t.busy);
+    // The details: the Verdict line under Tests, what it found (file:line first), the boxes ticked or crossed.
+    let at = |s: &str| shown.find(s).unwrap_or_else(|| panic!("{s:?} missing:\n{shown}"));
+    assert!(at("Tests   none set") < at("Verdict 2 problems · checked by fable at "), "{shown}");
+    assert!(shown.contains("· 12K tokens") && shown.contains("        src/mail.rs:2: Only HTML is sent."), "{shown}");
+    assert_eq!(fg_of(&term, "2 problems · checked"), t.warn);
+    assert_eq!(fg_of_nth(&term, "src/mail.rs:2: Only", 2), t.text, "the details' finding, after the row and the reason");
+    assert_eq!(fg_of(&term, "✓   The guide says so"), t.ok);
+    assert_eq!(fg_of(&term, "✗   A text-only client"), t.warn);
+    assert_eq!(fg_of(&term, "Needs you · the check found problems"), t.warn);
+    // Done: "done" in the color of done. Could not run: why, in the warning color.
+    Tickets::open(&w.config, &project)
+        .update(1, |x| {
+            x.state = State::Done;
+            true
+        })
+        .unwrap();
+    checked(&w, &project, 1, Some(Verdict { done: true, findings: vec![], boxes: vec![v.boxes[0].clone()], ..v.clone() }), false);
+    checked(&w, &project, 2, Some(Verdict { failed: Some("no answer within 600 seconds".into()), ..v }), false);
+    Tickets::open(&w.config, &project)
+        .update(2, |x| {
+            x.state = State::NeedsYou(Need::CheckFailed("no answer within 600 seconds".into()));
+            true
+        })
+        .unwrap();
+    app.reload_for_test();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Verdict could not run · no answer within 600 seconds"), "{shown}");
+    assert!(shown.contains("Feature · the check could not run: no answer within 600 seconds"), "{shown}");
+    assert_eq!(fg_of(&term, "could not run · no answer"), t.warn);
+    while app.board_task().map(|(_, k)| k) != Some(1) {
+        key(&mut app, KeyCode::Down);
+    }
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Verdict done · checked by fable"), "{shown}");
+    assert_eq!(fg_of(&term, "done · checked by fable"), t.ok);
+    assert!(!shown.contains("src/mail.rs:2"), "{shown}");
 }

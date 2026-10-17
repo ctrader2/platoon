@@ -65,7 +65,8 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
 - **A task's session edits files without asking** (Claude Code's "accept edits" mode, after plan mode for a squad that
   plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. A
-  project's test command, once you set one, is run by platoon there when the session stops.
+  project's test command, once you set one, is run by platoon there when the session stops, and then a fresh Claude
+  that can only read checks the work against the task before it is Done (it uses your plan, whatever the switches say).
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 

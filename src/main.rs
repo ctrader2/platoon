@@ -91,6 +91,7 @@ mod ui;
 mod uninstall;
 mod usage;
 mod usertheme;
+mod verdict;
 mod versions;
 #[cfg(test)]
 mod versions_app_tests;

@@ -69,6 +69,9 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
         out.push(Entry::Note(
             "Tests: when a task's session stops, platoon runs its project's test command (T on the project's screen sets it). A failure goes back to the session twice at most, then to you.".into(),
         ));
+        out.push(Entry::Note(
+            "Verdict: when the tests pass (or there are none), a fresh Claude on the squad's verdict model reads the task, the session's last message and the change, without changing anything, and says whether it is done. Not done goes back to the session once, then to you; only done makes the task Done.".into(),
+        ));
     }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.

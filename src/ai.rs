@@ -19,8 +19,12 @@
 //!   group). Turning a switch off cancels the calls of that feature that are running (`Switchboard`).
 //! - Nothing a person typed, and nothing Claude answered, is written to disk here: the ledger holds numbers only.
 //!
-//! The caller asks Claude for JSON in plain text (`--json-schema` is untested) and can use `extract_json`, which
-//! copes with code fences and chatter around the JSON.
+//! The caller asks Claude for JSON in plain text and can use `extract_json`, which copes with code fences and chatter
+//! around the JSON; or it gives a JSON Schema (`Request::json_schema`), and the answer is Claude's `structured_output`.
+//!
+//! A task's check (`verdict.rs`) is part of the task the user started, not a smart feature: it is outside the gate
+//! (`PART_OF_A_TASK`: no switch, no daily limit, no pause, and it neither waits for a back-off nor starts one), runs in
+//! the task's folder with read-only tools, and its tokens go in the ledger like every call's.
 
 // Step C is the first caller of most of this.
 #![allow(dead_code)]
@@ -92,6 +96,15 @@ pub const FEATURES: &[Feature] = &[
 pub const SWITCHLESS: &[(&str, &str)] =
     &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off"), (crate::taskdraft::FEATURE, "Tasks from a conversation")];
 
+/// Calls that are part of a task the user started, with what `platoon tokens` calls them: the task's session spends
+/// without asking platoon, and so does its check. Outside the gate entirely; their tokens are still in the ledger.
+pub const PART_OF_A_TASK: &[(&str, &str)] = &[(crate::verdict::FEATURE, "Task checks")];
+
+/// Is this a call that is part of a task (`PART_OF_A_TASK`)?
+pub fn part_of_a_task(id: &str) -> bool {
+    PART_OF_A_TASK.iter().any(|(f, _)| *f == id)
+}
+
 /// Is this a feature id with no switch of its own?
 pub fn switchless(id: &str) -> bool {
     SWITCHLESS.iter().any(|(f, _)| *f == id)
@@ -103,7 +116,7 @@ pub fn feature_label(id: &str) -> &str {
         .iter()
         .find(|f| f.id == id)
         .map(|f| f.label)
-        .or_else(|| SWITCHLESS.iter().find(|(f, _)| *f == id).map(|(_, label)| *label))
+        .or_else(|| SWITCHLESS.iter().chain(PART_OF_A_TASK).find(|(f, _)| *f == id).map(|(_, label)| *label))
         .unwrap_or(id)
 }
 
@@ -383,7 +396,15 @@ pub struct Request {
     /// The person asked for this by pressing a key (see `gate_for`): the plan-usage pause doesn't apply.
     pub user_initiated: bool,
     /// A model of its own for this call; None: the smart features' model.
-    pub model: Option<&'static str>,
+    pub model: Option<String>,
+    /// The tools it may use (`--tools`): "" for none.
+    pub tools: &'static str,
+    /// The folder it runs in; None: the one work folder (`work_dir`), where nothing it does is shown as a session.
+    pub cwd: Option<PathBuf>,
+    /// A JSON Schema the answer follows (`--json-schema`): the answer is then Claude's `structured_output`, as JSON.
+    pub json_schema: Option<String>,
+    /// `--effort`. At "low" hidden thinking is turned off too (`MAX_THINKING_TOKENS=0`).
+    pub effort: &'static str,
 }
 
 impl Request {
@@ -396,6 +417,10 @@ impl Request {
             cancel: Cancel::new(),
             user_initiated: false,
             model: None,
+            tools: "",
+            cwd: None,
+            json_schema: None,
+            effort: "low",
         }
     }
 }
@@ -653,7 +678,9 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         output: number(u, "output_tokens"),
     });
     let cost_usd = v.get("total_cost_usd").and_then(Value::as_f64).filter(|c| c.is_finite() && *c >= 0.0).unwrap_or(0.0);
-    let text = v.get("result").and_then(Value::as_str);
+    // With `--json-schema` the answer is `structured_output`; `result` may then be empty or a sentence about it.
+    let structured = v.get("structured_output").filter(|s| !s.is_null()).map(Value::to_string);
+    let text = structured.as_deref().or_else(|| v.get("result").and_then(Value::as_str));
     let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
     let result = match text {
         Some(t) if !is_error && exited_ok && !t.trim().is_empty() => Ok(t.to_string()),
@@ -736,7 +763,10 @@ impl Runner {
 
     pub fn run(&self, settings: &Settings, req: &Request) -> Result<Reply, AiError> {
         let start = self.now();
-        gate_for(settings, req.feature, &self.cache, start, req.user_initiated).map_err(AiError::Refused)?;
+        let gated = !part_of_a_task(req.feature);
+        if gated {
+            gate_for(settings, req.feature, &self.cache, start, req.user_initiated).map_err(AiError::Refused)?;
+        }
         if req.cancel.is_cancelled() {
             return Err(AiError::Cancelled);
         }
@@ -746,20 +776,25 @@ impl Runner {
         let work = self.work_dir();
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
 
-        let model = req.model.unwrap_or(settings.ai_model.as_str()).to_string();
+        let model = req.model.clone().unwrap_or_else(|| settings.ai_model.clone());
         let mut cmd = Command::new(&self.program);
-        cmd.args(["-p", "--model", model.as_str(), "--tools", "", "--setting-sources", ""])
+        cmd.args(["-p", "--model", model.as_str(), "--tools", req.tools, "--setting-sources", ""])
             .args(["--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"])
-            .args(["--system-prompt", req.system.as_str(), "--effort", "low", "--output-format", "json"])
-            .current_dir(&work)
+            .args(["--system-prompt", req.system.as_str(), "--effort", req.effort, "--output-format", "json"]);
+        if let Some(schema) = &req.json_schema {
+            cmd.args(["--json-schema", schema.as_str()]);
+        }
+        cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))
             .env("PLATOON_AI", "1")
-            // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
-            .env("MAX_THINKING_TOKENS", "0")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // Its own process group: what it starts dies with it, and nothing else is ever signalled.
             .process_group(0);
+        if req.effort == "low" {
+            // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
+            cmd.env("MAX_THINKING_TOKENS", "0");
+        }
         // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
         // to carry (which ones, and why: `claude::SESSION_MARKERS`).
         for k in crate::claude::inherited_session_markers() {
@@ -773,7 +808,9 @@ impl Runner {
                 } else {
                     format!("couldn't start `{}`: {e}", self.program)
                 };
-                let _ = ledger.note_failure(self.now(), FailKind::Other);
+                if gated {
+                    let _ = ledger.note_failure(self.now(), FailKind::Other);
+                }
                 return Err(other(why));
             }
         };
@@ -816,7 +853,9 @@ impl Runner {
             return Err(AiError::Cancelled);
         }
         if timed_out {
-            let _ = ledger.note_failure(now, FailKind::TimedOut);
+            if gated {
+                let _ = ledger.note_failure(now, FailKind::TimedOut);
+            }
             return Err(AiError::Failed {
                 kind: FailKind::TimedOut,
                 detail: format!("no answer within {} seconds", req.timeout.as_secs()),
@@ -843,14 +882,18 @@ impl Runner {
         }
         match outcome.result {
             Ok(text) => {
-                let _ = ledger.note_success();
+                if gated {
+                    let _ = ledger.note_success();
+                }
                 if req.cancel.is_cancelled() {
                     return Err(AiError::Cancelled); // finished, but the switch was turned off meanwhile: the result is thrown away
                 }
                 Ok(Reply { text, usage: used.unwrap_or_default(), usage_estimated: estimated, cost_usd: outcome.cost_usd, model })
             }
             Err((kind, detail)) => {
-                let _ = ledger.note_failure(now, kind);
+                if gated {
+                    let _ = ledger.note_failure(now, kind);
+                }
                 Err(AiError::Failed { kind, detail })
             }
         }
@@ -1651,6 +1694,41 @@ pub(crate) mod tests {
         assert!(reply.usage_estimated);
         assert_eq!((reply.usage.input, reply.usage.output), (101, 3));
         assert_eq!(Ledger::open(&f.cache).today(usage::now()).tokens(), 104, "the limit still sees it");
+    }
+
+    #[test]
+    fn a_tasks_check_is_outside_the_gate_runs_where_it_is_told_and_its_answer_is_the_structured_output() {
+        let f = Fake::new(
+            "task-check",
+            r#"printf '%s' '{"type":"result","subtype":"success","is_error":false,"result":"","structured_output":{"done":true},"usage":{"input_tokens":10,"output_tokens":5}}'"#,
+        );
+        let folder = f.dir.join("worktree");
+        std::fs::create_dir_all(&folder).unwrap();
+        // The token features off, and a back-off running: a smart feature would be refused; the task's check is not.
+        let off = Settings::default();
+        let ledger = Ledger::open(&f.cache);
+        ledger.note_failure(usage::now(), FailKind::Network).unwrap();
+        let before = ledger.load().backoff;
+        assert!(before.is_some());
+        let mut req = Request::new(crate::verdict::FEATURE, "sys", "prompt");
+        req.model = Some("fable".into());
+        req.tools = "Read,Grep,Glob";
+        req.cwd = Some(folder.clone());
+        req.json_schema = Some(r#"{"type":"object"}"#.into());
+        req.effort = "medium";
+        let reply = f.runner().run(&off, &req).unwrap();
+        assert_eq!(extract_json(&reply.text), Some(serde_json::json!({"done": true})));
+        let argv = f.rec("argv");
+        for want in ["--model\nfable\n", "--tools\nRead,Grep,Glob\n", "--json-schema\n{\"type\":\"object\"}\n", "--effort\nmedium\n"] {
+            assert!(argv.contains(want), "{want:?}: {argv}");
+        }
+        assert_eq!(f.rec("cwd").trim(), folder.canonicalize().unwrap().to_string_lossy());
+        assert!(!f.rec("env").contains("MAX_THINKING_TOKENS="), "thinking allowed above low effort");
+        assert_eq!(ledger.load().backoff, before, "it neither waits for a back-off nor moves it");
+        let day = ledger.today(usage::now());
+        assert_eq!(day.features.get(crate::verdict::FEATURE).map(|x| x.tokens), Some(15), "its tokens are in the ledger");
+        assert_eq!(feature_label(crate::verdict::FEATURE), "Task checks");
+        assert_eq!(f.runner().run(&off, &Request::new("names", "s", "p")), Err(AiError::Refused(Refusal::MasterOff)));
     }
 
     #[test]

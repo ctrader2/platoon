@@ -28,6 +28,7 @@ if [ "$1" = "-p" ]; then
   k=$(( $(ls "$FAKE_DIR/calls" | grep -c '\.stdin$') + 1 ))
   c="$FAKE_DIR/calls/$k"
   for a in "$@"; do printf '%s\n' "$a"; done > "$c.argv"
+  pwd > "$c.cwd"
   cat > "$c.stdin"
   text=$(cat "$FAKE_DIR/reply")
   esc=$(printf '%s' "$text" | tr '\n' ' ' | sed 's/\\/\\\\/g; s/"/\\"/g')
@@ -283,11 +284,13 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     t.wait_for_all(&["Needs you · 1", "a question", "Feature · asks: Which mail client first?"]);
     lab.hook("task-tool", ev("PostToolUse", json!({"tool_name": "AskUserQuestion"})));
     t.wait_for("Working · 1");
-    // The turn ends; the project has no test command: Done.
+    // The turn ends; the project has no test command, and the check of the work says done: Done.
+    fs::write(lab.fake.join("reply"), r#"{"done":true,"boxes":[],"findings":[]}"#).unwrap();
     let said = lab.hook("task-stop", ev("Stop", json!({"permission_mode": "acceptEdits"})));
     assert!(said.trim().is_empty(), "nothing refused: {said}");
     t.wait_for_all(&["Done · 1", "Not started · 1"]);
     assert_eq!(lab.task(1)["state"], "done");
+    assert_eq!(lab.task(1)["verdict"]["done"], true);
     // Typed into: Working again.
     lab.hook("task-prompt", ev("UserPromptSubmit", json!({"prompt": "one more thing"})));
     t.wait_for("Working · 1");
@@ -325,6 +328,57 @@ fn a_task_with_no_folder_asks_for_one_before_its_squad() {
     t.send(b"\x1b");
     t.wait_gone("Start #1 with a squad");
     assert_eq!(lab.task(1)["state"], "not_started");
+    t.send(&[3]);
+    t.wait_exit();
+}
+
+#[test]
+fn the_check_of_the_work_sends_it_back_once_then_needs_you_with_what_it_found() {
+    let lab = Lab::new("tasks-verdict");
+    // A task at work in the shop, as its session's hooks would have left it.
+    let v = json!({"next": 2, "tasks": [{"number": 1, "title": "Text mails", "file": "01-text-mails.md", "state": "working",
+        "folder": lab.shop, "squad": "feature", "session": "s-9", "started": 1, "created": 1, "updated": 1}]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
+    fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
+    fs::write(
+        lab.config.join("projects/pweb/tasks/01-text-mails.md"),
+        "## What it should do\n\nOrder mails have a text part.\n\n## Done when\n\n- [ ] A text-only client gets the order\n",
+    )
+    .unwrap();
+    fs::write(lab.shop.join("mail.rs"), "fn send() {\n    html_only();\n}\n").unwrap();
+    fs::write(
+        lab.fake.join("reply"),
+        r#"{"done":false,"boxes":[{"text":"A text-only client gets the order","met":false,"evidence":"no text part"}],
+            "findings":[{"file":"mail.rs","line":2,"quote":"html_only();","problem":"Only HTML is sent."},
+                        {"file":"mail.rs","line":30,"quote":"text_part();","problem":"Not in the code."}]}"#,
+    )
+    .unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
+    t.wait_for("The order email is HTML only");
+    t.send(b"2");
+    t.wait_for_all(&["Working · 1", "#1 Text mails"]);
+    let stop = json!({"session_id": "s-9", "hook_event_name": "Stop", "cwd": lab.shop, "permission_mode": "acceptEdits",
+        "last_assistant_message": "I added the text part."});
+    // Not done: the stop is refused once, with what it found, file:line first; the made-up finding is left out.
+    let said: Value = serde_json::from_str(&lab.hook("task-stop", stop.clone())).unwrap();
+    let reason = said["reason"].as_str().unwrap();
+    assert_eq!(said["decision"], "block");
+    assert!(reason.contains("- mail.rs:2: Only HTML is sent.") && !reason.contains("Not in the code"), "{reason}");
+    t.wait_for_all(&["Working · 1", "Verdict 2 problems · sent back to the session", "mail.rs:2: Only HTML is sent."]);
+    // What the check was given and how it ran: read only, in the task's folder, on Feature's verdict model.
+    let argv = fs::read_to_string(lab.fake.join("calls/1.argv")).unwrap();
+    assert!(argv.contains("--tools\nRead,Grep,Glob\n") && argv.contains("--model\nfable\n") && argv.contains("--json-schema\n"), "{argv}");
+    assert_eq!(fs::read_to_string(lab.fake.join("calls/1.cwd")).unwrap().trim(), lab.shop.canonicalize().unwrap().to_string_lossy());
+    let sent = fs::read_to_string(lab.fake.join("calls/1.stdin")).unwrap();
+    assert!(sent.contains("- [ ] A text-only client gets the order") && sent.contains("I added the text part."), "{sent}");
+    // Not done again: the stop goes through, and the task needs you with what the check found.
+    assert!(lab.hook("task-stop", stop).trim().is_empty());
+    t.wait_for_all(&["Needs you · 1", "the check found problems", "Feature · the check found 2 problems: mail.rs:2"]);
+    let shown = t.stable();
+    assert!(shown.contains("✗   A text-only client gets the order"), "{shown}");
+    assert_eq!(lab.task(1)["state"], "needs_you");
+    assert_eq!(lab.task(1)["need"], "check");
+    assert!(lab.config.join("projects/pweb/tasks/01-work/verdict.json").is_file());
     t.send(&[3]);
     t.wait_exit();
 }
