@@ -7,8 +7,7 @@
   your sessions with it and reads its files (see [What platoon changes](what-platoon-changes.md)).
 - Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
-- `git`, for [tasks handed to squads](tasks-and-squads.md#handing-a-task-to-a-squad) (they work in git
-  worktrees, or on a branch of your checkout) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
+- `git`, for [tasks](tasks-and-squads.md#starting-a-task) (they work in git worktrees) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
   without it.
 
 ## Install
@@ -71,8 +70,7 @@ that moves. Install platoon first, then run `platoon setup` again.
 
 Earlier platoons also installed a Claude Code skill, `/to-tickets` (`skills/to-tickets/SKILL.md` in Claude Code's
 folder). platoon now drafts tasks from a conversation itself ([`t` on a session](tasks-and-squads.md#making-tasks-from-a-conversation)),
-so setup no longer installs it and says nothing about it. A copy you have keeps working and is left alone;
-`platoon setup --remove to-tickets` takes it out (and so does the [uninstall](#uninstall)).
+and neither setup nor the uninstall touches that skill any more: delete the folder if you have it and don't want it.
 
 ## When Claude Code or platoon is newer
 
@@ -144,16 +142,12 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
-4. **The `/to-tickets` skill**, if an earlier platoon installed it. It removes `skills/to-tickets/SKILL.md` from Claude
-   Code's folder (and the folder, if nothing else is in it). If you changed the file, your copy is kept beside it as `SKILL.md.platoon-bak` (or
-   `SKILL.md.platoon-bak.2` if that name is taken), so Claude Code no longer offers the skill but nothing of yours is
-   lost.
-5. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
+4. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
    said yes. Folders older platoons made are removed too, if they are there: `~/.local/share/platoon` and
    `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment
    variables as everywhere else decide where these are (`PLATOON_CONFIG_DIR`, `PLATOON_CACHE_DIR`, `XDG_CONFIG_HOME`,
    `XDG_CACHE_HOME`, `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`).
-6. **Task worktrees and branches** are never deleted: they may hold work you want. Each one still there is listed
+5. **Task worktrees and branches** are never deleted: they may hold work you want. Each one still there is listed
    with the commands that remove it once you no longer need it, for example:
 
    ```

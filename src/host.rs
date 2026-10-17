@@ -395,8 +395,8 @@ enum Reason {
     NotIdle,
     /// Not quiet for the whole threshold yet: recent output, or a window left recently.
     RecentOutput,
-    /// A squad's leader whose ticket is Working: its members may be at work while nobody watches.
-    LeaderAtWork,
+    /// A task's session whose task is Working: its subagents may be at work while nobody watches.
+    TaskAtWork,
     /// The process table couldn't be read, so what runs under claude is unknown.
     ProcessesUnknown,
     /// "Never stop if any run" is chosen and this process runs under claude.
@@ -432,10 +432,10 @@ struct Watchdog {
     /// Where the MCP configuration lives, for the session's directory.
     sources: mcp::Sources,
     leftover_grace: Duration,
-    /// The session this host runs, when its arguments name it (`--session-id` or `--resume`): a squad's leader is
+    /// The session this host runs, when its arguments name it (`--session-id` or `--resume`): a task's session is
     /// found by it.
     session: Option<String>,
-    /// platoon's config folder, where the tickets are.
+    /// platoon's config folder, where the tasks are.
     config: PathBuf,
 }
 
@@ -487,9 +487,9 @@ impl Watchdog {
         if now.saturating_duration_since(*quiet_since) < threshold {
             return Decision::Keep(Reason::RecentOutput);
         }
-        // Only now, when everything else says stop: a few small reads of the tickets files.
-        if self.session.as_deref().is_some_and(|s| crate::tickets::leader_at_work(&self.config, s)) {
-            return Decision::Keep(Reason::LeaderAtWork);
+        // Only now, when everything else says stop: a few small reads of the tasks files.
+        if self.session.as_deref().is_some_and(|s| crate::tickets::session_at_work(&self.config, s)) {
+            return Decision::Keep(Reason::TaskAtWork);
         }
         self.decide_processes(settings.idle_stop_ignores_mcp)
     }
@@ -876,32 +876,30 @@ mod tests {
     }
 
     #[test]
-    fn a_squads_leader_is_not_stopped_while_its_ticket_is_working_and_is_like_any_session_after() {
-        use crate::tickets::{Leader, NewTicket, State, Tickets};
-        let mut rig = Rig::new("leader", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
+    fn a_tasks_session_is_not_stopped_while_its_task_is_working_and_is_like_any_session_after() {
+        use crate::tickets::{Need, NewTicket, State, Tickets};
+        let mut rig = Rig::new("task", Settings { idle_stop_minutes: 1, auto_archive_days: 2, ..Settings::default() });
         rig.status("idle");
         rig.dog.session =
-            session_of_args(&["--add-dir".into(), "/x".into(), "--session-id".into(), "lead-1".into(), "-n".into(), "#1 x".into()]);
-        assert_eq!(rig.dog.session.as_deref(), Some("lead-1"));
+            session_of_args(&["--add-dir".into(), "/x".into(), "--session-id".into(), "task-1".into(), "-n".into(), "#1 x".into()]);
+        assert_eq!(rig.dog.session.as_deref(), Some("task-1"));
         let config = rig.dir.join("config");
         let mut t = Tickets::open(&config, "p1");
         let n = t.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-        t.start_leader(
-            n,
-            &Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None },
-            &[],
-        )
-        .unwrap();
+        t.start(n, "feature", "task-1", None).unwrap();
         let t0 = Instant::now();
-        assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::LeaderAtWork));
-        for s in [State::Waiting, State::Done, State::Cancelled] {
-            Tickets::open(&config, "p1").set_state(n, &s).unwrap();
+        assert_eq!(rig.dog.decide(t0 + 500 * MIN, 0, &mut { t0 }), Decision::Keep(Reason::TaskAtWork));
+        for s in [State::NeedsYou(Need::Plan), State::Done, State::Cancelled] {
+            Tickets::open(&config, "p1")
+                .update(n, |t| {
+                    t.state = s.clone();
+                    true
+                })
+                .unwrap();
             assert!(rig.dog.should_stop(t0 + 500 * MIN, 0, &mut { t0 }), "{s:?}");
         }
-        Tickets::open(&config, "p1").squad_wants_to_publish(n, "Wants to publish: push").unwrap();
-        assert!(rig.dog.should_stop(t0 + 500 * MIN, 0, &mut { t0 }), "asking to publish");
-        // Any other session, and a resumed leader.
-        assert_eq!(session_of_args(&["--resume".into(), "lead-1".into(), "--agents".into()]).as_deref(), Some("lead-1"));
+        // Any other session, and a resumed one.
+        assert_eq!(session_of_args(&["--resume".into(), "task-1".into(), "--model".into()]).as_deref(), Some("task-1"));
         assert_eq!(session_of_args(&[]), None);
         assert_eq!(session_of_args(&["attach".into(), "abc".into()]), None);
     }

@@ -256,7 +256,7 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
         let anywhere = section(&help, "Anywhere in platoon");
         assert!(!help.iter().any(|(s, _, _)| s == "Everywhere"), "{place}");
         let keys: Vec<&str> = anywhere.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["1-4", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
+        assert_eq!(keys, ["1-3", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
         assert_eq!(here.iter().any(|(k, d)| k == "s" && d == "settings"), s, "{place}: s {here:?}");
         assert_eq!(here.iter().any(|(k, d)| k == "/" && d == "search"), slash, "{place}: / {here:?}");
         // Never one action twice: the back key's line says esc does the same, so the screen's esc back isn't listed.
@@ -268,24 +268,21 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
         }
         seen.push((place.to_string(), anywhere));
     };
-    // The project screen, its Sessions pane, then its Tickets pane.
+    // The project screen.
     check(&app, "project screen", true, true);
-    key(&mut app, KeyCode::Tab);
-    check(&app, "Tickets pane", false, true);
-    // A ticket's own screen.
-    key(&mut app, KeyCode::Enter);
-    assert!(app.tk.open.is_some());
-    check(&app, "ticket", false, false);
-    key(&mut app, KeyCode::Esc);
     key(&mut app, KeyCode::Esc);
     assert!(app.open_project.is_none());
-    // The three tabs.
+    // The three tabs, and a task's own screen.
     ch(&mut app, '1');
     check(&app, "Sessions", true, true);
+    ch(&mut app, '2');
+    check(&app, "Tasks", false, false);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.tk.open.is_some());
+    check(&app, "task", false, false);
+    key(&mut app, KeyCode::Esc);
     ch(&mut app, '3');
     check(&app, "Projects", true, true);
-    ch(&mut app, '4');
-    check(&app, "Briefs", true, false);
     let first = seen[0].1.clone();
     for (place, anywhere) in &seen {
         assert_eq!(anywhere, &first, "{place}: the same everywhere");
@@ -315,40 +312,24 @@ fn flat(lines: &[String]) -> String {
 }
 
 #[test]
-fn a_ticket_that_can_be_handed_over_says_can_start_and_the_states_read_in_sentence_case() {
-    use crate::tickets::State;
-    let words: Vec<&str> = [State::Working, State::Waiting, State::Done, State::Cancelled].iter().map(|s| s.label()).collect();
-    assert_eq!(words, ["Working", "Needs you", "Done", "Cancelled"]);
-    for w in &words {
-        assert!(w.chars().next().unwrap().is_uppercase(), "{w}");
-    }
-    assert_eq!(crate::tickets::waits_for_words(&[1, 3]), "Waits for #1, #3");
-    assert!(crate::tickets::QUEUED_WORDS.starts_with('W'));
-    let (w, mut app, id) = on_a_project("w-states");
-    let mut store = crate::tickets::Tickets::open(&w.config, &id);
-    store.add(crate::tickets::NewTicket { title: "After it".into(), blocked_by: vec![1], ..Default::default() }).unwrap();
-    // With a folder each: a task with none reads "Needs a folder" instead of "Can start".
-    store.set_folders(1, &["/tmp".into()]).unwrap();
-    store.set_folders(2, &["/tmp".into()]).unwrap();
-    app.reload_for_test();
+fn the_states_read_in_sentence_case_and_a_task_that_never_started_says_not_started() {
+    use crate::tickets::{Need, State};
+    let words: Vec<&str> =
+        [State::NotStarted, State::Working, State::NeedsYou(Need::Plan), State::Done, State::Cancelled].iter().map(|s| s.label()).collect();
+    assert_eq!(words, ["Not started", "Working", "Needs you", "Done", "Cancelled"]);
+    let (_w, mut app, _id) = on_a_project("w-states");
     let mut term = sized(&mut app, 120, 30);
-    // (The left column only: the notes beside it can wrap onto the same rows.)
-    let left: Vec<String> = draw(&mut term, &app).iter().map(|l| l.chars().take(55).collect()).collect();
-    let f = flat(&left);
-    // The pane's rows under the board's headings: what it is, then what it needs.
-    assert!(f.contains("Can start · 1 ▎#1 Coupon totals New · S hands it to a squad"), "{f}");
-    assert!(f.contains("Waits for · 1 #2 After it Waits for #1 Coupon totals"), "{f}");
-    assert!(!f.contains("ready"), "the old words are gone: {f}");
-    // On the Projects tab: how many can start.
+    // On the Projects tab: how many are open.
     key(&mut app, KeyCode::Esc);
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("2 open · 1 can start"), "{f}");
-    // On the ticket's own screen.
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Enter);
+    assert!(f.contains("1 open"), "{f}");
+    // On the Tasks tab: the section and what to press.
+    ch(&mut app, '2');
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("State Can start"), "{f}");
+    assert!(f.contains("Not started · 1") && f.contains("#1 Coupon totals"), "{f}");
+    assert!(f.contains("No folder yet · s starts it"), "{f}");
+    // Its details beside the list say the same.
+    assert!(f.contains("Not started") && f.contains("Squad none picked yet: s picks one"), "{f}");
 }
 
 #[test]
@@ -387,7 +368,7 @@ fn the_screens_say_session_and_every_popup_title_starts_with_a_capital() {
 }
 
 #[test]
-fn the_notes_and_the_squads_tab_say_it_plainly() {
+fn the_notes_say_it_plainly() {
     let (w, mut app, id) = on_a_project("w-notes");
     let _ = w;
     std::fs::write(app.projects.notes_path(&id), "# Overview\nSell socks.\n").unwrap();
@@ -395,99 +376,60 @@ fn the_notes_and_the_squads_tab_say_it_plainly() {
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("Every session in this project starts with these notes."), "{f}");
     assert!(!f.contains("context"), "{f}");
-    key(&mut app, KeyCode::Esc);
-    ch(&mut app, '4');
-    key(&mut app, KeyCode::Enter);
-    let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("its system prompt and model are in Settings (s) → Projects."), "{f}");
-    assert!(!f.contains("on the Projects tab"), "{f}");
 }
 
 // ---- group 2: cut text says so ------------------------------------------------------------------------------------
 
-/// The harness's shop: seven tickets in every state, one waiting for the first.
+/// A shop: tasks in every state, one with a long title.
 fn a_shop(name: &str) -> (World, App) {
-    use crate::tickets::{NewTicket, State, Tickets};
+    use crate::tickets::{Need, NewTicket, State, Tickets};
     let (w, mut app, id) = on_a_project(name);
     let mut store = Tickets::open(&w.config, &id);
-    for (title, blocked) in [
-        ("Move prices to the server", vec![]),
-        ("Pick a payment provider", vec![]),
-        ("Checkout confirmation page", vec![]),
-        ("Remove the old basket code", vec![1]),
-        ("Ship the shop", vec![]),
-        ("Old idea", vec![]),
+    for title in [
+        "Move prices to the server",
+        "Pick a payment provider",
+        "Remove the old basket code and every page that still links to it",
+        "Ship the shop",
+        "Old idea",
     ] {
-        store.add(NewTicket { title: title.into(), blocked_by: blocked, ..Default::default() }).unwrap();
+        store.add(NewTicket { title: title.into(), folder: Some("/tmp".into()), ..Default::default() }).unwrap();
     }
-    for (n, s) in [(2, State::Working), (3, State::Waiting), (6, State::Done), (7, State::Cancelled)] {
-        store.set_state(n, &s).unwrap();
+    for (n, s) in [
+        (2, State::Working),
+        (3, State::NeedsYou(Need::Question("Which provider do we pay for?".into()))),
+        (4, State::NeedsYou(Need::Permission("Claude needs your permission to use Bash".into()))),
+        (5, State::Done),
+        (6, State::Cancelled),
+    ] {
+        store
+            .update(n, |t| {
+                t.state = s;
+                t.squad = "feature".into();
+                true
+            })
+            .unwrap();
     }
-    store.squad_wants_to_publish(4, "Wants to publish: push task/4").unwrap();
     app.reload_for_test();
-    app.tk.unfolded = true;
+    ch(&mut app, '2');
     (w, app)
 }
 
-/// The Tickets pane's rows: the lines between its top and bottom borders, without them.
-fn tickets_pane(lines: &[String]) -> Vec<String> {
-    let top = lines.iter().position(|l| l.contains("╭ Tasks")).expect("the Tasks pane");
-    let left = lines[top].chars().position(|c| c == '╭').unwrap();
-    let right = left + lines[top].chars().skip(left + 1).position(|c| c == '╮').unwrap() + 1;
-    lines[top + 1..]
-        .iter()
-        .take_while(|l| !l.chars().nth(left).is_some_and(|c| c == '╰'))
-        .map(|l| l.chars().skip(left + 1).take(right - left - 1).collect::<String>())
-        .collect()
-}
-
 #[test]
-fn the_tasks_pane_never_cuts_a_rows_word_and_cuts_the_title_instead() {
+fn the_tasks_tab_never_cuts_a_rows_word_and_cuts_the_title_instead() {
     let (_w, mut app) = a_shop("c-tickets");
-    // The word at the right of each row: never cut (the title is, with "…").
-    let words = [(1, "Needs a folder"), (3, "a question"), (4, "a go-ahead"), (6, "Done"), (7, "Cancelled")];
+    let words = [(3, "a question"), (4, "asks permission")];
     for (w, h) in [(120u16, 60u16), (80, 60), (60, 60)] {
         let mut term = sized(&mut app, w, h);
         let lines = draw(&mut term, &app);
         let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
-        let pane = tickets_pane(&lines);
+        // The list's own columns (left of the details on a wide terminal).
+        let list: Vec<String> = lines.iter().map(|l| l.split('│').next().unwrap_or_default().to_string()).collect();
         for (n, word) in words {
-            let Some(row) = pane.iter().find(|l| l.contains(&format!("#{n} "))) else { panic!("#{n} isn't in the pane: {ctx}") };
+            let Some(row) = list.iter().find(|l| l.contains(&format!("#{n} "))) else { panic!("#{n} isn't listed: {ctx}") };
             assert!(row.trim_end().ends_with(word), "#{n}: {word:?} whole at the end of its row: {row:?}\n{ctx}");
         }
-        // Every second line ends at a word, or with "…" after one.
-        for (k, l) in pane.iter().enumerate() {
-            if l.contains("Wants to publish") || l.contains("wants to publish") {
-                let text = l.trim_end();
-                assert!(!text.ends_with(" pu") && !text.ends_with(" pus"), "line {k} cut mid-word: {l:?}\n{ctx}");
-            }
-        }
         if w < 120 {
-            assert!(pane.iter().any(|l| l.contains("#4 ") && l.contains('…')), "a long title is cut with …: {ctx}");
-        }
-    }
-}
-
-#[test]
-fn a_long_agent_name_is_cut_and_keeps_its_model_like_every_other_row() {
-    let (_w, mut app) = three("c-agents");
-    ch(&mut app, '4');
-    key(&mut app, KeyCode::Right);
-    for (w, h) in [(80u16, 24u16), (120, 40)] {
-        let mut term = sized(&mut app, w, h);
-        let lines = draw(&mut term, &app);
-        let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
-        // The list's pane, left of the details.
-        let rows: Vec<String> = lines
-            .iter()
-            .map(|l| l.split("││").next().unwrap_or_default().to_string())
-            .filter(|l| l.starts_with(" │") && ["planner", "report-wr", "summarizer"].iter().any(|n| l.contains(n)))
-            .collect();
-        assert_eq!(rows.len(), 3, "{ctx}");
-        // The same things on every row: the model, and at 120 columns how many squads use it.
-        for r in &rows {
-            assert!(["Opus", "Sonnet", "Haiku"].iter().any(|m| r.contains(m)), "{r}\n{ctx}");
-            assert_eq!(r.contains("· 1 squad"), w >= 120, "{r}\n{ctx}");
+            assert!(list.iter().any(|l| l.contains("#4 ") && l.contains('…')), "a long title is cut with …: {ctx}");
         }
     }
 }
@@ -517,13 +459,6 @@ fn a_pane_cut_at_its_bottom_says_how_much_more_is_below() {
     let lines = draw(&mut term, &app);
     assert!(!lines.iter().any(|l| l.contains("more lines below")), "{}", lines.join("\n"));
     assert!(lines.iter().any(|l| l.contains("point number 40")), "{}", lines.join("\n"));
-    // The Briefs tab's workflow, at 80x24, is longer than its pane.
-    key(&mut app, KeyCode::Esc);
-    ch(&mut app, '4');
-    let lines = draw(&mut term, &app);
-    assert!(lines.iter().any(|l| l.contains("Steps")), "{}", lines.join("\n"));
-    let more = lines.iter().position(|l| l.contains("more lines below")).unwrap_or_else(|| panic!("{}", lines.join("\n")));
-    assert!(lines[more + 1].contains('╰'), "{}", lines.join("\n"));
 }
 
 #[test]

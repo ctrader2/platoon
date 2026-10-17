@@ -6,22 +6,20 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1` to `4`.
-pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Briefs"];
+/// The top-level tabs, on `1` to `3`.
+pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_TASKS: usize = 1;
 pub const TOP_PROJECTS: usize = 2;
-pub const TOP_SQUADS: usize = 3;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
 pub const PTABS: &[(&str, &str)] =
     &[("Active", "No projects yet. Press n to make one."), ("Archived", "No archived projects. Press a on a project to archive it.")];
 
-/// The three panes of a project's screen: Sessions over Tickets on the left, Notes on the right.
+/// The two panes of a project's screen: Sessions on the left, Notes on the right.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Pane {
     Sessions,
-    Tickets,
     Notes,
 }
 
@@ -32,19 +30,11 @@ pub enum NamePurpose {
     /// A new project, with this session put in it (from the project picker).
     NewFor(String),
     Rename(String),
-    /// A new task in the open project: its title.
-    NewTicket,
     /// A new task made on the Tasks tab, in this project (`NO_PROJECT_ID`: in none): its title.
     NewTask(String),
     /// What the Tasks tab is narrowed to.
     TaskFilter,
-    /// A new title for this task.
-    TicketTitle(u32),
-    /// Something on the Briefs tab: a squad's name, a member's.
-    Squad(super::SquadName),
-    /// The branch the work of this folder line of the hand-over popup lands on.
-    LandsOn(usize),
-    /// The command that checks a squad's work on this project's tasks (`T` on its screen).
+    /// The command that runs this project's tests when a task's session stops (`T` on its screen).
     TestCommand(String),
 }
 
@@ -85,17 +75,11 @@ pub struct PStat {
     pub last_active: u64,
     /// Its non-archived sessions with a reply the user hasn't seen.
     pub unread: usize,
-    /// Its tasks that aren't Done or Cancelled, and how many of those can start.
+    /// Its tasks that aren't Done or Cancelled.
     pub open_tickets: usize,
-    pub ready_tickets: usize,
 }
 
 impl App {
-    /// The Briefs tab is showing.
-    pub fn squads_tab_showing(&self) -> bool {
-        self.top == TOP_SQUADS && self.open_project.is_none()
-    }
-
     /// The Projects tab's list is showing (not a project's screen).
     pub fn projects_list_showing(&self) -> bool {
         self.top == TOP_PROJECTS && self.open_project.is_none()
@@ -135,7 +119,6 @@ impl App {
             let all = store.all();
             if let Some(st) = out.get_mut(&p.id) {
                 st.open_tickets = all.iter().filter(|t| !t.state.closed()).count();
-                st.ready_tickets = all.iter().filter(|t| !t.state.closed() && crate::tickets::is_ready(t, all)).count();
             }
         }
         out
@@ -174,7 +157,7 @@ impl App {
         self.pview.get(self.pselected).map(|&i| &self.projects.all()[i])
     }
 
-    /// `1` to `4`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
+    /// `1` to `3`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
     /// opened on the Tasks tab, `2` goes back to the board.
     pub fn switch_top(&mut self, i: usize) {
         if i >= TOPS.len() {
@@ -189,6 +172,9 @@ impl App {
         }
         self.top = i;
         self.filter.clear();
+        if self.board_showing() {
+            self.sync_board_store();
+        }
         self.update_view();
     }
 
@@ -215,7 +201,6 @@ impl App {
         self.filter.clear();
         self.selected = 0;
         self.pane = Pane::Sessions;
-        self.open_tickets(&p);
         self.notes_top.set(0);
         self.update_view();
         self.poll_notes_status();
@@ -223,7 +208,6 @@ impl App {
 
     pub(super) fn close_project_screen(&mut self) {
         let Some(id) = self.open_project.take() else { return };
-        self.close_tickets();
         self.filter.clear();
         self.selected = 0;
         self.update_view();
@@ -265,8 +249,8 @@ impl App {
     // ---- keys -------------------------------------------------------------------------------------------------
 
     pub(super) fn list_key(&mut self, key: KeyEvent) {
-        // The quit key quits from the top-level lists only; on a project's or a ticket's screen, or in a squad's
-        // details, it goes back one level, as esc does.
+        // The quit key quits from the top-level lists only; on a project's or a task's screen it goes back one level,
+        // as esc does.
         let key = match self.keys.get().quit.matches(&key) {
             true if self.at_top_level() => return self.act(Action::Quit),
             true => KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
@@ -292,18 +276,14 @@ impl App {
             self.board_key(key);
         } else if self.top == TOP_PROJECTS {
             self.projects_key(key);
-        } else if self.top == TOP_SQUADS {
-            self.squads_tab_key(key);
         } else {
             self.sessions_key(key);
         }
     }
 
-    /// One of the top-level lists (Sessions, Tasks, Projects, Squads) with nothing open over it: where quit quits.
+    /// One of the top-level lists (Sessions, Tasks, Projects) with nothing open over it: where quit quits.
     pub fn at_top_level(&self) -> bool {
-        self.open_project.is_none()
-            && !(self.top == TOP_SQUADS && self.sqt.focus == super::SqFocus::Detail)
-            && !(self.top == TOP_TASKS && self.tk.open.is_some())
+        self.open_project.is_none() && !(self.top == TOP_TASKS && self.tk.open.is_some())
     }
 
     fn sessions_key(&mut self, key: KeyEvent) {
@@ -355,48 +335,40 @@ impl App {
         }
     }
 
-    /// `/` opens the search on the screen showing: everywhere on platoon's own screens but a ticket's, the Tasks tab
-    /// (where it narrows the board) and the Briefs tab (it looks for sessions and projects).
+    /// `/` opens the search on the screen showing: everywhere on platoon's own screens but the Tasks tab (where it
+    /// narrows the list of tasks).
     pub fn slash_searches(&self) -> bool {
-        matches!(self.mode, Mode::List) && self.tk.open.is_none() && !self.squads_tab_showing() && !self.board_showing()
+        matches!(self.mode, Mode::List) && !self.board_showing()
     }
 
-    /// `s` opens the settings on the screen showing. On a ticket (its screen, or its row in the Tickets pane) it does
-    /// nothing: it was the ticket's state, which the squad sets now (the user only cancels, with `c`), and settings
-    /// popping up there would surprise.
+    /// `s` opens the settings on the screen showing. On the Tasks tab it starts the picked task instead.
     pub fn s_opens_settings(&self) -> bool {
         matches!(self.mode, Mode::List) && !self.ticket_has_keys()
     }
 
-    /// A ticket's screen is showing, or the Tickets pane has the focus: `s` there is not the settings.
+    /// The Tasks tab is showing: `s` there starts a task, it is not the settings.
     pub(crate) fn ticket_has_keys(&self) -> bool {
-        self.task_screen_showing() || (self.open_project.is_some() && self.pane == Pane::Tickets)
+        self.board_showing()
     }
 
     fn project_screen_key(&mut self, key: KeyEvent) {
         // Plain arrows move inside a pane. With Shift or Ctrl (both, because some terminals keep one of them for
-        // themselves) they move between the panes: up and down between Sessions and Tickets, left to whichever of
-        // those two was used last, right to the notes.
+        // themselves) they move between the panes: left to the sessions, right to the notes.
         let across = key.modifiers.intersects(KeyModifiers::SHIFT | KeyModifiers::CONTROL);
         match key.code {
-            KeyCode::Up if across => self.focus_pane(Pane::Sessions),
-            KeyCode::Down if across => self.focus_pane(Pane::Tickets),
-            KeyCode::Left if across => self.focus_pane(self.left_pane),
-            KeyCode::Right if across => self.focus_pane(Pane::Notes),
+            KeyCode::Left if across => self.pane = Pane::Sessions,
+            KeyCode::Right if across => self.pane = Pane::Notes,
             KeyCode::Left | KeyCode::Right => {}
-            KeyCode::Tab => self.cycle_pane(1),
-            KeyCode::BackTab => self.cycle_pane(-1),
+            KeyCode::Tab | KeyCode::BackTab => {
+                self.pane = if self.pane == Pane::Sessions { Pane::Notes } else { Pane::Sessions };
+            }
             KeyCode::Esc if !self.filter.is_empty() => {
                 self.filter.clear();
                 self.selected = 0;
             }
             KeyCode::Esc => self.act(Action::Leave),
-            // How squads start on this project's tasks (the line under its description), whichever pane has the keys.
-            KeyCode::Char('o') => self.cycle_autonomy_default(),
-            // The command that checks a squad's work (the line under that one), from any pane too.
+            // The command that runs the project's tests (the line under its description), whichever pane has the keys.
             KeyCode::Char('T') => self.edit_test_command(),
-            // The Tickets pane has keys of its own (`n` there is a new ticket).
-            _ if self.pane == Pane::Tickets => self.tickets_pane_key(key),
             KeyCode::Char('n') => self.act(Action::New),
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Char('j' | 'k') if self.pane == Pane::Notes => {
                 let d: i64 = match key.code {
@@ -432,21 +404,6 @@ impl App {
         }
     }
 
-    /// `o` on a project's screen: the next level of how much a squad does on its own when one of its tasks is handed
-    /// over (plans first, asks before anything others can see, works and publishes), written as the project's default.
-    /// The hand-over popup starts from it; a task handed over already keeps its own.
-    pub(super) fn cycle_autonomy_default(&mut self) {
-        let Some(p) = self.open_project().cloned() else { return };
-        let next = p.autonomy_default.next();
-        match self.projects.set_autonomy_default(&p.id, &next) {
-            Ok(()) => self.notify(format!("Hand-overs in {} now start from \"{}\".", p.name, next.label())),
-            Err(e) => {
-                let why = e.to_string();
-                self.notify(format!("Couldn't save the project: {}", why.split(" (os error").next().unwrap_or(&why)));
-            }
-        }
-    }
-
     /// `T` on a project's screen: the box for its test command, holding the command it has (or, when it has none,
     /// what its `CLAUDE.md` suggests, for the user to check: nothing is saved, or ever run, until they press enter).
     pub(super) fn edit_test_command(&mut self) {
@@ -461,7 +418,7 @@ impl App {
         let name = self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default();
         match self.projects.set_test_command(id, &command) {
             Ok(()) if command.is_empty() => self.notify(format!("{name} has no test command now: platoon runs no tests for its tasks.")),
-            Ok(()) => self.notify(format!("Tests for {name}: platoon runs `{command}` when a squad finishes.")),
+            Ok(()) => self.notify(format!("Tests for {name}: platoon runs `{command}` when a task's session stops.")),
             Err(e) => self.report_projects_error(e),
         }
     }
@@ -482,16 +439,12 @@ impl App {
 
     pub(super) fn wheel_list(&mut self, up: bool) {
         let d = if up { -1 } else { 1 };
-        if self.squads_tab_showing() {
-            self.wheel_squads(up);
-        } else if self.board_showing() && self.tk.open.is_some() {
+        if self.board_showing() && self.tk.open.is_some() {
             self.wheel_ticket(up);
         } else if self.board_showing() {
             self.board_key(KeyEvent::new(if up { KeyCode::Up } else { KeyCode::Down }, KeyModifiers::NONE));
         } else if self.projects_list_showing() {
             self.move_project(d);
-        } else if self.open_project.is_some() && (self.tk.open.is_some() || self.pane == Pane::Tickets) {
-            self.wheel_ticket(up);
         } else if self.open_project.is_some() && self.pane == Pane::Notes {
             self.notes_top.set((self.notes_top.get() as i32 + d * 3).max(0) as usize);
         } else {
@@ -505,8 +458,6 @@ impl App {
         let input = match &purpose {
             NamePurpose::Rename(id) => self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
             NamePurpose::TaskFilter => self.filter.clone(),
-            NamePurpose::TicketTitle(n) => self.ticket(*n).map(|t| t.title.clone()).unwrap_or_default(),
-            NamePurpose::LandsOn(i) => self.sq.form.folders.get(*i).map(|l| l.lands_on.clone()).unwrap_or_default(),
             NamePurpose::TestCommand(id) => match self.projects.get(id).map(|p| p.test_command.clone()).filter(|c| !c.is_empty()) {
                 Some(c) => c,
                 None => self.test_suggestion(id).unwrap_or_default(),
@@ -526,10 +477,7 @@ impl App {
 
     pub(super) fn type_project_name(&mut self, text: &str) {
         let max = match &self.name_box.purpose {
-            NamePurpose::Squad(p) => Self::squad_name_max(p),
-            NamePurpose::NewTicket | NamePurpose::NewTask(_) | NamePurpose::TicketTitle(_) | NamePurpose::LandsOn(_) => {
-                crate::tickets::TITLE_MAX
-            }
+            NamePurpose::NewTask(_) => crate::tickets::TITLE_MAX,
             NamePurpose::TaskFilter => 200,
             NamePurpose::TestCommand(_) => projects_mod::TEST_COMMAND_MAX,
             _ => projects_mod::NAME_MAX,
@@ -541,8 +489,6 @@ impl App {
     /// Enter in the name box.
     pub(super) fn save_name_box(&mut self) {
         match self.name_box.purpose.clone() {
-            NamePurpose::Squad(p) => return self.save_squad_name(p),
-            NamePurpose::LandsOn(i) => return self.save_lands_on(i),
             NamePurpose::TestCommand(id) => return self.save_test_command(&id),
             NamePurpose::TaskFilter => {
                 self.filter = self.name_box.input.trim().to_string();
@@ -558,19 +504,6 @@ impl App {
                 self.mode = Mode::List;
                 return self.make_board_task(&project, &title);
             }
-            NamePurpose::NewTicket | NamePurpose::TicketTitle(_) => {
-                let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
-                if title.is_empty() {
-                    self.notify("A task needs a title");
-                    return; // the box stays open
-                }
-                self.mode = Mode::List;
-                match self.name_box.purpose.clone() {
-                    NamePurpose::TicketTitle(n) => self.rename_ticket(n, &title),
-                    _ => self.make_ticket(&title),
-                }
-                return;
-            }
             _ => {}
         }
         let name = projects_mod::clean(&self.name_box.input, projects_mod::NAME_MAX);
@@ -585,13 +518,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTicket
-            | NamePurpose::NewTask(_)
-            | NamePurpose::TaskFilter
-            | NamePurpose::TicketTitle(_)
-            | NamePurpose::Squad(_)
-            | NamePurpose::LandsOn(_)
-            | NamePurpose::TestCommand(_) => {}
+            NamePurpose::NewTask(_) | NamePurpose::TaskFilter | NamePurpose::TestCommand(_) => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

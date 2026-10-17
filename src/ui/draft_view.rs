@@ -1,8 +1,7 @@
 //! The popup **Tasks from this conversation**: the tasks Claude drafted from a session, each as a block (its title, the
-//! squad suggested for it, the folders it works in, what it waits for among the new tasks, then its text drawn from its
-//! Markdown: what it should do, how far, the acceptance checks), the picked one marked, scrolled so it shows; and the
-//! keys that make them, change them or leave them. It fits 80x24: the blocks scroll and the keys take two lines when
-//! one is too short.
+//! squad suggested for it, the folder it works in, then its text drawn from its Markdown: what it should do, its "Done
+//! when" boxes), the picked one marked, scrolled so it shows; and the keys that make them, change them or leave them.
+//! It fits 80x24: the blocks scroll and the keys take two lines when one is too short.
 
 use super::{Hint, badge_span, centered, draw_footer, draw_more_below, fit_end, hint_fg, hints_width, modal_block, popup_ground, wrap};
 use crate::app::{Action, App, Hit};
@@ -14,14 +13,13 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-/// The width of the labels in a block ("Waits for" and a space).
-const LABEL: usize = 11;
+/// The width of the labels in a block ("Works in" and a space).
+const LABEL: usize = 10;
 
 /// The keys the popup offers, the ones that make or leave the draft first (they stay when the line is short).
 pub(super) fn draft_hints() -> Vec<Hint<'static>> {
     vec![
-        ("enter", "make them and hand over", Some(Action::Confirm)),
-        ("k", "make them for later", None),
+        ("enter", "make them", Some(Action::Confirm)),
         ("esc", "cancel", Some(Action::Cancel)),
         ("e", "edit", None),
         ("x", "remove", None),
@@ -90,7 +88,7 @@ pub(super) fn draw_task_draft(f: &mut Frame, app: &App, area: Rect) {
     let hints = draft_hints();
     // (Two lines also while a key's line is said beside them.)
     let one = hints_width(&hints) <= iw && app.active_notice().is_none();
-    let rows: Vec<Vec<Hint>> = if one { vec![hints] } else { vec![hints[..3].to_vec(), hints[3..].to_vec()] };
+    let rows: Vec<Vec<Hint>> = if one { vec![hints] } else { vec![hints[..2].to_vec(), hints[2..].to_vec()] };
     let foot_h = rows.len() as u16;
     let foot_y = inner.bottom() - foot_h;
     // What a key just did ("Took ... out of the draft") is said here, beside the last row of keys, where it is seen.
@@ -123,30 +121,16 @@ pub(super) fn draw_task_draft(f: &mut Frame, app: &App, area: Rect) {
                 Span::styled(format!("{} ", k.name), Style::new().fg(t.text)),
                 Span::styled("(suggested)", Style::new().fg(t.dim)),
             ],
-            None => vec![label("Squad"), Span::styled("none suggested: you pick one", Style::new().fg(t.subtext))],
+            None => vec![label("Squad"), Span::styled("none suggested: you pick one when it starts", Style::new().fg(t.subtext))],
         };
         lines.push((Some(i), Line::from(squad)));
-        let folders: Vec<String> = d.folders.iter().map(|f| crate::dirs::tilde(f, &app.home)).collect();
         lines.push((
             Some(i),
             Line::from(vec![
                 label("Works in"),
-                Span::styled(fit_end(&folders.join(", "), lw.saturating_sub(LABEL)), Style::new().fg(t.text)),
+                Span::styled(fit_end(&crate::dirs::tilde(&d.folder, &app.home), lw.saturating_sub(LABEL)), Style::new().fg(t.text)),
             ]),
         ));
-        if task.waits_for.is_empty() {
-            lines.push((Some(i), Line::from(vec![label("Waits for"), Span::styled("nothing", Style::new().fg(t.subtext))])));
-        }
-        for (k, j) in task.waits_for.iter().enumerate() {
-            let title = d.tasks.get(*j).map(|o| o.title.as_str()).unwrap_or("");
-            lines.push((
-                Some(i),
-                Line::from(vec![
-                    label(if k == 0 { "Waits for" } else { "" }),
-                    Span::styled(fit_end(title, lw.saturating_sub(LABEL)), Style::new().fg(t.text)),
-                ]),
-            ));
-        }
         lines.push((Some(i), Line::raw("")));
         for l in compact(crate::mdview::render(task.body.trim(), lw, t, app.plain_marker)) {
             lines.push((Some(i), l));

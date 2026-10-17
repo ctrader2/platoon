@@ -1,12 +1,12 @@
-//! Opening a ticket's or a session's folders in a code editor of this computer's (`v`): what it opens from where the
-//! user is, the questions before it opens (the squad is still working), bringing a removed worktree back first, and the
+//! Opening a task's or a session's folders in a code editor of this computer's (`v`): what it opens from where the
+//! user is, the question before it opens (its session is still working), bringing a removed worktree back first, and the
 //! request the event loop takes to hand the terminal to an editor that draws in it (`main.rs`). The folders and
 //! running a terminal editor are `editor.rs`; finding the editors and starting a windowed one is `fileeditors.rs`.
 //!
 //! Where `v` opens what:
 //! - a session's row (Sessions tab, a project's Sessions pane): its folder and the folders added to it;
-//! - a ticket's row or its screen: its worktrees, its folders not in git, its work folder when it has files;
-//! - anywhere else (the Briefs tab, the Projects list, the notes, an empty list): the folder picker asks.
+//! - a task's row or its screen: its worktree, or its folder when it has none;
+//! - anywhere else (the Projects list, the notes, an empty list): the folder picker asks.
 //!
 //! In the attached view every key is Claude's: the back key (ctrl+space) to the list first, then `v`. Typed into a box, `v` is
 //! a letter (those modes never reach here).
@@ -14,10 +14,10 @@
 //! Which editor: `v` opens the favourite (`files_editor` in the settings; the first editor found until the user picks
 //! one, and instead of one no longer installed, said once), or, with "Always ask which editor" on, the list with the
 //! favourite starred and picked (picking another makes it the favourite). platoon installs no editor: with none found,
-//! `v` says so (`NO_EDITOR`). Everything else is the same for every editor: the squad-still-working question, bringing a
-//! removed worktree back, the folder picker. An editor that draws in the terminal (Helix, the user's own Neovim) is
-//! handed platoon's terminal (`main.rs`); one with a window of its own starts beside platoon, and a ticket's worktree
-//! opened in one is kept after the work until `w` (platoon cannot tell when that window closes).
+//! `v` says so (`NO_EDITOR`). Everything else is the same for every editor: the session-still-working question, bringing
+//! a removed worktree back, the folder picker. An editor that draws in the terminal (Helix, the user's own Neovim) is
+//! handed platoon's terminal (`main.rs`); one with a window of its own starts beside platoon, and a task's worktree
+//! opened in one is kept after the work (platoon cannot tell when that window closes).
 
 use super::*;
 use crate::editor::{self, Request};
@@ -42,7 +42,7 @@ pub enum EdTarget {
 #[derive(Clone, Debug)]
 struct Flow {
     target: EdTarget,
-    /// The user said to open it although the squad is still working.
+    /// The user said to open it although its session is still working.
     warned: bool,
     /// The editor it opens in; None while the list of editors is showing.
     editor: Option<FileEditor>,
@@ -99,7 +99,7 @@ impl App {
 
     /// What `v` opens from where the user is, if anything is selected there.
     pub fn editor_target(&self) -> Option<EdTarget> {
-        if self.squads_tab_showing() || self.projects_list_showing() {
+        if self.projects_list_showing() {
             return None;
         }
         if self.board_showing() {
@@ -109,12 +109,8 @@ impl App {
                 None => self.board_task().map(|(project, number)| EdTarget::Ticket { project, number }),
             };
         }
-        if let Some(project) = self.open_project.clone() {
-            if let Some(number) = self.tk.open {
-                return Some(EdTarget::Ticket { project, number });
-            }
+        if self.open_project.is_some() {
             return match self.pane {
-                Pane::Tickets => self.selected_ticket().map(|t| EdTarget::Ticket { project, number: t.number }),
                 Pane::Sessions => self.selected_session().map(|s| EdTarget::Session(s.id.clone())),
                 Pane::Notes => None,
             };
@@ -254,19 +250,18 @@ impl App {
                 self.ed.flow = None;
                 return;
             };
-            if !flow.warned && t.state == State::Working && self.leader_running(number) {
+            if !flow.warned && t.state == State::Working && t.session.as_deref().is_some_and(|s| self.task_session_running(s)) {
                 self.mode = Mode::Confirm(Confirm::EditorWhileWorking { number, title: t.title.clone() });
                 return;
             }
         }
         if let EdTarget::Ticket { project, number } = &flow.target {
             let (project, number) = (project.clone(), *number);
-            let gone = self.flow_ticket(&project, number).is_some_and(|t| t.worktrees.iter().any(|w| w.is_gone()));
+            let gone = self.flow_ticket(&project, number).is_some_and(|t| t.worktree.as_ref().is_some_and(|w| w.is_gone()));
             if gone
                 && self.task_scope().as_deref() == Some(project.as_str())
-                && self.bring_worktrees_back_then(number, worktree_glue::After::Editor)
+                && self.bring_worktree_back_then(number, worktree_glue::After::Editor)
             {
-                self.notify(format!("Bringing #{number}'s worktree back from its branch first…"));
                 return;
             }
         }
@@ -294,8 +289,8 @@ impl App {
         }
     }
 
-    /// Start an editor with a window of its own on `req`'s folders, beside platoon. A ticket's worktree opened in it
-    /// is written down as kept (platoon can't tell when that window closes), until `w` on the ticket.
+    /// Start an editor with a window of its own on `req`'s folders, beside platoon. A task's worktree opened in it is
+    /// written down as kept (platoon can't tell when that window closes).
     fn open_in_window(&mut self, target: &EdTarget, e: &FileEditor, req: &Request) {
         let dirs = req.dirs();
         let (commands, left) = fileeditors::commands(e, &dirs);
@@ -330,15 +325,9 @@ impl App {
         };
         if let EdTarget::Ticket { project, number } = target {
             let mut store = Tickets::open(&self.config, project);
-            let mut kept = 0;
-            for r in req.roots.iter().take(shown).filter(|r| r.kind == "worktree") {
-                if store.mark_opened_in(*number, &r.path, &e.name).is_ok() {
-                    kept += 1;
-                }
-            }
-            if kept > 0 {
-                self.reread_all_tickets();
-                line.push_str(&format!(" #{number}'s copy of the folder stays after the work until w on the task removes it."));
+            if req.roots.iter().take(shown).any(|r| r.kind == "worktree") && store.mark_opened_in(*number, &e.name).unwrap_or(false) {
+                self.reread_tickets();
+                line.push_str(&format!(" #{number}'s worktree stays after the work: remove it with git when you no longer need it."));
             }
         }
         if let Some(n) = self.ed.note.take() {
@@ -356,14 +345,13 @@ impl App {
             }
             EdTarget::Ticket { project, number } => {
                 let t = self.flow_ticket(project, *number)?;
-                let work = crate::tickets::work_dir(&self.config, project, *number);
-                Some(Request { roots: editor::ticket_roots(&t, &work) })
+                Some(Request { roots: editor::ticket_roots(&t) })
             }
             EdTarget::Folder(dir) => Some(Request { roots: editor::folder_roots(dir) }),
         }
     }
 
-    /// Yes to "the squad is still working".
+    /// Yes to "its session is still working".
     pub(super) fn editor_anyway(&mut self) {
         self.mode = Mode::List;
         if let Some(f) = self.ed.flow.as_mut() {
@@ -372,7 +360,7 @@ impl App {
         self.editor_continue();
     }
 
-    /// No to "the squad is still working".
+    /// No to "its session is still working".
     pub(super) fn editor_cancel(&mut self) {
         self.mode = Mode::List;
         self.ed.flow = None;
@@ -385,7 +373,7 @@ impl App {
     }
 
     /// The editor has closed (or couldn't start): say what went wrong, if anything, and look at everything again
-    /// (sessions may have moved on, a ticket may be done).
+    /// (sessions may have moved on, a task may be done).
     pub fn editor_closed(&mut self, result: Result<(), String>) {
         let note = self.ed.note.take();
         match (result, note) {
@@ -396,7 +384,7 @@ impl App {
         self.refresh();
     }
 
-    /// A `v` on ticket `number` of `project` is under way: its worktrees are left alone until it has opened.
+    /// A `v` on task `number` of `project` is under way: its worktree is left alone until it has opened.
     pub(super) fn editor_holds(&self, project: &str, number: u32) -> bool {
         matches!(&self.ed.flow, Some(Flow { target: EdTarget::Ticket { project: p, number: n }, .. }) if p == project && *n == number)
     }

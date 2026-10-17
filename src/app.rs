@@ -41,30 +41,25 @@ use std::{
 };
 
 mod board_glue;
-mod checks_glue;
 mod editor_glue;
 mod handoff_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
+mod spent_glue;
 mod squads_glue;
-mod squadtab_glue;
-mod squadwork_glue;
 mod taskdraft_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
-#[cfg(test)]
-pub use board_glue::GO_AHEAD_WITH_PLAN;
-pub use board_glue::{AnswerFor, BRow, BoardState, CHANGE_THE_PLAN, ListItem, PickFor};
+pub use board_glue::{BRow, BoardState, ListItem};
 #[cfg(test)]
 pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
-pub use notes_glue::{Changes, EditorPick, NotesEdit, NotesWindow};
+pub use notes_glue::{Changes, DraftEdit, EditorPick, NotesEdit, NotesWindow};
 pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_TASKS, TOPS};
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
-pub use squads_glue::{SPLIT_MIN_WIDTH, SquadState, split_areas};
-pub use squadtab_glue::{ARow, ChoiceFor, Drafting, SqFocus, SqView, SquadName, SquadTab, TextFor, agent_rows};
-pub use tickets_glue::{PickKind, PickOpt, TRow, TicketsState};
+pub use squads_glue::SquadState;
+pub use tickets_glue::TicketsState;
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
 /// Automatic archiving is something the user didn't do, so its notice stays long enough to be read.
@@ -128,8 +123,6 @@ pub struct Pages {
     pub sessions: Cell<usize>,
     pub projects: Cell<usize>,
     pub tickets: Cell<usize>,
-    /// The Briefs tab's list, Squads or Agents.
-    pub squads: Cell<usize>,
     /// The settings' entries.
     pub settings: Cell<usize>,
 }
@@ -137,7 +130,7 @@ pub struct Pages {
 impl Default for Pages {
     fn default() -> Self {
         let c = || Cell::new(10);
-        Pages { sessions: c(), projects: c(), tickets: c(), squads: c(), settings: c() }
+        Pages { sessions: c(), projects: c(), tickets: c(), settings: c() }
     }
 }
 
@@ -218,25 +211,15 @@ pub enum Hit {
     Top(usize),
     /// A row of the Projects tab.
     ProjectRow(usize),
-    /// A row of the Tasks pane of a project's screen.
+    /// A row of the Tasks tab.
     TicketRow(usize),
-    /// An entry of a list open over a task (its folders, what it waits for).
-    TicketPickRow(usize),
     /// A task in the popup of tasks drafted from a conversation.
     DraftTask(usize),
-    /// An entry of the squad picker.
+    /// An entry of the list of squads (`s` on a task).
     SquadRow(usize),
-    /// An entry of the Briefs tab's list (of squads or of agents, whichever it shows).
-    SquadEntry(usize),
-    /// The Briefs tab's list title: Squads (false) or Agents (true).
-    SquadView(bool),
-    /// A row of the selected squad's or agent's details.
-    SquadDetail(usize),
-    /// An entry of the small list open over the Briefs tab.
-    SquadChoiceRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
-    /// An entry of the project picker of a task (`n` on the Tasks tab, `m` on a task).
+    /// An entry of the project picker of a new task (`n` on the Tasks tab).
     ProjectPickRow(usize),
     /// An entry of the editor list.
     EditorRow(usize),
@@ -297,29 +280,11 @@ pub enum Confirm {
     DeleteProject { id: String, name: String, sessions: usize },
     /// Restoring platoon's default system prompt of an AI action (`r` in the settings) replaces the user's own.
     ResetInstructions { id: &'static str },
-    /// `c` on a ticket: cancel it? `squad`: a squad has had it; `pid`: its leader's `claude`, when that is running
-    /// (yes stops that session too).
+    /// `c` on a task: cancel it? `pid`: its session's `claude`, when that is running (yes stops that session too).
     /// `uncommitted`: its worktree has changes not yet committed, so platoon will keep it.
-    CancelTicket { number: u32, title: String, squad: bool, pid: Option<u32>, uncommitted: bool },
-    /// `w` on a Done or Cancelled ticket whose worktree was kept (it has changes not yet committed, or it was opened in
-    /// an editor with a window of its own): remove it anyway (changes are lost, the branch is kept).
-    RemoveWorktree { number: u32, branch: String, uncommitted: bool, opened_in: Option<String> },
-    /// The commander said this squad doesn't fit the ticket, and the user picked it again: hand it over anyway?
-    HandAnyway { number: u32, squad: String, title: String, says: String },
-    /// `v` on a ticket whose squad is still working in its files: open the editor anyway?
+    CancelTicket { number: u32, title: String, pid: Option<u32>, uncommitted: bool },
+    /// `v` on a task whose session is still working in its files: open the editor anyway?
     EditorWhileWorking { number: u32, title: String },
-    /// Delete one of the user's own squads.
-    DeleteSquad { id: String, name: String },
-    /// Put a built-in squad the user changed back as platoon has it.
-    RestoreSquad { id: String, name: String },
-    /// Throw away the drafted squad that was never saved.
-    DiscardDraft { name: String },
-    /// Delete one of the user's own agents (no squad uses it).
-    DeleteAgent { id: String, name: String },
-    /// Put a built-in agent the user changed back as platoon has it.
-    RestoreAgent { id: String, name: String },
-    /// Throw away the drafted agent that was never saved.
-    DiscardAgentDraft { name: String },
 }
 
 /// The smallest terminal platoon draws its screens in. Below it, `ui::draw` says so in one centered message instead of
@@ -375,20 +340,10 @@ pub enum Mode {
     Changes,
     /// The hand-off brief, waiting for Claude or waiting to be edited and accepted (`handoff`).
     Handoff,
-    /// A list open over a task: its folders or what it waits for (`tk.pick`).
-    TicketPick,
-    /// The hand-over popup: the squads a task can be handed to, and its terms (`sq`).
+    /// The list of squads a task starts with (`s`, `sq`).
     SquadPick,
-    /// A small list over the Briefs tab: a model, an agent, where a step sends the work back, what to describe
-    /// (`sqt.choice`).
-    SquadChoice,
-    /// A paragraph typed on the Briefs tab: a new squad described for Claude, what a squad can do, what a step does
-    /// (`sqt.text`).
-    SquadText,
-    /// Which project a new task goes in, or where a task moves to (`bd.pick`).
+    /// Which project a new task goes in (`bd.pick`).
     TaskProject,
-    /// The one-line answer to a squad's question (`bd.answer`).
-    Answer,
     /// The tasks drafted from a conversation, before any is made (`td.draft`).
     TaskDraft,
 }
@@ -401,8 +356,8 @@ pub struct Picker {
     pub selected: usize,
     /// The project a new session started from here goes into.
     pub project: Option<String>,
-    /// Picking a folder to add to this ticket (of the open project), rather than one to start a session in.
-    pub ticket: Option<u32>,
+    /// Picking the folder of this task (of the store the keys act on), before it starts.
+    pub task_folder: Option<u32>,
     /// Picking a folder to open the code editor in (`v` with nothing selected).
     pub editor: bool,
     /// Picking the folder of a new task in no project, with this title (it is written once the folder is picked).
@@ -597,26 +552,20 @@ pub struct App {
     pub open_project: Option<String>,
     /// Which pane of the project's screen has the focus.
     pub pane: Pane,
-    /// Sessions or Tickets: the one of the left column used last, which `←` goes back to.
-    pub left_pane: Pane,
-    /// The open project's tickets, the Tickets pane and a ticket's own screen.
+    /// The task store the keys act on, and a task's own screen.
     pub tk: TicketsState,
     /// The Tasks tab.
     pub bd: BoardState,
-    /// Squads: the picker, the split view, and which sessions are squads' leaders.
+    /// Starting tasks: the list of squads, the worktrees being made, and which sessions are tasks'.
     pub sq: SquadState,
-    /// What the open project's squads have done (tokens, members' runs), read off the UI thread.
-    pub sw: squadwork_glue::WorkState,
-    /// Tickets' worktrees after the work: removing them, and bringing them back to continue a squad.
+    /// What tasks' sessions have spent, read off the UI thread.
+    pub sw: spent_glue::WorkState,
+    /// Tasks' worktrees after the work: removing them, and bringing them back to continue a session.
     pub wt: worktree_glue::WtState,
-    /// The test check this window is running (`checks.rs`).
-    ck: checks_glue::CheckState,
-    /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup, the hand-overs that follow.
+    /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup.
     pub td: taskdraft_glue::DraftState,
     /// The code editor (`v`): the questions before it opens, the request the event loop takes.
     pub ed: editor_glue::EdState,
-    /// The Briefs tab: every squad, the one selected, a draft, and what is being changed.
-    pub sqt: SquadTab,
     /// The first line of the notes in view.
     pub notes_top: Cell<usize>,
     /// The open project and the state of its notes file when it was last looked at, so a change made by the
@@ -798,7 +747,7 @@ impl App {
                 results: Vec::new(),
                 selected: 0,
                 project: None,
-                ticket: None,
+                task_folder: None,
                 editor: false,
                 new_task: None,
             },
@@ -823,16 +772,13 @@ impl App {
             pstats: HashMap::new(),
             open_project: None,
             pane: Pane::Sessions,
-            left_pane: Pane::Sessions,
             tk: TicketsState::new(),
             bd: BoardState::new(),
             sq: SquadState::new(),
-            sw: squadwork_glue::WorkState::default(),
+            sw: spent_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
-            ck: checks_glue::CheckState::default(),
             td: taskdraft_glue::DraftState::default(),
             ed: editor_glue::EdState::new(),
-            sqt: SquadTab::new(&config),
             notes_top: Cell::new(0),
             notes_seen: None,
             notes_stopped: None,
@@ -848,7 +794,7 @@ impl App {
                 project: String::new(),
                 instructions: None,
                 ticket: None,
-                squad: None,
+                draft: None,
                 options: Vec::new(),
                 selected: 0,
                 starred: String::new(),
@@ -904,19 +850,6 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
-        // Installed skills are read where this platoon reads Claude's state; in a unit test, its MCP servers from a
-        // `.claude.json` in that same (temporary) folder, never the user's own.
-        app.sqt.claude_root = app.reader.root().to_path_buf();
-        #[cfg(not(test))]
-        {
-            app.sqt.claude_json = crate::claude::claude_json_path();
-        }
-        #[cfg(test)]
-        {
-            app.sqt.claude_json = app.sqt.claude_root.join(".claude.json");
-        }
-        // The agents the user's coding tool has, now that its folder is known.
-        app.reload_agents(None);
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app.say_keys_problems();
@@ -1024,7 +957,7 @@ impl App {
         self.notice = Some((msg.into(), Instant::now(), NOTICE_FOR, None));
     }
 
-    /// The screen showing, as far as notices go: the mode, the session attached, the tab, the project and ticket open,
+    /// The screen showing, as far as notices go: the mode, the session attached, the tab, the project and task open,
     /// and the help.
     pub fn screen_id(&self) -> ScreenId {
         ScreenId {
@@ -1101,11 +1034,7 @@ impl App {
 
     /// Where a version notice shows: the Sessions and Projects lists, with nothing over them.
     fn news_place(&self) -> bool {
-        matches!(self.mode, Mode::List)
-            && !self.help_open
-            && self.open_project.is_none()
-            && !self.squads_tab_showing()
-            && !self.board_showing()
+        matches!(self.mode, Mode::List) && !self.help_open && self.open_project.is_none() && !self.board_showing()
     }
 
     /// The version notice on screen now, if any.
@@ -1228,11 +1157,8 @@ impl App {
         }
     }
 
-    /// (rows, cols) of the terminal area inside the attached view (beside a ticket, in the split view).
+    /// (rows, cols) of the terminal area inside the attached view.
     fn pty_size(&self) -> (u16, u16) {
-        if self.sq.split.is_some() {
-            return squads_glue::split_size(self.size);
-        }
         // The whole width, and every row but the status line under it.
         (self.size.1.saturating_sub(1).max(1), self.size.0.max(1))
     }
@@ -1265,9 +1191,6 @@ impl App {
     /// Where the session's screen is drawn in the attached view: the whole width, above the status bar.
     /// The same numbers as `pty_size` and `ui::draw_attached`.
     pub fn term_area(&self) -> Rect {
-        if self.sq.split.is_some() {
-            return split_areas(self.size.0, self.size.1).term;
-        }
         let (rows, cols) = self.pty_size();
         Rect::new(0, 0, cols, rows)
     }
@@ -1302,12 +1225,7 @@ impl App {
             self.mode = Mode::List;
             self.client = None;
             self.clear_selection();
-            // A squad's session that ended leaves its ticket showing, with the way to continue it.
-            if self.sq.split.take().is_some() {
-                self.notify("The squad's session ended.");
-            } else {
-                self.notify("Session ended");
-            }
+            self.notify("Session ended");
         }
 
         // What we knew about running conversations, for spotting busy -> idle across the rebuild.
@@ -1321,17 +1239,14 @@ impl App {
         if self.names.reload_if_changed() {
             self.built.0 = u64::MAX;
         }
-        // Squads' leader sessions belong to their tickets: from here on nothing sees them (rows, counts, search,
-        // naming, archiving, "Take over?"), because they are never in `live` or `sessions`.
-        if self.refresh_leaders() {
+        // Tasks' sessions are ordinary rows, marked with their task's number.
+        if self.reread_tickets() {
             self.built.0 = u64::MAX;
         }
-        let all_live = self.reader.live();
-        // Which leaders run, for the squads at work at once; then they are left out like everywhere else.
-        self.note_running_leaders(&all_live);
+        let live = self.reader.live();
+        self.note_running_tasks(&live);
         // Where sessions are working now: no worktree is removed from under one.
-        self.note_busy_dirs(&all_live);
-        let live: Vec<Live> = all_live.into_iter().filter(|l| !self.sq.leaders_contains(&l.id)).collect();
+        self.note_busy_dirs(&live);
         self.projects.reload_if_changed();
         // Sessions started under a project are placed in it once their id shows up.
         let ids: Vec<(u32, String, u64)> =
@@ -1344,8 +1259,6 @@ impl App {
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
             self.open_project = None; // deleted in another window
         }
-        // A project's tasks still under the old file names are moved once no leader of it runs.
-        self.move_old_task_files();
         // A task added by `platoon task add` shows without a restart.
         self.refresh_tickets();
 
@@ -1456,12 +1369,8 @@ impl App {
         self.poll_handoff();
         self.poll_task_draft();
         self.poll_squad_starts();
-        self.start_from_line();
         self.poll_squad_work();
         self.poll_worktrees();
-        self.poll_checks();
-        self.poll_squad_files();
-        self.poll_squad_draft();
         self.drive_smart();
         self.usage = match snap.plan {
             Some(p) => Usage::Ready(p),
@@ -1549,7 +1458,7 @@ impl App {
     fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
         // The same id can be saved under two project folders; the most recently active file wins.
         let mut latest: HashMap<&str, &Arc<Entry>> = HashMap::new();
-        for e in self.indexer.entries.values().filter(|e| !self.sq.leaders_contains(&e.id)) {
+        for e in self.indexer.entries.values() {
             let slot = latest.entry(e.id.as_str()).or_insert(e);
             if (e.last_active_ms(), e.mtime) > (slot.last_active_ms(), slot.mtime) {
                 *slot = e;
@@ -1661,45 +1570,17 @@ impl App {
             (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
             (Action::Leave, Mode::List) if self.tk.open.is_some() => self.close_ticket_screen(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
-            (Action::Confirm, Mode::TicketPick) => self.take_ticket_pick(),
             (Action::Confirm, Mode::TaskProject) => self.take_task_project(),
-            (Action::Confirm, Mode::Answer) => self.send_answer(),
-            (Action::Confirm, Mode::SquadPick) => {
-                self.take_squad_pick();
-                self.after_hand_over_popup();
-            }
-            (Action::Cancel, Mode::SquadPick) => {
-                self.mode = Mode::List;
-                self.after_hand_over_popup();
-            }
-            (Action::Confirm, Mode::TaskDraft) => self.make_drafted(true),
+            (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
+            (Action::Confirm, Mode::TaskDraft) => self.make_drafted(),
             (Action::Cancel, Mode::TaskDraft) => self.drop_draft(),
-            // A built-in's brief platoon wrote for the editor that never opened: not needed.
-            (Action::Cancel, Mode::PickEditor)
-                if self.epick.squad.as_ref().is_some_and(|e| matches!(e.target, squadtab_glue::PromptOf::Brief { made: true, .. })) =>
-            {
-                if let Some(e) = self.epick.squad.take() {
-                    let _ = std::fs::remove_file(&e.path);
-                }
-                self.mode = Mode::List;
-                self.poll_squad_files();
-            }
-            (Action::Cancel, Mode::PickEditor) if self.epick.squad.as_ref().is_some_and(|e| e.is_draft()) => {
-                if let Some(e) = self.epick.squad.take() {
+            (Action::Cancel, Mode::PickEditor) if self.epick.draft.is_some() => {
+                if let Some(e) = self.epick.draft.take() {
                     let _ = std::fs::remove_file(&e.path);
                 }
                 self.mode = Mode::TaskDraft;
             }
             (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
-            (Action::Confirm, Mode::Confirm(Confirm::RemoveWorktree { number, .. })) => self.remove_worktree_anyway(number),
-            (Action::Confirm, Mode::Confirm(Confirm::HandAnyway { number, squad, .. })) => self.hand_anyway(number, &squad),
-            (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, .. })) => self.remove_squad(&id, false),
-            (Action::Confirm, Mode::Confirm(Confirm::RestoreSquad { id, .. })) => self.remove_squad(&id, true),
-            (Action::Confirm, Mode::Confirm(Confirm::DiscardDraft { .. })) => self.discard_draft(),
-            (Action::Confirm, Mode::Confirm(Confirm::DeleteAgent { id, .. })) => self.remove_agent(&id, false),
-            (Action::Confirm, Mode::Confirm(Confirm::RestoreAgent { id, .. })) => self.remove_agent(&id, true),
-            (Action::Confirm, Mode::Confirm(Confirm::DiscardAgentDraft { .. })) => self.discard_agent_draft(),
-            (Action::Confirm, Mode::SquadChoice) => self.take_squad_choice(),
             (Action::Edit, Mode::List) => self.edit_notes(),
             (Action::ShowChanges, Mode::List) => self.show_changes(),
             (Action::Undo, Mode::List) => self.undo_notes(),
@@ -1751,15 +1632,11 @@ impl App {
                 self.mode = Mode::List;
                 self.notify("No task was made: a task in no project needs a folder to work in.");
             }
-            (Action::Confirm, Mode::Picker) if self.picker.ticket.is_some() => {
-                if let (Some(dir), Some(n)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.ticket) {
-                    self.add_ticket_folder(n, dir);
+            (Action::Confirm, Mode::Picker) if self.picker.task_folder.is_some() => {
+                if let (Some(dir), Some(n)) = (self.picker.results.get(self.picker.selected).cloned(), self.picker.task_folder) {
+                    self.take_task_folder(n, dir);
                 }
             }
-            // Leaving the folder picker of a ticket goes back to its folders.
-            (Action::Cancel, Mode::Picker) if self.picker.ticket.is_some() => self.mode = Mode::TicketPick,
-            // Leaving the lands-on box goes back to the hand-over popup.
-            (Action::Cancel, Mode::ProjectName) if matches!(self.name_box.purpose, NamePurpose::LandsOn(_)) => self.mode = Mode::SquadPick,
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
                     let project = self.picker.project.clone();
@@ -1953,7 +1830,7 @@ impl App {
             self.tab = tab;
             self.top = TOP_SESSIONS;
         }
-        self.focus_pane(Pane::Sessions);
+        self.pane = Pane::Sessions;
         self.tk.open = None;
         self.update_view();
         if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
@@ -2047,8 +1924,16 @@ impl App {
         all.extend(dirs::candidates(self.reader.root(), &self.home));
         let mut seen = std::collections::HashSet::new();
         all.retain(|p| seen.insert(p.clone()));
-        self.picker =
-            Picker { input: String::new(), all, results: Vec::new(), selected: 0, project, ticket: None, editor: false, new_task: None };
+        self.picker = Picker {
+            input: String::new(),
+            all,
+            results: Vec::new(),
+            selected: 0,
+            project,
+            task_folder: None,
+            editor: false,
+            new_task: None,
+        };
         self.picker.update(&self.home);
         self.mode = Mode::Picker;
     }
@@ -2056,8 +1941,7 @@ impl App {
     /// Show the settings screen, starting from what is on disk now.
     fn open_settings(&mut self) {
         self.refresh_settings();
-        // From the Briefs tab, on the tab its "Settings (s) → Projects" points at: the leaders' prompt and model.
-        self.settings_tab = if self.squads_tab_showing() { crate::settings::TAB_PROJECTS } else { 0 };
+        self.settings_tab = 0;
         self.setting = 0;
         self.setting_top.set(0);
         self.mode = Mode::Settings;
@@ -2272,15 +2156,11 @@ impl App {
         self.apply_after.is_some()
     }
 
-    /// Leave the attached view. Only our connection closes; the session keeps running. From the split view, that is
-    /// back to the project's screen, on the ticket.
+    /// Leave the attached view. Only our connection closes; the session keeps running.
     fn detach(&mut self) {
         self.client = None;
         self.mode = Mode::List;
         self.clear_selection();
-        if self.sq.split.take().is_some() {
-            self.close_ticket_screen();
-        }
     }
 
     fn attach(&mut self, pid: u32) {
@@ -2750,13 +2630,9 @@ impl App {
             Mode::Attached(_) => {
                 // Typing moves the screen on (and the highlight would no longer be over what was selected).
                 self.clear_selection();
-                // The back key, and the one that drafts tasks from this conversation: everything else goes to Claude.
+                // The back key: everything else goes to Claude.
                 if back {
                     self.detach();
-                } else if let Mode::Attached(pid) = self.mode
-                    && self.keys.get().draft.matches(&key)
-                {
-                    self.draft_tasks_from_attached(pid);
                 } else if self.attached_paused() {
                     // Paused: nothing is forwarded, so this copy can't write to the conversation.
                 } else if let Some(c) = self.client.as_mut() {
@@ -2874,13 +2750,9 @@ impl App {
                 KeyCode::Char(c) if !ctrl && !alt => self.type_project_name(&c.to_string()),
                 _ => {}
             },
-            Mode::TicketPick => self.ticket_pick_key(key),
             Mode::TaskProject => self.task_project_key(key),
-            Mode::Answer => self.answer_key(key),
             Mode::TaskDraft => self.task_draft_key(key),
             Mode::SquadPick => self.squad_pick_key(key),
-            Mode::SquadChoice => self.squad_choice_key(key),
-            Mode::SquadText => self.squad_text_key(key),
             Mode::Assign => match key.code {
                 KeyCode::Esc => self.act(Action::Cancel),
                 KeyCode::Enter => self.act(Action::Confirm),
@@ -3007,8 +2879,6 @@ impl App {
             Mode::Look => self.type_badge(&text.replace(['\n', '\r'], "")),
             Mode::EditNotes => self.editor_paste(text),
             Mode::Handoff => self.handoff_paste(text),
-            Mode::SquadText => self.squad_type(text),
-            Mode::Answer => self.type_answer(text),
             _ => {}
         }
         self.update_view();
@@ -3042,13 +2912,6 @@ impl App {
             MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
                 let up = m.kind == MouseEventKind::ScrollUp;
                 match self.mode.clone() {
-                    Mode::Attached(_)
-                        if self.sq.split.is_some()
-                            && split_areas(self.size.0, self.size.1).wide
-                            && split_areas(self.size.0, self.size.1).ticket.contains((m.column, m.row).into()) =>
-                    {
-                        self.wheel_ticket(up);
-                    }
                     Mode::Attached(_) => {
                         // Scrolling changes which text is under the highlight, and a selection is only of what is
                         // on screen, so it is dropped.
@@ -3079,12 +2942,8 @@ impl App {
                     Mode::Picker => self.move_picker(if up { -1 } else { 1 }),
                     Mode::List => self.wheel_list(up),
                     Mode::Assign => self.move_assign(if up { -1 } else { 1 }),
-                    Mode::TicketPick => self.move_ticket_pick(if up { -1 } else { 1 }),
                     Mode::SquadPick => self.move_squad_pick(if up { -1 } else { 1 }),
-                    Mode::SquadChoice => self.move_squad_choice(if up { -1 } else { 1 }),
-                    Mode::SquadText => {}
                     Mode::TaskProject => self.move_task_project_pick(if up { -1 } else { 1 }),
-                    Mode::Answer => {}
                     Mode::TaskDraft => self.scroll_draft(if up { -3 } else { 3 }),
                     Mode::PickEditor => self.move_editor_pick(if up { -1 } else { 1 }),
                     Mode::PickFileEditor => self.move_file_editor_pick(if up { -1 } else { 1 }),
@@ -3116,19 +2975,12 @@ impl App {
                     Some(Hit::FileEditorRow(i)) if i == self.file_pick().selected => self.act(Action::Confirm),
                     Some(Hit::FileEditorRow(i)) => self.move_file_editor_pick(i as i32 - self.file_pick().selected as i32),
                     Some(Hit::Slot(i)) => self.look.slot = i,
-                    Some(Hit::Pane(p)) => self.focus_pane(p),
+                    Some(Hit::Pane(p)) => self.pane = p,
                     Some(Hit::TicketRow(i)) if self.board_showing() && self.tk.open.is_none() => self.click_board_row(i),
-                    Some(Hit::TicketRow(i)) => self.click_ticket_row(i),
+                    Some(Hit::TicketRow(_)) => {}
                     Some(Hit::ProjectPickRow(i)) if i == self.bd.pick_selected => self.act(Action::Confirm),
                     Some(Hit::ProjectPickRow(i)) => self.bd.pick_selected = i,
-                    Some(Hit::TicketPickRow(i)) if i == self.tk.pick.selected => self.act(Action::Confirm),
-                    Some(Hit::TicketPickRow(i)) => self.tk.pick.selected = i,
-                    Some(Hit::SquadRow(i)) => self.click_hand_row(i),
-                    Some(Hit::SquadEntry(i)) => self.click_squad(i),
-                    Some(Hit::SquadView(agents)) => self.show_squad_view(if agents { SqView::Agents } else { SqView::Squads }),
-                    Some(Hit::SquadDetail(i)) => self.click_squad_row(i),
-                    Some(Hit::SquadChoiceRow(i)) if i == self.sqt.choice.selected => self.act(Action::Confirm),
-                    Some(Hit::SquadChoiceRow(i)) => self.sqt.choice.selected = i,
+                    Some(Hit::SquadRow(i)) => self.click_squad_row(i),
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}
@@ -3147,7 +2999,7 @@ impl App {
                     }
                     Some(Hit::Row(i)) => {
                         self.selected = i;
-                        self.focus_pane(Pane::Sessions);
+                        self.pane = Pane::Sessions;
                     }
                     Some(Hit::PickerRow(i)) if i == self.picker.selected => self.act(Action::Confirm),
                     Some(Hit::PickerRow(i)) => self.picker.selected = i,

@@ -1,12 +1,12 @@
 //! The code editor (`v`) at the level of the app: what it opens from each place, the question before it opens (the
-//! squad is working), a removed worktree brought back first, the worktree clean-up never taking away a folder an editor
+//! task's session is working), a removed worktree brought back first, the worktree clean-up never taking away a folder an editor
 //! is about to open or has open, and what it says when this computer has no editor. Real git in temp repositories;
 //! nothing is run (the request the event loop would take is looked at instead, or a stand-in records its start).
 
 use crate::app::{App, Confirm, EdTarget, Mode};
 use crate::host::HostInfo;
 use crate::testkit::World;
-use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
+use crate::tickets::{Need, NewTicket, State, Tickets, Worktree};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{
     fs,
@@ -111,11 +111,7 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(opened(&mut app), vec![s(&w.base)]);
 
-    // The Briefs tab and the Projects list ask too.
-    key(&mut app, KeyCode::Char('4'));
-    v(&mut app);
-    assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
-    key(&mut app, KeyCode::Esc);
+    // The Projects list asks too.
     key(&mut app, KeyCode::Char('3'));
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
@@ -130,8 +126,8 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     assert!(app.take_own_editor_request().is_none());
 }
 
-/// A project "Web shop" (its screen open, the Tickets pane in focus) with ticket #1 in the temp repository `shop`,
-/// handed to a squad (leader `lead-1`) whose worktree has one commit and one change not yet committed.
+/// A project "Web shop" with task #1 in the temp repository `shop`, started as session `sess-1` whose worktree has one
+/// commit; the task is in `state` and picked on the Tasks tab.
 struct Lab {
     w: World,
     app: App,
@@ -150,53 +146,44 @@ fn lab(name: &str, state: State) -> Lab {
     with_helix(&mut app, &w);
     let project = app.projects.create("Web shop").unwrap();
     app.projects.assign("user-1", Some(&project)).unwrap();
-    let folders = vec![s(&shop)];
     let mut t = Tickets::open(&w.config, &project);
-    let n = t.add(NewTicket { title: "Basket".into(), folders: folders.clone(), ..Default::default() }).unwrap();
-    let made = crate::squads::prepare_worktrees("git", &folders, n, &[]).unwrap().remove(0);
-    let lead = Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None };
-    t.start_leader(n, &lead, std::slice::from_ref(&made)).unwrap();
+    let n = t.add(NewTicket { title: "Basket".into(), folder: Some(s(&shop)), ..Default::default() }).unwrap();
+    let made = crate::worktrees::prepare("git", &s(&shop), n, None).unwrap().unwrap();
+    t.start(n, "feature", "sess-1", Some(made.clone())).unwrap();
     let wt = PathBuf::from(&made.path);
     fs::write(wt.join("basket.txt"), "basket\n").unwrap();
     git(&wt, &["add", "."]);
     git(&wt, &["commit", "-q", "-m", "basket"]);
-    if state == State::Cancelled {
-        t.set_state(n, &State::Cancelled).unwrap();
-    } else {
-        t.squad_says(n, &state, "", None).unwrap();
-    }
-    app.reload_for_test();
-    key(&mut app, KeyCode::Char('3'));
-    key(&mut app, KeyCode::Enter);
-    assert!(app.open_project().is_some());
-    // The Tickets pane, on #1.
-    app.on_key(KeyEvent::new(KeyCode::Down, KeyModifiers::SHIFT));
-    Lab { w, app, project, shop, made, wt }
+    let mut l = Lab { w, app, project, shop, made, wt };
+    l.set(state);
+    key(&mut l.app, KeyCode::Char('2'));
+    assert!(l.app.board_showing() && l.app.ticket(1).is_some());
+    l
 }
 
 impl Lab {
-    /// Open #1's own screen from the Tickets pane (a Done one is under the folded "Done and cancelled").
-    fn open_ticket_screen(&mut self) {
-        if self.app.selected_ticket().is_none() {
-            key(&mut self.app, KeyCode::Enter);
-            key(&mut self.app, KeyCode::Down);
-        }
-        assert_eq!(self.app.selected_ticket().map(|t| t.number), Some(1));
-        key(&mut self.app, KeyCode::Enter);
-        assert_eq!(self.app.tk.open, Some(1));
-    }
-
     fn ticket(&self) -> crate::tickets::Ticket {
         Tickets::open(&self.w.config, &self.project).get(1).cloned().unwrap()
     }
 
-    /// The leader's session runs in a platoon host.
-    fn leader_hosted(&mut self) {
+    /// The task's state changes (as its session's hooks change it).
+    fn set(&mut self, state: State) {
+        Tickets::open(&self.w.config, &self.project)
+            .update(1, |t| {
+                t.state = state;
+                true
+            })
+            .unwrap();
+        self.app.reload_for_test();
+    }
+
+    /// The task's session runs in a platoon host.
+    fn session_hosted(&mut self) {
         let host = HostInfo {
             claude_pid: 4242,
             host_pid: 0,
             dir: s(&self.wt),
-            args: vec!["--resume".into(), "lead-1".into()],
+            args: vec!["--resume".into(), "sess-1".into()],
             sock: PathBuf::new(),
         };
         self.app.refresh_with(vec![host], false);
@@ -211,27 +198,36 @@ impl Lab {
         }
         self.app.refresh_until_for_test(10, "the removals to finish", |a| a.worktrees_idle());
     }
+
+    fn removed(&self) -> Option<u64> {
+        self.ticket().worktree.and_then(|w| w.removed)
+    }
 }
 
 #[test]
-fn v_on_a_ticket_opens_its_worktree() {
-    let mut l = lab("ed-ticket", State::Waiting);
+fn v_on_a_task_opens_its_worktree_and_on_one_not_started_its_folder() {
+    let mut l = lab("ed-ticket", State::NeedsYou(Need::Question("which page?".into())));
     assert_eq!(l.app.editor_target(), Some(EdTarget::Ticket { project: l.project.clone(), number: 1 }));
     v(&mut l.app);
     assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
-    // And from the ticket's own screen.
+    // A task that never started: its folder, from its own screen too.
+    Tickets::open(&l.w.config, &l.project)
+        .add(NewTicket { title: "Later".into(), folder: Some(s(&l.shop)), ..Default::default() })
+        .unwrap();
+    l.app.reload_for_test();
+    key(&mut l.app, KeyCode::Char('G'));
     key(&mut l.app, KeyCode::Enter);
-    assert_eq!(l.app.tk.open, Some(1));
+    assert_eq!(l.app.tk.open, Some(2));
     v(&mut l.app);
-    assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
-    let _ = (&l.shop, &l.made);
+    assert_eq!(opened(&mut l.app), vec![s(&l.shop)]);
+    let _ = &l.made;
 }
 
 #[test]
-fn the_squad_still_working_is_said_before_opening() {
+fn the_session_still_working_is_said_before_opening() {
     let mut l = lab("ed-working", State::Working);
-    l.leader_hosted();
-    assert!(l.app.leader_running(1));
+    l.session_hosted();
+    assert!(l.app.task_session_running("sess-1"));
     v(&mut l.app);
     assert!(matches!(&l.app.mode, Mode::Confirm(Confirm::EditorWhileWorking { number: 1, .. })));
     assert!(l.app.take_own_editor_request().is_none());
@@ -244,9 +240,7 @@ fn the_squad_still_working_is_said_before_opening() {
     assert_eq!(opened(&mut l.app), vec![s(&l.wt)], "yes: it opens");
 
     // Waiting on the user (not working): no question.
-    let mut t = Tickets::open(&l.w.config, &l.project);
-    t.squad_says(1, &State::Waiting, "a question", None).unwrap();
-    l.app.reload_for_test();
+    l.set(State::NeedsYou(Need::Plan));
     v(&mut l.app);
     assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
 }
@@ -255,36 +249,32 @@ fn the_squad_still_working_is_said_before_opening() {
 fn a_removed_worktree_is_brought_back_from_its_branch_before_the_editor_opens() {
     let mut l = lab("ed-back", State::Done);
     l.refresh_for(2.5);
-    assert!(!l.wt.exists(), "removed after the work (the squad isn't running)");
-    assert!(l.ticket().worktrees[0].removed.is_some());
-    l.open_ticket_screen();
+    assert!(!l.wt.exists(), "removed after the work (the session isn't running)");
+    assert!(l.removed().is_some());
     v(&mut l.app);
     assert!(l.app.take_own_editor_request().is_none(), "not yet: it is being made again");
     assert!(l.app.notice.as_ref().is_some_and(|(n, ..)| n.contains("back")), "{:?}", l.app.notice);
     l.app.refresh_until_for_test(10, "the worktree back and the editor asked for", |a| a.worktrees_idle());
     assert!(l.wt.is_dir());
-    assert!(l.wt.join("basket.txt").is_file(), "from its branch: the squad's commit is there");
-    assert_eq!(l.ticket().worktrees[0].removed, None);
+    assert!(l.wt.join("basket.txt").is_file(), "from its branch: the session's commit is there");
+    assert_eq!(l.removed(), None);
     assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
 }
 
-/// The race the brief names: platoon starts removing a Done ticket's worktree (its squad stopped) just before `v`.
-/// The editor must still open on a worktree that is there (made again), never on one being taken away.
+/// platoon starts removing a Done task's worktree (its session stopped) just before `v`: the editor must still open on
+/// a worktree that is there (made again), never on one being taken away.
 #[test]
 fn v_just_after_the_clean_up_started_opens_on_a_worktree_that_stays() {
     let mut l = lab("ed-race", State::Working);
-    l.open_ticket_screen();
-    // The squad says Done; past the clean-up's interval, one refresh starts the removal off the UI thread (it hasn't
-    // finished yet), then `v` at once.
-    Tickets::open(&l.w.config, &l.project).squad_says(1, &State::Done, "", None).unwrap();
+    // Done; past the clean-up's interval, one refresh starts the removal off the UI thread, then `v` at once.
     std::thread::sleep(Duration::from_millis(2100));
-    l.app.reload_for_test();
+    l.set(State::Done);
     assert!(!l.app.worktrees_idle(), "the removal is under way");
     v(&mut l.app);
     l.app.refresh_until_for_test(10, "the worktree back", |a| a.worktrees_idle());
     assert!(l.wt.is_dir(), "the editor's folder is there");
     assert_eq!(opened(&mut l.app), vec![s(&l.wt)]);
-    assert_eq!(l.ticket().worktrees[0].removed, None);
+    assert_eq!(l.removed(), None);
 }
 
 /// While a `v` waits on a question (here: which editor?), or while an editor (this window's or another's) has the
@@ -292,21 +282,20 @@ fn v_just_after_the_clean_up_started_opens_on_a_worktree_that_stays() {
 #[test]
 fn the_clean_up_leaves_a_worktree_the_editor_is_opening_or_has_open() {
     let mut l = lab("ed-hold", State::Working);
-    // The list of editors is open while the ticket turns Done and the squad stops.
+    // The list of editors is open while the task turns Done and its session stops.
     with_settings(&l.w, |s| s.files_editor_ask = true);
     l.app.reload_for_test();
     v(&mut l.app);
     assert!(matches!(l.app.mode, Mode::PickFileEditor));
-    let mut t = Tickets::open(&l.w.config, &l.project);
-    t.squad_says(1, &State::Done, "", None).unwrap();
-    l.app.reload_for_test();
+    l.set(State::Done);
     l.refresh_for(2.5);
     assert!(l.wt.is_dir(), "kept while v is on its way");
     key(&mut l.app, KeyCode::Esc);
 
     // An editor has it open (a mark, as main.rs writes while the editor runs; here another window's, this process).
     let mark = crate::editor::mark_open(&l.w.cache, std::process::id(), &[s(&l.wt)]).unwrap();
-    t.touch(1).unwrap(); // a new version of the ticket: tried again
+    let mut t = Tickets::open(&l.w.config, &l.project);
+    t.touch(1).unwrap(); // a new version of the task: tried again
     l.app.reload_for_test();
     l.refresh_for(2.5);
     assert!(l.wt.is_dir(), "kept while the editor has it open");
@@ -507,8 +496,8 @@ fn jetbrains_opens_each_folder_in_a_window_of_its_own_at_most_three() {
 }
 
 #[test]
-fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
-    let mut l = lab("fe-kept", State::Waiting);
+fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work() {
+    let mut l = lab("fe-kept", State::NeedsYou(Need::Question("which page?".into())));
     let bin = l.w.base.join("bin");
     let code = window_stand_in(&bin, "code", "VS Code", &["--new-window"], Several::OneWindow);
     with_settings(&l.w, |s| s.files_editor = "code".into());
@@ -516,38 +505,18 @@ fn a_worktree_opened_in_a_window_editor_is_kept_after_the_work_until_w() {
     l.app.set_file_editors_for_test(vec![helix(&bin), code]);
     v(&mut l.app);
     assert_eq!(calls(&bin, "code", 1), vec![format!("--new-window {}", s(&l.wt))]);
-    assert_eq!(l.ticket().worktrees[0].opened_in.as_deref(), Some("VS Code"), "written on the ticket: it survives a restart");
-    assert!(notice(&l.app).contains("#1's copy of the folder stays after the work until w on the task removes it"), "{}", notice(&l.app));
-
-    // Done, its squad not running: the clean-up leaves it (platoon can't tell when VS Code closes).
-    Tickets::open(&l.w.config, &l.project).squad_says(1, &State::Done, "", None).unwrap();
-    l.app.reload_for_test();
+    assert_eq!(l.ticket().worktree.and_then(|w| w.opened_in).as_deref(), Some("VS Code"), "written on the task: it survives a restart");
+    assert!(notice(&l.app).contains("#1's worktree stays after the work"), "{}", notice(&l.app));
+    // Done, its session not running: the clean-up leaves it (platoon can't tell when VS Code closes).
+    l.set(State::Done);
     l.refresh_for(2.5);
     assert!(l.wt.is_dir(), "kept");
-    assert!(l.ticket().worktrees[0].removed.is_none());
-    assert!(l.app.can_remove_worktree(1));
-
-    // `w` asks, naming the editor; yes removes it and keeps the branch.
-    l.open_ticket_screen();
-    key(&mut l.app, KeyCode::Char('w'));
-    match &l.app.mode {
-        Mode::Confirm(Confirm::RemoveWorktree { number: 1, opened_in, uncommitted, .. }) => {
-            assert_eq!(opened_in.as_deref(), Some("VS Code"));
-            assert!(!uncommitted, "everything was committed");
-        }
-        _ => panic!("not asked"),
-    }
-    key(&mut l.app, KeyCode::Char('y'));
-    l.app.refresh_until_for_test(10, "the removal", |a| a.worktrees_idle());
-    assert!(!l.wt.exists());
-    let wt = &l.ticket().worktrees[0];
-    assert!(wt.removed.is_some() && wt.opened_in.is_none(), "{wt:?}");
-    assert!(git(&l.shop, &["branch", "--list", "task/1"]).contains("task/1"), "the branch is kept");
+    assert!(l.removed().is_none());
 }
 
 #[test]
 fn a_terminal_editor_keeps_nothing_after_the_work() {
-    let mut l = lab("fe-term", State::Waiting);
+    let mut l = lab("fe-term", State::NeedsYou(Need::Question("which page?".into())));
     let bin = l.w.base.join("bin");
     with_settings(&l.w, |s| s.files_editor = "helix".into());
     l.app.reload_for_test();
@@ -556,7 +525,7 @@ fn a_terminal_editor_keeps_nothing_after_the_work() {
     let (_, dirs) = l.app.take_own_editor_request().expect("handed the terminal");
     assert_eq!(dirs, vec![s(&l.wt)]);
     l.app.editor_closed(Ok(()));
-    assert_eq!(l.ticket().worktrees[0].opened_in, None, "platoon waits for a terminal editor: its open marks cover it");
+    assert_eq!(l.ticket().worktree.and_then(|w| w.opened_in), None, "platoon waits for a terminal editor: its open marks cover it");
 }
 
 #[test]

@@ -30,7 +30,7 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
     vec![
         (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
         (app.back_label().to_string(), "back one level (esc does the same)".into()),
-        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Briefs lists (elsewhere it goes back)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks and Projects lists (elsewhere it goes back)".into()),
         ("?".into(), "this help".into()),
     ]
 }
@@ -61,31 +61,18 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
-    // Where sessions are listed, the chord that does in a session what `t` does on its row.
-    if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {
-        out.push(Entry::Note(format!(
-            "Inside a session, {} drafts tasks from the conversation, as t does on its row.",
-            app.keys.get().draft_label()
-        )));
-    }
-    // Where tasks are: what the Tests line means.
-    if app.board_showing() || app.tk.open.is_some() || app.open_project.is_some() {
+    // Where tasks are: how a task runs, and what the Tests line means.
+    if app.board_showing() {
         out.push(Entry::Note(
-            "Tests: when a squad says it is finished, platoon runs the project's test command itself (T on the project's screen sets it). A failure goes back to the squad twice at most, then to you.".into(),
+            "A task runs as one Claude Code session that follows its squad's steps, in a copy of its folder (a git worktree on the branch task/N). Pushing or publishing waits at Claude Code's own permission prompt.".into(),
         ));
         out.push(Entry::Note(
-            "Checks: a squad's brief may also ask that an agent read the change and that every acceptance box be ticked, with how. platoon checks both at the same moments; a failure goes back to the squad once, then to you.".into(),
-        ));
-    }
-    // On the Briefs tab: what a brief is.
-    if app.squads_tab_showing() {
-        out.push(Entry::Note(
-            "A squad is a brief: a Markdown file of yours with what it does, its steps, its checks and when it asks you. e opens it in your editor; platoon reads it again when you are done.".into(),
+            "Tests: when a task's session stops, platoon runs its project's test command (T on the project's screen sets it). A failure goes back to the session twice at most, then to you.".into(),
         ));
     }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
-    if !app.squads_tab_showing() && !app.projects_list_showing() && !app.board_showing() && app.tk.open.is_none() {
+    if !app.projects_list_showing() && !app.board_showing() {
         out.push(Entry::Note(
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));

@@ -507,30 +507,30 @@ fn an_older_settings_file_without_the_choice_ignores_mcp_servers() {
 }
 
 #[test]
-fn a_squads_leader_is_not_stopped_while_its_ticket_is_working_and_is_once_it_waits_on_the_user() {
-    let mut r = Rig::new("idle-leader", 1);
-    // The ticket whose current leader this session is, Working.
-    let tickets = r.config.join("projects/p1/tickets.json");
-    fs::create_dir_all(tickets.parent().unwrap()).unwrap();
+fn a_tasks_session_is_not_stopped_while_its_task_is_working_and_is_once_it_needs_the_user() {
+    let mut r = Rig::new("idle-task", 1);
+    // The task whose session this is, Working.
+    let tasks = r.config.join("projects/p1/tasks.json");
+    fs::create_dir_all(tasks.parent().unwrap()).unwrap();
     let write = |state: &str| {
-        let t = serde_json::json!({"next": 2, "tickets": [{"number": 1, "title": "Basket", "file": "01-basket.md", "state": state, "how_far": "Local commit",
-            "folders": ["/tmp"], "blocked_by": [], "created": 1, "updated": 1, "leaders": [{"squad": "coding", "session": "lead-idle-1", "started": 1}]}]});
-        let tmp = tickets.with_extension("tmp");
+        let t = serde_json::json!({"next": 2, "tasks": [{"number": 1, "title": "Basket", "file": "01-basket.md", "state": state, "need": "question",
+            "folder": "/tmp", "squad": "feature", "session": "task-idle-1", "created": 1, "updated": 1}]});
+        let tmp = tasks.with_extension("tmp");
         fs::write(&tmp, t.to_string()).unwrap();
-        fs::rename(&tmp, &tickets).unwrap();
+        fs::rename(&tmp, &tasks).unwrap();
     };
     write("working");
-    // A stand-in leader: started with the leader's flags (its session id among them), it only sleeps.
-    let script = r.work.join("leader.sh");
+    // A stand-in session: started with a task session's flags (its session id among them), it only sleeps.
+    let script = r.work.join("task.sh");
     fs::write(&script, "#!/bin/sh\nexec sleep 600\n").unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     let pid =
-        r.start(&script.to_string_lossy(), &["--add-dir", "/tmp", "--session-id", "lead-idle-1", "-n", "#1 Basket", "--agent", "leader"]);
+        r.start(&script.to_string_lossy(), &["--add-dir", "/tmp", "--session-id", "task-idle-1", "-n", "#1 Basket", "--model", "opus"]);
     r.register(pid, "idle");
-    // Idle, quiet, nobody watching, way past the 2s threshold: kept, because its members may be at work.
+    // Idle, quiet, nobody watching, way past the 2s threshold: kept, because its subagents may be at work.
     r.stays_up(pid, STAY);
-    // Waiting on you: an idle session like any other.
-    write("waiting");
+    // Needing the user: an idle session like any other.
+    write("needs_you");
     let since = Instant::now();
     r.wait_stopped(pid);
     assert!(since.elapsed() < Duration::from_secs(8), "took {:?}", since.elapsed());

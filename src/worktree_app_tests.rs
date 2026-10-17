@@ -1,12 +1,11 @@
-//! Tickets' worktrees after the work, at the level of the app: removed once a Done or Cancelled ticket's squad has
-//! stopped (never while it runs, never from under another session), kept and said on the ticket's screen when they
-//! have changes not yet committed, `w` to remove one anyway after a yes, `c`'s question mentioning such changes, and
-//! continuing a squad bringing its worktree back first. Real git in temp repositories only; nothing is started (a
-//! unit test's leader is only noted).
+//! Tasks' worktrees after the work, at the level of the app: removed once a Done or Cancelled task's session has
+//! stopped (never while it runs, never from under another session), kept and said when they have changes not yet
+//! committed, `c`'s question mentioning such changes, and opening a Done task's session again bringing its worktree
+//! back first. Real git in temp repositories only; nothing is started (a unit test's session is only noted).
 
 use crate::app::{App, Confirm, Mode};
 use crate::testkit::World;
-use crate::tickets::{Leader, NewTicket, State, Tickets, Worktree};
+use crate::tickets::{NewTicket, State, Tickets, Worktree};
 use crate::ui;
 use ratatui::{
     Terminal,
@@ -52,8 +51,8 @@ fn git(dir: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
-/// A project "Web shop" (its screen open) with ticket #1 in the temp repository `shop`, handed to a squad whose
-/// leader `lead-1` made one commit in its worktree; the ticket is in `state`.
+/// A project "Web shop" with task #1 in the temp repository `shop`, started as session `sess-1`, which made one commit
+/// in its worktree; the task is in `state`, and the Tasks tab shows it.
 struct Lab {
     w: World,
     app: App,
@@ -76,26 +75,24 @@ fn lab(name: &str, state: State) -> Lab {
     let mut app = w.app();
     let project = app.projects.create("Web shop").unwrap();
     app.projects.assign("user-1", Some(&project)).unwrap();
-    let folders = vec![shop.to_string_lossy().into_owned()];
+    let folder = shop.to_string_lossy().into_owned();
     let mut t = Tickets::open(&w.config, &project);
-    let n = t.add(NewTicket { title: "Basket".into(), folders: folders.clone(), ..Default::default() }).unwrap();
-    let made = crate::squads::prepare_worktrees("git", &folders, n, &[]).unwrap().remove(0);
-    let lead = Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None };
-    t.start_leader(n, &lead, std::slice::from_ref(&made)).unwrap();
+    let n = t.add(NewTicket { title: "Basket".into(), folder: Some(folder.clone()), ..Default::default() }).unwrap();
+    let made = crate::worktrees::prepare("git", &folder, n, None).unwrap().unwrap();
+    t.start(n, "feature", "sess-1", Some(made.clone())).unwrap();
     let wt = PathBuf::from(&made.path);
     fs::write(wt.join("basket.txt"), "basket\n").unwrap();
     git(&wt, &["add", "."]);
     git(&wt, &["commit", "-q", "-m", "basket"]);
     let tip = git(&wt, &["rev-parse", "HEAD"]);
-    if state == State::Cancelled {
-        t.set_state(n, &State::Cancelled).unwrap();
-    } else {
-        t.squad_says(n, &state, "", None).unwrap();
-    }
+    t.update(n, |x| {
+        x.state = state;
+        true
+    })
+    .unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('3'));
-    key(&mut app, KeyCode::Enter);
-    assert!(app.open_project().is_some());
+    key(&mut app, KeyCode::Char('2'));
+    assert!(app.board_showing() && app.ticket(1).is_some());
     Lab { w, app, project, shop, made, wt, tip }
 }
 
@@ -122,223 +119,112 @@ impl Lab {
     fn branch_tip(&self) -> String {
         git(&self.shop, &["rev-parse", "task/1"])
     }
+
+    fn removed(&self) -> bool {
+        self.ticket().worktree.is_some_and(|w| w.removed.is_some())
+    }
 }
 
 #[test]
-fn nothing_is_removed_while_the_squad_or_another_session_is_in_it_and_a_clean_worktree_goes_once_they_stop() {
+fn nothing_is_removed_while_the_session_or_another_one_is_in_it_and_a_clean_worktree_goes_once_they_stop() {
     let mut l = lab("wt-running", State::Done);
-    // The Done ticket's leader is still running (this test process stands in for it): the worktree stays.
-    l.w.register(std::process::id(), "lead-1", &l.made.path, 1, "idle");
-    assert!(l.stays_for(2.5), "removed while the squad's session runs");
-    assert_eq!(l.ticket().worktrees[0], l.made, "nothing written");
-    // The leader stopped, but some other session is working inside the worktree: it still stays.
+    // The Done task's session is still running (this test process stands in for it): the worktree stays.
+    l.w.register(std::process::id(), "sess-1", &l.made.path, 1, "idle");
+    assert!(l.stays_for(2.5), "removed while the task's session runs");
+    assert_eq!(l.ticket().worktree.as_ref(), Some(&l.made), "nothing written");
+    // The session stopped, but some other session is working inside the worktree: it still stays.
     l.w.register(std::process::id(), "user-9", &l.wt.join("sub").to_string_lossy(), 1, "idle");
     assert!(l.stays_for(2.5), "removed from under another session");
-    // Nobody is in it now: removed, its branch and commit kept, and the ticket says so.
+    // Nobody is in it now: removed, its branch and commit kept, and the task says so.
     fs::remove_file(l.registry()).unwrap();
-    l.app.refresh_until_for_test(15, "the worktree removed", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].removed.is_some()));
+    let (config, project) = (l.w.config.clone(), l.project.clone());
+    l.app.refresh_until_for_test(15, "the worktree removed", |_| {
+        Tickets::open(&config, &project).get(1).and_then(|t| t.worktree.clone()).is_some_and(|w| w.removed.is_some())
+    });
     assert!(!l.wt.exists());
     assert_eq!(l.branch_tip(), l.tip);
     let t = l.ticket();
-    assert_eq!(
-        (t.worktrees[0].base.clone(), t.worktrees[0].path.clone(), t.state),
-        (l.made.base.clone(), l.made.path.clone(), State::Done),
-        "path and base kept"
-    );
+    let w = t.worktree.clone().unwrap();
+    assert_eq!((w.base.clone(), w.path.clone(), t.state), (l.made.base.clone(), l.made.path.clone(), State::Done), "path and base kept");
     assert_eq!(l.app.active_notice(), Some("Removed #1's worktree (its branch task/1 is kept)."), "said once, in one line");
-    // The screen says so.
-    l.app.tk.open = Some(1);
+    // The details say so.
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
     let f = flat(&draw(&mut term, &l.app));
-    assert!(f.contains("Works in a copy of shop (task/1) The copy is removed; its branch task/1 is kept."), "{f}");
-    assert!(!f.contains("remove the copy"), "{f}");
+    assert!(f.contains("Branch task/1 · its worktree was removed after the work"), "{f}");
 }
 
 #[test]
-fn a_worktree_with_changes_not_yet_committed_is_kept_said_on_its_screen_and_w_removes_it_after_a_yes() {
+fn a_worktree_with_changes_not_yet_committed_is_kept_and_said_once() {
     let mut l = lab("wt-kept", State::Cancelled);
     fs::write(l.wt.join("draft.txt"), "not committed\n").unwrap();
-    l.app.refresh_until_for_test(15, "the worktree kept", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].kept_uncommitted));
+    let (config, project) = (l.w.config.clone(), l.project.clone());
+    l.app.refresh_until_for_test(15, "the worktree kept", |_| {
+        Tickets::open(&config, &project).get(1).and_then(|t| t.worktree.clone()).is_some_and(|w| w.kept_uncommitted)
+    });
     assert!(l.wt.join("draft.txt").exists());
-    assert_eq!(l.ticket().worktrees[0].removed, None);
-    assert_eq!(l.app.active_notice(), Some("Kept #1's worktree: it has changes not yet committed (w on the task removes it)."));
-    // Looked at once for the ticket as it is: not over and over.
+    assert!(!l.removed());
+    assert_eq!(l.app.active_notice(), Some("Kept #1's worktree: it has changes not yet committed."));
+    // Looked at once for the task as it is: not over and over.
     assert!(l.stays_for(2.5));
-    // A platoon started again looks at it again (the changes may have been committed meanwhile), but says nothing:
-    // it was said the first time.
+    // A platoon started again looks at it again (the changes may have been committed meanwhile), but says nothing.
     let mut again = l.w.app();
     again.refresh_until_for_test(10, "the look-over done", |a| a.worktrees_tried_for_test() > 0 && a.worktrees_idle());
     assert!(again.active_notice().is_none(), "{:?}", again.active_notice());
     assert!(l.wt.join("draft.txt").exists());
-    l.app.notice = None; // (it covers the footer's key hints while it shows)
-    l.app.tk.open = Some(1);
+    l.app.notice = None;
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
-    let shown = draw(&mut term, &l.app);
-    let f = flat(&shown);
-    assert!(f.contains("Kept because it has changes not yet committed."), "{shown}");
-    assert!(f.contains("w removes it anyway"), "{shown}");
-    assert!(f.contains("w remove the copy"), "the footer too: {shown}");
-    // Its key in the accent and its words in the hint color, like every key hint.
-    let t = l.app.effective_theme();
-    let buf = term.backend().buffer().clone();
-    let (y, x) =
-        shown.lines().enumerate().find_map(|(y, line)| line.find("w removes it anyway").map(|b| (y, line[..b].chars().count()))).unwrap();
-    assert_eq!(buf[(x as u16, y as u16)].fg, t.accent);
-    assert_eq!(buf[(x as u16 + 2, y as u16)].fg, crate::ui::hint_fg(t), "its words in the hint color, like the footer's");
-    let (ky, kx) =
-        shown.lines().enumerate().find_map(|(y, line)| line.find("Kept because").map(|b| (y, line[..b].chars().count()))).unwrap();
-    assert_eq!(buf[(kx as u16, ky as u16)].fg, t.warn);
-    // `w`: asked first, in plain words.
-    key(&mut l.app, KeyCode::Char('w'));
-    assert!(matches!(l.app.mode, Mode::Confirm(Confirm::RemoveWorktree { number: 1, .. })));
     let f = flat(&draw(&mut term, &l.app));
-    assert!(f.contains("Remove #1's copy of the folder anyway?"), "{f}");
-    // (The question's lines share their rows with the screen behind it, so its words are checked in pieces.)
-    assert!(
-        f.contains("It has changes not yet committed, and they will be lost. Its branch")
-            && f.contains("task/1 and everything committed on it are kept."),
-        "{f}"
-    );
-    assert!(f.contains("y remove it") && f.contains("n keep it"), "{f}");
-    // No: nothing happens.
-    key(&mut l.app, KeyCode::Char('n'));
-    assert!(matches!(l.app.mode, Mode::List));
-    assert!(l.stays_for(0.3));
-    // Yes: removed with its changes, branch kept.
-    key(&mut l.app, KeyCode::Char('w'));
-    key(&mut l.app, KeyCode::Char('y'));
-    l.app.refresh_until_for_test(15, "the worktree removed", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].removed.is_some()));
-    assert!(!l.wt.exists());
-    assert_eq!(l.branch_tip(), l.tip);
-    assert!(!l.ticket().worktrees[0].kept_uncommitted);
-    assert_eq!(l.app.active_notice(), Some("#1's worktree is removed. Its branch task/1 is kept."));
+    assert!(f.contains("kept: changes not yet committed"), "{f}");
 }
 
 #[test]
-fn w_is_refused_while_the_squad_runs_or_when_nothing_was_kept() {
-    let mut l = lab("wt-refuse", State::Done);
-    l.app.tk.open = Some(1);
-    l.w.register(std::process::id(), "lead-1", &l.made.path, 1, "idle");
-    l.app.refresh_for_test();
-    key(&mut l.app, KeyCode::Char('w'));
-    assert!(matches!(l.app.mode, Mode::List));
-    assert_eq!(l.app.active_notice(), Some("#1 has no worktree kept after the work."));
-    // Kept, but the squad's session is running in it.
-    fs::write(l.wt.join("draft.txt"), "x\n").unwrap();
-    Tickets::open(&l.w.config, &l.project).mark_worktree(1, &l.made.path, crate::tickets::WtMark::KeptUncommitted).unwrap();
-    l.app.refresh_for_test();
-    key(&mut l.app, KeyCode::Char('w'));
-    assert!(matches!(l.app.mode, Mode::List));
-    assert_eq!(l.app.active_notice(), Some("#1's squad's session is running in its worktree. Stop it first."));
-    assert!(l.wt.join("draft.txt").exists());
-    let _ = fs::remove_file(l.registry());
-}
-
-#[test]
-fn cancelling_a_ticket_whose_worktree_has_changes_says_platoon_keeps_it() {
+fn cancelling_a_task_whose_worktree_has_changes_says_platoon_keeps_it() {
     let mut l = lab("wt-cancel", State::Working);
     fs::write(l.wt.join("README"), "changed\n").unwrap();
-    l.app.tk.open = Some(1);
     key(&mut l.app, KeyCode::Char('c'));
     assert!(matches!(l.app.mode, Mode::Confirm(Confirm::CancelTicket { uncommitted: true, .. })));
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
     let f = flat(&draw(&mut term, &l.app));
-    // Wrapped in the popup: each of its lines.
-    assert!(
-        f.contains("Its copy of the folder has changes not yet") && f.contains("platoon keeps it: w on the task removes it anyway."),
-        "{f}"
-    );
+    assert!(f.contains("Its worktree has changes not yet committed, so platoon keeps it."), "{f}");
     key(&mut l.app, KeyCode::Char('y'));
     assert_eq!(l.ticket().state, State::Cancelled);
-    l.app.refresh_until_for_test(15, "the worktree kept", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].kept_uncommitted));
+    let (config, project) = (l.w.config.clone(), l.project.clone());
+    l.app.refresh_until_for_test(15, "the worktree kept", |_| {
+        Tickets::open(&config, &project).get(1).and_then(|t| t.worktree.clone()).is_some_and(|w| w.kept_uncommitted)
+    });
     assert!(l.wt.join("README").exists());
     // A clean one: the question doesn't mention it.
-    git(&l.wt, &["checkout", "--", "README"]);
     let mut l2 = lab("wt-cancel-clean", State::Working);
-    l2.app.tk.open = Some(1);
     key(&mut l2.app, KeyCode::Char('c'));
     assert!(matches!(l2.app.mode, Mode::Confirm(Confirm::CancelTicket { uncommitted: false, .. })));
 }
 
 #[test]
-fn continuing_a_done_ticket_whose_worktree_was_removed_makes_it_again_from_its_branch_first() {
+fn opening_a_done_tasks_session_whose_worktree_was_removed_makes_it_again_from_its_branch_first() {
     let mut l = lab("wt-continue", State::Done);
-    l.app.refresh_until_for_test(15, "the worktree removed", |a| a.ticket(1).is_some_and(|t| t.worktrees[0].removed.is_some()));
+    let (config, project) = (l.w.config.clone(), l.project.clone());
+    l.app.refresh_until_for_test(15, "the worktree removed", |_| {
+        Tickets::open(&config, &project).get(1).and_then(|t| t.worktree.clone()).is_some_and(|w| w.removed.is_some())
+    });
     assert!(!l.wt.exists());
     // The main repository moves on meanwhile.
     fs::write(l.shop.join("later.txt"), "later\n").unwrap();
     git(&l.shop, &["add", "."]);
     git(&l.shop, &["commit", "-q", "-m", "later"]);
-    l.app.tk.open = Some(1);
     let mut term = Terminal::new(TestBackend::new(140, 36)).unwrap();
-    assert!(flat(&draw(&mut term, &l.app)).contains("enter continue the squad"));
+    assert!(flat(&draw(&mut term, &l.app)).contains("enter its session"));
     key(&mut l.app, KeyCode::Enter);
     assert!(l.app.sq.launched.is_empty(), "not before the worktree is back");
-    l.app.refresh_until_for_test(15, "the squad continued", |a| a.worktrees_idle() && !a.sq.launched.is_empty());
+    l.app.refresh_until_for_test(15, "the session continued", |a| a.worktrees_idle() && !a.sq.launched.is_empty());
     assert_eq!(l.app.sq.launched, [1]);
-    // Resumed (not a new session), in the worktree, which is back where it was with the squad's commit.
+    // Resumed (not a new session), in the worktree, which is back where it was with the session's commit.
     let (dir, args) = l.app.sq.launched_with[0].clone();
     assert_eq!(dir, l.made.path);
-    assert!(args.windows(2).any(|a| a == ["--resume", "lead-1"]), "{args:?}");
+    assert!(args.windows(2).any(|a| a == ["--resume", "sess-1"]), "{args:?}");
     assert_eq!(git(&l.wt, &["rev-parse", "HEAD"]), l.tip);
     assert_eq!(git(&l.wt, &["rev-parse", "--abbrev-ref", "HEAD"]), "task/1");
     assert!(!l.wt.join("later.txt").exists(), "on its own branch, not main");
     let t = l.ticket();
-    assert_eq!(t.worktrees[0], l.made, "no longer marked removed; same path, branch and base");
+    assert_eq!(t.worktree.as_ref(), Some(&l.made), "no longer marked removed; same path, branch and base");
     assert_eq!(t.state, State::Done, "Working again only when the user writes to it (the hook)");
-    assert!(!l.app.ticket(1).unwrap().busy.is_some());
-}
-
-#[test]
-fn the_notice_says_each_ticket_once_in_plain_words() {
-    use crate::app::worktree_glue::removal_notice;
-    assert_eq!(removal_notice(7, "task/7", 0, 0), None);
-    assert_eq!(removal_notice(7, "task/7", 1, 0).as_deref(), Some("Removed #7's worktree (its branch task/7 is kept)."));
-    assert_eq!(removal_notice(7, "task/7", 2, 0).as_deref(), Some("Removed #7's worktrees (2); their branch task/7 is kept."));
-    assert_eq!(
-        removal_notice(7, "task/7", 0, 1).as_deref(),
-        Some("Kept #7's worktree: it has changes not yet committed (w on the task removes it).")
-    );
-    assert_eq!(
-        removal_notice(7, "task/7", 0, 2).as_deref(),
-        Some("Kept #7's worktrees (2): they have changes not yet committed (w on the task removes them).")
-    );
-    assert_eq!(
-        removal_notice(7, "task/7", 1, 1).as_deref(),
-        Some("Removed #7's worktree (its branch task/7 is kept); kept one with changes not yet committed (w on the task removes it).")
-    );
-}
-
-#[test]
-fn a_ticket_with_worktrees_in_two_repositories_gets_one_notice_for_both() {
-    let w = World::new("wt-two");
-    w.transcript("user-1", "/tmp", "make a basket page", 10);
-    let mut folders = Vec::new();
-    for name in ["shop", "api"] {
-        let repo = w.base.join("repos").join(name);
-        fs::create_dir_all(&repo).unwrap();
-        fs::write(repo.join("README"), "hi\n").unwrap();
-        git(&repo, &["init", "-q"]);
-        git(&repo, &["add", "."]);
-        git(&repo, &["commit", "-q", "-m", "first"]);
-        folders.push(repo.to_string_lossy().into_owned());
-    }
-    let mut app = w.app();
-    let project = app.projects.create("Web shop").unwrap();
-    let mut t = Tickets::open(&w.config, &project);
-    let n = t.add(NewTicket { title: "Basket".into(), folders: folders.clone(), ..Default::default() }).unwrap();
-    let made = crate::squads::prepare_worktrees("git", &folders, n, &[]).unwrap();
-    assert_eq!(made.len(), 2);
-    let lead = Leader { squad: "coding".into(), session: "lead-1".into(), started: 1, names: Default::default(), snapshot: None };
-    t.start_leader(n, &lead, &made).unwrap();
-    t.squad_says(n, &State::Done, "", None).unwrap();
-    app.reload_for_test();
-    let config = w.config.clone();
-    app.refresh_until_for_test(15, "both removed", |a| {
-        a.worktrees_idle() && Tickets::open(&config, &project).get(1).is_some_and(|t| t.worktrees.iter().all(|w| w.removed.is_some()))
-    });
-    assert_eq!(app.active_notice(), Some("Removed #1's worktrees (2); their branch task/1 is kept."));
-    for m in &made {
-        assert!(!Path::new(&m.path).exists());
-    }
 }

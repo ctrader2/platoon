@@ -89,14 +89,8 @@ pub const FEATURES: &[Feature] = &[
 /// Work that has no switch of its own, with what `platoon tokens` calls it. It only ever runs because the person
 /// asked for it then and there, so there is nothing to switch off; it obeys every other gate (the master switch,
 /// the daily limit, a back-off) and its spend is in the ledger like everything else.
-pub const SWITCHLESS: &[(&str, &str)] = &[
-    (TEST_FEATURE, "Token test"),
-    (crate::handoff::FEATURE, "Hand-off"),
-    (crate::taskdraft::FEATURE, "Tasks from a conversation"),
-    (crate::squads::COMMANDER_FEATURE, "Squad commander"),
-    (crate::squadfile::DRAFT_FEATURE, "Drafting a squad"),
-    (crate::agentfile::DRAFT_FEATURE, "Drafting an agent"),
-];
+pub const SWITCHLESS: &[(&str, &str)] =
+    &[(TEST_FEATURE, "Token test"), (crate::handoff::FEATURE, "Hand-off"), (crate::taskdraft::FEATURE, "Tasks from a conversation")];
 
 /// Is this a feature id with no switch of its own?
 pub fn switchless(id: &str) -> bool {
@@ -388,7 +382,7 @@ pub struct Request {
     pub cancel: Cancel,
     /// The person asked for this by pressing a key (see `gate_for`): the plan-usage pause doesn't apply.
     pub user_initiated: bool,
-    /// A model of its own for this call (the squad commander runs on Haiku); None: the smart features' model.
+    /// A model of its own for this call; None: the smart features' model.
     pub model: Option<&'static str>,
 }
 

@@ -8,30 +8,31 @@ here.
 
 ### Changed
 
-- **A squad is a brief**: a short Markdown file of yours, `~/.config/platoon/briefs/<id>.md`, with what the squad does, its
-  steps in order (each an agent and what it does, and when it may send the work back), its checks and when it asks you.
-  The Briefs tab (it was the Squads tab) shows the brief as it reads, with what is wrong in it at the top and the agents
-  its steps use at the end, and `e` opens it in your editor; the
-  in-app step editor is gone. The four built-in squads are briefs too, and work as they are. Squads you had as JSON files
-  are turned into briefs once (each old file kept as `.bak`).
-- **The agents your coding tool already has** (Claude Code's `~/.claude/agents`, and a task's repository's
-  `.claude/agents`) can do a brief's steps. The Agents list shows yours under **From Claude Code**; platoon only reads
-  them, and `c` copies one into platoon's own to change it.
-- A task's screen names its squad by its brief ("Coding brief").
-- The built-in Research and Summarize squads no longer have the project's tests run after them: their briefs don't ask
-  for it, since they don't change your code. Coding and Docs still do, and squads of your own keep the tests.
+- **A task is one Claude Code session.** `s` on a task picks a squad (the one suggested for it is picked) and starts one
+  ordinary `claude` session in a worktree on `task/<N>` from the repository's default branch, with the squad's model, in
+  plan mode when the squad plans first, the squad's steps added to its system prompt and the task's text as its first
+  message. It is a session like any other: it shows on the Sessions tab marked `#N`, and `enter` on the task opens it.
+  The leader, its team of agents, the commander, the squad line and the hand-over popup are gone.
+- **A squad is a Markdown file of steps**: front matter (`name`, `description`, `model`, `verdict_model`, `plan_first`)
+  and the steps. Six are built in (Feature, Bug fix, Refactor, Explain, Review, Docs), adapted from pstack's playbooks;
+  a file of yours in `~/.config/platoon/squads/<id>.md` adds one, or replaces the built-in of that id.
+- **The task's state comes from its session's hooks**: a plan to approve, a question, a permission prompt (Needs you),
+  Working again once answered or typed into, and Done when it stops. With a project test command, platoon runs the tests
+  when the session stops and hands a failure back to it twice before the task needs you.
+- **Publishing asks you**: Claude Code's own `ask` rules for the session hold `git push`, pull requests, releases,
+  writing `gh api` calls, `glab` and `cargo`/`npm publish` for your yes.
+- **The Tasks tab** has four sections, Needs you, Working, Not started and Done, and few keys: `n` new, `s` start,
+  `enter` open, `e` edit, `c` cancel. Tasks drafted from a conversation (`t`) come with a suggested squad and are made
+  Not started.
+- The tabs are Sessions, Tasks and Projects (`1` to `3`).
 
-### Added
+### Removed
 
-- **Checks from the brief**: besides the project's tests, a brief can ask that an agent read the change ("the reviewer
-  read the change": platoon checks that agent ran after the last change) and that every acceptance box is ticked, with
-  how (in the squad's result). platoon checks them when the squad says it is finished; a failure is typed into the
-  squad's session once, then the task needs you. Other lines are the squad's own, and its leader is reminded of them. A
-  task's screen shows a line for each.
-
-### Fixed
-
-- The Tests line beside the Tasks tab no longer breaks a command such as `npm test` across two lines.
+- The Briefs tab, briefs, agents and their files; waits between tasks, moving tasks between projects, putting a task
+  aside, the per-task autonomy levels and the project's default, the go-ahead (`p`), the answer box (`y`), checks other
+  than the tests, the timeline and "what ran", the squads-at-once and leader-model settings, the `alt+n` chord
+  (`draft_tasks` in `keys.json`), `platoon ticket` (use `platoon task`), `platoon task where`, `--from-session`,
+  `platoon squads --kinds` and `platoon setup --remove`. Task files from earlier versions are not read.
 
 ## [1.0.0] - unreleased
 

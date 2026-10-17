@@ -3,7 +3,7 @@
 //! was started with (arguments, folder, environment) and waits for a line typed on its terminal, and a VS Code that
 //! writes down its arguments and ends at once. Checked: platoon's screen goes while a terminal editor runs and nothing
 //! of platoon draws over it, the keys reach it, and platoon comes back drawn in full where the user was; the folders of
-//! a session and of a ticket; the question while the squad is working; the list of editors; a window editor beside
+//! a session and of a task; the question while the task's session is working; the list of editors; a window editor beside
 //! platoon; the settings; no editor found; `v` typed into a box stays a letter.
 //!
 //! Every directory is a temp dir; no real editor, no real `claude`.
@@ -222,73 +222,67 @@ fn v_on_a_session_hands_the_terminal_to_the_editor_and_platoon_comes_back_where_
     assert_eq!(t.wait_exit(), 0);
 }
 
-/// A ticket written straight into the project's file, with the worktree its squad made (a commit on its branch and a
-/// change not yet committed), `state`, and its leader `lead-1`.
+/// A task written straight into the project's file, with the worktree its session made (a commit on its branch and a
+/// change not yet committed), `state`, and its session `sess-9`.
 fn ticket_lab(name: &str, state: &str) -> (Lab, PathBuf, String) {
     let lab = Lab::new(name);
     lab.session(&[]);
     let base = git(&lab.work, &["rev-parse", "HEAD"]);
-    let wt = lab.base.join("work-worktrees/ticket-1");
-    git(&lab.work, &["worktree", "add", "-q", "-b", "ticket/1", &s(&wt), &base]);
+    let wt = lab.base.join("work-worktrees/task-1");
+    git(&lab.work, &["worktree", "add", "-q", "-b", "task/1", &s(&wt), &base]);
     fs::write(wt.join("basket.txt"), "b\n").unwrap();
     git(&wt, &["add", "."]);
     git(&wt, &["commit", "-q", "-m", "basket"]);
     fs::write(wt.join("README"), "changed\n").unwrap();
     let projects = json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": {"s-1": "pweb"}});
     fs::write(lab.config.join("projects.json"), projects.to_string()).unwrap();
-    let t = json!({"number": 1, "title": "Basket", "file": "01-basket.md", "state": state, "folders": [lab.work], "blocked_by": [], "created": 1, "updated": 1,
-        "leaders": [{"squad": "coding", "session": "lead-1", "started": 1}],
-        "worktrees": [{"folder": lab.work, "path": wt, "branch": "ticket/1", "base": base}]});
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+    let t = json!({"number": 1, "title": "Basket", "file": "01-basket.md", "state": state, "need": "question", "why": "Which page?",
+        "folder": lab.work, "squad": "feature", "session": "sess-9", "created": now, "updated": now,
+        "worktree": {"path": wt, "branch": "task/1", "base": base}});
     fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
     fs::write(lab.config.join("projects/pweb/tasks/01-basket.md"), "# Basket\n").unwrap();
-    fs::write(lab.config.join("projects/pweb/tasks.json"), json!({"next": 2, "tickets": [t]}).to_string()).unwrap();
+    fs::write(lab.config.join("projects/pweb/tasks.json"), json!({"next": 2, "tasks": [t]}).to_string()).unwrap();
     (lab, wt, base)
 }
 
-/// The project's screen, the Tickets pane in focus on #1.
-fn to_tickets(t: &mut Term) {
+/// The Tasks tab, on #1.
+fn to_tasks(t: &mut Term) {
     t.wait_for("enter open");
-    t.send(b"3");
-    t.wait_for_flat("WB Web");
-    t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
-    t.wait_for("#1");
-    t.send(b"\x1b[1;2B");
-    t.wait_for_flat("n new task");
+    t.send(b"2");
+    t.wait_for_all(&["#1 Basket", "n new task"]);
 }
 
 #[test]
-fn v_on_a_tickets_screen_opens_its_worktree_and_comes_back_to_the_ticket() {
-    let (lab, wt, _) = ticket_lab("ed-term-ticket", "waiting");
+fn v_on_a_task_opens_its_worktree_and_comes_back_to_the_tasks_tab() {
+    let (lab, wt, _) = ticket_lab("ed-term-ticket", "needs_you");
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
-    to_tickets(&mut t);
-    t.send(b"\r");
-    t.wait_for_all(&["Basket", "v editor"]);
+    to_tasks(&mut t);
     t.send(b"v");
-    editor_has_the_screen(&mut t, &["Basket", "v editor"]);
+    editor_has_the_screen(&mut t, &["Basket", "n new task"]);
     let run = lab.only_run();
     assert_eq!(fs::read_to_string(run.join("argv")).unwrap().lines().collect::<Vec<_>>(), vec![s(&wt)]);
     assert_eq!(fs::read_to_string(run.join("cwd")).unwrap().trim(), s(&wt));
     t.send(b"\r");
-    // Back on the ticket's own screen.
-    t.wait_for_all(&["Basket", "v editor", "esc back"]);
+    // Back on the Tasks tab.
+    t.wait_for_all(&["#1 Basket", "n new task"]);
     assert!(!t.stable().contains("STAND-IN"));
 }
 
 #[test]
-fn v_on_a_ticket_whose_squad_is_working_asks_first() {
+fn v_on_a_task_whose_session_is_working_asks_first() {
     let (lab, wt, _) = ticket_lab("ed-term-working", "working");
-    // The leader's session, "hosted": a host file for a process of the test's own (nothing to connect to, and
-    // nothing here opens it).
-    let mut leader = Command::new("sleep").arg("60").spawn().unwrap();
+    // The task's session, "hosted": a host file for a process of the test's own (nothing to connect to, and nothing
+    // here opens it).
+    let mut session = Command::new("sleep").arg("60").spawn().unwrap();
     fs::create_dir_all(lab.cache.join("hosts")).unwrap();
-    let host = json!({"claude_pid": leader.id(), "host_pid": leader.id(), "dir": wt, "args": ["--resume", "lead-1"]});
-    fs::write(lab.cache.join(format!("hosts/{}.json", leader.id())), host.to_string()).unwrap();
+    let host = json!({"claude_pid": session.id(), "host_pid": session.id(), "dir": wt, "args": ["--resume", "sess-9"]});
+    fs::write(lab.cache.join(format!("hosts/{}.json", session.id())), host.to_string()).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 120);
-    to_tickets(&mut t);
+    to_tasks(&mut t);
     t.send(b"v");
-    t.wait_for_all(&["Squad at work", "Open #1 Basket in the editor anyway?", "open anyway"]);
-    t.wait_for_all(&["The squad is still working in these files; what you change may clash", "with it."]);
+    t.wait_for_all(&["Task at work", "Open #1 Basket in the editor anyway?", "open anyway"]);
+    t.wait_for_all(&["Its session is still working in these files; what you change may", "clash with it."]);
     t.send(b"n");
     t.wait_gone("anyway?");
     std::thread::sleep(Duration::from_millis(300));
@@ -300,8 +294,8 @@ fn v_on_a_ticket_whose_squad_is_working_asks_first() {
     t.send(b"\r");
     t.wait_for_flat("n new task");
     assert_eq!(lab.runs().len(), 1);
-    let _ = leader.kill();
-    let _ = leader.wait();
+    let _ = session.kill();
+    let _ = session.wait();
 }
 
 #[test]
@@ -383,37 +377,19 @@ fn always_ask_lists_the_editors_with_the_favourite_starred_and_a_window_editor_s
 }
 
 #[test]
-fn a_tickets_worktree_opened_in_a_window_editor_is_kept_on_its_screen_until_w() {
+fn a_tasks_worktree_opened_in_a_window_editor_is_kept_after_the_work() {
     let (lab, wt, _) = ticket_lab("ed-term-kept", "done");
     let env = lab.own_editors(json!({"files_editor": "code"}));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 130);
-    t.wait_for("enter open");
-    t.send(b"3");
-    t.wait_for_flat("WB Web");
-    t.send(b"\r");
-    t.wait_for_all(&["╭ Sessions", "╭ Tasks", "╭ Notes"]);
-    // A Done ticket is under the folded "Done and cancelled" group: into the Tickets pane, open the group, on #1.
-    t.send(b"\x1b[1;2B");
-    t.wait_for_flat("n new task");
-    t.send(b"\r");
-    t.wait_for("#1");
-    t.send(b"\x1b[B\r");
-    t.wait_for_all(&["Basket", "v editor", "esc back"]);
+    to_tasks(&mut t);
     t.send(b"v");
     assert_eq!(wait_file(&lab.out.join("code.argv")).lines().collect::<Vec<_>>(), vec!["--new-window".to_string(), s(&wt)]);
-    t.wait_for_flat("Kept: opened in VS Code.");
-    t.wait_for_flat("w removes it");
-    // Longer than the clean-up's interval: still there.
+    t.wait_for_flat("#1's worktree stays after the work");
+    // Longer than the clean-up's interval: still there, and written on the task.
     std::thread::sleep(Duration::from_millis(3000));
     assert!(wt.is_dir());
-    t.send(b"w");
-    t.wait_for_flat("Remove #1's copy of the folder anyway?");
-    t.wait_for_flat("It was opened in VS Code: close it there first.");
-    t.send(b"y");
-    t.wait_for_flat("#1's worktree is removed. Its branch ticket/1 is kept.");
-    assert!(!wt.exists());
-    let tickets: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tasks.json")).unwrap()).unwrap();
-    assert!(tickets["tickets"][0]["worktrees"][0].get("opened_in").is_none());
+    let tasks: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("projects/pweb/tasks.json")).unwrap()).unwrap();
+    assert_eq!(tasks["tasks"][0]["worktree"]["opened_in"], "VS Code");
 }
 
 #[test]

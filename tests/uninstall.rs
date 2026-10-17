@@ -77,14 +77,6 @@ impl World {
         assert!(out.status.success(), "{}", text(&out));
         fs::create_dir_all(self.config().join("projects")).unwrap();
         fs::create_dir_all(self.cache().join("status")).unwrap();
-        // The /to-tickets skill, as an earlier platoon's setup installed it (with the record it kept): setup no longer
-        // does, and the uninstall still takes it out.
-        let skill = include_str!("../src/skills/to-tickets/SKILL.md");
-        let dir = self.claude().join("skills/to-tickets");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("SKILL.md"), skill).unwrap();
-        let fnv = skill.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
-        fs::write(self.config().join("setup.json"), json!({"to-tickets": {"written": format!("{fnv:016x}")}}).to_string()).unwrap();
     }
 
     fn stub(&self, name: &str, body: &str) {
@@ -156,19 +148,17 @@ fn uninstall_takes_out_exactly_what_the_real_setup_added_and_a_second_run_finds_
     w.set_up(&user);
     let set_up = fs::read_to_string(w.claude().join("settings.json")).unwrap();
     assert!(set_up.contains("hook guard") && set_up.contains("hook session-start") && set_up.contains(" statusline"), "{set_up}");
-    assert!(w.claude().join("skills/to-tickets/SKILL.md").exists());
 
     let out = w.command(BIN, &[], Some("n\n")).arg("uninstall").output().unwrap();
     let said = text(&out);
     assert_eq!(out.status.code(), Some(0), "{said}");
     assert_eq!(w.settings(), user, "{said}");
     assert_eq!(fs::read_to_string(w.claude().join("settings.json.platoon-bak")).unwrap(), set_up);
-    assert!(!w.claude().join("skills/to-tickets").exists() && !w.cache().exists() && w.config().exists(), "{said}");
+    assert!(!w.cache().exists() && w.config().exists(), "{said}");
     for want in [
         "Also delete your projects, notes, tasks and settings? [y/N]",
         "Removed:",
         "the status line, the session guard hook, the project notes hook, the notes updates hook",
-        "the /to-tickets skill",
         "platoon's cache folder",
         "Kept:",
         "To delete them later: rm -rf",
@@ -361,7 +351,7 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         let w = World::new(&format!("none-{sh}"));
         w.set_up(&json!({}));
         fs::create_dir_all(w.home.join(".local/share/platoon/editor")).unwrap();
-        // A ticket worktree, made the way a squad's is.
+        // A task's worktree, made the way platoon makes one.
         let repo = w.base.join("repo");
         fs::create_dir_all(&repo).unwrap();
         let git = |dir: &Path, args: &[&str]| {
@@ -372,13 +362,13 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         fs::write(repo.join("a"), "a").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"]);
-        let wt = w.base.join("repo-worktrees/ticket-4");
-        git(&repo, &["worktree", "add", "-q", "-b", "ticket/4", wt.to_str().unwrap()]);
+        let wt = w.base.join("repo-worktrees/task-4");
+        git(&repo, &["worktree", "add", "-q", "-b", "task/4", wt.to_str().unwrap()]);
         let project = w.config().join("projects/p1");
         fs::create_dir_all(&project).unwrap();
-        let tickets = json!({"next": 5, "tickets": [{"number": 4, "title": "t", "file": "04.md", "state": "done",
-            "worktrees": [{"folder": repo, "path": wt, "branch": "ticket/4"}]}]});
-        fs::write(project.join("tickets.json"), serde_json::to_string_pretty(&tickets).unwrap()).unwrap();
+        let tasks = json!({"next": 5, "tasks": [{"number": 4, "title": "t", "file": "04.md", "state": "done", "folder": repo,
+            "worktree": {"path": wt, "branch": "task/4"}}]});
+        fs::write(project.join("tasks.json"), serde_json::to_string_pretty(&tasks).unwrap()).unwrap();
         let (pid, waiter) = sleeper();
         host_entry(&w, pid);
 
@@ -399,12 +389,11 @@ fn without_platoon_the_script_asks_the_same_questions_cleans_the_folders_and_say
         assert!(!w.cache().exists() && !w.config().exists() && !w.home.join(".local/share/platoon").exists(), "{said}");
         let repo_s = repo.display().to_string();
         assert!(said.contains(&format!("git -C {repo_s} worktree remove {}", wt.display())), "{sh}: {said}");
-        assert!(said.contains(&format!("git -C {repo_s} branch -D ticket/4")), "{sh}: {said}");
+        assert!(said.contains(&format!("git -C {repo_s} branch -D task/4")), "{sh}: {said}");
         assert!(wt.join("a").exists(), "never deleted");
-        // Claude Code's settings and the skill can't be taken out without platoon: said, with how.
+        // Claude Code's settings can't be taken out without platoon: said, with how.
         assert!(said.contains("Claude Code's settings still mention platoon") && said.contains("platoon hook guard"), "{said}");
-        assert!(said.contains("The /to-tickets skill is still in Claude Code: rm -r"), "{said}");
-        assert!(w.settings().to_string().contains("hook guard") && w.claude().join("skills/to-tickets/SKILL.md").exists());
+        assert!(w.settings().to_string().contains("hook guard"));
         assert!(said.trim_end().ends_with("platoon is uninstalled, but for what is above to do by hand."), "{said}");
         assert!(said.contains("platoon is running 1 session:") && said.contains("Stop it and go on? [y/N]"), "{said}");
     }

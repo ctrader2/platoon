@@ -1,29 +1,12 @@
-//! The test check platoon runs itself. A project may name a **test command** (`test_command` in `projects.json`, see
-//! `projects.rs`): when a squad's leader stops at the end of the work, platoon runs it where the squad works and tells
-//! the squad when it fails, so a squad's "done" is checked by something other than the squad.
+//! The project's tests, run where a task's session works when its turn ends (the `task-stop` hook, `taskrun.rs`): a
+//! project may name a **test command** (`test_command` in `projects.json`, with `test_timeout_minutes`). `run` runs it
+//! through `sh -c` in the task's folder, with platoon's environment less its own variables (`env`), no terminal, its
+//! output kept in a log, its whole process group ended when its time is up. `summary` and `tail` say how it went.
 //!
-//! How it goes: the `squad-stop` hook (a short-lived process inside the leader's session) sets the task's state as the
-//! leader's last line says and, when that line is the end of the work (`Stop`) and the project has a command, marks the
-//! task `check_due`. It runs nothing. The platoon window that holds the squad line's lock runs the command
-//! (`app/checks_glue.rs`), off the UI thread, with `run` here: `sh -c <command>` in the folder the squad works in (the
-//! task's copy of its first git folder, or the user's checkout when the task works on a branch there and the checkout is
-//! still on it: `place`), never where another session of the user's is open, with the leader's environment less
-//! platoon's own variables (`env`), no terminal, its output kept as `<NN>-work/tests-<try>.log`, stopped with its
-//! process group when its time is up. The result goes on the task (`tickets::CheckRun`), and `then` says what it means:
-//! a pass leaves the task as the leader left it; a failure is typed into the squad's session (`typed_message`) and the
-//! task is Working again, at most `FIXES` times in a row; the next failure leaves it Needs you.
-//!
-//! A squad's brief may ask for two more checks platoon makes at the same moments (`brief::CheckKind`): that an agent
-//! read the change (`review`: a run of that agent after the last run of any member that can change files, from the
-//! leader's transcript), and that every acceptance box is ticked, with how (`acceptance`: the squad's result ticks each
-//! acceptance line of the task's text). Each is told to the squad once (`fixes_for`); the next failure needs the user.
-//! A leader started before briefs has no list of checks in its snapshot: it gets the test check alone, as before.
-//!
-//! Also here: the suggestion on the project's screen (the first command of the "Build and test" block in the
-//! `CLAUDE.md` of the project's first git folder; nothing is ever run from a suggestion).
+//! Also here: a task's "Done when" boxes as its text has them (`done_when`), and the suggestion on the project's
+//! screen (the first command of the "Build and test" block in the `CLAUDE.md` of the project's first git folder;
+//! nothing is ever run from a suggestion).
 
-use crate::squads::EndLine;
-use crate::tickets::{CheckRun, CheckThen, Ticket};
 use std::{
     fs,
     io::{Read, Seek, SeekFrom},
@@ -35,193 +18,13 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// The kinds of check platoon runs: the project's test command, an agent reading the change, the acceptance boxes.
-pub const TESTS: &str = "tests";
-pub const REVIEW: &str = "review";
-pub const ACCEPTANCE: &str = "acceptance";
-
-/// How many times in a row the squad is told its tests fail and given the work back; the next failure needs the user.
-pub const FIXES: u32 = 2;
-
-/// How many of the output's last lines are typed into the squad's session with a failure.
+/// How many of the output's last lines go back to the session with a failure.
 pub const TAIL_LINES: usize = 30;
 
 /// The longest summary kept, in characters.
 pub const SUMMARY_MAX: usize = 120;
 
-/// What a task needs the user for when its tests still fail after the squad's tries.
-pub const STILL_FAIL: &str = "The tests still fail after the squad tried twice";
-
-/// ... and when they fail and the squad's session isn't there to be told.
-pub const FAILED_NOT_RUNNING: &str = "The tests failed; the squad's session isn't running";
-
-/// Why a check wasn't run: someone works in that folder.
-pub const SESSION_OPEN: &str = "a session of yours is open there";
-
-/// What a task's row says while its check runs (or waits to).
-pub const RUNNING: &str = "running the tests";
-
-// ---- when ---------------------------------------------------------------------------------------------------------
-
-/// The leader stopped at the end of the work: one of the three stops a check follows.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Stop {
-    /// `SQUAD: question - Shall I close this task?`
-    Close,
-    /// `SQUAD: ready to publish - ...`
-    Publish,
-    /// `SQUAD: done`
-    Done,
-}
-
-impl Stop {
-    pub fn id(self) -> &'static str {
-        match self {
-            Stop::Close => "close",
-            Stop::Publish => "publish",
-            Stop::Done => "done",
-        }
-    }
-}
-
-/// Is the leader's question the one it asks when the work is finished ("Shall I close this task?"; "ticket" from
-/// before the rename)?
-pub fn is_close_question(question: &str) -> bool {
-    let q = question.to_lowercase();
-    q.contains("close this task") || q.contains("close this ticket")
-}
-
-/// The stop a check follows, from the leader's last line; None for any other (members still running, a question, stuck,
-/// the plan, no line).
-pub fn stop_of(line: &EndLine, members_running: bool) -> Option<Stop> {
-    if members_running {
-        return None;
-    }
-    match line {
-        EndLine::Question(q) if is_close_question(q) => Some(Stop::Close),
-        EndLine::ReadyToPublish(_) => Some(Stop::Publish),
-        EndLine::Done => Some(Stop::Done),
-        _ => None,
-    }
-}
-
-/// Does task `t` have a folder a check can run in: a copy of a git folder (its worktree), or a branch in the user's
-/// checkout? A task with only folders outside git, or none, has no test check.
-pub fn has_place(t: &Ticket) -> bool {
-    t.worktrees.iter().any(|w| w.removed.is_none()) || t.folders.iter().any(|f| t.branch_in_checkout(f))
-}
-
-// ---- what a result means ------------------------------------------------------------------------------------------
-
-/// Which of the squad's tries the next test run is: 1, plus one for each failure since the tests last passed (a run
-/// that wasn't done counts neither way).
-pub fn next_try(checks: &[CheckRun]) -> u32 {
-    next_try_of(checks, TESTS)
-}
-
-/// The same for a check of `kind`.
-pub fn next_try_of(checks: &[CheckRun], kind: &str) -> u32 {
-    let failures = checks.iter().rev().filter(|c| c.kind == kind && !c.skipped).take_while(|c| !c.ok).count();
-    1 + u32::try_from(failures).unwrap_or(u32::MAX - 1)
-}
-
-/// How many times in a row the squad is told a check of `kind` fails before the user is: the tests twice, the others
-/// once.
-pub fn fixes_for(kind: &str) -> u32 {
-    if kind == TESTS { FIXES } else { 1 }
-}
-
-/// What a task needs the user for when a check of `kind` still fails after the squad was told.
-pub fn still_fails(kind: &str) -> String {
-    match kind {
-        REVIEW => "The change still wasn't read after the squad was told once".into(),
-        ACCEPTANCE => "Not every acceptance box is ticked after the squad was told once".into(),
-        _ => STILL_FAIL.into(),
-    }
-}
-
-/// ... and when it fails with the squad's session not running to be told.
-pub fn failed_not_running(kind: &str) -> String {
-    match kind {
-        REVIEW => "The change wasn't read after its last change; the squad's session isn't running".into(),
-        ACCEPTANCE => "Not every acceptance box is ticked; the squad's session isn't running".into(),
-        _ => FAILED_NOT_RUNNING.into(),
-    }
-}
-
-/// What a check's result does to its task. `failed`: it ran and failed. `attempt`: its try (`next_try`). `still`: the
-/// task is still at the stop the check was for (Needs you or Done, nobody has written to it, no newer stop).
-/// `can_type`: the squad's session is running where platoon can type into it.
-///
-/// A pass, a run that wasn't done, or a task that moved on: kept, nothing else. A failure on try 1 or 2: the squad is
-/// told and the task is Working (or, with nobody to tell, Needs you). On try 3: Needs you, the tests still fail. Later
-/// tries (the user, told already, has had the squad go on): kept, as the leader left the task.
-#[cfg(test)]
-pub fn then(failed: bool, attempt: u32, still: bool, can_type: bool) -> CheckThen {
-    then_for(TESTS, failed, attempt, still, can_type)
-}
-
-/// `then` for a check of `kind`: the squad is told `fixes_for(kind)` times, then the user.
-pub fn then_for(kind: &str, failed: bool, attempt: u32, still: bool, can_type: bool) -> CheckThen {
-    if !failed || !still {
-        return CheckThen::Keep;
-    }
-    let fixes = fixes_for(kind);
-    match attempt {
-        n if n <= fixes && can_type => CheckThen::Fix,
-        n if n <= fixes => CheckThen::NeedsYou(failed_not_running(kind)),
-        n if n == fixes + 1 => CheckThen::NeedsYou(still_fails(kind)),
-        _ => CheckThen::Keep,
-    }
-}
-
-// ---- the brief's own checks: an agent read the change, the acceptance boxes ------------------------------------------
-
-/// What a check found: whether it passed, one line that says so, and (on a failure) the message typed into the
-/// squad's session.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Judged {
-    pub ok: bool,
-    pub summary: String,
-    pub message: String,
-}
-
-/// The role of an agent in a session's name, as the brief calls it: "builder" for "coding-builder" (`squad` is the
-/// squad's id; a leader started with plain names has the role alone).
-pub fn role_of<'a>(name: &'a str, squad: &str) -> &'a str {
-    name.strip_prefix(squad).and_then(|r| r.strip_prefix('-')).unwrap_or(name)
-}
-
-/// Did `reviewer` (its name in the session) run after the last run of any member that can change files (`changers`,
-/// their names in the session)? From the leader's member runs (`runs`, in the order the leader started them): a
-/// reviewer's run counts when it started after the last change's run ended (or, without times, came after it in the
-/// list). No member changed anything: nothing to read, it passes. `squad`: the squad's id, for the roles in the words.
-pub fn review(runs: &[crate::claude::MemberRun], reviewer: &str, changers: &[String], squad: &str) -> Judged {
-    let who = role_of(reviewer, squad);
-    let last_change = runs.iter().enumerate().rev().find(|(_, r)| changers.contains(&r.agent));
-    let Some((at, change)) = last_change else {
-        return Judged { ok: true, summary: "nothing was changed for it to read".into(), message: String::new() };
-    };
-    let changer = role_of(&change.agent, squad);
-    let change_end = change.ended_at.or(change.started_at);
-    let after = runs.iter().enumerate().any(|(k, r)| {
-        r.agent == reviewer
-            && match (r.started_at, change_end) {
-                (Some(s), Some(e)) => s >= e,
-                _ => k > at,
-            }
-    });
-    if after {
-        return Judged { ok: true, summary: format!("{who} ran after {changer}'s last change"), message: String::new() };
-    }
-    let ever = runs.iter().any(|r| r.agent == reviewer);
-    let summary = if ever { format!("{who} hasn't run since {changer}'s last change") } else { format!("{who} never ran") };
-    let message = format!(
-        "Your brief asks that the {who} read the change after the last change; it hasn't since the {changer}'s last run. Hand the \
-         change to the {who} ({reviewer}), then end your turn as before: platoon checks again when you stop."
-    );
-    Judged { ok: false, summary, message }
-}
+// ---- "Done when" ----------------------------------------------------------------------------------------------------
 
 /// A line's words as they are compared: lower case letters and digits, one space between.
 fn words_of(s: &str) -> Vec<String> {
@@ -245,86 +48,36 @@ fn checkbox(line: &str) -> Option<(bool, &str)> {
     Some((ticked, t[3..].trim()))
 }
 
-/// The acceptance boxes of a task's text: the checkbox lines under a heading that says "acceptance" (until the next
-/// heading of the same level or above), or, without such a heading, every checkbox line. Empty ones (the template's)
-/// are left out.
-pub fn acceptance_lines(body: &str) -> Vec<String> {
+/// A task's "Done when" boxes, as written: the checkbox lines under a heading that says "done when" (until the next
+/// heading of the same level or above), with whether each is ticked. Empty ones (the template's) are left out.
+pub fn done_when(body: &str) -> Vec<(bool, String)> {
     let heading = |l: &str| {
         let t = l.trim_start();
         let level = t.chars().take_while(|c| *c == '#').count();
         ((1..=6).contains(&level) && t[level..].starts_with(' ')).then(|| (level, t[level..].trim().to_lowercase()))
     };
     let mut under: Option<usize> = None;
-    let mut found = false;
     let mut out = Vec::new();
     for l in body.lines() {
         if let Some((level, text)) = heading(l) {
-            if text.contains("acceptance") {
+            if text.contains("done when") {
                 under = Some(level);
-                found = true;
             } else if under.is_some_and(|u| level <= u) {
                 under = None;
             }
             continue;
         }
         if under.is_some()
-            && let Some((_, text)) = checkbox(l)
+            && let Some((ticked, text)) = checkbox(l)
             && !words_of(text).is_empty()
         {
-            out.push(text.to_string());
+            out.push((ticked, text.to_string()));
         }
     }
-    if found {
-        return out;
-    }
-    body.lines().filter_map(checkbox).map(|(_, t)| t.to_string()).filter(|t| !words_of(t).is_empty()).collect()
+    out
 }
 
-/// Does the ticked result line `got` tick the acceptance line `want`, with words after it saying how? Matched on the
-/// words (case and punctuation aside): `got` holds `want`'s words in order and more after them, or (loosely) holds at
-/// least four in five of `want`'s words and more words than it.
-fn ticks_with_how(want: &str, got: &str) -> bool {
-    let (w, g) = (words_of(want), words_of(got));
-    if w.is_empty() {
-        return false;
-    }
-    if let Some(at) = g.windows(w.len()).position(|win| win == w.as_slice()) {
-        return g.len() > at + w.len();
-    }
-    let held = w.iter().filter(|x| g.contains(x)).count();
-    held * 5 >= w.len() * 4 && g.len() > w.len()
-}
-
-/// Is every acceptance box of the task's text (`body`) ticked in the squad's result, each with how it was shown?
-pub fn acceptance(body: &str, result: Option<&str>) -> Judged {
-    let boxes = acceptance_lines(body);
-    if boxes.is_empty() {
-        return Judged { ok: true, summary: "the task has no acceptance boxes".into(), message: String::new() };
-    }
-    let ticked: Vec<&str> = result.unwrap_or_default().lines().filter_map(checkbox).filter(|(t, _)| *t).map(|(_, l)| l).collect();
-    let missing: Vec<&String> = boxes.iter().filter(|b| !ticked.iter().any(|g| ticks_with_how(b, g))).collect();
-    let n = boxes.len();
-    if missing.is_empty() {
-        return Judged { ok: true, summary: format!("{n} of {n} ticked, with how"), message: String::new() };
-    }
-    let summary = match result {
-        None => "no result yet to tick them in".to_string(),
-        Some(_) => format!(
-            "{} of {n} ticked; not ticked: {}",
-            n - missing.len(),
-            missing.iter().map(|m| format!("\"{m}\"")).collect::<Vec<_>>().join(", ")
-        ),
-    };
-    let list: String = missing.iter().map(|m| format!("- [ ] {m}\n")).collect();
-    let message = format!(
-        "Your brief asks that every acceptance box is ticked, with how. Not ticked in your result, with how it was shown:\n\n{list}\n\
-         Show each one, then put your result above your last line with every acceptance check as `- [x] <the check>: <how it was \
-         shown>`, and end your turn as before: platoon checks again when you stop."
-    );
-    Judged { ok: false, summary: cut(&summary), message }
-}
-
-// ---- the summary and the message ----------------------------------------------------------------------------------
+// ---- the summary ----------------------------------------------------------------------------------------------------
 
 /// `line` with terminal escape sequences and other control characters taken out.
 fn plain(line: &str) -> String {
@@ -396,7 +149,8 @@ fn cut(s: &str) -> String {
     out
 }
 
-/// The longest line of output typed into the squad's session, in characters (a minified file on one line stays short).
+/// The longest line of output handed back to the task's session, in characters (a minified file on one line stays
+/// short).
 const LINE_MAX: usize = 400;
 
 /// The last `n` lines of the output that have something on them at the end (blank ones before them stay), each cut to
@@ -425,77 +179,11 @@ pub fn duration_words(secs: u64) -> String {
     }
 }
 
-/// What platoon types into the squad's session when the tests fail: what it ran and where, the output's last
-/// `TAIL_LINES` lines (or what happened when there are none), and what to do about it.
-pub fn typed_message(command: &str, folder: &str, ran: &Ran) -> String {
-    let mut out = format!("The tests failed when platoon ran `{command}` in {folder}:\n\n");
-    let tail = tail(&ran.output, TAIL_LINES);
-    if tail.trim().is_empty() {
-        out.push_str(&format!("({})\n", ran.summary));
-    } else {
-        out.push_str(&format!("```\n{tail}\n```\n"));
-        if ran.timed_out || ran.not_started {
-            out.push_str(&format!("({})\n", ran.summary));
-        }
-    }
-    out.push_str("\nFix what makes them fail, then end your turn as before: platoon runs them again when you stop.");
-    out
-}
-
-// ---- where --------------------------------------------------------------------------------------------------------
-
-/// Where a task's check runs: the folder to run the command in, and the folder no other session may be open in (the
-/// task's copy as a whole, or the checkout); or why it can't run there now.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Place {
-    Run { folder: PathBuf, root: PathBuf },
-    Skip { folder: PathBuf, why: String },
-}
-
-/// The folder platoon made for task `number`'s copy `path`: the `task-<N>` (or `ticket-<N>`) folder it is in, or the
-/// path itself.
-pub fn copy_root(path: &Path, number: u32) -> PathBuf {
-    let names = [format!("task-{number}"), format!("ticket-{number}")];
-    path.ancestors().find(|a| a.file_name().is_some_and(|n| names.iter().any(|x| *x == n.to_string_lossy()))).unwrap_or(path).to_path_buf()
-}
-
-/// Where task `t`'s check runs (`Place`), from its first folder that has a copy (a worktree not removed) or works on a
-/// branch in the user's checkout; the checkout only while it is still on the task's branch (`branch_now` says which
-/// branch a folder's checkout is on: read-only git, `gitfacts::current_branch`). None when it has no such folder.
-pub fn place(t: &Ticket, branch_now: &dyn Fn(&Path) -> Option<String>) -> Option<Place> {
-    for f in &t.folders {
-        if let Some(w) = t.worktrees.iter().find(|w| w.folder == *f && w.removed.is_none()) {
-            let folder = PathBuf::from(&w.path);
-            if !folder.is_dir() {
-                return Some(Place::Skip { folder, why: "its copy of the folder isn't there any more".into() });
-            }
-            let root = copy_root(&folder, t.branch_number());
-            return Some(Place::Run { folder, root });
-        }
-        if t.branch_in_checkout(f) {
-            let folder = PathBuf::from(f);
-            let branch = t.branch();
-            if branch_now(&folder).as_deref() != Some(branch.as_str()) {
-                let name = crate::squads::folder_name(f);
-                return Some(Place::Skip { folder, why: format!("your checkout of {name} isn't on {branch} any more") });
-            }
-            return Some(Place::Run { root: folder.clone(), folder });
-        }
-    }
-    None
-}
-
-/// Is a session other than the squad's own open in `root` (or a folder inside it)? `others`: the folders the user's
-/// other sessions work in.
-pub fn open_there(root: &Path, others: &[PathBuf]) -> bool {
-    others.iter().any(|d| d.starts_with(root))
-}
-
 // ---- running it ---------------------------------------------------------------------------------------------------
 
-/// The environment the command runs with: platoon's own, as the squad's leader gets it (the variables that describe a
-/// Claude Code session platoon was started from taken out, `claude::is_session_marker`), less every `PLATOON_*`
-/// variable (platoon's folders and test knobs are not the project's business).
+/// The environment the command runs with: the one the task's session gives its Stop hook, with the variables that
+/// describe a Claude Code session taken out (`claude::is_session_marker`) and every `PLATOON_*` variable too
+/// (platoon's folders and test knobs are not the project's business).
 pub fn env() -> Vec<(String, String)> {
     env_from(std::env::vars_os().filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?))))
 }
@@ -709,7 +397,7 @@ pub fn suggested_command(text: &str) -> Option<String> {
 /// The suggestion for a project whose folders are `folders` (most recently used first): from the `CLAUDE.md` of the
 /// first one in git, as `suggested_command` reads it.
 pub fn suggestion_for(folders: &[String]) -> Option<String> {
-    let first = folders.iter().map(Path::new).find(|f| crate::squads::in_git(f))?;
+    let first = folders.iter().map(Path::new).find(|f| crate::worktrees::in_git(f))?;
     let text = std::fs::read_to_string(claude_md_for(first)?).ok()?;
     suggested_command(&text)
 }
@@ -717,8 +405,6 @@ pub fn suggestion_for(folders: &[String]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tickets::{How, WorksOn, Worktree};
-    use std::fs;
 
     fn dir(name: &str) -> PathBuf {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-ut-checks-{name}-{}", std::process::id())));
@@ -727,128 +413,12 @@ mod tests {
         d
     }
 
-    fn check(ok: bool, skipped: bool) -> CheckRun {
-        CheckRun { kind: TESTS.into(), ok, skipped, ..CheckRun::default() }
-    }
-
-    fn member(agent: &str, started: Option<u64>, ended: Option<u64>) -> crate::claude::MemberRun {
-        crate::claude::MemberRun {
-            call: format!("c-{agent}-{started:?}"),
-            agent: agent.into(),
-            description: String::new(),
-            ended: ended.map(|_| "completed".into()),
-            started_at: started,
-            ended_at: ended,
-        }
-    }
-
     #[test]
-    fn the_review_check_passes_when_the_reviewer_ran_after_the_last_change() {
-        let changers = vec!["coding-builder".to_string()];
-        let review_of = |runs: &[crate::claude::MemberRun]| review(runs, "coding-reviewer", &changers, "coding");
-        // Planned, built, reviewed: the review started after the build ended.
-        let good = [
-            member("coding-planner", Some(1), Some(2)),
-            member("coding-builder", Some(3), Some(9)),
-            member("coding-reviewer", Some(10), Some(12)),
-        ];
-        let j = review_of(&good);
-        assert_eq!((j.ok, j.summary.as_str(), j.message.as_str()), (true, "reviewer ran after builder's last change", ""));
-        // Built again after the review (sent back): the review is out of date.
-        let mut again = good.to_vec();
-        again.push(member("coding-builder", Some(13), Some(20)));
-        let j = review_of(&again);
-        assert!(!j.ok, "{j:?}");
-        assert_eq!(j.summary, "reviewer hasn't run since builder's last change");
-        assert_eq!(
-            j.message,
-            "Your brief asks that the reviewer read the change after the last change; it hasn't since the builder's last run. Hand the change to the reviewer (coding-reviewer), then end your turn as before: platoon checks again when you stop."
-        );
-        // A review that started while the build was still running doesn't count.
-        let overlap = [member("coding-builder", Some(3), Some(9)), member("coding-reviewer", Some(5), Some(12))];
-        assert!(!review_of(&overlap).ok);
-        // Never ran at all.
-        let j = review_of(&[member("coding-builder", Some(3), Some(9))]);
-        assert_eq!((j.ok, j.summary.as_str()), (false, "reviewer never ran"));
-        // Nothing was changed: nothing to read.
-        let j = review_of(&[member("coding-planner", Some(1), Some(2))]);
-        assert_eq!((j.ok, j.summary.as_str()), (true, "nothing was changed for it to read"));
-        // Without times, the order of the runs says it.
-        assert!(review_of(&[member("coding-builder", None, None), member("coding-reviewer", None, None)]).ok);
-        assert!(!review_of(&[member("coding-reviewer", None, None), member("coding-builder", None, None)]).ok);
-        // A leader with plain names: the roles are the names.
-        assert!(
-            review(&[member("builder", Some(1), Some(2)), member("reviewer", Some(3), None)], "reviewer", &["builder".into()], "coding").ok
-        );
-        assert_eq!(role_of("coding-report-writer", "coding"), "report-writer");
-    }
-
-    const BODY: &str = "## What it should do\n\nPlain text emails.\n\nHow far: local changes only.\n\n## Acceptance\n\n- [ ] A mail client that shows only text gets the whole order\n- [ ] The HTML part is unchanged\n- [ ] \n\n## Notes\n\n- [ ] not an acceptance box\n";
-
-    #[test]
-    fn the_acceptance_check_wants_every_box_ticked_with_how() {
-        assert_eq!(acceptance_lines(BODY), ["A mail client that shows only text gets the whole order", "The HTML part is unchanged"]);
-        let all = "Done on task/3.\n\n- [x] A mail client that shows only text gets the whole order: a test renders the text part\n- [X] The HTML part is unchanged - its snapshot test still passes\n";
-        let j = acceptance(BODY, Some(all));
-        assert_eq!((j.ok, j.summary.as_str()), (true, "2 of 2 ticked, with how"));
-        // Loose: case, punctuation and a word or two of difference.
-        let loose = "* [x] a mail client showing only text gets the whole order! checked by hand\n1. [x] the html part is unchanged, see the diff\n";
-        assert!(acceptance(BODY, Some(loose)).ok, "{:?}", acceptance(BODY, Some(loose)));
-        // One not ticked, one ticked without how.
-        let one = "- [x] A mail client that shows only text gets the whole order: tested\n- [ ] The HTML part is unchanged: not yet\n";
-        let j = acceptance(BODY, Some(one));
-        assert_eq!((j.ok, j.summary.as_str()), (false, "1 of 2 ticked; not ticked: \"The HTML part is unchanged\""));
-        assert!(j.message.starts_with("Your brief asks that every acceptance box is ticked, with how. Not ticked in your result, with how it was shown:\n\n- [ ] The HTML part is unchanged\n"), "{}", j.message);
-        assert!(j.message.contains("`- [x] <the check>: <how it was shown>`"), "{}", j.message);
-        let no_how = "- [x] A mail client that shows only text gets the whole order\n- [x] The HTML part is unchanged\n";
-        assert_eq!(
-            acceptance(BODY, Some(no_how)).summary,
-            "0 of 2 ticked; not ticked: \"A mail client that shows only text gets the whole order\", \"The HTML part is unchanged\""
-        );
-        assert_eq!(acceptance(BODY, None).summary, "no result yet to tick them in");
-        // No acceptance section: every checkbox counts; none at all (the template's blanks): nothing to check.
-        assert_eq!(acceptance_lines("- [ ] one\n- [x] two\n"), ["one", "two"]);
-        assert!(acceptance(crate::tickets::TEMPLATE, None).ok);
-        assert_eq!(acceptance(crate::tickets::TEMPLATE, None).summary, "the task has no acceptance boxes");
-    }
-
-    #[test]
-    fn each_kind_of_check_is_told_to_the_squad_its_own_number_of_times_then_needs_you() {
-        // The tests: twice, then you. The review and the acceptance boxes: once, then you.
-        assert_eq!((fixes_for(TESTS), fixes_for(REVIEW), fixes_for(ACCEPTANCE)), (2, 1, 1));
-        for kind in [REVIEW, ACCEPTANCE] {
-            assert_eq!(then_for(kind, true, 1, true, true), CheckThen::Fix, "{kind}");
-            assert_eq!(then_for(kind, true, 2, true, true), CheckThen::NeedsYou(still_fails(kind)), "{kind}");
-            assert_eq!(then_for(kind, true, 3, true, true), CheckThen::Keep, "{kind}: told already");
-            assert_eq!(then_for(kind, true, 1, true, false), CheckThen::NeedsYou(failed_not_running(kind)), "{kind}");
-            assert_eq!(then_for(kind, false, 1, true, true), CheckThen::Keep, "{kind}: a pass");
-            assert_eq!(then_for(kind, true, 1, false, true), CheckThen::Keep, "{kind}: moved on");
-        }
-        assert_eq!(then_for(TESTS, true, 2, true, true), CheckThen::Fix);
-        assert_eq!(then_for(TESTS, true, 3, true, true), CheckThen::NeedsYou(STILL_FAIL.into()));
-        let runs = |kinds: &[(&str, bool)]| -> Vec<CheckRun> {
-            kinds.iter().map(|(k, ok)| CheckRun { kind: (*k).into(), ok: *ok, ..CheckRun::default() }).collect()
-        };
-        let mixed = runs(&[(TESTS, false), (REVIEW, false), (TESTS, false), (REVIEW, true), (ACCEPTANCE, false)]);
-        assert_eq!(
-            (next_try_of(&mixed, TESTS), next_try_of(&mixed, REVIEW), next_try_of(&mixed, ACCEPTANCE)),
-            (3, 1, 2),
-            "each kind its own"
-        );
-    }
-
-    #[test]
-    fn only_the_three_stops_at_the_end_of_the_work_are_followed_by_a_check() {
-        let stop = |msg: &str, running: bool| stop_of(&crate::squads::parse_end_line(msg), running);
-        assert_eq!(stop("Done on task/3.\nSQUAD: question - Shall I close this task?", false), Some(Stop::Close));
-        assert_eq!(stop("SQUAD: question - shall i close this ticket", false), Some(Stop::Close), "the old word, any case");
-        assert_eq!(stop("SQUAD: ready to publish - push task/3", false), Some(Stop::Publish));
-        assert_eq!(stop("Pushed.\nSQUAD: done", false), Some(Stop::Done));
-        for other in ["SQUAD: question - which page?", "SQUAD: blocked - no database", "SQUAD: working", "SQUAD: plan ready", "no line"] {
-            assert_eq!(stop(other, false), None, "{other}");
-        }
-        assert_eq!(stop("SQUAD: done", true), None, "members still running: not the end");
-        assert_eq!((Stop::Close.id(), Stop::Publish.id(), Stop::Done.id()), ("close", "publish", "done"));
+    fn the_done_when_boxes_are_the_ones_under_their_heading_as_written() {
+        let body = "## What it should do\n\n- [ ] not a box of done when\n\n## Done when\n\n- [x] The page loads\n- [ ] A test covers it\n- [ ] \n\n## Notes\n- [ ] after\n";
+        assert_eq!(done_when(body), [(true, "The page loads".to_string()), (false, "A test covers it".to_string())]);
+        assert!(done_when(crate::tickets::TEMPLATE).is_empty(), "the template's empty boxes");
+        assert!(done_when("- [ ] no heading").is_empty());
     }
 
     #[test]
@@ -867,101 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn the_retry_rule_tells_the_squad_twice_then_needs_you_then_leaves_it_to_the_user() {
-        assert_eq!(next_try(&[]), 1);
-        assert_eq!(next_try(&[check(true, false)]), 1, "after a pass");
-        assert_eq!(next_try(&[check(false, false)]), 2, "after one failure");
-        assert_eq!(
-            next_try(&[check(true, false), check(false, false), check(false, true), check(false, false)]),
-            3,
-            "a skip counts neither way"
-        );
-        assert_eq!(next_try(&[check(false, false), check(true, false)]), 1, "a pass starts again");
-        // A pass, and a run that wasn't done, change nothing.
-        assert_eq!(then(false, 1, true, true), CheckThen::Keep);
-        // Fail once, twice: the squad is told and works again; with nobody to tell, the user is.
-        assert_eq!(then(true, 1, true, true), CheckThen::Fix);
-        assert_eq!(then(true, 2, true, true), CheckThen::Fix);
-        assert_eq!(then(true, 1, true, false), CheckThen::NeedsYou(FAILED_NOT_RUNNING.into()));
-        // The third failure: the user.
-        assert_eq!(then(true, 3, true, true), CheckThen::NeedsYou(STILL_FAIL.into()));
-        assert_eq!(then(true, 3, true, false), CheckThen::NeedsYou(STILL_FAIL.into()));
-        // After that the user has been told: the task stays as the leader left it.
-        assert_eq!(then(true, 4, true, true), CheckThen::Keep);
-        // A task that moved on (the user wrote to it, or the squad stopped again) only keeps the result.
-        assert_eq!(then(true, 1, false, true), CheckThen::Keep);
-    }
-
-    #[test]
-    fn the_typed_message_says_what_ran_where_and_the_last_thirty_lines() {
-        let output: String = (1..=50).map(|i| format!("line {i}\n")).collect();
-        let ran = Ran { summary: "line 50".into(), output, ..Ran::default() };
-        let m = typed_message("cargo test", "/home/u/code/shop-worktrees/task-5", &ran);
-        let mut lines = m.lines();
-        assert_eq!(lines.next(), Some("The tests failed when platoon ran `cargo test` in /home/u/code/shop-worktrees/task-5:"));
-        assert!(m.contains("```\nline 21\n") && m.contains("line 50\n```"), "{m}");
-        assert!(!m.contains("line 20\n"), "only the last 30 lines: {m}");
-        assert_eq!(m.lines().filter(|l| l.starts_with("line ")).count(), TAIL_LINES);
-        assert!(m.ends_with("Fix what makes them fail, then end your turn as before: platoon runs them again when you stop."), "{m}");
-        // A timeout says so after what it wrote; with no output, the summary stands in for it.
-        let late = Ran { summary: "timed out after 10 minutes".into(), output: "waiting\n".into(), timed_out: true, ..Ran::default() };
-        assert!(typed_message("make", "/w", &late).contains("```\nwaiting\n```\n(timed out after 10 minutes)\n"));
-        let quiet = Ran { summary: "failed with exit code 1, with nothing to say".into(), ..Ran::default() };
-        assert!(typed_message("make", "/w", &quiet).contains(":\n\n(failed with exit code 1, with nothing to say)\n"));
-        // A very long line is cut; colors are taken out.
-        let long = Ran { output: format!("\u{1b}[31m{}\u{1b}[0m\n", "x".repeat(5000)), ..Ran::default() };
-        let m = typed_message("make", "/w", &long);
-        assert!(m.contains(&format!("```\n{}…\n```", "x".repeat(399))), "{}", m.len());
-    }
-
-    fn task(folders: &[&str]) -> Ticket {
-        Ticket { number: 5, folders: folders.iter().map(|f| f.to_string()).collect(), ..Ticket::default() }
-    }
-
-    #[test]
-    fn the_check_runs_in_the_tasks_copy_or_its_branch_in_the_checkout_while_head_is_still_on_it() {
-        let d = dir("place");
-        let copy = d.join("shop-worktrees/task-5/web");
-        fs::create_dir_all(&copy).unwrap();
-        let none = |_: &Path| -> Option<String> { panic!("no git asked for a copy") };
-        // The first folder with a copy: its copy, and the task-5 folder as the one no other session may be in.
-        let mut t = task(&["/home/u/notes", "/home/u/shop/web"]);
-        t.worktrees.push(Worktree {
-            folder: "/home/u/shop/web".into(),
-            path: copy.to_string_lossy().into(),
-            branch: "task/5".into(),
-            ..Worktree::default()
-        });
-        assert!(has_place(&t));
-        assert_eq!(place(&t, &none), Some(Place::Run { folder: copy.clone(), root: d.join("shop-worktrees/task-5") }));
-        // A copy that is gone: not run, said why.
-        fs::remove_dir_all(d.join("shop-worktrees")).unwrap();
-        assert!(matches!(place(&t, &none), Some(Place::Skip { why, .. }) if why == "its copy of the folder isn't there any more"));
-        // A removed copy is no place; a folder outside git is none either.
-        t.worktrees[0].removed = Some(1);
-        assert!(!has_place(&t));
-        assert_eq!(place(&t, &none), None);
-        // A branch in the user's own checkout: only while it is still on the task's branch.
-        let shop = d.join("shop");
-        fs::create_dir_all(&shop).unwrap();
-        let mut t = task(&[&shop.to_string_lossy()]);
-        t.works_on.push(WorksOn { folder: shop.to_string_lossy().into(), how: How::Branch, lands_on: "main".into() });
-        assert!(has_place(&t));
-        let on = |b: &'static str| move |_: &Path| Some(b.to_string());
-        assert_eq!(place(&t, &on("task/5")), Some(Place::Run { folder: shop.clone(), root: shop.clone() }));
-        assert_eq!(
-            place(&t, &on("main")),
-            Some(Place::Skip { folder: shop.clone(), why: "your checkout of shop isn't on task/5 any more".into() })
-        );
-        assert!(matches!(place(&t, &|_: &Path| None), Some(Place::Skip { .. })), "a detached HEAD, or git can't say");
-        // Another session open in the copy (or a folder inside it) keeps the check out; one in a folder above doesn't.
-        let root = Path::new("/home/u/shop-worktrees/task-5");
-        assert!(open_there(root, &[PathBuf::from("/home/u/shop-worktrees/task-5/web")]));
-        assert!(!open_there(root, &[PathBuf::from("/home/u"), PathBuf::from("/home/u/shop-worktrees/task-50")]));
-    }
-
-    #[test]
-    fn the_environment_is_the_leaders_less_platoons_own_variables() {
+    fn the_environment_is_the_sessions_less_platoons_own_variables() {
         let vars = [("PATH", "/usr/bin"), ("HOME", "/home/u"), ("PLATOON_CONFIG_DIR", "/x"), ("PLATOON_IDLE_SECS_PER_MINUTE", "1")]
             .into_iter()
             .chain([("CLAUDE_CODE_SESSION_ID", "s"), ("CLAUDECODE", "1"), ("ANTHROPIC_API_KEY", "k"), ("CLAUDE_CONFIG_DIR", "/c")])

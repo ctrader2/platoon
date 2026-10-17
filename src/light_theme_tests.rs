@@ -454,25 +454,6 @@ fn the_attached_views_footer_and_session_in_a_light_theme() {
 }
 
 #[test]
-fn a_brief_in_a_light_theme() {
-    let (_w, mut app, _) = light_world("light-rail", "Rosé Pine Dawn");
-    let t = app.theme.clone();
-    key(&mut app, KeyCode::Char('4'));
-    assert!(app.squads_tab_showing());
-    let mut term = Terminal::new(TestBackend::new(130, 34)).unwrap();
-    let shown = draw(&mut term, &app);
-    assert!(shown.contains("1. planner: Reads the task") && !shown.contains("◉"), "the numbered steps: {shown}");
-    let ls = lines(&term);
-    let (y, x) = find(&ls, "1. planner").unwrap();
-    assert_eq!((ls[y][x].fg, ls[y][x].bg), (t.dim, t.bg), "the step's number");
-    let (hy, hx) = find(&ls, "What it does").unwrap();
-    assert_eq!((ls[hy][hx].fg, ls[hy][hx].bg), (t.accent, t.bg), "a heading");
-    assert!(ls.iter().flatten().any(|c| c.symbol() == "│" && c.fg == t.border), "the panes' frames, in the border color");
-    assert!(ls.iter().flatten().any(|c| c.symbol() == "▎" && c.fg == t.accent && c.bg == t.surface), "the selected squad");
-    assert_legible(&term, &app.theme, "the Briefs tab");
-}
-
-#[test]
 fn every_light_built_in_draws_every_main_screen_legibly() {
     let (w, mut app, project) = light_world("light-sweep", "Catppuccin Latte");
     let path = crate::projects::notes_path(&w.config, &project);
@@ -504,7 +485,7 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
             (&[c('3')], "projects", "Web shop"),
             (&[c('3'), c('c')], "a project's color", "╭ Color and badge"),
             (&[c('3'), c('d')], "deleting a project", "╭ Delete project"),
-            (&[c('4')], "briefs", "[Briefs]"),
+            (&[c('2')], "tasks", "No tasks yet"),
         ];
         for (keys, what, sign) in screens {
             app.mode = Mode::List;
@@ -562,7 +543,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
         (&[c('s')], "settings", "╭ Settings"),
         (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
         (&[c('n')], "the folder picker", "pick a folder"),
-        (&[c('4')], "briefs", "[Briefs]"),
+        (&[c('2')], "tasks", "No tasks yet"),
     ];
     for (keys, what, sign) in screens {
         app.mode = Mode::List;

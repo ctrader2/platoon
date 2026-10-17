@@ -80,8 +80,8 @@ marks. See [Environment variables](settings-and-keys.md#environment-variables).
 can't ask for a new window. See [Opening the editor](sessions.md#opening-the-editor-v).
 
 **A task's copy of the folder (its worktree) wasn't removed.** It has changes not yet committed, or it was opened in an
-editor with a window of its own. `w` on the task removes it after asking. See
-[Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
+editor with a window of its own. Commit or throw away the changes, or remove it with `git worktree remove <folder>`;
+its branch stays either way. See [After the work](tasks-and-squads.md#after-the-work).
 
 ## Projects and notes
 
@@ -106,51 +106,18 @@ paused (as for the hand-off); the session has no folder platoon can find; its pr
 another conversation's tasks are being drafted (one at a time); or Claude found no work left for later in it. See
 [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
 
-**`alt+n` does nothing in a session.** On macOS the terminal's Option key must be set to send alt (or press the back key
-and `t` on the session's row). Elsewhere, check `keys.json` for a `draft_tasks` of your own, and that the terminal
-doesn't keep alt with that letter for a menu. See [Keys](settings-and-keys.md#keys-back-and-quit).
+**`s` doesn't start a task.** It says why in one line: the squad picked has something wrong in its file (the list
+shows **needs fixing**, and what), the task was changed meanwhile, or its worktree couldn't be made (the branch name
+`task/<N>` is already taken in the repository, or the folder `<repo>-worktrees/task-<N>` is already there: rename or move
+it, then try again). See [Starting a task](tasks-and-squads.md#starting-a-task).
 
-**`S` refuses to hand a task to a squad.** The task must be one nobody has yet (Can start, or Needs a folder) and not
-waiting for another task, its folders that aren't in git must be free (one task at a time there: the line names the
-other task), and the squad must have nothing to fix on the Briefs tab. If the commander said the squad doesn't fit, pick
-the same squad again for "Hand it anyway?". "Session limit has been reached" means the commander couldn't run (today's
-token limit, or a pause after a failure). See [Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
-
-**"A new branch in your checkout" isn't offered.** The checkout has changes not yet committed, another open task already
-works there on a branch, or a session of yours is running in it; the line under the folder says which. A copy (the
-usual) works regardless. See [The hand-over](tasks-and-squads.md#the-hand-over).
-
-**The task says its branch name `task/<N>` is taken.** Something else already uses that branch name in the repository;
-platoon stops rather than reuse it. Rename or remove that branch, then hand the task over again. See
-[Handing a task to a squad](tasks-and-squads.md#handing-a-task-to-a-squad).
-
-**The task says there is no branch called what it lands on.** The branch was renamed or deleted since the hand-over:
-press `S`, `l` on the folder's line, and type one git knows. See [The hand-over](tasks-and-squads.md#the-hand-over).
-
-**A task says "Waiting for your OK on a command".** The leader is at Claude Code's permission prompt: open the task
-and answer it in the squad's session. See
-[How the task's state follows the squad](tasks-and-squads.md#how-the-tasks-state-follows-the-squad).
-
-**A task says "Working · Waiting for a free squad".** Every place is taken; it starts by itself when one frees. See
-[How many squads work at once](tasks-and-squads.md#how-many-squads-work-at-once).
-
-**A task Needs you and says it wants to publish.** Press `p` on the task to let it, or hand tasks over as "works and
-publishes" when you don't want to be asked. See
-[Anything other people can see asks you first](tasks-and-squads.md#anything-other-people-can-see-asks-you-first).
-
-**The status line said "Moved Web shop's tickets to tasks.json."** platoon renamed that project's task files once (tasks
-were called tickets before 1.0); the old list is kept beside them as `tickets.json.bak`. See
-[Where tasks are kept](tasks-and-squads.md#where-tasks-are-kept).
+**A task says "asks permission".** Its session is at Claude Code's permission prompt: `enter` opens the session, where
+the question is. See [How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).
 
 **A task's tests never run.** The project needs a test command (`T` on its screen; a suggestion from `CLAUDE.md` is never
-run until you save it), the task a copy of a folder in git or a branch in your checkout, and a platoon window open: they
-run when the squad says it is finished (asks to close the task, wants to publish, or is done), not before. See
-[Checks](tasks-and-squads.md#checks).
+run until you save it). They run when the task's session stops, not before. See
+[How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).
 
-**A task's tests say "not run".** A session of yours was open in the folder they would run in, or your checkout was no
-longer on the task's branch. They run again the next time the squad finishes; the line says which. See
-[Checks](tasks-and-squads.md#checks).
-
-**A task says "The tests still fail after the squad tried twice".** platoon handed the failure back to the squad twice and
-they still fail: read `tests-<try>.log` in the task's own folder (`v` opens it), then tell the squad what to do with `y`.
-See [Checks](tasks-and-squads.md#checks).
+**A task says "the tests still fail".** platoon handed the failure back to the session twice and they still fail: read
+`tests.log` in the task's own folder, then tell the session what to do (`enter` opens it). See
+[How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).

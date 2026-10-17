@@ -1,7 +1,6 @@
 //! What git can say about a folder, for the hand-off document: its branch and how it stands against its upstream,
 //! what is not committed yet, the last commit, and what was committed since a moment (the session's start); and for a
-//! task's hand-over: the repository's default branch (`default_branch`), whether a branch exists and whether the
-//! checkout is clean, and which branch a checkout is on (`current_branch`, before platoon runs a task's tests there).
+//! task's worktree: the repository's default branch (`default_branch`) and whether a branch exists.
 //! Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never
 //! `fetch`: the upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
 //! refresh is written, and every command shares one short time budget.
@@ -219,11 +218,6 @@ pub fn default_branch(program: &str, dir: &Path, deadline: Instant) -> Option<St
     run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| clean_path(b.trim())).filter(|b| !b.is_empty())
 }
 
-/// The branch checked out in `dir` (None on a detached HEAD, outside a repository, or when git can't say in time).
-pub fn current_branch(program: &str, dir: &Path, deadline: Instant) -> Option<String> {
-    run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| b.trim().to_string()).filter(|b| !b.is_empty())
-}
-
 /// Is `name` a branch (or anything else git finds a commit by) in `dir`'s repository? Checked with
 /// `git rev-parse --verify <name>^{commit}`; a name that could be taken for an option, or an empty one, is not.
 pub fn branch_exists(program: &str, dir: &Path, name: &str, deadline: Instant) -> bool {
@@ -232,12 +226,6 @@ pub fn branch_exists(program: &str, dir: &Path, name: &str, deadline: Instant) -
         return false;
     }
     run(program, dir, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")], deadline).is_some_and(|o| !o.trim().is_empty())
-}
-
-/// Has the checkout in `dir` nothing uncommitted (no changed, staged or new files git doesn't ignore)? None when git
-/// can't say in time: never taken to mean clean.
-pub fn is_clean(program: &str, dir: &Path, deadline: Instant) -> Option<bool> {
-    run(program, dir, &["status", "--porcelain", "--untracked-files=normal"], deadline).map(|o| o.trim().is_empty())
 }
 
 /// `git status --porcelain=v1 -z`: `XY path\0`, and for a rename or copy `XY new\0old\0`.
@@ -658,9 +646,6 @@ mod tests {
                 && !branch_exists("git", &a, "--help", soon())
                 && !branch_exists("git", &a, "a b", soon())
         );
-        assert_eq!(is_clean("git", &a, soon()), Some(true));
-        fs::write(a.join("g"), "new").unwrap();
-        assert_eq!(is_clean("git", &a, soon()), Some(false), "a new file git doesn't ignore");
         // With a `main`: main, even from another branch.
         run(&a, &["branch", "main"]);
         assert_eq!(default_branch("git", &a, soon()).as_deref(), Some("main"));
@@ -676,6 +661,5 @@ mod tests {
         fs::create_dir_all(&plain).unwrap();
         assert_eq!(default_branch("git", &plain, soon()), None);
         assert_eq!(default_branch("git", &a, Instant::now()), None);
-        assert_eq!(is_clean("git", &plain, soon()), None);
     }
 }

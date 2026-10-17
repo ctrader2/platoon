@@ -113,3 +113,37 @@ x11rb-protocol, percent-encoding, petgraph, cc, pkg-config, shlex, find-msvc-too
 wayland-client, wayland-protocols, wayland-protocols-wlr, wayland-scanner, wayland-sys, os_pipe, quick-xml,
 tree_magic_mini), MIT/Apache-2.0 (wl-clipboard-rs) and Apache-2.0 (gethostname). Versions are pinned in `Cargo.lock`.
 (The macOS and Windows crates arboard uses on those systems are not part of a Linux build.)
+
+## The built-in squads
+
+The six built-in squads in `src/squads/` (Feature, Bug fix, Refactor, Explain, Review, Docs) are adapted from the
+playbooks and skills of pstack: Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), as ported to
+Claude Code by Michael Denyer ([pstack-claude](https://github.com/michael-denyer/pstack-claude)). platoon took the
+substance of its `poteto-mode` skill and its feature, bug-fix, refactoring and investigation playbooks, and of its
+`how`, `interrogate`, `technical-writing` and `unslop` skills, and rewrote and renamed it as squads. No text was taken
+from the skills that pstack-claude marks as Cursor's. pstack is published under this license:
+
+```
+MIT License
+
+Copyright (c) 2026 Lauren Tan
+Copyright (c) 2026 Michael Denyer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```

@@ -3,19 +3,19 @@
 //!
 //! What it does, in this order, so a "no" leaves everything as it was:
 //! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes), the
-//!    `/to-tickets` skill, the sessions platoon's hosts are running, the worktrees tickets recorded, and the folders.
+//!    sessions platoon's hosts are running, the worktrees tasks recorded, and the folders.
 //! 2. Ask: whether to stop the running sessions (no: stop here, nothing changed; `--stop-sessions` says yes), then
-//!    whether to delete the config folder (the user's projects, notes, tickets and settings: default keep; `--all`
+//!    whether to delete the config folder (the user's projects, notes, tasks and settings: default keep; `--all`
 //!    deletes it without asking). Answers come from the terminal (`/dev/tty`, so `curl ... | sh` can still ask); with
 //!    no terminal the sessions question is a no and the config folder is kept.
 //! 3. Act: stop the sessions (SIGTERM to the `claude` each host runs, as the app's own stop does), take the entries out
-//!    of settings.json (backup first, as setup does), remove the skill (a copy the user changed is kept as
-//!    `SKILL.md.platoon-bak`), delete the cache folder, the config folder when asked, and older platoons' leftovers.
-//! 4. Say what was removed and what was kept, with the git commands for the ticket worktrees (never deleted).
+//!    of settings.json (backup first, as setup does), delete the cache folder, the config folder when asked, and
+//!    older platoons' leftovers.
+//! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
 //! Claude Code's conversations are never touched.
 
-use crate::{claude, setup, tickets, totickets, versions};
+use crate::{claude, setup, tickets, versions};
 use serde_json::Value;
 use std::{
     fs,
@@ -24,10 +24,10 @@ use std::{
 };
 
 pub const USAGE: &str = "usage: platoon uninstall [--all] [--stop-sessions]
-  Takes platoon out of Claude Code (its status line, hooks and /to-tickets skill), deletes its cache
-  folder, and asks before deleting your projects, notes, tickets and settings. Claude Code's
+  Takes platoon out of Claude Code (its status line and hooks), deletes its cache folder, and
+  asks before deleting your projects, notes, tasks and settings. Claude Code's
   conversations are never touched. The program itself is removed the way you installed it.
-  --all             also delete your projects, notes, tickets and settings, without asking
+  --all             also delete your projects, notes, tasks and settings, without asking
   --stop-sessions   stop the sessions platoon is running without asking (otherwise it asks, and
                     without a terminal it stops and changes nothing)";
 
@@ -172,12 +172,12 @@ pub fn running_sessions(cache: &Path, root: &Path) -> Vec<Running> {
     out
 }
 
-/// A ticket's worktree or branch that is still there: listed with the git commands that remove it, never deleted.
+/// A task's worktree or branch that is still there: listed with the git commands that remove it, never deleted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeptWorktree {
     pub project: String,
     pub number: u32,
-    /// The ticket's folder in the repository (where `git -C` runs).
+    /// The task's folder in the repository (where `git -C` runs).
     pub folder: String,
     /// The worktree's folder, when it is still there.
     pub dir: Option<PathBuf>,
@@ -195,81 +195,40 @@ impl KeptWorktree {
     }
 }
 
-/// The worktree folder platoon made for task `number` that `path` (the squad's place inside it) is in:
-/// `<parent>/<repo>-worktrees/task-<N>`, or `ticket-<N>` from before the rename (`squads::worktree_dir`).
+/// The worktree folder platoon made for task `number` that `path` (the session's place inside it) is in:
+/// `<parent>/<repo>-worktrees/task-<N>` (`worktrees::worktree_dir`).
 fn worktree_root(path: &Path, number: u32) -> Option<PathBuf> {
-    let want = [format!("task-{number}"), format!("ticket-{number}")];
+    let want = format!("task-{number}");
     path.ancestors()
         .find(|a| {
-            a.file_name().is_some_and(|n| want.iter().any(|w| *w == n.to_string_lossy()))
+            a.file_name().is_some_and(|n| n.to_string_lossy() == want)
                 && a.parent().and_then(Path::file_name).is_some_and(|p| p.to_string_lossy().ends_with("-worktrees"))
         })
         .map(Path::to_path_buf)
 }
 
-/// The worktrees and branches the tickets in `config` recorded that are still there (git is asked, read-only, whether
+/// The worktrees and branches the tasks in `config` recorded that are still there (git is asked, read-only, whether
 /// a branch is; when it can't say, the branch is listed).
 pub fn kept_worktrees(config: &Path, git: &str) -> Vec<KeptWorktree> {
     let mut out: Vec<KeptWorktree> = Vec::new();
     for (project, t) in tickets::every_ticket(config) {
-        for w in &t.worktrees {
-            if !Path::new(&w.folder).is_dir() || w.branch.is_empty() {
-                continue;
-            }
-            let dir = worktree_root(Path::new(&w.path), t.number).filter(|d| d.is_dir());
-            let branch_there = || {
-                crate::squads::git(git, Path::new(&w.folder), &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", w.branch)])
-                    .map(|_| true)
-                    // No git to ask: listed, in case it is there.
-                    .unwrap_or_else(|e| e.starts_with("couldn't run git"))
-            };
-            if dir.is_none() && !branch_there() {
-                continue;
-            }
-            let k = KeptWorktree { project: project.clone(), number: t.number, folder: w.folder.clone(), dir, branch: w.branch.clone() };
-            // Two folders of one repository share one worktree: once is enough.
-            if !out.iter().any(|o| {
-                o.number == k.number
-                    && o.project == k.project
-                    && o.dir == k.dir
-                    && o.branch == k.branch
-                    && (k.dir.is_some() || o.folder == k.folder)
-            }) {
-                out.push(k);
-            }
+        let (Some(w), Some(folder)) = (&t.worktree, &t.folder) else { continue };
+        if !Path::new(folder).is_dir() || w.branch.is_empty() {
+            continue;
         }
+        let dir = worktree_root(Path::new(&w.path), t.number).filter(|d| d.is_dir());
+        let branch_there = || {
+            crate::worktrees::git(git, Path::new(folder), &["rev-parse", "--verify", "--quiet", &format!("refs/heads/{}", w.branch)])
+                .map(|_| true)
+                // No git to ask: listed, in case it is there.
+                .unwrap_or_else(|e| e.starts_with("couldn't run git"))
+        };
+        if dir.is_none() && !branch_there() {
+            continue;
+        }
+        out.push(KeptWorktree { project: project.clone(), number: t.number, folder: folder.clone(), dir, branch: w.branch.clone() });
     }
     out
-}
-
-/// What is in the way of the `/to-tickets` skill.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Skill {
-    Absent,
-    /// platoon's own copy (as written now, or an older one platoon wrote): removed.
-    Ours,
-    /// The user changed it: kept as `SKILL.md.platoon-bak` (or the next free name), the original removed.
-    Changed,
-    /// Something there platoon can't read: left alone.
-    Unreadable,
-}
-
-pub fn skill_state(root: &Path, config: &Path) -> Skill {
-    match totickets::installed(root, config) {
-        totickets::Installed::No | totickets::Installed::Removed => Skill::Absent,
-        totickets::Installed::Yes | totickets::Installed::OutOfDate => Skill::Ours,
-        totickets::Installed::Changed if fs::read_to_string(totickets::skill_path(root)).is_ok() => Skill::Changed,
-        totickets::Installed::Changed => Skill::Unreadable,
-    }
-}
-
-/// `SKILL.md.platoon-bak`, or `.platoon-bak.2`, ... when that is taken (a copy setup's `--replace` kept).
-fn free_backup(root: &Path) -> PathBuf {
-    let first = totickets::backup_path(root);
-    if !first.exists() {
-        return first;
-    }
-    (2..).map(|n| PathBuf::from(format!("{}.{n}", first.display()))).find(|p| !p.exists()).unwrap_or(first)
 }
 
 // ---- the plan, asked, then carried out --------------------------------------------------------------------------------
@@ -278,7 +237,6 @@ fn free_backup(root: &Path) -> PathBuf {
 pub struct Plan {
     settings: Option<(PathBuf, Value, setup::TakenOut)>,
     settings_error: Option<String>,
-    skill: Skill,
     pub running: Vec<Running>,
     worktrees: Vec<KeptWorktree>,
     config_there: bool,
@@ -302,7 +260,6 @@ pub fn look(places: &Places, git: &str) -> Plan {
     Plan {
         settings,
         settings_error,
-        skill: skill_state(&places.root, &places.config),
         running: running_sessions(&places.cache, &places.root),
         worktrees: kept_worktrees(&places.config, git),
         config_there: places.config.exists(),
@@ -473,33 +430,6 @@ pub fn run(
         }
     }
 
-    let skill_path = totickets::skill_path(&places.root);
-    let skill_dir = skill_path.parent().map(Path::to_path_buf).unwrap_or_default();
-    match plan.skill {
-        Skill::Absent => {}
-        Skill::Ours => match fs::remove_file(&skill_path) {
-            Ok(()) => {
-                let _ = fs::remove_dir(&skill_dir); // only when nothing else is in it
-                removed.push(format!("the /to-tickets skill ({})", skill_dir.display()));
-            }
-            Err(e) => failed.push(format!("couldn't remove {}: {e}", skill_path.display())),
-        },
-        Skill::Changed => {
-            let backup = free_backup(&places.root);
-            match fs::rename(&skill_path, &backup) {
-                Ok(()) => {
-                    removed.push(format!("the /to-tickets skill ({})", skill_path.display()));
-                    kept.push(format!("your changed copy of the /to-tickets skill, as {} (delete it when you like)", backup.display()));
-                }
-                Err(e) => failed.push(format!("couldn't move {} aside: {e}", skill_path.display())),
-            }
-        }
-        Skill::Unreadable => kept.push(format!("{}: something platoon can't read is there, so it was left alone", skill_path.display())),
-    }
-    if skill_dir.is_dir() && plan.skill != Skill::Changed {
-        kept.push(format!("{}: other files are in it, so it was left", skill_dir.display()));
-    }
-
     let remove_dir = |dir: &Path, what: &str, removed: &mut Vec<String>, failed: &mut Vec<String>| -> bool {
         if !dir.exists() {
             return false;
@@ -640,7 +570,6 @@ mod tests {
             list.push(json!({"hooks": [{"type": "command", "command": format!("/opt/x/bin/platoon {args}")}]}));
         }
         fs::write(p.root.join("settings.json"), serde_json::to_string_pretty(&v).unwrap() + "\n").unwrap();
-        totickets::install_for_test(&p.root, &p.config);
         // setup knows each one as its own (pointing at a platoon that isn't on this computer).
         assert!(setup::check(&p.root).iter().all(|s| matches!(s, setup::State::Broken(_))));
     }
@@ -671,7 +600,6 @@ mod tests {
         for want in ["the status line", "the session guard hook", "the project notes hook", "the notes updates hook", "Removed:"] {
             assert!(said.contains(want), "{want}: {said}");
         }
-        assert!(!p.root.join("skills/to-tickets").exists(), "the skill went too: {said}");
     }
 
     #[test]
@@ -756,35 +684,6 @@ mod tests {
         assert!(said.contains("isn't valid JSON") && said.contains("Nothing was changed"), "{said}");
         assert_eq!(fs::read_to_string(p.root.join("settings.json")).unwrap(), "{ not json");
         assert!(p.cache.exists());
-    }
-
-    #[test]
-    fn the_skill_goes_but_a_copy_the_user_changed_is_kept_beside_it() {
-        let p = places(&tmp("skill"));
-        set_up(&p, json!({}));
-        let skill = totickets::skill_path(&p.root);
-        // Changed by the user, with an older copy setup's --replace kept already: neither is lost.
-        fs::write(&skill, "my own skill").unwrap();
-        fs::write(totickets::backup_path(&p.root), "an older copy of mine").unwrap();
-        let (code, said) = uninstall(&p, &Options::default(), None, &mut no_stop());
-        assert_eq!(code, 0, "{said}");
-        assert!(!skill.exists(), "Claude Code no longer finds the skill");
-        assert_eq!(fs::read_to_string(totickets::backup_path(&p.root)).unwrap(), "an older copy of mine");
-        let kept = PathBuf::from(format!("{}.2", totickets::backup_path(&p.root).display()));
-        assert_eq!(fs::read_to_string(&kept).unwrap(), "my own skill");
-        assert!(said.contains("your changed copy of the /to-tickets skill") && said.contains(&kept.display().to_string()), "{said}");
-        // platoon's own copy, and a file of the user's beside it: the copy goes, the folder and their file stay.
-        let p = places(&tmp("skill-extra"));
-        set_up(&p, json!({}));
-        fs::write(skill_path_dir(&p).join("notes.txt"), "mine").unwrap();
-        let (_, said) = uninstall(&p, &Options::default(), None, &mut no_stop());
-        assert!(!totickets::skill_path(&p.root).exists());
-        assert_eq!(fs::read_to_string(skill_path_dir(&p).join("notes.txt")).unwrap(), "mine");
-        assert!(said.contains("other files are in it"), "{said}");
-    }
-
-    fn skill_path_dir(p: &Places) -> PathBuf {
-        totickets::skill_path(&p.root).parent().unwrap().to_path_buf()
     }
 
     #[test]
@@ -883,7 +782,7 @@ mod tests {
             }
             assert!(!said.contains("Also delete"), "nothing more is asked after a no: {said}");
             assert_eq!(fs::read_to_string(p.root.join("settings.json")).unwrap(), before);
-            assert!(p.cache.join(format!("hosts/{pid}.json")).exists() && p.config.exists() && totickets::skill_path(&p.root).exists());
+            assert!(p.cache.join(format!("hosts/{pid}.json")).exists() && p.config.exists());
             assert!(p.cache.join("hosts/4000000001.json").exists(), "looking cleans nothing up");
         }
     }
@@ -944,7 +843,7 @@ mod tests {
     }
 
     #[test]
-    fn ticket_worktrees_and_branches_are_listed_with_their_commands_and_never_touched() {
+    fn task_worktrees_and_branches_are_listed_with_their_commands_and_never_touched() {
         let base = tmp("worktrees");
         let p = places(&base);
         let repo = base.join("repo");
@@ -953,20 +852,22 @@ mod tests {
         fs::write(repo.join("sub/a"), "a").unwrap();
         git(&repo, &["add", "."]);
         git(&repo, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "a"]);
-        let wt = base.join("repo-worktrees/ticket-3");
-        git(&repo, &["worktree", "add", "-q", "-b", "ticket/3", wt.to_str().unwrap()]);
-        git(&repo, &["branch", "ticket/5"]); // ticket 5's worktree was removed; its branch is kept
+        let wt = base.join("repo-worktrees/task-3");
+        git(&repo, &["worktree", "add", "-q", "-b", "task/3", wt.to_str().unwrap()]);
+        git(&repo, &["branch", "task/5"]); // task 5's worktree was removed; its branch is kept
         let project_dir = p.config.join("projects/p1");
         fs::create_dir_all(&project_dir).unwrap();
-        let w = |n: u32, folder: &Path, path: &Path| json!({"folder": folder, "path": path, "branch": format!("ticket/{n}")});
-        let t = |n: u32, ws: Vec<Value>| json!({"number": n, "title": format!("t{n}"), "file": format!("{n:02}.md"), "state": "done", "worktrees": ws});
+        let t = |n: u32, folder: &Path, path: &Path| {
+            json!({"number": n, "title": format!("t{n}"), "file": format!("{n:02}.md"), "state": "done", "folder": folder,
+                "worktree": {"path": path, "branch": format!("task/{n}")}})
+        };
         fs::write(
-            project_dir.join("tickets.json"),
-            json!({"next": 8, "tickets": [
-                t(3, vec![w(3, &repo.join("sub"), &wt.join("sub")), w(3, &repo, &wt)]),
-                t(5, vec![w(5, &repo, &base.join("repo-worktrees/ticket-5"))]),
-                t(6, vec![w(6, &repo, &base.join("repo-worktrees/ticket-6"))]),
-                t(7, vec![w(7, &base.join("gone"), &base.join("gone-worktrees/ticket-7"))])
+            project_dir.join("tasks.json"),
+            json!({"next": 8, "tasks": [
+                t(3, &repo.join("sub"), &wt.join("sub")),
+                t(5, &repo, &base.join("repo-worktrees/task-5")),
+                t(6, &repo, &base.join("repo-worktrees/task-6")),
+                t(7, &base.join("gone"), &base.join("gone-worktrees/task-7"))
             ]})
             .to_string(),
         )
@@ -976,9 +877,9 @@ mod tests {
         let r = sh_quote(&repo.join("sub").to_string_lossy());
         assert!(said.contains("#3 (p1):"), "{said}");
         assert!(said.contains(&format!("git -C {r} worktree remove {}", sh_quote(&wt.to_string_lossy()))), "{said}");
-        assert!(said.contains(&format!("git -C {r} branch -D ticket/3")), "{said}");
-        assert_eq!(said.matches("worktree remove").count(), 1, "one worktree, said once: {said}");
-        assert!(said.contains("#5 (p1):") && said.contains("branch -D ticket/5"), "{said}");
+        assert!(said.contains(&format!("git -C {r} branch -D task/3")), "{said}");
+        assert_eq!(said.matches("worktree remove").count(), 1, "{said}");
+        assert!(said.contains("#5 (p1):") && said.contains("branch -D task/5"), "{said}");
         assert!(!said.contains("#6") && !said.contains("#7"), "no branch, no folder: nothing to say: {said}");
         assert!(wt.join("sub/a").exists(), "never deleted");
         assert!(!p.config.exists(), "read before the config folder went");
@@ -995,8 +896,7 @@ mod tests {
         assert!(program_line(&versions::Install::Cargo, Path::new("/x")).ends_with("cargo uninstall platoon-tui"));
         assert!(program_line(&versions::Install::Homebrew, Path::new("/x")).ends_with("brew uninstall platoon"));
         assert!(program_line(&versions::Install::Other, Path::new("/a b/platoon")).contains("rm '/a b/platoon'"));
-        assert_eq!(worktree_root(Path::new("/r-worktrees/ticket-3/sub/x"), 3), Some(PathBuf::from("/r-worktrees/ticket-3")));
         assert_eq!(worktree_root(Path::new("/r-worktrees/task-3/sub/x"), 3), Some(PathBuf::from("/r-worktrees/task-3")));
-        assert_eq!(worktree_root(Path::new("/r/ticket-3/sub"), 3), None);
+        assert_eq!(worktree_root(Path::new("/r/task-3/sub"), 3), None);
     }
 }

@@ -108,7 +108,7 @@ fn a_project_is_made_renamed_and_deleted_from_the_projects_tab() {
     assert_eq!(app.selected_project().map(|p| p.name.as_str()), Some("Web shop"));
     let shown = flat(&draw(&mut term, &app));
     assert!(
-        shown.contains("1 Sessions 2 Tasks 3 Projects 4 Briefs")
+        shown.contains("1 Sessions 2 Tasks 3 Projects")
             && shown.contains("Active 1")
             && shown.contains("WS Web shop")
             && shown.contains("no sessions"),
@@ -964,15 +964,13 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     key(&mut app, KeyCode::Char('3'));
     key(&mut app, KeyCode::Enter);
     let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
-    // Without a description: one empty line between the title and the line saying how squads start, the test command's
-    // line, then the panes.
+    // Without a description: one empty line between the title and the test command's line, then the panes.
     let shown = draw(&mut term, &app);
     let top = |shown: &str| lines_with(shown, "╭ Sessions")[0];
     let title = lines_with(&shown, "Fruit")[0];
     let bare = top(&shown);
-    assert_eq!(lines_with(&shown, "Squads start")[0], title + 2, "{shown}");
-    assert_eq!(lines_with(&shown, "Tests")[0], title + 3, "{shown}");
-    assert_eq!(bare, title + 4, "{shown}");
+    assert_eq!(lines_with(&shown, "Tests")[0], title + 2, "{shown}");
+    assert_eq!(bare, title + 3, "{shown}");
     let desc = crate::projects::clean(LONG_DESC, crate::describe::MAX_CHARS);
     app.projects.set_description(&a, &desc, 1).unwrap();
     let shown = draw(&mut term, &app);
@@ -985,8 +983,8 @@ fn a_projects_screen_shows_a_long_description_in_full_with_the_panes_below_it() 
     let last = lines_with(&shown, "current")[0];
     assert!(last > first, "wrapped at 60 columns: {shown}");
     assert_eq!(first, title + 1, "{shown}");
-    assert_eq!(lines_with(&shown, "Squads start")[0], last + 1, "how squads start, on the line after it: {shown}");
-    assert_eq!(top(&shown), last + 3, "then the tests' line and the panes: {shown}");
+    assert_eq!(lines_with(&shown, "Tests")[0], last + 1, "the tests' line, on the line after it: {shown}");
+    assert_eq!(top(&shown), last + 2, "then the panes: {shown}");
     assert!(shown.contains("Sessions") && shown.contains("Notes"), "{shown}");
 }
 
@@ -1044,27 +1042,30 @@ fn the_projects_list_shows_unread_beside_the_session_counts_and_the_open_tickets
     assert!(row.contains("3 active · ● 1 unread") && !row.contains("archived") && row.contains("no tasks"), "{row}");
     assert!(colors_of(&term, &lines, " Fruit ", "● 1 unread").iter().all(|c| *c == t.ok), "{row}");
 
-    // Tickets: open ones (not Done or Cancelled), and how many of those are ready.
+    // Tasks: the open ones (not Done or Cancelled).
     let mut store = Tickets::open(&w.config, &id);
     let one = store.add(NewTicket { title: "Basket".into(), ..Default::default() }).unwrap();
-    store.add(NewTicket { title: "Totals".into(), blocked_by: vec![one], ..Default::default() }).unwrap();
+    store.add(NewTicket { title: "Totals".into(), ..Default::default() }).unwrap();
+    let set = |store: &mut Tickets, n: u32, s: State| {
+        store
+            .update(n, |t| {
+                t.state = s;
+                true
+            })
+            .unwrap();
+    };
     let done = store.add(NewTicket { title: "Logo".into(), ..Default::default() }).unwrap();
-    store.set_state(done, &State::Done).unwrap();
+    set(&mut store, done, State::Done);
     let gone = store.add(NewTicket { title: "Fax".into(), ..Default::default() }).unwrap();
-    store.set_state(gone, &State::Cancelled).unwrap();
+    set(&mut store, gone, State::Cancelled);
     app.restat_for_test();
     let lines = draw(&mut term, &app);
     let row = row_of(&lines);
-    assert!(row.contains("2 open · 1 can start") && !row.contains("no tickets"), "the second waits for the first: {row}");
-    assert!(colors_of(&term, &lines, " Fruit ", "2 open · 1 can start").iter().all(|c| *c == t.subtext), "{row}");
-    // None ready: just the open count.
-    store.set_state(one, &State::Working).unwrap();
-    app.restat_for_test();
-    let row = row_of(&draw(&mut term, &app));
     assert!(row.contains("2 open ") && !row.contains("can start"), "{row}");
+    assert!(colors_of(&term, &lines, " Fruit ", "2 open").iter().all(|c| *c == t.subtext), "{row}");
     // Only closed ones: none open.
-    store.set_state(one, &State::Done).unwrap();
-    store.set_state(one + 1, &State::Cancelled).unwrap();
+    set(&mut store, one, State::Done);
+    set(&mut store, one + 1, State::Cancelled);
     app.restat_for_test();
     assert!(row_of(&draw(&mut term, &app)).contains("no tasks"));
 
@@ -1093,7 +1094,7 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     let one = "platoon will keep project notes up to date. Start or add a session to begin.";
     let hint = "Press n to start one, or m on a session in the Sessions tab.";
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains(one) && f.contains(hint) && f.contains("No tasks yet"), "{f}");
+    assert!(f.contains(one) && f.contains(hint), "{f}");
     for gone in [
         "Every session in this project starts with these notes",
         "No notes yet",

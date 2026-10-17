@@ -3,10 +3,6 @@
 //! Every step's status is computed from the settings file itself, so "done" is always a fact about the
 //! files as they are now: `platoon` refuses to start until every step is done, running `setup` again
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists.
-//!
-//! Until 2026-10 setup also installed the `/to-tickets` Claude Code skill; platoon drafts tasks itself now (`t`), so
-//! setup neither installs it nor says anything about it. A copy an earlier platoon installed is left alone (it keeps
-//! working); `platoon setup --remove to-tickets` takes it out, and `platoon uninstall` does too.
 
 use crate::{ai, settings};
 use serde_json::{Value, json};
@@ -170,26 +166,6 @@ fn check_guard(v: &Value) -> State {
 pub fn check(root: &Path) -> Vec<State> {
     let v = read_settings(root).unwrap_or(Value::Null);
     vec![check_statusline(&v), check_guard(&v), check_notes_hook(&v), check_stop_hook(&v)]
-}
-
-/// What `platoon setup --remove` takes, by the word it takes: the `/to-tickets` skill an earlier platoon installed.
-pub const REMOVABLE: &[&str] = &[crate::totickets::NAME];
-
-/// `platoon setup --remove <what>`: take the `/to-tickets` skill an earlier platoon installed out of Claude Code's
-/// folder (setup no longer installs it). Says what happened in one line. `config` is platoon's own folder (where an
-/// earlier setup kept its record of the skill).
-pub fn remove_step(root: &Path, config: &Path, what: &str) -> Result<String, String> {
-    match what {
-        crate::totickets::NAME => {
-            let path = crate::totickets::skill_path(root);
-            Ok(if crate::totickets::remove(root, config)? {
-                format!("Removed the /to-tickets skill ({}).", path.display())
-            } else {
-                "The /to-tickets skill isn't installed, so there was nothing to remove.".to_string()
-            })
-        }
-        other => Err(format!("platoon setup can't remove \"{other}\"; it can remove: {}", REMOVABLE.join(", "))),
-    }
 }
 
 /// Every step platoon can't do without is done (the notes hook is not one of them).
@@ -591,11 +567,6 @@ mod tests {
         d
     }
 
-    /// platoon's own config folder for a test's Claude folder.
-    fn pc(root: &Path) -> PathBuf {
-        root.join("platoon-config")
-    }
-
     fn settings(root: &Path) -> Value {
         serde_json::from_str(&fs::read_to_string(root.join("settings.json")).unwrap()).unwrap()
     }
@@ -734,74 +705,12 @@ mod tests {
     }
 
     #[test]
-    fn setup_no_longer_installs_the_tasks_skill_and_leaves_one_an_earlier_platoon_installed_alone() {
-        let root = tmp("skill");
-        let skill = root.join("skills/to-tickets/SKILL.md");
-        // Nothing about it in the checklist, the report or the blocked message, and nothing written.
-        assert_eq!(STEPS.len(), 4);
-        assert!(STEPS.iter().all(|s| !s.name.contains("skill") && !s.what.contains("to-tickets")));
-        let r = run(&root).unwrap();
-        assert_eq!(r.outcomes.len(), 4);
-        let shown = render_report(&r, &root, false);
-        assert!(!shown.contains("Tasks skill") && !shown.contains("to-tickets") && !shown.contains("Wrote"), "{shown}");
-        assert!(!render_blocked(&check(&root), false).contains("to-tickets"));
-        assert!(!root.join("skills").exists(), "setup writes no skill");
-        // A copy an earlier platoon installed (the one in this repository, with its record) is left exactly as it is,
-        // and so is one the user changed: setup says nothing about either.
-        fs::create_dir_all(skill.parent().unwrap()).unwrap();
-        fs::write(&skill, crate::totickets::SKILL).unwrap();
-        let r = run(&root).unwrap();
-        assert!(r.saved.is_none() && render_report(&r, &root, false).contains("Nothing to change"));
-        assert_eq!(fs::read_to_string(&skill).unwrap(), crate::totickets::SKILL);
-        fs::write(&skill, "my own copy").unwrap();
-        run(&root).unwrap();
-        assert_eq!(fs::read_to_string(&skill).unwrap(), "my own copy");
-        // `--remove to-tickets` still takes it out, and only that.
-        let settings_before = fs::read_to_string(root.join("settings.json")).unwrap();
-        let said = remove_step(&root, &pc(&root), "to-tickets").unwrap();
-        assert_eq!(said, format!("Removed the /to-tickets skill ({}).", skill.display()));
-        assert!(!root.join("skills/to-tickets").exists());
-        assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), settings_before);
-        assert_eq!(
-            remove_step(&root, &pc(&root), "to-tickets").unwrap(),
-            "The /to-tickets skill isn't installed, so there was nothing to remove."
-        );
-        assert_eq!(remove_step(&root, &pc(&root), "guard").unwrap_err(), "platoon setup can't remove \"guard\"; it can remove: to-tickets");
-        run(&root).unwrap();
-        assert!(!skill.exists(), "and setup doesn't put it back");
-    }
-
-    #[test]
     fn invalid_settings_are_reported_not_overwritten() {
         let root = tmp("invalid");
         fs::write(root.join("settings.json"), "{ not json").unwrap();
         assert!(!ready(&check(&root)));
         assert!(run(&root).is_err());
         assert_eq!(fs::read_to_string(root.join("settings.json")).unwrap(), "{ not json");
-    }
-
-    // ---- the old code editor question ----
-
-    /// setup doesn't ask about a code editor or show a line for one, and an old `setup.json` that remembers the
-    /// question an older platoon asked reads as before and is kept as it is.
-    #[test]
-    fn setup_knows_no_editor_and_an_old_setup_json_still_reads() {
-        let root = tmp("old-editor-choice");
-        let config = pc(&root);
-        fs::create_dir_all(&config).unwrap();
-        let old = "{\n  \"to-tickets\": {\n    \"written\": \"925710a6a1025c4c\"\n  },\n  \"editor\": {\n    \"asked\": true,\n    \"wanted\": true\n  }\n}\n";
-        fs::write(config.join("setup.json"), old).unwrap();
-        let r = run(&root).unwrap();
-        let shown = render_report(&r, &root, false);
-        assert!(!shown.contains("Code editor"), "{shown}");
-        assert!(ready(&check(&root)));
-        let kept: Value = serde_json::from_str(&fs::read_to_string(config.join("setup.json")).unwrap()).unwrap();
-        assert_eq!(kept["editor"], serde_json::json!({"asked": true, "wanted": true}), "the old record is kept");
-        assert!(crate::totickets::choice(&config, "editor").get("wanted").is_some());
-        assert!(!render_blocked(&check(&root), false).contains("Code editor"));
-        // `editor` is a step like any other setup doesn't know.
-        assert!(remove_step(&root, &config, "editor").unwrap_err().contains("can remove: to-tickets"));
-        assert!(remove_step(&root, &config, "x").unwrap_err().ends_with("can remove: to-tickets"));
     }
 
     fn ask(config: &Path, interactive: bool, typed: &str) -> (TokenQuestion, String) {

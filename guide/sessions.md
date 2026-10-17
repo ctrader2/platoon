@@ -6,7 +6,7 @@ folders in an editor.
 
 ## The list
 
-The header has four tabs, **Sessions**, **Tasks**, **Projects** and **Briefs** (`1` to `4`, or click them). Under Sessions
+The header has three tabs, **Sessions**, **Tasks** and **Projects** (`1` to `3`, or click them). Under Sessions
 and Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
 narrow terminal, on the row under it): the left and right arrow keys switch them (or click them). After the tabs, the
 header says how many tasks need you (**● 2 need you**, see [the Tasks tab](tasks-and-squads.md#the-tasks-tab)) and how
@@ -37,7 +37,7 @@ shows a hollow `○` and no status: `enter` picks it up from its saved history.
 The name shown is, in this order: the one you gave it with `r` (platoon's own), then one you typed with `/rename` inside
 Claude, then, when the [smart features](tokens.md) are on, a short name platoon made up (marked with a quiet `✦` at the end
 of the name, or `*` on the Linux console or when `PLATOON_GLYPHS=plain`, so you can tell it from one you chose), and
-otherwise the folder's name.
+otherwise the folder's name. A [task's](tasks-and-squads.md) session has the task's number in front of its name: `#5 task-5`.
 
 The folder always stays visible in the DIR column: when the path is too long for it, the start is cut and the end (the
 folder itself) kept. Folders you added to a conversation (with `/add-dir` or `--add-dir`) follow its own, separated by
@@ -74,16 +74,16 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
-| `t` | [draft tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from this conversation: Claude reads it in the background (the row says **Drafting tasks…**) and the tasks it suggests open in a popup, where you change them, make them and hand them to squads, or make nothing (needs the smart features) |
+| `t` | [draft tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from this conversation: Claude reads it in the background (the row says **Drafting tasks…**) and the tasks it suggests open in a popup, where you change them and make them, or make nothing (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
-| `1` `2` `3` `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Briefs](tasks-and-squads.md#the-briefs-tab) tabs (or click them); the current tab is underlined |
+| `1` `2` `3` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab) and Projects tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |
 | `s` | [settings](settings-and-keys.md) |
 | `?` | every key of the screen you are on |
-| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tasks, Squads and Agents, and the settings |
-| `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a task's screen, or in a squad's details, `q` goes back one level |
+| `↑` `↓` (or `k` `j`) `pgup` `pgdn` `g` `G` | move by one, by a screenful, or to the first/last (`g`/`G`); the mouse works too. The same keys move in every list: Projects, a project's panes, Tasks, and the settings |
+| `q` | quit (sessions keep running). Only from the top-level lists: on a project's or a task's screen, `q` goes back one level |
 | `ctrl+space` or `esc` | back one level, from anywhere: see [Keys](settings-and-keys.md#keys-back-and-quit) |
 
 Count badges (beside Active and Archived) are drawn with round ends in terminals that ship their own symbol glyphs
@@ -217,12 +217,8 @@ Each one runs under a small background host, so quitting platoon (or closing its
 has looked at for a while does stop itself (see [Automatic clean-up](#automatic-clean-up)); `enter` picks the conversation
 up again.
 
-Inside a session, every key goes to Claude but two: the back key, and **`alt+n`**, which goes back to the list and
-[drafts tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from that conversation, as `t` does on its row. The
-line under the session says both (`ctrl+space back to list   alt+n tasks from this conversation`; on a narrow terminal
-only the first). Both keys can be changed in [`keys.json`](settings-and-keys.md#keys-back-and-quit). In a macOS terminal,
-an `alt` key works only when the terminal's Option key is set to send it (Terminal: "Use Option as Meta key"; iTerm2:
-Left Option key "Esc+"; Ghostty: `macos-option-as-alt = true`); `t` on the row works everywhere.
+Inside a session, every key goes to Claude but one: the back key, which the line under the session names
+(`ctrl+space back to list`). It can be changed in [`keys.json`](settings-and-keys.md#keys-back-and-quit).
 
 ## Copying text from a session
 
@@ -287,10 +283,10 @@ Press `v` anywhere in platoon's lists to look at the work in a code editor of yo
 | Where | What it opens |
 | --- | --- |
 | a conversation's row (Sessions tab, a project's Sessions pane) | its folder, and the folders added to it with `/add-dir` |
-| a task's row or its screen | the task's copies of its folders (every repository the squad works in), its folders that aren't in git as they are, and its own folder when there is something in it |
-| anywhere else (the Briefs tab, the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
+| a task's row or its screen | the task's copy of its folder (its worktree), or its folder as it is when that isn't in git |
+| anywhere else (the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 
-In a session's live view every key goes to Claude (but the back key and `alt+n`): press the [back key](settings-and-keys.md#keys-back-and-quit)
+In a session's live view every key goes to Claude (but the back key): press the [back key](settings-and-keys.md#keys-back-and-quit)
 (`ctrl+space`) to go back to the list, then `v`. Typed into a box (search, a name, the folder picker), `v` is just a
 letter.
 
@@ -317,15 +313,16 @@ Editors without a file tree (vi, Vim, nano, Micro, gedit, Mousepad) aren't offer
 Which one opens: your **favourite**, the first one found until you choose one (Settings, Editors: "Editor for folders (v)").
 With "Always ask which editor" on, `v` shows the list every time, the favourite starred and picked (enter opens it);
 choosing another there makes it the favourite. A favourite that is no longer installed opens the first one found instead,
-and platoon says so once. Sessions and squads keep running meanwhile. A few things happen first when needed, whichever
+and platoon says so once. Sessions keep running meanwhile. A few things happen first when needed, whichever
 editor it is:
 
-- **The squad is still working** on the task: platoon asks before opening, since what you change may clash with it.
+- **The task's session is still working** on it: platoon asks before opening, since what you change may clash with it.
 - **The task's copy of the folder was removed** after the work (Done or cancelled): it is made again from its branch first, as
-  when you continue the squad. While an editor in platoon's terminal is open, platoon never removes a worktree it has
+  when you open its session again. While an editor in platoon's terminal is open, platoon never removes a worktree it has
   open.
 
 An editor with a window of its own starts beside platoon and is left alone: platoon stays on screen, and closing platoon
 doesn't close it. platoon can't tell when that window closes, so **a task's copy of the folder opened in one is kept** after the
-task is Done or cancelled: its screen says "Kept: opened in VS Code", and `w` removes it (after asking). An editor in
+task is Done or cancelled, and platoon says so: remove it with git (`git worktree remove <folder>`) when you no longer
+need it. An editor in
 platoon's terminal needs none of this: platoon waits for it to close.

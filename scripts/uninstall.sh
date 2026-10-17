@@ -4,8 +4,7 @@
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
 #   curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh -s -- --all
 #
-# 1. When a platoon is found, `platoon uninstall` takes platoon's status line, hooks and /to-tickets skill out of
-#    Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
+# 1. When a platoon is found, `platoon uninstall` takes platoon's status line and hooks out of Claude Code, deletes platoon's cache folder, asks before deleting your projects, notes, tasks and settings, and
 #    asks before stopping the sessions it runs (a "no" there stops everything, with nothing changed).
 #    When none is found (or one too old to have `uninstall`), this script asks the same questions and deletes the same
 #    folders itself, and says how to take the entries out of Claude Code's settings by hand.
@@ -33,9 +32,9 @@ say() {
 
 usage() {
     say "usage: uninstall.sh [--all] [--stop-sessions]"
-    say "  Removes platoon: its entries in Claude Code's settings, its /to-tickets skill, its cache folder and the"
-    say "  program itself. Asks before deleting your projects, notes, tasks and settings, and before stopping"
-    say "  the sessions platoon is running. Claude Code's conversations are never touched."
+    say "  Removes platoon: its entries in Claude Code's settings, its cache folder and the program itself."
+    say "  Asks before deleting your projects, notes, tasks and settings, and before stopping the sessions"
+    say "  platoon is running. Claude Code's conversations are never touched."
     say "  --all             also delete your projects, notes, tasks and settings, without asking"
     say "  --stop-sessions   stop the sessions platoon is running without asking"
     say "  With flags through curl: curl -LsSf <url> | sh -s -- --all"
@@ -148,14 +147,14 @@ stop_sessions() {
     return 1
 }
 
-# The task worktrees the tasks files record that are still there (`tasks.json`, or `tickets.json` from before the
-# rename; folders `task-N`, or `ticket-N`), with the git commands that remove them.
+# The task worktrees the tasks files record that are still there (folders `task-N`), with the git commands that
+# remove them.
 list_worktrees() {
     found=""
-    for t in "$CONFIG"/tasks.json "$CONFIG"/projects/*/tasks.json "$CONFIG"/projects/*/tickets.json; do
+    for t in "$CONFIG"/tasks.json "$CONFIG"/projects/*/tasks.json; do
         [ -f "$t" ] || continue
-        found="$found$(grep -o '"path":[[:space:]]*"[^"]*-worktrees/t[ai][sc]k[e]*t*-[0-9][0-9]*[^"]*"' "$t" |
-            sed 's/^"path":[[:space:]]*"//; s/"$//; s#\(-worktrees/t[ai][sc]k[e]*t*-[0-9][0-9]*\).*#\1#')
+        found="$found$(grep -o '"path":[[:space:]]*"[^"]*-worktrees/task-[0-9][0-9]*[^"]*"' "$t" |
+            sed 's/^"path":[[:space:]]*"//; s/"$//; s#\(-worktrees/task-[0-9][0-9]*\).*#\1#')
 "
     done
     printf '%s' "$found" | sort -u | while IFS= read -r d; do
@@ -265,10 +264,6 @@ by_hand_notes() {
         say "Open $settings and delete the \"statusLine\" entry if its command ends in \`platoon statusline\`, and"
         say "each hook whose command ends in \`platoon hook guard\`, \`platoon hook session-start\` or \`platoon hook stop\`."
         say "Until then Claude Code reports those hooks failing. More: $GUIDE"
-    fi
-    if [ -d "$CLAUDE_ROOT/skills/to-tickets" ]; then
-        BY_HAND=1
-        say "The /to-tickets skill is still in Claude Code: rm -r $(quote "$CLAUDE_ROOT/skills/to-tickets")"
     fi
 }
 

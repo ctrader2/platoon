@@ -42,48 +42,31 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 
 ## A project's screen
 
-A project's screen shows its name and its description across the top (in full, wrapped when it is long), then how squads
-start on its tasks and the command that tests their work, its sessions at the top left (active ones first, then an `Archived (N)` group, dimmed), its
-[tasks](tasks-and-squads.md#the-tasks-pane) under them (the same rows as the [Tasks tab](tasks-and-squads.md#the-tasks-tab),
-this project's only) and its notes on the right.
+A project's screen shows its name and its description across the top (in full, wrapped when it is long), then the
+command that tests its tasks' work, its sessions on the left (active ones first, then an `Archived (N)` group, dimmed)
+and its notes on the right. Its tasks are on the [Tasks tab](tasks-and-squads.md#the-tasks-tab).
 
-- `tab` and `shift+tab` go round the three panes. `shift` with an arrow moves between them too: `shift+↑` to Sessions,
-  `shift+↓` to Tasks, `shift+→` to the notes and `shift+←` back to whichever of Sessions and Tasks you used last.
-  `ctrl` with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
-  pane: `↑` `↓` move in the sessions or tasks or scroll the notes, and `←` `→` do nothing there.
+- `tab` and `shift+tab` switch between the two panes. `shift+←` goes to the sessions and `shift+→` to the notes; `ctrl`
+  with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
+  pane: `↑` `↓` move in the sessions or scroll the notes, and `←` `→` do nothing there.
 - `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r`, `h` and `t` work there too).
 - `n` starts a new session in the project: the folder picker lists the folders the project's other sessions use first.
 - `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search).
 - The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back.
 - With the notes in focus, `e` [edits them](#editing-the-notes), `c` shows what changed last and `u` undoes it.
-- `o`, from any of the panes, changes how squads start on this project's tasks (see below).
-- `T` (shift+t), from any of the panes, sets the command that tests a squad's work on this project's tasks (see
+- `T` (shift+t), from either pane, sets the command that tests the work on this project's tasks (see
   [The test command](#the-test-command)).
-
-### How squads start
-
-Under the description, one line says how much a squad does on its own when one of this project's tasks is
-[handed over](tasks-and-squads.md#the-hand-over):
-
-```
-Squads start  asks before anything others can see   o changes
-```
-
-`o` goes round the three levels: **plans first, then waits for your yes**, **asks before anything others can see** (the
-usual) and **works and publishes**. It is the project's default: the hand-over popup starts from it, and you can still
-pick another level there for one task. A task handed over already keeps what was chosen for it. It is kept as
-`autonomy_default` (`plan`, `ask` or `publish`) on the project in `projects.json`.
 
 ### The test command
 
-Under it, one more line says which command tests a squad's work on this project's tasks:
+Under the description, one line says which command tests the work on this project's tasks:
 
 ```
 Tests         cargo test   T changes
 ```
 
-When a squad finishes (it asks to close the task, wants to publish, or is done), platoon runs that command itself where
-the squad works, and tells the squad when it fails: see [Checks](tasks-and-squads.md#checks). `T` opens a one-line box
+When a task's session stops, platoon runs that command itself in the task's worktree, and hands a failure back to the
+session: see [How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session). `T` opens a one-line box
 for it; `enter` saves what is in the box, and an empty box takes the command away (then no tests are run). It is kept as
 `test_command` on the project in `projects.json`, with `test_timeout_minutes` (10 unless you write another number there):
 how long it may run before platoon stops it.

@@ -1,14 +1,8 @@
-mod agentfile;
 mod ai;
 mod app;
 mod archive;
 mod board;
-#[cfg(test)]
-mod board_app_tests;
-mod brief;
 mod checks;
-#[cfg(test)]
-mod checks_app_tests;
 #[cfg(test)]
 mod clarity_app_tests;
 mod claude;
@@ -59,8 +53,6 @@ mod open;
 #[cfg(test)]
 mod perf;
 #[cfg(test)]
-mod plan_app_tests;
-#[cfg(test)]
 mod polish_app_tests;
 mod procs;
 mod projects;
@@ -79,20 +71,13 @@ mod setup;
 mod smart;
 #[cfg(test)]
 mod smart_app_tests;
-mod squadfile;
-mod squadqueue;
-#[cfg(test)]
-mod squadqueue_app_tests;
+mod spent;
 mod squads;
-#[cfg(test)]
-mod squads_app_tests;
-#[cfg(test)]
-mod squadtab_app_tests;
-mod squadwork;
 #[cfg(test)]
 mod stop_app_tests;
 mod summaries;
 mod taskdraft;
+mod taskrun;
 #[cfg(test)]
 mod tasks_app_tests;
 #[cfg(test)]
@@ -101,10 +86,7 @@ mod textbox;
 mod theme;
 mod tickets;
 #[cfg(test)]
-mod tickets_app_tests;
-#[cfg(test)]
 mod tokens_app_tests;
-mod totickets;
 mod ui;
 mod uninstall;
 mod usage;
@@ -137,15 +119,10 @@ fn main() -> io::Result<()> {
         }
         Some("statusline") => return statusline(),
         Some("setup") if std::env::args().nth(2).is_some() => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            std::process::exit(setup_with(&args));
+            eprintln!("usage: platoon setup");
+            std::process::exit(2);
         }
         Some("setup") => return setup(),
-        Some("squads") => {
-            let args: Vec<String> = std::env::args().skip(2).collect();
-            let (mut out, mut err) = (io::stdout(), io::stderr());
-            std::process::exit(totickets::squads_cli(&args, &archive::config_dir(), &mut out, &mut err));
-        }
         Some("themes") => return themes(),
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -160,12 +137,10 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run()),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook()),
-        // Given only to a squad's leader session, with `--settings` (never installed in the user's own settings).
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-stop") => std::process::exit(squads::run_stop_hook()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-gate") => std::process::exit(squads::run_gate_hook()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-notify") => std::process::exit(squads::run_notify_hook()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-tool") => std::process::exit(squads::run_tool_hook()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("squad-prompt") => std::process::exit(squads::run_prompt_hook()),
+        // Given only to a task's session, with `--settings` (never installed in the user's own settings).
+        Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
+            std::process::exit(taskrun::run_hook(&std::env::args().nth(2).unwrap_or_default()))
+        }
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(notesrun::run_helper(&args));
@@ -178,8 +153,7 @@ fn main() -> io::Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(uninstall_cli(&args));
         }
-        // `ticket` is the name it had: it still works, the same in every way.
-        Some("task" | "ticket") => {
+        Some("task") => {
             use std::io::IsTerminal;
             let args: Vec<String> = std::env::args().skip(2).collect();
             let cwd = std::env::current_dir().unwrap_or_default();
@@ -227,8 +201,8 @@ fn version_line() -> String {
     format!("platoon {}", versions::running())
 }
 
-const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | task where |
-               squads --kinds | themes | tokens | uninstall | --version]
+const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> | task add | task list | themes | tokens |
+               uninstall | --version]
   (no arguments)  open the session manager
   open [id]       show a session live in this terminal (starts or resumes it if needed);
                   with no id, start a new one here. The back key (Ctrl+Space unless
@@ -237,23 +211,18 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, and two hooks
                   that hand a project's notes to its sessions and keep them up to date
-  setup --remove to-tickets   take out the /to-tickets skill an earlier platoon installed
-  task add (--project <name> | --from-session <id>) --title <text> [--body-file <path>]
-                  [--folder <path>... | --no-folder] [--waits-for <number>]...
-                  make a task in that project and print its number (#N); with no --folder it
-                  works in the current folder (--no-folder: none). --from-session: in the project
-                  that session belongs to, and the task shows where it came from
+  task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>]
+                  make a task and print its number (#N); with no --folder it works in the
+                  current folder
   task list [--project <name>] [--json]   the tasks, open ones first
-  task where --session <id>   the project a session belongs to (exit 1 when none)
-  squads --kinds [--json]   each squad's name and what it can do
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
   uninstall [--all] [--stop-sessions]   take platoon out of Claude Code and delete its cache;
-                  asks before deleting your projects, notes, tickets and settings (--all: without
+                  asks before deleting your projects, notes, tasks and settings (--all: without
                   asking) and before stopping the sessions it runs (--stop-sessions: without asking)
   --version, -V   print platoon's version
-  statusline, hook guard, hook session-start, hook stop, hook squad-stop, hook squad-gate,
-                  hook squad-notify, hook squad-tool, hook squad-prompt,
+  statusline, hook guard, hook session-start, hook stop, hook task-plan, hook task-question,
+                  hook task-notify, hook task-tool, hook task-prompt, hook task-stop,
                   notes-update   internal: run by Claude Code, or by platoon itself";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
@@ -320,28 +289,6 @@ fn setup() -> io::Result<()> {
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
     Ok(())
-}
-
-/// `platoon setup <args>`: `--remove to-tickets` takes out the `/to-tickets` skill an earlier platoon installed.
-fn setup_with(args: &[String]) -> i32 {
-    let (root, config) = (claude::claude_root(), archive::config_dir());
-    let done = match args {
-        [flag, what] if flag == "--remove" => setup::remove_step(&root, &config, what),
-        _ => {
-            eprintln!("usage: platoon setup [--remove {}]", setup::REMOVABLE.join(" | "));
-            return 2;
-        }
-    };
-    match done {
-        Ok(line) => {
-            println!("{line}");
-            0
-        }
-        Err(why) => {
-            eprintln!("{why}");
-            1
-        }
-    }
 }
 
 /// `platoon uninstall [--all] [--stop-sessions]`: see `uninstall.rs`. Answers come from the terminal itself
@@ -455,8 +402,6 @@ fn run(terminal: &mut ratatui::DefaultTerminal) -> io::Result<usize> {
     }
     // Stops still running for the archive key get a few seconds to finish, so their records are written.
     app.finish_stops();
-    // A test check still running is stopped; it runs again the next time platoon is open.
-    app.end_checks();
     Ok(app.hosts.len())
 }
 
@@ -565,12 +510,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_usage_text_names_tasks_not_tickets() {
-        assert!(USAGE.contains("task add | task list | task where"), "{USAGE}");
-        assert!(!USAGE.contains("ticket add") && !USAGE.contains("ticket list") && !USAGE.contains("ticket where"), "{USAGE}");
-        assert!(
-            USAGE.contains("  task add (--project") && USAGE.contains("  task list [--project") && USAGE.contains("  task where --session")
-        );
+    fn the_usage_text_names_tasks_and_the_task_hooks() {
+        assert!(USAGE.contains("task add | task list"), "{USAGE}");
+        assert!(!USAGE.contains("ticket") && !USAGE.contains("squad") && !USAGE.contains("to-tickets"), "{USAGE}");
+        assert!(USAGE.contains("  task add [--project") && USAGE.contains("  task list [--project"));
+        for h in crate::taskrun::HOOKS {
+            assert!(USAGE.contains(&format!("hook {h}")), "{h}");
+        }
     }
     use crate::app::{Action, AdoptKind, App, Confirm, Hit, JumpPlan, Mode};
     use crate::model::Status;
@@ -733,7 +679,7 @@ mod tests {
             assert!(!text.contains(banned), "{banned:?} must not appear:\n{text}");
         }
         assert!(
-            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"),
+            text.contains("enter open") && text.contains("a archive") && flat(&text).contains("1 Sessions 2 Tasks 3 Projects"),
             "{text}"
         );
         // Working then finished while unseen -> "done".
@@ -903,9 +849,7 @@ mod tests {
         assert_eq!(ids(&app), ["new-3", "mid-2"]);
         let shown = flat(&draw(&mut term, &app));
         assert!(
-            shown.contains("1 Sessions 2 Tasks 3 Projects 4 Briefs ")
-                && !shown.contains("Plugins")
-                && shown.contains("Active 2 Archived 1"),
+            shown.contains("1 Sessions 2 Tasks 3 Projects ") && !shown.contains("Plugins") && shown.contains("Active 2 Archived 1"),
             "{shown}"
         );
 
@@ -917,7 +861,7 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 to 4: the top-level tabs. A number with no tab does nothing.
+        // 1 to 3: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
         assert!(app.top == 1 && app.board_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains(crate::board::EMPTY));
@@ -925,11 +869,9 @@ mod tests {
         assert!(app.top == 2 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '4');
-        assert!(app.top == 3 && app.squads_tab_showing() && app.selected_session().is_none());
-        ch(&mut app, '5');
-        assert!(app.top == 3 && matches!(app.mode, Mode::List));
+        assert!(app.top == 2 && matches!(app.mode, Mode::List));
         ch(&mut app, '6');
-        assert_eq!(app.top, 3);
+        assert_eq!(app.top, 2);
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 
@@ -2075,7 +2017,7 @@ mod tests {
         let (_w, mut app) = mixed_app("tabs-rule");
         let mut term = Terminal::new(TestBackend::new(120, 24)).unwrap();
         let shown = draw(&mut term, &app);
-        assert!(flat(&shown).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{shown}");
+        assert!(flat(&shown).contains("1 Sessions 2 Tasks 3 Projects"), "{shown}");
         let rule = shown.lines().nth(1).unwrap().to_string();
         assert!(rule.contains('─') && rule.contains('━'), "a quiet rule with a heavy underline: {rule}");
         let (a_first, a_last) = underline(&shown).unwrap();
@@ -2115,8 +2057,8 @@ mod tests {
         let cells = row_cells(&term, 0);
         let header: String = cells.iter().map(|c| c.symbol()).collect();
         // The counts are on the Active/Archived switch under them, so the tabs are just a key and a name.
-        assert!(header.contains("1 Sessions   2 Tasks   3 Projects   4 Briefs"), "{header}");
-        for (key, name) in [("1", "1 Sessions"), ("2", "2 Tasks"), ("3", "3 Projects"), ("4", "4 Briefs")] {
+        assert!(header.contains("1 Sessions   2 Tasks   3 Projects"), "{header}");
+        for (key, name) in [("1", "1 Sessions"), ("2", "2 Tasks"), ("3", "3 Projects")] {
             let at = cell_index(&cells, name);
             let hint = if cells[at].bg == t.surface { t.readable_on(t.subtext, t.surface, crate::theme::MIN_SUBTEXT) } else { t.subtext };
             assert_eq!((cells[at].symbol(), cells[at].fg), (key, hint), "{name}: the key reads as a hint, current or not");
@@ -2233,7 +2175,7 @@ mod tests {
             let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
             let shown = draw(&mut term, &app);
             let header = shown.lines().next().unwrap();
-            assert!(flat(header).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{cols}: {header}");
+            assert!(flat(header).contains("1 Sessions 2 Tasks 3 Projects"), "{cols}: {header}");
             assert!(!header.contains("1234") && !header.contains("5678"), "{cols}: no counts in the tabs: {header}");
             assert!(flat(shown.lines().nth(1).unwrap()).contains("Active 1234 Archived 3"), "{cols}: the counts are on the rule: {shown}");
             assert!(
@@ -2246,7 +2188,7 @@ mod tests {
         app.usage = crate::usage::Usage::NotSetUp;
         let mut term = Terminal::new(TestBackend::new(60, 24)).unwrap();
         let header = draw(&mut term, &app).lines().next().unwrap().to_string();
-        assert!(flat(&header).contains("1 Sessions 2 Tasks 3 Projects 4 Briefs"), "{header}");
+        assert!(flat(&header).contains("1 Sessions 2 Tasks 3 Projects"), "{header}");
     }
 
     #[test]

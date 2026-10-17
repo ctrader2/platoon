@@ -1,23 +1,158 @@
-//! A task's worktrees after the work: whether one has changes not yet committed, and removing one once its task is
-//! Done or Cancelled (`remove`). The branch is never touched: removing a worktree keeps every commit, and continuing
-//! the squad makes the worktree again from its branch (`squads::prepare_worktrees`). Making them is in `squads.rs`;
-//! when the app removes them is in `app/worktree_glue.rs`.
+//! A task's worktree: made when the task starts (`prepare`), and after the work, whether it has changes not yet
+//! committed and removing it once its task is Done or Cancelled (`remove`). The branch is never touched: removing a
+//! worktree keeps every commit, and opening the task's session again makes the worktree again from its branch.
+//! When the app removes them is in `app/worktree_glue.rs`.
 //!
-//! What `remove` will touch, and nothing else: the folder platoon made for this task
-//! (`<parent>/<repo>-worktrees/task-<N>`, or `ticket-<N>` from before the rename; `squads::worktree_dir`), when the
-//! task's record points there, git lists it as a worktree of that repository on the task's own branch (`task/<N>` or
-//! `ticket/<N>`), and it is not the repository's main worktree. It uses `git worktree remove`, which refuses a worktree
-//! with changes by itself; `force` (the user said yes to losing them) adds `--force` once, which still refuses a locked
-//! worktree.
+//! A task's worktree is `<parent>/<repo>-worktrees/task-<N>` (`worktree_dir`), on the branch `task/<N>`, made from the
+//! repository's default branch. What `remove` will touch, and nothing else: that folder, when the task's record
+//! points there, git lists it as a worktree of that repository on the task's own branch, and it is not the
+//! repository's main worktree. It uses `git worktree remove`, which refuses a worktree with changes by itself; `force`
+//! (the user said yes to losing them) adds `--force` once, which still refuses a locked worktree.
 
-use crate::squads::{git, same_place, worktree_dir, worktrees_of};
-use crate::tickets::{Worktree, is_task_branch};
+use crate::tickets::{Worktree, task_branch};
 use std::{
+    fs,
     path::{Component, Path, PathBuf},
+    process::{Command, Stdio},
     time::{Duration, Instant},
 };
 
-/// What removing one of a ticket's worktrees came to.
+pub(crate) fn git(program: &str, dir: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new(program)
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|e| format!("couldn't run git: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        let first = err.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or("git said no").trim_start_matches("fatal: ").to_string();
+        Err(first)
+    }
+}
+
+/// `git worktree list --porcelain`: (path, branch ref or ""), the repository's main worktree first.
+pub(crate) fn worktrees_of(program: &str, root: &Path) -> Vec<(PathBuf, String)> {
+    let text = git(program, root, &["worktree", "list", "--porcelain"]).unwrap_or_default();
+    let mut out = Vec::new();
+    let (mut path, mut branch): (Option<PathBuf>, String) = (None, String::new());
+    for line in text.lines().chain(std::iter::once("")) {
+        if line.is_empty() {
+            if let Some(p) = path.take() {
+                out.push((p, std::mem::take(&mut branch)));
+            }
+        } else if let Some(p) = line.strip_prefix("worktree ") {
+            path = Some(PathBuf::from(p));
+        } else if let Some(b) = line.strip_prefix("branch ") {
+            branch = b.to_string();
+        }
+    }
+    out
+}
+
+pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
+    match (fs::canonicalize(a), fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
+/// Is `folder` inside a git repository? Looked up on disk only (a `.git` in it or above it), so it costs no process.
+pub fn in_git(folder: &Path) -> bool {
+    folder.ancestors().any(|d| d.join(".git").exists())
+}
+
+/// Where the worktree of repository `root` on `branch` goes: `<parent>/<name>-worktrees/<branch>`, the branch's `/`
+/// as `-` (`task-5`).
+pub fn worktree_dir(root: &Path, branch: &str) -> PathBuf {
+    let name = root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "repo".into());
+    root.parent().unwrap_or(root).join(format!("{name}-worktrees")).join(branch.replace('/', "-"))
+}
+
+/// Where task `number` works in `folder`: a git worktree on `task/<N>`, made from the repository's default branch (its
+/// commit written down as the worktree's `base`). None when `folder` is not in git (the task works in the folder as
+/// it is). One already made for this task is used again, keeping its base; one platoon removed after the work (its
+/// branch kept) is made again from that branch at the same place, when `recorded` (what the task says about its
+/// worktree) shows it is this task's. A branch of that name the task doesn't account for is refused. Says why in plain
+/// words when it can't. Nothing here ever removes a worktree.
+pub fn prepare(program: &str, folder: &str, number: u32, recorded: Option<&Worktree>) -> Result<Option<Worktree>, String> {
+    let at = Path::new(folder);
+    let Ok(top) = git(program, at, &["rev-parse", "--show-toplevel"]) else { return Ok(None) };
+    let root = PathBuf::from(top.trim());
+    let branch = task_branch(number);
+    let full = format!("refs/heads/{branch}");
+    let sub = fs::canonicalize(at)
+        .ok()
+        .and_then(|c| c.strip_prefix(fs::canonicalize(&root).ok()?).ok().map(Path::to_path_buf))
+        .unwrap_or_default();
+    let dir = worktree_dir(&root, &branch);
+    let shown = dir.display();
+    let before = recorded.filter(|w| w.branch == branch && Path::new(&w.path).starts_with(&dir));
+    let mut base = before.and_then(|w| w.base.clone());
+    let make_parent = || -> Result<(), String> {
+        match dir.parent() {
+            Some(parent) => fs::create_dir_all(parent).map_err(|e| format!("couldn't make {}: {e}", parent.display())),
+            None => Ok(()),
+        }
+    };
+    let from_branch = || -> Result<(), String> {
+        make_parent()?;
+        let d = dir.to_string_lossy().into_owned();
+        git(program, &root, &["worktree", "add", &d, &branch])
+            .map(|_| ())
+            .map_err(|e| format!("couldn't make the worktree of {} again from its branch: {e}", root.display()))
+    };
+    match worktrees_of(program, &root).iter().find(|(p, _)| same_place(p, &dir)) {
+        Some((_, b)) if *b == full && dir.is_dir() => {}
+        // Git still lists it but its folder is gone (removed by hand): forget that, and make it again.
+        Some((_, b)) if *b == full && !dir.exists() => {
+            git(program, &root, &["worktree", "prune"]).map_err(|e| format!("couldn't tidy the worktrees of {}: {e}", root.display()))?;
+            from_branch()?;
+        }
+        Some(_) => return Err(format!("{shown} is already a worktree on another branch; move it away, then try again")),
+        None if dir.exists() => {
+            return Err(format!("{shown} is already there and isn't this task's worktree; move it away, then try again"));
+        }
+        None if git(program, &root, &["rev-parse", "--verify", "--quiet", &full]).is_ok() => {
+            if before.is_none() {
+                return Err(format!("the branch name {branch} is already taken in {}; rename that branch, then try again", root.display()));
+            }
+            from_branch()?;
+        }
+        None => {
+            make_parent()?;
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let commit = |name: &str| {
+                git(program, &root, &["rev-parse", "--verify", "--quiet", &format!("{name}^{{commit}}")])
+                    .ok()
+                    .map(|h| h.trim().to_string())
+                    .filter(|h| !h.is_empty())
+            };
+            let start = crate::gitfacts::default_branch(program, &root, deadline).and_then(|b| commit(&b)).or_else(|| commit("HEAD"));
+            let d = dir.to_string_lossy().into_owned();
+            let mut args = vec!["worktree", "add", d.as_str(), "-b", branch.as_str()];
+            if let Some(h) = &start {
+                args.push(h);
+            }
+            git(program, &root, &args).map_err(|e| format!("couldn't make a worktree of {}: {e}", root.display()))?;
+            base = start;
+        }
+    }
+    let path = if sub.as_os_str().is_empty() { dir.clone() } else { dir.join(&sub) };
+    // A folder git doesn't track (empty, or ignored) isn't in the worktree: made, so the session can start there.
+    if !path.is_dir() {
+        fs::create_dir_all(&path).map_err(|e| format!("couldn't make {}: {e}", path.display()))?;
+    }
+    Ok(Some(Worktree { path: path.to_string_lossy().into_owned(), branch, base, ..Default::default() }))
+}
+
+/// What removing a task's worktree came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Removal {
     /// Its folder is gone: removed now, or it was gone already (git's note of it tidied away). The branch is kept.
@@ -28,21 +163,21 @@ pub enum Removal {
     Refused(String),
 }
 
-/// Where ticket `number`'s worktree `w` is, checked against its record: (its repository's root, the worktree's
-/// folder). Err: why platoon won't touch it.
-fn located(program: &str, w: &Worktree, number: u32) -> Result<(PathBuf, PathBuf), String> {
-    if !is_task_branch(&w.branch, number) {
+/// Where task `number`'s worktree `w` (of its `folder`) is, checked against its record: (its repository's root, the
+/// worktree's folder). Err: why platoon won't touch it.
+fn located(program: &str, folder: &str, w: &Worktree, number: u32) -> Result<(PathBuf, PathBuf), String> {
+    if w.branch != task_branch(number) {
         return Err(format!("its branch {} isn't this task's", w.branch));
     }
     let path = Path::new(&w.path);
     if !path.is_absolute() || path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(format!("{} isn't a place platoon makes worktrees", w.path));
     }
-    if !Path::new(&w.folder).is_dir() {
-        return Err(format!("its repository's folder {} isn't there any more", w.folder));
+    if !Path::new(folder).is_dir() {
+        return Err(format!("its repository's folder {folder} isn't there any more"));
     }
-    let top = git(program, Path::new(&w.folder), &["rev-parse", "--show-toplevel"])
-        .map_err(|e| format!("{} isn't in a git repository any more: {e}", w.folder))?;
+    let top = git(program, Path::new(folder), &["rev-parse", "--show-toplevel"])
+        .map_err(|e| format!("{folder} isn't in a git repository any more: {e}"))?;
     let root = PathBuf::from(top.trim());
     let dir = worktree_dir(&root, &w.branch);
     if !path.starts_with(&dir) || same_place(&dir, &root) {
@@ -63,12 +198,12 @@ pub fn uncommitted_quick(program: &str, dir: &Path, budget: Duration) -> bool {
         .is_some_and(|out| !out.trim().is_empty())
 }
 
-/// Remove ticket `number`'s worktree `w`, keeping its branch. Only a worktree whose record is sound (see the top of
-/// this file) and that git lists for its repository on the ticket's branch is ever touched. One with changes not yet
-/// committed is left in place unless `force` (the user said yes to losing them). Never while a session is working in
-/// it: the caller makes sure of that.
-pub fn remove(program: &str, w: &Worktree, number: u32, force: bool) -> Removal {
-    let (root, dir) = match located(program, w, number) {
+/// Remove task `number`'s worktree `w` (of its `folder`), keeping its branch. Only a worktree whose record is sound (see
+/// the top of this file) and that git lists for its repository on the task's branch is ever touched. One with changes
+/// not yet committed is left in place unless `force` (the user said yes to losing them). Never while a session is
+/// working in it: the caller makes sure of that.
+pub fn remove(program: &str, folder: &str, w: &Worktree, number: u32, force: bool) -> Removal {
+    let (root, dir) = match located(program, folder, w, number) {
         Ok(x) => x,
         Err(e) => return Removal::Refused(e),
     };
@@ -120,8 +255,7 @@ pub fn remove(program: &str, w: &Worktree, number: u32, force: bool) -> Removal 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::squads::prepare_worktrees;
-    use crate::tickets::{NewTicket, Tickets, WtMark};
+    use crate::tickets::{NewTicket, Tickets};
     use std::{fs, process::Command, process::Stdio};
 
     fn dir(name: &str) -> PathBuf {
@@ -174,74 +308,38 @@ mod tests {
         worktrees_of("git", r).into_iter().map(|(p, _)| p).collect()
     }
 
-    #[test]
-    fn the_worktree_records_the_commit_it_was_made_from_and_keeps_it_when_used_again() {
-        let base = dir("base");
-        let shop = repo(&base, "shop");
-        let head = run(&shop, &["rev-parse", "HEAD"]);
-        let folders = vec![shop.to_string_lossy().into_owned()];
-        let got = prepare_worktrees("git", &folders, 3, &[]).unwrap();
-        assert_eq!(got[0].base.as_deref(), Some(head.as_str()));
-        // The main repository moves on; the worktree is used again: the base stays where the branch started.
-        commit_in(&shop, "later.txt", "later on main");
-        let again = prepare_worktrees("git", &folders, 3, &got).unwrap();
-        assert_eq!(again, got);
-        // Written on the ticket and read back.
-        let config = dir("base-config");
-        let mut t = Tickets::open(&config, "p1");
-        let n = t.add(NewTicket { title: "Basket".into(), folders: folders.clone(), ..Default::default() }).unwrap();
-        let lead =
-            crate::tickets::Leader { squad: "coding".into(), session: "s".into(), started: 1, names: Default::default(), snapshot: None };
-        t.start_leader(n, &lead, &got).unwrap();
-        assert_eq!(Tickets::open(&config, "p1").get(n).unwrap().worktrees, got);
-        let text = fs::read_to_string(crate::tickets::path_in(&config, "p1")).unwrap();
-        assert!(text.contains(&format!("\"base\": \"{head}\"")), "{text}");
-        assert!(!text.contains("removed") && !text.contains("kept_uncommitted"), "nothing more until there is something to say: {text}");
-        let _ = fs::remove_dir_all(&base);
-        let _ = fs::remove_dir_all(&config);
+    fn prep(folder: &Path, n: u32, recorded: Option<&Worktree>) -> Result<Worktree, String> {
+        prepare("git", &folder.to_string_lossy(), n, recorded).map(|w| w.expect("in git"))
     }
 
     #[test]
-    fn a_ticket_from_before_the_base_reads_and_writes_as_it_was_and_keeps_keys_it_doesnt_know() {
-        let config = dir("old");
-        let file = crate::tickets::path_in(&config, "p1");
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        let old = serde_json::json!({"next": 2, "tickets": [{"number": 1, "title": "Old", "file": "01-old.md", "state": "done", "folders": ["/w/shop"], "blocked_by": [], "created": 1, "updated": 5,
-            "worktrees": [{"folder": "/w/shop", "path": "/w/shop-worktrees/task-1", "branch": "task/1", "colour": "teal"}], "later": {"x": 1}}]});
-        fs::write(&file, serde_json::to_string_pretty(&old).unwrap()).unwrap();
+    fn the_worktree_is_made_from_the_default_branch_and_keeps_its_base_when_used_again() {
+        let base = dir("base");
+        let shop = repo(&base, "shop");
+        let head = run(&shop, &["rev-parse", "HEAD"]);
+        // The checkout is on another branch with a commit of its own: the worktree still starts from main.
+        run(&shop, &["switch", "-q", "-c", "side"]);
+        commit_in(&shop, "side.txt", "on the side");
+        let got = prep(&shop, 3, None).unwrap();
+        assert_eq!((got.base.as_deref(), got.branch.as_str()), (Some(head.as_str()), "task/3"));
+        assert_eq!(Path::new(&got.path), worktree_dir(&shop, "task/3"));
+        assert!(!Path::new(&got.path).join("side.txt").exists(), "made from main, not from the checkout's branch");
+        commit_in(&shop, "later.txt", "later");
+        assert_eq!(prep(&shop, 3, Some(&got)).unwrap(), got, "used again: the base stays where the branch started");
+        let config = dir("base-config");
         let mut t = Tickets::open(&config, "p1");
-        let w = t.get(1).unwrap().worktrees[0].clone();
-        assert_eq!(
-            w,
-            Worktree { folder: "/w/shop".into(), path: "/w/shop-worktrees/task-1".into(), branch: "task/1".into(), ..Default::default() }
-        );
-        // A rename rewrites the file: the worktree's entry, and everything platoon doesn't know, as they were.
-        t.rename(1, "Old one").unwrap();
-        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(v["tickets"][0]["worktrees"], old["tickets"][0]["worktrees"]);
-        assert_eq!(v["tickets"][0]["later"], serde_json::json!({"x": 1}));
-        // Marks go on that entry alone, keep its unknown key, and never touch `updated`.
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::KeptUncommitted).unwrap());
-        assert!(!t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::KeptUncommitted).unwrap(), "said already: nothing written");
-        assert!(!t.mark_worktree(1, "/elsewhere", WtMark::Removed).unwrap(), "no worktree there");
-        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(v["tickets"][0]["worktrees"][0]["colour"], "teal");
-        assert_eq!(v["tickets"][0]["worktrees"][0]["kept_uncommitted"], true);
-        let updated = v["tickets"][0]["updated"].clone();
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::Removed).unwrap());
-        let w = t.get(1).unwrap().worktrees[0].clone();
-        assert!(w.removed.is_some() && !w.kept_uncommitted && w.is_gone(), "{w:?}");
-        assert!(t.mark_worktree(1, "/w/shop-worktrees/task-1", WtMark::Present).unwrap());
-        let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        assert_eq!(v["tickets"][0]["worktrees"], old["tickets"][0]["worktrees"], "back as it was");
-        assert_eq!(v["tickets"][0]["updated"], updated);
-        // A base that isn't a commit id is not taken.
-        let mut bad = old.clone();
-        if let Some(w) = bad.pointer_mut("/tickets/0/worktrees/0").and_then(|w| w.as_object_mut()) {
-            w.insert("base".into(), serde_json::json!("; rm -rf /"));
-        }
-        fs::write(&file, bad.to_string()).unwrap();
-        assert_eq!(Tickets::open(&config, "p1").get(1).unwrap().worktrees[0].base, None);
+        let n =
+            t.add(NewTicket { title: "Basket".into(), folder: Some(shop.to_string_lossy().into_owned()), ..Default::default() }).unwrap();
+        t.start(n, "feature", "s", Some(got.clone())).unwrap();
+        assert_eq!(Tickets::open(&config, "p1").get(n).unwrap().worktree, Some(got));
+        let text = fs::read_to_string(crate::tickets::path_in(&config, "p1")).unwrap();
+        assert!(text.contains(&format!("\"base\": \"{head}\"")), "{text}");
+        assert!(!text.contains("removed") && !text.contains("kept_uncommitted"), "{text}");
+        // A folder outside git: no worktree.
+        let plain = base.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(prepare("git", &plain.to_string_lossy(), 1, None), Ok(None));
+        let _ = fs::remove_dir_all(&base);
         let _ = fs::remove_dir_all(&config);
     }
 
@@ -249,20 +347,22 @@ mod tests {
     fn a_clean_worktree_is_removed_and_its_branch_and_commits_kept() {
         let base = dir("clean");
         let shop = repo(&base, "shop");
-        let got = prepare_worktrees("git", &[shop.join("src").to_string_lossy().into_owned()], 2, &[]).unwrap();
+        let src = shop.join("src");
+        let got = prep(&src, 2, None).unwrap();
+        let f = src.to_string_lossy().into_owned();
         let wt = worktree_dir(&shop, "task/2");
         let tip = commit_in(&wt, "basket.txt", "the basket");
         // Ignored files (a build) don't count as changes, and go with the folder.
         fs::create_dir_all(wt.join("target")).unwrap();
         fs::write(wt.join("target/out"), "built").unwrap();
         assert_eq!(uncommitted("git", &wt), Ok(false));
-        assert_eq!(remove("git", &got[0], 2, false), Removal::Removed);
+        assert_eq!(remove("git", &f, &got, 2, false), Removal::Removed);
         assert!(!wt.exists());
         assert_eq!(listed(&shop).len(), 1, "git no longer lists it");
         assert!(branches(&shop).lines().any(|b| b == "task/2"));
         assert_eq!(run(&shop, &["rev-parse", "task/2"]), tip, "its commits are on the branch");
         // Again: gone already, still fine.
-        assert_eq!(remove("git", &got[0], 2, false), Removal::Removed);
+        assert_eq!(remove("git", &f, &got, 2, false), Removal::Removed);
         let _ = fs::remove_dir_all(&base);
     }
 
@@ -270,24 +370,24 @@ mod tests {
     fn a_worktree_with_changed_or_new_files_is_kept_unless_the_user_said_yes() {
         let base = dir("dirty");
         let shop = repo(&base, "shop");
-        let folders = vec![shop.to_string_lossy().into_owned()];
-        let got = prepare_worktrees("git", &folders, 4, &[]).unwrap();
+        let f = shop.to_string_lossy().into_owned();
+        let got = prep(&shop, 4, None).unwrap();
         let wt = worktree_dir(&shop, "task/4");
         fs::write(wt.join("README"), "changed\n").unwrap();
-        assert_eq!(remove("git", &got[0], 4, false), Removal::Uncommitted);
+        assert_eq!(remove("git", &f, &got, 4, false), Removal::Uncommitted);
         assert!(wt.join("README").exists());
         run(&wt, &["checkout", "--", "README"]);
         // A new file git doesn't ignore.
         fs::write(wt.join("notes.txt"), "mine\n").unwrap();
         assert_eq!(uncommitted("git", &wt), Ok(true));
         assert!(uncommitted_quick("git", &wt, Duration::from_secs(5)));
-        assert_eq!(remove("git", &got[0], 4, false), Removal::Uncommitted);
+        assert_eq!(remove("git", &f, &got, 4, false), Removal::Uncommitted);
         assert!(wt.join("notes.txt").exists());
         // Staged only.
         run(&wt, &["add", "notes.txt"]);
-        assert_eq!(remove("git", &got[0], 4, false), Removal::Uncommitted);
+        assert_eq!(remove("git", &f, &got, 4, false), Removal::Uncommitted);
         // The user said yes: removed, changes lost, branch kept.
-        assert_eq!(remove("git", &got[0], 4, true), Removal::Removed);
+        assert_eq!(remove("git", &f, &got, 4, true), Removal::Removed);
         assert!(!wt.exists());
         assert!(branches(&shop).lines().any(|b| b == "task/4"));
         let _ = fs::remove_dir_all(&base);
@@ -297,31 +397,30 @@ mod tests {
     fn nothing_is_touched_that_doesnt_match_the_tickets_record() {
         let base = dir("guard");
         let shop = repo(&base, "shop");
-        let folders = vec![shop.to_string_lossy().into_owned()];
-        let got = prepare_worktrees("git", &folders, 8, &[]).unwrap();
+        let f = shop.to_string_lossy().into_owned();
+        let got = prep(&shop, 8, None).unwrap();
         let wt = worktree_dir(&shop, "task/8");
-        let refused = |w: &Worktree, n: u32| matches!(remove("git", w, n, true), Removal::Refused(_));
+        let refused = |w: &Worktree, n: u32| matches!(remove("git", &f, w, n, true), Removal::Refused(_));
         // Another ticket's number, another branch, a path elsewhere, a path that climbs out, the repository itself.
-        assert!(refused(&got[0], 9));
-        assert!(refused(&Worktree { branch: "main".into(), ..got[0].clone() }, 8));
-        assert!(refused(&Worktree { path: shop.to_string_lossy().into_owned(), ..got[0].clone() }, 8));
-        assert!(refused(&Worktree { path: format!("{}/../../shop", wt.display()), ..got[0].clone() }, 8));
-        assert!(refused(&Worktree { path: "relative/task-8".into(), ..got[0].clone() }, 8));
+        assert!(refused(&got, 9));
+        assert!(refused(&Worktree { branch: "main".into(), ..got.clone() }, 8));
+        assert!(refused(&Worktree { path: shop.to_string_lossy().into_owned(), ..got.clone() }, 8));
+        assert!(refused(&Worktree { path: format!("{}/../../shop", wt.display()), ..got.clone() }, 8));
+        assert!(refused(&Worktree { path: "relative/task-8".into(), ..got.clone() }, 8));
         assert!(wt.is_dir() && shop.join("README").exists());
         // The right place, but not a worktree of this repository (a plain folder someone made): left alone.
         let fake = worktree_dir(&shop, "task/11");
         fs::create_dir_all(&fake).unwrap();
         fs::write(fake.join("keep.txt"), "x").unwrap();
-        let w11 = Worktree { path: fake.to_string_lossy().into_owned(), branch: "task/11".into(), ..got[0].clone() };
+        let w11 = Worktree { path: fake.to_string_lossy().into_owned(), branch: "task/11".into(), ..got.clone() };
         assert!(refused(&w11, 11));
         assert!(fake.join("keep.txt").exists());
         // A worktree at the right place that has been switched to another branch: left alone.
         run(&wt, &["switch", "-q", "-c", "elsewhere"]);
-        assert!(refused(&got[0], 8));
+        assert!(refused(&got, 8));
         assert!(wt.is_dir());
         // Its repository gone: nothing to check against, so nothing is touched.
-        let w = Worktree { folder: base.join("gone").to_string_lossy().into_owned(), ..got[0].clone() };
-        assert!(refused(&w, 8));
+        assert!(matches!(remove("git", &base.join("gone").to_string_lossy(), &got, 8, true), Removal::Refused(_)));
         assert!(wt.is_dir());
         let _ = fs::remove_dir_all(&base);
     }
@@ -330,26 +429,27 @@ mod tests {
     fn a_removed_worktree_comes_back_from_its_branch_at_the_same_place_with_its_commits_and_base() {
         let base = dir("back");
         let shop = repo(&base, "shop");
-        let folders = vec![shop.join("src").to_string_lossy().into_owned()];
-        let got = prepare_worktrees("git", &folders, 6, &[]).unwrap();
+        let src = shop.join("src");
+        let f = src.to_string_lossy().into_owned();
+        let got = prep(&src, 6, None).unwrap();
         let wt = worktree_dir(&shop, "task/6");
         let tip = commit_in(&wt, "basket.txt", "the basket");
-        assert_eq!(remove("git", &got[0], 6, false), Removal::Removed);
+        assert_eq!(remove("git", &f, &got, 6, false), Removal::Removed);
         commit_in(&shop, "later.txt", "main moves on");
         // Without the ticket's record the branch name is taken, as before.
-        let err = prepare_worktrees("git", &folders, 6, &[]).unwrap_err();
+        let err = prep(&src, 6, None).unwrap_err();
         assert!(err.contains("task/6 is already taken"), "{err}");
         assert!(!wt.exists());
         // With it: the same place, on the branch, with its commit and the base it was made from.
-        let removed = Worktree { removed: Some(9), ..got[0].clone() };
-        let back = prepare_worktrees("git", &folders, 6, &[removed]).unwrap();
+        let removed = Worktree { removed: Some(9), ..got.clone() };
+        let back = prep(&src, 6, Some(&removed)).unwrap();
         assert_eq!(back, got, "same path, branch and base");
         assert_eq!(run(&wt, &["rev-parse", "HEAD"]), tip);
         assert_eq!(run(&wt, &["rev-parse", "--abbrev-ref", "HEAD"]), "task/6");
         assert!(wt.join("basket.txt").exists());
         // Removed by hand (git still has a note of it): made again too.
         fs::remove_dir_all(&wt).unwrap();
-        let back = prepare_worktrees("git", &folders, 6, &got).unwrap();
+        let back = prep(&src, 6, Some(&got)).unwrap();
         assert_eq!(back, got);
         assert!(wt.join("basket.txt").exists());
         let _ = fs::remove_dir_all(&base);

@@ -1,7 +1,7 @@
 # platoon
 
 Every AI coding session you have, in one terminal app. See them all at a glance, pick up any one where you left it,
-group them into projects with shared notes, and hand tasks to squads of agents.
+group them into projects with shared notes, and start tasks that follow a squad's way of working.
 
 ![platoon: the Sessions list with running and finished sessions, a project's notes, a task handed to a squad of agents, a squad's workflow, and a switch to a light theme](demo/platoon.gif)
 
@@ -20,13 +20,11 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
   and can keep themselves up to date as you work. When a conversation gets long, hand the work on to a fresh session
   with one key. → [Projects](guide/projects.md)
 - **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude drafts tasks from
-  the conversation, for you to change and make), then hand it to a squad: a lead agent and its team, working in a copy
-  of your folder (a git worktree) or on a new branch of your checkout, on the branch you say the work lands on. They can
-  show you their plan first and wait for your yes, and they ask you before a push or a pull request unless you let them
-  publish on their own. Each squad is a brief, a short Markdown file of yours (what it does, its steps, its checks, when
-  it asks you) that you change in your own editor, and it can use the agents your coding tool already has. When a squad
-  says it is finished, platoon runs your project's tests itself and hands a failure back to the squad. The Tasks tab
-  shows every task across your projects, what each squad asks you (answer it in place), and what it has done.
+  the conversation, each with the squad that suits it), then start it: one Claude Code session in a copy of your folder
+  (a git worktree on the branch `task/<N>`), following a squad, a short Markdown file of steps for that kind of work
+  (Feature, Bug fix, Refactor, Explain, Review, Docs, or your own). It can show you its plan first and wait for your yes,
+  and it asks you before a push, a pull request or a release. When it stops, platoon runs your project's tests and hands
+  a failure back to it. The Tasks tab shows every task across your projects and what each one needs from you.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
@@ -62,12 +60,12 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   and two that carry a project's notes to its sessions). Nothing else in the file is touched, and a status line of your
   own is left alone.
 - **Its own folders**: `~/.config/platoon` and `~/.cache/platoon`, and a `<repo>-worktrees` folder beside a repository
-  when a squad works on it.
+  when a task works on it.
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
-- **Squads edit files without asking** (Claude Code's "accept edits" mode), inside the task's copy of the folder (or the
-  branch you chose for it). They still ask before a push, a pull request or a release, unless you hand a task over as
-  "works and publishes". A project's test command, once you set one, is run by platoon there when a squad finishes.
+- **A task's session edits files without asking** (Claude Code's "accept edits" mode, after plan mode for a squad that
+  plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. A
+  project's test command, once you set one, is run by platoon there when the session stops.
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 
@@ -80,8 +78,7 @@ It was last checked with Claude Code 2.1.288. → [What platoon changes](guide/w
 curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
 ```
 
-It takes platoon's status line and hooks out of Claude Code (backing `settings.json` up first), and the `/to-tickets`
-skill if an earlier platoon installed it, deletes platoon's cache, asks before deleting your projects, notes, tasks and
+It takes platoon's status line and hooks out of Claude Code (backing `settings.json` up first), deletes platoon's cache, asks before deleting your projects, notes, tasks and
 settings (`| sh -s -- --all` deletes them without asking) and before stopping any session platoon is running, then
 removes the program however you installed it. Your conversations are Claude Code's and are never touched; task
 worktrees are listed, not deleted.

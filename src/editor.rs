@@ -67,25 +67,15 @@ pub fn folder_roots(dir: &str) -> Vec<Root> {
     vec![Root { path: dir.to_string(), kind: "folder" }]
 }
 
-/// A ticket's worktrees, its folders that have no worktree (not in git, or not handed to a squad yet) as they are, and
-/// its work folder when there is something in it. Worktrees that are gone are left out: the app brings them back first.
-pub fn ticket_roots(t: &Ticket, work: &Path) -> Vec<Root> {
+/// A task's worktree, or its folder when it has none (not in git, or not started yet). A worktree that is gone is left
+/// out: the app brings it back first.
+pub fn ticket_roots(t: &Ticket) -> Vec<Root> {
     let mut out = Vec::new();
-    for f in &t.folders {
-        match t.worktrees.iter().find(|w| w.folder == *f) {
-            Some(w) if !w.is_gone() => push_unique(&mut out, &w.path, "worktree"),
-            Some(_) => {}
-            None if Path::new(f).is_dir() => push_unique(&mut out, f, "folder"),
-            None => {}
-        }
-    }
-    // A worktree whose folder was taken off the ticket later is still its work.
-    for w in t.worktrees.iter().filter(|w| !t.folders.contains(&w.folder) && !w.is_gone()) {
-        push_unique(&mut out, &w.path, "worktree");
-    }
-    let has_files = fs::read_dir(work).is_ok_and(|mut d| d.next().is_some());
-    if has_files {
-        push_unique(&mut out, &work.to_string_lossy(), "work");
+    match (&t.worktree, &t.folder) {
+        (Some(w), _) if !w.is_gone() => push_unique(&mut out, &w.path, "worktree"),
+        (Some(_), _) => {}
+        (None, Some(f)) if Path::new(f).is_dir() => push_unique(&mut out, f, "folder"),
+        (None, _) => {}
     }
     out
 }
@@ -285,83 +275,25 @@ mod tests {
         assert_eq!((r[0].path.as_str(), r[0].kind), (s(&d).as_str(), "folder"));
     }
 
-    fn ticket(number: u32, folders: Vec<String>, worktrees: Vec<Worktree>) -> Ticket {
-        Ticket {
-            number,
-            title: "Basket".into(),
-            file: String::new(),
-            state: crate::tickets::State::Working,
-            folders,
-            blocked_by: vec![],
-            created: 0,
-            updated: 0,
-            leaders: vec![],
-            worktrees,
-            reason: String::new(),
-            go_ahead: false,
-            handover: None,
-            permission: false,
-            busy: None,
-            queued: None,
-            from: None,
-            aside: None,
-            check_due: None,
-            checks: Vec::new(),
-            tests_failing: false,
-            check_failing: None,
-            publish_wanted: false,
-            plan_ready: false,
-            autonomy: None,
-            works_on: vec![],
-            old_number: None,
-        }
+    fn ticket(number: u32, folder: &Path, worktree: Option<Worktree>) -> Ticket {
+        Ticket { number, title: "Basket".into(), folder: Some(s(folder)), worktree, ..Default::default() }
     }
 
     #[test]
-    fn a_ticket_opens_its_worktrees_its_plain_folders_and_its_work_folder() {
+    fn a_task_opens_its_worktree_or_its_folder() {
         let d = tmp("ticket");
         let shop = d.join("repos/shop");
         let base = repo(&shop);
-        let plain = d.join("plain");
-        fs::create_dir_all(&plain).unwrap();
-        let folders = vec![s(&shop), s(&plain)];
-        let made = crate::squads::prepare_worktrees("git", &folders, 4, &[]).unwrap();
-        assert_eq!(made.len(), 1, "only the git folder gets a worktree");
-        let w = made[0].clone();
+        let w = crate::worktrees::prepare("git", &s(&shop), 4, None).unwrap().unwrap();
         assert_eq!(w.base.as_deref(), Some(base.as_str()));
-        fs::write(Path::new(&w.path).join("basket.txt"), "b\n").unwrap();
-        git(Path::new(&w.path), &["add", "."]);
-        git(Path::new(&w.path), &["commit", "-q", "-m", "basket"]);
-        let work = d.join("04-work");
-        fs::create_dir_all(&work).unwrap();
-        let t = ticket(4, folders.clone(), made.clone());
-        let roots = ticket_roots(&t, &work);
-        assert_eq!(
-            roots.iter().map(|r| r.path.clone()).collect::<Vec<_>>(),
-            vec![w.path.clone(), s(&plain)],
-            "an empty work folder is left out"
-        );
-        assert_eq!((roots[0].kind, roots[1].kind), ("worktree", "folder"));
-
-        fs::write(work.join("notes.md"), "x").unwrap();
-        let roots = ticket_roots(&t, &work);
-        assert_eq!(roots.last().map(|r| (r.path.clone(), r.kind)), Some((s(&work), "work")));
-
-        // A removed worktree is left out (the app brings it back before opening).
-        let mut gone = w.clone();
-        gone.removed = Some(1);
-        let roots = ticket_roots(&ticket(4, folders.clone(), vec![gone]), &work);
-        assert!(roots.iter().all(|r| r.kind != "worktree"), "{roots:?}");
-        assert!(roots.iter().all(|r| r.path != s(&shop)), "nor is the repository itself opened in its place");
-    }
-
-    #[test]
-    fn a_ticket_not_handed_to_a_squad_yet_opens_its_folders() {
-        let d = tmp("new-ticket");
-        let shop = d.join("shop");
-        repo(&shop);
-        let roots = ticket_roots(&ticket(2, vec![s(&shop)], vec![]), &d.join("none"));
-        assert_eq!(roots, vec![Root { path: s(&shop), kind: "folder" }]);
+        let roots = ticket_roots(&ticket(4, &shop, Some(w.clone())));
+        assert_eq!(roots, vec![Root { path: w.path.clone(), kind: "worktree" }]);
+        // A removed worktree is left out (the app brings it back before opening), and the repository isn't opened in
+        // its place.
+        let gone = Worktree { removed: Some(1), ..w };
+        assert!(ticket_roots(&ticket(4, &shop, Some(gone))).is_empty());
+        // Not started yet: its folder.
+        assert_eq!(ticket_roots(&ticket(2, &shop, None)), vec![Root { path: s(&shop), kind: "folder" }]);
     }
 
     #[test]

@@ -1,14 +1,13 @@
-//! The Tasks tab (`2`): the board's sections and their two-line rows (the same rows a project's Tasks pane draws,
-//! `draw_task_list`), the picked task's details beside the list from `SPLIT_MIN_WIDTH` columns (what the squad asks or
-//! wants to publish and the keys that answer, what it has done as a timeline, what ran), the timeline and "what ran"
-//! that a task's own screen shows too, the answer box (`y`) and the project picker (`n`, `m`).
+//! The Tasks tab (`2`): the board's sections and their two-line rows, the picked task's details beside the list from
+//! `SPLIT_MIN_WIDTH` columns (its state and why, its squad, its folder and branch, its plan when one is ready, its "Done
+//! when" boxes, its tests and what it has spent), a task's own screen (the same details and its text), the list of
+//! squads a task starts with (`s`) and the project picker of a new task (`n`).
 
-use super::{Hint, ROW_H, badge_span, badge_width, centered, draw_footer, fit, fit_end, hint_fg, modal_block, popup_ground, wrap};
+use super::{Hint, ROW_H, badge_span, badge_width, centered, draw_footer, fit_end, hint_fg, modal_block, popup_ground, wrap};
 use crate::app::{Action, App, Hit, ListItem};
 use crate::board::{self, Piece, Section, Tone};
-use crate::squadwork::{self, RunState};
 use crate::theme::Theme;
-use crate::tickets::{self, Leader, State, Ticket};
+use crate::tickets::{self, Need, State, Ticket};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Margin, Rect},
@@ -36,10 +35,19 @@ fn section_color(t: &Theme, s: Section) -> Color {
     match s {
         Section::NeedsYou => t.warn,
         Section::Working => t.busy,
-        Section::CanStart => t.ok,
-        Section::WaitsFor => t.subtext,
-        Section::Later | Section::Finished => t.dim,
-        Section::Closed => t.subtext,
+        Section::NotStarted => t.text,
+        Section::Done => t.dim,
+    }
+}
+
+/// A state's color: what needs the user stands out, what is finished steps back.
+pub(crate) fn state_color(t: &Theme, s: &State) -> Color {
+    match s {
+        State::NeedsYou(_) => t.warn,
+        State::Working => t.busy,
+        State::NotStarted => t.text,
+        State::Done => t.ok,
+        State::Cancelled => t.dim,
     }
 }
 
@@ -116,18 +124,8 @@ pub(super) fn fit_words(s: &str, n: usize) -> String {
     if out.is_empty() { fit_end(s, n) } else { format!("{out}…") }
 }
 
-/// The lines of an item: a heading, a task's two lines, a fold, a blank.
-#[allow(clippy::too_many_arguments)]
-fn item_lines(
-    app: &App,
-    item: &ListItem,
-    width: usize,
-    selected: bool,
-    lit: bool,
-    badges: bool,
-    badge_w: usize,
-    plain: bool,
-) -> Vec<Line<'static>> {
+/// The lines of an item: a heading, a task's two lines, a blank.
+fn item_lines(app: &App, item: &ListItem, width: usize, selected: bool, lit: bool, badges: bool, badge_w: usize) -> Vec<Line<'static>> {
     let t = app.effective_theme();
     let bg = if lit { t.surface } else { t.bg };
     let base = Style::new().bg(bg);
@@ -141,23 +139,6 @@ fn item_lines(
                 Span::styled(s.heading().to_string(), Style::new().fg(c).add_modifier(Modifier::BOLD)),
                 Span::styled(format!(" · {n}"), Style::new().fg(c)),
             ])]
-        }
-        ListItem::Fold { section, count, open } => {
-            let mark = match (open, plain) {
-                (true, false) => "▾",
-                (false, false) => "▸",
-                (true, true) => "-",
-                (false, true) => "+",
-            };
-            let text = if *section == Section::Closed {
-                format!("{mark} Done and cancelled · {count}")
-            } else if *open {
-                format!("{mark} the first {} only", board::FINISHED_SHOWN)
-            } else {
-                format!("{mark} {count} more")
-            };
-            let style = if *section == Section::Closed { base.fg(t.subtext).add_modifier(Modifier::BOLD) } else { base.fg(t.subtext) };
-            vec![Line::from(vec![lead, Span::styled(fit_end(&text, width.saturating_sub(1)), style)]).style(base)]
         }
         ListItem::Task(r) => {
             let mut one = vec![lead];
@@ -174,7 +155,7 @@ fn item_lines(
                 indent += badge_w + 1;
             }
             let num = format!("#{} ", r.number);
-            let closed = matches!(r.section, Section::Finished | Section::Closed);
+            let closed = r.section == Section::Done;
             let right_w = r.right.width();
             let room = width.saturating_sub(indent + num.width());
             let title_room = if right_w > 0 { room.saturating_sub(right_w + 2) } else { room };
@@ -194,36 +175,21 @@ fn item_lines(
     }
 }
 
-/// A list of tasks as the board draws it: each section's heading and count, its tasks as two-line rows (the project's
-/// badge with `badges`), folds, blank lines between the board's sections. `selected`: the picked row among those that
-/// can be picked; `focused`: the list has the keys (the picked row is lit only then). Scrolled so the picked row
-/// shows, with its heading when it is the first of its section; `top` keeps where it was so the list doesn't jump.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn draw_task_list(
-    f: &mut Frame,
-    app: &App,
-    area: Rect,
-    items: &[ListItem],
-    selected: usize,
-    focused: bool,
-    badges: bool,
-    top: &Cell<usize>,
-) {
+/// The board's list: each section's heading and count, its tasks as two-line rows with their project's badge, blank
+/// lines between sections. `selected`: the picked task. Scrolled so the picked row shows, with its heading when it is
+/// the first of its section; `top` keeps where it was so the list doesn't jump.
+pub(super) fn draw_task_list(f: &mut Frame, app: &App, area: Rect, items: &[ListItem], selected: usize, top: &Cell<usize>) {
     if area.height == 0 || area.width == 0 {
         return;
     }
     let t = app.effective_theme();
     app.pages.tickets.set((area.height / ROW_H).max(1) as usize);
-    let badge_w = if badges {
-        items
-            .iter()
-            .filter_map(|i| if let ListItem::Task(r) = i { app.projects.get(&r.project).map(badge_width) } else { None })
-            .max()
-            .unwrap_or(0)
-    } else {
-        0
-    };
-    let badges = badges && badge_w > 0;
+    let badge_w = items
+        .iter()
+        .filter_map(|i| if let ListItem::Task(r) = i { app.projects.get(&r.project).map(badge_width) } else { None })
+        .max()
+        .unwrap_or(0);
+    let badges = badge_w > 0;
     // Where each item starts, and the picked one's lines (with its heading above it when it is the first row).
     let mut ys = Vec::with_capacity(items.len());
     let mut y = 0usize;
@@ -231,7 +197,7 @@ pub(super) fn draw_task_list(
     let mut pick: Option<(usize, usize)> = None;
     for (i, item) in items.iter().enumerate() {
         ys.push(y);
-        if item.selectable() {
+        if matches!(item, ListItem::Task(_)) {
             if k == selected {
                 let from = if i > 0 && matches!(items[i - 1], ListItem::Heading(..)) { y - 1 } else { y };
                 pick = Some((from, y + item.height() as usize));
@@ -252,10 +218,9 @@ pub(super) fn draw_task_list(
         }
     }
     top.set(first);
-    let plain = app.plain_marker;
     let mut k = 0usize;
     for (i, item) in items.iter().enumerate() {
-        let index = if item.selectable() {
+        let index = if matches!(item, ListItem::Task(_)) {
             k += 1;
             Some(k - 1)
         } else {
@@ -270,8 +235,8 @@ pub(super) fn draw_task_list(
         let full = rect.intersection(area);
         let sel = index == Some(selected);
         let hover = index.is_some() && full.contains(app.mouse.into());
-        let lit = (sel && focused) || hover;
-        let lines = item_lines(app, item, area.width as usize, sel, lit, badges, badge_w, plain);
+        let lit = sel || hover;
+        let lines = item_lines(app, item, area.width as usize, sel, lit, badges, badge_w);
         for (li, line) in lines.into_iter().enumerate() {
             let ly = y0 + li;
             if ly < first || ly >= first + h {
@@ -285,7 +250,6 @@ pub(super) fn draw_task_list(
             f.render_widget(Paragraph::new(line).style(Style::new().bg(bg)), at);
         }
     }
-    // More below what shows: said on the last line (the list scrolls as the picked row moves).
     let below = total.saturating_sub(first + h);
     if below > 0 {
         super::draw_more_below(f, t, Rect::new(area.x, area.bottom() - 1, area.width, 1), below);
@@ -305,21 +269,23 @@ pub(super) fn draw_board(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), at);
         return;
     }
-    let wide = f.area().width >= crate::app::SPLIT_MIN_WIDTH;
     let selected = app.board_selected();
-    if !wide {
-        draw_task_list(f, app, area, &items, selected, true, true, &app.bd.top);
+    if f.area().width < SPLIT_MIN_WIDTH {
+        draw_task_list(f, app, area, &items, selected, &app.bd.top);
         return;
     }
     let left = area.width * 55 / 100;
     let list = Rect::new(area.x, area.y, left.saturating_sub(1), area.height);
-    draw_task_list(f, app, list, &items, selected, true, true, &app.bd.top);
+    draw_task_list(f, app, list, &items, selected, &app.bd.top);
     for y in area.y..area.bottom() {
         f.render_widget(Paragraph::new("│").style(Style::new().fg(t.border)), Rect::new(area.x + left, y, 1, 1));
     }
     let details = Rect::new(area.x + left + 2, area.y, area.width.saturating_sub(left + 2), area.height);
     draw_board_details(f, app, details);
 }
+
+/// From this many columns the board has the picked task's details beside it.
+pub const SPLIT_MIN_WIDTH: u16 = 100;
 
 /// The task the board has picked, as it is now.
 fn picked_task(app: &App) -> Option<(String, Ticket)> {
@@ -329,55 +295,11 @@ fn picked_task(app: &App) -> Option<(String, Ticket)> {
     Some((p, t))
 }
 
-/// "in WS Web shop · Docs squad · 11 min": where a task is and who has it (how long it has been at it).
-pub(super) fn where_line(app: &App, project: &str, x: &Ticket, w: usize) -> Line<'static> {
-    let t = app.effective_theme();
-    let mut spans: Vec<Span> = Vec::new();
-    match app.projects.get(project) {
-        Some(p) => {
-            spans.push(Span::styled("in ", Style::new().fg(t.dim)));
-            spans.push(badge_span(t, p));
-            spans.push(Span::styled(format!(" {}", p.name), Style::new().fg(t.subtext)));
-        }
-        None => spans.push(Span::styled(tickets::NO_PROJECT_NAME, Style::new().fg(t.subtext))),
-    }
-    if let Some(l) = x.leader() {
-        let mut who = format!(" · {} squad", app.squad_name(&l.squad));
-        if !x.state.closed() && l.started > 0 {
-            let at = board::since(crate::usage::now(), l.started);
-            if !at.is_empty() {
-                who.push_str(&format!(" · {}", if at == "just now" { "just started".to_string() } else { at }));
-            }
-        }
-        let used: usize = spans.iter().map(|s| s.content.width()).sum();
-        spans.push(Span::styled(fit_end(&who, w.saturating_sub(used)), Style::new().fg(t.subtext)));
-    }
-    Line::from(spans)
-}
-
-/// A task's Tests line after its label, in rows of `room` cells: all of what its last check said and when
+/// A task's Tests line after its label, in rows of `room` cells: what its last run said and when
 /// (`board::tests_line`), wrapped after whole words, the verdict in its color and the rest quiet.
-pub(super) fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
+fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
     let command = app.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default();
-    let mut pieces = board::tests_line(x, &command, &|secs| clock(Some(secs * 1000)));
-    // The brief asks for the tests and the project has none to run: the brief's check isn't made, and it says so.
-    if command.is_empty()
-        && x.last_tests().is_none()
-        && app.leader_checks(project, x).iter().any(|(_, k)| *k == crate::brief::CheckKind::Tests)
-    {
-        pieces = board::tests_not_set_but_asked();
-    }
-    piece_rows(app, pieces, room)
-}
-
-/// A task's lines for its brief's other checks (an agent reading the change, the acceptance boxes, the gate, the
-/// squad's own), each its label and its words wrapped under themselves: what its leader was started with.
-pub(super) fn check_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<(&'static str, Vec<Vec<Span<'static>>>)> {
-    let checks = app.leader_checks(project, x);
-    board::check_lines(x, &checks, &|secs| clock(Some(secs * 1000)))
-        .into_iter()
-        .map(|(label, pieces)| (label, piece_rows(app, pieces, room)))
-        .collect()
+    piece_rows(app, board::tests_line(x, &command, &|secs| clock(Some(secs * 1000))), room)
 }
 
 /// The words of a backtick pair (`npm test`) stay together: a line breaks before it rather than inside it. A pair too
@@ -426,23 +348,15 @@ fn piece_rows(app: &App, pieces: Vec<board::Piece>, room: usize) -> Vec<Vec<Span
     rows
 }
 
-/// The details of the board's picked task: its title and where it is, what the squad asks (or wants to publish) and
-/// the keys that answer, what it has done, what ran.
-fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
+/// The width of the details' labels ("Folder" and the air after it).
+const LABEL_W: usize = 8;
+
+/// The details of a task, `w` cells wide: its number and title, its project, its state and why, its squad, its folder
+/// and branch, its plan when one is ready (`plan_most`: at most that many lines of it), its "Done when" boxes as its
+/// text has them, its tests, what it has spent.
+fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Option<usize>) -> Vec<Line<'static>> {
     let t = app.effective_theme();
-    let w = area.width as usize;
-    if w < 10 {
-        return;
-    }
-    let Some((project, x)) = picked_task(app) else {
-        let msg = match app.board_pick() {
-            Some(crate::app::BRow::Fold) => "Enter shows the rest of today's finished tasks.",
-            _ => "",
-        };
-        f.render_widget(Paragraph::new(fit_end(msg, w)).style(Style::new().fg(t.dim)), Rect::new(area.x, area.y, area.width, 1));
-        return;
-    };
-    let mut lines: Vec<Line> = Vec::new();
+    let mut lines: Vec<Line<'static>> = Vec::new();
     let bold = Style::new().fg(t.text).add_modifier(Modifier::BOLD);
     for (i, l) in wrap(&format!("#{} {}", x.number, x.title), w).into_iter().enumerate() {
         if i == 0 {
@@ -453,147 +367,109 @@ fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::styled(l, bold));
         }
     }
-    lines.push(where_line(app, &project, &x, w));
-    // Once a squad has had it: what its tests said (or that the project has none), then its brief's other checks.
-    if x.leader().is_some() {
-        // The labels take the room of the longest ("Its own checks") once there are more than the tests.
-        let others = check_rows(app, &project, &x, w.saturating_sub(15));
-        let label_w = if others.is_empty() { 6 } else { 15 };
-        let mut rows = vec![("Tests", tests_rows(app, &project, &x, w.saturating_sub(label_w)))];
-        rows.extend(others);
-        for (label, wrapped) in rows {
-            for (k, row) in wrapped.into_iter().enumerate() {
-                let lead = if k == 0 { format!("{label:<label_w$}") } else { " ".repeat(label_w) };
-                let mut spans = vec![Span::styled(lead, Style::new().fg(t.dim))];
-                spans.extend(row);
-                lines.push(Line::from(spans));
-            }
+    let mut place: Vec<Span<'static>> = Vec::new();
+    match app.projects.get(project) {
+        Some(p) => {
+            place.push(Span::styled("in ", Style::new().fg(t.dim)));
+            place.push(badge_span(t, p));
+            place.push(Span::styled(format!(" {}", p.name), Style::new().fg(t.subtext)));
+        }
+        None => place.push(Span::styled(tickets::NO_PROJECT_NAME, Style::new().fg(t.subtext))),
+    }
+    lines.push(Line::from(place));
+    lines.push(Line::raw(""));
+    // Its state, and why it needs the user.
+    let now = crate::usage::now();
+    let busy = app.starting_words(project, x.number);
+    let (word, color) = match (&x.state, busy) {
+        (_, Some(_)) => ("Starting".to_string(), t.busy),
+        (State::NeedsYou(n), _) => (format!("Needs you · {}", n.words()), t.warn),
+        (s, _) => (s.label().to_string(), state_color(t, s)),
+    };
+    let mut state = vec![Span::styled(word.clone(), Style::new().fg(color).add_modifier(Modifier::BOLD))];
+    if x.state.closed() {
+        state.push(Span::styled(format!(" · {}", board::ago(now, x.updated)), Style::new().fg(t.dim)));
+    }
+    lines.push(Line::from(state));
+    if let State::NeedsYou(n) = &x.state
+        && !n.text().is_empty()
+    {
+        for l in wrap(n.text(), w).into_iter().take(8) {
+            lines.push(Line::styled(l, Style::new().fg(t.warn)));
         }
     }
     lines.push(Line::raw(""));
-    let key = |k: &str, d: &str| {
-        vec![Span::styled(k.to_string(), Style::new().fg(t.accent)), Span::styled(format!(" {d}"), Style::new().fg(hint_fg(t)))]
+    let label = |s: &str| Span::styled(format!("{s:<LABEL_W$}"), Style::new().fg(t.dim));
+    let room = w.saturating_sub(LABEL_W);
+    // Its squad (suggested, before it starts).
+    let squad = match (x.squad.is_empty(), x.started()) {
+        (true, _) => Span::styled("none picked yet: s picks one", Style::new().fg(t.subtext)),
+        (false, true) => Span::styled(fit_end(&app.squad_name(&x.squad), room), Style::new().fg(t.text)),
+        (false, false) => Span::styled(fit_end(&format!("{} (suggested)", app.squad_name(&x.squad)), room), Style::new().fg(t.text)),
     };
-    // The keys that answer, each whole: the ones that don't fit beside the others are left to the footer.
-    let keys_line = |pairs: &[(&str, &str)]| {
-        let mut spans = Vec::new();
-        let mut used = 0;
-        for (i, (k, d)) in pairs.iter().enumerate() {
-            let gap = if i > 0 { 3 } else { 0 };
-            let need = gap + k.width() + 1 + d.width();
-            if used + need > w {
-                break;
-            }
-            if i > 0 {
-                spans.push(Span::raw("   "));
-            }
-            spans.extend(key(k, d));
-            used += need;
-        }
-        Line::from(spans)
+    lines.push(Line::from(vec![label("Squad"), squad]));
+    let folder = match &x.folder {
+        Some(f) => Span::styled(fit_end(&crate::dirs::tilde(f, &app.home), room), Style::new().fg(t.text)),
+        None => Span::styled("none yet: s asks for one", Style::new().fg(t.subtext)),
     };
-    let siblings: Vec<Ticket> = app.all_tasks().into_iter().find(|(p, _)| *p == project).map(|(_, l)| l).unwrap_or_default();
-    if let Some(need) = board::need_of(&x) {
-        let aside = x.is_aside();
-        lines.push(Line::styled(need.heading(), bold));
-        let h = if aside { "bring it back" } else { "later" };
-        if need == board::Need::Plan {
-            // The plan itself, as much as leaves room for the keys under it (all of it on the task's own screen).
-            let most = (area.height as usize / 2).max(6);
-            lines.extend(plan_lines(app, &project, &x, w, Some(most)));
-            lines.push(Line::raw(""));
-            lines.push(keys_line(&[("y", "go ahead"), ("n", "change the plan"), ("enter", "open the session"), ("h", h)]));
-            lines.push(Line::raw(""));
+    lines.push(Line::from(vec![label("Folder"), folder]));
+    if let Some(wt) = &x.worktree {
+        let where_ = if wt.removed.is_some() {
+            "its worktree was removed after the work".to_string()
+        } else if wt.kept_uncommitted {
+            format!("kept: changes not yet committed · {}", crate::dirs::tilde(&wt.path, &app.home))
         } else {
-            for l in wrap(&board::squad_said(&x), w).into_iter().take(8) {
-                lines.push(Line::styled(l, Style::new().fg(if aside { t.subtext } else { t.warn })));
-            }
-            lines.push(Line::raw(""));
-            let y = match need {
-                board::Need::GoAhead => "go ahead",
-                board::Need::Permission => "open its session",
-                _ => "answer",
-            };
-            lines.push(keys_line(&[("y", y), ("enter", "open the session"), ("h", h)]));
-            lines.push(Line::raw(""));
-        }
-    } else {
-        let says = tickets::words(&x, &siblings);
-        let color = super::words_color(t, &x, &says);
-        let mut state = vec![Span::styled(says.clone(), Style::new().fg(color).add_modifier(Modifier::BOLD))];
-        let tail = x.busy.clone().or_else(|| x.queued.as_ref().map(|_| tickets::QUEUED_WORDS.to_string()));
-        if let Some(tail) = tail {
-            state.push(Span::styled(fit_end(&format!(" · {tail}"), w.saturating_sub(says.width())), Style::new().fg(t.subtext)));
-        } else if x.state.closed() {
-            state.push(Span::styled(format!(" · {}", board::ago(crate::usage::now(), x.updated)), Style::new().fg(t.dim)));
-        }
-        lines.push(Line::from(state));
-        if x.state == State::New {
-            if x.folders.is_empty() {
-                lines.push(Line::styled("No folder of its own: a squad works in the task's own folder.", Style::new().fg(t.subtext)));
-            } else {
-                let names: Vec<String> = x.folders.iter().map(|f| crate::squads::folder_name(f)).collect();
-                for l in wrap(&format!("Works in {}", names.join(", ")), w) {
-                    lines.push(Line::styled(l, Style::new().fg(t.subtext)));
-                }
-            }
-            let waits = tickets::waiting_for(&x, &siblings);
-            for n in &waits {
-                let title = siblings.iter().find(|o| o.number == *n).map(|o| o.title.clone()).unwrap_or_default();
-                lines.push(Line::styled(fit_end(&format!("Waits for #{n} {title}"), w), Style::new().fg(t.subtext)));
-            }
-            if let Some(h) = &x.handover {
-                for l in wrap(&h.says, w).into_iter().take(4) {
-                    lines.push(Line::styled(l, Style::new().fg(t.warn)));
-                }
-            }
-            lines.push(Line::raw(""));
-            if waits.is_empty() {
-                lines.push(keys_line(&[("S", "hand to a squad"), ("enter", "open")]));
-            } else {
-                lines.push(keys_line(&[("enter", "open")]));
-            }
-            lines.push(Line::raw(""));
-        } else {
-            lines.push(Line::raw(""));
-        }
-        // A finished task: its result first.
-        if x.state == State::Done
-            && let Ok(text) = std::fs::read_to_string(tickets::bodies_dir(&app.config, &project).join(tickets::result_file(x.number)))
-            && !text.trim().is_empty()
-        {
-            lines.push(Line::styled("Result", bold));
-            for l in text.lines().filter(|l| !l.trim().is_empty()).flat_map(|l| wrap(l, w)).take(6) {
-                lines.push(Line::styled(l, Style::new().fg(t.text)));
-            }
-            lines.push(Line::raw(""));
+            crate::dirs::tilde(&wt.path, &app.home)
+        };
+        lines.push(Line::from(vec![
+            label("Branch"),
+            Span::styled(fit_end(&format!("{} · {where_}", wt.branch), room), Style::new().fg(t.text)),
+        ]));
+    } else if x.started() {
+        lines.push(Line::from(vec![label("Branch"), Span::styled("none: its folder is not in git", Style::new().fg(t.subtext))]));
+    }
+    for (k, row) in tests_rows(app, project, x, room).into_iter().enumerate() {
+        let mut spans = vec![if k == 0 { label("Tests") } else { Span::raw(" ".repeat(LABEL_W)) }];
+        spans.extend(row);
+        lines.push(Line::from(spans));
+    }
+    if let Some(s) = x.session.as_deref().and_then(|s| app.session_spent(s)) {
+        for (k, l) in wrap(&crate::spent::details_total(&s), room).into_iter().enumerate() {
+            lines.push(Line::from(vec![
+                if k == 0 { label("Tokens") } else { Span::raw(" ".repeat(LABEL_W)) },
+                Span::styled(l, Style::new().fg(t.subtext)),
+            ]));
         }
     }
-    if let Some(l) = x.leader() {
-        let lanes = timeline_lines(app, &x, l, w, true);
-        if !lanes.is_empty() {
-            lines.push(Line::styled("What it has done", bold));
-            lines.extend(lanes);
-            lines.push(Line::raw(""));
+    // The plan, while it waits for the user's yes.
+    if x.state == State::NeedsYou(Need::Plan) {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("The plan", bold));
+        lines.extend(plan_lines(app, project, x, w, plan_most));
+    }
+    // The "Done when" boxes, as its text has them.
+    let body = tickets::Tickets::open(&app.config, project).get(x.number).map(|t| tickets::Tickets::open(&app.config, project).body(t));
+    let boxes = body.as_deref().map(crate::checks::done_when).unwrap_or_default();
+    if !boxes.is_empty() {
+        lines.push(Line::raw(""));
+        lines.push(Line::styled("Done when", bold));
+        for (ticked, text) in boxes {
+            let (mark, c) = if ticked { ("[x] ", t.ok) } else { ("[ ] ", t.subtext) };
+            for (k, l) in wrap(&text, w.saturating_sub(4)).into_iter().enumerate() {
+                let lead = if k == 0 { Span::styled(mark, Style::new().fg(c)) } else { Span::raw("    ") };
+                lines.push(Line::from(vec![lead, Span::styled(l, Style::new().fg(t.text))]));
+            }
         }
     }
-    let ran = ran_lines(app, &x, w, Some(squadwork::RAN_SHOWN));
-    if !ran.is_empty() {
-        lines.push(Line::styled("What ran", bold));
-        lines.extend(ran);
-    }
-    lines.truncate(area.height as usize);
-    f.render_widget(Paragraph::new(lines), area);
+    lines
 }
 
 /// A task's plan (`plan.md` in its own folder) drawn from its Markdown in `w` cells; `most`: at most that many lines,
-/// with a last one saying how many more there are (the task's own screen shows all of it). When the squad wrote none
-/// down, one line says where to read it.
-pub(super) fn plan_lines(app: &App, project: &str, x: &Ticket, w: usize, most: Option<usize>) -> Vec<Line<'static>> {
+/// with a last one saying how many more there are.
+fn plan_lines(app: &App, project: &str, x: &Ticket, w: usize, most: Option<usize>) -> Vec<Line<'static>> {
     let t = app.effective_theme();
-    let Some(text) = std::fs::read_to_string(tickets::plan_file(&app.config, project, x.number)).ok().filter(|s| !s.trim().is_empty())
-    else {
-        return wrap("The squad didn't write its plan down here: open its session to read it.", w)
+    let Some(text) = tickets::Tickets::open(&app.config, project).plan(x.number) else {
+        return wrap("Its plan is in its session: enter opens it.", w)
             .into_iter()
             .map(|l| Line::styled(l, Style::new().fg(t.subtext)))
             .collect();
@@ -602,9 +478,171 @@ pub(super) fn plan_lines(app: &App, project: &str, x: &Ticket, w: usize, most: O
     if let Some(most) = most.filter(|m| lines.len() > *m) {
         let more = lines.len() - (most - 1);
         lines.truncate(most - 1);
-        lines.push(Line::styled(fit_end(&format!("… {more} more lines: enter opens the task"), w), Style::new().fg(t.dim)));
+        lines.push(Line::styled(fit_end(&format!("… {more} more lines in its session"), w), Style::new().fg(t.dim)));
     }
     lines
+}
+
+/// The details of the board's picked task.
+fn draw_board_details(f: &mut Frame, app: &App, area: Rect) {
+    let w = area.width as usize;
+    if w < 10 {
+        return;
+    }
+    let Some((project, x)) = picked_task(app) else { return };
+    let mut lines = detail_lines(app, &project, &x, w, Some((area.height as usize / 2).max(6)));
+    lines.truncate(area.height as usize);
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+/// A task's own screen: its details, then its text drawn from its Markdown, scrolled with the arrows.
+pub(super) fn draw_task_screen(f: &mut Frame, app: &App, number: u32, area: Rect) {
+    let t = app.effective_theme();
+    let w = area.width.saturating_sub(2) as usize;
+    let Some(project) = app.task_scope() else { return };
+    let Some(x) = app.ticket(number).cloned() else { return };
+    let mut lines = detail_lines(app, &project, &x, w, None);
+    lines.push(Line::raw(""));
+    lines.push(Line::styled("Its text", Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
+    let body = app.tickets_store().map(|s| s.body(&x)).unwrap_or_default();
+    if body.trim().is_empty() {
+        lines.push(Line::styled("Nothing written yet: e opens it in your editor.", Style::new().fg(hint_fg(t))));
+    } else {
+        lines.extend(crate::mdview::render(body.trim(), w, t, app.plain_marker));
+    }
+    let view = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), area.height);
+    let h = view.height as usize;
+    let top = app.tk.body_top.get().min(lines.len().saturating_sub(h));
+    app.tk.body_top.set(top);
+    let below = lines.len().saturating_sub(top + h);
+    let shown: Vec<Line> = lines.into_iter().skip(top).take(if below > 0 { h.saturating_sub(1) } else { h }).collect();
+    f.render_widget(Paragraph::new(shown), view);
+    if below > 0 {
+        super::draw_more_below(f, t, Rect::new(view.x, view.bottom() - 1, view.width, 1), below);
+    }
+}
+
+/// The keys of a task's own screen.
+pub(super) fn task_screen_hints(app: &App, n: u32) -> Vec<Hint<'_>> {
+    let t = app.ticket(n);
+    let mut out: Vec<Hint> = Vec::new();
+    match t {
+        Some(t) if t.started() => out.push(("enter", "its session", None)),
+        Some(t) if t.state != State::Cancelled => out.push(("s", "start", None)),
+        _ => {}
+    }
+    out.push(("e", "edit", None));
+    if t.is_some_and(|t| t.state != State::Cancelled) {
+        out.push(("c", "cancel", None));
+    }
+    out.extend([
+        ("v", "editor", Some(Action::Editor)),
+        ("↑↓", "scroll", None),
+        ("?", "help", Some(Action::Help)),
+        ("esc", "back", Some(Action::Leave)),
+    ]);
+    out
+}
+
+/// The keys of the Tasks tab for the picked row (the footer, and with `all` every key the board has, for the help).
+pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
+    let mut out: Vec<Hint> = Vec::new();
+    if all {
+        out.extend([
+            ("n", "a new task", None),
+            ("s", "start the task: pick its squad (and its folder, when it has none)", None),
+            ("enter", "open the task's session; a task that never started shows its text", None),
+            ("e", "edit its text", None),
+            ("c", "cancel", None),
+        ]);
+    } else if let Some((p, n)) = app.board_task() {
+        let t = app.all_tasks().into_iter().find(|(q, _)| *q == p).and_then(|(_, l)| l.into_iter().find(|t| t.number == n));
+        match &t {
+            Some(t) if t.started() => out.push(("enter", "its session", Some(Action::Jump))),
+            Some(t) if t.state != State::Cancelled => {
+                out.push(("s", "start", None));
+                out.push(("enter", "open", Some(Action::Jump)));
+            }
+            _ => out.push(("enter", "open", Some(Action::Jump))),
+        }
+        out.push(("e", "edit", None));
+        if t.is_some_and(|t| t.state != State::Cancelled) {
+            out.push(("c", "cancel", None));
+        }
+    }
+    if !all {
+        out.push(("n", "new task", None));
+    }
+    out.extend([
+        ("/", "filter", None),
+        ("1-3", "tabs", None),
+        ("↑↓", "move", None),
+        ("?", "help", Some(Action::Help)),
+        (app.quit_label(), "quit", Some(Action::Quit)),
+    ]);
+    out
+}
+
+/// The list of squads a task starts with (`s`): each squad's name and what it is for, the picked one's model and
+/// whether it plans first under the list; a squad whose file has something wrong says what.
+pub(super) fn draw_squad_list(f: &mut Frame, app: &App, area: Rect) {
+    let t = app.effective_theme();
+    app.hits.borrow_mut().clear();
+    let (_, number) = &app.sq.pick_task;
+    let n = app.sq.pick.len();
+    let w = area.width.saturating_sub(8).clamp(40, 90);
+    let iw = w.saturating_sub(4) as usize;
+    let picked = app.sq.pick.get(app.sq.pick_selected);
+    let about: Vec<String> = match picked {
+        Some(s) if !s.usable() => wrap(&format!("Can't be used: {}", s.problems.join("; ")), iw).into_iter().take(4).collect(),
+        Some(s) => {
+            let mut v = wrap(&s.description, iw);
+            let plan = if s.plan_first { "plans first, then waits for your yes" } else { "starts working at once" };
+            v.push(format!("Model {} · {plan}", s.model));
+            v
+        }
+        None => Vec::new(),
+    };
+    let h = (n as u16 + about.len() as u16 + 7).min(area.height.saturating_sub(2)).max(8);
+    let r = centered(area, w, h);
+    popup_ground(f, t, area, r, true);
+    let title = format!("Start #{number} with a squad");
+    let block = modal_block(t, &title);
+    let inner = block.inner(r).inner(Margin::new(1, 0));
+    f.render_widget(block, r);
+    let [list, _, about_a, _, foot] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(1),
+        Constraint::Length(about.len() as u16),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let rows = list.height as usize;
+    let start = app.sq.pick_selected.saturating_sub(rows.saturating_sub(1));
+    let name_w = app.sq.pick.iter().map(|s| s.name.width().max(s.id.width())).max().unwrap_or(0).min(20);
+    for (i, s) in app.sq.pick.iter().enumerate().skip(start).take(rows) {
+        let rect = Rect::new(list.x, list.y + (i - start) as u16, list.width, 1);
+        app.hits.borrow_mut().push((rect, Hit::SquadRow(i)));
+        let sel = i == app.sq.pick_selected;
+        let bg = if sel || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
+        let base = Style::new().bg(bg);
+        let name = if s.name.is_empty() { s.id.clone() } else { s.name.clone() };
+        let (name_c, rest, rest_c) =
+            if s.usable() { (t.text, s.description.clone(), t.subtext) } else { (t.dim, "needs fixing".to_string(), t.warn) };
+        let room = (rect.width as usize).saturating_sub(2 + name_w + 2);
+        let spans = vec![
+            Span::styled(if sel { "▎ " } else { "  " }, base.fg(t.accent)),
+            Span::styled(format!("{:<name_w$}  ", fit_end(&name, name_w)), base.fg(name_c).add_modifier(Modifier::BOLD)),
+            Span::styled(fit_end(&rest, room), base.fg(rest_c)),
+        ];
+        f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+    }
+    let about_lines: Vec<Line> = about.into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
+    f.render_widget(Paragraph::new(about_lines), about_a);
+    app.hits.borrow_mut().push((r, Hit::Inert));
+    let hints: [Hint; 3] = [("enter", "start", Some(Action::Confirm)), ("esc", "cancel", Some(Action::Cancel)), ("↑↓", "move", None)];
+    draw_footer(f, app, foot, &hints, None);
 }
 
 /// A clock time in the user's own time zone: "13:40" ("" when unknown).
@@ -614,235 +652,11 @@ fn clock(ms: Option<u64>) -> String {
         .unwrap_or_default()
 }
 
-/// A leader's timeline in `w` cells: one line per member run (the agent, a bar for when it ran within the squad's
-/// time so far, how long it took, done / now / stopped), then (`upcoming`, while the task is open) the steps of its
-/// workflow that haven't run yet. Nothing until its transcript has been read.
-pub(super) fn timeline_lines(app: &App, x: &Ticket, l: &Leader, w: usize, upcoming: bool) -> Vec<Line<'static>> {
-    let t = app.effective_theme();
-    let Some(log) = app.leader_log(&l.session) else { return Vec::new() };
-    let current = x.leader().is_some_and(|c| c.session == l.session);
-    let running = current && x.queued.is_none() && app.leader_session_running(&l.session);
-    let steps: Vec<String> = if upcoming && current && !x.state.closed() {
-        app.sqt
-            .list
-            .iter()
-            .find(|s| s.id == l.squad)
-            .and_then(|s| s.squad.as_ref())
-            .map(|s| s.agent_ids().iter().map(|a| crate::squads::agent_name(&l.squad, a, l.names)).collect())
-            .unwrap_or_default()
-    } else {
-        Vec::new()
-    };
-    if log.runs.is_empty() && steps.is_empty() {
-        return Vec::new();
-    }
-    let from = log.first_at.unwrap_or(l.started * 1000);
-    let ends = log.runs.iter().filter_map(|r| r.ended_at.or(r.started_at)).max().unwrap_or(from);
-    let to = if running { (crate::usage::now() * 1000).max(ends) } else { log.last_at.unwrap_or(ends).max(ends) };
-    let names: Vec<String> = log
-        .runs
-        .iter()
-        .map(|r| squadwork::agent_label(&r.agent, &l.squad))
-        .chain(steps.iter().map(|s| squadwork::agent_label(s, &l.squad)))
-        .collect();
-    let name_w = names.iter().map(|n| n.width()).max().unwrap_or(0).min(16).min(w / 3);
-    const TOOK: usize = 7;
-    const WORD: usize = 7;
-    let bar_w = w.saturating_sub(name_w + 1 + 1 + 1 + TOOK + 2 + WORD);
-    let bar_w = if bar_w >= 4 { bar_w } else { 0 };
-    let lanes = squadwork::timeline(&log.runs, running, &l.squad, &steps, from, to, bar_w);
-    lanes
-        .into_iter()
-        .map(|lane| {
-            let (word, color) = match lane.state {
-                Some(s @ RunState::Finished) => (s.word(), t.ok),
-                Some(s @ RunState::Running) => (s.word(), t.busy),
-                Some(s) => (s.word(), t.dim),
-                None => (squadwork::NOT_YET, t.dim),
-            };
-            let name_color = if lane.state.is_none() { t.dim } else { t.text };
-            let mut spans = vec![Span::styled(fit(&lane.agent, name_w), Style::new().fg(name_color)), Span::raw(" ")];
-            if bar_w > 0 {
-                let mut bar = vec![Span::raw(" ")];
-                match lane.bar {
-                    Some((at, len)) => {
-                        bar.push(Span::raw(" ".repeat(at)));
-                        bar.push(Span::styled("━".repeat(len), Style::new().fg(color)));
-                        bar.push(Span::raw(" ".repeat(bar_w.saturating_sub(at + len))));
-                    }
-                    None if lane.state.is_none() => bar.push(Span::raw(" ".repeat(bar_w))),
-                    None => bar.push(Span::styled(fit("·", bar_w), Style::new().fg(t.dim))),
-                }
-                spans.extend(bar);
-            }
-            let took = lane.took.map(squadwork::took).unwrap_or_default();
-            spans.push(Span::styled(format!(" {took:>TOOK$}"), Style::new().fg(t.subtext)));
-            spans.push(Span::styled(format!("  {word}"), Style::new().fg(color)));
-            Line::from(spans)
-        })
-        .collect()
-}
-
-/// What ran for a task, in `w` cells, grouped by run: platoon's own steps and the commands its squads ran in the shell,
-/// each with its time. `last`: only the latest that many (the board); None: all of them (a task's screen).
-pub(super) fn ran_lines(app: &App, x: &Ticket, w: usize, last: Option<usize>) -> Vec<Line<'static>> {
-    let t = app.effective_theme();
-    let logs: Vec<(&Leader, Option<&crate::claude::LeaderLog>)> = x.leaders.iter().map(|l| (l, app.leader_log(&l.session))).collect();
-    let ran = squadwork::task_ran(x, &logs, &|id| app.squad_name(id));
-    let mut out = Vec::new();
-    for g in squadwork::grouped(&ran, last) {
-        out.push(Line::styled(fit_end(&g.who, w), Style::new().fg(t.subtext)));
-        for (at, text) in g.lines {
-            let time = clock(at);
-            let lead = format!("  {time:<5}  ");
-            out.push(Line::from(vec![
-                Span::styled(lead.clone(), Style::new().fg(t.dim)),
-                Span::styled(fit_words(&text, w.saturating_sub(lead.width())), Style::new().fg(t.text)),
-            ]));
-        }
-    }
-    out
-}
-
-/// The keys of the Tasks tab for the picked row (the footer, and with `all` every key the board has, for the help).
-pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
-    let mut out: Vec<Hint> = Vec::new();
-    let row = if all { None } else { app.board_row() };
-    let fold = !all && matches!(app.board_pick(), Some(crate::app::BRow::Fold));
-    if all {
-        out.extend([
-            ("y", "answer the squad (on a go-ahead: let it publish; on a plan: go ahead with it)", None),
-            ("n", "a new task; on a plan to approve: say what should change in it", None),
-            ("enter", "open the task, beside its squad's session when it runs", None),
-            ("h", "later: put a task that needs you aside until its squad says something new (h again brings it back)", None),
-            ("S", "hand to a squad", None),
-            ("c", "cancel", None),
-            ("m", "move it to another project (or to no project)", None),
-            ("e", "edit its text", None),
-            ("p", "let it publish", None),
-        ]);
-    } else if fold {
-        out.push(("enter", "show/hide", None));
-    } else if let Some(r) = &row {
-        match r.section {
-            Section::NeedsYou | Section::Later => {
-                let y = match r.need {
-                    Some(board::Need::GoAhead | board::Need::Plan) => "go ahead",
-                    Some(board::Need::Permission) => "its session",
-                    _ => "answer",
-                };
-                out.push(("y", y, None));
-                if r.need == Some(board::Need::Plan) {
-                    out.push(("n", "change the plan", None));
-                }
-                out.push(("enter", "open", Some(Action::Jump)));
-                out.push(("h", if r.section == Section::Later { "bring back" } else { "later" }, None));
-            }
-            Section::CanStart => {
-                out.push(("S", "hand to a squad", None));
-                out.push(("enter", "open", Some(Action::Jump)));
-            }
-            _ => out.push(("enter", "open", Some(Action::Jump))),
-        }
-        if !matches!(r.section, Section::Finished | Section::Closed) || r.right != "Cancelled" {
-            let cancelled = app.ticket(r.number).is_some_and(|t| t.state == State::Cancelled);
-            if !cancelled {
-                out.push(("c", "cancel", None));
-            }
-        }
-        out.push(("m", "move", None));
-    }
-    // On a plan to approve, `n` is the change (above).
-    if !all && row.as_ref().is_none_or(|r| r.need != Some(board::Need::Plan)) {
-        out.push(("n", "new task", None));
-    }
-    out.extend([
-        ("/", "filter", None),
-        ("1-4", "tabs", None),
-        ("↑↓", "move", None),
-        ("?", "help", Some(Action::Help)),
-        (app.quit_label(), "quit", Some(Action::Quit)),
-    ]);
-    out
-}
-
-/// "2 of 3 squads at work", for the board's footer while nothing else is said there.
-pub(super) fn at_work_line(app: &App) -> Option<String> {
-    let n = app.squads_at_work();
-    (n > 0).then(|| format!("{n} of {} squads at work", app.settings().get().squads_at_once))
-}
-
-/// The answer box: "Answer the Docs squad on #6", the question above, one line typed into the squad's session. For a
-/// change to a plan: "Change the Coding squad's plan for #5", typed as "Change the plan: <the note>".
-pub(super) fn draw_answer(f: &mut Frame, app: &App, area: Rect) {
-    let t = app.effective_theme();
-    app.hits.borrow_mut().clear();
-    let a = &app.bd.answer;
-    let Some(x) = app.ticket(a.number) else { return };
-    let w = area.width.saturating_sub(8).clamp(30, 76);
-    let inner_w = w.saturating_sub(4) as usize;
-    let plan = a.purpose == crate::app::AnswerFor::PlanChange;
-    let above = if plan { "What should change in the plan?".to_string() } else { board::squad_said(x) };
-    let question: Vec<String> = wrap(&above, inner_w).into_iter().take(5).collect();
-    let note = if plan {
-        format!(
-            "Sent to the squad's session as \"{}…\"; it plans again and stops with the new plan.",
-            crate::app::CHANGE_THE_PLAN.trim_end()
-        )
-    } else {
-        "Sent to the squad's session as your reply; the task goes back to Working.".to_string()
-    };
-    let notes = wrap(&note, inner_w);
-    let h = (question.len() + notes.len() + 7) as u16;
-    let r = centered(area, w, h.min(area.height.saturating_sub(2)));
-    popup_ground(f, t, area, r, true);
-    let title = if plan {
-        format!("Change the {} squad's plan for #{}", app.answer_squad_name(), a.number)
-    } else {
-        format!("Answer the {} squad on #{}", app.answer_squad_name(), a.number)
-    };
-    let block = modal_block(t, &title);
-    let inner = block.inner(r).inner(Margin::new(1, 0));
-    f.render_widget(block, r);
-    app.hits.borrow_mut().push((r, Hit::Inert));
-    let [q_area, _, input, _, note_area, _, foot] = Layout::vertical([
-        Constraint::Length(question.len() as u16),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(notes.len() as u16),
-        Constraint::Min(0),
-        Constraint::Length(1),
-    ])
-    .areas(inner);
-    let above_color = if plan { t.text } else { t.warn };
-    f.render_widget(
-        Paragraph::new(question.into_iter().map(|l| Line::styled(l, Style::new().fg(above_color))).collect::<Vec<_>>()),
-        q_area,
-    );
-    // A long answer shows its end, where the typing is.
-    let room = (input.width as usize).saturating_sub(3);
-    let len = a.input.chars().count();
-    let shown: String = a.input.chars().skip(len.saturating_sub(room)).collect();
-    f.render_widget(
-        Paragraph::new(Line::from(vec![Span::styled("❯ ", Style::new().fg(t.accent)), Span::styled(shown, Style::new().fg(t.text))])),
-        input,
-    );
-    f.set_cursor_position((input.x + 2 + (len as u16).min(input.width.saturating_sub(3)), input.y));
-    f.render_widget(Paragraph::new(notes.into_iter().map(|l| Line::styled(l, Style::new().fg(t.dim))).collect::<Vec<_>>()), note_area);
-    let hints: [Hint; 3] =
-        [("enter", "send", Some(Action::Confirm)), ("ctrl+o", "open the session instead", None), ("esc", "cancel", Some(Action::Cancel))];
-    draw_footer(f, app, foot, &hints, None);
-}
-
-/// The project picker: which project a new task goes in, or where a task moves to.
+/// The project picker: which project a new task goes in.
 pub(super) fn draw_task_project(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     app.hits.borrow_mut().clear();
-    let (title, head) = match &app.bd.pick_for {
-        crate::app::PickFor::NewTask => ("New task".to_string(), "Which project is it in?".to_string()),
-        crate::app::PickFor::Move(from, n) => (format!("Move #{n}"), format!("Where to? It is in {} now.", app.task_project_name(from))),
-    };
+    let (title, head) = ("New task".to_string(), "Which project is it in?".to_string());
     let n = app.bd.pick.len();
     let h = (n as u16 + 6).min(area.height.saturating_sub(2)).max(7);
     let r = centered(area, area.width.saturating_sub(8).clamp(30, 60), h);

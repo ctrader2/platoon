@@ -94,7 +94,7 @@ fn the_sessions_list_has_no_frame_two_rows_of_header_and_keeps_wide_text_inside_
         edges_clear(&lines, w, &ctx);
         assert!(!lines.iter().any(|l| l.contains(FRAME)), "no box anywhere on the list: {ctx}");
         // Row 0: the title and the three tabs, whole, with no counts in them.
-        assert!(lines[0].starts_with(" platoon    1 Sessions   2 Tasks   3 Projects   4 Briefs "), "{ctx}");
+        assert!(lines[0].starts_with(" platoon    1 Sessions   2 Tasks   3 Projects "), "{ctx}");
         // Row 1: the rule, with the Active/Archived switch set into its right end.
         assert!(lines[1].starts_with(" ──────────━━━━━━━━━━━━──"), "the current tab is marked on the rule: {ctx}");
         assert!(lines[1].trim_end().ends_with("Active  3   Archived  0   ←→"), "{ctx}");
@@ -123,7 +123,7 @@ fn the_footer_keeps_help_however_narrow_and_drops_the_others_first() {
         // Whole hints only: nothing is cut off at the right.
         assert!(footer.ends_with(' ') && !footer.contains('…'), "{w}: {footer:?}");
     }
-    // On a ticket-less project screen and the Briefs tab too.
+    // On the Tasks and Projects tabs too.
     for top in ['2', '3'] {
         ch(&mut app, top);
         let mut term = sized(&mut app, 60, 14);
@@ -147,7 +147,7 @@ fn the_projects_tab_puts_its_switch_on_the_rule_where_it_fits_and_on_a_row_of_it
         let lines = draw(&mut term, &app);
         let ctx = format!("{w}x{h}\n{}", lines.join("\n"));
         edges_clear(&lines, w, &ctx);
-        assert!(lines[0].contains("1 Sessions   2 Tasks   3 Projects   4 Briefs"), "{ctx}");
+        assert!(lines[0].contains("1 Sessions   2 Tasks   3 Projects"), "{ctx}");
         // The Projects tab's mark sits further right: at 80 columns the switch still fits beside it on the rule; at 60
         // it doesn't (the mark leaves 22 cells, the switch needs 26), so it has the row under the rule.
         let (switch_row, titles_row) = if w >= 80 { (1, 2) } else { (2, 3) };
@@ -202,7 +202,7 @@ fn question_mark_lists_every_key_of_the_screen_even_those_the_footer_dropped() {
         "←→ active/archived",
         "↑↓ move",
         "Anywhere in platoon",
-        "1-4 the tabs: Sessions, Tasks, Projects, Briefs",
+        "1-3 the tabs: Sessions, Tasks, Projects",
         "s settings",
         "/ search",
         "ctrl+space back one level (esc does the same)",
@@ -217,7 +217,7 @@ fn question_mark_lists_every_key_of_the_screen_even_those_the_footer_dropped() {
     draw(&mut tall_term, &app);
     let tall = popup_text(&tall_term, &app);
     assert!(!tall.contains("more lines below") && tall.contains("Ctrl+Z"), "{tall}");
-    for once in ["s settings", "/ search", "1-4", "q quit"] {
+    for once in ["s settings", "/ search", "1-3", "q quit"] {
         assert_eq!(tall.matches(once).count(), 1, "{once}: {tall}");
     }
     key(&mut app, KeyCode::Home);
@@ -330,15 +330,15 @@ fn question_mark_is_only_help_on_platoons_own_screens() {
     assert!(!app.help_showing());
     let mut r = &host;
     assert!(matches!(read_frame(&mut r), Ok((_, b)) if b == b"?"), "sent to the session");
-    // On the project screen and the Briefs tab it is the help, with that screen's keys.
+    // On the Tasks tab it is the help, with that screen's keys.
     app.client = None;
     app.mode = Mode::List;
-    ch(&mut app, '4');
+    ch(&mut app, '2');
     ch(&mut app, '?');
     let mut term = sized(&mut app, 100, 30);
     let f = flat(&draw(&mut term, &app));
-    assert!(app.help_showing() && f.contains("n describe a new squad or agent"), "{f}");
-    // Not `/ search` there: it doesn't search on the Briefs tab.
+    assert!(app.help_showing() && f.contains("s start the task"), "{f}");
+    // Not `/ search` there: `/` narrows the list of tasks.
     assert!(!f.contains("/ search"), "{f}");
     key(&mut app, KeyCode::Esc);
 }

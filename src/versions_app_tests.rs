@@ -5,13 +5,12 @@
 
 use crate::app::{App, TOP_SESSIONS, TOP_TASKS, TOPS};
 
-/// The Projects and Briefs tabs, as `app.top` numbers them (`TOPS`).
+/// The Projects tab, as `app.top` numbers it (`TOPS`).
 const TOP_PROJECTS: usize = 2;
-const TOP_SQUADS: usize = 3;
 
 #[test]
 fn the_tab_numbers_here_are_the_apps() {
-    assert_eq!((TOPS[TOP_TASKS], TOPS[TOP_PROJECTS], TOPS[TOP_SQUADS]), ("Tasks", "Projects", "Briefs"));
+    assert_eq!((TOPS[TOP_TASKS], TOPS[TOP_PROJECTS], TOPS.len()), ("Tasks", "Projects", 3));
 }
 use crate::testkit::World;
 use crate::ui;
@@ -110,13 +109,10 @@ fn it_shows_on_the_two_lists_only_and_is_remembered_once_it_has_shown() {
     let state = w.cache.join("version-check.json");
     let mut app = w.app();
     app.notice = None;
-    // The checks answer while the Briefs tab shows: nothing is drawn, nothing is remembered yet. Nor on the Tasks tab,
-    // whose details have the room beside the list.
+    // The checks answer while the Tasks tab shows (its details have the room beside the list): nothing is drawn,
+    // nothing is remembered yet.
     app.top = TOP_TASKS;
     app.set_news_for_test(CLAUDE);
-    app.refresh();
-    assert_eq!(app.news_showing(), None);
-    app.top = TOP_SQUADS;
     app.refresh();
     assert_eq!(app.news_showing(), None);
     assert!(!words(&shown(&app, 110, 24)).contains("Claude Code 2.2.0"));

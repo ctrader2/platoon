@@ -5,8 +5,8 @@
 //! `{"version": 1, "projects": {"<id>": {"name", "color", "badge", "archived", "created", "archived_sessions"}},
 //!   "sessions": {"<session id>": "<project id>"}}`.
 //! `archived_sessions` are the sessions that archiving the project archived (and that restoring it brings back).
-//! A project may also say how squads start on its tasks (`autonomy_default`) and the command that checks a squad's work
-//! (`test_command`, with `test_timeout_minutes`: see `checks.rs`).
+//! A project may also name the command that runs its tests when a task's session stops (`test_command`, with
+//! `test_timeout_minutes`: see `checks.rs`).
 //! The notes of a project are `<config dir>/projects/<id>/project.md`; folders are named by id so a rename is safe.
 //!
 //! Like the other files of ours: writes are atomic (temp file + rename) and happen under a lock file (the
@@ -123,11 +123,8 @@ pub struct Project {
     pub description: String,
     /// When that line was written, seconds since the epoch (0: never).
     pub description_at: u64,
-    /// How much a squad does on its own, as the hand-over popup starts for this project's tasks (`autonomy_default`
-    /// in the file; absent: it asks before anything others can see). The task itself keeps what was chosen.
-    pub autonomy_default: crate::tickets::Autonomy,
-    /// The command platoon runs to check a squad's work when its leader stops at the end of the work (`test_command`
-    /// in the file; empty: none, and nothing is run). One line, run through `sh -c` where the squad works.
+    /// The command platoon runs when a task's session stops (`test_command` in the file; empty: none, and nothing is
+    /// run). One line, run through `sh -c` where the task works.
     pub test_command: String,
     /// How long that command may run before platoon stops it, in seconds (`test_timeout_minutes` in the file, which
     /// may be a fraction; `TEST_TIMEOUT_MINUTES` when it isn't there).
@@ -210,6 +207,7 @@ impl Projects {
         path_in(&self.config)
     }
 
+    #[cfg(test)]
     pub fn is_corrupt(&self) -> bool {
         self.corrupt
     }
@@ -313,12 +311,6 @@ impl Projects {
                     .unwrap_or_default(),
                 description: o.get("description").and_then(Value::as_str).map(|d| clean(d, crate::describe::MAX_CHARS)).unwrap_or_default(),
                 description_at: o.get("description_at").and_then(Value::as_u64).unwrap_or(0),
-                autonomy_default: o
-                    .get("autonomy_default")
-                    .and_then(Value::as_str)
-                    .filter(|a| !a.is_empty())
-                    .map(crate::tickets::Autonomy::from_id)
-                    .unwrap_or_default(),
                 test_command: o.get("test_command").and_then(Value::as_str).map(clean_command).unwrap_or_default(),
                 test_timeout_secs: timeout_secs(o.get("test_timeout_minutes")),
                 name,
@@ -437,16 +429,7 @@ impl Projects {
         })
     }
 
-    /// How much a squad does on its own when one of this project's tasks is handed over: what the hand-over popup
-    /// starts from (`autonomy_default`; the task keeps what was chosen at its own hand-over).
-    pub fn set_autonomy_default(&mut self, id: &str, autonomy: &crate::tickets::Autonomy) -> io::Result<()> {
-        let a = autonomy.id().to_string();
-        self.edit(id, |p| {
-            p.insert("autonomy_default".into(), json!(a));
-        })
-    }
-
-    /// The command that checks a squad's work on this project's tasks (`test_command`), as typed in its box: one line
+    /// The command that runs this project's tests when a task's session stops (`test_command`), as typed in its box: one line
     /// (`clean_command`). Empty takes it away: no check runs then.
     pub fn set_test_command(&mut self, id: &str, command: &str) -> io::Result<()> {
         let command = clean_command(command);

@@ -72,10 +72,6 @@ pub const MAX_QUIET_SECONDS: u64 = 3600;
 pub const DEFAULT_NOTES_QUIET_MINUTES: u64 = 3;
 pub const MIN_NOTES_QUIET_MINUTES: u64 = 1;
 pub const MAX_NOTES_QUIET_MINUTES: u64 = 60;
-/// How many squads may be at work at once (see `squadqueue.rs`).
-pub const DEFAULT_SQUADS_AT_ONCE: u64 = 3;
-pub const MIN_SQUADS_AT_ONCE: u64 = 1;
-pub const MAX_SQUADS_AT_ONCE: u64 = 10;
 /// How much of Claude's last reply in each session the notes updater reads (characters).
 pub const DEFAULT_NOTES_REPLY_CHARS: u64 = 1500;
 pub const MIN_NOTES_REPLY_CHARS: u64 = 200;
@@ -164,10 +160,6 @@ pub struct Settings {
     pub ai_find_candidates: u64,
     pub ai_find_results: u64,
     pub ai_find_wide_candidates: u64,
-    /// How many squads may be at work at once; a ticket handed over when all are waits for a free one.
-    pub squads_at_once: u64,
-    /// The model every squad's leader runs on: one of `squadfile::MODELS` ("opus", "sonnet", "haiku").
-    pub squad_leader_model: String,
     /// Once a day at most, ask GitHub whether a newer platoon is out (`versions.rs`): platoon's only network request.
     pub update_check: bool,
 }
@@ -204,8 +196,6 @@ impl Default for Settings {
             ai_find_candidates: DEFAULT_FIND_CANDIDATES,
             ai_find_results: DEFAULT_FIND_RESULTS,
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
-            squads_at_once: DEFAULT_SQUADS_AT_ONCE,
-            squad_leader_model: crate::squads::LEADER_MODEL.into(),
             update_check: true,
         }
     }
@@ -237,12 +227,6 @@ impl Settings {
             ai_find_candidates: self.ai_find_candidates.clamp(MIN_FIND_CANDIDATES, MAX_FIND_CANDIDATES),
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
-            squads_at_once: self.squads_at_once.clamp(MIN_SQUADS_AT_ONCE, MAX_SQUADS_AT_ONCE),
-            squad_leader_model: if crate::squadfile::known_model(&self.squad_leader_model) {
-                self.squad_leader_model
-            } else {
-                crate::squads::LEADER_MODEL.into()
-            },
             ..self
         }
     }
@@ -335,11 +319,6 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_candidates: number("ai_find_candidates", d.ai_find_candidates),
             ai_find_results: number("ai_find_results", d.ai_find_results),
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
-            squads_at_once: number("squads_at_once", d.squads_at_once),
-            squad_leader_model: o
-                .get("squad_leader_model")
-                .and_then(Value::as_str)
-                .map_or(d.squad_leader_model.clone(), |m| m.trim().to_lowercase()),
             update_check: o.get("update_check").and_then(Value::as_bool).unwrap_or(d.update_check),
         }
         .clamped(),
@@ -421,8 +400,6 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_candidates".into(), json!(s.ai_find_candidates));
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
-    object.insert("squads_at_once".into(), json!(s.squads_at_once));
-    object.insert("squad_leader_model".into(), json!(s.squad_leader_model));
     object.insert("update_check".into(), json!(s.update_check));
     // The per-feature switches: the ones we hold are written, and entries of the file's own that we don't hold
     // (a feature of a newer version) stay.
@@ -517,10 +494,6 @@ pub fn chars_label(n: u64) -> String {
     plural(n, "character")
 }
 
-pub fn squads_label(n: u64) -> String {
-    plural(n, "squad")
-}
-
 pub fn results_label(n: u64) -> String {
     plural(n, "result")
 }
@@ -592,8 +565,6 @@ impl Tab {
 /// The tabs by position, for the code that treats one of them specially (see `tabs`).
 pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
-/// Where the squad leaders' system prompt and model are: `s` on the Briefs tab opens the settings here.
-pub const TAB_PROJECTS: usize = 4;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
 
@@ -983,36 +954,10 @@ fn projects_items() -> Vec<Item> {
             label: chars_label,
             off: None,
         },
-        Item {
-            name: "Squads at work at once",
-            explain: "How many squads may work on tasks at the same time, in all projects. One more handed over waits for a \
-                      free squad and starts by itself, oldest first. A squad waiting for you doesn't count. Lowering it never stops a squad at work.",
-            kind: Kind::Steps,
-            choices: &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            get: |s| s.squads_at_once,
-            set: |s, v| s.squads_at_once = v,
-            label: squads_label,
-            off: None,
-        },
         instructions_item(crate::instructions::NOTES),
         instructions_item(crate::instructions::DESCRIPTION),
         instructions_item(crate::instructions::HANDOFF),
         instructions_item(crate::instructions::TASK_DRAFT),
-        instructions_item(crate::instructions::COMMANDER),
-        instructions_item(crate::instructions::SQUAD_LEADER),
-        Item {
-            name: "Model for squad leaders",
-            explain: "The model every squad's leader runs on. The leader hands the work to its agents, who each run on their own model; \
-                      Sonnet is plenty for most leading. A squad already at work keeps the model it started with.",
-            kind: Kind::Steps,
-            choices: &[0, 1, 2],
-            get: |s| crate::squadfile::MODELS.iter().position(|(m, _)| *m == s.squad_leader_model).unwrap_or(1) as u64,
-            set: |s, v| s.squad_leader_model = crate::squadfile::MODELS[(v as usize).min(crate::squadfile::MODELS.len() - 1)].0.into(),
-            label: |v| crate::squadfile::MODELS.get(v as usize).map_or("Sonnet", |(_, l)| l).into(),
-            off: None,
-        },
-        instructions_item(crate::instructions::SQUAD_DRAFT),
-        instructions_item(crate::instructions::AGENT_DRAFT),
     ]
 }
 
@@ -1317,8 +1262,6 @@ mod tests {
                 "ai_find_candidates",
                 "ai_find_results",
                 "ai_find_wide_candidates",
-                "squads_at_once",
-                "squad_leader_model",
                 "update_check",
                 "token_features",
                 "theme"
@@ -1598,16 +1541,10 @@ mod tests {
             [
                 "Update notes after",
                 "Read Claude's last reply up to",
-                "Squads at work at once",
                 "System prompt for project notes",
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
-                "System prompt for tasks from a conversation",
-                "System prompt for the squad commander",
-                "System prompt for squad leaders",
-                "Model for squad leaders",
-                "System prompt for drafting a squad",
-                "System prompt for drafting an agent"
+                "System prompt for tasks from a conversation"
             ]
         );
         // Every AI action's instructions are an entry, on the tab it belongs to, and nothing else is of that kind.
@@ -1624,11 +1561,7 @@ mod tests {
                 (4, Kind::Instructions("project-notes")),
                 (4, Kind::Instructions("project-description")),
                 (4, Kind::Instructions("hand-off")),
-                (4, Kind::Instructions("tasks-from-conversation")),
-                (4, Kind::Instructions("squad-commander")),
-                (4, Kind::Instructions("squad-leader")),
-                (4, Kind::Instructions("squad-draft")),
-                (4, Kind::Instructions("agent-draft"))
+                (4, Kind::Instructions("tasks-from-conversation"))
             ]
         );
         for item in all_items().filter(|i| matches!(i.kind, Kind::Instructions(_))) {
@@ -1939,14 +1872,8 @@ mod tests {
                 "",
                 "3 minutes",
                 "1500 characters",
-                "3 squads",
                 "",
                 "",
-                "",
-                "",
-                "",
-                "",
-                "Sonnet",
                 "",
                 "",
                 "50 sessions",
@@ -2037,47 +1964,6 @@ mod tests {
         assert_eq!(load(&dir).0, s);
         save(&dir, &Settings::default()).unwrap();
         assert_eq!(saved(&dir)["ai_archived"], "off");
-    }
-
-    #[test]
-    fn squads_at_once_is_three_unless_set_and_stays_between_one_and_ten() {
-        assert_eq!(Settings::default().squads_at_once, 3);
-        assert_eq!(parse(r#"{"squads_at_once": 5}"#).unwrap().squads_at_once, 5);
-        assert_eq!(parse(r#"{"squads_at_once": 0}"#).unwrap().squads_at_once, 1, "at least one: 0 would never start a squad");
-        assert_eq!(parse(r#"{"squads_at_once": 99}"#).unwrap().squads_at_once, 10);
-        assert_eq!(parse(r#"{"squads_at_once": -2}"#).unwrap().squads_at_once, 3, "nonsense keeps the default");
-        assert_eq!(parse(r#"{"squads_at_once": "four"}"#).unwrap().squads_at_once, 3);
-        let item = tab("Projects").iter().find(|i| i.name == "Squads at work at once").unwrap();
-        assert_eq!(item.choices.first().copied(), Some(1));
-        assert_eq!(item.choices.last().copied(), Some(10));
-        assert_eq!(item.step(10, Step::Next), 10, "no further than ten");
-        assert_eq!(item.step(1, Step::Prev), 1, "no fewer than one");
-        assert_eq!(((item.label)(1), (item.label)(3)), ("1 squad".to_string(), "3 squads".to_string()));
-    }
-
-    #[test]
-    fn the_squad_leaders_model_is_sonnet_by_default_one_of_three_and_saved() {
-        let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-settings-leader-{}", std::process::id())));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        assert_eq!(Settings::default().squad_leader_model, "sonnet");
-        let item = TABS.iter().flat_map(|t| t.items.iter()).find(|i| i.name == "Model for squad leaders").unwrap();
-        assert_eq!(item.choices.iter().map(|&c| (item.label)(c)).collect::<Vec<_>>(), ["Opus", "Sonnet", "Haiku"]);
-        let mut s = Settings::default();
-        assert_eq!((item.label)(item.value(&s)), "Sonnet");
-        item.assign(&mut s, 0);
-        assert_eq!(s.squad_leader_model, "opus");
-        save(&d, &s).unwrap();
-        assert_eq!(load(&d).0.squad_leader_model, "opus");
-        let v: Value = serde_json::from_str(&fs::read_to_string(path_in(&d)).unwrap()).unwrap();
-        assert_eq!(v["squad_leader_model"], "opus");
-        // Hand-written: the case doesn't matter; one platoon doesn't offer is the default.
-        fs::write(path_in(&d), r#"{"squad_leader_model":" Haiku "}"#).unwrap();
-        assert_eq!(load(&d).0.squad_leader_model, "haiku");
-        fs::write(path_in(&d), r#"{"squad_leader_model":"gpt-5"}"#).unwrap();
-        assert_eq!(load(&d).0.squad_leader_model, "sonnet");
-        fs::write(path_in(&d), r#"{"squad_leader_model":7}"#).unwrap();
-        assert_eq!(load(&d).0.squad_leader_model, "sonnet");
     }
 
     #[test]

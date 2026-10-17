@@ -1,6 +1,6 @@
 //! The second round of small things that make platoon's screens read cleanly: a session's description line ending where
-//! STATUS starts, a session that runs told apart from one that doesn't, `v` with no editor said in one short line, the
-//! Briefs tab keeping its main key and pointing at the right settings, one name for the editor, words that wrap
+//! STATUS starts, a session that runs told apart from one that doesn't, `v` with no editor said in one short line, one
+//! name for the editor, words that wrap
 //! together, and a help heading never left alone at the fold. Every directory is a temp dir (`World`); the only process
 //! started is a `sleep` standing in for a running claude.
 
@@ -192,48 +192,6 @@ fn the_text_editor_setting_says_which_list_its_star_is_in() {
     }
 }
 
-// ---- the Briefs tab ------------------------------------------------------------------------------------------------
-
-fn on_the_squads_tab(name: &str) -> (World, App) {
-    let w = World::new(name);
-    w.transcript("alpha-1", "/srv/alpha", "fix the login page", 10);
-    let mut app = w.app();
-    app.notice = None;
-    ch(&mut app, '4');
-    assert!(app.squads_tab_showing());
-    (w, app)
-}
-
-#[test]
-fn the_squads_tab_keeps_enter_details_at_eighty_columns() {
-    let (_w, mut app) = on_the_squads_tab("c-sq80");
-    let mut term = sized(&mut app, 80, 24);
-    let lines = draw(&mut term, &app);
-    let footer = lines.last().unwrap();
-    assert!(footer.contains("enter details") && footer.contains("? help"), "{footer}");
-}
-
-#[test]
-fn settings_s_projects_stays_on_one_line_and_s_opens_the_settings_there() {
-    let (_w, mut app) = on_the_squads_tab("c-sqs");
-    key(&mut app, KeyCode::Enter);
-    for width in [80u16, 100, 120, 160, 200] {
-        let mut term = sized(&mut app, width, 40);
-        let lines = draw(&mut term, &app);
-        let ctx = format!("{width}\n{}", lines.join("\n"));
-        assert!(lines.iter().any(|l| l.contains("Settings (s) → Projects.")), "{ctx}");
-    }
-    key(&mut app, KeyCode::Esc);
-    ch(&mut app, 's');
-    assert!(matches!(app.mode, Mode::Settings));
-    assert_eq!(app.settings_tab, crate::settings::TAB_PROJECTS, "on the tab with the leaders' prompt and model");
-    key(&mut app, KeyCode::Esc);
-    // Elsewhere the settings open on their first tab, as before.
-    ch(&mut app, '1');
-    ch(&mut app, 's');
-    assert_eq!(app.settings_tab, 0);
-}
-
 // ---- wrapping ------------------------------------------------------------------------------------------------------
 
 #[test]
@@ -297,11 +255,9 @@ fn a_help_heading_is_never_the_last_line_in_view() {
         .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Tab);
-    key(&mut app, KeyCode::Enter);
-    assert!(app.tk.open.is_some(), "a ticket's screen");
+    assert!(app.tk.open.is_some(), "a task's screen");
     let headings = ["On this screen", "Anywhere in platoon", "Good to know"];
     for height in 14u16..=30 {
         let mut term = sized(&mut app, 80, height);

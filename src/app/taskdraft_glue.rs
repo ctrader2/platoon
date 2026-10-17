@@ -1,22 +1,19 @@
 //! Tasks drafted from a conversation, inside the app. `t` on a session's row (the Sessions tab, a project's Sessions
-//! pane), or the chord inside an open session (`draft_tasks` in keys.json, which goes back to the list first), asks
-//! Claude once, in the background, to turn the conversation into one or several tasks; meanwhile the row says
-//! "Drafting tasks…" and platoon keeps going. The draft opens in the popup **Tasks from this conversation** as soon as
-//! the user is on platoon's own lists (in a session, a line says it is ready): `↑` `↓` move, `x` takes a task out, `e`
-//! opens one in the user's editor, `enter` makes them all and opens the hand-over popup for each in turn (the
-//! suggested squad picked; `esc` there leaves that task as Can start and goes on to the next), `k` makes them and
-//! stops, `esc` makes nothing. Each made task remembers the session it came from and goes in its project, or in none.
+//! pane) asks Claude once, in the background, to turn the conversation into one or several tasks; meanwhile the row
+//! says "Drafting tasks…" and platoon keeps going. The draft opens in the popup **Tasks from this conversation** as soon
+//! as the user is on platoon's own lists (in a session, a line says it is ready): `↑` `↓` move, `x` takes a task out,
+//! `e` opens one in the user's editor, `enter` makes them all (Not started, each with the squad suggested for it),
+//! `esc` makes nothing. Each made task works in the session's folder, remembers the session it came from and goes in
+//! its project, or in none.
 //!
 //! What is sent, what a reply may be and what a task's text looks like are in `taskdraft.rs`; reading the
 //! conversation is the hand-off's way (`notesrun::read_session`).
 
-use super::squadtab_glue::{PromptOf, SquadPromptEdit};
 use super::*;
 use crate::ai::{AiError, Reply, Request};
 use crate::instructions;
 use crate::taskdraft::{self, DraftTask, Kind, Material};
 use crate::tickets::{self, NewTicket, Source, Tickets};
-use std::collections::VecDeque;
 use std::sync::mpsc::{TryRecvError, channel};
 
 /// How long the call may take before it is given up on. The user asked for it, and a draft is longer than a
@@ -36,8 +33,8 @@ pub struct TaskDraft {
     pub session_name: String,
     /// The project the tasks go in (`tickets::NO_PROJECT_ID`: none).
     pub project: String,
-    /// Every task works in these: the session's own folder and the ones added to it.
-    pub folders: Vec<String>,
+    /// Every task works in the session's own folder.
+    pub folder: String,
     pub kinds: Vec<Kind>,
     pub tasks: Vec<DraftTask>,
     /// The task picked in the popup.
@@ -60,15 +57,6 @@ pub struct DraftState {
     flight: Option<Flight>,
     /// A draft ready: in the popup, or waiting for the user to be back on platoon's lists.
     pub draft: Option<TaskDraft>,
-    /// The tasks just made that are still to be offered to a squad, in turn: (project, number, suggested squad).
-    chain: VecDeque<(String, u32, Option<String>)>,
-    /// While the hand-overs go one after the other: the tasks made, the ones that still wait for another, and the first
-    /// reason one couldn't be handed over, for the line said at the end.
-    chaining: bool,
-    made: Vec<u32>,
-    made_in: String,
-    waiting: Vec<u32>,
-    refused: Option<String>,
 }
 
 /// A conversation as the drafting gets it, read from its transcript the way the hand-off reads one: the first message
@@ -124,26 +112,6 @@ impl App {
         }
     }
 
-    /// The chord inside an open session: back to the list (the session keeps running), then the same as `t` on its row.
-    /// Not in a squad's own session, which belongs to its task.
-    pub(super) fn draft_tasks_from_attached(&mut self, pid: u32) {
-        if self.sq.split.is_some() {
-            self.notify("This is a squad's session: tasks are drafted from your own conversations.");
-            return;
-        }
-        let id = self.sessions.iter().find(|s| s.procs.iter().any(|p| p.pid == pid)).map(|s| s.id.clone());
-        self.detach();
-        match id {
-            Some(id) => {
-                if let Some(pos) = self.view.iter().position(|&i| self.sessions[i].id == id) {
-                    self.selected = pos;
-                }
-                self.start_task_draft(&id);
-            }
-            None => self.notify("platoon doesn't know this session yet, so it can't draft tasks from it. Try again in a moment."),
-        }
-    }
-
     /// Ask Claude for tasks from conversation `id`, in the background. Everything that would make it pointless is
     /// said in one line and nothing is asked: another draft under way, a project that takes no new tasks, no folder to
     /// work in, or the gate says no.
@@ -162,7 +130,7 @@ impl App {
             self.notify("That session isn't in platoon's list any more.");
             return;
         };
-        let (name, cwd, extra) = (s.name.clone(), s.cwd.clone(), s.extra_dirs.clone());
+        let (name, cwd) = (s.name.clone(), s.cwd.clone());
         let project = match self.projects.of(id) {
             Some(p) if p.archived => {
                 let why = tickets::archived_refusal(&p.name);
@@ -172,14 +140,7 @@ impl App {
             Some(p) => p.id.clone(),
             None => tickets::NO_PROJECT_ID.to_string(),
         };
-        // Its own folder and the ones added to it, those that are there.
-        let mut folders: Vec<String> = Vec::new();
-        for f in std::iter::once(cwd).chain(extra.iter().filter_map(|d| dirs::expand(d, &self.home))) {
-            if !f.is_empty() && Path::new(&f).is_dir() && !folders.contains(&f) {
-                folders.push(f);
-            }
-        }
-        if folders.is_empty() {
+        if cwd.is_empty() || !Path::new(&cwd).is_dir() {
             self.notify(format!("\"{name}\" has no folder platoon can find, so no tasks can be drafted from it."));
             return;
         }
@@ -193,16 +154,15 @@ impl App {
             self.notify(format!("No tasks drafted: {text}"));
             return;
         }
-        let kinds: Vec<Kind> = crate::squadfile::load_all(&self.config)
+        let kinds: Vec<Kind> = crate::squads::all(&self.config)
             .into_iter()
-            .filter_map(|l| l.squad)
-            .filter(|s| s.shape.is_empty())
-            .map(|s| Kind { id: s.id.clone(), name: s.name.clone(), can_do: s.can_do_line() })
+            .filter(|s| s.usable())
+            .map(|s| Kind { id: s.id, name: s.name, description: s.description })
             .collect();
         let material = Material {
             name: name.clone(),
             project: if project == tickets::NO_PROJECT_ID { String::new() } else { self.task_project_name(&project) },
-            folders: folders.iter().map(|f| crate::squads::folder_name(f)).collect(),
+            folders: vec![Path::new(&cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()],
             kinds: kinds.clone(),
             ..Material::default()
         };
@@ -219,7 +179,7 @@ impl App {
             session: id.to_string(),
             session_name: name.clone(),
             project,
-            folders,
+            folder: cwd,
             kinds,
             tasks: Vec::new(),
             selected: 0,
@@ -318,7 +278,6 @@ impl App {
             KeyCode::Esc => self.act(Action::Cancel),
             KeyCode::Char('c') if ctrl => self.act(Action::Cancel),
             KeyCode::Enter => self.act(Action::Confirm),
-            KeyCode::Char('k') if !ctrl => self.make_drafted(false),
             KeyCode::Char('x') | KeyCode::Delete => self.remove_drafted(),
             KeyCode::Char('e') => self.edit_drafted(),
             KeyCode::Up => self.move_draft(-1),
@@ -353,8 +312,7 @@ impl App {
         }
     }
 
-    /// `x`: the picked task goes from the draft (the others that waited for it don't any more). The last one gone, the
-    /// popup closes with nothing made.
+    /// `x`: the picked task goes from the draft. The last one gone, the popup closes with nothing made.
     fn remove_drafted(&mut self) {
         let Some(d) = self.td.draft.as_mut() else { return };
         let i = d.selected;
@@ -382,11 +340,11 @@ impl App {
             self.notify(format!("Couldn't open the task for editing: {}", plain(&e)));
             return;
         }
-        self.pick_squad_editor(SquadPromptEdit { target: PromptOf::DraftTask(d.selected), path, before: text });
+        self.pick_draft_editor(DraftEdit { index: d.selected, path, before: text });
     }
 
     /// The editor is done with a drafted task's file: what it says now goes in the draft (the file goes).
-    pub(super) fn after_draft_edit(&mut self, i: usize, edit: &SquadPromptEdit) {
+    pub(super) fn after_draft_edit(&mut self, i: usize, edit: &DraftEdit) {
         let text = std::fs::read_to_string(&edit.path).unwrap_or_default();
         let _ = std::fs::remove_file(&edit.path);
         if matches!(self.mode, Mode::List) && self.td.draft.is_some() {
@@ -414,10 +372,9 @@ impl App {
         }
     }
 
-    /// `enter` (`hand_over`) or `k` in the popup: every task left is made, each after the ones it waits for, in the
-    /// session's project (or in none), remembering the session it came from; then (`enter`) the hand-over popup for
-    /// each that can start, in turn.
-    pub(super) fn make_drafted(&mut self, hand_over: bool) {
+    /// `enter` in the popup: every task left is made, Not started, in the session's project (or in none), working in
+    /// the session's folder, with the squad suggested for it, remembering the session it came from.
+    pub(super) fn make_drafted(&mut self) {
         let Some(d) = self.td.draft.take() else {
             self.mode = Mode::List;
             return;
@@ -443,8 +400,8 @@ impl App {
             let new = NewTicket {
                 title: t.title.clone(),
                 body: Some(t.body.clone()),
-                folders: d.folders.clone(),
-                blocked_by: t.waits_for.iter().filter_map(|j| made.get(*j).copied()).collect(),
+                folder: Some(d.folder.clone()),
+                squad: t.squad.clone().unwrap_or_default(),
                 from: Some(Source { session: d.session.clone(), project: d.project.clone() }),
             };
             match store.add(new) {
@@ -458,109 +415,22 @@ impl App {
         }
         let Some(&first) = made.first() else { return };
         self.reread_tickets();
-        self.show_made(&d.project, first);
+        if self.open_project.is_some() || self.top != TOP_TASKS || self.tk.open.is_some() {
+            self.switch_top(TOP_TASKS);
+        }
+        self.bd.selected = Some(BRow(d.project.clone(), first));
+        self.set_task_store(&d.project);
+        if made.len() < d.tasks.len() {
+            // The line about what couldn't be made stays.
+            return;
+        }
         let whose = if d.project == tickets::NO_PROJECT_ID {
             " (in no project)".to_string()
         } else {
             format!(" in {}", self.task_project_name(&d.project))
         };
-        if made.len() < d.tasks.len() {
-            // The line about what couldn't be made stays.
-            return;
-        }
-        if !hand_over {
-            let tasks = if made.len() == 1 { "task" } else { "tasks" };
-            self.notify(format!("Made {} {tasks}{whose}: {}. S on each hands it to a squad.", made.len(), numbers(&made)));
-            return;
-        }
-        self.td.chain = made.iter().zip(&d.tasks).map(|(n, t)| (d.project.clone(), *n, t.squad.clone())).collect();
-        self.td.chaining = true;
-        self.td.made = made;
-        self.td.made_in = whose;
-        self.td.waiting.clear();
-        self.td.refused = None;
-        self.next_in_chain();
-    }
-
-    /// Where the tasks just made can be seen, with `first` picked: the project's Tasks pane when that project's screen
-    /// is showing, else the Tasks tab.
-    fn show_made(&mut self, project: &str, first: u32) {
-        if self.open_project.as_deref() == Some(project) {
-            self.tk.open = None;
-            if let Some(s) = self.tk.store.as_mut() {
-                s.reload_if_changed();
-            }
-            self.focus_pane(Pane::Tickets);
-            self.tk.selected = Some(TRow::Ticket(first));
-            return;
-        }
-        if self.open_project.is_some() || self.top != TOP_TASKS || self.tk.open.is_some() {
-            self.switch_top(TOP_TASKS);
-        }
-        self.bd.selected = Some(BRow::Task(project.to_string(), first));
-        self.set_task_store(project);
-    }
-
-    /// Pick task `n` of `project` where the made tasks are shown.
-    fn pick_made(&mut self, project: &str, n: u32) {
-        if self.open_project.as_deref() == Some(project) {
-            self.tk.selected = Some(TRow::Ticket(n));
-        } else {
-            self.bd.selected = Some(BRow::Task(project.to_string(), n));
-        }
-        self.set_task_store(project);
-    }
-
-    /// The hand-over popup for the next task just made that can start (its suggested squad picked); a task that
-    /// waits for another is left for later. When none is left, one line says what was made.
-    pub(super) fn next_in_chain(&mut self) {
-        while let Some((project, n, squad)) = self.td.chain.pop_front() {
-            self.pick_made(&project, n);
-            let Some(t) = self.ticket(n).cloned() else { continue };
-            if !tickets::waiting_for(&t, self.tickets()).is_empty() {
-                self.td.waiting.push(n);
-                continue;
-            }
-            let said = self.notice.as_ref().map(|(s, ..)| s.clone());
-            self.ask_hand_to_squad(n);
-            if !matches!(self.mode, Mode::SquadPick) {
-                let now = self.notice.as_ref().map(|(s, ..)| s.clone());
-                if now != said && self.td.refused.is_none() {
-                    self.td.refused = now.map(|why| format!("#{n}: {why}"));
-                }
-                continue;
-            }
-            if let Some(i) = squad.and_then(|id| self.sq.pick.iter().position(|s| s.id == id)) {
-                self.sq.pick_selected = i;
-                self.sq.form.cursor = i;
-            }
-            // Handed over from here, it starts without taking the screen (another popup may be up by then).
-            self.sq.quiet.insert((project, n));
-            return;
-        }
-        if !self.td.chaining {
-            return;
-        }
-        self.td.chaining = false;
-        let made = std::mem::take(&mut self.td.made);
-        let mut line = format!("Made {}{}.", numbers(&made), self.td.made_in);
-        let waiting = std::mem::take(&mut self.td.waiting);
-        if !waiting.is_empty() {
-            let verb = if waiting.len() == 1 { "waits" } else { "wait" };
-            line.push_str(&format!(" {} {verb} for another: S hands it over once that is done.", numbers(&waiting)));
-        }
-        if let Some(why) = self.td.refused.take() {
-            line.push_str(&format!(" {why}"));
-        }
-        self.notify(line);
-    }
-
-    /// The hand-over popup closed (handed over, or `esc`): the next task of the ones just made, if they are being
-    /// handed over in turn.
-    pub(super) fn after_hand_over_popup(&mut self) {
-        if self.td.chaining && matches!(self.mode, Mode::List) {
-            self.next_in_chain();
-        }
+        let tasks = if made.len() == 1 { "task" } else { "tasks" };
+        self.notify(format!("Made {} {tasks}{whose}: {}. s on each starts it.", made.len(), numbers(&made)));
     }
 }
 

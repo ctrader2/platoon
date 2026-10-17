@@ -1,11 +1,11 @@
 //! Density and narrow widths, drawn the way a terminal shows them (TestBackend) at 80x24, 60x24 and 60x14: the
 //! Sessions list's two lines a conversation and its selection, the gaps between columns and the order they go in,
-//! the CONTEXT column left blank when nothing is known, the Briefs tab as one pane on a narrow terminal, the settings'
-//! tab strip, `S` handing a ticket to a squad, j/k and PageUp/PageDown in the lists, and which hints the Sessions
+//! the CONTEXT column left blank when nothing is known, the settings' tab strip, `s` starting a task from the Tasks
+//! tab, j/k and PageUp/PageDown in the lists, and which hints the Sessions
 //! footer keeps at 120 and 80 columns. Every directory is a temp dir
 //! (`World`); nothing here starts a process.
 
-use crate::app::{App, Mode, Pane, SqFocus, SqView};
+use crate::app::{App, Mode};
 use crate::testkit::World;
 use crate::tickets::{NewTicket, Tickets};
 use crate::ui;
@@ -155,54 +155,6 @@ fn the_context_column_is_blank_for_a_conversation_nothing_is_known_about() {
     assert_eq!(bare.trim_end_matches(['│', ' ']).chars().count(), known.trim_end_matches(['│', ' ']).chars().count());
 }
 
-#[test]
-fn the_squads_tab_is_one_pane_at_60_columns_and_two_at_100() {
-    let w = World::new("d-squads");
-    let mut app = w.app();
-    ch(&mut app, '4');
-    // 100 columns: the list and the details side by side.
-    let (lines, _) = shown(&app, 100, 24);
-    assert!(lines.iter().any(|l| l.contains("╮╭")), "two panes at 100:\n{}", lines.join("\n"));
-    assert!(flat(&lines).contains("What it does"), "{}", lines.join("\n"));
-    // From an 80-column terminal, two panes; below it, one.
-    let (lines, _) = shown(&app, 80, 24);
-    println!("Briefs tab at 80x24:\n{}\n", lines.join("\n"));
-    assert!(lines.iter().any(|l| l.contains("╮╭")), "two panes at 80:\n{}", lines.join("\n"));
-    let (lines, _) = shown(&app, 79, 24);
-    assert!(!lines.iter().any(|l| l.contains("╮╭")), "one pane at 79:\n{}", lines.join("\n"));
-    // 60 columns: only the list, every squad on it, and no "Built in" under each.
-    let (lines, _) = shown(&app, 60, 24);
-    println!("Briefs tab at 60x24, the list:\n{}\n", lines.join("\n"));
-    let f = flat(&lines);
-    assert!(!lines.iter().any(|l| l.contains("╮╭")), "one pane at 60:\n{}", lines.join("\n"));
-    assert!(f.contains("▎ Coding 4 agents Research 4 agents Docs 3 agents Summarize 1 agent"), "{f}");
-    assert!(!f.contains("Built in") && !f.contains("Name Coding") && !f.contains("next pane"), "{f}");
-    // Down to Research, enter: its details take the whole width, with room for what they say.
-    ch(&mut app, 'j');
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.sqt.focus, SqFocus::Detail);
-    let (lines, _) = shown(&app, 60, 24);
-    println!("Briefs tab at 60x24, Research's details:\n{}\n", lines.join("\n"));
-    let f = flat(&lines);
-    assert!(!f.contains("[Briefs]"), "the list is not drawn beside them: {f}");
-    assert!(f.contains("Built in") && f.contains("What it does Finds things out"), "{f}");
-    assert!(f.contains("esc back to the list"), "{f}");
-    // Esc: the list again, on the same squad.
-    key(&mut app, KeyCode::Esc);
-    assert_eq!((app.sqt.focus, app.sqt.selected), (SqFocus::List, 1));
-    let (lines, _) = shown(&app, 60, 24);
-    assert!(flat(&lines).contains("▎ Research"), "{}", lines.join("\n"));
-    // The Agents list too: one pane, enter opens the agent full width.
-    key(&mut app, KeyCode::Right);
-    assert_eq!(app.sqt.view, SqView::Agents);
-    let (lines, _) = shown(&app, 60, 14);
-    assert!(flat(&lines).contains("[Agents]") && !flat(&lines).contains("Built in"), "{}", lines.join("\n"));
-    key(&mut app, KeyCode::Enter);
-    let (lines, _) = shown(&app, 60, 14);
-    let f = flat(&lines);
-    assert!(f.contains("Name planner") && !f.contains("[Agents]"), "{f}");
-}
-
 /// The tab strip of the settings popup, at the top of its border: the line under "╭ Settings".
 fn strip(lines: &[String]) -> String {
     lines[row_of(lines, "╭ Settings") + 1].clone()
@@ -241,47 +193,37 @@ fn at_60_columns_the_settings_strip_keeps_the_showing_tab_in_view_and_marks_the_
     assert!(titles.iter().all(|t| s.contains(t)) && !s.contains('‹') && !s.contains('›'), "{s}");
 }
 
-/// A project with two tickets and one session; its screen open, the Tickets pane in focus.
-fn on_the_tickets(name: &str) -> (World, App) {
+/// A project with two tasks and one session; the Tasks tab showing.
+fn on_the_tasks(name: &str) -> (World, App) {
     let w = World::new(name);
     w.transcript("aaa-1", "/tmp", "a conversation", 10);
     let mut app = w.app();
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     let mut store = Tickets::open(&w.config, &id);
-    store.add(NewTicket { title: "Basket page".into(), ..Default::default() }).unwrap();
-    store.add(NewTicket { title: "Checkout".into(), ..Default::default() }).unwrap();
+    store.add(NewTicket { title: "Basket page".into(), folder: Some("/tmp".into()), ..Default::default() }).unwrap();
+    store.add(NewTicket { title: "Checkout".into(), folder: Some("/tmp".into()), ..Default::default() }).unwrap();
     app.reload_for_test();
-    ch(&mut app, '3');
-    key(&mut app, KeyCode::Enter);
-    key(&mut app, KeyCode::Tab);
-    assert_eq!(app.pane, Pane::Tickets);
+    ch(&mut app, '2');
+    assert!(app.board_showing());
     (w, app)
 }
 
 #[test]
-fn shift_s_hands_a_ticket_to_a_squad_and_a_says_so_instead() {
-    let (_w, mut app) = on_the_tickets("d-shift-s");
+fn s_on_the_tasks_tab_starts_the_picked_task_and_is_not_the_settings_there() {
+    let (_w, mut app) = on_the_tasks("d-s");
     let (lines, _) = shown(&app, 160, 30);
     let f = flat(&lines);
-    assert!(f.contains("S hand to a squad") && !f.contains("a hand to a squad"), "{f}");
-    // `a` (which archives a session in the pane above) does nothing to a ticket, and says what does.
-    ch(&mut app, 'a');
-    assert!(matches!(app.mode, Mode::List));
-    assert_eq!(app.active_notice(), Some("S (shift+s) hands a task to a squad."));
-    // Shift+s, as a terminal sends it.
-    app.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+    assert!(f.contains("s start") && !f.contains("s settings"), "{f}");
+    ch(&mut app, 's');
     assert!(matches!(app.mode, Mode::SquadPick), "{:?}", app.active_notice());
     key(&mut app, KeyCode::Esc);
-    // On the ticket's own screen, the same.
+    // On the task's own screen, the same.
     key(&mut app, KeyCode::Enter);
     assert!(app.tk.open.is_some());
     let (lines, _) = shown(&app, 160, 30);
-    assert!(flat(&lines).contains("S hand to a squad"), "{}", lines.join("\n"));
-    app.notice = None;
-    ch(&mut app, 'a');
-    assert!(matches!(app.mode, Mode::List) && app.active_notice() == Some("S (shift+s) hands a task to a squad."));
-    app.on_key(KeyEvent::new(KeyCode::Char('S'), KeyModifiers::SHIFT));
+    assert!(flat(&lines).contains("s start"), "{}", lines.join("\n"));
+    ch(&mut app, 's');
     assert!(matches!(app.mode, Mode::SquadPick));
 }
 
@@ -312,14 +254,6 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
     assert_eq!(app.pselected, 1);
     ch(&mut app, 'k');
     assert_eq!(app.pselected, 0);
-    // Squads and Agents.
-    ch(&mut app, '4');
-    ch(&mut app, 'j');
-    assert_eq!(app.sqt.selected, 1);
-    key(&mut app, KeyCode::PageDown);
-    assert_eq!(app.sqt.selected, 3, "to the last squad");
-    ch(&mut app, 'k');
-    assert_eq!(app.sqt.selected, 2);
     // The settings' entries.
     ch(&mut app, 's');
     ch(&mut app, 'j');
@@ -327,13 +261,13 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
     ch(&mut app, 'k');
     assert_eq!(app.setting, 0);
     key(&mut app, KeyCode::Esc);
-    // The Tickets pane.
-    let (_w, mut app) = on_the_tickets("d-jk-tickets");
-    let first = app.ticket_selected();
+    // The Tasks tab.
+    let (_w, mut app) = on_the_tasks("d-jk-tasks");
+    let first = app.board_selected();
     ch(&mut app, 'j');
-    assert_eq!(app.ticket_selected(), first + 1);
+    assert_eq!(app.board_selected(), first + 1);
     ch(&mut app, 'k');
-    assert_eq!(app.ticket_selected(), first);
+    assert_eq!(app.board_selected(), first);
 }
 
 #[test]

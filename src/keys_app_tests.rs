@@ -1,10 +1,10 @@
 //! The back and quit keys at the level of the app: the back key (Ctrl+Space, or what keys.json says) and Esc both go
-//! back one level on every screen and cancel every popup; `q` goes back on a project's or a ticket's screen and in a
-//! squad's details, and quits only from the top-level lists; a keys.json with other keys is followed (and the hints
+//! back one level on every screen and cancel every popup; `q` goes back on a project's or a task's screen, and quits
+//! only from the top-level lists; a keys.json with other keys is followed (and the hints
 //! say them), a bad entry is said once and its default used. Every directory is a temp dir (`World`); the only
 //! processes started are the tests' own stand-in editors.
 
-use crate::app::{App, Mode, Pane, SqFocus};
+use crate::app::{App, Mode, Pane};
 use crate::client::Client;
 use crate::editors::Editor;
 use crate::host::{F_INPUT, read_frame};
@@ -75,29 +75,28 @@ fn on_the_project(name: &str) -> (World, App) {
     (w, app)
 }
 
-/// From the project's screen: ticket #1's own screen.
+/// Task #1's own screen, from the Tasks tab (it never started: enter shows its text).
 fn open_ticket(app: &mut App) {
-    key(app, KeyCode::Tab);
-    assert_eq!(app.pane, Pane::Tickets);
+    ch(app, '2');
     key(app, KeyCode::Enter);
-    assert_eq!(app.tk.open, Some(1), "the ticket's screen is open");
+    assert_eq!(app.tk.open, Some(1), "the task's screen is open");
 }
 
-/// Where the app is: (project open, ticket open, quit asked).
+/// Where the app is: (a project open, a task open, quit asked).
 fn at(app: &App) -> (bool, Option<u32>, bool) {
     (app.open_project().is_some(), app.tk.open, app.quit)
 }
 
 #[test]
-fn the_back_key_and_esc_each_go_back_one_level_from_a_ticket_to_its_project_to_the_list_and_never_quit() {
+fn the_back_key_and_esc_each_go_back_one_level_and_never_quit() {
     for back in [ctrl_space as fn(&mut App), |a: &mut App| key(a, KeyCode::Esc)] {
         let (_w, mut app) = on_the_project("keys-levels");
-        open_ticket(&mut app);
-        back(&mut app);
-        assert_eq!(at(&app), (true, None, false), "the ticket -> its project");
-        assert!(matches!(app.mode, Mode::List));
         back(&mut app);
         assert_eq!(at(&app), (false, None, false), "the project -> the list");
+        open_ticket(&mut app);
+        back(&mut app);
+        assert_eq!(at(&app), (false, None, false), "the task -> the Tasks tab");
+        assert!(matches!(app.mode, Mode::List) && app.board_showing());
         // At the top it does what esc does there (clears the filter), and never quits.
         app.filter = "zzz".into();
         back(&mut app);
@@ -107,55 +106,28 @@ fn the_back_key_and_esc_each_go_back_one_level_from_a_ticket_to_its_project_to_t
 }
 
 #[test]
-fn q_goes_back_on_a_project_or_ticket_screen_and_quits_only_from_the_top_level_list() {
+fn q_goes_back_on_a_project_or_task_screen_and_quits_only_from_the_top_level_list() {
     let (_w, mut app) = on_the_project("keys-q");
-    open_ticket(&mut app);
-    ch(&mut app, 'q');
-    assert_eq!(at(&app), (true, None, false), "q on a ticket: back to the project");
     ch(&mut app, 'q');
     assert_eq!(at(&app), (false, None, false), "q on a project: back to the list");
+    open_ticket(&mut app);
     ch(&mut app, 'q');
-    assert!(app.quit, "q on the list quits");
+    assert_eq!(at(&app), (false, None, false), "q on a task: back to the Tasks tab");
+    ch(&mut app, 'q');
+    assert!(app.quit, "q on the Tasks tab quits");
 
-    // The hints say so: no "q quit" on a project's or a ticket's screen, `esc back` instead (Esc is platoon's own there; the back key is a second Esc); "q quit" at the top.
+    // The hints say so: no "q quit" on a project's or a task's screen, `esc back` instead; "q quit" at the top.
     let (_w, mut app) = on_the_project("keys-q-hints");
     let mut term = Terminal::new(TestBackend::new(160, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("esc back") && !shown.contains("q quit"), "{shown}");
+    ch(&mut app, 'q');
     open_ticket(&mut app);
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("esc back") && !shown.contains("q quit"), "{shown}");
     ch(&mut app, 'q');
-    ch(&mut app, 'q');
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("q quit"), "{shown}");
-}
-
-#[test]
-fn in_a_squads_details_the_back_key_esc_and_q_go_back_to_the_list_and_q_quits_from_the_list() {
-    let w = World::new("keys-squads");
-    let mut app = w.app();
-    let mut term = Terminal::new(TestBackend::new(160, 36)).unwrap();
-    ch(&mut app, '4');
-    for back in [ctrl_space as fn(&mut App), |a: &mut App| key(a, KeyCode::Esc), |a: &mut App| ch(a, 'q')] {
-        key(&mut app, KeyCode::Enter);
-        assert_eq!(app.sqt.focus, SqFocus::Detail);
-        let shown = flat(&draw(&mut term, &app));
-        assert!(shown.contains("esc back to the list") && !shown.contains("q quit"), "{shown}");
-        back(&mut app);
-        assert_eq!(app.sqt.focus, SqFocus::List);
-        assert!(!app.quit);
-    }
-    // In the agents' details a space switches a switch: Ctrl+Space is not a space there.
-    key(&mut app, KeyCode::Right);
-    key(&mut app, KeyCode::Enter);
-    assert_eq!(app.sqt.focus, SqFocus::Detail);
-    ctrl_space(&mut app);
-    assert_eq!(app.sqt.focus, SqFocus::List);
-    let shown = flat(&draw(&mut term, &app));
-    assert!(shown.contains("q quit"), "{shown}");
-    ch(&mut app, 'q');
-    assert!(app.quit);
 }
 
 #[test]
@@ -213,17 +185,18 @@ fn keys_json_changes_the_back_and_quit_keys_and_the_hints_say_them() {
         "platoon's own screens say esc: {shown}"
     );
     assert_eq!(app.back_label(), "alt+x", "where Esc is the session's or the editor's, the hints name the back key from keys.json");
-    open_ticket(&mut app);
-    // Ctrl+Space is nothing now; alt+x goes back; so does esc, always.
-    ctrl_space(&mut app);
-    assert_eq!(at(&app), (true, Some(1), false));
-    alt(&mut app, 'x');
-    assert_eq!(at(&app), (true, None, false));
     // The quit key goes back too, below the top; q is nothing now.
     ch(&mut app, 'q');
     assert_eq!(at(&app), (true, None, false));
     ch(&mut app, 'w');
     assert_eq!(at(&app), (false, None, false));
+    open_ticket(&mut app);
+    // Ctrl+Space is nothing now; alt+x goes back; so does esc, always.
+    ctrl_space(&mut app);
+    assert_eq!(at(&app), (false, Some(1), false));
+    alt(&mut app, 'x');
+    assert_eq!(at(&app), (false, None, false));
+    ch(&mut app, '1');
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains("w quit") && !shown.contains("q quit"), "{shown}");
     ch(&mut app, 'q');
@@ -332,7 +305,6 @@ fn the_back_key_stops_the_notes_editor_and_otherwise_every_key_is_the_editors() 
     crate::settings::save(&w.config, &s).unwrap();
     app.refresh_for_test();
     app.notice = None;
-    key(&mut app, KeyCode::Tab);
     key(&mut app, KeyCode::Tab);
     assert_eq!(app.pane, Pane::Notes);
     ch(&mut app, 'e');
