@@ -74,6 +74,8 @@ mod smart_app_tests;
 mod spent;
 mod squads;
 #[cfg(test)]
+mod squads_app_tests;
+#[cfg(test)]
 mod stop_app_tests;
 mod summaries;
 mod taskdraft;
@@ -862,7 +864,7 @@ mod tests {
         key(&mut app, KeyCode::Left);
         assert_eq!((app.tab, app.selected), (0, 0));
 
-        // 1 to 3: the top-level tabs. A number with no tab does nothing.
+        // 1 to 4: the top-level tabs. A number with no tab does nothing.
         ch(&mut app, '2');
         assert!(app.top == 1 && app.board_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains(crate::board::EMPTY));
@@ -870,9 +872,10 @@ mod tests {
         assert!(app.top == 2 && app.projects_list_showing() && app.selected_session().is_none());
         assert!(flat(&draw(&mut term, &app)).contains("No projects yet. Press n to make one."));
         ch(&mut app, '4');
-        assert!(app.top == 2 && matches!(app.mode, Mode::List));
+        assert!(app.top == 3 && app.squads_showing() && app.selected_session().is_none());
+        assert!(flat(&draw(&mut term, &app)).contains("Feature"));
         ch(&mut app, '6');
-        assert_eq!(app.top, 2);
+        assert!(app.top == 3 && matches!(app.mode, Mode::List));
         ch(&mut app, '1');
         assert_eq!(app.top, 0);
 

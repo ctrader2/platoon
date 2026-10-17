@@ -31,7 +31,15 @@ here.
 - **The Tasks tab** has four sections, Needs you, Working, Not started and Done, and few keys: `n` new, `s` start,
   `enter` open, `e` edit, `c` cancel. Tasks drafted from a conversation (`t`) come with a suggested squad and are made
   Not started.
-- The tabs are Sessions, Tasks and Projects (`1` to `3`).
+- The tabs are Sessions, Tasks, Projects and Squads (`1` to `4`).
+
+### Added
+
+- **The Squads tab** (`4`) lists every squad, built in or yours, with where it comes from and **needs fixing** when its
+  file has something wrong, and shows the picked one beside the list: what it is for, its models, whether it plans first,
+  its steps and what is wrong with it. `e` opens a squad's file in your editor (a built-in's text is copied into
+  `~/.config/platoon/squads/` first, and the copy goes again if you leave it unchanged), `n` makes a new one from a
+  template, `d` deletes one of yours after asking (kept as `<id>.md.bak`; a built-in it replaced comes back).
 
 ### Removed
 

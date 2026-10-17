@@ -71,6 +71,11 @@ impl Squad {
         self.problems.is_empty()
     }
 
+    /// Its name, or its file's name when it has none.
+    pub fn name_or_id(&self) -> String {
+        if self.name.is_empty() { self.id.clone() } else { self.name.clone() }
+    }
+
     /// Its whole file, as `parse` reads it (the copy beside a task).
     pub fn text(&self) -> String {
         format!(
@@ -202,6 +207,95 @@ pub fn get(config: &Path, id: &str) -> Option<Squad> {
     all(config).into_iter().find(|s| s.id == id)
 }
 
+/// The file of the user's squad `id` (there or not).
+pub fn path(config: &Path, id: &str) -> PathBuf {
+    dir(config).join(format!("{id}.md"))
+}
+
+/// The built-in text of squad `id`, if it is a built-in.
+pub fn built_in_text(id: &str) -> Option<&'static str> {
+    BUILT_IN.iter().find(|(b, _)| *b == id).map(|(_, text)| *text)
+}
+
+/// A squad's file, ready for an editor: its path, its text before the edit, and whether platoon has just written it
+/// (a built-in's text, so that leaving it unchanged takes the copy away again: `after_edit`). A file of the user's that
+/// can't be read is not opened, and nothing is written over it.
+pub fn prepare_edit(config: &Path, id: &str) -> std::io::Result<(PathBuf, String, bool)> {
+    let p = path(config, id);
+    match fs::read_to_string(&p) {
+        Ok(text) => Ok((p, text, false)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let text = built_in_text(id).ok_or(e)?;
+            crate::projects::write_atomic(&p, text)?;
+            Ok((p, text.to_string(), true))
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// After an editor has been on squad `id`'s file: whether it changed. A built-in's copy that platoon wrote and the
+/// user left as it was is removed, so the built-in stays a built-in.
+pub fn after_edit(config: &Path, id: &str, before: &str, copied: bool) -> bool {
+    let p = path(config, id);
+    let changed = fs::read_to_string(&p).map_or(true, |now| now != before);
+    if !changed && copied {
+        let _ = fs::remove_file(&p);
+    }
+    changed
+}
+
+/// The file name a new squad called `name` gets (without `.md`): its name in lower-case letters, digits and `-`, or
+/// None when the name has no letter or digit to make one from.
+pub fn id_for(name: &str) -> Option<String> {
+    if !name.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    let mut id = crate::usertheme::slug(name);
+    if !id.starts_with(|c: char| c.is_ascii_lowercase()) {
+        id = format!("squad-{id}");
+    }
+    id.truncate(40);
+    Some(id.trim_end_matches('-').to_string())
+}
+
+/// The file a new squad starts as: the Feature squad's settings and one step to write over.
+pub fn template(name: &str) -> String {
+    format!(
+        "---\nname: {name}\ndescription: One line on what kind of work this squad is for.\nmodel: opus\nverdict_model: fable\nplan_first: true\n---\n\
+         1. Write the first step here: what the session does, and how it checks that it worked.\n"
+    )
+}
+
+/// Why a new squad couldn't be made.
+#[derive(Debug)]
+pub enum NewError {
+    /// The name has no letter or digit.
+    NoName,
+    /// There is a squad with that file name already: its name.
+    Taken(String),
+    Io(std::io::Error),
+}
+
+/// Make a new squad of the user's called `name` from the template: its id. A name that would replace a built-in, or a
+/// file that is there already, is refused (nothing is ever written over).
+pub fn create(config: &Path, name: &str) -> Result<String, NewError> {
+    let id = id_for(name).ok_or(NewError::NoName)?;
+    if let Some(s) = all(config).into_iter().find(|s| s.id == id) {
+        return Err(NewError::Taken(if s.name.is_empty() { id } else { s.name }));
+    }
+    let p = path(config, &id);
+    if p.exists() {
+        return Err(NewError::Taken(id));
+    }
+    crate::projects::write_atomic(&p, &template(name)).map_err(NewError::Io)?;
+    Ok(id)
+}
+
+/// Delete the user's squad `id`: its file is kept as `<id>.md.bak` (one, the latest). A built-in it replaced comes back.
+pub fn delete(config: &Path, id: &str) -> std::io::Result<()> {
+    fs::rename(path(config, id), dir(config).join(format!("{id}.md.bak")))
+}
+
 /// A squad's name for a task's row: its name, else its id as written.
 pub fn name_of(squads: &[Squad], id: &str) -> String {
     squads.iter().find(|s| s.id == id).map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| id.to_string())
@@ -303,5 +397,76 @@ mod tests {
         assert!(!broken.usable() && broken.origin == Origin::Own);
         assert_eq!(name_of(&all, "zebra"), "Alpha");
         assert_eq!(name_of(&all, "gone"), "gone");
+    }
+
+    #[test]
+    fn editing_a_built_in_writes_its_copy_and_leaving_it_unchanged_takes_the_copy_away() {
+        let d = dir_for("edit-built-in");
+        let (p, before, copied) = prepare_edit(&d, "docs").unwrap();
+        assert!(copied && p == path(&d, "docs"));
+        assert_eq!(fs::read_to_string(&p).unwrap(), before);
+        assert_eq!(get(&d, "docs").unwrap().origin, Origin::Replaces, "while the editor has it");
+        assert!(!after_edit(&d, "docs", &before, copied));
+        assert!(!p.exists(), "unchanged: the copy goes");
+        assert_eq!(get(&d, "docs").unwrap().origin, Origin::BuiltIn);
+
+        let (p, before, copied) = prepare_edit(&d, "docs").unwrap();
+        fs::write(&p, before.replace("model: sonnet", "model: haiku")).unwrap();
+        assert!(after_edit(&d, "docs", &before, copied));
+        let docs = get(&d, "docs").unwrap();
+        assert_eq!((docs.origin, docs.model.as_str()), (Origin::Replaces, "haiku"), "changed: it is the user's now");
+
+        // The user's own file again: nothing is written, and unchanged keeps it.
+        let (_, again, copied) = prepare_edit(&d, "docs").unwrap();
+        assert!(!copied && again.contains("model: haiku"));
+        assert!(!after_edit(&d, "docs", &again, copied));
+        assert!(path(&d, "docs").exists());
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_not_opened_and_not_written_over() {
+        let d = dir_for("unreadable");
+        fs::create_dir_all(path(&d, "odd")).unwrap(); // a folder where the file would be: read_to_string fails
+        assert!(prepare_edit(&d, "odd").is_err());
+        assert!(path(&d, "odd").is_dir());
+        assert!(prepare_edit(&d, "nobody").is_err(), "neither a file nor a built-in");
+        assert!(!path(&d, "nobody").exists());
+    }
+
+    #[test]
+    fn a_new_squad_gets_a_file_name_from_its_name_and_never_writes_over_one() {
+        assert_eq!(id_for("My Squad!").as_deref(), Some("my-squad"));
+        assert_eq!(id_for("Écrire la doc").as_deref(), Some("ecrire-la-doc"));
+        assert_eq!(id_for("2nd pass").as_deref(), Some("squad-2nd-pass"));
+        assert_eq!(id_for("  ?! "), None);
+        assert!(id_for(&"long name ".repeat(10)).is_some_and(|id| valid_id(&id) && !id.ends_with('-')));
+
+        let d = dir_for("new");
+        let id = create(&d, "Quick fix").unwrap();
+        assert_eq!(id, "quick-fix");
+        let s = get(&d, &id).unwrap();
+        assert!(s.usable(), "the template has no problems: {:?}", s.problems);
+        let feature = get(&d, DEFAULT).unwrap();
+        assert_eq!(
+            (s.name.as_str(), s.origin, s.model.as_str(), s.verdict_model.as_str(), s.plan_first),
+            ("Quick fix", Origin::Own, feature.model.as_str(), feature.verdict_model.as_str(), feature.plan_first)
+        );
+        assert!(matches!(create(&d, "quick fix"), Err(NewError::Taken(n)) if n == "Quick fix"));
+        assert!(matches!(create(&d, "Feature"), Err(NewError::Taken(n)) if n == "Feature"), "e changes a built-in, n doesn't");
+        assert!(matches!(create(&d, "!!"), Err(NewError::NoName)));
+    }
+
+    #[test]
+    fn deleting_keeps_a_bak_and_a_replaced_built_in_comes_back() {
+        let d = dir_for("delete");
+        create(&d, "Mine").unwrap();
+        fs::write(path(&d, "review"), "---\nname: Our review\ndescription: Ours\nmodel: sonnet\n---\nRead.\n").unwrap();
+        delete(&d, "mine").unwrap();
+        delete(&d, "review").unwrap();
+        assert!(dir(&d).join("mine.md.bak").exists() && dir(&d).join("review.md.bak").exists());
+        let all = all(&d);
+        assert!(all.iter().all(|s| s.id != "mine"), "a .bak is not a squad");
+        assert_eq!(all.iter().find(|s| s.id == "review").map(|s| (s.name.as_str(), s.origin)), Some(("Review", Origin::BuiltIn)));
+        assert!(delete(&d, "mine").is_err(), "nothing left to delete");
     }
 }

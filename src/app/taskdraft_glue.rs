@@ -340,11 +340,11 @@ impl App {
             self.notify(format!("Couldn't open the task for editing: {}", plain(&e)));
             return;
         }
-        self.pick_draft_editor(DraftEdit { index: d.selected, path, before: text });
+        self.pick_file_editor(FileEdit { of: FileOf::Draft(d.selected), path, before: text });
     }
 
     /// The editor is done with a drafted task's file: what it says now goes in the draft (the file goes).
-    pub(super) fn after_draft_edit(&mut self, i: usize, edit: &DraftEdit) {
+    pub(super) fn after_draft_edit(&mut self, i: usize, edit: &FileEdit) {
         let text = std::fs::read_to_string(&edit.path).unwrap_or_default();
         let _ = std::fs::remove_file(&edit.path);
         if matches!(self.mode, Mode::List) && self.td.draft.is_some() {

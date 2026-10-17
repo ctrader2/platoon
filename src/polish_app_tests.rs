@@ -256,7 +256,7 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
         let anywhere = section(&help, "Anywhere in platoon");
         assert!(!help.iter().any(|(s, _, _)| s == "Everywhere"), "{place}");
         let keys: Vec<&str> = anywhere.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, ["1-3", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
+        assert_eq!(keys, ["1-4", "ctrl+space", "q", "?"], "{place}: only the keys that work on every screen");
         assert_eq!(here.iter().any(|(k, d)| k == "s" && d == "settings"), s, "{place}: s {here:?}");
         assert_eq!(here.iter().any(|(k, d)| k == "/" && d == "search"), slash, "{place}: / {here:?}");
         // Never one action twice: the back key's line says esc does the same, so the screen's esc back isn't listed.

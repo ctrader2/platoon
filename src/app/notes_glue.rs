@@ -21,8 +21,8 @@ pub struct NotesEdit {
     pub instructions: Option<&'static str>,
     /// Editing the body of this ticket of `project` rather than its notes.
     pub ticket: Option<u32>,
-    /// Editing a task of a draft: `project` is empty.
-    pub draft: Option<DraftEdit>,
+    /// Editing a file of its own (a task of a draft, a squad): `project` is empty.
+    pub file: Option<FileEdit>,
     /// The instructions (or the ticket's body) as they were before the editor ran.
     before: String,
     /// The editor's plain name, for the status line.
@@ -40,20 +40,28 @@ pub struct NotesWindow {
     pub project: String,
     pub instructions: Option<&'static str>,
     pub ticket: Option<u32>,
-    pub draft: Option<DraftEdit>,
+    pub file: Option<FileEdit>,
     before: String,
     pub name: String,
     stamp: notes::Stamp,
     child: std::process::Child,
 }
 
-/// A task of a draft (tasks drafted from a conversation, `app/taskdraft_glue.rs`), open in an editor as a file of its
-/// own: its place in the draft, the file, and what the file said before.
+/// A file of its own open in an editor: what it is, the file, and what the file said before.
 #[derive(Clone, Debug)]
-pub struct DraftEdit {
-    pub index: usize,
+pub struct FileEdit {
+    pub of: FileOf,
     pub path: PathBuf,
     pub before: String,
+}
+
+/// What a `FileEdit` is the file of.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileOf {
+    /// A task of a draft (tasks drafted from a conversation, `app/taskdraft_glue.rs`): its place in the draft.
+    Draft(usize),
+    /// A squad (the Squads tab, `app/squadtab_glue.rs`); `copied`: platoon wrote the built-in's text there for the edit.
+    Squad { id: String, copied: bool },
 }
 
 /// The list of editors, which `e` opens. The one used last is first and picked, so enter is one keystroke.
@@ -63,8 +71,8 @@ pub struct EditorPick {
     pub instructions: Option<&'static str>,
     /// Opened for the body of this ticket of `project`.
     pub ticket: Option<u32>,
-    /// Opened for a task of a draft.
-    pub draft: Option<DraftEdit>,
+    /// Opened for a file of its own (a task of a draft, a squad).
+    pub file: Option<FileEdit>,
     pub options: Vec<Editor>,
     pub selected: usize,
     /// The id of the editor used last: the one with the star in front of it (empty when none has been used).
@@ -213,7 +221,7 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, instructions: None, ticket: None, draft: None, options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, ticket: None, file: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -226,8 +234,7 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick =
-            EditorPick { project: String::new(), instructions: Some(id), ticket: None, draft: None, options, selected: 0, starred };
+        self.epick = EditorPick { project: String::new(), instructions: Some(id), ticket: None, file: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
@@ -242,14 +249,14 @@ impl App {
         let last = self.settings.get().notes_editor;
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
-        self.epick = EditorPick { project, instructions: None, ticket: Some(number), draft: None, options, selected: 0, starred };
+        self.epick = EditorPick { project, instructions: None, ticket: Some(number), file: None, options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
-    /// The same list of editors, for a task of a draft (its file is already written).
-    pub(super) fn pick_draft_editor(&mut self, edit: DraftEdit) {
+    /// The same list of editors, for a file of its own (already written: a task of a draft, a squad).
+    pub(super) fn pick_file_editor(&mut self, edit: FileEdit) {
         if let Some(name) = self.editing.as_ref().map(|e| e.name.clone()).or_else(|| self.notes_window.as_ref().map(|w| w.name.clone())) {
-            let _ = std::fs::remove_file(&edit.path);
+            self.drop_file_edit(edit);
             self.notify(format!("{name} is still open on something else. Close it first."));
             return;
         }
@@ -257,14 +264,40 @@ impl App {
         let options = editors::in_order(&self.editors, &last);
         let starred = options.first().filter(|e| e.id == last).map(|e| e.id.clone()).unwrap_or_default();
         self.epick =
-            EditorPick { project: String::new(), instructions: None, ticket: None, draft: Some(edit), options, selected: 0, starred };
+            EditorPick { project: String::new(), instructions: None, ticket: None, file: Some(edit), options, selected: 0, starred };
         self.mode = Mode::PickEditor;
     }
 
-    /// Open a task of a draft, written to its own file, in `e`.
-    fn run_draft_editor(&mut self, edit: DraftEdit, e: &Editor) {
+    /// A file of its own that no editor opened after all: a task of a draft's file goes, and a built-in squad's copy
+    /// left as it was goes.
+    pub(super) fn drop_file_edit(&mut self, edit: FileEdit) {
+        match &edit.of {
+            FileOf::Draft(_) => {
+                let _ = std::fs::remove_file(&edit.path);
+            }
+            FileOf::Squad { id, copied } => {
+                crate::squads::after_edit(&self.config, id, &edit.before, *copied);
+            }
+        }
+    }
+
+    /// An editor has been and gone from a file of its own.
+    fn after_file_edit(&mut self, edit: &FileEdit) {
+        match &edit.of {
+            FileOf::Draft(i) => self.after_draft_edit(*i, edit),
+            FileOf::Squad { .. } => self.after_squad_edit(edit),
+        }
+    }
+
+    /// Where the list of editors goes back to for a file of its own: the draft's popup, or the list.
+    pub(super) fn file_edit_mode(edit: &FileEdit) -> Mode {
+        if matches!(edit.of, FileOf::Draft(_)) { Mode::TaskDraft } else { Mode::List }
+    }
+
+    /// Open a file of its own in `e`.
+    fn run_file_editor(&mut self, edit: FileEdit, e: &Editor) {
         let stamp = file_stamp(&edit.path);
-        let what = "the task";
+        let what = if matches!(edit.of, FileOf::Draft(_)) { "the task" } else { "the squad" };
         if e.terminal {
             let (rows, cols) = self.pty_size();
             match editors::Running::spawn(e, &edit.path, rows, cols) {
@@ -273,7 +306,7 @@ impl App {
                         project: String::new(),
                         instructions: None,
                         ticket: None,
-                        draft: Some(edit),
+                        file: Some(edit),
                         before: String::new(),
                         name: e.name.clone(),
                         stamp,
@@ -284,7 +317,7 @@ impl App {
                     self.clear_selection();
                 }
                 Err(err) => {
-                    let _ = std::fs::remove_file(&edit.path);
+                    self.drop_file_edit(edit);
                     self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
                 }
             }
@@ -297,7 +330,7 @@ impl App {
                     project: String::new(),
                     instructions: None,
                     ticket: None,
-                    draft: Some(edit),
+                    file: Some(edit),
                     before: String::new(),
                     name: e.name.clone(),
                     stamp,
@@ -305,7 +338,7 @@ impl App {
                 });
             }
             Err(err) => {
-                let _ = std::fs::remove_file(&edit.path);
+                self.drop_file_edit(edit);
                 self.notify(format!("Couldn't open {what} in {}: {}", e.name, plain(&err)));
             }
         }
@@ -324,7 +357,10 @@ impl App {
     /// Enter in the editor list: use that editor, and remember it as the one to offer first next time.
     pub(super) fn take_editor_pick(&mut self) {
         // A task of a draft goes back to the draft's popup, which stays open while a windowed editor has it.
-        let back = if self.epick.draft.is_some() { Mode::TaskDraft } else { Self::after_pick_mode(self.epick.instructions) };
+        let back = match &self.epick.file {
+            Some(f) => Self::file_edit_mode(f),
+            None => Self::after_pick_mode(self.epick.instructions),
+        };
         let Some(e) = self.epick.options.get(self.epick.selected).cloned() else {
             self.mode = back;
             return;
@@ -332,8 +368,8 @@ impl App {
         let project = self.epick.project.clone();
         self.mode = back;
         self.remember_editor(&e.id);
-        if let Some(edit) = self.epick.draft.take() {
-            return self.run_draft_editor(edit, &e);
+        if let Some(edit) = self.epick.file.take() {
+            return self.run_file_editor(edit, &e);
         }
         match (self.epick.instructions, self.epick.ticket) {
             (Some(id), _) => self.run_instructions_editor(id, &e),
@@ -384,7 +420,7 @@ impl App {
                         project: project.to_string(),
                         instructions: None,
                         ticket: None,
-                        draft: None,
+                        file: None,
                         before: String::new(),
                         name: e.name.clone(),
                         stamp,
@@ -407,7 +443,7 @@ impl App {
                     project: project.to_string(),
                     instructions: None,
                     ticket: None,
-                    draft: None,
+                    file: None,
                     before: String::new(),
                     name: e.name.clone(),
                     stamp,
@@ -441,7 +477,7 @@ impl App {
                         project: String::new(),
                         instructions: Some(id),
                         ticket: None,
-                        draft: None,
+                        file: None,
                         before,
                         name: e.name.clone(),
                         stamp,
@@ -464,7 +500,7 @@ impl App {
                     project: String::new(),
                     instructions: Some(id),
                     ticket: None,
-                    draft: None,
+                    file: None,
                     before,
                     name: e.name.clone(),
                     stamp,
@@ -505,7 +541,7 @@ impl App {
                         project: project.to_string(),
                         instructions: None,
                         ticket: Some(number),
-                        draft: None,
+                        file: None,
                         before,
                         name: e.name.clone(),
                         stamp,
@@ -525,7 +561,7 @@ impl App {
                     project: project.to_string(),
                     instructions: None,
                     ticket: Some(number),
-                    draft: None,
+                    file: None,
                     before,
                     name: e.name.clone(),
                     stamp,
@@ -650,8 +686,8 @@ impl App {
             // Either the editor is done with the file, or it has written it: read the notes again either way.
             Some(w) => {
                 matches!(w.child.try_wait(), Ok(Some(_)))
-                    || w.draft.as_ref().is_some_and(|sp| file_stamp(&sp.path) != w.stamp)
-                    || w.draft.is_none()
+                    || w.file.as_ref().is_some_and(|sp| file_stamp(&sp.path) != w.stamp)
+                    || w.file.is_none()
                         && match (w.instructions, w.ticket) {
                             (Some(id), _) => instructions::stamp(&self.config, id) != w.stamp,
                             (None, Some(n)) => {
@@ -665,8 +701,8 @@ impl App {
             None => false,
         };
         if done && let Some(w) = self.notes_window.take() {
-            if let Some(sp) = &w.draft {
-                self.after_draft_edit(sp.index, sp);
+            if let Some(sp) = &w.file {
+                self.after_file_edit(sp);
                 return self.poll_notes_changes();
             }
             match (w.instructions, w.ticket) {
@@ -683,8 +719,8 @@ impl App {
         if matches!(self.mode, Mode::EditNotes) {
             self.mode = Self::after_pick_mode(ed.instructions);
         }
-        if let Some(sp) = &ed.draft {
-            return self.after_draft_edit(sp.index, sp);
+        if let Some(sp) = &ed.file {
+            return self.after_file_edit(sp);
         }
         if let Some(id) = ed.instructions {
             return self.after_instructions_edit(id, &ed.before);

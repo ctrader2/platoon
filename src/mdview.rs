@@ -30,7 +30,18 @@ const TAB: usize = 4;
 /// `text` as lines of at most `width` columns (a prefix wider than a tiny pane may still overflow it; the pane
 /// clips). `plain`: bullets from `PLAIN_BULLETS`.
 pub fn render(text: &str, width: usize, theme: &Theme, plain: bool) -> Vec<Line<'static>> {
+    render_with(text, width, theme, plain, false)
+}
+
+/// `render`, but a line break inside a paragraph joins the lines as strict Markdown does: for prose written hard-wrapped
+/// at some width of its own (a squad's steps), which would otherwise break twice.
+pub fn render_joined(text: &str, width: usize, theme: &Theme, plain: bool) -> Vec<Line<'static>> {
+    render_with(text, width, theme, plain, true)
+}
+
+fn render_with(text: &str, width: usize, theme: &Theme, plain: bool, join: bool) -> Vec<Line<'static>> {
     let mut v = View::new(width.max(1), theme, plain);
+    v.join = join;
     for event in Parser::new_ext(text, Options::empty()) {
         v.event(event);
     }
@@ -73,6 +84,8 @@ struct View<'t> {
     html: bool,
     /// A blank line is owed before the next block.
     gap: bool,
+    /// A soft line break is a space (`render_joined`).
+    join: bool,
 }
 
 impl<'t> View<'t> {
@@ -93,6 +106,7 @@ impl<'t> View<'t> {
             code: None,
             html: false,
             gap: false,
+            join: false,
         }
     }
 
@@ -140,6 +154,7 @@ impl<'t> View<'t> {
             },
             Event::Code(s) => self.pieces.push(Piece::Text(clean(&s), self.code_style())),
             Event::Html(s) | Event::InlineHtml(s) => self.text(&s, Style::new().fg(self.t.dim)),
+            Event::SoftBreak if self.join => self.text(" ", self.text_style()),
             Event::SoftBreak | Event::HardBreak => self.pieces.push(Piece::Break),
             Event::Rule => {
                 self.start_block();
@@ -540,6 +555,14 @@ mod tests {
             }
         }
         panic!("{needle:?} is not in {:?}", lines.iter().map(text_of).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn joined_text_reads_a_hard_wrapped_paragraph_as_one_and_keeps_its_list_items_apart() {
+        let md = "Plan it, build it,\nverify it.\n\n1. Read the code\n   yourself.\n2. Write the plan.\n";
+        let joined: Vec<String> = render_joined(md, 40, &theme(), false).iter().map(text_of).collect();
+        assert_eq!(joined, ["Plan it, build it, verify it.", "", "1. Read the code yourself.", "2. Write the plan."]);
+        assert_eq!(texts(md, 40)[..2], ["Plan it, build it,", "verify it."], "render keeps the notes' lines");
     }
 
     #[test]

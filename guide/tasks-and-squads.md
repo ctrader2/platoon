@@ -152,6 +152,22 @@ when it has none). A file of your own in `~/.config/platoon/squads/<id>.md` is a
 built-in (`feature.md`) replaces it. A file with something wrong in it is listed as **needs fixing** and can't start a
 task; the list says what is wrong. A started task keeps the squad it started with (its copy is in the task's own folder).
 
+### The Squads tab
+
+The fourth tab, `4` **Squads**, lists every squad: the built-ins first, then yours by name, each with what it is for and
+where it comes from (**built in**, **yours**, or **yours, replaces the built-in**), and **needs fixing** when its file has
+something wrong. From 80 columns the picked squad is beside the list: what it is for, its model and verdict model,
+whether it plans first, its steps, and under them what is wrong with its file, one line each.
+
+| Key (Squads tab) | Does |
+| --- | --- |
+| `enter` | the squad in the whole width, scrolled with `↑` `↓`; `esc` goes back to the list |
+| `e` | open its file in your editor (the same list of editors as the notes); the tab reads it again when the editor is done. On a built-in, its text is copied to `~/.config/platoon/squads/<id>.md` first, and if you leave it unchanged the copy goes again, so a built-in becomes yours only when you change it |
+| `n` | a new squad: its name, then its file (`~/.config/platoon/squads/<name>.md`, the Feature squad's settings and one step to write over) opens in your editor |
+| `d` | delete one of yours, after asking. The file is kept as `<id>.md.bak`; a built-in it replaced comes back |
+
+Changing or deleting a squad never touches a task that has started: it follows its own copy.
+
 The built-in squads are adapted from the playbooks of Lauren Tan's
 [pstack](https://github.com/cursor/plugins/tree/main/pstack) (MIT; see `THIRD_PARTY_NOTICES.md`).
 

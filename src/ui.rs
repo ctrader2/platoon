@@ -12,6 +12,7 @@ use crate::usage::Usage;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 mod draft_view;
 mod help_view;
+mod squads_view;
 mod tasks_view;
 
 use ratatui::{
@@ -139,7 +140,7 @@ fn draw_all(f: &mut Frame, app: &App) {
 
     // The Active/Archived switch of the Sessions and Projects lists sits at the right of the rule when it fits there
     // (clear of the current tab's mark); otherwise it has the row under the rule to itself.
-    let lists = app.open_project.is_none() && !app.board_showing();
+    let lists = app.open_project.is_none() && !app.board_showing() && !app.squads_showing();
     let (labels, counts, current): (Vec<&str>, &[usize], usize) = if app.projects_list_showing() {
         (PTABS.iter().map(|(l, _)| *l).collect(), &app.pcounts, app.ptab)
     } else {
@@ -154,8 +155,10 @@ fn draw_all(f: &mut Frame, app: &App) {
 
     // The selected conversation's summary, two lines just above the footer, when there is one and the terminal is
     // tall enough to keep at least three rows of the list beside it. (Not on the Projects tab, whose rows are projects.)
-    let summary =
-        app.selected_session().map(|s| s.summary.as_str()).filter(|s| !s.is_empty() && app.open_project.is_none() && !app.board_showing());
+    let summary = app
+        .selected_session()
+        .map(|s| s.summary.as_str())
+        .filter(|s| !s.is_empty() && app.open_project.is_none() && !app.board_showing() && !app.squads_showing());
     // A newer Claude Code or platoon (`versions.rs`): its own lines above the footer, in the summary's place.
     let news = app.news_showing().map(|text| news_lines(text, rest.width as usize, full.height));
     let news_h = news.as_ref().map_or(0, |l| l.len() as u16);
@@ -188,6 +191,8 @@ fn draw_all(f: &mut Frame, app: &App) {
         draw_project_screen(f, app, shelf, Rect::new(titles.x, titles.y, titles.width, list.bottom() - titles.y));
     } else if app.board_showing() {
         tasks_view::draw_board(f, app, screen);
+    } else if app.squads_showing() {
+        squads_view::draw_squads_tab(f, app, screen);
     } else if app.projects_list_showing() {
         if shelf_on_rule.is_none() {
             draw_shelf(f, app, shelf, &labels, counts, current, true);
@@ -304,6 +309,8 @@ fn screen_hints(app: &App) -> Vec<Hint<'_>> {
         project_screen_hints(app)
     } else if app.board_showing() {
         tasks_view::board_hints(app, false)
+    } else if app.squads_showing() {
+        squads_view::squads_hints(app)
     } else if app.projects_list_showing() {
         projects_hints(app)
     } else {
@@ -2814,6 +2821,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
         }
         NamePurpose::NewTask(_) => (new_task_title.as_str(), "Its title. The text opens in your editor next."),
         NamePurpose::TaskFilter => ("Filter tasks", "By title, project or squad. The list narrows as you type."),
+        NamePurpose::NewSquad => ("New squad", "Its name. Its file starts like Feature's and opens in your editor next."),
         NamePurpose::Rename(_) => ("Rename project", "The project's notes and sessions stay as they are."),
         NamePurpose::NewFor(_) => ("New project", "The session goes into it. Its color and badge can be changed later (c)."),
         NamePurpose::New => ("New project", "Give it a name. Its color and badge can be changed later (c)."),
@@ -2902,7 +2910,11 @@ fn draw_editor_pick(f: &mut Frame, app: &App, area: Rect) {
     let what = match (pick.instructions, pick.ticket) {
         (Some(_), _) => "Edit the system prompt with".to_string(),
         (None, Some(n)) => format!("Edit task #{n} with"),
-        (None, None) => "Edit the notes with".to_string(),
+        (None, None) => match pick.file.as_ref().map(|f| &f.of) {
+            Some(crate::app::FileOf::Draft(_)) => "Edit the task with".to_string(),
+            Some(crate::app::FileOf::Squad { .. }) => "Edit the squad with".to_string(),
+            None => "Edit the notes with".to_string(),
+        },
     };
     let block = modal_block(t, &what);
     let inner = block.inner(r).inner(Margin::new(1, 0));
@@ -3132,8 +3144,13 @@ fn draw_editing(f: &mut Frame, app: &App, edit: &crate::app::NotesEdit, area: Re
         None => match (edit.instructions, edit.ticket) {
             (Some(id), _) => format!("{} · the system prompt for {}", edit.name, crate::instructions::action(id).what),
             (None, Some(n)) => format!("{} · task #{n}", edit.name),
-            (None, None) if edit.draft.is_some() => format!("{} · a drafted task", edit.name),
-            (None, None) => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
+            (None, None) => match edit.file.as_ref().map(|f| &f.of) {
+                Some(crate::app::FileOf::Draft(_)) => format!("{} · a drafted task", edit.name),
+                Some(crate::app::FileOf::Squad { id, .. }) => {
+                    format!("{} · the squad {}", edit.name, crate::squads::name_of(&app.sqt.list, id))
+                }
+                None => format!("{} · the notes of {}", edit.name, app.open_project().map(|p| p.name.clone()).unwrap_or_default()),
+            },
         },
     };
     let hints: [Hint; 1] = [(app.back_label(), "leave the editor", Some(Action::Back))];
@@ -3335,6 +3352,16 @@ fn draw_confirm(f: &mut Frame, app: &App, c: &Confirm, area: Rect) {
                 "Its notes are deleted too (a backup copy is kept). Its {sessions} session{} stay in the Sessions tab, in no project; no session is deleted.",
                 if *sessions == 1 { "" } else { "s" }
             ),
+            "delete",
+        ),
+        Confirm::DeleteSquad { id, name, replaces } => (
+            "Delete squad",
+            format!("Delete the squad \"{name}\"?"),
+            if *replaces {
+                format!("The built-in {name} comes back in its place. Your file is kept as {id}.md.bak in the squads folder.")
+            } else {
+                format!("Your file is kept as {id}.md.bak in the squads folder. Tasks already started keep their own copy.")
+            },
             "delete",
         ),
         Confirm::EditorWhileWorking { number, title } => (

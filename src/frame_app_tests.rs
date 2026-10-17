@@ -202,7 +202,7 @@ fn question_mark_lists_every_key_of_the_screen_even_those_the_footer_dropped() {
         "←→ active/archived",
         "↑↓ move",
         "Anywhere in platoon",
-        "1-3 the tabs: Sessions, Tasks, Projects",
+        "1-4 the tabs: Sessions, Tasks, Projects, Squads",
         "s settings",
         "/ search",
         "ctrl+space back one level (esc does the same)",
@@ -217,7 +217,7 @@ fn question_mark_lists_every_key_of_the_screen_even_those_the_footer_dropped() {
     draw(&mut tall_term, &app);
     let tall = popup_text(&tall_term, &app);
     assert!(!tall.contains("more lines below") && tall.contains("Ctrl+Z"), "{tall}");
-    for once in ["s settings", "/ search", "1-3", "q quit"] {
+    for once in ["s settings", "/ search", "1-4", "q quit"] {
         assert_eq!(tall.matches(once).count(), 1, "{once}: {tall}");
     }
     key(&mut app, KeyCode::Home);

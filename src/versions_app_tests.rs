@@ -10,7 +10,7 @@ const TOP_PROJECTS: usize = 2;
 
 #[test]
 fn the_tab_numbers_here_are_the_apps() {
-    assert_eq!((TOPS[TOP_TASKS], TOPS[TOP_PROJECTS], TOPS.len()), ("Tasks", "Projects", 3));
+    assert_eq!((TOPS[TOP_TASKS], TOPS[TOP_PROJECTS], TOPS.len()), ("Tasks", "Projects", 4));
 }
 use crate::testkit::World;
 use crate::ui;

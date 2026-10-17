@@ -168,8 +168,8 @@ session or an editor, where it is theirs), so the key hints there say `esc back`
 editor they name the back key. On the top-level lists, with nothing open, it does what `esc` does there (clears a kept
 filter) and never quits.
 
-`q` quits, but only from the top-level lists (Sessions, Tasks, Projects with nothing open). On a project's or a task's
-screen, it goes back one level instead. In a box you type in, `q` is just a letter.
+`q` quits, but only from the top-level lists (Sessions, Tasks, Projects, Squads with nothing open). On a project's or a
+task's screen, or a squad opened from its tab, it goes back one level instead. In a box you type in, `q` is just a letter.
 
 Both can be changed in `keys.json`, beside `settings.json` (`~/.config/platoon/keys.json`, or `$PLATOON_CONFIG_DIR`).
 platoon never writes this file; there is no entry for it on the settings screen. For example:

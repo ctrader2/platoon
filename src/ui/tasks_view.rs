@@ -613,7 +613,7 @@ pub(super) fn board_hints(app: &App, all: bool) -> Vec<Hint<'_>> {
     }
     out.extend([
         ("/", "filter", None),
-        ("1-3", "tabs", None),
+        ("1-4", "tabs", None),
         ("↑↓", "move", None),
         ("?", "help", Some(Action::Help)),
         (app.quit_label(), "quit", Some(Action::Quit)),

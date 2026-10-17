@@ -48,6 +48,7 @@ mod projects_glue;
 mod smart_glue;
 mod spent_glue;
 mod squads_glue;
+mod squadtab_glue;
 mod taskdraft_glue;
 mod tickets_glue;
 pub(crate) mod worktree_glue;
@@ -55,10 +56,13 @@ pub use board_glue::{BRow, BoardState, ListItem};
 #[cfg(test)]
 pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
-pub use notes_glue::{Changes, DraftEdit, EditorPick, NotesEdit, NotesWindow};
-pub use projects_glue::{AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_TASKS, TOPS};
+pub use notes_glue::{Changes, EditorPick, FileEdit, FileOf, NotesEdit, NotesWindow};
+pub use projects_glue::{
+    AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_SQUADS, TOP_TASKS, TOPS,
+};
 pub use smart_glue::{Engine, FIND_KIND, FindData, FindState};
 pub use squads_glue::SquadState;
+pub use squadtab_glue::{SquadsTab, origin_words};
 pub use tickets_glue::TicketsState;
 
 const NOTICE_FOR: Duration = Duration::from_secs(5);
@@ -217,6 +221,8 @@ pub enum Hit {
     DraftTask(usize),
     /// An entry of the list of squads (`s` on a task).
     SquadRow(usize),
+    /// A row of the Squads tab.
+    SquadsTabRow(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the project picker of a new task (`n` on the Tasks tab).
@@ -285,6 +291,8 @@ pub enum Confirm {
     CancelTicket { number: u32, title: String, pid: Option<u32>, uncommitted: bool },
     /// `v` on a task whose session is still working in its files: open the editor anyway?
     EditorWhileWorking { number: u32, title: String },
+    /// `d` on a squad of the user's: delete it? `replaces`: it replaces a built-in, which comes back.
+    DeleteSquad { id: String, name: String, replaces: bool },
 }
 
 /// The smallest terminal platoon draws its screens in. Below it, `ui::draw` says so in one centered message instead of
@@ -300,6 +308,7 @@ pub struct ScreenId {
     top: usize,
     project: Option<String>,
     ticket: Option<u32>,
+    squad_open: bool,
     help: bool,
 }
 
@@ -558,6 +567,8 @@ pub struct App {
     pub bd: BoardState,
     /// Starting tasks: the list of squads, the worktrees being made, and which sessions are tasks'.
     pub sq: SquadState,
+    /// The Squads tab.
+    pub sqt: SquadsTab,
     /// What tasks' sessions have spent, read off the UI thread.
     pub sw: spent_glue::WorkState,
     /// Tasks' worktrees after the work: removing them, and bringing them back to continue a session.
@@ -775,6 +786,7 @@ impl App {
             tk: TicketsState::new(),
             bd: BoardState::new(),
             sq: SquadState::new(),
+            sqt: SquadsTab::default(),
             sw: spent_glue::WorkState::default(),
             wt: worktree_glue::WtState::default(),
             td: taskdraft_glue::DraftState::default(),
@@ -794,7 +806,7 @@ impl App {
                 project: String::new(),
                 instructions: None,
                 ticket: None,
-                draft: None,
+                file: None,
                 options: Vec::new(),
                 selected: 0,
                 starred: String::new(),
@@ -966,6 +978,7 @@ impl App {
             top: self.top,
             project: self.open_project.clone(),
             ticket: self.tk.open,
+            squad_open: self.squads_showing() && self.sqt.open,
             help: self.help_showing(),
         }
     }
@@ -1219,6 +1232,10 @@ impl App {
         let attached = self.attached_pid();
         self.hosts = hosts;
         self.guard_on = guard_on;
+        // The squads' files are small and few: read again while their tab shows, so a change made by hand is seen.
+        if self.squads_showing() {
+            self.reload_squads(None);
+        }
         if let Some(pid) = attached
             && (self.client.as_ref().is_none_or(|c| c.closed()) || !self.hosts.iter().any(|h| h.claude_pid == pid))
         {
@@ -1569,16 +1586,17 @@ impl App {
             (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
             (Action::Look, Mode::List) if self.projects_list_showing() => self.open_look(),
             (Action::Leave, Mode::List) if self.tk.open.is_some() => self.close_ticket_screen(),
+            (Action::Leave, Mode::List) if self.squads_showing() => self.close_squad(),
             (Action::Leave, Mode::List) => self.close_project_screen(),
             (Action::Confirm, Mode::TaskProject) => self.take_task_project(),
             (Action::Confirm, Mode::SquadPick) => self.take_squad_pick(),
             (Action::Confirm, Mode::TaskDraft) => self.make_drafted(),
             (Action::Cancel, Mode::TaskDraft) => self.drop_draft(),
-            (Action::Cancel, Mode::PickEditor) if self.epick.draft.is_some() => {
-                if let Some(e) = self.epick.draft.take() {
-                    let _ = std::fs::remove_file(&e.path);
+            (Action::Cancel, Mode::PickEditor) if self.epick.file.is_some() => {
+                if let Some(e) = self.epick.file.take() {
+                    self.mode = Self::file_edit_mode(&e);
+                    self.drop_file_edit(e);
                 }
-                self.mode = Mode::TaskDraft;
             }
             (Action::Confirm, Mode::Confirm(Confirm::CancelTicket { number, pid, .. })) => self.cancel_ticket(number, pid),
             (Action::Edit, Mode::List) => self.edit_notes(),
@@ -1604,6 +1622,7 @@ impl App {
             (Action::Confirm, Mode::Confirm(Confirm::ResetInstructions { id })) => self.reset_instructions(id),
             (Action::Cancel, Mode::Confirm(Confirm::ResetInstructions { .. })) => self.mode = Mode::Settings,
             (Action::Cancel, Mode::PickEditor) if self.epick.instructions.is_some() => self.mode = Mode::Settings,
+            (Action::Confirm, Mode::Confirm(Confirm::DeleteSquad { id, name, replaces })) => self.delete_squad(&id, &name, replaces),
             (Action::Confirm, Mode::Confirm(Confirm::DeleteProject { id, .. })) => {
                 self.mode = Mode::List;
                 self.delete_project(&id);
@@ -2981,6 +3000,8 @@ impl App {
                     Some(Hit::ProjectPickRow(i)) if i == self.bd.pick_selected => self.act(Action::Confirm),
                     Some(Hit::ProjectPickRow(i)) => self.bd.pick_selected = i,
                     Some(Hit::SquadRow(i)) => self.click_squad_row(i),
+                    Some(Hit::SquadsTabRow(i)) if self.squads_showing() && matches!(self.mode, Mode::List) => self.click_squads_row(i),
+                    Some(Hit::SquadsTabRow(_)) => {}
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}

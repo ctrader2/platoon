@@ -6,11 +6,12 @@ use super::*;
 use crate::projects::{Project, SLOTS};
 use std::fs;
 
-/// The top-level tabs, on `1` to `3`.
-pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects"];
+/// The top-level tabs, on `1` to `4`.
+pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Squads"];
 pub const TOP_SESSIONS: usize = 0;
 pub const TOP_TASKS: usize = 1;
 pub const TOP_PROJECTS: usize = 2;
+pub const TOP_SQUADS: usize = 3;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
 pub const PTABS: &[(&str, &str)] =
@@ -32,6 +33,8 @@ pub enum NamePurpose {
     Rename(String),
     /// A new task made on the Tasks tab, in this project (`NO_PROJECT_ID`: in none): its title.
     NewTask(String),
+    /// A new squad (`n` on the Squads tab): its name.
+    NewSquad,
     /// What the Tasks tab is narrowed to.
     TaskFilter,
     /// The command that runs this project's tests when a task's session stops (`T` on its screen).
@@ -157,8 +160,8 @@ impl App {
         self.pview.get(self.pselected).map(|&i| &self.projects.all()[i])
     }
 
-    /// `1` to `3`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
-    /// opened on the Tasks tab, `2` goes back to the board.
+    /// `1` to `4`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
+    /// opened on the Tasks tab, `2` goes back to the board; from a squad opened on the Squads tab, `4` to its list.
     pub fn switch_top(&mut self, i: usize) {
         if i >= TOPS.len() {
             return;
@@ -167,6 +170,8 @@ impl App {
             self.close_project_screen();
         } else if self.board_showing() && self.tk.open.is_some() {
             self.close_ticket_screen();
+        } else if self.squads_showing() && self.sqt.open {
+            self.close_squad();
         } else if i == self.top {
             return;
         }
@@ -174,6 +179,9 @@ impl App {
         self.filter.clear();
         if self.board_showing() {
             self.sync_board_store();
+        }
+        if self.squads_showing() {
+            self.reload_squads(None);
         }
         self.update_view();
     }
@@ -276,14 +284,16 @@ impl App {
             self.board_key(key);
         } else if self.top == TOP_PROJECTS {
             self.projects_key(key);
+        } else if self.top == TOP_SQUADS {
+            self.squads_key(key);
         } else {
             self.sessions_key(key);
         }
     }
 
-    /// One of the top-level lists (Sessions, Tasks, Projects) with nothing open over it: where quit quits.
+    /// One of the top-level lists (Sessions, Tasks, Projects, Squads) with nothing open over it: where quit quits.
     pub fn at_top_level(&self) -> bool {
-        self.open_project.is_none() && !(self.top == TOP_TASKS && self.tk.open.is_some())
+        self.open_project.is_none() && !(self.top == TOP_TASKS && self.tk.open.is_some()) && !(self.top == TOP_SQUADS && self.sqt.open)
     }
 
     fn sessions_key(&mut self, key: KeyEvent) {
@@ -336,9 +346,9 @@ impl App {
     }
 
     /// `/` opens the search on the screen showing: everywhere on platoon's own screens but the Tasks tab (where it
-    /// narrows the list of tasks).
+    /// narrows the list of tasks) and the Squads tab (no sessions there to find).
     pub fn slash_searches(&self) -> bool {
-        matches!(self.mode, Mode::List) && !self.board_showing()
+        matches!(self.mode, Mode::List) && !self.board_showing() && !self.squads_showing()
     }
 
     /// `s` opens the settings on the screen showing. On the Tasks tab it starts the picked task instead.
@@ -445,6 +455,8 @@ impl App {
             self.board_key(KeyEvent::new(if up { KeyCode::Up } else { KeyCode::Down }, KeyModifiers::NONE));
         } else if self.projects_list_showing() {
             self.move_project(d);
+        } else if self.squads_showing() {
+            self.move_squads(if self.sqt.open { d * 3 } else { d });
         } else if self.open_project.is_some() && self.pane == Pane::Notes {
             self.notes_top.set((self.notes_top.get() as i32 + d * 3).max(0) as usize);
         } else {
@@ -495,6 +507,7 @@ impl App {
                 self.mode = Mode::List;
                 return;
             }
+            NamePurpose::NewSquad => return self.save_new_squad(),
             NamePurpose::NewTask(project) => {
                 let title = crate::tickets::clean(&self.name_box.input, crate::tickets::TITLE_MAX);
                 if title.is_empty() {
@@ -518,7 +531,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTask(_) | NamePurpose::TaskFilter | NamePurpose::TestCommand(_) => {}
+            NamePurpose::NewTask(_) | NamePurpose::TaskFilter | NamePurpose::TestCommand(_) | NamePurpose::NewSquad => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

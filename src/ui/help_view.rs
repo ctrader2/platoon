@@ -30,7 +30,7 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
     vec![
         (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
         (app.back_label().to_string(), "back one level (esc does the same)".into()),
-        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks and Projects lists (elsewhere it goes back)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Squads lists (elsewhere it goes back)".into()),
         ("?".into(), "this help".into()),
     ]
 }
@@ -73,9 +73,14 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "Verdict: when the tests pass (or there are none), a fresh Claude on the squad's verdict model reads the task, the session's last message and the change, without changing anything, and says whether it is done. Not done goes back to the session once, then to you; only done makes the task Done.".into(),
         ));
     }
+    if app.squads_showing() {
+        out.push(Entry::Note(
+            "A squad is a Markdown file: front matter (name, description, model, verdict_model, plan_first), then the steps its task's session follows. Yours are in the squads folder of platoon's config; one named like a built-in (feature.md) replaces it. A task keeps the copy it started with.".into(),
+        ));
+    }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.
-    if !app.projects_list_showing() && !app.board_showing() {
+    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
         out.push(Entry::Note(
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));
