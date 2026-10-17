@@ -1,0 +1,13 @@
+# How CI runs the tests: `cargo nextest run --profile ci`. Every test binary's tests share one pool, instead of
+# `cargo test` running the binaries one after another. Locally `cargo test` is the check; both must pass.
+[profile.ci]
+# The tests mostly wait (on a pty, the stand-in claude, a timer) rather than compute, so more run at once than the
+# runner has cores (4 on Linux, 3 on macOS).
+test-threads = 16
+fail-fast = false
+# Never retried: a test that fails once is a race to fix, not to retry.
+retries = 0
+# A test still running after a minute is named in the log, and one at three minutes is ended, so a hang says
+# which test it is long before the job's timeout.
+slow-timeout = { period = "60s", terminate-after = 3 }
+failure-output = "immediate-final"

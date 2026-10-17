@@ -43,6 +43,7 @@ cargo test                               # ~40s; tests/idle_stop.rs alone is ~20
 cargo build --release                    # must be warning-free
 cargo fmt --check                        # the code is kept formatted: run `cargo fmt` to fix
 cargo clippy --all-targets -- -D warnings  # no clippy warnings, tests included
+shellcheck scripts/*.sh tests/fake-claude.sh  # if you have it; CI's is older and warns about more (SC2015: use `if`)
 ```
 
 `tests/fake-claude.sh` is the stand-in `claude -p` (records every call, answers from files) shared by `testkit::AiFake` and `tests/common`.
@@ -60,12 +61,15 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push to `main` and every pull request, on Linux: the checks above (warnings are
-errors: `RUSTFLAGS=-D warnings`), `scripts/check-claude-version.sh`, `shellcheck scripts/*.sh`, and a build on the minimum Rust (1.88,
-`rust-version`). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request, on Linux, as jobs side by side: `checks`
+(fmt, clippy, the release build, `scripts/check-claude-version.sh`, shellcheck), `linux` (the tests) and a build on the
+minimum Rust (1.88, `rust-version`); warnings are errors (`RUSTFLAGS=-D warnings`). A run takes about 3 minutes. CI runs
+the tests with cargo-nextest (`cargo nextest run --profile ci`, `.config/nextest.toml`): every test binary in one pool
+of 16 threads (the tests mostly wait), no retries, a hung test named at 60s and ended at 3 minutes. Locally `cargo test`
+is the check; a test must pass both ways (nextest runs each test in its own process). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
 --ref main`), not on pull requests while the repo is private (10x minutes); once public, on pull requests too. Every
-job has a `timeout-minutes` (Linux 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat the free minutes.
-The macOS tests run with `--no-fail-fast -- --nocapture`, so a failure's message is in the log even if a later test hangs.
+job has a `timeout-minutes` (checks 15, Linux tests 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat
+the free minutes. A failing test's output is printed as it happens and again at the end, and every test runs after one fails.
 Tests must hold on macOS too: no `/proc`, no GNU-only flags (`sed -i`, `date -d`), no `/bin/true`, no case-sensitive file
 names, and a temp folder that may be under the home folder (paths there are shown from `~`).
 `deny.yml` runs `cargo deny check` (`deny.toml`: licenses, advisories, crates.io only) with CI and weekly.
@@ -118,7 +122,7 @@ the release binaries, the install script and the Homebrew formula (tap `ctrader2
 | `mdview.rs` | Markdown to styled, wrapped terminal lines (headings, lists with hanging indents, bold/italic, code, quotes, links as text; plain-glyph bullets), pure; draws the notes pane (`render`: a line break kept) and a squad's steps (`render_joined`: a hard-wrapped paragraph read as one) |
 | `prompts.rs` | the local prompt index (also holds one line of Claude's last reply and the substantive-message count per conversation) |
 | `testkit.rs`, `perf.rs` | test fixtures, scale checks with thousands of synthetic transcripts |
-| `.github/workflows/`, `deny.toml` | CI (`ci.yml`: Linux checks, minimum Rust, macOS on `main`), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code), `release.yml` (written by `dist`: a tagged release) and `publish-crate.yml` (crates.io, called by it) |
+| `.github/workflows/`, `deny.toml`, `.config/nextest.toml` | CI (`ci.yml`: Linux checks, Linux tests, minimum Rust, macOS on `main`; the tests run by cargo-nextest as `.config/nextest.toml`'s `ci` profile says), `deny.yml` (`cargo deny check` against `deny.toml`, also weekly), `claude-code-watch.yml` (daily: an issue for a newer Claude Code), `release.yml` (written by `dist`: a tagged release) and `publish-crate.yml` (crates.io, called by it) |
 | `versions.rs` | the two version notices: Claude Code newer than `checked-with/claude-code` (compiled in; `claude --version`), and a newer platoon from GitHub's latest release (`curl`, once a day at most: platoon's only network request), each said once per version, with the update command for how platoon was installed (`install_kind`); `<cache>/version-check.json`; the `update_check` setting and `PLATOON_NO_UPDATE_CHECK`; run off the UI thread when the app starts (`App::start_version_checks`), shown above the footer of the top-level lists (`App::news_showing`, tests in `versions_app_tests.rs`); `setup_line` for `platoon setup` |
 | `CHANGELOG.md`, `dist-workspace.toml`, `flake.nix`, `flake.lock` | the changelog (Keep a Changelog; each release's notes); `dist`'s config for releases; the Nix flake (`nix run github:ctrader2/platoon`) |
 | `checked-with/`, `scripts/` | `checked-with/claude-code`: the Claude Code version platoon was last checked with (one file per tool later); `scripts/check-claude-version.sh` (the docs name that version), `scripts/claude-code-watch.sh` (the watch's logic; `DRY_RUN=1` locally), `scripts/uninstall.sh` (the complete uninstall, POSIX sh, `curl ... | sh`: runs `platoon uninstall`, or without a usable platoon asks the same questions and cleans the folders itself; then removes the program: Homebrew, cargo, or the install script's receipt in `~/.config/platoon-tui` and its line in the shell startup files; tested end to end in `tests/uninstall.rs` under sh, bash and dash) |

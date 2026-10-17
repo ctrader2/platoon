@@ -23,10 +23,11 @@ env:
   LANG: C.UTF-8
 
 jobs:
-  linux:
-    name: Linux (test, release build, fmt, clippy)
+  # Linux runs as two jobs side by side, so neither waits for the other: the checks, and the tests.
+  checks:
+    name: Linux (fmt, clippy, release build, scripts)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,21 +41,44 @@ jobs:
       - name: Docs name the same Claude Code version as checked-with/claude-code
         run: scripts/check-claude-version.sh
       - name: shellcheck the scripts (the uninstall script must stay POSIX sh)
-        run: shellcheck scripts/*.sh
+        # The runner's own shellcheck, which may be older than yours: older ones warn about more.
+        run: |
+          shellcheck --version | sed -n 2p
+          shellcheck scripts/*.sh tests/fake-claude.sh
       - name: cargo fmt --check
         run: cargo fmt --check
       - name: cargo clippy
         run: cargo clippy --locked --all-targets -- -D warnings
       - name: cargo build --release
         run: cargo build --locked --release
+
+  linux:
+    name: Linux (test)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Rust (stable)
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
       - name: Git identity for the tests
         # The tests make repos and commits in temp folders. Set in the global config (not GIT_* variables, which
         # would override the names the tests give git themselves).
         run: |
           git config --global user.name platoon-ci
           git config --global user.email ci@example.invalid
-      - name: cargo test
-        run: cargo test --locked
+      - name: cargo nextest run
+        # All the test binaries at once (`.config/nextest.toml`, profile ci): a failing test's output is printed as
+        # it happens and again at the end, and a hung one is named and ended.
+        run: cargo nextest run --locked --profile ci
 
   msrv:
     name: Minimum Rust (1.88) builds
@@ -97,6 +121,9 @@ jobs:
           rustup default stable
           rustc --version
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        with:
+          tool: cargo-nextest@0.9.148
       - name: cargo build --release
         run: cargo build --locked --release
       - name: Git identity for the tests
@@ -105,7 +132,7 @@ jobs:
         run: |
           git config --global user.name platoon-ci
           git config --global user.email ci@example.invalid
-      - name: cargo test
-        # Every test program runs even after one fails, and a failing test's message is printed as it happens
-        # (--nocapture): if something hangs and the job times out, what failed before it is still in the log.
-        run: cargo test --locked --no-fail-fast -- --nocapture
+      - name: cargo nextest run
+        # As on Linux: every test runs even after one fails, a failing test's output is printed as it happens, and a
+        # hung one is named and ended before the job's timeout.
+        run: cargo nextest run --locked --profile ci

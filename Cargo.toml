@@ -12,7 +12,7 @@ keywords = ["tui", "terminal", "ai", "agents", "sessions"]
 categories = ["command-line-utilities", "development-tools"]
 # What the crate on crates.io leaves out: the README animation and video (16 MB, over crates.io's limit), CI, and
 # the release and Nix files, which only the repository uses.
-exclude = ["/demo", "/.github", "/flake.nix", "/flake.lock", "/dist-workspace.toml"]
+exclude = ["/demo", "/.github", "/.config", "/flake.nix", "/flake.lock", "/dist-workspace.toml"]
 
 # The package is platoon-tui (crates.io's "platoon" is someone else's); the command is still platoon.
 [[bin]]
@@ -34,3 +34,9 @@ vt100 = "0.16.2"
 [profile.dist]
 inherits = "release"
 lto = "thin"
+
+# Dependencies are optimized in debug and test builds too: the scale checks (`perf.rs`) spend their time in
+# serde_json and friends, and run in about half the time. Only a clean build pays for it; platoon's own code still
+# builds unoptimized.
+[profile.dev.package."*"]
+opt-level = 2
