@@ -231,8 +231,7 @@ fn e_starts_the_notes_from_the_template_runs_the_editor_inside_platoon_and_shows
     t.wait_for("Sell socks online.");
     until("the editor to write the notes", || lab.notes().contains("Sell socks online."));
     t.wait_for("The notes changed");
-    t.wait_for("╭ Notes");
-    assert!(t.text().contains("Sell socks online."), "the pane shows it:\n{}", t.text());
+    t.wait_for_all(&["╭ Notes", "Sell socks online."]); // the pane shows it
     t.send(&[3]); // ctrl+c quits from any screen (q goes back one level on a project's)
     t.wait_exit();
 }

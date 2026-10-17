@@ -1,11 +1,14 @@
 #!/bin/sh
 dir='@DIR@'
-k=$(( $(ls "$dir/calls" | grep -c '\.stdin$') + 1 ))
+# The call's number, claimed (noclobber) so that calls running at the same time never share one.
+k=1
+while ! (set -C; : > "$dir/calls/$k.argv") 2>/dev/null; do k=$((k + 1)); done
 c="$dir/calls/$k"
 for a in "$@"; do printf '%s\n' "$a"; done > "$c.argv"
 pwd > "$c.cwd"
 env > "$c.env"
-cat > "$c.stdin"
+# Whole before it is counted: a call is counted by its .stdin file, and a test reads it once counted.
+cat > "$c.stdin.part" && mv "$c.stdin.part" "$c.stdin"
 if [ -e "$dir/hang" ]; then
   echo $$ > "$dir/pid"
   sleep 300 &

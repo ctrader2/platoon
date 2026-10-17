@@ -40,16 +40,14 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
     let file = base.join("config/settings.json");
     fs::write(&file, r#"{"idle_stop_minutes":120,"auto_archive_days":0,"keep":{"me":[1,2]}}"#).unwrap();
     let mut t = Term::spawn(&[], &env, &base, 30, 100);
-    t.wait_for("enter open");
-    assert!(t.text().contains("s settings"), "{}", t.text());
+    t.wait_for_all(&["enter open", "s settings"]);
 
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
-    t.wait_for("Changes are saved and apply immediately."); // the whole screen, not a half-drawn one
+    // The whole popup, not a half-drawn one: the file's location is its last line.
+    t.wait_for_all(&["Changes are saved and apply immediately.", "Settings file:", "settings.json"]);
     let text = t.text();
     assert!(text.contains("2 hours") && text.contains("Off") && text.contains("Archive sessions after"), "{text}");
-    assert!(text.contains("Changes are saved and apply immediately."), "{text}");
-    assert!(text.contains("settings.json"), "the file's location is shown:\n{text}");
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "opening the screen writes nothing");
 
     // A key: down to the first of the numeric settings (the Theme is above it), then right arrow steps 2 hours -> 4 hours,
@@ -217,7 +215,7 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     t.wait_for("Settings file:");
     t.send(b"\r");
     t.wait_for("sample");
-    t.wait_for("1 theme file skipped");
+    t.wait_for_all(&["1 theme file skipped", "Bright Day:"]);
     let screen = t.text();
     // (The user's own theme is at the end of the list, past the built-ins: it is seen below, after jumping there.)
     assert!(screen.contains("Bright Day:"), "{screen}");
@@ -252,7 +250,9 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     });
     assert_eq!(saved(&base)["keep"], serde_json::json!({"me":[1,2]}), "the rest of the file is kept");
     t.wait_bg(1, 1, Rgb(0x0a, 0x16, 0x22));
-    t.wait_for("Deep Sea"); // the Theme row now shows it
+    // The Theme row now shows it, and the popup is drawn to its last line: until then "Settings file:" is missing
+    // and the wait for it to go would pass at once, sending q while esc is unread (esc q reads as alt+q).
+    t.wait_for_all(&["Deep Sea", "Settings file:"]);
 
     t.send(b"\x1b");
     t.wait_gone("Settings file:");

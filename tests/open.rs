@@ -161,8 +161,7 @@ fn platoon_open_resumes_a_saved_session_nothing_is_running_in_its_own_directory(
     w.save_transcript("beef-0001-aaaa");
     let claude = fake_claude(&w.claude);
     let mut t = Term::spawn(&["open", "beef"], &w.env(&claude.to_string_lossy()), &w.work, 24, 100);
-    t.wait_for("fake-claude args:--resume beef-0001-aaaa");
-    assert!(t.text().contains(&format!("cwd:{}", w.work.display())), "{}", t.text());
+    t.wait_for_all(&["fake-claude args:--resume beef-0001-aaaa", &format!("cwd:{}", w.work.display())]);
     t.send(&[0]);
     t.wait_exit();
     if let Some((pid, _)) = find_host(&w.cache) {

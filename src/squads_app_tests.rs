@@ -125,7 +125,9 @@ fn the_tab_lists_every_squad_with_where_it_comes_from_and_the_picked_one_beside_
     assert_eq!(at("│ Needs fixing") + 1, at("│ · line 4: unknown setting \"modle\""), "{shown}");
     assert!(text.contains("· front matter: no model"), "{shown}");
     assert_eq!(fg_of(&term, "line 4: unknown setting"), t.warn);
-    assert!(text.contains("File ") && text.contains("config/squads/"), "its file: {shown}");
+    // The path wraps wherever the temp folder's length puts it: read the pane's lines joined up.
+    let pane: String = shown.lines().filter_map(|l| l.split_once('│')).map(|(_, r)| r.trim()).collect();
+    assert!(text.contains("File ") && pane.contains("config/squads/sloppy.md"), "its file: {shown}");
     // The one replacing a built-in: no verdict model of its own, plans first not.
     pick(&mut app, "review");
     let text = flat(&draw(&mut term, &app));
