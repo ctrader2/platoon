@@ -79,6 +79,10 @@ jobs:
         # All the test binaries at once (`.config/nextest.toml`, profile ci): a failing test's output is printed as
         # it happens and again at the end, and a hung one is named and ended.
         run: cargo nextest run --locked --profile ci
+      - name: cargo nextest run (the scale checks, on their own)
+        # They time themselves, so nothing else runs beside them. Run even when the step above failed.
+        if: success() || failure()
+        run: cargo nextest run --locked --profile ci-perf
 
   msrv:
     name: Minimum Rust (1.88) builds
@@ -136,3 +140,6 @@ jobs:
         # As on Linux: every test runs even after one fails, a failing test's output is printed as it happens, and a
         # hung one is named and ended before the job's timeout.
         run: cargo nextest run --locked --profile ci
+      - name: cargo nextest run (the scale checks, on their own)
+        if: success() || failure()
+        run: cargo nextest run --locked --profile ci-perf

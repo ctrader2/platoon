@@ -64,9 +64,10 @@ used in tests (trust-folder prompt): use `sh` or a fake script.
 `.github/workflows/ci.yml` runs on every push to `main` and every pull request, on Linux, as jobs side by side: `checks`
 (fmt, clippy, the release build, `scripts/check-claude-version.sh`, shellcheck), `linux` (the tests) and a build on the
 minimum Rust (1.88, `rust-version`); warnings are errors (`RUSTFLAGS=-D warnings`). A run takes about 3 minutes. CI runs
-the tests with cargo-nextest (`cargo nextest run --profile ci`, `.config/nextest.toml`): every test binary in one pool
-of 16 threads (the tests mostly wait), no retries, a hung test named at 60s and ended at 3 minutes. Locally `cargo test`
-is the check; a test must pass both ways (nextest runs each test in its own process). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
+the tests with cargo-nextest (`.config/nextest.toml`): `--profile ci`, every test binary in one pool of 16 threads (the
+tests mostly wait), then `--profile ci-perf`, the scale checks (`perf::`) on their own, one per core, since they time
+themselves and miss their limits beside the pool. No retries; a hung test is named at 60s and ended at 3 minutes.
+Locally `cargo test` is the check; a test must pass both ways (nextest runs each test in its own process). macOS (arm64: test and release build) runs on pushes to `main` and when started by hand (`gh workflow run ci.yml
 --ref main`), not on pull requests while the repo is private (10x minutes); once public, on pull requests too. Every
 job has a `timeout-minutes` (checks 15, Linux tests 20, minimum Rust 15, macOS 25, deny 10, watch 5) so a hang cannot eat
 the free minutes. A failing test's output is printed as it happens and again at the end, and every test runs after one fails.
