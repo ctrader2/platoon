@@ -121,7 +121,7 @@ running_sessions() {
     for f in "$CACHE"/hosts/*.json; do
         [ -f "$f" ] || continue
         pid=$(sed -n 's/.*"claude_pid":[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$f" | head -n 1)
-        [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null || continue
+        if [ -z "$pid" ] || ! [ "$pid" -gt 1 ] 2>/dev/null; then continue; fi
         kill -0 "$pid" 2>/dev/null || continue
         dir=$(sed -n 's/.*"dir":[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
         id=$(sed -n 's/.*"--resume",[[:space:]]*"\([^"]*\)".*/\1/p' "$f" | head -n 1)
@@ -158,7 +158,7 @@ list_worktrees() {
 "
     done
     printf '%s' "$found" | sort -u | while IFS= read -r d; do
-        [ -n "$d" ] && [ -d "$d" ] || continue
+        if [ -z "$d" ] || [ ! -d "$d" ]; then continue; fi
         name=${d##*/}
         n=${name##*-}
         branch="${name%-*}/$n"
