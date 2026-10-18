@@ -23,7 +23,7 @@ here.
   Working again once answered or typed into, and Done when it stops and the check of its work passes.
 - **The session runs the tests, not platoon.** platoon's rules for every task tell the session to find how its repo runs
   its tests (its `CLAUDE.md`, README or build files), run them before it finishes and name the command and the result
-  in its last message; the Feature, Bug fix, Incident and Refactor squads say so where they verify.
+  in its last message; the Feature, Bug fix and Refactor squads say so where they verify; Incident only diagnoses and changes nothing.
 - **A task is Done only when a check of its work says so.** When its session stops, a fresh `claude -p` on the squad's `verdict_model` reads the task, the session's last message and the change,
   with tools that only read, and judges each "Done when" box with the evidence. Not done goes back to the session once
   with what it found (`file:line: problem`, each quote checked in the code), then the task needs you; a check that can't

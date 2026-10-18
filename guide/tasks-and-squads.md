@@ -100,8 +100,8 @@ platoon gives the session a few hooks, and they move the task along:
 
 platoon runs no tests itself. Its rules for every task tell the session to find how its repo runs its tests (its
 `CLAUDE.md`, its README or its build files), run them before it finishes, and name the command and the result in its
-last message (or say the repo has none, and how it checked the change instead). The Feature, Bug fix, Incident and
-Refactor squads say so again where they check their work. A repo whose `CLAUDE.md` says how to build and test is found
+last message (or say the repo has none, and how it checked the change instead). The Feature, Bug fix and Refactor
+squads say so again where they check their work. A repo whose `CLAUDE.md` says how to build and test is found
 fastest.
 
 ### The check of the work
@@ -153,7 +153,7 @@ default branch, so it says not merged until you delete `task/<N>`.
 | --- | --- | --- | --- |
 | **Feature** | new or changed behaviour, planned first and built in small checked steps | opus | yes |
 | **Bug fix** | a defect to reproduce, trace to its root cause and fix with evidence | opus | yes |
-| **Incident** | something broken for users now: stop the damage (asking you first), find the cause from the evidence, fix it, and a short postmortem | opus | no |
+| **Incident** | something broken in production: find what is causing it from the evidence, changing nothing (no fix, no rollback) | opus | no |
 | **Refactor** | a change of structure that keeps the behaviour exactly as it is | opus | yes |
 | **Explain** | a read-only question about how code works or which option to pick | opus | no |
 | **Review** | an adversarial review of a change or a plan, with a verdict | opus | no |

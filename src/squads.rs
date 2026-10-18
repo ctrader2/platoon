@@ -491,22 +491,23 @@ mod tests {
         }
         let incident = by("incident");
         assert_eq!((incident.model.as_str(), incident.verdict_model.as_str(), incident.plan_first), ("opus", "fable", false));
-        // Stop the damage first, asking before anything others see; prove the cause; a postmortem at the end.
+        // A diagnosis only: the cause from the evidence, nothing changed, nothing fixed.
         for want in [
-            "Stabilise first",
-            "ask the user with `AskUserQuestion` before you do it",
+            "You do not fix it",
+            "change nothing",
             "MCP tools",
             "`Agent` tool",
             "timeline",
             "Prove the cause before you believe it",
-            "Write a test that fails",
-            "postmortem",
-            "what would have caught it sooner",
+            "the causes you ruled out",
         ] {
             assert!(incident.body.contains(want), "{want}");
         }
+        for not in ["Stabilise", "Write a test", "commit it", "test command you ran"] {
+            assert!(!incident.body.contains(not), "{not}");
+        }
         // Every squad that changes code runs the repo's tests where it verifies, and names them at the end.
-        for id in ["feature", "bug-fix", "incident", "refactor"] {
+        for id in ["feature", "bug-fix", "refactor"] {
             let body = by(id).body.split_whitespace().collect::<Vec<_>>().join(" ");
             assert!(body.contains("find how this repo runs its tests (its CLAUDE.md, README, or build files) and run them all"), "{id}");
             assert!(body.contains("test command you ran and its result"), "{id}");
