@@ -218,8 +218,8 @@ pub fn rules(r: &Rules) -> String {
     let mut out = String::from("# How this task works\n\nYou are working on a task the user handed to platoon.\n\n");
     match &r.branch {
         Some(b) => out.push_str(&format!(
-            "- You work in {} on the branch `{b}`, a git worktree made for this task. Commit your work there.\n\
-             - Your work stays on the branch `{b}`: it is not merged, and the user merges it. Your final message says so: that the work is on the branch `{b}` and is not merged.\n",
+            "- You work in {} on the branch `{b}`, a git worktree made for this task. Commit what you change there.\n\
+             - What you commit stays on the branch `{b}`: it is not merged, and the user merges it. If you committed, your final message says so: that the work is on the branch `{b}` and is not merged. If you changed nothing, leave the branch out of it.\n",
             r.folder
         )),
         None => out.push_str(&format!("- You work in {}. It is not a git repository.\n", r.folder)),
@@ -677,8 +677,9 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         let text = fs::read_to_string(task_dir.join("squad.md")).unwrap();
         for want in [
             "You work in /w/shop-worktrees/task-5 on the branch `task/5`",
-            "Commit your work there.",
-            "Your final message says so: that the work is on the branch `task/5` and is not merged.",
+            "Commit what you change there.",
+            "If you committed, your final message says so: that the work is on the branch `task/5` and is not merged.",
+            "If you changed nothing, leave the branch out of it.",
             "the user merges it",
             "Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.",
             "AskUserQuestion tool, not in prose",

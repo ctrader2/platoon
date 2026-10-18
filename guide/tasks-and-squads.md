@@ -141,7 +141,8 @@ When a Done or cancelled task's session has stopped and nothing else is open in 
 worktree (never its branch: `task/<N>` and its commits stay). A worktree with changes not yet committed is kept, and the
 task says so. Opening a Done task's session again makes its worktree again from the branch first.
 
-**Merging is yours.** The work stays on `task/<N>`, and the session's last message says so. While the branch has
+**Merging is yours.** The work stays on `task/<N>`, and the session's last message says so when it committed something
+(a task that changes nothing, such as an Incident diagnosis, leaves the branch out). While the branch has
 commits the default branch hasn't (here, or on `origin` as git last fetched it), the task's row says **Done · not
 merged** and its details say how many, **Branch task/5 has 2 commits not in main.** Merge it (or ask the session to
 open a pull request) and it reads plain **Done**. A branch merged by squashing or rebasing gets new commits on the

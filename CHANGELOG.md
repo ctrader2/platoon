@@ -12,6 +12,9 @@ here.
   one of its sessions finishes answering, or a session joins it, and the first update fills it in a few minutes later;
   you no longer have to press `e` first. A notes file you emptied is left to you, and nothing starts with Project
   notes switched off.
+- **A task that changes nothing leaves its branch out of its last message.** The rule that the last message says the
+  work is on `task/<N>` and not merged now applies only when the session committed something, so an Incident diagnosis
+  no longer ends with a line about a branch it never used.
 - **A squad's pane no longer lists its file.** The "File" line (the path, or "built in") under the settings is gone; the
   list rows still say where a squad comes from.
 - **A task is one Claude Code session.** `s` on a task picks a squad (the one suggested for it is picked) and starts one
