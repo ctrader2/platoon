@@ -79,7 +79,7 @@ fn the_arrows_pick_a_setting_lit_and_enter_writes_the_next_choice_to_that_line()
     assert_eq!(fs::read_to_string(&file).unwrap(), built_in.replace("\nmodel: sonnet\n", "\nmodel: haiku\n"));
     assert_eq!(app.active_notice(), Some("Docs: Model haiku. Yours now, in place of the built-in."));
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("Model          haiku") && shown.contains("in place of the built-in"), "{shown}");
+    assert!(shown.contains("Model          haiku") && !shown.contains("File "), "{shown}");
 
     // ↓ the verdict model, ↓ plans first: each its own line, the rest of the file as it was.
     key(&mut app, KeyCode::Down);

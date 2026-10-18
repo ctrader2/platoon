@@ -164,15 +164,9 @@ pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>, pi
         vec![Line::styled(fit_end(&s.name_or_id(), w), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
     head.extend(wrap(&s.description, w).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))));
     head.push(Line::raw(""));
-    let path = || crate::dirs::tilde(&crate::squads::path(&app.config, &s.id).to_string_lossy(), &app.home);
-    let file = match s.origin {
-        Origin::BuiltIn => "built in".to_string(),
-        Origin::Replaces => format!("{}, in place of the built-in", path()),
-        Origin::Own => path(),
-    };
     const LABEL: usize = 15;
     const CHANGES: &str = "   enter changes";
-    // The three settings, one line each (the one picked lit, with what enter does), then where the file is.
+    // The three settings, one line each (the one picked lit, with what enter does).
     for (i, setting) in Setting::ALL.into_iter().enumerate() {
         let lit = picked == Some(i);
         let base = if lit { Style::new().bg(t.surface) } else { Style::new() };
@@ -188,11 +182,6 @@ pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>, pi
             spans.push(Span::styled(" ".repeat(gap), base));
         }
         head.push(Line::from(spans));
-    }
-    let rows = wrap(&file, w.saturating_sub(LABEL).max(10));
-    for (k, row) in rows.into_iter().enumerate() {
-        let l = if k == 0 { format!("{:<LABEL$}", "File") } else { " ".repeat(LABEL) };
-        head.push(Line::from(vec![Span::styled(l, Style::new().fg(t.subtext)), Span::styled(row, Style::new().fg(t.text))]));
     }
     head.push(Line::raw(""));
     head.push(Line::styled("Steps", Style::new().fg(t.text).add_modifier(Modifier::BOLD)));

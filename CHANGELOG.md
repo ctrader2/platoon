@@ -8,6 +8,8 @@ here.
 
 ### Changed
 
+- **A squad's pane no longer lists its file.** The "File" line (the path, or "built in") under the settings is gone; the
+  list rows still say where a squad comes from.
 - **A task is one Claude Code session.** `s` on a task picks a squad (the one suggested for it is picked) and starts one
   ordinary `claude` session in a worktree on `task/<N>` from the repository's default branch, with the squad's model, in
   plan mode when the squad plans first, the squad's steps added to its system prompt and the task's text as its first
