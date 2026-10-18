@@ -28,6 +28,9 @@ here.
   run needs you with why. For a change to code, a last message that names no test run is not done (the box **Tests run
   and reported** is crossed). The details show a **Verdict** line, what it found and the boxes ticked or crossed; the whole
   answer is `verdict.json` in the task's folder. It needs no switch, and its tokens show as **Task checks**.
+- **Done says when the work is not merged.** A Done task whose branch `task/<N>` has commits the repository's default
+  branch hasn't (locally or on `origin`) reads **Done · not merged**, and its details say how many and where; the
+  session's last message says the work is on its branch and not merged. Merging stays yours.
 - **Publishing asks you**: Claude Code's own `ask` rules for the session hold `git push` (also `git -C <dir> push` and
   the other forms with git's options before `push`), pull requests, releases, writing `gh api` calls, `glab` and
   `cargo`/`npm publish` for your yes.

@@ -101,7 +101,14 @@ pub trait Facts {
     fn last_wrote(&self, session: &str) -> Option<u64>;
     /// A project's name by its id, for the filter ("No project" for none).
     fn project_name(&self, id: &str) -> String;
+    /// A Done task's branch has commits its repository's default branch hasn't (as git last said).
+    fn not_merged(&self, _project: &str, _number: u32) -> bool {
+        false
+    }
 }
+
+/// What a Done task whose work is not merged says on its row.
+pub const NOT_MERGED: &str = "Done · not merged";
 
 /// A task as the board is given it: its project's id, whether that project is archived, and what the app is doing
 /// for it just now (starting it: making its worktree).
@@ -246,7 +253,15 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
         (State::Done, _) => {
             right = ago(now, t.updated);
             right_tone = Tone::Ok;
-            second.push(piece(if squad.is_empty() { "Done".to_string() } else { squad.clone() }, Tone::Subtext));
+            if f.not_merged(i.project, t.number) {
+                // Its work is on its branch, and the default branch doesn't have it yet: the user merges it.
+                if !squad.is_empty() {
+                    second.push(piece(format!("{squad} · "), Tone::Subtext));
+                }
+                second.push(piece(NOT_MERGED, Tone::Warn));
+            } else {
+                second.push(piece(if squad.is_empty() { "Done".to_string() } else { squad.clone() }, Tone::Subtext));
+            }
             if t.worktree.is_some() {
                 second.push(piece(format!(" · on {}", t.branch()), Tone::Dim));
             }
@@ -418,6 +433,44 @@ mod tests {
         let g = board(&[In { project: "p", archived: false, task: &t, busy: Some("Making its worktree…") }], &Known, "");
         assert_eq!(shape(&g), vec![("Working", vec![(1, "starting".to_string(), "Making its worktree…".to_string())])]);
         assert!(board(&[In { project: "p", archived: true, task: &t, busy: None }], &Known, "").is_empty());
+    }
+
+    /// `Known`, with task 6 of project `p` not merged.
+    struct Unmerged;
+
+    impl Facts for Unmerged {
+        fn now(&self) -> u64 {
+            Known.now()
+        }
+        fn squad_name(&self, id: &str) -> String {
+            Known.squad_name(id)
+        }
+        fn tokens(&self, session: &str) -> Option<String> {
+            Known.tokens(session)
+        }
+        fn last_wrote(&self, session: &str) -> Option<u64> {
+            Known.last_wrote(session)
+        }
+        fn project_name(&self, id: &str) -> String {
+            Known.project_name(id)
+        }
+        fn not_merged(&self, project: &str, number: u32) -> bool {
+            (project, number) == ("p", 6)
+        }
+    }
+
+    #[test]
+    fn a_done_task_whose_branch_is_not_merged_says_so_and_a_merged_one_reads_plain_done() {
+        let mut t = started(task(6, "Finished", State::Done, NOW - 60), "s-read");
+        t.worktree = Some(crate::tickets::Worktree { path: "/w-worktrees/task-6".into(), branch: "task/6".into(), ..Default::default() });
+        let i = In { project: "p", archived: false, task: &t, busy: None };
+        let r = row(&i, Section::Done, &Unmerged);
+        assert_eq!(r.second_text(), "Feature · Done · not merged · on task/6 · 84K tokens");
+        assert_eq!(r.second.iter().find(|p| p.text == NOT_MERGED).map(|p| p.tone), Some(Tone::Warn));
+        assert_eq!(row(&i, Section::Done, &Known).second_text(), "Feature · on task/6 · 84K tokens", "merged: plain Done");
+        let bare = Ticket { squad: String::new(), ..t.clone() };
+        let i = In { project: "p", archived: false, task: &bare, busy: None };
+        assert_eq!(row(&i, Section::Done, &Unmerged).second_text(), "Done · not merged · on task/6 · 84K tokens");
     }
 
     #[test]

@@ -218,7 +218,8 @@ pub fn rules(r: &Rules) -> String {
     let mut out = String::from("# How this task works\n\nYou are working on a task the user handed to platoon.\n\n");
     match &r.branch {
         Some(b) => out.push_str(&format!(
-            "- You work in {} on the branch `{b}`, a git worktree made for this task. Commit your work there.\n",
+            "- You work in {} on the branch `{b}`, a git worktree made for this task. Commit your work there.\n\
+             - Your work stays on the branch `{b}`: it is not merged, and the user merges it. Your final message says so: that the work is on the branch `{b}` and is not merged.\n",
             r.folder
         )),
         None => out.push_str(&format!("- You work in {}. It is not a git repository.\n", r.folder)),
@@ -677,6 +678,8 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         for want in [
             "You work in /w/shop-worktrees/task-5 on the branch `task/5`",
             "Commit your work there.",
+            "Your final message says so: that the work is on the branch `task/5` and is not merged.",
+            "the user merges it",
             "Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.",
             "AskUserQuestion tool, not in prose",
             "how you checked each \"Done when\" box",

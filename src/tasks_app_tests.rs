@@ -333,3 +333,52 @@ fn the_check_of_the_work_shows_on_the_row_and_in_the_details_with_what_it_found_
     assert_eq!(fg_of(&term, "done · checked by fable"), t.ok);
     assert!(!shown.contains("src/mail.rs:2"), "{shown}");
 }
+
+/// Refresh until `cond` (git reads the branches on a thread of its own).
+fn refreshed_until(app: &mut App, what: &str, cond: impl Fn(&App) -> bool) {
+    let start = std::time::Instant::now();
+    while !cond(app) {
+        assert!(start.elapsed() < std::time::Duration::from_secs(20), "timed out waiting for: {what}");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        app.refresh_for_test();
+    }
+}
+
+#[test]
+fn a_done_task_whose_branch_is_not_merged_says_so_until_the_default_branch_has_it() {
+    let (w, mut app, project, folder) = lab("tasks-not-merged", &[("Order mails", "feature", State::Done)]);
+    let shop = Path::new(&folder);
+    git(shop, &["switch", "-q", "-c", "task/1"]);
+    for f in ["a", "b"] {
+        fs::write(shop.join(f), f).unwrap();
+        git(shop, &["add", "."]);
+        git(shop, &["commit", "-q", "-m", f]);
+    }
+    git(shop, &["switch", "-q", "main"]);
+    let wt = w.base.join("repos/shop-worktrees/task-1").to_string_lossy().into_owned();
+    Tickets::open(&w.config, &project)
+        .update(1, |t| {
+            t.worktree =
+                Some(crate::tickets::Worktree { path: wt.clone(), branch: "task/1".into(), removed: Some(1), ..Default::default() });
+            true
+        })
+        .unwrap();
+    app.reload_for_test();
+    refreshed_until(&mut app, "the branch to be read", |a| a.not_merged(&project, 1).is_some());
+    let mut term = Terminal::new(TestBackend::new(150, 40)).unwrap();
+    let shown = draw(&mut term, &app);
+    let t = app.effective_theme().clone();
+    // The row, and the details: how many commits, on which branch, not in which.
+    assert!(shown.contains("Feature · Done · not merged · on task/1"), "{shown}");
+    assert_eq!(fg_of_nth(&term, "Done · not merged", 0), t.warn, "the row's");
+    assert_eq!(fg_of_nth(&term, "Done · not merged", 1), t.warn, "the details' state");
+    assert!(shown.contains("Branch task/1 has 2 commits not in main."), "{shown}");
+    assert_eq!(fg_of(&term, "Branch task/1 has"), t.warn);
+    // Merged: plain Done again.
+    git(shop, &["merge", "-q", "--no-ff", "-m", "merge task 1", "task/1"]);
+    app.read_merged_soon_for_test();
+    refreshed_until(&mut app, "the merge to be seen", |a| a.not_merged(&project, 1).is_none());
+    let shown = draw(&mut term, &app);
+    assert!(!shown.contains("not merged") && !shown.contains("commits not in"), "{shown}");
+    assert!(shown.contains("Feature · on task/1"), "{shown}");
+}

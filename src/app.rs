@@ -43,6 +43,7 @@ use std::{
 mod board_glue;
 mod editor_glue;
 mod handoff_glue;
+mod merged_glue;
 mod notes_glue;
 mod projects_glue;
 mod smart_glue;
@@ -573,6 +574,8 @@ pub struct App {
     pub sqt: SquadsTab,
     /// What tasks' sessions have spent, read off the UI thread.
     pub sw: spent_glue::WorkState,
+    /// Which Done tasks' branches are not merged yet (`app/merged_glue.rs`).
+    merged: merged_glue::MergeState,
     /// Tasks' worktrees after the work: removing them, and bringing them back to continue a session.
     pub wt: worktree_glue::WtState,
     /// Tasks drafted from a conversation (`t`): the call out, the draft in its popup.
@@ -788,6 +791,7 @@ impl App {
             sq: SquadState::new(),
             sqt: SquadsTab::default(),
             sw: spent_glue::WorkState::default(),
+            merged: merged_glue::MergeState::default(),
             wt: worktree_glue::WtState::default(),
             td: taskdraft_glue::DraftState::default(),
             ed: editor_glue::EdState::new(),
@@ -1387,6 +1391,7 @@ impl App {
         self.poll_task_draft();
         self.poll_squad_starts();
         self.poll_squad_work();
+        self.poll_merged();
         self.poll_worktrees();
         self.drive_smart();
         self.usage = match snap.plan {

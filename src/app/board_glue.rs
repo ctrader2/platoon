@@ -73,6 +73,9 @@ impl Facts for AppFacts<'_> {
     fn project_name(&self, id: &str) -> String {
         self.app.task_project_name(id)
     }
+    fn not_merged(&self, project: &str, number: u32) -> bool {
+        self.app.not_merged(project, number).is_some()
+    }
 }
 
 impl App {

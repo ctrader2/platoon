@@ -14,7 +14,9 @@ with how many it has:
   permission prompt, or the [check of its work](#the-check-of-the-work) still found problems (or could not run).
 - **Working**: its session is at it (or platoon is making its worktree, or checking its work).
 - **Not started**: nobody has started it yet.
-- **Done**: Done or cancelled in the last 24 hours.
+- **Done**: Done or cancelled in the last 24 hours. Done means the check passed, not that the work is merged: while
+  its branch `task/<N>` has commits your repository's default branch hasn't, the task reads **Done · not merged** (see
+  [After the work](#after-the-work)).
 
 Each task takes two lines: its project's badge, its number and title, and at the right what it needs or how long since
 it last changed; under it, its squad and its own words (the question it asks), **Suggested: Docs · s starts it** for one
@@ -138,6 +140,12 @@ Merging, pushing and opening pull requests are yours to do (or to ask the sessio
 When a Done or cancelled task's session has stopped and nothing else is open in its worktree, platoon removes the
 worktree (never its branch: `task/<N>` and its commits stay). A worktree with changes not yet committed is kept, and the
 task says so. Opening a Done task's session again makes its worktree again from the branch first.
+
+**Merging is yours.** The work stays on `task/<N>`, and the session's last message says so. While the branch has
+commits the default branch hasn't (here, or on `origin` as git last fetched it), the task's row says **Done · not
+merged** and its details say how many, **Branch task/5 has 2 commits not in main.** Merge it (or ask the session to
+open a pull request) and it reads plain **Done**. A branch merged by squashing or rebasing gets new commits on the
+default branch, so it says not merged until you delete `task/<N>`.
 
 ## Squads
 

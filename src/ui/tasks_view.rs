@@ -355,9 +355,11 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
     // Its state, and why it needs the user.
     let now = crate::usage::now();
     let busy = app.starting_words(project, x.number);
+    let unmerged = app.not_merged(project, x.number).filter(|_| x.state == State::Done);
     let (word, color) = match (&x.state, busy) {
         (_, Some(_)) => ("Starting".to_string(), t.busy),
         (State::NeedsYou(n), _) => (format!("Needs you · {}", n.words()), t.warn),
+        (State::Done, _) if unmerged.is_some() => (board::NOT_MERGED.to_string(), t.warn),
         (s, _) => (s.label().to_string(), state_color(t, s)),
     };
     let mut state = vec![Span::styled(word.clone(), Style::new().fg(color).add_modifier(Modifier::BOLD))];
@@ -365,6 +367,13 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
         state.push(Span::styled(format!(" · {}", board::ago(now, x.updated)), Style::new().fg(t.dim)));
     }
     lines.push(Line::from(state));
+    // Done, but its work is only on its branch: how much, and where it isn't yet.
+    if let Some(u) = unmerged {
+        let commits = if u.commits == 1 { "1 commit".to_string() } else { format!("{} commits", u.commits) };
+        for l in wrap(&format!("Branch {} has {commits} not in {}.", x.branch(), u.into), w) {
+            lines.push(Line::styled(l, Style::new().fg(t.warn)));
+        }
+    }
     if let State::NeedsYou(n) = &x.state
         && !n.text().is_empty()
     {

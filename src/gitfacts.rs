@@ -1,6 +1,7 @@
 //! What git can say about a folder, for the hand-off document: its branch and how it stands against its upstream,
 //! what is not committed yet, the last commit, and what was committed since a moment (the session's start); and for a
-//! task's worktree: the repository's default branch (`default_branch`) and whether a branch exists.
+//! task's worktree: the repository's default branch (`default_branch`), whether a branch exists, and how many of a
+//! task's commits that branch doesn't have yet (`not_merged`).
 //! Read-only: only `rev-parse`, `symbolic-ref`, `status`, `rev-list` and `log` are ever run (never
 //! `fetch`: the upstream is as git last saw it), with `GIT_OPTIONAL_LOCKS=0` so not even git's own index
 //! refresh is written, and every command shares one short time budget.
@@ -216,6 +217,34 @@ pub fn default_branch(program: &str, dir: &Path, deadline: Instant) -> Option<St
         }
     }
     run(program, dir, &["symbolic-ref", "--quiet", "--short", "HEAD"], deadline).map(|b| clean_path(b.trim())).filter(|b| !b.is_empty())
+}
+
+/// A branch's commits that the repository's default branch doesn't have.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unmerged {
+    pub commits: usize,
+    /// The default branch's name ("main").
+    pub into: String,
+}
+
+/// How many commits `branch` has that the repository's default branch has not, locally or on `origin` as git last saw
+/// it (a pull request merged and fetched counts as merged). None when `dir` is no repository, the branch or the default
+/// branch isn't there, git can't say by `deadline`, or there are none: everything on it is merged. A squash or a rebase
+/// onto the default branch makes new commits, so a branch merged that way still counts here until it is deleted.
+pub fn not_merged(program: &str, dir: &Path, branch: &str, deadline: Instant) -> Option<Unmerged> {
+    if !branch_exists(program, dir, branch, deadline) {
+        return None;
+    }
+    let into = default_branch(program, dir, deadline)?;
+    let remote = format!("origin/{into}");
+    let bases: Vec<&str> = [into.as_str(), remote.as_str()].into_iter().filter(|b| branch_exists(program, dir, b, deadline)).collect();
+    if bases.is_empty() {
+        return None;
+    }
+    let mut args = vec!["rev-list", "--count", branch, "--not"];
+    args.extend(&bases);
+    let commits: usize = run(program, dir, &args, deadline)?.trim().parse().ok()?;
+    (commits > 0).then_some(Unmerged { commits, into })
 }
 
 /// Is `name` a branch (or anything else git finds a commit by) in `dir`'s repository? Checked with
@@ -661,5 +690,57 @@ mod tests {
         fs::create_dir_all(&plain).unwrap();
         assert_eq!(default_branch("git", &plain, soon()), None);
         assert_eq!(default_branch("git", &a, Instant::now()), None);
+    }
+
+    #[test]
+    fn a_branch_is_not_merged_while_the_default_branch_lacks_its_commits_here_or_on_origin() {
+        let d = Repo::new("not-merged").dir.clone();
+        let run = |dir: &Path, args: &[&str]| {
+            let out = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"])
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        let soon = || Instant::now() + Duration::from_secs(10);
+        let commit = |dir: &Path, file: &str| {
+            fs::write(dir.join(file), file).unwrap();
+            run(dir, &["add", "."]);
+            run(dir, &["commit", "-q", "-m", file]);
+        };
+        let a = d.join("a");
+        fs::create_dir_all(&a).unwrap();
+        run(&a, &["init", "-q", "--initial-branch=main"]);
+        commit(&a, "base");
+        run(&a, &["switch", "-q", "-c", "task/5"]);
+        commit(&a, "one");
+        commit(&a, "two");
+        run(&a, &["switch", "-q", "main"]);
+        assert_eq!(not_merged("git", &a, "task/5", soon()), Some(Unmerged { commits: 2, into: "main".into() }));
+        // Merged into main: nothing left to say.
+        run(&a, &["merge", "-q", "--no-ff", "-m", "merge", "task/5"]);
+        assert_eq!(not_merged("git", &a, "task/5", soon()), None);
+        // A clone whose local main is behind, but whose origin/main has the work (a pull request merged and fetched).
+        run(&a, &["switch", "-q", "-c", "task/6"]);
+        commit(&a, "three");
+        run(&a, &["switch", "-q", "main"]);
+        let b = d.join("b");
+        run(&d, &["clone", "-q", a.to_str().unwrap(), b.to_str().unwrap()]);
+        run(&b, &["branch", "-q", "task/6", "origin/task/6"]);
+        assert_eq!(not_merged("git", &b, "task/6", soon()).map(|u| u.commits), Some(1));
+        run(&a, &["merge", "-q", "--no-ff", "-m", "merge 6", "task/6"]);
+        run(&b, &["fetch", "-q", "origin"]);
+        assert_eq!(not_merged("git", &b, "task/6", soon()), None, "on origin/main counts");
+        // No such branch, not a repository, no time: nothing.
+        assert_eq!(not_merged("git", &a, "task/9", soon()), None);
+        let plain = d.join("plain");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(not_merged("git", &plain, "task/5", soon()), None);
+        assert_eq!(not_merged("git", &a, "task/6", Instant::now()), None);
     }
 }
