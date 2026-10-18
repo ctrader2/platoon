@@ -72,16 +72,16 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
             "Notes go to the project's sessions up to 8,000 characters. Updates keep them under that; past it, only the first 8,000 are sent, and the notes pane says so.".into(),
         ));
     }
-    // Where tasks are: how a task runs, and what the Tests line means.
+    // Where tasks are: how a task runs, and what the Verdict line means.
     if app.board_showing() {
         out.push(Entry::Note(
             "A task runs as one Claude Code session that follows its squad's steps, in a copy of its folder (a git worktree on the branch task/N). Pushing or publishing waits at Claude Code's own permission prompt.".into(),
         ));
         out.push(Entry::Note(
-            "Tests: when a task's session stops, platoon runs its project's test command (T on the project's screen sets it). A failure goes back to the session twice at most, then to you.".into(),
+            "Tests: platoon runs none itself. The session is told to find how its repo runs its tests, run them and name the command and the result when it finishes.".into(),
         ));
         out.push(Entry::Note(
-            "Verdict: when the tests pass (or there are none), a fresh Claude on the squad's verdict model reads the task, the session's last message and the change, without changing anything, and says whether it is done. Not done goes back to the session once, then to you; only done makes the task Done.".into(),
+            "Verdict: when a task's session stops, a fresh Claude on the squad's verdict model reads the task, the session's last message and the change, without changing anything, and says whether it is done (a change to code with no test run named is not). Not done goes back to the session once, then to you; only done makes the task Done.".into(),
         ));
     }
     if app.squads_showing() {

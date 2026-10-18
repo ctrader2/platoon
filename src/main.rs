@@ -2,7 +2,6 @@ mod ai;
 mod app;
 mod archive;
 mod board;
-mod checks;
 #[cfg(test)]
 mod clarity_app_tests;
 mod claude;

@@ -287,7 +287,7 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     t.wait_for_all(&["Needs you · 1", "a question", "Feature · asks: Which mail client first?"]);
     lab.hook("task-tool", ev("PostToolUse", json!({"tool_name": "AskUserQuestion"})));
     t.wait_for("Working · 1");
-    // The turn ends; the project has no test command, and the check of the work says done: Done.
+    // The turn ends, and the check of the work says done: Done.
     fs::write(lab.fake.join("reply"), r#"{"done":true,"boxes":[],"findings":[]}"#).unwrap();
     let said = lab.hook("task-stop", ev("Stop", json!({"permission_mode": "acceptEdits"})));
     assert!(said.trim().is_empty(), "nothing refused: {said}");

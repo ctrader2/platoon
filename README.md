@@ -23,8 +23,9 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
   the conversation, each with the squad that suits it), then start it: one Claude Code session in a copy of your folder
   (a git worktree on the branch `task/<N>`), following a squad, a short Markdown file of steps for that kind of work
   (Feature, Bug fix, Refactor, Explain, Review, Docs, or your own). It can show you its plan first and wait for your yes,
-  and it asks you before a push, a pull request or a release. When it stops, platoon runs your project's tests and hands
-  a failure back to it. The Tasks tab shows every task across your projects and what each one needs from you.
+  and it asks you before a push, a pull request or a release. It runs your repo's tests itself, and when it stops a
+  fresh Claude checks its work against the task before it is Done. The Tasks tab shows every task across your projects
+  and what each one needs from you.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
@@ -64,9 +65,9 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update
   themselves use your Claude plan, so they are off until you turn them on, with a daily limit.
 - **A task's session edits files without asking** (Claude Code's "accept edits" mode, after plan mode for a squad that
-  plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. A
-  project's test command, once you set one, is run by platoon there when the session stops, and then a fresh Claude
-  that can only read checks the work against the task before it is Done (it uses your plan, whatever the switches say).
+  plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. When
+  the session stops, a fresh Claude that can only read checks the work against the task before it is Done (it uses
+  your plan, whatever the switches say).
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 

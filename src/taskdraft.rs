@@ -316,7 +316,7 @@ mod tests {
             "## What it should do\n\nEvery order email also has a plain-text part with the same items, total and delivery date.\n\n\
              ## Done when\n\n- [ ] A mail client that shows only text gets the whole order\n- [ ] The HTML part is unchanged\n"
         );
-        assert_eq!(crate::checks::done_when(&t.body).len(), 2, "the boxes read back as the task's Done when");
+        assert_eq!(crate::tickets::done_when(&t.body).len(), 2, "the boxes read back as the task's Done when");
         assert_eq!(parse(&format!("```json\n{r}\n```"), &kinds()).unwrap(), got, "in a code fence: the same");
         let bare = json!([{"title": "T", "does": "It works."}]).to_string();
         assert_eq!(parse(&bare, &kinds()).unwrap()[0].body, body("It works.", &[]));

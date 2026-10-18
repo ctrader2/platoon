@@ -1,13 +1,15 @@
 //! The verdict: an independent check, before a task is Done, that its work does what the task asked.
 //!
-//! When a task's session stops and the project's tests pass (or it has none), the `task-stop` hook (`taskrun.rs`) asks
-//! a fresh `claude -p` on the squad's `verdict_model` to judge the work. It runs in the task's folder with read-only
-//! tools (`Read`, `Grep`, `Glob`: no shell, no edits), outside the token gate (`ai::PART_OF_A_TASK`), and it is given
-//! (`prompt`): the task's text with its "Done when" boxes, the session's last message (what it says it did) and, in
-//! git, the diff of the task's branch from where it started (`gather`) and what is not committed yet. Its answer
-//! follows a JSON Schema (`SCHEMA`): `done`, each box `met` with its evidence, and its findings, each with the exact
-//! text at the line it names. platoon looks for every finding's quote in that file near that line and drops one it
-//! can't find (`judge`): a check that says "not done" with nothing left that holds up counts as done, with a note.
+//! When a task's session stops, the `task-stop` hook (`taskrun.rs`) asks a fresh `claude -p` on the squad's
+//! `verdict_model` to judge the work. It runs in the task's folder with read-only tools (`Read`, `Grep`, `Glob`: no
+//! shell, no edits), outside the token gate (`ai::PART_OF_A_TASK`), and it is given (`prompt`): the task's text with
+//! its "Done when" boxes, the session's last message (what it says it did) and, in git, the diff of the task's branch
+//! from where it started (`gather`) and what is not committed yet. Its answer follows a JSON Schema (`SCHEMA`): `done`,
+//! each box `met` with its evidence, and its findings, each with the exact text at the line it names. platoon looks
+//! for every finding's quote in that file near that line and drops one it can't find (`judge`): a check that says "not
+//! done" with nothing left that holds up counts as done, with a note. platoon runs no tests: the session is told to run
+//! the repo's own and name them (`taskrun::TESTS_RULE`), and for a change to code a last message that names no test
+//! run is not done, with the unmet box "Tests run and reported" (`SYSTEM`).
 //!
 //! Pure but for `gather` (git) and `run` (the call).
 
@@ -46,6 +48,9 @@ judge it. You can read the files of the folder you are in (Read, Grep, Glob); yo
 - Judge only what the task asks, and each of its \"Done when\" boxes. Not style, naming, or what you would have done \
 differently.
 - Don't take the worker's word for it: look in the code for the evidence.
+- For a change to code, the worker's last message must name the test command it ran and its result (or say the \
+repository has no tests and how it checked the change instead). If it names no test run, done is false, and add the \
+box \"Tests run and reported\" with met false.
 - A finding is something the task asks for that is missing or wrong. Name the file (relative to this folder), the \
 line, and copy the exact text of that line as `quote`; say the problem in one sentence.
 - done is true when the work does what the task asks and every box is met.
@@ -284,7 +289,7 @@ pub fn refusal(v: &Verdict) -> String {
         out.push_str(&format!("- Done when \"{}\": not met\n", b.text));
     }
     out.push_str(
-        "\nFix these, then finish again: platoon runs the tests and checks again when you stop. If a finding is wrong, \
+        "\nFix these, then finish again: platoon checks again when you stop. If a finding is wrong, \
          say why in your last message.",
     );
     out
@@ -379,6 +384,17 @@ mod tests {
         assert!(v.done && v.dropped == 1 && v.note == "the check's findings could not be found in the code", "{v:?}");
         let v = judge(&Answer { done: false, boxes: vec![], findings: vec![] }, &d, "fable", 0, 0);
         assert!(v.done && v.note == "the check said not done but gave no reason", "{v:?}");
+        // No test run named: the box the check adds is unmet, so it is not done, and the session is told so.
+        let untested = Answer {
+            done: false,
+            boxes: vec![BoxAnswer { text: "Tests run and reported".into(), met: false, evidence: "no test command named".into() }],
+            findings: vec![],
+        };
+        let v = judge(&untested, &d, "fable", 0, 0);
+        assert!(!v.done && v.note.is_empty(), "{v:?}");
+        assert_eq!(short(&v), "1 problem: not met: Tests run and reported");
+        assert!(refusal(&v).contains("- Done when \"Tests run and reported\": not met"), "{}", refusal(&v));
+        assert!(!refusal(&v).contains("platoon runs the tests"), "platoon runs none");
         // Done.
         let v = judge(&Answer { done: true, boxes: a.boxes[1..].to_vec(), findings: vec![] }, &d, "fable", 0, 0);
         assert!(v.done && v.note.is_empty() && v.problems() == 0);
@@ -455,6 +471,9 @@ mod tests {
         let big = "+a line of the diff\n".repeat(20_000);
         let p = prompt(&Material { diff: Some(big), ..m });
         assert!(p.len() < DIFF_MAX + 2000 && p.contains("The diff is cut here"), "{}", p.len());
+        // A change to code is done only with its tests run and named, by the worker: platoon runs none.
+        assert!(SYSTEM.contains("name the test command it ran and its result"), "{SYSTEM}");
+        assert!(SYSTEM.contains("If it names no test run, done is false, and add the box \"Tests run and reported\""), "{SYSTEM}");
         let schema: Value = serde_json::from_str(SCHEMA).unwrap();
         assert_eq!(schema["required"], serde_json::json!(["done", "boxes", "findings"]));
     }

@@ -42,8 +42,8 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 
 ## A project's screen
 
-A project's screen shows its name and its description across the top (in full, wrapped when it is long), then the
-command that tests its tasks' work, its sessions on the left (active ones first, then an `Archived (N)` group, dimmed)
+A project's screen shows its name and its description across the top (in full, wrapped when it is long), then its
+sessions on the left (active ones first, then an `Archived (N)` group, dimmed)
 and its notes on the right. Its tasks are on the [Tasks tab](tasks-and-squads.md#the-tasks-tab).
 
 - `tab` and `shift+tab` switch between the two panes. `shift+←` goes to the sessions and `shift+→` to the notes; `ctrl`
@@ -54,34 +54,6 @@ and its notes on the right. Its tasks are on the [Tasks tab](tasks-and-squads.md
 - `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search).
 - The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back.
 - With the notes in focus, `e` [edits them](#editing-the-notes), `c` shows what changed last and `u` undoes it.
-- `T` (shift+t), from either pane, sets the command that tests the work on this project's tasks (see
-  [The test command](#the-test-command)).
-
-### The test command
-
-Under the description, one line says which command tests the work on this project's tasks:
-
-```
-Tests         cargo test   T changes
-```
-
-When a task's session stops, platoon runs that command itself in the task's worktree, and hands a failure back to the
-session: see [How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session). `T` opens a one-line box
-for it; `enter` saves what is in the box, and an empty box takes the command away (then no tests are run). It is kept as
-`test_command` on the project in `projects.json`, with `test_timeout_minutes` (10 unless you write another number there):
-how long it may run before platoon stops it.
-
-A project without one says so, `Tests  not set · T sets it`. When the first of its folders that is in git has a
-`CLAUDE.md` (in the folder, or at the top of its repository) with a **Build and test** section holding a block of
-commands, the line adds the first command in that block (lines that only set the shell up, like `export PATH=...` or
-`cd`, are passed over):
-
-```
-Tests         not set · T sets it · CLAUDE.md says: cargo test
-```
-
-Nothing is ever run from that suggestion: `T` puts it in the box for you to check, and only `enter` makes it the
-project's command.
 
 ## The notes reach every session
 

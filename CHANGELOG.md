@@ -17,13 +17,15 @@ here.
   and the steps. Six are built in (Feature, Bug fix, Refactor, Explain, Review, Docs), adapted from pstack's playbooks;
   a file of yours in `~/.config/platoon/squads/<id>.md` adds one, or replaces the built-in of that id.
 - **The task's state comes from its session's hooks**: a plan to approve, a question, a permission prompt (Needs you),
-  Working again once answered or typed into, and Done when it stops. With a project test command, platoon runs the tests
-  when the session stops and hands a failure back to it twice before the task needs you.
-- **A task is Done only when a check of its work says so.** When its session stops and the tests pass (or there are
-  none), a fresh `claude -p` on the squad's `verdict_model` reads the task, the session's last message and the change,
+  Working again once answered or typed into, and Done when it stops and the check of its work passes.
+- **The session runs the tests, not platoon.** platoon's rules for every task tell the session to find how its repo runs
+  its tests (its `CLAUDE.md`, README or build files), run them before it finishes and name the command and the result
+  in its last message; the Feature, Bug fix and Refactor squads say so where they verify.
+- **A task is Done only when a check of its work says so.** When its session stops, a fresh `claude -p` on the squad's `verdict_model` reads the task, the session's last message and the change,
   with tools that only read, and judges each "Done when" box with the evidence. Not done goes back to the session once
   with what it found (`file:line: problem`, each quote checked in the code), then the task needs you; a check that can't
-  run needs you with why. The details show a **Verdict** line, what it found and the boxes ticked or crossed; the whole
+  run needs you with why. For a change to code, a last message that names no test run is not done (the box **Tests run
+  and reported** is crossed). The details show a **Verdict** line, what it found and the boxes ticked or crossed; the whole
   answer is `verdict.json` in the task's folder. It needs no switch, and its tokens show as **Task checks**.
 - **Publishing asks you**: Claude Code's own `ask` rules for the session hold `git push` (also `git -C <dir> push` and
   the other forms with git's options before `push`), pull requests, releases, writing `gh api` calls, `glab` and
@@ -52,8 +54,9 @@ here.
 ### Removed
 
 - The Briefs tab, briefs, agents and their files; waits between tasks, moving tasks between projects, putting a task
-  aside, the per-task autonomy levels and the project's default, the go-ahead (`p`), the answer box (`y`), checks other
-  than the tests, the timeline and "what ran", the squads-at-once and leader-model settings, the `alt+n` chord
+  aside, the per-task autonomy levels and the project's default, the go-ahead (`p`), the answer box (`y`), the checks
+  platoon ran itself, the project's test command (`T` on its screen, its timeout and the suggestion from `CLAUDE.md`)
+  with the tests platoon ran when a session stopped, the Tests line and "tests failing", the timeline and "what ran", the squads-at-once and leader-model settings, the `alt+n` chord
   (`draft_tasks` in `keys.json`), `platoon ticket` (use `platoon task`), `platoon task where`, `--from-session`,
   `platoon squads --kinds` and `platoon setup --remove`. Task files from earlier versions are not read.
 

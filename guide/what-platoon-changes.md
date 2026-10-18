@@ -53,13 +53,7 @@ A task's session is a Claude Code session that platoon starts for the task, in a
   sandbox: something they don't name (another tool, a script that pushes, `sh -c 'git push'`, `/usr/bin/git push`, or
   an MCP server that publishes) is not stopped by them.
 
-**A command of yours runs when a task's session stops.** When a project has a [test command](projects.md#the-test-command),
-platoon runs it (`sh -c <your command>`) from the session's `Stop` hook, in the task's worktree, with the session's
-environment, no terminal, for 10 minutes at most (then it is stopped with everything it started), and what it writes
-is kept as `tests.log` in the task's own folder. It is your command: platoon adds nothing to what it does, network
-included. A project without a test command runs nothing.
-
-**When the tests pass (or there are none), Claude checks the work.** From the same `Stop` hook platoon runs
+**When a task's session stops, Claude checks the work.** From the session's `Stop` hook platoon runs
 `claude -p` on the squad's `verdict_model`, in the task's worktree, with only the tools that read files (`Read`, `Grep`,
 `Glob`: no shell, no edits), no settings (`--setting-sources ""`), no saved session, for 10 minutes at most. It is sent
 the task's text, the session's last message and the change on the task's branch (`git diff`), and its answer is kept as
@@ -79,8 +73,8 @@ because they would be lost or cost tokens to make again.
 - `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what an earlier setup remembered)
 - `names.json` (names you gave), `archive.json` (archived conversations), `summaries.json` (smart names and summaries)
 - `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `project.md.bak` (the notes as they were the first time an update condensed them), `notes-state.json`, and the tasks
-  (`tasks.json`, `tasks/` with each task's text and its own folder: the squad it was started with, its plan, its last
-  test output); `tasks.json` and `tasks/` at the top for tasks in no project
+  (`tasks.json`, `tasks/` with each task's text and its own folder: the squad it was started with, its plan, the last
+  check of its work); `tasks.json` and `tasks/` at the top for tasks in no project
 - `squads/` (your own squads, and built-in ones you replaced, `<id>.md`), `prompts/` (system prompts you changed),
   `themes/` (your own themes)
 
@@ -115,8 +109,6 @@ saved by Claude Code like any other.
 - After stopping a session, platoon asks the MCP servers that session had started to exit too, and never any other
   process.
 - The project notes helper runs in the background, one per project, for at most half an hour.
-- A project's test command runs when one of its tasks' sessions stops (see [Tasks](#tasks)); platoon stops it, and
-  everything it started, when its time is up or platoon closes, and nothing else.
 
 ## One network request, no telemetry
 

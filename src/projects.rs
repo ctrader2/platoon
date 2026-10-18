@@ -5,8 +5,6 @@
 //! `{"version": 1, "projects": {"<id>": {"name", "color", "badge", "archived", "created", "archived_sessions"}},
 //!   "sessions": {"<session id>": "<project id>"}}`.
 //! `archived_sessions` are the sessions that archiving the project archived (and that restoring it brings back).
-//! A project may also name the command that runs its tests when a task's session stops (`test_command`, with
-//! `test_timeout_minutes`: see `checks.rs`).
 //! The notes of a project are `<config dir>/projects/<id>/project.md`; folders are named by id so a rename is safe.
 //!
 //! Like the other files of ours: writes are atomic (temp file + rename) and happen under a lock file (the
@@ -29,10 +27,6 @@ use std::{
 pub const NAME_MAX: usize = 60;
 /// The longest badge, in characters.
 pub const BADGE_MAX: usize = 3;
-/// The longest test command kept, in characters.
-pub const TEST_COMMAND_MAX: usize = 500;
-/// How long a test command may run before platoon stops it, unless the project says otherwise (`test_timeout_minutes`).
-pub const TEST_TIMEOUT_MINUTES: u64 = 10;
 
 /// The colors a project can have, by name. Stored as the name, never as RGB, so a project follows the theme (and the
 /// 256-color fallback): the two named roles are the theme's own, the rest are its bright palette colors (the
@@ -76,14 +70,6 @@ pub fn badge_text(t: &Theme, fill: Color) -> Color {
     if t.light { t.text_on(fill) } else { t.on_accent }
 }
 
-/// A test command as it is kept: one line (a line break or a tab becomes a space, so nothing can hide a second
-/// command on a line of its own), trimmed, at most `TEST_COMMAND_MAX` characters. The spaces inside it stay as typed:
-/// they may be inside quotes.
-pub fn clean_command(text: &str) -> String {
-    let one: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
-    one.trim().chars().take(TEST_COMMAND_MAX).collect::<String>().trim_end().to_string()
-}
-
 /// One line, trimmed, at most `max` characters.
 pub fn clean(text: &str, max: usize) -> String {
     let one = text.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -123,21 +109,6 @@ pub struct Project {
     pub description: String,
     /// When that line was written, seconds since the epoch (0: never).
     pub description_at: u64,
-    /// The command platoon runs when a task's session stops (`test_command` in the file; empty: none, and nothing is
-    /// run). One line, run through `sh -c` where the task works.
-    pub test_command: String,
-    /// How long that command may run before platoon stops it, in seconds (`test_timeout_minutes` in the file, which
-    /// may be a fraction; `TEST_TIMEOUT_MINUTES` when it isn't there).
-    pub test_timeout_secs: u64,
-}
-
-/// The seconds a `test_timeout_minutes` from the file stands for: the default when it is missing, not a number or not
-/// above zero; at least one second.
-pub fn timeout_secs(minutes: Option<&Value>) -> u64 {
-    match minutes.and_then(Value::as_f64).filter(|m| m.is_finite() && *m > 0.0) {
-        Some(m) => ((m * 60.0).round() as u64).clamp(1, 7 * 24 * 3600),
-        None => TEST_TIMEOUT_MINUTES * 60,
-    }
 }
 
 pub struct Projects {
@@ -311,8 +282,6 @@ impl Projects {
                     .unwrap_or_default(),
                 description: o.get("description").and_then(Value::as_str).map(|d| clean(d, crate::describe::MAX_CHARS)).unwrap_or_default(),
                 description_at: o.get("description_at").and_then(Value::as_u64).unwrap_or(0),
-                test_command: o.get("test_command").and_then(Value::as_str).map(clean_command).unwrap_or_default(),
-                test_timeout_secs: timeout_secs(o.get("test_timeout_minutes")),
                 name,
             });
         }
@@ -426,19 +395,6 @@ impl Projects {
         self.edit(id, |p| {
             p.insert("color".into(), json!(color));
             p.insert("badge".into(), json!(badge));
-        })
-    }
-
-    /// The command that runs this project's tests when a task's session stops (`test_command`), as typed in its box: one line
-    /// (`clean_command`). Empty takes it away: no check runs then.
-    pub fn set_test_command(&mut self, id: &str, command: &str) -> io::Result<()> {
-        let command = clean_command(command);
-        self.edit(id, |p| {
-            if command.is_empty() {
-                p.remove("test_command");
-            } else {
-                p.insert("test_command".into(), json!(command));
-            }
         })
     }
 
@@ -722,37 +678,6 @@ mod tests {
         assert_eq!(again.all().len(), 2);
         assert_eq!(again.all()[0].id, a, "oldest first");
         assert!(!fs::read_dir(&d).unwrap().flatten().any(|e| e.file_name().to_string_lossy().ends_with(".tmp")));
-    }
-
-    #[test]
-    fn the_test_command_is_one_line_kept_as_typed_and_its_timeout_defaults_to_ten_minutes() {
-        let d = dir("tests");
-        let mut p = Projects::open(&d);
-        let a = p.create("Shop").unwrap();
-        let shop = p.get(&a).unwrap();
-        assert_eq!((shop.test_command.as_str(), shop.test_timeout_secs), ("", 600), "none, and ten minutes");
-        // As typed, spaces inside quotes and all; a line break can't hide a second command on a line of its own.
-        p.set_test_command(&a, "  cargo test -- --skip \"two  words\"\nrm -rf x  ").unwrap();
-        assert_eq!(p.get(&a).unwrap().test_command, "cargo test -- --skip \"two  words\" rm -rf x");
-        assert_eq!(saved(&d)["projects"][&a]["test_command"], "cargo test -- --skip \"two  words\" rm -rf x");
-        assert_eq!(Projects::open(&d).get(&a).unwrap().test_command, "cargo test -- --skip \"two  words\" rm -rf x", "read back");
-        // The timeout in minutes, a fraction too; nonsense is the default.
-        let mut v = saved(&d);
-        v["projects"][&a]["test_timeout_minutes"] = json!(0.05);
-        v["projects"][&a]["future"] = json!("kept");
-        fs::write(d.join("projects.json"), v.to_string()).unwrap();
-        assert_eq!(Projects::open(&d).get(&a).unwrap().test_timeout_secs, 3);
-        for bad in [json!(0), json!(-2), json!("ten"), json!(null)] {
-            assert_eq!(timeout_secs(Some(&bad)), 600, "{bad}");
-        }
-        assert_eq!(timeout_secs(Some(&json!(2))), 120);
-        // Empty takes it away; what platoon doesn't know stays.
-        let mut p = Projects::open(&d);
-        p.set_test_command(&a, "   ").unwrap();
-        let v = saved(&d);
-        assert!(v["projects"][&a].get("test_command").is_none(), "{v}");
-        assert_eq!((v["projects"][&a]["future"].as_str(), v["projects"][&a]["test_timeout_minutes"].as_f64()), (Some("kept"), Some(0.05)));
-        assert_eq!(clean_command(&"x".repeat(900)).chars().count(), TEST_COMMAND_MAX);
     }
 
     #[test]

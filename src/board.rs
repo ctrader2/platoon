@@ -50,16 +50,10 @@ pub enum Tone {
 pub struct Piece {
     pub text: String,
     pub tone: Tone,
-    /// Shown whatever the room: what comes before it is cut first to leave it room (what the tests said).
-    pub keep: bool,
 }
 
 pub fn piece(text: impl Into<String>, tone: Tone) -> Piece {
-    Piece { text: text.into(), tone, keep: false }
-}
-
-fn kept(text: impl Into<String>, tone: Tone) -> Piece {
-    Piece { text: text.into(), tone, keep: true }
+    Piece { text: text.into(), tone }
 }
 
 /// One task on the board.
@@ -162,7 +156,6 @@ pub fn need_words(n: &Need) -> String {
         Need::Plan => "its plan is ready: read it, then answer in its session".into(),
         Need::Question(q) => format!("asks: {q}"),
         Need::Permission(m) => format!("waits at a permission prompt: {m}"),
-        Need::Tests(s) => format!("the tests still fail: {s}"),
         Need::Check(s) => format!("the check found {s}"),
         Need::CheckFailed(s) => format!("the check could not run: {s}"),
     }
@@ -205,34 +198,6 @@ pub fn verdict_line(t: &Ticket, now: u64, clock: &dyn Fn(u64) -> String) -> Vec<
     out
 }
 
-/// What a row says about the last test run: "tests ✓" or "tests ✗". Nothing before any. Kept on a narrow row.
-pub fn tests_mark(t: &Ticket) -> Vec<Piece> {
-    match t.last_tests() {
-        None => Vec::new(),
-        Some(r) if r.ok => vec![kept(" · tests ", Tone::Subtext), kept("✓", Tone::Ok)],
-        Some(_) => vec![kept(" · tests ", Tone::Subtext), kept("✗", Tone::Warn)],
-    }
-}
-
-/// A task's Tests line in its details (after the label "Tests"): what the last run said and when. `command`: its
-/// project's test command ("" for none, or a task in no project). `clock` says a time of day ("13:52").
-pub fn tests_line(t: &Ticket, command: &str, clock: &dyn Fn(u64) -> String) -> Vec<Piece> {
-    let ran = |r: &crate::tickets::TestRun| {
-        let at = clock(r.at);
-        let at = if at.is_empty() { String::new() } else { format!(" at {at}") };
-        piece(format!(" · platoon ran `{}`{at}", r.command), Tone::Dim)
-    };
-    match t.last_tests() {
-        None if command.is_empty() => vec![piece("none set for this project", Tone::Dim)],
-        None => vec![piece(format!("not run yet · `{command}` runs when its session stops"), Tone::Dim)],
-        Some(r) if r.ok => vec![piece(r.summary.clone(), Tone::Ok), ran(r)],
-        Some(r) if t.state == State::Working => {
-            vec![piece("failed", Tone::Warn), piece(format!(" · {} · sent back to the session", r.summary), Tone::Dim), ran(r)]
-        }
-        Some(r) => vec![piece("failed", Tone::Warn), piece(format!(" · {}", r.summary), Tone::Dim), ran(r)],
-    }
-}
-
 /// One task's row in `section`.
 pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
     let t = i.task;
@@ -252,13 +217,11 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
             right = n.words().to_string();
             right_tone = Tone::Warn;
             second.push(piece(named(need_words(n)), Tone::Warn));
-            second.extend(tests_mark(t));
         }
         (State::Working, _) => {
             right = since(now, f.last_wrote(session).unwrap_or(t.updated));
             right_tone = Tone::Busy;
             second.push(piece(if squad.is_empty() { "Working".to_string() } else { squad.clone() }, Tone::Subtext));
-            second.extend(tests_mark(t));
             if checking(t, now) {
                 second.push(piece(" · checking the work", Tone::Busy));
             }
@@ -284,7 +247,6 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
             right = ago(now, t.updated);
             right_tone = Tone::Ok;
             second.push(piece(if squad.is_empty() { "Done".to_string() } else { squad.clone() }, Tone::Subtext));
-            second.extend(tests_mark(t));
             if t.worktree.is_some() {
                 second.push(piece(format!(" · on {}", t.branch()), Tone::Dim));
             }
@@ -362,7 +324,6 @@ pub const EMPTY: &str = "No tasks yet. Press n to write one.";
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tickets::TestRun;
 
     const NOW: u64 = 1_800_000_000;
 
@@ -423,7 +384,7 @@ mod tests {
                 task(9, "Permission", State::NeedsYou(Need::Permission("Claude needs your permission to use Bash".into())), NOW - 20),
                 "s-9",
             ),
-            started(task(10, "Tests", State::NeedsYou(Need::Tests("3 failed".into())), NOW - 30), "s-10"),
+            started(task(10, "Checked", State::NeedsYou(Need::Check("1 problem: a.rs:3: x".into())), NOW - 30), "s-10"),
         ];
         let ins: Vec<In> = tasks.iter().map(|t| In { project: "p", archived: false, task: t, busy: None }).collect();
         let g = board(&ins, &Known, "");
@@ -436,7 +397,7 @@ mod tests {
                     vec![
                         (2, s("a question"), s("Feature · asks: Which page?")),
                         (1, s("a plan to approve"), s("Feature · its plan is ready: read it, then answer in its session")),
-                        (10, s("tests failing"), s("Feature · the tests still fail: 3 failed")),
+                        (10, s("the check found problems"), s("Feature · the check found 1 problem: a.rs:3: x")),
                         (9, s("asks permission"), s("Feature · waits at a permission prompt: Claude needs your permission to use Bash")),
                     ]
                 ),
@@ -457,25 +418,6 @@ mod tests {
         let g = board(&[In { project: "p", archived: false, task: &t, busy: Some("Making its worktree…") }], &Known, "");
         assert_eq!(shape(&g), vec![("Working", vec![(1, "starting".to_string(), "Making its worktree…".to_string())])]);
         assert!(board(&[In { project: "p", archived: true, task: &t, busy: None }], &Known, "").is_empty());
-    }
-
-    #[test]
-    fn the_tests_show_on_the_row_and_on_the_tests_line() {
-        let mut t = started(task(1, "T", State::Done, NOW - 5), "s-1");
-        let clock = |_: u64| "13:52".to_string();
-        let text = |p: Vec<Piece>| p.iter().map(|x| x.text.as_str()).collect::<String>();
-        assert_eq!(text(tests_line(&t, "", &clock)), "none set for this project");
-        assert_eq!(text(tests_line(&t, "cargo test", &clock)), "not run yet · `cargo test` runs when its session stops");
-        t.tests.push(TestRun { ok: true, summary: "214 passed".into(), command: "cargo test".into(), at: NOW });
-        assert_eq!(text(tests_line(&t, "cargo test", &clock)), "214 passed · platoon ran `cargo test` at 13:52");
-        assert_eq!(text(tests_mark(&t)), " · tests ✓");
-        t.tests.push(TestRun { ok: false, summary: "3 failed".into(), command: "cargo test".into(), at: NOW });
-        t.state = State::Working;
-        assert_eq!(
-            text(tests_line(&t, "cargo test", &clock)),
-            "failed · 3 failed · sent back to the session · platoon ran `cargo test` at 13:52"
-        );
-        assert_eq!(tests_mark(&t)[1].tone, Tone::Warn);
     }
 
     #[test]

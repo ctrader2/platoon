@@ -55,25 +55,6 @@ pub(crate) fn state_color(t: &Theme, s: &State) -> Color {
 /// "…": the first piece (the squad's words) is cut after a word, never in the middle of one; a later piece (a step's
 /// mark, the tokens) goes whole.
 pub(super) fn fit_pieces(t: &Theme, pieces: &[Piece], room: usize, bg: Color) -> Vec<Span<'static>> {
-    // Pieces that are kept whatever the room (what the tests said): what comes before them is fitted into what they
-    // leave, and what comes after them goes when it doesn't fit.
-    let total: usize = pieces.iter().map(|p| p.text.width()).sum();
-    if total > room
-        && let Some(k) = pieces.iter().position(|p| p.keep)
-    {
-        let end = pieces[k..].iter().position(|p| !p.keep).map_or(pieces.len(), |e| k + e);
-        let kept_w: usize = pieces[k..end].iter().map(|p| p.text.width()).sum();
-        if kept_w < room {
-            let mut out = if k == 0 { Vec::new() } else { fit_pieces(t, &pieces[..k], room - kept_w, bg) };
-            out.extend(pieces[k..end].iter().map(|p| Span::styled(p.text.clone(), Style::new().fg(tone(t, p.tone)).bg(bg))));
-            let used: usize = out.iter().map(|s| s.content.width()).sum();
-            let rest = &pieces[end..];
-            if !rest.is_empty() && rest.iter().map(|p| p.text.width()).sum::<usize>() <= room.saturating_sub(used) {
-                out.extend(rest.iter().map(|p| Span::styled(p.text.clone(), Style::new().fg(tone(t, p.tone)).bg(bg))));
-            }
-            return out;
-        }
-    }
     let mut out = Vec::new();
     let mut used = 0usize;
     for (k, p) in pieces.iter().enumerate() {
@@ -295,13 +276,6 @@ fn picked_task(app: &App) -> Option<(String, Ticket)> {
     Some((p, t))
 }
 
-/// A task's Tests line after its label, in rows of `room` cells: what its last run said and when
-/// (`board::tests_line`), wrapped after whole words, the verdict in its color and the rest quiet.
-fn tests_rows(app: &App, project: &str, x: &Ticket, room: usize) -> Vec<Vec<Span<'static>>> {
-    let command = app.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default();
-    piece_rows(app, board::tests_line(x, &command, &|secs| clock(Some(secs * 1000))), room)
-}
-
 /// The words of a backtick pair (`npm test`) stay together: a line breaks before it rather than inside it. A pair too
 /// long for a line of `room` columns is broken at its spaces after all.
 fn units(text: &str, room: usize) -> Vec<String> {
@@ -353,7 +327,7 @@ const LABEL_W: usize = 8;
 
 /// The details of a task, `w` cells wide: its number and title, its project, its state and why, its squad, its folder
 /// and branch, its plan when one is ready (`plan_most`: at most that many lines of it), its "Done when" boxes as its
-/// text has them, its tests, what it has spent.
+/// text has them, the check of its work, what it has spent.
 fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Option<usize>) -> Vec<Line<'static>> {
     let t = app.effective_theme();
     let mut lines: Vec<Line<'static>> = Vec::new();
@@ -428,11 +402,6 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
     } else if x.started() {
         lines.push(Line::from(vec![label("Branch"), Span::styled("none: its folder is not in git", Style::new().fg(t.subtext))]));
     }
-    for (k, row) in tests_rows(app, project, x, room).into_iter().enumerate() {
-        let mut spans = vec![if k == 0 { label("Tests") } else { Span::raw(" ".repeat(LABEL_W)) }];
-        spans.extend(row);
-        lines.push(Line::from(spans));
-    }
     // The check of the work: what it said, then what it found, file:line first.
     let verdict = board::verdict_line(x, now, &|secs| clock(Some(secs * 1000)));
     if !verdict.is_empty() {
@@ -481,7 +450,7 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
     let boxes: Vec<(&str, Color, String)> = if checked.is_empty() {
         let store = tickets::Tickets::open(&app.config, project);
         let body = store.get(x.number).map(|t| store.body(t)).unwrap_or_default();
-        crate::checks::done_when(&body)
+        crate::tickets::done_when(&body)
             .into_iter()
             .map(|(ticked, text)| if ticked { ("[x] ", t.ok, text) } else { ("[ ] ", t.subtext, text) })
             .collect()

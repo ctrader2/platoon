@@ -24,6 +24,8 @@ first, and mark each one done or skipped with a one-line reason.
 6. If you hand work to a subagent (`Agent` tool, `subagent_type: "general-purpose"`, `model: "opus"`), give it an
    exact scope and check its diff and its claims yourself.
 7. Verify on the same surface as step 1: the original reproduction passes now. Unit tests show one branch's
-   behaviour, not that the bug is gone.
+   behaviour, not that the bug is gone. Then find how this repo runs its tests (its CLAUDE.md, README, or build
+   files) and run them all; fix what fails.
 8. Reply with what was broken, the root cause, the fix, and how you verified it, quoting the decisive failing and
-   passing output trimmed to the assertion and the counts. Say how you checked each "Done when" box.
+   passing output trimmed to the assertion and the counts. Name the test command you ran and its result, and say
+   how you checked each "Done when" box.

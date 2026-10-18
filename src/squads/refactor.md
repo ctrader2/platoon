@@ -24,7 +24,8 @@ skipped with a one-line reason.
 6. If you hand mechanical edits to a subagent (`Agent` tool, `subagent_type: "general-purpose"`, `model: "sonnet"`),
    give it the files, the names and the behaviour to hold, and check its diff yourself.
 7. Prove the behaviour is unchanged on the real thing: run the pin, and for a larger reshape compare old and new
-   outputs or run the program end to end.
+   outputs or run the program end to end. Then find how this repo runs its tests (its CLAUDE.md, README, or build
+   files) and run them all; fix what fails.
 8. Keep the change only if the code is easier to read afterwards. If it isn't, revert it and say so.
-9. Reply with the structure that changed, the pin you held it against, the proof that behaviour is unchanged, and
-   what you reverted. Say how you checked each "Done when" box.
+9. Reply with the structure that changed, the pin you held it against, the proof that behaviour is unchanged, the
+   test command you ran and its result, and what you reverted. Say how you checked each "Done when" box.

@@ -37,8 +37,6 @@ pub enum NamePurpose {
     NewSquad,
     /// What the Tasks tab is narrowed to.
     TaskFilter,
-    /// The command that runs this project's tests when a task's session stops (`T` on its screen).
-    TestCommand(String),
 }
 
 pub struct NameBox {
@@ -377,8 +375,6 @@ impl App {
                 self.selected = 0;
             }
             KeyCode::Esc => self.act(Action::Leave),
-            // The command that runs the project's tests (the line under its description), whichever pane has the keys.
-            KeyCode::Char('T') => self.edit_test_command(),
             KeyCode::Char('n') => self.act(Action::New),
             KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Char('j' | 'k') if self.pane == Pane::Notes => {
                 let d: i64 = match key.code {
@@ -414,39 +410,6 @@ impl App {
         }
     }
 
-    /// `T` on a project's screen: the box for its test command, holding the command it has (or, when it has none,
-    /// what its `CLAUDE.md` suggests, for the user to check: nothing is saved, or ever run, until they press enter).
-    pub(super) fn edit_test_command(&mut self) {
-        let Some(p) = self.open_project().cloned() else { return };
-        self.open_name_box(NamePurpose::TestCommand(p.id.clone()));
-    }
-
-    /// Enter in the test command's box: saved on the project (empty takes it away), said in one line.
-    fn save_test_command(&mut self, id: &str) {
-        let command = projects_mod::clean_command(&self.name_box.input);
-        self.mode = Mode::List;
-        let name = self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default();
-        match self.projects.set_test_command(id, &command) {
-            Ok(()) if command.is_empty() => self.notify(format!("{name} has no test command now: platoon runs no tests for its tasks.")),
-            Ok(()) => self.notify(format!("Tests for {name}: platoon runs `{command}` when a task's session stops.")),
-            Err(e) => self.report_projects_error(e),
-        }
-    }
-
-    /// What the project's `CLAUDE.md` gives for testing (`checks::suggestion_for` over its folders), worked out once
-    /// per refresh: the project's screen draws it on every frame.
-    pub fn test_suggestion(&self, id: &str) -> Option<String> {
-        if let Some((p, rev, s)) = self.test_hint.borrow().as_ref()
-            && p == id
-            && *rev == self.rev
-        {
-            return s.clone();
-        }
-        let s = crate::checks::suggestion_for(&self.project_folders(id));
-        *self.test_hint.borrow_mut() = Some((id.to_string(), self.rev, s.clone()));
-        s
-    }
-
     pub(super) fn wheel_list(&mut self, up: bool) {
         let d = if up { -1 } else { 1 };
         if self.board_showing() && self.tk.open.is_some() {
@@ -470,10 +433,6 @@ impl App {
         let input = match &purpose {
             NamePurpose::Rename(id) => self.projects.get(id).map(|p| p.name.clone()).unwrap_or_default(),
             NamePurpose::TaskFilter => self.filter.clone(),
-            NamePurpose::TestCommand(id) => match self.projects.get(id).map(|p| p.test_command.clone()).filter(|c| !c.is_empty()) {
-                Some(c) => c,
-                None => self.test_suggestion(id).unwrap_or_default(),
-            },
             _ => String::new(),
         };
         self.name_box = NameBox { purpose, input };
@@ -491,7 +450,6 @@ impl App {
         let max = match &self.name_box.purpose {
             NamePurpose::NewTask(_) => crate::tickets::TITLE_MAX,
             NamePurpose::TaskFilter => 200,
-            NamePurpose::TestCommand(_) => projects_mod::TEST_COMMAND_MAX,
             _ => projects_mod::NAME_MAX,
         };
         let room = max.saturating_sub(self.name_box.input.chars().count());
@@ -501,7 +459,6 @@ impl App {
     /// Enter in the name box.
     pub(super) fn save_name_box(&mut self) {
         match self.name_box.purpose.clone() {
-            NamePurpose::TestCommand(id) => return self.save_test_command(&id),
             NamePurpose::TaskFilter => {
                 self.filter = self.name_box.input.trim().to_string();
                 self.mode = Mode::List;
@@ -531,7 +488,7 @@ impl App {
                 Ok(()) => self.notify(format!("Renamed the project to \"{name}\"")),
                 Err(e) => self.report_projects_error(e),
             },
-            NamePurpose::NewTask(_) | NamePurpose::TaskFilter | NamePurpose::TestCommand(_) | NamePurpose::NewSquad => {}
+            NamePurpose::NewTask(_) | NamePurpose::TaskFilter | NamePurpose::NewSquad => {}
             NamePurpose::New | NamePurpose::NewFor(_) => match self.projects.create(&name) {
                 Ok(id) => {
                     let mut msg = format!("Made the project \"{name}\"");

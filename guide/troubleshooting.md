@@ -114,10 +114,7 @@ it, then try again). See [Starting a task](tasks-and-squads.md#starting-a-task).
 **A task says "asks permission".** Its session is at Claude Code's permission prompt: `enter` opens the session, where
 the question is. See [How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).
 
-**A task's tests never run.** The project needs a test command (`T` on its screen; a suggestion from `CLAUDE.md` is never
-run until you save it). They run when the task's session stops, not before. See
-[How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).
-
-**A task says "the tests still fail".** platoon handed the failure back to the session twice and they still fail: read
-`tests.log` in the task's own folder, then tell the session what to do (`enter` opens it). See
-[How the task follows its session](tasks-and-squads.md#how-the-task-follows-its-session).
+**A task's check says "Tests run and reported: not met".** platoon runs no tests itself: the session is told to find
+how its repo runs its tests and to name the command and the result in its last message. The check found no such
+line. Tell the session how to run them (`enter` opens it), or put it in the repo's `CLAUDE.md` so every session finds
+it. See [The check of the work](tasks-and-squads.md#the-check-of-the-work).

@@ -18,23 +18,21 @@
 //! - `task-notify`, `Notification`: a permission prompt makes a Working task Needs you.
 //! - `task-tool`, `PostToolUse` on every tool: the answer came (the plan approved, the question answered, the
 //!   permission given): Working again.
-//! - `task-prompt`, `UserPromptSubmit`: the user typed: Working, and the counts of refused stops start again.
-//! - `task-stop`, `Stop`: the project's tests run in the task's folder; failing, the stop is refused with their last
-//!   lines (twice in a row at most), then the task needs the user. Passing, or with no test command, the work is
-//!   checked (`verdict.rs`; the task is Working, "checking the work", meanwhile): done, the task is Done; not done, the
-//!   stop is refused once with what the check found, and the next "not done" makes the task need the user; a check
-//!   that could not run makes it need the user with why.
+//! - `task-prompt`, `UserPromptSubmit`: the user typed: Working, and the count of refused stops starts again.
+//! - `task-stop`, `Stop`: the work is checked (`verdict.rs`; the task is Working, "checking the work", meanwhile):
+//!   done, the task is Done; not done, the stop is refused once with what the check found, and the next "not done"
+//!   makes the task need the user; a check that could not run makes it need the user with why. platoon runs no tests
+//!   itself: the rules (`rules`) tell the session to find and run the repo's tests and report them, and the check
+//!   holds it to that.
 
-use crate::checks;
 use crate::squads::Squad;
-use crate::tickets::{self, Need, State, TestRun, Ticket, Tickets};
+use crate::tickets::{self, Need, State, Ticket, Tickets};
 use crate::verdict;
 use serde_json::{Value, json};
 use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
     time::Duration,
 };
 
@@ -82,7 +80,8 @@ pub const ASK: &[&str] = &[
 /// The hooks, by the name `platoon hook <name>` takes.
 pub const HOOKS: [&str; 6] = ["task-plan", "task-question", "task-notify", "task-tool", "task-prompt", "task-stop"];
 
-/// How much longer than the tests may run the `Stop` hook is given before Claude Code gives up on it, in seconds.
+/// How much longer than the check of the work may take the `Stop` hook is given before Claude Code gives up on it, in
+/// seconds.
 const STOP_MARGIN: u64 = 60;
 
 /// A program path as one word for a shell (the hook commands run through one).
@@ -94,15 +93,14 @@ pub fn shell_word(s: &str) -> String {
     }
 }
 
-/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules. `test_secs`:
-/// how long the project's tests may run (the `Stop` hook waits that long, the check of the work's time, and a little
-/// more).
-pub fn settings_json(exe: &str, test_secs: u64) -> String {
+/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules. The `Stop`
+/// hook waits as long as the check of the work may take, and a little more.
+pub fn settings_json(exe: &str) -> String {
     let exe = shell_word(exe);
     let cmd = |name: &str| json!({"type": "command", "command": format!("{exe} hook {name}")});
     let mut stop = cmd("task-stop");
     if let Some(o) = stop.as_object_mut() {
-        o.insert("timeout".into(), json!(test_secs + verdict::TIMEOUT.as_secs() + STOP_MARGIN));
+        o.insert("timeout".into(), json!(verdict::TIMEOUT.as_secs() + STOP_MARGIN));
     }
     json!({
         "permissions": {"ask": ASK},
@@ -206,12 +204,14 @@ pub struct Rules {
     pub folder: String,
     /// In git, on this branch (None: the folder is not in git).
     pub branch: Option<String>,
-    /// The project's test command ("" for none).
-    pub test_command: String,
     /// Where the squads are copied (`<task folder>/squads`).
     pub squads_dir: String,
     pub plan_first: bool,
 }
+
+/// The rule on tests: platoon runs none itself, so the session finds the repo's own and reports them (the check of the
+/// work holds a change to code to it: `verdict::SYSTEM`).
+pub const TESTS_RULE: &str = "- When you change code, find how this repo runs its tests (its CLAUDE.md, README, or build files), run them before you finish, and name the command and its result in your final message. If the repo has no tests, say so and how you checked the change instead.\n";
 
 /// platoon's fixed rules, above the squad's steps in `squad.md`. Not the user's to change.
 pub fn rules(r: &Rules) -> String {
@@ -231,12 +231,7 @@ pub fn rules(r: &Rules) -> String {
         out.push_str("- You start in plan mode. Present the plan with ExitPlanMode; the user approves it before you change anything.\n");
     }
     out.push_str("- When you finish, end with what you did and how you checked each \"Done when\" box of the task.\n");
-    if !r.test_command.is_empty() {
-        out.push_str(&format!(
-            "- When you stop, platoon runs the project's tests (`{}`) in your folder. If they fail, you get their output back and carry on.\n",
-            r.test_command
-        ));
-    }
+    out.push_str(TESTS_RULE);
     out.push_str(
         "- Each time you finish, another Claude that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
     );
@@ -354,13 +349,12 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
         "task-prompt" => {
             let _ = store.update(number, |t| {
                 let reopen = matches!(t.state, State::NeedsYou(_) | State::Done);
-                if !reopen && t.stops_refused == 0 && t.checks_refused == 0 && t.checking.is_none() {
+                if !reopen && t.checks_refused == 0 && t.checking.is_none() {
                     return false;
                 }
                 if reopen {
                     t.state = State::Working;
                 }
-                t.stops_refused = 0;
                 t.checks_refused = 0;
                 // A check still running is of the work before this message: its answer no longer moves the task.
                 t.checking = None;
@@ -375,7 +369,6 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
 
 /// The `Stop` hook: the end of a turn.
 fn stop(v: &Value, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) -> Said {
-    let config = at.config.as_path();
     // Waiting for the user already (a plan to approve, a question), or subagents still at work: nothing to do.
     if t.state != State::Working || still_working(v.get("background_tasks")) {
         return None;
@@ -389,51 +382,7 @@ fn stop(v: &Value, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) 
         });
         return None;
     }
-    let p = crate::projects::Projects::open(config).get(project).cloned();
-    let command = p.as_ref().map(|p| p.test_command.clone()).unwrap_or_default();
-    if command.is_empty() {
-        return check(v, at, project, store, t.number);
-    }
-    let timeout = Duration::from_secs(p.map_or(crate::projects::TEST_TIMEOUT_MINUTES * 60, |p| p.test_timeout_secs));
-    let folder = t.work_folder().unwrap_or_default();
-    let log = tickets::task_dir(config, project, t.number).join("tests.log");
-    let ran = checks::run(&command, Path::new(&folder), &checks::env(), timeout, &log, &AtomicBool::new(false));
-    let run = TestRun {
-        ok: ran.ok,
-        summary: tickets::clean(&ran.summary, checks::SUMMARY_MAX),
-        command: command.clone(),
-        at: crate::usage::now(),
-    };
-    let mut refuse = false;
-    let _ = store.update(t.number, |x| {
-        x.tests.push(run.clone());
-        let extra = x.tests.len().saturating_sub(tickets::TESTS_KEPT);
-        x.tests.drain(..extra);
-        if run.ok {
-            x.stops_refused = 0;
-        } else if x.stops_refused < tickets::STOPS_REFUSED_MAX {
-            x.stops_refused += 1;
-            refuse = true;
-        } else {
-            x.state = State::NeedsYou(Need::Tests(run.summary.clone()));
-        }
-        true
-    });
-    if run.ok {
-        return check(v, at, project, store, t.number);
-    }
-    if !refuse {
-        return None;
-    }
-    let tail = checks::tail(&ran.output, checks::TAIL_LINES);
-    let mut reason = format!("The project's tests failed when platoon ran `{command}` in {folder}");
-    if tail.trim().is_empty() {
-        reason.push_str(&format!(" ({}).", ran.summary));
-    } else {
-        reason.push_str(&format!(":\n\n```\n{tail}\n```\n"));
-    }
-    reason.push_str("\nFix what makes them fail, then finish again: platoon runs them each time you stop.");
-    Some(json!({"decision": "block", "reason": reason}).to_string())
+    check(v, at, project, store, t.number)
 }
 
 /// The model a task's work is checked with: the `verdict_model` of the squad it started with (its copy in the task's
@@ -450,7 +399,7 @@ fn verdict_model(config: &Path, project: &str, t: &Ticket) -> String {
         .unwrap_or_else(|| "opus".into())
 }
 
-/// The tests passed (or there are none): check the work (`verdict.rs`). Done, refused once with what it found, or
+/// The end of a turn: check the work (`verdict.rs`). Done, refused once with what it found, or
 /// Needs you. While it runs the task is Working with `checking` set; a message the user types meanwhile clears that,
 /// and then the answer is kept but moves nothing.
 fn check(v: &Value, at: &Places, project: &str, store: &mut Tickets, number: u32) -> Said {
@@ -494,7 +443,6 @@ fn check(v: &Value, at: &Places, project: &str, store: &mut Tickets, number: u32
             x.state = State::NeedsYou(Need::CheckFailed(why.clone()));
         } else if found.done {
             x.state = State::Done;
-            x.stops_refused = 0;
             x.checks_refused = 0;
         } else if x.checks_refused < tickets::CHECKS_REFUSED_MAX {
             x.checks_refused += 1;
@@ -531,7 +479,7 @@ pub fn run_hook(name: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tickets::{NewTicket, Worktree};
+    use crate::tickets::NewTicket;
 
     fn dir(name: &str) -> PathBuf {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-taskrun-{name}-{}", std::process::id())));
@@ -580,14 +528,10 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         fs::read_to_string(d.join("check-calls")).map(|s| s.lines().count()).unwrap_or(0)
     }
 
-    /// A project with a test command, and a task of it started in `folder` as session `s-1`.
-    fn world(name: &str, command: &str) -> (PathBuf, String, u32) {
+    /// A project, and a task of it started in `<d>/work` as session `s-1`.
+    fn world(name: &str) -> (PathBuf, String, u32) {
         let d = dir(name);
-        let mut projects = crate::projects::Projects::open(&d);
-        let p = projects.create("Shop").unwrap();
-        if !command.is_empty() {
-            projects.set_test_command(&p, command).unwrap();
-        }
+        let p = crate::projects::Projects::open(&d).create("Shop").unwrap();
         let folder = d.join("work");
         fs::create_dir_all(&folder).unwrap();
         let mut store = Tickets::open(&d, &p);
@@ -638,7 +582,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             model: "opus".into(),
             plan: true,
             task_dir: PathBuf::from("/c/tasks/05-work"),
-            settings: settings_json("/opt/platoon/bin/platoon", 600),
+            settings: settings_json("/opt/platoon/bin/platoon"),
             first: Some("Task #5: Login\n\nDo it.".into()),
         };
         let a = args(&l);
@@ -662,7 +606,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         assert_eq!(hooks["PostToolUse"][0]["hooks"][0]["command"], "/opt/platoon/bin/platoon hook task-tool");
         assert_eq!(hooks["UserPromptSubmit"][0]["hooks"][0]["command"], "/opt/platoon/bin/platoon hook task-prompt");
         assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], "/opt/platoon/bin/platoon hook task-stop");
-        assert_eq!(hooks["Stop"][0]["hooks"][0]["timeout"], 600 + 600 + 60, "the tests' time, the check's and a minute");
+        assert_eq!(hooks["Stop"][0]["hooks"][0]["timeout"], 600 + 60, "the check's time and a minute");
         let ask: Vec<&str> = s["permissions"]["ask"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
         for want in [
             "Bash(git push:*)",
@@ -725,7 +669,6 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         let r = Rules {
             folder: "/w/shop-worktrees/task-5".into(),
             branch: Some("task/5".into()),
-            test_command: "cargo test".into(),
             squads_dir: task_dir.join("squads").to_string_lossy().into_owned(),
             plan_first: true,
         };
@@ -737,7 +680,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             "Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.",
             "AskUserQuestion tool, not in prose",
             "how you checked each \"Done when\" box",
-            "platoon runs the project's tests (`cargo test`)",
+            "find how this repo runs its tests (its CLAUDE.md, README, or build files), run them before you finish, and name the command and its result in your final message",
             "another Claude that can only read checks your work",
             "You start in plan mode",
             "# The squad: Feature",
@@ -749,15 +692,17 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             let copy = fs::read_to_string(task_dir.join("squads").join(format!("{}.md", s.id))).unwrap();
             assert_eq!(crate::squads::parse(&s.id, &copy, s.origin), *s, "a copy reads as the squad");
         }
-        // Not in git, no test command, not plan first: none of those lines.
+        // Not in git, not plan first: none of those lines. The tests are the session's to run either way.
         let plain = rules(&Rules { folder: "/notes".into(), squads_dir: "/x".into(), ..Default::default() });
         assert!(plain.contains("You work in /notes. It is not a git repository."));
-        assert!(!plain.contains("branch") && !plain.contains("tests") && !plain.contains("plan mode"), "{plain}");
+        assert!(!plain.contains("branch") && !plain.contains("plan mode"), "{plain}");
+        assert!(plain.contains(TESTS_RULE), "{plain}");
+        assert!(!plain.contains("platoon runs"), "platoon runs no tests: {plain}");
     }
 
     #[test]
     fn a_plan_is_saved_and_needs_you_until_the_user_approves_it() {
-        let (d, p, n) = world("plan", "");
+        let (d, p, n) = world("plan");
         let plan = "## Plan\n\n1. Do it.\n";
         assert_eq!(hook("task-plan", &input("PreToolUse", json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": plan}})), &d), None);
         assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Plan));
@@ -772,7 +717,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn a_question_needs_you_with_its_words_until_it_is_answered() {
-        let (d, p, n) = world("question", "");
+        let (d, p, n) = world("question");
         let q = json!({"tool_name": "AskUserQuestion", "tool_input": {"questions": [{"question": "Which page?", "header": "Page", "options": []}, {"question": "Which colour?"}]}});
         hook("task-question", &input("PreToolUse", q), &d);
         assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Which page? / Which colour?".into())));
@@ -784,7 +729,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn a_permission_prompt_needs_you_and_the_next_tool_that_runs_is_the_answer() {
-        let (d, p, n) = world("permission", "");
+        let (d, p, n) = world("permission");
         hook(
             "task-notify",
             &input("Notification", json!({"message": "Claude is waiting for your input", "notification_type": "idle_prompt"})),
@@ -807,18 +752,19 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
     }
 
     #[test]
-    fn a_stop_with_no_test_command_is_done_and_typing_makes_it_working_again() {
-        let (d, p, n) = world("no-command", "");
+    fn a_stop_the_check_passes_is_done_and_typing_makes_it_working_again() {
+        let (d, p, n) = world("check-passes");
         assert_eq!(hook("task-stop", &input("Stop", json!({"stop_hook_active": false})), &d), None);
         assert_eq!(state(&d, &p, n), State::Done);
-        assert!(task(&d, &p, n).tests.is_empty(), "nothing ran");
+        assert_eq!(checks_made(&d), 1, "the check ran, and nothing else");
+        assert!(!tickets::task_dir(&d, &p, n).join("tests.log").exists(), "platoon runs no tests");
         hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "one more thing"})), &d);
         assert_eq!(state(&d, &p, n), State::Working, "typed into a Done task");
     }
 
     #[test]
     fn a_stop_with_subagents_still_at_work_or_waiting_for_the_user_changes_nothing() {
-        let (d, p, n) = world("busy", "");
+        let (d, p, n) = world("busy");
         hook("task-stop", &input("Stop", json!({"background_tasks": [{"id": "a1"}]})), &d);
         assert_eq!(state(&d, &p, n), State::Working);
         hook("task-plan", &input("PreToolUse", json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "p"}})), &d);
@@ -828,83 +774,15 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn a_stop_while_planning_without_a_plan_needs_you_with_its_last_words() {
-        let (d, p, n) = world("planning", "true");
+        let (d, p, n) = world("planning");
         hook("task-stop", &input("Stop", json!({"permission_mode": "plan", "last_assistant_message": "Should it be red or blue?"})), &d);
         assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Should it be red or blue?".into())));
-        assert!(task(&d, &p, n).tests.is_empty(), "no tests while planning");
-    }
-
-    #[test]
-    fn passing_tests_make_the_stop_done_and_are_recorded() {
-        let (d, p, n) = world("pass", "echo 'test result: ok. 7 passed; 0 failed'");
-        assert_eq!(hook("task-stop", &input("Stop", json!({})), &d), None);
-        let t = task(&d, &p, n);
-        assert_eq!(t.state, State::Done);
-        assert_eq!((t.tests.len(), t.tests[0].ok, t.tests[0].summary.as_str()), (1, true, "7 passed"));
-        assert!(tickets::task_dir(&d, &p, n).join("tests.log").is_file());
-    }
-
-    #[test]
-    fn failing_tests_refuse_the_stop_twice_with_their_tail_then_need_you_and_typing_starts_the_count_again() {
-        let (d, p, n) = world("fail", "echo first line; echo 'assertion failed: login'; exit 1");
-        for k in 1..=2 {
-            let said = hook("task-stop", &input("Stop", json!({"stop_hook_active": k > 1})), &d).expect("refused");
-            let v: Value = serde_json::from_str(&said).unwrap();
-            assert_eq!(v["decision"], "block");
-            let reason = v["reason"].as_str().unwrap();
-            assert!(reason.contains("assertion failed: login") && reason.contains("first line"), "the tail: {reason}");
-            assert!(reason.contains("echo first line"), "what ran: {reason}");
-            let t = task(&d, &p, n);
-            assert_eq!((t.state.clone(), t.stops_refused), (State::Working, k));
-        }
-        // The third time: the stop goes through and the task needs the user.
-        assert_eq!(hook("task-stop", &input("Stop", json!({"stop_hook_active": true})), &d), None);
-        let t = task(&d, &p, n);
-        assert_eq!(t.state, State::NeedsYou(Need::Tests("assertion failed: login".into())));
-        assert_eq!(t.tests.len(), 3);
-        // The user types: Working, and two more tries.
-        hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "try again"})), &d);
-        let t = task(&d, &p, n);
-        assert_eq!((t.state.clone(), t.stops_refused), (State::Working, 0));
-        assert!(hook("task-stop", &input("Stop", json!({})), &d).is_some(), "refused again");
-        // Typing while Working starts the count again too.
-        hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "hint"})), &d);
-        assert_eq!(task(&d, &p, n).stops_refused, 0);
-        // Only the last few runs are kept.
-        for _ in 0..6 {
-            hook("task-stop", &input("Stop", json!({})), &d);
-            hook("task-prompt", &input("UserPromptSubmit", json!({})), &d);
-        }
-        assert_eq!(task(&d, &p, n).tests.len(), tickets::TESTS_KEPT);
-    }
-
-    #[test]
-    fn tests_run_in_the_tasks_worktree_and_are_stopped_at_the_projects_time() {
-        let (d, p, n) = world("where", "pwd > where.txt; sleep 30");
-        let wt = d.join("wt");
-        fs::create_dir_all(&wt).unwrap();
-        Tickets::open(&d, &p)
-            .update(n, |t| {
-                t.worktree = Some(Worktree { path: wt.to_string_lossy().into_owned(), branch: "task/1".into(), ..Default::default() });
-                true
-            })
-            .unwrap();
-        let file = crate::projects::Projects::open(&d).path();
-        let mut v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
-        if let Some(o) = v.get_mut("projects").and_then(|x| x.get_mut(&p)).and_then(Value::as_object_mut) {
-            o.insert("test_timeout_minutes".into(), json!(0.02));
-        }
-        fs::write(&file, v.to_string()).unwrap();
-        let started = std::time::Instant::now();
-        let said = hook("task-stop", &input("Stop", json!({})), &d).expect("a timeout fails");
-        assert!(started.elapsed() < Duration::from_secs(10), "ended at its time, not after the sleep");
-        assert!(said.contains("timed out after 1 second"), "{said}");
-        assert_eq!(fs::read_to_string(wt.join("where.txt")).unwrap().trim(), wt.canonicalize().unwrap().to_string_lossy());
+        assert_eq!(checks_made(&d), 0, "no check while planning");
     }
 
     #[test]
     fn a_session_that_is_no_tasks_and_a_cancelled_task_are_left_alone() {
-        let (d, p, n) = world("alone", "");
+        let (d, p, n) = world("alone");
         let other = json!({"session_id": "someone-else", "hook_event_name": "Stop"}).to_string();
         assert_eq!(hook("task-stop", &other, &d), None);
         assert_eq!(state(&d, &p, n), State::Working);
@@ -917,7 +795,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn a_stop_is_done_only_once_the_check_says_so_and_the_check_is_read_only_on_the_squads_verdict_model() {
-        let (d, p, n) = world("check-done", "");
+        let (d, p, n) = world("check-done");
         fs::write(
             d.join("check-reply"),
             r#"{"done":true,"boxes":[{"text":"It logs in","met":true,"evidence":"src/login.rs:3"}],"findings":[]}"#,
@@ -953,7 +831,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn not_done_refuses_the_stop_once_with_what_it_found_then_needs_you_and_typing_starts_again() {
-        let (d, p, n) = world("check-not-done", "echo 'test result: ok. 3 passed; 0 failed'");
+        let (d, p, n) = world("check-not-done");
         fs::write(d.join("work/mail.rs"), "fn send() {\n    html_only();\n}\n").unwrap();
         fs::write(
             d.join("check-reply"),
@@ -970,27 +848,23 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         assert!(reason.contains("\"A text-only client gets the order\": not met"), "{reason}");
         assert!(!reason.contains("Not there"), "a finding whose quote isn't there is dropped: {reason}");
         let t = task(&d, &p, n);
-        assert_eq!((t.state.clone(), t.checks_refused, t.tests.len()), (State::Working, 1, 1), "the tests ran first");
+        assert_eq!((t.state.clone(), t.checks_refused), (State::Working, 1));
         assert_eq!(t.verdict.as_ref().map(|v| (v.done, v.dropped, v.problems())), Some((false, 1, 2)));
         // The second "not done": the stop goes through, and the task needs the user with what was found.
         assert_eq!(hook("task-stop", &input("Stop", json!({})), &d), None);
         let t = task(&d, &p, n);
         assert_eq!(t.state, State::NeedsYou(Need::Check("2 problems: mail.rs:2: Only HTML is sent.".into())));
-        assert_eq!((checks_made(&d), t.tests.len()), (2, 2), "the tests and the check, each stop");
+        assert_eq!(checks_made(&d), 2, "the check, each stop");
         // The user types: Working, and one more refusal before it needs them again.
         hook("task-prompt", &input("UserPromptSubmit", json!({"prompt": "look again"})), &d);
         let t = task(&d, &p, n);
         assert_eq!((t.state.clone(), t.checks_refused), (State::Working, 0));
         assert!(hook("task-stop", &input("Stop", json!({})), &d).is_some(), "refused again");
-        // Failing tests are handed back before any check runs.
-        let (d2, _, _) = world("check-after-tests", "exit 1");
-        assert!(hook("task-stop", &input("Stop", json!({})), &d2).is_some());
-        assert_eq!(checks_made(&d2), 0);
     }
 
     #[test]
     fn a_not_done_whose_findings_are_not_in_the_code_counts_as_done_with_a_note() {
-        let (d, p, n) = world("check-made-up", "");
+        let (d, p, n) = world("check-made-up");
         fs::write(
             d.join("check-reply"),
             r#"{"done":false,"boxes":[],"findings":[{"file":"nowhere.rs","line":3,"quote":"x();","problem":"Made up."}]}"#,
@@ -1005,7 +879,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn a_check_that_cannot_run_needs_you_with_why_and_never_blocks() {
-        let (d, p, n) = world("check-fails", "");
+        let (d, p, n) = world("check-fails");
         fs::write(d.join("check-fail"), "").unwrap();
         assert_eq!(hook("task-stop", &input("Stop", json!({})), &d), None, "never refused");
         let t = task(&d, &p, n);

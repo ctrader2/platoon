@@ -265,7 +265,6 @@ impl App {
         let rules = Rules {
             folder: worktree.as_ref().map(|w| w.path.clone()).or(t.folder.clone()).unwrap_or_default(),
             branch: worktree.as_ref().map(|w| w.branch.clone()),
-            test_command: self.projects.get(project).map(|p| p.test_command.clone()).unwrap_or_default(),
             squads_dir: task_dir.join("squads").to_string_lossy().into_owned(),
             plan_first: squad.plan_first,
         };
@@ -317,7 +316,6 @@ impl App {
             return Err(format!("{} doesn't exist any more", dirs::tilde(&dir, &self.home)));
         }
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
-        let timeout = self.projects.get(project).map_or(crate::projects::TEST_TIMEOUT_MINUTES * 60, |p| p.test_timeout_secs);
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));
         let launch = Launch {
             session,
@@ -326,7 +324,7 @@ impl App {
             model: squad.model.clone(),
             plan,
             task_dir,
-            settings: taskrun::settings_json(&exe, timeout),
+            settings: taskrun::settings_json(&exe),
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
         };
         let args = taskrun::args(&launch);

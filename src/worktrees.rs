@@ -63,11 +63,6 @@ pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Is `folder` inside a git repository? Looked up on disk only (a `.git` in it or above it), so it costs no process.
-pub fn in_git(folder: &Path) -> bool {
-    folder.ancestors().any(|d| d.join(".git").exists())
-}
-
 /// Where the worktree of repository `root` on `branch` goes: `<parent>/<name>-worktrees/<branch>`, the branch's `/`
 /// as `-` (`task-5`).
 pub fn worktree_dir(root: &Path, branch: &str) -> PathBuf {

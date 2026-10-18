@@ -5,12 +5,12 @@
 //!
 //! A task runs as one ordinary Claude Code session (`taskrun.rs`): in a git worktree of its folder on the branch
 //! `task/<N>`, or in the folder itself when that is not in git. The session's own hooks move the task along: the plan
-//! is ready, a question, a permission prompt, the user typed, the turn ended (with the project's tests run).
+//! is ready, a question, a permission prompt, the user typed, the turn ended (and the work was checked).
 //!
 //! A project's tasks live beside its notes: `<config>/projects/<id>/tasks.json` =
 //! `{"next": 4, "tasks": [{"number", "title", "file", "state", "folder", "squad", "session", ...}]}`, the texts in
 //! `<config>/projects/<id>/tasks/<NN>-<slug>.md` and each task's own folder in `tasks/<NN>-work/` (the squad it runs
-//! with, `squad.md`, the other squads beside it, its plan, the last test output). Tasks in no project live in
+//! with, `squad.md`, the other squads beside it, its plan, the check's answer). Tasks in no project live in
 //! `<config>/tasks.json` and `<config>/tasks/`, with a number space of their own (the project id `""`, `NO_PROJECT_ID`).
 //!
 //! Writes are atomic (temp file + rename) and happen under a lock (`tasks.lock` beside the file: the app, the hooks and
@@ -28,7 +28,7 @@ use std::{
 /// The longest title kept, in characters.
 pub const TITLE_MAX: usize = 100;
 
-/// The longest reason kept (a question, a permission prompt's words, a test summary), in characters.
+/// The longest reason kept (a question, a permission prompt's words, what the check found), in characters.
 pub const WHY_MAX: usize = 600;
 
 /// What a new task's text starts from: what should work when it is finished, and how to tell.
@@ -41,6 +41,59 @@ What should work when this is finished, as behaviour, not a list of changes.
 
 - [ ] \n- [ ] \n";
 
+// ---- "Done when" ----------------------------------------------------------------------------------------------------
+
+/// A line's words as they are compared: lower case letters and digits, one space between.
+fn words_of(s: &str) -> Vec<String> {
+    s.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).map(str::to_lowercase).collect()
+}
+
+/// A checkbox line's text and whether it is ticked: `- [ ] text`, `* [x] text` (any case, any of `-*+`, or numbered).
+fn checkbox(line: &str) -> Option<(bool, &str)> {
+    let t = line.trim_start();
+    let t = t.strip_prefix(['-', '*', '+']).map(str::trim_start).or_else(|| {
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
+        (digits > 0).then(|| t[digits..].strip_prefix(['.', ')'])).flatten().map(str::trim_start)
+    })?;
+    let ticked = if t.starts_with("[ ]") {
+        false
+    } else if t.starts_with("[x]") || t.starts_with("[X]") {
+        true
+    } else {
+        return None;
+    };
+    Some((ticked, t[3..].trim()))
+}
+
+/// A task's "Done when" boxes, as written: the checkbox lines under a heading that says "done when" (until the next
+/// heading of the same level or above), with whether each is ticked. Empty ones (the template's) are left out.
+pub fn done_when(body: &str) -> Vec<(bool, String)> {
+    let heading = |l: &str| {
+        let t = l.trim_start();
+        let level = t.chars().take_while(|c| *c == '#').count();
+        ((1..=6).contains(&level) && t[level..].starts_with(' ')).then(|| (level, t[level..].trim().to_lowercase()))
+    };
+    let mut under: Option<usize> = None;
+    let mut out = Vec::new();
+    for l in body.lines() {
+        if let Some((level, text)) = heading(l) {
+            if text.contains("done when") {
+                under = Some(level);
+            } else if under.is_some_and(|u| level <= u) {
+                under = None;
+            }
+            continue;
+        }
+        if under.is_some()
+            && let Some((ticked, text)) = checkbox(l)
+            && !words_of(text).is_empty()
+        {
+            out.push((ticked, text.to_string()));
+        }
+    }
+    out
+}
+
 // ---- states -------------------------------------------------------------------------------------------------------
 
 /// Why a task needs the user, with what it says.
@@ -52,8 +105,6 @@ pub enum Need {
     Question(String),
     /// It waits at Claude Code's permission prompt: the prompt's words.
     Permission(String),
-    /// Its tests still fail after it was sent back twice: the summary of the last run.
-    Tests(String),
     /// The check of its work (`verdict.rs`) still found problems after it was sent back once: what it found, short.
     Check(String),
     /// The check of its work could not run (timed out, no answer it could read, no `claude`): why.
@@ -66,7 +117,6 @@ impl Need {
             Need::Plan => "plan",
             Need::Question(_) => "question",
             Need::Permission(_) => "permission",
-            Need::Tests(_) => "tests",
             Need::Check(_) => "check",
             Need::CheckFailed(_) => "check_failed",
         }
@@ -76,7 +126,7 @@ impl Need {
     pub fn text(&self) -> &str {
         match self {
             Need::Plan => "",
-            Need::Question(s) | Need::Permission(s) | Need::Tests(s) | Need::Check(s) | Need::CheckFailed(s) => s,
+            Need::Question(s) | Need::Permission(s) | Need::Check(s) | Need::CheckFailed(s) => s,
         }
     }
 
@@ -86,7 +136,6 @@ impl Need {
             Need::Plan => "a plan to approve",
             Need::Question(_) => "a question",
             Need::Permission(_) => "asks permission",
-            Need::Tests(_) => "tests failing",
             Need::Check(_) => "the check found problems",
             Need::CheckFailed(_) => "the check could not run",
         }
@@ -97,7 +146,6 @@ impl Need {
         match id {
             "plan" => Need::Plan,
             "permission" => Need::Permission(text),
-            "tests" => Need::Tests(text),
             "check" => Need::Check(text),
             "check_failed" => Need::CheckFailed(text),
             _ => Need::Question(text),
@@ -194,17 +242,6 @@ pub enum WtMark {
 pub struct Source {
     pub session: String,
     pub project: String,
-}
-
-/// One run of the project's tests at the end of a turn, newest last; a task keeps `TESTS_KEPT`.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct TestRun {
-    pub ok: bool,
-    /// One line: "214 passed", "211 passed, 3 failed", "timed out after 10 minutes".
-    pub summary: String,
-    pub command: String,
-    /// When it ended, seconds since the epoch.
-    pub at: u64,
 }
 
 /// The last check of a task's work (`verdict.rs`): a fresh read-only `claude -p` judged whether the work does what
@@ -317,12 +354,6 @@ impl Verdict {
 /// the user.
 pub const CHECKS_REFUSED_MAX: u32 = 1;
 
-/// How many test runs a task keeps.
-pub const TESTS_KEPT: usize = 5;
-
-/// How many times in a row a turn's end is refused because the tests fail; the next time the task needs the user.
-pub const STOPS_REFUSED_MAX: u32 = 2;
-
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Ticket {
     pub number: u32,
@@ -343,9 +374,6 @@ pub struct Ticket {
     pub created: u64,
     pub updated: u64,
     pub from: Option<Source>,
-    pub tests: Vec<TestRun>,
-    /// How many ends of a turn in a row were refused because the tests failed (reset when the user types).
-    pub stops_refused: u32,
     /// The last check of its work.
     pub verdict: Option<Verdict>,
     /// How many ends of a turn in a row were refused because the check found problems (reset when the user types).
@@ -366,11 +394,6 @@ impl Ticket {
     /// The branch its work goes on.
     pub fn branch(&self) -> String {
         self.worktree.as_ref().map(|w| w.branch.clone()).filter(|b| !b.is_empty()).unwrap_or_else(|| task_branch(self.number))
-    }
-
-    /// The latest test run.
-    pub fn last_tests(&self) -> Option<&TestRun> {
-        self.tests.last()
     }
 
     /// It has a session (it was started).
@@ -448,23 +471,6 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
             let session = f.get("session")?.as_str().filter(|s| !s.is_empty())?.to_string();
             Some(Source { session, project: f.get("project").and_then(Value::as_str).unwrap_or_default().to_string() })
         }),
-        tests: o
-            .get("tests")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|r| {
-                        Some(TestRun {
-                            ok: r.get("ok")?.as_bool()?,
-                            summary: clean(r.get("summary").and_then(Value::as_str).unwrap_or_default(), crate::checks::SUMMARY_MAX),
-                            command: r.get("command").and_then(Value::as_str).unwrap_or_default().to_string(),
-                            at: r.get("at").and_then(Value::as_u64).unwrap_or(0),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
-        stops_refused: o.get("stops_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
         verdict: o.get("verdict").and_then(Verdict::from_json),
         checks_refused: o.get("checks_refused").and_then(Value::as_u64).and_then(|n| u32::try_from(n).ok()).unwrap_or(0),
         checking: o.get("checking").and_then(Value::as_u64),
@@ -506,13 +512,6 @@ fn ticket_into(t: &Ticket, o: &mut Map<String, Value>) {
     set("created", Some(json!(t.created)));
     set("updated", Some(json!(t.updated)));
     set("from", t.from.as_ref().map(|f| json!({"session": f.session, "project": f.project})));
-    set(
-        "tests",
-        (!t.tests.is_empty()).then(|| {
-            Value::Array(t.tests.iter().map(|r| json!({"ok": r.ok, "summary": r.summary, "command": r.command, "at": r.at})).collect())
-        }),
-    );
-    set("stops_refused", (t.stops_refused > 0).then(|| json!(t.stops_refused)));
     set("verdict", t.verdict.as_ref().map(Verdict::to_json));
     set("checks_refused", (t.checks_refused > 0).then(|| json!(t.checks_refused)));
     set("checking", t.checking.map(|at| json!(at)));
@@ -862,7 +861,6 @@ impl Tickets {
             t.started = now;
             t.worktree = worktree;
             t.state = State::Working;
-            t.stops_refused = 0;
             t.checks_refused = 0;
             true
         })
@@ -1328,6 +1326,14 @@ mod tests {
     }
 
     #[test]
+    fn the_done_when_boxes_are_the_ones_under_their_heading_as_written() {
+        let body = "## What it should do\n\n- [ ] not a box of done when\n\n## Done when\n\n- [x] The page loads\n- [ ] A test covers it\n- [ ] \n\n## Notes\n- [ ] after\n";
+        assert_eq!(done_when(body), [(true, "The page loads".to_string()), (false, "A test covers it".to_string())]);
+        assert!(done_when(TEMPLATE).is_empty(), "the template's empty boxes");
+        assert!(done_when("- [ ] no heading").is_empty());
+    }
+
+    #[test]
     fn the_template_says_what_it_should_do_and_when_it_is_done() {
         assert!(TEMPLATE.starts_with("## What it should do\n"));
         assert!(TEMPLATE.contains("## Done when\n\n- [ ] \n- [ ] \n"));
@@ -1344,7 +1350,8 @@ mod tests {
             State::NeedsYou(Need::Plan),
             State::NeedsYou(Need::Question("Which page?".into())),
             State::NeedsYou(Need::Permission("Claude needs your permission to use Bash".into())),
-            State::NeedsYou(Need::Tests("3 failed".into())),
+            State::NeedsYou(Need::Check("2 problems: mail.rs:2: Only HTML is sent.".into())),
+            State::NeedsYou(Need::CheckFailed("no answer within 600 seconds".into())),
             State::Done,
             State::Cancelled,
             State::NotStarted,

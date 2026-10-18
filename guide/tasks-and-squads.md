@@ -11,19 +11,18 @@ The second tab, `2` **Tasks**, lists every task across your projects (and the on
 with how many it has:
 
 - **Needs you**: its session stopped for you. Its plan is ready for your yes, it asks a question, it waits at a
-  permission prompt, the project's tests still fail after it tried twice, or the [check of its work](#the-check-of-the-work)
-  still found problems (or could not run).
+  permission prompt, or the [check of its work](#the-check-of-the-work) still found problems (or could not run).
 - **Working**: its session is at it (or platoon is making its worktree, or checking its work).
 - **Not started**: nobody has started it yet.
 - **Done**: Done or cancelled in the last 24 hours.
 
 Each task takes two lines: its project's badge, its number and title, and at the right what it needs or how long since
 it last changed; under it, its squad and its own words (the question it asks), **Suggested: Docs · s starts it** for one
-not started yet, **No folder yet** when it has none, and **tests ✓** or **tests ✗** once the tests ran. The header says
+not started yet, and **No folder yet** when it has none. The header says
 how many tasks need you, **● 2 need you**, on every tab.
 
 On a terminal 100 columns wide or more, the picked task's details are beside the list: its state and why, its squad, its
-folder, its branch and worktree, what the last test run said, the **Verdict** of the last check of its work (and what it
+folder, its branch and worktree, the **Verdict** of the last check of its work (and what it
 found, `file:line: problem`), the tokens its session used, **The plan** when one waits for your yes, and its **Done when**
 boxes (ticked ✓ or crossed ✗ by the check, once it has run).
 
@@ -91,16 +90,21 @@ platoon gives the session a few hooks, and they move the task along:
 - It asks you something (Claude Code's question tool): **Needs you · a question**, with the question. Answer it in the
   session.
 - It waits at a permission prompt: **Needs you · asks permission**.
-- It stops. With a test command for the project (`T` on the [project's screen](projects.md)), platoon runs the tests in
-  the worktree: when they fail, the session gets the end of their output and carries on, twice; the third time the task
-  needs you with what failed. The output is in `tests.log` in the task's own folder. When they pass, or the project has
-  no test command, platoon [checks the work](#the-check-of-the-work), and only a check that says done makes the task
+- It stops: platoon [checks the work](#the-check-of-the-work), and only a check that says done makes the task
   **Done**.
 - You type into it: a task that needed you, or was Done, is Working again, with its tries counted from nothing.
 
+### The tests
+
+platoon runs no tests itself. Its rules for every task tell the session to find how its repo runs its tests (its
+`CLAUDE.md`, its README or its build files), run them before it finishes, and name the command and the result in its
+last message (or say the repo has none, and how it checked the change instead). The Feature, Bug fix and Refactor
+squads say so again where they check their work. A repo whose `CLAUDE.md` says how to build and test is found
+fastest.
+
 ### The check of the work
 
-When a task's session stops and the tests pass (or there are none), a fresh Claude, on the squad's `verdict_model`,
+When a task's session stops, a fresh Claude, on the squad's `verdict_model`,
 judges whether the work does what the task asked. It didn't do the work, it can only read (the files in the worktree:
 no shell, no edits), and it is given the task's text with its **Done when** boxes, the session's last message (what it
 says it did) and the change on the task's branch since it started (what isn't committed yet is listed too). It says, for
@@ -108,15 +112,17 @@ each box, whether it is met, and what is missing or wrong, each with the file, t
 task shows **Working · checking the work** meanwhile (10 minutes at most).
 
 - **Done**: the task is Done; its details say **Verdict done · checked by fable at 13:52** and its boxes are ticked.
+- For a change to code, a last message that names no test run is **not done**: the check crosses the box **Tests run
+  and reported**.
 - **Not done**: the session gets what the check found, `file:line: problem` first, and carries on, once. The next time
-  it stops, the tests and the check run again; a second "not done" makes the task **Needs you · the check found
+  it stops, the check runs again; a second "not done" makes the task **Needs you · the check found
   problems**, with what it found in its details.
 - platoon looks for the text the check quotes at each line it names. A finding whose text isn't there is left out; a
   "not done" with nothing left that holds up counts as done, and the Verdict line says so.
 - **The check could not run** (it took too long, its answer couldn't be read, `claude` wasn't found): the task needs
   you, with why. It never holds the session up for longer than its 10 minutes.
 
-Typing into the session counts the tries from nothing again, as for the tests. The check's whole answer is
+Typing into the session counts the tries from nothing again. The check's whole answer is
 `verdict.json` in the task's own folder. It needs no switch: it is part of the task, like its session (see
 [Features that use tokens](tokens.md#the-features)).
 
@@ -185,7 +191,7 @@ The built-in squads are adapted from the playbooks of Lauren Tan's
 ## Where tasks are kept
 
 A project's tasks are in `~/.config/platoon/projects/<id>/tasks.json`, their texts in `tasks/<NN>-<title>.md` beside it
-and each task's own folder in `tasks/<NN>-work/` (`squad.md`, `squads/`, `plan.md`, `tests.log`, `verdict.json`). Tasks in no project are
+and each task's own folder in `tasks/<NN>-work/` (`squad.md`, `squads/`, `plan.md`, `verdict.json`). Tasks in no project are
 in `~/.config/platoon/tasks.json` and `~/.config/platoon/tasks/`. Numbers are never reused.
 
 From a shell:

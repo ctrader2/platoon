@@ -244,7 +244,6 @@ fn draw_all(f: &mut Frame, app: &App) {
         "active/archived",
         "move",
         "editor",
-        "test command",
         // (On the Sessions tab rename goes before drafting tasks does: t stays at 120 columns. The settings stay longer,
         // to 80 columns.)
         "rename",
@@ -412,7 +411,6 @@ fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     out.extend([
         ("/", "search", Some(Action::Search)),
         ("tab", "next pane", None),
-        ("T", "test command", None),
         ("?", "help", Some(Action::Help)),
         ("esc", "back", Some(Action::Leave)),
     ]);
@@ -693,14 +691,10 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     // written one for this project, the line stays empty.
     let lines: Vec<Line> =
         wrap(&p.description, body.width as usize).into_iter().map(|l| Line::styled(l, Style::new().fg(t.subtext))).collect();
-    let [desc, tests, panes] =
-        Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Length(1), Constraint::Min(1)]).areas(body);
+    let [desc, panes] = Layout::vertical([Constraint::Length(lines.len().max(1) as u16), Constraint::Min(1)]).areas(body);
     if !lines.is_empty() {
         f.render_widget(Paragraph::new(lines), desc);
     }
-    // The command platoon runs when a task's session stops, or what the project's CLAUDE.md would suggest.
-    let suggestion = if p.test_command.is_empty() { app.test_suggestion(&p.id) } else { None };
-    f.render_widget(Paragraph::new(test_command_line(t, &p.test_command, suggestion.as_deref(), tests.width as usize)), tests);
     // Below 100 columns the sessions get half; wider, the notes get a little more.
     let left_w = if panes.width >= 100 { panes.width * 45 / 100 } else { panes.width / 2 };
     let [left, right] = Layout::horizontal([Constraint::Length(left_w), Constraint::Min(1)]).areas(panes);
@@ -724,43 +718,6 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     // After the rows (drawn above), so a click on a row finds the row first.
     hits.push((left, Hit::Pane(Pane::Sessions)));
     hits.push((right, Hit::Pane(Pane::Notes)));
-}
-
-/// The project screen's line for the command that runs the project's tests, under its description:
-/// "Tests         cargo test   T changes", or "Tests         not set · T sets it", which adds "· CLAUDE.md says: cargo
-/// test" when the project's first git folder suggests one. Short of room, the suggestion goes first, then the key;
-/// the command is cut last.
-pub(crate) fn test_command_line(t: &Theme, command: &str, suggestion: Option<&str>, w: usize) -> Line<'static> {
-    let label = format!("{:<14}", "Tests");
-    let label_w = label.chars().count();
-    let set = !command.is_empty();
-    let value = if set { command.to_string() } else { "not set".to_string() };
-    let key: Vec<(String, Color)> = if set {
-        vec![("   T".into(), t.accent), (" changes".into(), hint_fg(t))]
-    } else {
-        vec![(" · ".into(), t.dim), ("T".into(), t.accent), (" sets it".into(), hint_fg(t))]
-    };
-    let says: Vec<(String, Color)> = match suggestion.filter(|_| !set) {
-        Some(s) => vec![(" · CLAUDE.md says: ".into(), t.dim), (s.to_string(), t.subtext)],
-        None => Vec::new(),
-    };
-    let width = |parts: &[(String, Color)]| parts.iter().map(|(s, _)| s.width()).sum::<usize>();
-    let base = label_w + value.width();
-    let with_key = base + width(&key) <= w;
-    let with_says = with_key && base + width(&key) + width(&says) <= w;
-    let room = w.saturating_sub(label_w + if with_key { width(&key) } else { 0 } + if with_says { width(&says) } else { 0 });
-    let mut spans = vec![
-        Span::styled(label, Style::new().fg(t.dim)),
-        Span::styled(fit_end(&value, room), Style::new().fg(if set { t.text } else { t.subtext })),
-    ];
-    let mut add = |parts: Vec<(String, Color)>| spans.extend(parts.into_iter().map(|(s, c)| Span::styled(s, Style::new().fg(c))));
-    if with_key {
-        add(key);
-    }
-    if with_says {
-        add(says);
-    }
-    Line::from(spans)
 }
 
 fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
@@ -2814,7 +2771,7 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let nb = &app.name_box;
     app.hits.borrow_mut().clear();
-    let wide = matches!(nb.purpose, NamePurpose::NewTask(_) | NamePurpose::TestCommand(_));
+    let wide = matches!(nb.purpose, NamePurpose::NewTask(_));
     let r = centered(area, area.width.saturating_sub(8).clamp(30, if wide { 84 } else { 64 }), 7);
     popup_ground(f, t, area, r, true);
     let new_task_title = match &nb.purpose {
@@ -2832,9 +2789,6 @@ fn draw_name_box(f: &mut Frame, app: &App, area: Rect) {
         NamePurpose::Rename(_) => ("Rename project", "The project's notes and sessions stay as they are."),
         NamePurpose::NewFor(_) => ("New project", "The session goes into it. Its color and badge can be changed later (c)."),
         NamePurpose::New => ("New project", "Give it a name. Its color and badge can be changed later (c)."),
-        NamePurpose::TestCommand(_) => {
-            ("Test command", "Run with sh in a task's folder when its session stops. Empty: no tests. Check a suggested one before saving.")
-        }
     };
     let block = modal_block(t, title);
     let inner = block.inner(r).inner(Margin::new(1, 0));

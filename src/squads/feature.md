@@ -25,7 +25,8 @@ or skipped with a one-line reason.
 6. If you hand code-writing to a subagent, give it an exact scope: the files, the data shape, what success looks like.
    Review its diff yourself and run the checks yourself. Its report is a claim, not proof.
 7. Prove it works on the real thing: run the feature the way a user would. "It compiles" and "the tests pass" are not
-   proof that the behaviour is there. If you could not check something, say so.
+   proof that the behaviour is there. If you could not check something, say so. Then find how this repo runs its
+   tests (its CLAUDE.md, README, or build files) and run them all; fix what fails.
 8. Before you finish, follow the Review squad on your diff. Fix what it puts under "Act on"; mention the rest.
-9. Reply with what you built, what you chose and why, how you checked each "Done when" box, and any decision left
-   for the user. Short declarative sentences; each claim says whether you measured it or infer it.
+9. Reply with what you built, what you chose and why, how you checked each "Done when" box, the test command you
+   ran and its result, and any decision left for the user. Short declarative sentences; each claim says whether you measured it or infer it.

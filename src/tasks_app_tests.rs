@@ -138,7 +138,8 @@ fn the_board_shows_its_sections_in_order_and_each_state_in_its_color() {
     assert_eq!(fg_of(&term, "Not started · 1"), t.text);
     assert_eq!(fg_of(&term, "Done · 1"), t.dim);
     // The picked task (the first, which needs the user) in the details beside the list, its state in the warning color.
-    assert!(shown.contains("Squad   Feature") && shown.contains("Tests   none set for this project"), "{shown}");
+    assert!(shown.contains("Squad   Feature"), "{shown}");
+    assert!(!shown.contains("Tests "), "platoon runs no tests, so the details have no Tests line: {shown}");
     assert_eq!(fg_of(&term, "Needs you · a question"), t.warn);
 }
 
@@ -295,9 +296,9 @@ fn the_check_of_the_work_shows_on_the_row_and_in_the_details_with_what_it_found_
         assert!(shown.contains(want), "{want:?}:\n{shown}");
     }
     assert_eq!(fg_of(&term, "checking the work"), t.busy);
-    // The details: the Verdict line under Tests, what it found (file:line first), the boxes ticked or crossed.
+    // The details: the Verdict line, what it found (file:line first), the boxes ticked or crossed.
     let at = |s: &str| shown.find(s).unwrap_or_else(|| panic!("{s:?} missing:\n{shown}"));
-    assert!(at("Tests   none set") < at("Verdict 2 problems · checked by fable at "), "{shown}");
+    assert!(at("Folder ") < at("Verdict 2 problems · checked by fable at "), "{shown}");
     assert!(shown.contains("· 12K tokens") && shown.contains("        src/mail.rs:2: Only HTML is sent."), "{shown}");
     assert_eq!(fg_of(&term, "2 problems · checked"), t.warn);
     assert_eq!(fg_of_nth(&term, "src/mail.rs:2: Only", 2), t.text, "the details' finding, after the row and the reason");
