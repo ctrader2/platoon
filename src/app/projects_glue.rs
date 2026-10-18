@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::projects::{Project, SLOTS};
+use crate::tickets::{State, Ticket};
 use std::fs;
 
 /// The top-level tabs, on `1` to `4`.
@@ -91,6 +92,54 @@ impl App {
         self.open_project.as_deref().and_then(|p| self.projects.get(p))
     }
 
+    /// The rows of the list showing that `selected` moves over: the sessions, and on a project's screen its tasks after
+    /// them.
+    pub(super) fn row_count(&self) -> usize {
+        self.view.len() + if self.open_project.is_some() { self.project_tasks().len() } else { 0 }
+    }
+
+    /// The tasks a project's screen lists under its sessions: all of the open project's tasks but the cancelled ones,
+    /// the open ones first and Done last, each by its latest change; narrowed by the filter (on the title) as the
+    /// sessions are.
+    pub fn project_tasks(&self) -> Vec<Ticket> {
+        let Some(open) = self.open_project.as_deref() else { return Vec::new() };
+        let q = self.filter.to_lowercase();
+        let mut out: Vec<Ticket> = self
+            .all_tasks()
+            .into_iter()
+            .filter(|(p, _)| p == open)
+            .flat_map(|(_, list)| list)
+            .filter(|t| t.state != State::Cancelled && (q.is_empty() || t.title.to_lowercase().contains(&q)))
+            .collect();
+        out.sort_by(|a, b| {
+            (a.state == State::Done).cmp(&(b.state == State::Done)).then(b.updated.cmp(&a.updated)).then(b.number.cmp(&a.number))
+        });
+        out
+    }
+
+    /// The task picked on a project's screen (its rows come after the sessions'): its number.
+    pub fn project_task_picked(&self) -> Option<u32> {
+        let i = self.selected.checked_sub(self.view.len())?;
+        self.project_tasks().get(i).map(|t| t.number)
+    }
+
+    /// Enter on a task's row of a project's screen does what it does on the Tasks tab: its session opens; a task that
+    /// never started shows its text, on the Tasks tab's screen for it, and esc there comes back here.
+    pub(super) fn open_project_task(&mut self) {
+        let (Some(project), Some(number)) = (self.open_project.clone(), self.project_task_picked()) else { return };
+        self.set_task_store(&project);
+        if self.ticket(number).is_some_and(|t| t.started()) {
+            return self.open_task_session(number);
+        }
+        let back = (project.clone(), self.selected);
+        self.close_project_screen();
+        self.top = TOP_TASKS;
+        self.bd.selected = Some(BRow(project, number));
+        self.update_view();
+        self.open_task(number);
+        self.tk.back_to = Some(back);
+    }
+
     /// A search only looks at the sessions of the project whose screen is showing.
     pub(super) fn in_scope(&self, s: &Session) -> bool {
         match &self.open_project {
@@ -102,7 +151,8 @@ impl App {
     pub(super) fn project_stats(&self) -> HashMap<String, PStat> {
         let mut out: HashMap<String, PStat> = self.projects.all().iter().map(|p| (p.id.clone(), PStat::default())).collect();
         for s in &self.sessions {
-            if self.stopping.contains_key(&s.id) {
+            // A task's session is counted as its task, as the project's screen lists it.
+            if self.stopping.contains_key(&s.id) || self.sq.task_of(&s.id).is_some() {
                 continue;
             }
             let Some(st) = self.projects.project_id_of(&s.id).and_then(|p| out.get_mut(p)) else { continue };
@@ -167,6 +217,7 @@ impl App {
         if self.open_project.is_some() {
             self.close_project_screen();
         } else if self.board_showing() && self.tk.open.is_some() {
+            self.tk.back_to = None;
             self.close_ticket_screen();
         } else if self.squads_showing() && self.sqt.open {
             self.close_squad();
@@ -403,7 +454,7 @@ impl App {
                 KeyCode::PageDown => self.move_selection(super::page_of(&self.pages.sessions)),
                 KeyCode::PageUp => self.move_selection(-super::page_of(&self.pages.sessions)),
                 KeyCode::Char('g') | KeyCode::Home => self.selected = 0,
-                KeyCode::Char('G') | KeyCode::End => self.selected = self.view.len().saturating_sub(1),
+                KeyCode::Char('G') | KeyCode::End => self.selected = self.row_count().saturating_sub(1),
                 _ => {}
             },
             _ => {}

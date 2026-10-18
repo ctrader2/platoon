@@ -290,14 +290,15 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
 }
 
 #[test]
-fn the_help_explains_the_estimate_mark_and_the_pane_arrows() {
+fn the_help_explains_the_context_figure_the_task_rows_and_the_pane_arrows() {
     let (_w, mut app, _) = on_a_project("h-notes");
     let help = ui::help_for_test(&app);
     let here = section(&help, "On this screen");
     assert!(here.contains(&("tab".into(), "next pane".into())), "{here:?}");
     assert!(here.iter().any(|(k, _)| k == "shift+arrows"), "the arrows are kept in the help: {here:?}");
     let notes = section(&help, "Good to know");
-    assert!(notes.iter().any(|(_, n)| n.starts_with("A ~ before a percentage means it is an estimate")), "{notes:?}");
+    assert!(notes.iter().any(|(_, n)| n.starts_with("62% on a session's row: how full its context is")), "{notes:?}");
+    assert!(notes.iter().any(|(_, n)| n.starts_with("A project's screen lists its sessions, then its tasks.")), "{notes:?}");
     // The footer says only "tab next pane".
     let mut term = sized(&mut app, 120, 30);
     let lines = draw(&mut term, &app);

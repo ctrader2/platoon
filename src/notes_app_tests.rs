@@ -329,7 +329,8 @@ fn the_pane_says_in_one_line_when_platoon_last_updated_the_notes_and_where_they_
     // platoon's own old line at the top of the file is left out; the one line above the notes says it now.
     set_notes(&w, &id, &format!("{}\n\n# Overview\nSell socks.\n", notes::OLD_PREAMBLES[0]));
     app.reload_for_test();
-    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    // Wide enough for the line to fit the notes pane in one.
+    let mut term = Terminal::new(TestBackend::new(200, 30)).unwrap();
     let shown = flat(&draw(&mut term, &app));
     assert!(shown.contains(reach) && shown.contains("Sell socks."), "{shown}");
     assert!(!shown.contains("platoon last updated") && !shown.contains("keeps these up to date"), "{shown}");

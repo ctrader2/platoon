@@ -98,10 +98,15 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
         out.push(Entry::Note(
             "● idle: the session is running, waiting for you. ○ with no status: nothing runs it now; enter picks it up from its saved history.".into(),
         ));
+        out.push(Entry::Note(
+            "62% on a session's row: how full its context is, of its model's window. Above 80% it is in the warning colour: time to start fresh or let Claude Code compact it.".into(),
+        ));
     }
-    out.push(Entry::Note(
-        "A ~ before a percentage means it is an estimate: platoon worked it out from the session's messages. Without it, the figure is Claude Code's own.".into(),
-    ));
+    if app.open_project().is_some() {
+        out.push(Entry::Note(
+            "A project's screen lists its sessions, then its tasks. enter on a task opens its session, or its text if it never started; its other keys are on the Tasks tab.".into(),
+        ));
+    }
     out
 }
 

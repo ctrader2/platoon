@@ -286,7 +286,7 @@ Press `v` anywhere in platoon's lists to look at the work in a code editor of yo
 
 | Where | What it opens |
 | --- | --- |
-| a conversation's row (Sessions tab, a project's Sessions pane) | its folder, and the folders added to it with `/add-dir` |
+| a conversation's row (Sessions tab, a project's screen) | its folder, and the folders added to it with `/add-dir` |
 | a task's row or its screen | the task's copy of its folder (its worktree), or its folder as it is when that isn't in git |
 | anywhere else (the Projects list, the notes, an empty list) | a folder you pick, in the same picker as a new session |
 

@@ -14,11 +14,13 @@ pub struct TicketsState {
     pub open: Option<u32>,
     /// The first drawn line of the open task's screen in view.
     pub body_top: Cell<usize>,
+    /// The project's screen (and its picked row) the open task's screen was opened from, where esc goes back to.
+    pub back_to: Option<(String, usize)>,
 }
 
 impl TicketsState {
     pub fn new() -> Self {
-        Self { store: None, open: None, body_top: Cell::new(0) }
+        Self { store: None, open: None, body_top: Cell::new(0), back_to: None }
     }
 }
 
@@ -41,6 +43,7 @@ impl App {
         }
         if self.tk.open.is_some_and(|n| self.ticket(n).is_none()) {
             self.tk.open = None;
+            self.tk.back_to = None;
         }
     }
 
@@ -69,6 +72,7 @@ impl App {
             self.open_task_session(number);
         } else if self.tk.open != Some(number) {
             self.tk.open = Some(number);
+            self.tk.back_to = None;
             self.tk.body_top.set(0);
         }
     }
@@ -88,11 +92,20 @@ impl App {
         }
     }
 
-    /// Esc on a task's screen: back to the Tasks tab, with the same task picked.
+    /// Esc on a task's screen: back to the Tasks tab, with the same task picked; or, when it was opened from a
+    /// project's screen, back there on its row.
     pub(super) fn close_ticket_screen(&mut self) {
         let Some(n) = self.tk.open.take() else { return };
         if let Some(p) = self.task_scope() {
             self.bd.selected = Some(BRow(p, n));
+        }
+        if let Some((project, row)) = self.tk.back_to.take().filter(|(p, _)| self.projects.get(p).is_some()) {
+            self.top = super::projects_glue::TOP_PROJECTS;
+            self.open_project = Some(project);
+            self.pane = Pane::Sessions;
+            self.filter.clear();
+            self.update_view();
+            self.selected = row.min(self.row_count().saturating_sub(1));
         }
     }
 

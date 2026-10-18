@@ -162,7 +162,7 @@ default, and at most the first 8,000 characters of one are sent.
 
 One key goes **back one level everywhere**: `ctrl+space` by default. It leaves a session's live view (the session keeps
 running), detaches `platoon open`, leaves a notes editor running inside platoon (after asking "Leave the editor?": `y` leaves
-and ends it, anything else stays, since what it hasn't saved would be lost), goes from a task's screen to the Tasks tab, from a project's screen to the list, leaves the settings, the theme list and the changes view,
+and ends it, anything else stays, since what it hasn't saved would be lost), goes from a task's screen to the Tasks tab (or to the project's screen it was opened from), from a project's screen to the list, leaves the settings, the theme list and the changes view,
 and cancels every question, box and list that pops up. `esc` does the same on platoon's own screens and popups (not in a
 session or an editor, where it is theirs), so the key hints there say `esc back`; in a session's live view and the notes
 editor they name the back key. On the top-level lists, with nothing open, it does what `esc` does there (clears a kept

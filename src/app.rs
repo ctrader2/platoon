@@ -1104,8 +1104,10 @@ impl App {
         self.pstats = self.project_stats();
         self.archived_rows = 0;
         if let Some(open) = self.open_project.clone() {
-            // A project's screen: its sessions, the active ones first and then the archived ones.
-            let mine = |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s);
+            // A project's screen: its sessions, the active ones first and then the archived ones. A task's session is
+            // listed as its task, under them (`project_tasks`).
+            let mine =
+                |s: &Session| self.projects.project_id_of(&s.id) == Some(open.as_str()) && listed(s) && self.sq.task_of(&s.id).is_none();
             let (active, archived): (Vec<usize>, Vec<usize>) =
                 self.sessions.iter().enumerate().filter(|(_, s)| mine(s)).map(|(i, _)| i).partition(|&i| !self.sessions[i].archived);
             self.tab_view = active.into_iter().chain(archived).collect();
@@ -1132,7 +1134,7 @@ impl App {
     }
 
     fn clamp_selected(&mut self) {
-        self.selected = self.selected.min(self.view.len().saturating_sub(1));
+        self.selected = self.selected.min(self.row_count().saturating_sub(1));
         self.pselected = self.pselected.min(self.pview.len().saturating_sub(1));
     }
 
@@ -1586,6 +1588,7 @@ impl App {
             (Action::Rename, Mode::List) => self.open_rename(),
             (Action::Settings, Mode::List) => self.open_settings(),
             (Action::Jump, Mode::List) if self.projects_list_showing() => self.open_project_screen(),
+            (Action::Jump, Mode::List) if self.project_task_picked().is_some() => self.open_project_task(),
             (Action::Jump, Mode::List) => self.jump(),
             (Action::Assign, Mode::List) if !self.projects_list_showing() => self.open_assign(),
             (Action::Delete, Mode::List) if self.projects_list_showing() => self.ask_delete_project(),
@@ -2636,7 +2639,7 @@ impl App {
     }
 
     fn move_selection(&mut self, delta: i32) {
-        let last = self.view.len().saturating_sub(1) as i32;
+        let last = self.row_count().saturating_sub(1) as i32;
         self.selected = (self.selected as i32 + delta).clamp(0, last) as usize;
     }
 

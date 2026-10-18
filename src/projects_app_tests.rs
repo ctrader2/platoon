@@ -1090,9 +1090,12 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     assert!(app.open_project().is_some());
     let mut term = Terminal::new(TestBackend::new(240, 30)).unwrap();
     let one = "platoon will keep project notes up to date. Start or add a session to begin.";
-    let hint = "Press n to start one, or m on a session in the Sessions tab.";
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains(one) && f.contains(hint), "{f}");
+    assert!(f.contains(one), "{f}");
+    // Each of the list's two sections says in one line that it has nothing yet.
+    for hint in ["No sessions. Press n to start one.", "No tasks. Press n on the Tasks tab to write one."] {
+        assert!(f.contains(hint), "{hint}\n{f}");
+    }
     for gone in [
         "Every session in this project starts with these notes",
         "No notes yet",
@@ -1131,11 +1134,11 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
             && f.contains("Every session in this project starts with these notes"),
         "{f}"
     );
-    assert!(!f.contains(one) && !f.contains(hint), "{f}");
+    assert!(!f.contains(one) && !f.contains("No sessions. Press n"), "{f}");
 
     // A filter that finds nothing still says so.
     key(&mut app, KeyCode::Char('/'));
     type_str(&mut app, "zzz");
     let f = flat(&draw(&mut term, &app));
-    assert!(f.contains("No sessions match the filter") && !f.contains(hint), "{f}");
+    assert!(f.contains("No sessions match the filter") && f.contains("No tasks match the filter"), "{f}");
 }

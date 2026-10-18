@@ -385,3 +385,34 @@ fn the_check_of_the_work_sends_it_back_once_then_needs_you_with_what_it_found() 
     t.send(&[3]);
     t.wait_exit();
 }
+
+#[test]
+fn a_projects_screen_lists_its_sessions_and_tasks_apart_and_enter_shows_a_task_that_never_started() {
+    let lab = Lab::new("tasks-project-screen");
+    let v = json!({"next": 3, "tasks": [
+        {"number": 1, "title": "Write the docs", "file": "01-write-the-docs.md", "state": "not_started", "created": 1, "updated": 1},
+        {"number": 2, "title": "Old idea", "file": "02-old-idea.md", "state": "cancelled", "created": 1, "updated": 1},
+    ]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
+    let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
+    t.wait_for("The order email is HTML only");
+    t.send(b"2");
+    t.wait_for_flat("WB Web");
+    t.send(b"\r");
+    t.wait_for_all(&["Sessions and tasks", "▎○ shop", "#1 Write the docs", "Not started"]);
+    let shown = t.stable();
+    let lines: Vec<&str> = shown.lines().collect();
+    let at = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap_or_else(|| panic!("{s}:\n{shown}"));
+    assert!(at("│ Sessions ") < at("▎○ shop") && at("▎○ shop") < at("│ Tasks ") && at("│ Tasks ") < at("#1 Write the docs"), "{shown}");
+    assert!(!shown.contains("Old idea"), "a cancelled task is not listed: {shown}");
+    // Down to the task, enter: its text on its own screen; esc: back on the project's screen.
+    t.send(b"j");
+    t.wait_for("▎  #1 Write the docs");
+    t.send(b"\r");
+    t.wait_gone("Sessions and tasks");
+    t.wait_for_all(&["#1 Write the docs", "Not started"]);
+    t.send(b"\x1b");
+    t.wait_for_all(&["Sessions and tasks", "▎  #1 Write the docs"]);
+    t.send(&[3]);
+    t.wait_exit();
+}

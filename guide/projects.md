@@ -43,15 +43,24 @@ its columns share a wide terminal's spare width the same way as the Sessions tab
 ## A project's screen
 
 A project's screen shows its name and its description across the top (in full, wrapped when it is long), then its
-sessions on the left (active ones first, then an `Archived (N)` group, dimmed)
-and its notes on the right. Its tasks are on the [Tasks tab](tasks-and-squads.md#the-tasks-tab).
+sessions and tasks on the left and its notes on the right.
+
+The left pane has two sections. **Sessions** lists the project's conversations that are not a task's session (active
+ones first, then an `Archived (N)` group, dimmed), each with how full its context is and when it was last active.
+**Tasks** lists the project's tasks, all but the cancelled ones, open ones first and Done last: `#N`, the title and its
+state in the words and colours of the [Tasks tab](tasks-and-squads.md#the-tasks-tab) (Needs you, Working, Not started,
+Done). A section with nothing in it says so in one line. A task's session is counted and listed as its task, here and
+in the project's numbers.
 
 - `tab` and `shift+tab` switch between the two panes. `shift+←` goes to the sessions and `shift+→` to the notes; `ctrl`
   with an arrow does the same, for terminals that keep `shift`+arrows for themselves. The plain arrows stay inside a
   pane: `↑` `↓` move in the sessions or scroll the notes, and `←` `→` do nothing there.
 - `enter` on a session opens it as on the Sessions tab (and `a`, `m`, `r`, `h` and `t` work there too).
+- `enter` on a task does what it does on the Tasks tab: opens its session, or shows its text when it never started
+  (`esc` comes back here). Its other keys (`s`, `e`, `c`) are on the Tasks tab.
 - `n` starts a new session in the project: the folder picker lists the folders the project's other sessions use first.
-- `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search).
+- `/` searches only this project's sessions, with all three kinds of [search](sessions.md#search); a filter narrows
+  the tasks by their titles too.
 - The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`), `esc` or `q` goes back.
 - With the notes in focus, `e` [edits them](#editing-the-notes), `c` shows what changed last and `u` undoes it.
 

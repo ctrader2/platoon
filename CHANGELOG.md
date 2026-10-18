@@ -40,7 +40,10 @@ here.
 - The tabs are Sessions, Projects, Tasks and Squads (`1` to `4`): Projects comes second, next to the sessions it groups.
 - **CONTEXT** on a session's row is a plain figure, `62%` of the model's window (the last reply's input; a 1M window
   when the model's name says so or the conversation is past 200,000 tokens), in the warning colour above 80%. It
-  replaces the bar and its `~`.
+  replaces the bar and its `~`. A project's screen shows it too.
+- **A project's screen lists its sessions and its tasks apart**, in two sections, Sessions and Tasks. A task's row is
+  `#N`, its title and its state as the Tasks tab says it (cancelled ones left out, Done last); `enter` on it opens its
+  session, or its text when it never started. A task's session is listed (and counted) as its task, not as a session.
 
 ### Added
 

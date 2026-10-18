@@ -393,7 +393,9 @@ fn projects_hints(app: &App) -> Vec<Hint<'_>> {
 fn project_screen_hints(app: &App) -> Vec<Hint<'_>> {
     let archive_verb = if app.selected_session().is_some_and(|s| s.archived) { "restore" } else { "archive" };
     let mut out = vec![("enter", "open", Some(Action::Jump)), ("n", "new session", Some(Action::New))];
-    if app.pane == Pane::Sessions {
+    if app.pane == Pane::Sessions && app.project_task_picked().is_some() {
+        // A task's row: enter opens it; its other keys are on the Tasks tab.
+    } else if app.pane == Pane::Sessions {
         out.push(("a", archive_verb, Some(Action::Archive)));
         out.push(("m", "project", Some(Action::Assign)));
         out.push(("h", "hand-off", Some(Action::HandOff)));
@@ -706,7 +708,7 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
             .title(Span::styled(format!(" {title} "), Style::new().fg(if focused { t.accent } else { t.dim }).add_modifier(Modifier::BOLD)))
             .style(Style::new().bg(t.bg))
     };
-    let lb = pane_block("Sessions", app.pane == Pane::Sessions);
+    let lb = pane_block("Sessions and tasks", app.pane == Pane::Sessions);
     let li = lb.inner(left).inner(Margin::new(1, 0));
     f.render_widget(lb, left);
     draw_project_sessions(f, app, li);
@@ -720,65 +722,141 @@ fn draw_project_screen(f: &mut Frame, app: &App, title: Rect, body: Rect) {
     hits.push((right, Hit::Pane(Pane::Notes)));
 }
 
+/// A line of a project's list: its two sections, "Sessions" and "Tasks", each a heading and its rows (or one line
+/// saying there are none), the archived sessions under a heading of their own, a blank line between the sections.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum PLine {
+    Heading(&'static str),
+    Archived(usize),
+    Empty(&'static str),
+    Blank,
+    /// A session's row: its index into `app.visible()` (and so into the rows `selected` moves over).
+    Session(usize),
+    /// A task's row: its index into `app.project_tasks()`.
+    Task(usize),
+}
+
+/// The lines of the open project's list, top to bottom.
+fn project_lines(app: &App, tasks: usize) -> Vec<PLine> {
+    let visible = app.visible().len();
+    let active = visible - app.archived_rows;
+    let filtered = !app.filter.is_empty();
+    let mut out = vec![PLine::Heading("Sessions")];
+    if visible == 0 {
+        out.push(PLine::Empty(if filtered { "No sessions match the filter" } else { "No sessions. Press n to start one." }));
+    }
+    for i in 0..visible {
+        if i == active {
+            out.push(PLine::Archived(app.archived_rows));
+        }
+        out.push(PLine::Session(i));
+    }
+    out.extend([PLine::Blank, PLine::Heading("Tasks")]);
+    if tasks == 0 {
+        out.push(PLine::Empty(if filtered { "No tasks match the filter" } else { "No tasks. Press n on the Tasks tab to write one." }));
+    }
+    out.extend((0..tasks).map(PLine::Task));
+    out
+}
+
+/// A task's state on a project's list, in the words and colours the Tasks tab gives it: "Needs you", "Working",
+/// "Starting", "Not started", "Done".
+pub(crate) fn task_state_look(app: &App, project: &str, x: &crate::tickets::Ticket) -> (&'static str, Color) {
+    let t = app.effective_theme();
+    match app.starting_words(project, x.number) {
+        Some(_) => ("Starting", t.busy),
+        None => (x.state.label(), tasks_view::state_color(t, &x.state)),
+    }
+}
+
+/// The width of a project list's state column: the longest state's words and a blank cell before them.
+const TASK_STATE_W: usize = "Not started".len() + 1;
+
+/// The width of a project list's CONTEXT figure (`100%` and a blank cell before it), shown from `PCTX_FROM` cells.
+const PCTX_W: usize = 5;
+const PCTX_FROM: usize = 40;
+
 fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let visible = app.visible();
-    if visible.is_empty() {
-        let msg = if app.filter.is_empty() {
-            "Press n to start one, or m on a session in the Sessions tab."
-        } else {
-            "No sessions match the filter"
-        };
-        let color = if app.filter.is_empty() { hint_fg(t) } else { t.dim };
-        f.render_widget(Paragraph::new(msg).wrap(Wrap { trim: true }).style(Style::new().fg(color)), area);
-        return;
-    }
-    let active = visible.len() - app.archived_rows;
-    // Screen lines: the active rows, then (if any are archived) a heading and the archived rows.
-    let line_of = |i: usize| if i < active { i } else { i + 1 };
-    let total = line_of(visible.len() - 1) + 1;
+    let tasks = app.project_tasks();
+    let project = app.open_project.clone().unwrap_or_default();
+    let lines = project_lines(app, tasks.len());
     let rows = area.height as usize;
     app.pages.sessions.set(rows.max(1));
-    let want = line_of(app.selected);
-    let top = if rows == 0 { 0 } else { want.saturating_sub(rows.saturating_sub(1)).min(total.saturating_sub(rows)) };
+    // The picked row's line, kept in view; a heading right above it comes along when there is room.
+    let want = lines
+        .iter()
+        .position(|l| match *l {
+            PLine::Session(i) => i == app.selected,
+            PLine::Task(j) => visible.len() + j == app.selected,
+            _ => false,
+        })
+        .unwrap_or(0);
+    let top = if rows == 0 { 0 } else { want.saturating_sub(rows.saturating_sub(1)).min(lines.len().saturating_sub(rows)) };
     let now = crate::usage::now() * 1000;
     let w = area.width as usize;
-    let name_w = (w.saturating_sub(4 + LAST_W) * 3 / 5).max(6);
-    let dir_w = w.saturating_sub(4 + LAST_W + name_w);
-    for (i, &idx) in visible.iter().enumerate() {
-        let line = line_of(i);
-        if i == active && active <= visible.len() && line > 0 && line > top && line - 1 < top + rows {
-            let y = area.y + (line - 1 - top) as u16;
-            f.render_widget(
-                Paragraph::new(Span::styled(
-                    format!("Archived ({})", app.archived_rows),
-                    Style::new().fg(t.dim).add_modifier(Modifier::BOLD),
-                )),
-                Rect::new(area.x, y, area.width, 1),
-            );
-        }
-        if line < top || line >= top + rows {
-            continue;
-        }
-        let s = &app.sessions[idx];
+    let ctx_w = if w >= PCTX_FROM { PCTX_W } else { 0 };
+    let name_w = (w.saturating_sub(4 + LAST_W + ctx_w) * 3 / 5).max(6);
+    let dir_w = w.saturating_sub(4 + LAST_W + ctx_w + name_w);
+    let heading = |text: String, color: Color| Paragraph::new(Span::styled(text, Style::new().fg(color).add_modifier(Modifier::BOLD)));
+    for (line, l) in lines.iter().enumerate().skip(top).take(rows) {
         let rect = Rect::new(area.x, area.y + (line - top) as u16, area.width, 1);
+        let (i, row) = match *l {
+            PLine::Heading(h) => {
+                f.render_widget(heading(h.to_string(), t.text), rect);
+                continue;
+            }
+            PLine::Archived(n) => {
+                f.render_widget(heading(format!("Archived ({n})"), t.dim), rect);
+                continue;
+            }
+            PLine::Empty(msg) => {
+                f.render_widget(Paragraph::new(Span::styled(format!("  {msg}"), Style::new().fg(hint_fg(t)))), rect);
+                continue;
+            }
+            PLine::Blank => continue,
+            PLine::Session(i) => (i, None),
+            PLine::Task(j) => (visible.len() + j, Some(&tasks[j])),
+        };
         app.hits.borrow_mut().push((rect, Hit::Row(i)));
         let sel = i == app.selected;
         let bg = if (sel && app.pane == Pane::Sessions) || rect.contains(app.mouse.into()) { t.surface } else { t.bg };
         let base = Style::new().bg(bg);
+        let lead = Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent));
+        if let Some(x) = row {
+            // `#N`, the title, and at the right its state as the Tasks tab says it.
+            let (word, color) = task_state_look(app, &project, x);
+            let num = format!("#{} ", x.number);
+            let title_w = w.saturating_sub(3 + num.chars().count() + TASK_STATE_W);
+            let done = x.state.closed();
+            let spans = vec![
+                lead,
+                Span::styled("  ", base),
+                Span::styled(num, base.fg(t.accent)),
+                Span::styled(fit(&x.title, title_w), base.fg(if done { t.subtext } else { t.text })),
+                Span::styled(format!("{word:>w$}", w = TASK_STATE_W), base.fg(color)),
+            ];
+            f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
+            continue;
+        }
+        let s = &app.sessions[visible[i]];
         let Look { marker, marker_color, .. } = row_look(t, s.status, s.unread, app.session_running(s), app.tick);
         let text = if s.archived { t.dim } else { t.text };
         let drafting = app.drafting_from() == Some(s.id.as_str());
         let dir = if drafting { fit(DRAFTING, dir_w) } else { fit_dirs(&s.dir, &s.extra_dirs, dir_w) };
-        let mark = task_mark(app, &s.id, name_w);
-        let spans = vec![
-            Span::styled(if sel { "▎" } else { " " }, base.fg(t.accent)),
+        let mut spans = vec![
+            lead,
             Span::styled(format!("{marker} "), base.fg(if s.archived { t.dim } else { marker_color })),
-            Span::styled(mark.clone(), base.fg(t.accent)),
-            Span::styled(cell(&s.name, name_w - mark.chars().count()), base.fg(text)),
+            Span::styled(cell(&s.name, name_w), base.fg(text)),
             Span::styled(dir, base.fg(if drafting { t.busy } else { t.dim })),
-            Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)),
         ];
+        // How full its context is, as on the Sessions tab (blank when nothing is known).
+        if ctx_w > 0 {
+            let figure = if context_known(s) { context_text(s.context_pct) } else { String::new() };
+            spans.push(Span::styled(format!("{figure:>w$}", w = ctx_w), base.fg(context_color(t, s.context_pct, s.archived))));
+        }
+        spans.push(Span::styled(format!("{:>w$}", ago(now, s.last_active), w = LAST_W), base.fg(t.dim)));
         f.render_widget(Paragraph::new(Line::from(spans)).style(base), rect);
     }
 }

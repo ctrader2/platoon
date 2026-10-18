@@ -250,7 +250,7 @@ fn the_help_fits_at_sixty_by_fourteen_and_closes_with_question_mark_back_or_a_cl
         }
         // Scrolls to the end and back.
         key(&mut app, KeyCode::End);
-        assert!(flat(&draw(&mut term, &app)).contains("Ctrl+Z"), "{ctx}");
+        assert!(flat(&draw(&mut term, &app)).contains("compact it."), "the last note: {ctx}");
         key(&mut app, KeyCode::Home);
         assert!(flat(&draw(&mut term, &app)).contains("On this screen"), "{ctx}");
         ch(&mut app, '?');

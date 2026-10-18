@@ -382,3 +382,96 @@ fn a_done_task_whose_branch_is_not_merged_says_so_until_the_default_branch_has_i
     assert!(!shown.contains("not merged") && !shown.contains("commits not in"), "{shown}");
     assert!(shown.contains("Feature · on task/1"), "{shown}");
 }
+
+/// The foreground color of `word` on the line that has `row` (after `row`'s own text).
+fn fg_after(term: &Terminal<TestBackend>, row: &str, word: &str) -> Color {
+    let buf = term.backend().buffer();
+    for y in 0..buf.area.height {
+        let cells: Vec<String> = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        let line = cells.concat();
+        let Some(at) = line.find(row) else { continue };
+        let x = line[..at + row.len() + line[at + row.len()..].find(word).unwrap()].chars().count();
+        return buf[(x as u16, y)].fg;
+    }
+    panic!("{row:?} isn't on the screen");
+}
+
+#[test]
+fn a_projects_screen_lists_its_sessions_and_its_tasks_apart_and_enter_on_a_task_opens_it() {
+    let (w, mut app, project, folder) = lab(
+        "tasks-on-project",
+        &[
+            ("Write the guide", "docs", State::NotStarted),
+            ("Add a basket", "feature", State::NotStarted),
+            ("Fix the cart", "bug-fix", State::Done),
+            ("Old idea", "feature", State::Cancelled),
+            ("Pick a font", "docs", State::NeedsYou(Need::Question("Which one?".into()))),
+        ],
+    );
+    // #2 has a session, in the project: it is listed as its task, not among the sessions.
+    Tickets::open(&w.config, &project).start(2, "feature", "task-sess", None).unwrap();
+    w.transcript("task-sess", &folder, "Task #2: Add a basket", 1);
+    app.projects.assign("task-sess", Some(&project)).unwrap();
+    app.reload_for_test();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    assert!(app.open_project().is_some());
+    assert_eq!(app.visible().iter().map(|&i| app.sessions[i].id.as_str()).collect::<Vec<_>>(), ["user-1"]);
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    let lines: Vec<&str> = shown.lines().collect();
+    let line_of = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap_or_else(|| panic!("{s:?} missing:\n{shown}"));
+    // Sessions, then Tasks: the open ones first (the latest change first), Done last, the cancelled one left out.
+    let heading = |s: &str| lines.iter().position(|l| l.starts_with(&format!(" │ {s} "))).unwrap_or_else(|| panic!("{s}:\n{shown}"));
+    let (sessions, tasks) = (heading("Sessions"), heading("Tasks"));
+    assert!(sessions < line_of("tmp") && line_of("tmp") < tasks, "{shown}");
+    let done = line_of("#3 Fix the cart");
+    for open in ["#2 Add a basket", "#5 Pick a font", "#1 Write the guide"] {
+        assert!(tasks < line_of(open) && line_of(open) < done, "{open}\n{shown}");
+    }
+    assert!(shown.contains("1 active"), "the task's session is counted as its task: {shown}");
+    assert!(!shown.contains("Old idea") && !shown.contains("#2 shop"), "{shown}");
+    // Each task's state in the words and the colors of the Tasks tab.
+    let t = app.theme.clone();
+    for (row, word, color) in [
+        ("#2 Add a basket", "Working", t.busy),
+        ("#5 Pick a font", "Needs you", t.warn),
+        ("#1 Write the guide", "Not started", t.text),
+        ("#3 Fix the cart", "Done", t.ok),
+    ] {
+        assert!(lines[line_of(row)].contains(word), "{row}: {word}\n{shown}");
+        assert_eq!(fg_after(&term, row, word), color, "{row}: {word}");
+    }
+    // A session's row says how full its context is, as on the Sessions tab.
+    assert!(lines[line_of("tmp")].contains(" 25% "), "{shown}");
+    assert_eq!(fg_after(&term, "/tmp", "25%"), t.subtext);
+
+    // The task rows come after the sessions in one list. On one, enter is its only key.
+    let pick = |app: &mut App, n: u32| {
+        key(app, KeyCode::Home);
+        for _ in 0..6 {
+            key(app, KeyCode::Down);
+            if app.project_task_picked() == Some(n) {
+                return;
+            }
+        }
+        panic!("#{n} is not in the list");
+    };
+    key(&mut app, KeyCode::Down);
+    assert!(app.project_task_picked().is_some());
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("enter open") && !shown.contains("a archive") && !shown.contains("h hand-off"), "{shown}");
+    // Enter on one that never started: its text, on its own screen; esc comes back to the project's screen, on its row.
+    pick(&mut app, 1);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.task_screen_showing() && app.tk.open == Some(1));
+    assert!(draw(&mut term, &app).contains("Write the guide"));
+    key(&mut app, KeyCode::Esc);
+    assert!(app.open_project().is_some() && !app.task_screen_showing());
+    assert_eq!(app.project_task_picked(), Some(1));
+    // Enter on a started one: its session, continued (nothing is really started in a unit test).
+    pick(&mut app, 2);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.sq.launched.contains(&2), "its session was continued");
+    assert!(app.open_project().is_some(), "still on the project's screen");
+}
