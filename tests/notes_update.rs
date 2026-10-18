@@ -284,6 +284,36 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
 }
 
 #[test]
+fn a_project_with_no_notes_file_gets_them_started_by_the_hook_and_filled_by_the_first_update() {
+    let lab = Lab::new("notes-update-start");
+    lab.project("", "sess-1", &["Add a basket page to the shop", "And make the totals add up"]);
+    fs::remove_file(lab.notes_path()).unwrap();
+    fs::remove_dir(lab.config.join("projects/pweb")).unwrap();
+    lab.reply_to(
+        1,
+        r#"{"summary":"A sock shop with a basket.","sections":[{"heading":"Open questions","body":"- Does VAT go in the basket total?"}],"decisions":["Baskets are session based"]}"#,
+    );
+    lab.reply_to(2, r#"{"description":"A sock shop with a basket."}"#);
+
+    // The hook: still instant, silent and 0, and it starts the notes from the template.
+    let out = lab.stop_hook("sess-1", "/home/x/work");
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty() && out.stderr.is_empty(), "the hook says nothing: {out:?}");
+
+    until("the notes to be filled in", || lab.notes().contains("A sock shop with a basket."));
+    until("the helper to finish", || lab.helper_pid().is_some_and(|p| !alive(p)));
+    let after = lab.notes();
+    let headings: Vec<&str> = after.lines().filter(|l| l.starts_with("# ")).collect();
+    assert_eq!(headings, ["# Summary", "# Open questions", "# Decisions"], "{after}");
+    assert!(after.contains(": Baskets are session based"), "{after}");
+    // The first update read the session in full, and the template is the version kept before it.
+    let sent = lab.sent(1);
+    assert!(sent.contains("Add a basket page to the shop") && sent.contains("And make the totals add up"), "{sent}");
+    assert_eq!(lab.versions().len(), 1);
+    assert_eq!(fs::read_to_string(&lab.versions()[0]).unwrap(), "# Summary\n\n# Decisions\n\n");
+}
+
+#[test]
 fn the_notes_pane_says_while_an_update_is_running() {
     let lab = Lab::new("notes-update-running");
     lab.project(NOTES, "sess-1", &["Add a basket page to the shop"]);

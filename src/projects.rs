@@ -151,19 +151,49 @@ pub fn lock(path: &Path) -> io::Result<fs::File> {
     Ok(lock)
 }
 
+/// The temp file `path` is written through: unique per process and thread, beside it.
+fn temp_beside(path: &Path) -> PathBuf {
+    let tid = format!("{:?}", std::thread::current().id()).chars().filter(char::is_ascii_digit).collect::<String>();
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    path.with_file_name(format!(".{name}.{}-{tid}.tmp", std::process::id()))
+}
+
 /// Write `text` to `path` through a temp file of its own (unique per process and thread) and a rename.
 pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let tid = format!("{:?}", std::thread::current().id()).chars().filter(char::is_ascii_digit).collect::<String>();
-    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = path.with_file_name(format!(".{name}.{}-{tid}.tmp", std::process::id()));
+    let tmp = temp_beside(path);
     let written = fs::write(&tmp, text).and_then(|()| fs::rename(&tmp, path));
     if written.is_err() {
         let _ = fs::remove_file(&tmp);
     }
     written
+}
+
+/// Write `text` to `path` only while there is no file there: true when it was written, false when a file was
+/// already there (it is left exactly as it is). The file appears whole, through a temp file and a hard link, which
+/// fails rather than replace anything; on a file system without hard links it is created new and then written.
+pub fn write_new(path: &Path, text: &str) -> io::Result<bool> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let tmp = temp_beside(path);
+    let linked = fs::write(&tmp, text).map(|()| fs::hard_link(&tmp, path));
+    let _ = fs::remove_file(&tmp);
+    let linked = linked?;
+    match linked {
+        Ok(()) => Ok(true),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) => {
+            use std::io::Write;
+            match fs::OpenOptions::new().write(true).create_new(true).open(path) {
+                Ok(mut f) => f.write_all(text.as_bytes()).map(|()| true),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+                Err(e) => Err(e),
+            }
+        }
+    }
 }
 
 impl Projects {

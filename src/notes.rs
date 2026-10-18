@@ -189,6 +189,13 @@ pub fn undo(config: &Path, id: &str) -> Result<(), String> {
     write_atomic(&notes, &before).map_err(|e| format!("Couldn't write the notes: {e}"))
 }
 
+/// Start a project's notes from `TEMPLATE` when it has no notes file at all: true when it was written now, false
+/// when a file was already there, which is never replaced (it may have appeared a moment ago). There is nothing
+/// before it to keep a version of.
+pub fn start(config: &Path, id: &str) -> io::Result<bool> {
+    crate::projects::write_new(&crate::projects::notes_path(config, id), TEMPLATE)
+}
+
 /// Write `text` as the notes, keeping what is there now first. Used for a change platoon makes itself.
 pub fn write(config: &Path, id: &str, text: &str) -> io::Result<()> {
     keep_version(config, id)?;

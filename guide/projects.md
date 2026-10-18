@@ -125,9 +125,12 @@ next time. If platoon finds nothing at all it offers `nano` and `vi`.
 The same list of editors is used for a task's text and for the
 [system prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).
 
-**A new file starts from a template**: one line saying what platoon keeps up to date, then the two headings that are
-always there, **Summary** and **Decisions**. The sections in between are added as the work needs them (see
-[The shape of the notes](#the-shape-of-the-notes)).
+**A new file starts from a template**: the two headings that are always there, **Summary** and **Decisions**. The
+sections in between are added as the work needs them (see [The shape of the notes](#the-shape-of-the-notes)). You don't
+have to start it: with Project notes on, platoon writes the template itself the first time a session of the project
+finishes answering, or a session joins it, and fills it in a few minutes later (see
+[Notes that keep themselves up to date](#notes-that-keep-themselves-up-to-date)). Until then the notes pane says so;
+`e` starts the file by hand straight away if you would rather write the first lines yourself.
 
 **Nothing is lost.** Before every change platoon didn't make itself, the version that was there is copied into
 `~/.config/platoon/projects/<id>/history/`, newest first, at most 20 per project (the oldest goes). `c` shows the last
@@ -181,8 +184,10 @@ few minutes later without you having to resume anything (a conversation you neve
 at all). The helper waits until the project has been quiet for as long as **Update notes after** says (3 minutes unless you
 change it, in the [settings](settings-and-keys.md#projects) on the Projects tab: 1, 3, 5, 15 or 30 minutes; another turn
 starts that timer over) and then makes **one** request to Claude. Only one helper runs per project, and it works whether
-the platoon window is open or closed. Archived projects, archived sessions, and projects whose notes file doesn't exist yet
-are skipped entirely: platoon never starts the notes for you, you do that with `e`.
+the platoon window is open or closed. **A project with no notes file yet gets one**: the hook writes the template
+first, then marks the project as above, so the first update has something to fill in. Archived projects and archived
+sessions are skipped entirely, and so is a notes file that is there but empty: if you emptied it, platoon leaves it to
+you (`e` starts it again).
 
 **What it reads.** Only what is new since the last update: for each active session in the project, the messages you typed
 since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus Claude's last reply, up to

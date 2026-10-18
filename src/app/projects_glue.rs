@@ -298,6 +298,13 @@ impl App {
         fs::read_to_string(self.projects.notes_path(p)).ok()
     }
 
+    /// The open project has no notes file, and platoon will start one itself the next time a turn ends in one of
+    /// its sessions (`notesrun::notes_to_keep`): the notes switch is on. False once there is a file, blank or not.
+    pub fn notes_start_by_themselves(&self) -> bool {
+        let Some(p) = self.open_project.as_deref() else { return false };
+        !self.settings.is_corrupt() && self.settings.get().feature_on(crate::notesrun::FEATURE) && !self.projects.notes_path(p).exists()
+    }
+
     /// Where the open project's notes live, home-abbreviated.
     pub fn open_notes_path(&self) -> String {
         self.open_project.as_deref().map(|p| dirs::tilde(&self.projects.notes_path(p).to_string_lossy(), &self.home)).unwrap_or_default()
@@ -581,8 +588,9 @@ impl App {
     }
 
     /// A session has just joined a project: tell the notes helper, so an update runs a few minutes later without
-    /// the user having to resume anything. It never blocks (the helper is a detached process of its own) and it
-    /// does nothing at all when the feature is off, the project is archived or there are no notes yet.
+    /// the user having to resume anything. A project with no notes file yet gets one from the template. It never
+    /// blocks (the helper is a detached process of its own) and it does nothing at all when the feature is off, the
+    /// project is archived or the user emptied its notes.
     pub(super) fn joined_project(&self, project: &str, session: &str) {
         crate::notesrun::mark_joined(&self.config, &self.cache, project, session, crate::notesrun::now_ms());
     }

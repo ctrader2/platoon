@@ -1142,3 +1142,59 @@ fn an_empty_projects_screen_says_one_thing_about_its_notes() {
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("No sessions match the filter") && f.contains("No tasks match the filter"), "{f}");
 }
+
+#[test]
+fn a_project_with_sessions_and_no_notes_file_says_platoon_starts_them_unless_the_notes_are_switched_off() {
+    let w = four("p-notes-start");
+    let mut s = crate::settings::load(&w.config).0;
+    s.tokens_enabled = true;
+    s.set_feature(crate::notesrun::FEATURE, true);
+    crate::settings::save(&w.config, &s).unwrap();
+    let mut app = w.app();
+    let id = make_project(&mut app, "Fruit");
+    // A session joining it starts the notes from the template at once.
+    put_in(&mut app, "alpha-1", &id);
+    let notes = app.projects.notes_path(&id);
+    assert_eq!(fs::read_to_string(&notes).unwrap(), crate::notes::TEMPLATE);
+    // A project that had its sessions before platoon started notes by itself: none yet, and the next turn starts them.
+    fs::remove_file(&notes).unwrap();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.open_project().map(|p| p.id.as_str()), Some(id.as_str()));
+    let mut term = Terminal::new(TestBackend::new(240, 30)).unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("No notes yet"), "{f}");
+    assert!(f.contains(&format!("{} Or press e to start them now from a short template.", ui::NOTES_START_THEMSELVES)), "{f}");
+    assert!(f.contains("They live in") && !f.contains("Press e to start them from"), "{f}");
+    // The same colours as the lines it replaces: the heading quiet, what to do in the text colour, where they live dim.
+    let t = app.effective_theme();
+    let lines = cells(&term);
+    let fg = |needle: &str| {
+        let y = lines.iter().position(|l| col_of(l, needle).is_some()).unwrap_or_else(|| panic!("{needle} not drawn"));
+        lines[y][col_of(&lines[y], needle).unwrap()].fg
+    };
+    assert_eq!(fg("No notes yet"), t.subtext);
+    assert_eq!(fg("platoon starts them"), t.text);
+    assert_eq!(fg("Or press e"), t.text);
+    assert_eq!(fg("They live in"), t.dim);
+
+    // Notes the user emptied are theirs to start again: `e`, as before.
+    fs::create_dir_all(notes.parent().unwrap()).unwrap();
+    fs::write(&notes, "\n").unwrap();
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("No notes yet") && f.contains("Press e to start them from a short template."), "{f}");
+    assert!(!f.contains(ui::NOTES_START_THEMSELVES), "{f}");
+    fs::remove_file(&notes).unwrap();
+
+    // With the notes switched off, nothing is promised.
+    s.set_feature(crate::notesrun::FEATURE, false);
+    crate::settings::save(&w.config, &s).unwrap();
+    let mut app = w.app();
+    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.open_project().map(|p| p.id.as_str()), Some(id.as_str()));
+    let f = flat(&draw(&mut term, &app));
+    assert!(f.contains("No notes yet") && f.contains("Press e to start them from a short template."), "{f}");
+    assert!(!f.contains(ui::NOTES_START_THEMSELVES), "{f}");
+    assert!(!notes.exists(), "drawing never writes the notes");
+}

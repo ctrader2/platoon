@@ -4,9 +4,10 @@
 //!
 //! How it hangs together:
 //! - Claude Code runs `platoon hook stop` whenever a session finishes answering. The hook is instant, silent,
-//!   spends no tokens and exits 0 whatever happens. If the session belongs to an active project whose notes exist,
-//!   it writes the time into `<cache>/notes-due/<project id>` and starts the helper. Any later turn rewrites that
-//!   time, which is what makes the timer start over.
+//!   spends no tokens and exits 0 whatever happens. If the session belongs to an active project, it writes the time
+//!   into `<cache>/notes-due/<project id>` and starts the helper; a project with no notes file yet gets one from the
+//!   template first, so its first update has something to fill in. Any later turn rewrites that time, which is what
+//!   makes the timer start over.
 //! - The helper (`platoon notes-update <project id>`, run detached, so the platoon window need not be open) takes
 //!   an exclusive lock on `<cache>/notes-helper/<project id>.lock`: a second helper for the same project exits at
 //!   once, because the one holding the lock will see the newer time anyway. It waits until the mark is about three
@@ -175,7 +176,8 @@ fn max_life_secs() -> u64 {
 // ---- the Stop hook --------------------------------------------------------------------------------------------
 
 /// What the hook does with one hook input: the project it marked, or None for "nothing to do", which costs one
-/// small read of `projects.json` and nothing else. It never writes anything but the mark and never prints.
+/// small read of `projects.json` and nothing else. It never writes anything but the mark (and, for a project with
+/// no notes file yet, the notes from the template: `notes_to_keep`) and never prints.
 pub fn stop_mark(input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms: u64) -> Option<String> {
     // The helper's own calls must never come back here. (They load no settings, so Claude Code runs no hook for
     // them at all; these two checks are the belt to that brace.)
@@ -204,12 +206,29 @@ pub fn stop_mark(input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms
     if Archive::open(config).contains(session) {
         return None;
     }
-    // No notes yet means nothing to keep up to date: the user starts them with `e`.
-    if fs::read_to_string(projects.notes_path(&id)).ok()?.trim().is_empty() {
+    if !notes_to_keep(config, cache, &id) {
         return None;
     }
     mark_due(cache, &id, at_ms).ok()?;
     Some(id)
+}
+
+/// Does this project have notes to keep up to date? Notes with something in them do. A project with no notes file
+/// at all gets one from the template now (`notes::start`), and then does - unless an editor platoon started has the
+/// notes (it is about to write them). A file that is there but blank was emptied by the user, and is theirs to
+/// start again with `e`: platoon leaves it alone. One small read when the notes are there.
+fn notes_to_keep(config: &Path, cache: &Path, id: &str) -> bool {
+    let path = crate::projects::notes_path(config, id);
+    match fs::read_to_string(&path) {
+        Ok(text) => return !text.trim().is_empty(),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => return false,
+    }
+    if being_edited(cache, id) || notes::start(config, id).is_err() {
+        return false;
+    }
+    // Whoever's file is there now - the template just written, or one that appeared a moment before it - decides.
+    fs::read_to_string(&path).is_ok_and(|text| !text.trim().is_empty())
 }
 
 /// Start the helper for `id`, detached: its own session, no terminal, nothing waiting for it. It exits at once if
@@ -256,8 +275,9 @@ pub fn run_hook() -> i32 {
 /// wait until somebody resumed one of its sessions, and a session nobody resumes would never be read at all.
 ///
 /// Everything the `Stop` hook turns away is turned away here too (the switch off, an archived project, an
-/// archived session, no notes to keep up to date), and marking is all it does: the helper it starts takes the
-/// same one-per-project lock and waits out the same quiet period. True when the project was marked.
+/// archived session, notes the user emptied), and marking is all it does (with the notes started from the template
+/// when there is no file yet): the helper it starts takes the same one-per-project lock and waits out the same
+/// quiet period. True when the project was marked.
 pub fn mark_joined(config: &Path, cache: &Path, project: &str, session: &str, at_ms: u64) -> bool {
     if Archive::open(config).contains(session) {
         return false;
@@ -267,8 +287,8 @@ pub fn mark_joined(config: &Path, cache: &Path, project: &str, session: &str, at
 
 /// Something new for a project's notes that no session's turn brought (a session joined it, a ticket's squad
 /// finished with a result): mark the project due and start the helper, as the `Stop` hook does. Turned away, after
-/// small reads only, when the switch is off, the project is archived or gone, or it has no notes to keep up to date.
-/// True when the project was marked.
+/// small reads only, when the switch is off, the project is archived or gone, or its notes are there but blank. A
+/// project with no notes file yet gets one from the template first (`notes_to_keep`). True when the project was marked.
 pub fn mark_project(config: &Path, cache: &Path, project: &str, at_ms: u64) -> bool {
     let (settings, corrupt) = crate::settings::load(config);
     if corrupt || !settings.feature_on(FEATURE) {
@@ -278,8 +298,7 @@ pub fn mark_project(config: &Path, cache: &Path, project: &str, at_ms: u64) -> b
     if !projects.get(project).is_some_and(|p| !p.archived) {
         return false;
     }
-    // No notes yet means nothing to keep up to date: the user starts them with `e`.
-    if fs::read_to_string(projects.notes_path(project)).map(|t| t.trim().is_empty()).unwrap_or(true) {
+    if !notes_to_keep(config, cache, project) {
         return false;
     }
     if mark_due(cache, project, at_ms).is_err() {
@@ -836,7 +855,7 @@ mod tests {
         "platoon keeps these.\n\n# Overview\n\nSell socks.\n\n# Requirements\n\n# Status\n\n# Decisions\n\n# Notes\n\nmine\n";
 
     #[test]
-    fn the_hook_marks_a_project_with_notes_and_costs_nothing_for_anything_else() {
+    fn the_hook_marks_a_project_and_costs_nothing_for_anything_else() {
         let r = Rig::new("hook");
         let id = r.project(NOTES);
         r.session(&id, "in-project", &["Add a basket page to the shop"], "Done.");
@@ -871,12 +890,16 @@ mod tests {
         p.archive(&id, &[]).unwrap();
         assert_eq!(r.hook("in-project"), None, "an archived project");
         p.restore(&id).unwrap();
-        // No notes file, and an empty one.
+        // No notes file: they are started from the template, and the project is marked.
         let notes = Projects::open(&r.env.config).notes_path(&id);
         fs::remove_file(&notes).unwrap();
-        assert_eq!(r.hook("in-project"), None, "no notes yet");
+        assert_eq!(r.hook("in-project"), Some(id.clone()), "no notes file yet");
+        assert_eq!(fs::read_to_string(&notes).unwrap(), notes::TEMPLATE);
+        let _ = fs::remove_file(due_path(&r.env.cache, &id));
+        // Notes the user emptied are theirs: left as they are, and nothing is marked.
         fs::write(&notes, "  \n\n").unwrap();
         assert_eq!(r.hook("in-project"), None, "empty notes");
+        assert_eq!(fs::read_to_string(&notes).unwrap(), "  \n\n");
         fs::write(&notes, NOTES).unwrap();
         // The switch off costs nothing either.
         let mut s = crate::settings::load(&r.env.config).0;
@@ -890,6 +913,136 @@ mod tests {
         // Nothing of all that wrote a mark.
         assert_eq!(due_at(&r.env.cache, &id), None);
         assert_eq!(r.fake.calls(), 0, "the hook never asks Claude anything");
+    }
+
+    /// Every file under `dir`, relative to it.
+    fn files_under(dir: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut todo = vec![dir.to_path_buf()];
+        while let Some(d) = todo.pop() {
+            for e in fs::read_dir(&d).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    todo.push(e.path());
+                } else {
+                    out.push(e.path().strip_prefix(dir).unwrap().display().to_string());
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn a_project_with_no_notes_file_gets_the_template_and_is_marked_and_nothing_else_is_written() {
+        let r = Rig::new("hook-start");
+        let id = Projects::open(&r.env.config).create("Web shop").unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let notes = Projects::open(&r.env.config).notes_path(&id);
+        assert!(!notes.exists() && !notes.parent().unwrap().exists(), "not even the project's folder is there yet");
+        let before = files_under(&r.base);
+        assert_eq!(r.hook("s1"), Some(id.clone()));
+        assert_eq!(fs::read_to_string(&notes).unwrap(), notes::TEMPLATE, "the same template `e` starts from");
+        assert!(due_at(&r.env.cache, &id).is_some(), "and the project is marked, as one with notes is");
+        // The notes and the mark, and not a byte more: no temp file left beside them, no earlier version kept.
+        let mut wrote: Vec<String> = files_under(&r.base).into_iter().filter(|f| !before.contains(f)).collect();
+        wrote.sort();
+        let mut expected = vec![format!("config/projects/{id}/project.md"), format!("cache/notes-due/{id}")];
+        expected.sort();
+        assert_eq!(wrote, expected);
+        assert!(crate::notes::versions(&r.env.config, &id).is_empty());
+        // A session joining a project with no notes file starts them in the same way.
+        let other = Projects::open(&r.env.config).create("Docs").unwrap();
+        Projects::open(&r.env.config).assign("s2", Some(&other)).unwrap();
+        assert!(mark_joined(&r.env.config, &r.env.cache, &other, "s2", 5));
+        assert_eq!(fs::read_to_string(Projects::open(&r.env.config).notes_path(&other)).unwrap(), notes::TEMPLATE);
+        assert_eq!(due_at(&r.env.cache, &other), Some(5));
+        assert_eq!(r.fake.calls(), 0, "the hook never asks Claude anything");
+    }
+
+    #[test]
+    fn notes_are_never_started_where_the_project_would_be_turned_away_or_over_a_file_that_is_there() {
+        let r = Rig::new("hook-no-start");
+        let id = Projects::open(&r.env.config).create("Web shop").unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let notes = Projects::open(&r.env.config).notes_path(&id);
+        let no_notes = |why: &str| {
+            assert!(!notes.exists(), "{why}: no notes were started");
+            assert_eq!(due_at(&r.env.cache, &id), None, "{why}: nothing was marked");
+        };
+        // A session in no project, the helper's own calls, its work folder.
+        assert_eq!(r.hook("loose"), None);
+        no_notes("a session in no project");
+        assert_eq!(stop_mark(&json!({"session_id":"s1"}).to_string(), &r.env.config, &r.env.cache, true, 1), None);
+        no_notes("PLATOON_AI is set");
+        let work = ai::work_dir(&r.env.cache).display().to_string();
+        assert_eq!(stop_mark(&json!({"session_id":"s1","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1), None);
+        no_notes("the work folder");
+        // An archived session, by the hook and by joining.
+        let mut archive = Archive::open(&r.env.config);
+        archive.archive("s1", usage::now()).unwrap();
+        assert_eq!(r.hook("s1"), None);
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &id, "s1", 1));
+        no_notes("an archived session");
+        archive.restore("s1", usage::now()).unwrap();
+        // An archived project.
+        let mut p = Projects::open(&r.env.config);
+        p.archive(&id, &[]).unwrap();
+        assert_eq!(r.hook("s1"), None);
+        assert!(!mark_project(&r.env.config, &r.env.cache, &id, 1));
+        no_notes("an archived project");
+        p.restore(&id).unwrap();
+        // The notes switch off, and the master switch off.
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.set_feature(FEATURE, false);
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert_eq!(r.hook("s1"), None);
+        assert!(!mark_project(&r.env.config, &r.env.cache, &id, 1));
+        no_notes("the feature is switched off");
+        s.set_feature(FEATURE, true);
+        s.tokens_enabled = false;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        assert_eq!(r.hook("s1"), None);
+        no_notes("the master switch is off");
+        s.tokens_enabled = true;
+        crate::settings::save(&r.env.config, &s).unwrap();
+        // An editor platoon started has the notes (this process is alive): they are not started under it.
+        set_marker(&editing_path(&r.env.cache, &id));
+        assert_eq!(r.hook("s1"), None);
+        no_notes("an editor of platoon's has the notes");
+        clear_marker(&editing_path(&r.env.cache, &id));
+        // A file that is there is never replaced, however it got there.
+        fs::create_dir_all(notes.parent().unwrap()).unwrap();
+        fs::write(&notes, "# Mine\n\nWritten a moment ago.\n").unwrap();
+        assert!(!notes::start(&r.env.config, &id).unwrap(), "there is a file: nothing is written");
+        assert_eq!(r.hook("s1"), Some(id.clone()));
+        assert_eq!(fs::read_to_string(&notes).unwrap(), "# Mine\n\nWritten a moment ago.\n");
+        assert_eq!(r.fake.calls(), 0);
+    }
+
+    #[test]
+    fn the_first_update_of_notes_started_from_the_template_reads_every_session_in_full() {
+        let r = Rig::new("first-from-template");
+        let id = Projects::open(&r.env.config).create("Web shop").unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop", "And make the totals add up"], "The totals add up now.");
+        r.session(&id, "s2", &["Write the shipping page"], "The shipping page is written.");
+        assert_eq!(r.hook("s1"), Some(id.clone()));
+        assert_eq!(r.notes(&id), notes::TEMPLATE);
+        r.fake.reply(
+            1,
+            r#"{"summary":"A shop that sells socks.","sections":[{"heading":"Open questions","body":"- Free shipping?"}],"decisions":["Baskets are session based"]}"#,
+        );
+        assert_eq!(update_once(&r.env, &id), Round::Written { sections: 2, decisions: 1 });
+        let text = r.notes(&id);
+        assert!(text.starts_with("# Summary\n\nA shop that sells socks."), "{text}");
+        assert!(text.contains("# Open questions\n\n- Free shipping?"), "{text}");
+        assert!(text.contains(": Baskets are session based"), "{text}");
+        // Both sessions, every message of them, in the one call.
+        let sent = r.fake.stdin(1);
+        for m in ["Add a basket page to the shop", "And make the totals add up", "Write the shipping page"] {
+            assert!(sent.contains(m), "{m} missing from: {sent}");
+        }
+        // The template is the version kept before it, so `u` takes the notes back to it.
+        assert_eq!(crate::notes::last_change(&r.env.config, &id).map(|(b, _)| b), Some(notes::TEMPLATE.to_string()));
     }
 
     #[test]
@@ -1478,9 +1631,10 @@ mod tests {
             let mut p = Projects::open(&r.env.config);
             let e = p.create("Empty").unwrap();
             fs::create_dir_all(r.env.config.join("projects").join(&e)).unwrap();
+            fs::write(p.notes_path(&e), "\n").unwrap();
             e
         };
-        assert!(!mark_joined(&r.env.config, &r.env.cache, &empty, "s1", 1), "a project with no notes");
+        assert!(!mark_joined(&r.env.config, &r.env.cache, &empty, "s1", 1), "a project whose notes the user emptied");
         assert!(!mark_joined(&r.env.config, &r.env.cache, "pnope", "s1", 1), "a project that isn't there");
         // An archived session is skipped.
         crate::archive::Archive::open(&r.env.config).archive_many(&["gone".to_string()], usage::now()).unwrap();

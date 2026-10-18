@@ -8,6 +8,10 @@ here.
 
 ### Changed
 
+- **A project's notes start by themselves.** A project with no notes file gets one from the template the first time
+  one of its sessions finishes answering, or a session joins it, and the first update fills it in a few minutes later;
+  you no longer have to press `e` first. A notes file you emptied is left to you, and nothing starts with Project
+  notes switched off.
 - **A squad's pane no longer lists its file.** The "File" line (the path, or "built in") under the settings is gone; the
   list rows still say where a squad comes from.
 - **A task is one Claude Code session.** `s` on a task picks a squad (the one suggested for it is picked) and starts one

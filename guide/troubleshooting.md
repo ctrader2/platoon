@@ -89,8 +89,8 @@ its branch stays either way. See [After the work](tasks-and-squads.md#after-the-
 again. See [The notes reach every session](projects.md#the-notes-reach-every-session).
 
 **The notes don't update by themselves.** The notes pane says why in one line. It needs the Notes updates step of
-`platoon setup`, the Project notes switch on, a notes file that exists (platoon never starts one: press `e`), and a project
-that isn't archived. See [Notes that keep themselves up to date](projects.md#notes-that-keep-themselves-up-to-date).
+`platoon setup`, the Project notes switch on, and a project that isn't archived. A project with no notes file gets one
+the next time one of its sessions finishes answering; a notes file you emptied stays empty until you press `e`. See [Notes that keep themselves up to date](projects.md#notes-that-keep-themselves-up-to-date).
 
 **The header says `smart features paused`.** Today's token limit is used up, your plan is above the pause point, or a
 failure paused things for a while. The header says which. See [What keeps it safe](tokens.md#what-keeps-it-safe).

@@ -861,6 +861,10 @@ fn draw_project_sessions(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// What the notes pane says for a project with sessions and no notes file, while platoon will start one itself.
+pub(crate) const NOTES_START_THEMSELVES: &str =
+    "platoon starts them the next time Claude finishes answering in one of this project's sessions.";
+
 fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let notes = app.open_notes().filter(|n| !n.trim().is_empty());
@@ -930,7 +934,14 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
     let Some(text) = notes else {
         let mut lines = vec![Line::styled("No notes yet", Style::new().fg(t.subtext))];
         lines.push(Line::raw(""));
-        lines.push(Line::styled("Press e to start them from a short template.", Style::new().fg(t.text)));
+        // A project with no file gets one when a turn ends in one of its sessions; notes the user emptied, or the
+        // switch off, wait for `e`.
+        if app.notes_start_by_themselves() {
+            lines.push(Line::styled(NOTES_START_THEMSELVES, Style::new().fg(t.text)));
+            lines.push(Line::styled("Or press e to start them now from a short template.", Style::new().fg(t.text)));
+        } else {
+            lines.push(Line::styled("Press e to start them from a short template.", Style::new().fg(t.text)));
+        }
         lines.push(Line::raw(""));
         lines.push(Line::styled(format!("They live in {}", app.open_notes_path()), Style::new().fg(t.dim)));
         f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), area);
