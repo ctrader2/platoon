@@ -109,6 +109,5 @@ Claude Code are trademarks of Anthropic.
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says how, and everyone taking part
-follows the [code of conduct](CODE_OF_CONDUCT.md). Found a security problem? Please report it privately, as
-[SECURITY.md](SECURITY.md) describes.
+Bug reports, ideas and pull requests are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) says how. Found a security problem?
+Please report it privately, as [SECURITY.md](SECURITY.md) describes.

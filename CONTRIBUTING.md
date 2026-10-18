@@ -4,8 +4,7 @@ Thank you for wanting to help. platoon is a small project with one maintainer, s
 deeper guide, for people and for AI coding agents alike, is [CLAUDE.md](CLAUDE.md): how the code is laid out, the
 safety rules and the test knobs.
 
-Taking part means following the [code of conduct](CODE_OF_CONDUCT.md). Found a security problem? Don't open an issue:
-see [SECURITY.md](SECURITY.md).
+Found a security problem? Don't open an issue: see [SECURITY.md](SECURITY.md).
 
 ## Before you start
 
