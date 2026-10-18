@@ -1,10 +1,11 @@
 //! The Squads tab (`4`): every squad in two-line rows (its name and where it comes from, then what it is for), and the
 //! picked one beside the list from `TWO_PANES_FROM` columns (its description, models, whether it plans first, its steps
-//! drawn from their Markdown, and what is wrong with its file). `enter` opens the picked one in the whole width.
+//! drawn from their Markdown, and what is wrong with its file). `enter` opens the picked one in the whole width, where
+//! the setting `↑` `↓` picks is lit and `enter` changes it.
 
 use super::{Hint, ROW_H, fit_end, hint_fg, wrap};
 use crate::app::{Action, App, Hit, origin_words};
-use crate::squads::{Origin, Squad};
+use crate::squads::{Origin, Setting, Squad};
 use ratatui::{
     Frame,
     layout::{Alignment, Rect},
@@ -63,7 +64,7 @@ pub(super) fn draw_squads_tab(f: &mut Frame, app: &App, area: Rect) {
     let pane = Rect::new(area.x + left + 2, area.y, area.width.saturating_sub(left + 2), area.height);
     if let Some(s) = sqt.picked() {
         let w = pane.width as usize;
-        let mut lines = squad_lines(app, s, w, Some(pane.height as usize));
+        let mut lines = squad_lines(app, s, w, Some(pane.height as usize), None);
         lines.truncate(pane.height as usize);
         f.render_widget(Paragraph::new(lines), pane);
     }
@@ -128,11 +129,18 @@ fn draw_open_squad(f: &mut Frame, app: &App, area: Rect) {
     let t = app.effective_theme();
     let Some(s) = app.sqt.picked() else { return };
     let view = Rect::new(area.x + 1, area.y, area.width.saturating_sub(2), area.height);
-    let lines = squad_lines(app, s, view.width as usize, None);
+    let lines = squad_lines(app, s, view.width as usize, None, app.sqt.field);
     let h = view.height as usize;
     app.sqt.page.set(h.saturating_sub(1).max(1));
     let top = app.sqt.top.get().min(lines.len().saturating_sub(h));
     app.sqt.top.set(top);
+    // The settings' lines can be clicked: a click picks one, a click on the picked one changes it.
+    let first = settings_at(s, view.width as usize);
+    for i in 0..Setting::ALL.len() {
+        if let Some(row) = (first + i).checked_sub(top).filter(|r| *r < h) {
+            app.hits.borrow_mut().push((Rect::new(view.x, view.y + row as u16, view.width, 1), Hit::SquadSetting(i)));
+        }
+    }
     let below = lines.len().saturating_sub(top + h);
     let shown: Vec<Line> = lines.into_iter().skip(top).take(if below > 0 { h.saturating_sub(1) } else { h }).collect();
     f.render_widget(Paragraph::new(shown), view);
@@ -141,10 +149,16 @@ fn draw_open_squad(f: &mut Frame, app: &App, area: Rect) {
     }
 }
 
+/// The line of a squad's lines (`squad_lines`, `w` cells wide) its first setting is on: under its name, what it is for
+/// and a blank line.
+fn settings_at(s: &Squad, w: usize) -> usize {
+    2 + wrap(&s.description, w).len()
+}
+
 /// A squad as the pane shows it, `w` cells wide: its name and what it is for, its settings, its steps, then what is
 /// wrong with its file. With `fit` (the pane beside the list, that many lines tall) the steps are cut so that what is
-/// wrong still shows.
-pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>) -> Vec<Line<'static>> {
+/// wrong still shows. `picked`: the setting `enter` changes (the open squad), lit, with that said at its end.
+pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>, picked: Option<usize>) -> Vec<Line<'static>> {
     let t = app.effective_theme();
     let mut head: Vec<Line<'static>> =
         vec![Line::styled(fit_end(&s.name_or_id(), w), Style::new().fg(t.text).add_modifier(Modifier::BOLD))];
@@ -156,21 +170,29 @@ pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>) ->
         Origin::Replaces => format!("{}, in place of the built-in", path()),
         Origin::Own => path(),
     };
-    let verdict = if s.verdict_model.is_empty() { "the same as the model".to_string() } else { s.verdict_model.clone() };
-    let facts = [
-        ("Model", s.model.clone()),
-        ("Verdict model", verdict),
-        ("Plans first", if s.plan_first { "yes, then waits for your yes" } else { "no" }.to_string()),
-        ("File", file),
-    ];
     const LABEL: usize = 15;
-    for (label, value) in facts {
-        let value = if value.is_empty() { "none".to_string() } else { value };
-        let rows = wrap(&value, w.saturating_sub(LABEL).max(10));
-        for (k, row) in rows.into_iter().enumerate() {
-            let l = if k == 0 { format!("{label:<LABEL$}") } else { " ".repeat(LABEL) };
-            head.push(Line::from(vec![Span::styled(l, Style::new().fg(t.subtext)), Span::styled(row, Style::new().fg(t.text))]));
+    const CHANGES: &str = "   enter changes";
+    // The three settings, one line each (the one picked lit, with what enter does), then where the file is.
+    for (i, setting) in Setting::ALL.into_iter().enumerate() {
+        let lit = picked == Some(i);
+        let base = if lit { Style::new().bg(t.surface) } else { Style::new() };
+        let room = w.saturating_sub(LABEL + if lit { CHANGES.width() } else { 0 });
+        let value = Some(setting.words(s)).filter(|v| !v.is_empty()).unwrap_or_else(|| "none".into());
+        let value = fit_end(&value, room);
+        let mut spans =
+            vec![Span::styled(format!("{:<LABEL$}", setting.label()), base.fg(t.subtext)), Span::styled(value.clone(), base.fg(t.text))];
+        if lit {
+            // What enter does, just after the value; the light runs on to the line's end.
+            let gap = room.saturating_sub(value.width());
+            spans.push(Span::styled(CHANGES, base.fg(hint_fg(t))));
+            spans.push(Span::styled(" ".repeat(gap), base));
         }
+        head.push(Line::from(spans));
+    }
+    let rows = wrap(&file, w.saturating_sub(LABEL).max(10));
+    for (k, row) in rows.into_iter().enumerate() {
+        let l = if k == 0 { format!("{:<LABEL$}", "File") } else { " ".repeat(LABEL) };
+        head.push(Line::from(vec![Span::styled(l, Style::new().fg(t.subtext)), Span::styled(row, Style::new().fg(t.text))]));
     }
     head.push(Line::raw(""));
     head.push(Line::styled("Steps", Style::new().fg(t.text).add_modifier(Modifier::BOLD)));
@@ -208,11 +230,14 @@ pub(super) fn squads_hints(app: &App) -> Vec<Hint<'_>> {
     let own = sqt.picked().is_some_and(|s| s.origin != Origin::BuiltIn);
     let mut out: Vec<Hint> = Vec::new();
     if sqt.open {
+        if sqt.field.is_some() {
+            out.push(("enter", "change", None));
+        }
         out.push(("e", "edit", None));
         if own {
             out.push(("d", "delete", None));
         }
-        out.extend([("↑↓", "scroll", None), ("?", "help", Some(Action::Help)), ("esc", "back", Some(Action::Leave))]);
+        out.extend([("↑↓", "move", None), ("?", "help", Some(Action::Help)), ("esc", "back", Some(Action::Leave))]);
         return out;
     }
     out.push(("enter", "open", None));

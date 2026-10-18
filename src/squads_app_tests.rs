@@ -163,8 +163,10 @@ fn below_two_panes_the_list_is_alone_and_enter_opens_the_squad_full_width() {
     assert!(text.contains("Bug fix") && text.contains("Verdict model fable") && text.contains("Steps"), "{shown}");
     assert!(text.contains("more lines"), "a long squad says what is below: {shown}");
     assert!(shown.lines().last().unwrap().contains("esc back"), "{shown}");
-    // The arrows scroll it now; esc goes back to the list, on the same squad.
-    key(&mut app, KeyCode::Down);
+    // The arrows go through its three settings, then scroll it; esc goes back to the list, on the same squad.
+    for _ in 0..3 {
+        key(&mut app, KeyCode::Down);
+    }
     draw(&mut term, &app);
     assert_eq!(app.sqt.top.get(), 1);
     key(&mut app, KeyCode::Esc);

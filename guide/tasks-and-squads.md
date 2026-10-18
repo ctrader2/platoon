@@ -179,10 +179,18 @@ whether it plans first, its steps, and under them what is wrong with its file, o
 
 | Key (Squads tab) | Does |
 | --- | --- |
-| `enter` | the squad in the whole width, scrolled with `↑` `↓`; `esc` goes back to the list |
+| `enter` | the squad in the whole width, with its **Model** line picked; `esc` goes back to the list |
+| `↑` `↓` (squad open) | pick its **Model**, **Verdict model** or **Plans first** line; past them, scroll the squad |
+| `enter` (squad open) | change the picked line to the next choice: the model goes opus, sonnet, haiku, fable; the verdict model the same four, then **the same as the model**; plans first yes or no. A click on a line picks it, a click on the picked one changes it |
 | `e` | open its file in your editor (the same list of editors as the notes); the tab reads it again when the editor is done. On a built-in, its text is copied to `~/.config/platoon/squads/<id>.md` first, and if you leave it unchanged the copy goes again, so a built-in becomes yours only when you change it |
 | `n` | a new squad: its name, then its file (`~/.config/platoon/squads/<name>.md`, the Feature squad's settings and one step to write over) opens in your editor |
 | `d` | delete one of yours, after asking. The file is kept as `<id>.md.bak`; a built-in it replaced comes back |
+
+Changing a setting rewrites only that line of the squad's file, everything else in it as it was. On a built-in, its
+text is copied to `~/.config/platoon/squads/<id>.md` first, as `e` does, so it reads **yours, replaces the built-in**;
+change it back to the built-in's own and the copy goes again. A file that has no front matter at its top is left
+alone (`e` opens it to fix that), and so is one open in your editor. The description and the steps are changed with
+`e`.
 
 Changing or deleting a squad never touches a task that has started: it follows its own copy.
 

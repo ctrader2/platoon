@@ -71,6 +71,8 @@ mod smart;
 #[cfg(test)]
 mod smart_app_tests;
 mod spent;
+#[cfg(test)]
+mod squad_settings_app_tests;
 mod squads;
 #[cfg(test)]
 mod squads_app_tests;

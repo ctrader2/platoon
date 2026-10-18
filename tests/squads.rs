@@ -144,3 +144,27 @@ fn n_makes_a_squad_from_the_template_and_opens_it_in_the_editor() {
     t.send(&[3]);
     t.wait_exit();
 }
+
+#[test]
+fn enter_on_an_open_squads_setting_changes_that_line_of_its_file() {
+    let lab = Lab::new("squads-settings");
+    let mut t = Term::spawn(&[], &lab.env(), &lab.work, 30, 110);
+    t.wait_for("enter open");
+    t.send(b"4");
+    t.wait_for("n new squad");
+    // Docs is the seventh: open it, and the Model line is picked.
+    t.send(b"jjjjjj");
+    t.wait_for("Model          sonnet");
+    t.send(b"\r");
+    t.wait_for_all(&["enter changes", "enter change", "esc back"]);
+    t.send(b"\r");
+    t.wait_for_all(&["Model          haiku", "Docs: Model haiku. Yours now, in place of the built-in."]);
+    let text = fs::read_to_string(lab.squad("docs")).unwrap();
+    assert!(text.contains("\nmodel: haiku\n") && text.contains("name: Docs") && !text.contains("model: sonnet"), "{text}");
+    // Down to Plans first: it says yes now, and the file's line with it.
+    t.send(b"jj\r");
+    t.wait_for("Plans first    yes");
+    assert!(fs::read_to_string(lab.squad("docs")).unwrap().contains("\nplan_first: true\n"));
+    t.send(&[3]);
+    t.wait_exit();
+}

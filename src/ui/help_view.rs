@@ -88,6 +88,9 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
         out.push(Entry::Note(
             "A squad is a Markdown file: front matter (name, description, model, verdict_model, plan_first), then the steps its task's session follows. Yours are in the squads folder of platoon's config; one named like a built-in (feature.md) replaces it. A task keeps the copy it started with.".into(),
         ));
+        out.push(Entry::Note(
+            "Open a squad (enter) to change its model, its verdict model or whether it plans first: ↑↓ picks the line, enter changes it. A built-in becomes your copy first; the description and the steps are changed with e.".into(),
+        ));
     }
     out.push(Entry::Note("Ctrl+Z does nothing on platoon's own screens; in a session it goes to Claude Code like any other key.".into()));
     // The marks of the sessions' rows, where sessions are listed: the Sessions tab and a project's screen.

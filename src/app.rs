@@ -223,6 +223,8 @@ pub enum Hit {
     SquadRow(usize),
     /// A row of the Squads tab.
     SquadsTabRow(usize),
+    /// A setting of the open squad on the Squads tab (`squads::Setting::ALL`).
+    SquadSetting(usize),
     /// An entry of the project picker (`m`).
     AssignRow(usize),
     /// An entry of the project picker of a new task (`n` on the Tasks tab).
@@ -3029,6 +3031,8 @@ impl App {
                     Some(Hit::SquadRow(i)) => self.click_squad_row(i),
                     Some(Hit::SquadsTabRow(i)) if self.squads_showing() && matches!(self.mode, Mode::List) => self.click_squads_row(i),
                     Some(Hit::SquadsTabRow(_)) => {}
+                    Some(Hit::SquadSetting(i)) if self.squads_showing() && matches!(self.mode, Mode::List) => self.click_squad_setting(i),
+                    Some(Hit::SquadSetting(_)) => {}
                     Some(Hit::SearchKind(i)) => self.set_search_kind(i),
                     // A row that is no longer listed (the box was emptied since the last frame) is not there to click.
                     Some(Hit::SearchRow(_)) if self.search_rows_hidden() => {}

@@ -302,6 +302,156 @@ pub fn name_of(squads: &[Squad], id: &str) -> String {
     squads.iter().find(|s| s.id == id).map(|s| s.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| id.to_string())
 }
 
+// ---- the settings changed from the Squads tab ------------------------------------------------------------------------
+
+/// The models a squad's settings are picked from on the Squads tab (its file may name any other).
+pub const MODELS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
+
+/// A front matter setting the Squads tab changes without an editor. The description and the steps are the editor's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Setting {
+    Model,
+    VerdictModel,
+    PlanFirst,
+}
+
+impl Setting {
+    /// In the order the squad's pane shows them.
+    pub const ALL: [Setting; 3] = [Setting::Model, Setting::VerdictModel, Setting::PlanFirst];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Setting::Model => "model",
+            Setting::VerdictModel => "verdict_model",
+            Setting::PlanFirst => "plan_first",
+        }
+    }
+
+    /// Its label in the pane.
+    pub fn label(self) -> &'static str {
+        match self {
+            Setting::Model => "Model",
+            Setting::VerdictModel => "Verdict model",
+            Setting::PlanFirst => "Plans first",
+        }
+    }
+
+    /// What `s` has for it, in the pane's words.
+    pub fn words(self, s: &Squad) -> String {
+        match self {
+            Setting::Model => s.model.clone(),
+            Setting::VerdictModel if s.verdict_model.is_empty() => "the same as the model".into(),
+            Setting::VerdictModel => s.verdict_model.clone(),
+            Setting::PlanFirst => if s.plan_first { "yes, then waits for your yes" } else { "no" }.into(),
+        }
+    }
+
+    /// The value after `s`'s, as its file writes it: the models in `MODELS`' order, round (a model not in it goes to the
+    /// first); the verdict model the same, then "the same as the model" (None: no `verdict_model` line); plans first
+    /// yes or no.
+    pub fn next(self, s: &Squad) -> Option<String> {
+        let after = |m: &str| MODELS.iter().position(|x| *x == m).map(|i| i + 1);
+        match self {
+            Setting::Model => Some(MODELS[after(&s.model).unwrap_or(0) % MODELS.len()].to_string()),
+            Setting::VerdictModel if s.verdict_model.is_empty() => Some(MODELS[0].to_string()),
+            Setting::VerdictModel => MODELS.get(after(&s.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
+            Setting::PlanFirst => Some((!s.plan_first).to_string()),
+        }
+    }
+}
+
+/// `text` (a squad's file) with its front matter's `key` line saying `value`: the line rewritten in place (the last
+/// one, which is the one read, when there are several), or added before the closing `---`; with None, every `key` line
+/// taken out. Every other byte stays as it was. None when the file has no front matter to change.
+pub fn set_line(text: &str, key: &str, value: Option<&str>) -> Option<String> {
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
+    let bare = |l: &str| l.trim_start_matches('\u{feff}').trim_end().to_string();
+    if lines.first().map(|l| bare(l)) != Some("---".to_string()) {
+        return None;
+    }
+    let end = lines.iter().skip(1).position(|l| bare(l) == "---")? + 1;
+    let is_key = |l: &str| {
+        let t = l.trim();
+        !t.starts_with('#') && t.split_once(':').is_some_and(|(k, _)| k.trim() == key)
+    };
+    let found: Vec<usize> = (1..end).filter(|&i| is_key(lines[i])).collect();
+    let ending = |l: &str| {
+        if l.ends_with("\r\n") {
+            "\r\n"
+        } else if l.ends_with('\n') {
+            "\n"
+        } else {
+            ""
+        }
+    };
+    let mut out: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+    match (value, found.last()) {
+        (Some(v), Some(&i)) => {
+            let l = lines[i];
+            let colon = l.find(':').unwrap_or(l.len());
+            out[i] = format!("{} {v}{}", &l[..=colon], ending(l));
+        }
+        (Some(v), None) => {
+            let nl = match ending(lines[end]) {
+                "" => ending(lines[end - 1]),
+                e => e,
+            };
+            out.insert(end, format!("{key}: {v}{}", if nl.is_empty() { "\n" } else { nl }));
+        }
+        (None, _) => {
+            for &i in found.iter().rev() {
+                out.remove(i);
+            }
+        }
+    }
+    Some(out.concat())
+}
+
+/// What changing a setting made of the squad's file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Became {
+    /// The user's file, changed.
+    Changed,
+    /// A built-in's text was written to the user's folder with the change: the user's copy now replaces it.
+    Yours,
+    /// The change made the user's copy the built-in's text again: the copy is gone, and it is built in again.
+    BuiltIn,
+}
+
+/// Why a setting couldn't be changed.
+#[derive(Debug)]
+pub enum ChangeError {
+    /// The file has no front matter to change (it needs the editor).
+    NoFrontMatter,
+    Io(std::io::Error),
+}
+
+/// Change squad `id`'s `setting` to the next value (`Setting::next`) in its file: the user's file, or, for a built-in
+/// not yet theirs, a copy of its text written to the user's folder first (as `e` does). Only that one line changes. A
+/// file that can't be read is never written over; a copy left the same as the built-in is removed, so it stays built in.
+pub fn change(config: &Path, id: &str, setting: Setting) -> Result<(Squad, Became), ChangeError> {
+    let p = path(config, id);
+    let (text, copied) = match fs::read_to_string(&p) {
+        Ok(text) => (text, false),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (built_in_text(id).ok_or(ChangeError::Io(e))?.to_string(), true),
+        Err(e) => return Err(ChangeError::Io(e)),
+    };
+    let origin = if copied { Origin::BuiltIn } else { Origin::Own };
+    let value = setting.next(&parse(id, &text, origin));
+    let new = set_line(&text, setting.key(), value.as_deref()).ok_or(ChangeError::NoFrontMatter)?;
+    let became = if built_in_text(id) == Some(new.as_str()) {
+        if !copied {
+            fs::remove_file(&p).map_err(ChangeError::Io)?;
+        }
+        Became::BuiltIn
+    } else {
+        crate::projects::write_atomic(&p, &new).map_err(ChangeError::Io)?;
+        if copied { Became::Yours } else { Became::Changed }
+    };
+    let squad = get(config, id).ok_or_else(|| ChangeError::Io(std::io::Error::other("the squad is gone")))?;
+    Ok((squad, became))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,6 +634,99 @@ mod tests {
         assert!(matches!(create(&d, "quick fix"), Err(NewError::Taken(n)) if n == "Quick fix"));
         assert!(matches!(create(&d, "Feature"), Err(NewError::Taken(n)) if n == "Feature"), "e changes a built-in, n doesn't");
         assert!(matches!(create(&d, "!!"), Err(NewError::NoName)));
+    }
+
+    #[test]
+    fn a_setting_is_one_line_rewritten_and_every_other_byte_stays() {
+        let text = "\u{feff}---\r\nname: Mine\r\n# a note of the user's: model: none\r\n  model:   haiku  \r\nfuture: kept\r\n---\r\n1. Go.\r\nmodel: in the steps\r\n";
+        let changed = set_line(text, "model", Some("opus")).unwrap();
+        assert_eq!(changed, text.replace("  model:   haiku  \r\n", "  model: opus\r\n"), "the line in place, its ending kept");
+        // Missing: added before the closing line, in the file's line endings. None: every line of it taken out.
+        let added = set_line(text, "verdict_model", Some("fable")).unwrap();
+        assert_eq!(added, text.replace("future: kept\r\n---", "future: kept\r\nverdict_model: fable\r\n---"));
+        let twice = "---\nname: X\nverdict_model: opus\nverdict_model: sonnet\n---\nGo.\n";
+        assert_eq!(set_line(twice, "verdict_model", None).unwrap(), "---\nname: X\n---\nGo.\n");
+        assert_eq!(
+            set_line(twice, "verdict_model", Some("haiku")).unwrap(),
+            "---\nname: X\nverdict_model: opus\nverdict_model: haiku\n---\nGo.\n",
+            "the one read: the last"
+        );
+        assert_eq!(
+            set_line("---\nname: X\nplan_first: true\n---", "plan_first", Some("false")).unwrap(),
+            "---\nname: X\nplan_first: false\n---"
+        );
+        assert_eq!(set_line("---\nname: X\n---", "model", Some("opus")).unwrap(), "---\nname: X\nmodel: opus\n---");
+        assert_eq!(set_line("no front matter", "model", Some("opus")), None);
+        assert_eq!(set_line("---\nname: X\n", "model", Some("opus")), None, "no closing line");
+        // What it reads back as.
+        let s = parse("mine", &changed, Origin::Own);
+        assert_eq!(s.model, "opus");
+        assert_eq!(s.body, parse("mine", text, Origin::Own).body);
+    }
+
+    #[test]
+    fn each_setting_goes_round_its_choices() {
+        let mut s = parse("x", "---\nname: X\ndescription: D\nmodel: opus\n---\nGo.\n", Origin::Own);
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            let next = Setting::Model.next(&s).unwrap();
+            seen.push(next.clone());
+            s.model = next;
+        }
+        assert_eq!(seen, ["sonnet", "haiku", "fable", "opus", "sonnet"]);
+        s.model = "claude-some-full-name".into();
+        assert_eq!(Setting::Model.next(&s).as_deref(), Some("opus"), "a model of the file's own goes to the first");
+        let mut seen = Vec::new();
+        for _ in 0..6 {
+            let next = Setting::VerdictModel.next(&s);
+            seen.push(next.clone().unwrap_or_else(|| "same".into()));
+            s.verdict_model = next.unwrap_or_default();
+        }
+        assert_eq!(seen, ["opus", "sonnet", "haiku", "fable", "same", "opus"]);
+        assert_eq!(Setting::VerdictModel.words(&Squad { verdict_model: String::new(), ..s.clone() }), "the same as the model");
+        assert_eq!(Setting::PlanFirst.next(&s).as_deref(), Some("true"));
+        s.plan_first = true;
+        assert_eq!(Setting::PlanFirst.next(&s).as_deref(), Some("false"));
+    }
+
+    #[test]
+    fn changing_a_built_ins_setting_makes_it_yours_and_changing_it_back_makes_it_built_in_again() {
+        let d = dir_for("change");
+        let (docs, became) = change(&d, "docs", Setting::Model).unwrap();
+        assert_eq!((docs.model.as_str(), docs.origin, became), ("haiku", Origin::Replaces, Became::Yours));
+        let text = fs::read_to_string(path(&d, "docs")).unwrap();
+        assert_eq!(text, built_in_text("docs").unwrap().replace("\nmodel: sonnet\n", "\nmodel: haiku\n"), "only that line");
+        // Round again: the copy is the built-in's text once more, so it goes.
+        change(&d, "docs", Setting::Model).unwrap();
+        change(&d, "docs", Setting::Model).unwrap();
+        let (docs, became) = change(&d, "docs", Setting::Model).unwrap();
+        assert_eq!((docs.model.as_str(), docs.origin, became), ("sonnet", Origin::BuiltIn, Became::BuiltIn));
+        assert!(!path(&d, "docs").exists());
+        // The verdict model "the same as the model" is no line at all.
+        let (feature, _) = change(&d, "feature", Setting::VerdictModel).unwrap();
+        assert_eq!(feature.verdict_model, "", "fable was the last choice");
+        assert!(!fs::read_to_string(path(&d, "feature")).unwrap().contains("verdict_model"));
+        let (feature, became) = change(&d, "feature", Setting::PlanFirst).unwrap();
+        assert_eq!((feature.plan_first, became), (false, Became::Changed));
+    }
+
+    #[test]
+    fn a_setting_never_writes_over_a_file_it_cant_read_or_change() {
+        let d = dir_for("change-refused");
+        fs::create_dir_all(path(&d, "odd")).unwrap();
+        assert!(matches!(change(&d, "odd", Setting::Model), Err(ChangeError::Io(_))));
+        assert!(path(&d, "odd").is_dir());
+        assert!(matches!(change(&d, "nobody", Setting::Model), Err(ChangeError::Io(_))), "neither a file nor a built-in");
+        assert!(!path(&d, "nobody").exists());
+        fs::write(path(&d, "loose"), "just steps\n").unwrap();
+        assert!(matches!(change(&d, "loose", Setting::Model), Err(ChangeError::NoFrontMatter)));
+        assert_eq!(fs::read_to_string(path(&d, "loose")).unwrap(), "just steps\n");
+        // An own squad changes in place, its unknown text kept.
+        let own = "---\nname: Mine\ndescription: D\nmodel: opus\nmood: calm\n---\n1. Go.\n";
+        fs::write(path(&d, "mine"), own).unwrap();
+        let (mine, became) = change(&d, "mine", Setting::Model).unwrap();
+        assert_eq!((mine.model.as_str(), mine.origin, became), ("sonnet", Origin::Own, Became::Changed));
+        assert_eq!(fs::read_to_string(path(&d, "mine")).unwrap(), own.replace("model: opus", "model: sonnet"));
     }
 
     #[test]

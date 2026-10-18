@@ -1,10 +1,12 @@
-//! The Squads tab (`4`): every squad's file to read, and the three things done to one: `e` opens it in the notes'
-//! editors (a built-in's text written to the user's folder first, and taken away again when left as it was), `n` makes a
-//! new one from a template, `d` deletes one of the user's (kept as `<id>.md.bak`). The files themselves are
+//! The Squads tab (`4`): every squad's file to read, and what is done to one: `e` opens it in the notes' editors (a
+//! built-in's text written to the user's folder first, and taken away again when left as it was), `n` makes a new one
+//! from a template, `d` deletes one of the user's (kept as `<id>.md.bak`). With a squad open (`enter`), `↑` `↓` pick its
+//! Model, Verdict model or Plans first line and `enter` changes it to the next choice (`squads::change`: that one line
+//! of its file, a built-in copied to the user's folder first); past them the arrows scroll. The files themselves are
 //! `squads.rs`; the drawing is `ui/squads_view.rs`.
 
 use super::*;
-use crate::squads::{self, NewError, Origin, Squad};
+use crate::squads::{self, Became, ChangeError, NewError, Origin, Setting, Squad};
 
 /// The Squads tab: the squads as their files said when last read, the picked one, and whether it is open full width.
 #[derive(Default)]
@@ -15,6 +17,8 @@ pub struct SquadsTab {
     pub open: bool,
     /// The first line of the open squad in view.
     pub top: Cell<usize>,
+    /// The setting picked in the open squad (`Setting::ALL`), which `enter` changes. None: the arrows scroll.
+    pub field: Option<usize>,
     /// The first row of the list in view.
     pub list_top: Cell<usize>,
     /// How many rows (or, with a squad open, lines) a page is, as last drawn.
@@ -59,21 +63,37 @@ impl App {
             KeyCode::Char('n') => self.open_name_box(NamePurpose::NewSquad),
             KeyCode::Char('d') => self.ask_delete_squad(),
             KeyCode::Enter if !self.sqt.open => self.open_squad(),
+            KeyCode::Enter => self.change_squad_setting(),
             KeyCode::Esc if self.sqt.open => self.close_squad(),
             KeyCode::Down | KeyCode::Char('j') => self.move_squads(1),
             KeyCode::Up | KeyCode::Char('k') => self.move_squads(-1),
             KeyCode::PageDown => self.move_squads(page),
             KeyCode::PageUp => self.move_squads(-page),
+            KeyCode::Char('g') | KeyCode::Home if self.sqt.open => {
+                self.sqt.top.set(0);
+                self.sqt.field = Some(0);
+            }
             KeyCode::Char('g') | KeyCode::Home => self.move_squads(i32::MIN / 2),
             KeyCode::Char('G') | KeyCode::End => self.move_squads(i32::MAX / 2),
             _ => {}
         }
     }
 
-    /// The arrows: through the list, or, with a squad open, through its lines.
+    /// The arrows: through the list, or, with a squad open, through its settings and then its lines (a page or the
+    /// wheel scrolls at once).
     pub(super) fn move_squads(&mut self, delta: i32) {
         if self.sqt.open {
-            self.sqt.top.set((self.sqt.top.get() as i64 + i64::from(delta)).clamp(0, u32::MAX as i64) as usize);
+            let last = Setting::ALL.len() - 1;
+            let top = self.sqt.top.get();
+            match (self.sqt.field, delta) {
+                (Some(i), 1) if i < last => self.sqt.field = Some(i + 1),
+                (Some(i), -1) => self.sqt.field = Some(i.saturating_sub(1)),
+                (None, -1) if top == 0 => self.sqt.field = Some(last),
+                _ => {
+                    self.sqt.field = None;
+                    self.sqt.top.set((top as i64 + i64::from(delta)).clamp(0, u32::MAX as i64) as usize);
+                }
+            }
             return;
         }
         let last = self.sqt.list.len().saturating_sub(1) as i64;
@@ -84,6 +104,45 @@ impl App {
         if self.sqt.picked().is_some() {
             self.sqt.open = true;
             self.sqt.top.set(0);
+            self.sqt.field = Some(0);
+        }
+    }
+
+    /// `enter` on a setting of the open squad: the next choice written to its file (a built-in becomes the user's copy
+    /// first), and said in one line. Not while an editor has the squad's file.
+    pub(super) fn change_squad_setting(&mut self) {
+        let (Some(s), Some(&setting)) = (self.sqt.picked().cloned(), self.sqt.field.and_then(|i| Setting::ALL.get(i))) else { return };
+        let in_editor = |e: Option<&FileEdit>| matches!(e.map(|e| &e.of), Some(FileOf::Squad { id, .. }) if *id == s.id);
+        let held = self
+            .editing
+            .as_ref()
+            .filter(|e| in_editor(e.file.as_ref()))
+            .map(|e| e.name.clone())
+            .or_else(|| self.notes_window.as_ref().filter(|w| in_editor(w.file.as_ref())).map(|w| w.name.clone()));
+        if let Some(editor) = held {
+            self.notify(format!("{} is open in {editor}. Close it first.", s.name_or_id()));
+            return;
+        }
+        let name = s.name_or_id();
+        match squads::change(&self.config, &s.id, setting) {
+            Ok((now, became)) => {
+                self.reload_squads(Some(&s.id));
+                let value = match setting {
+                    Setting::PlanFirst if now.plan_first => "yes".to_string(),
+                    Setting::PlanFirst => "no".to_string(),
+                    _ => setting.words(&now),
+                };
+                let said = format!("{name}: {} {value}.", setting.label());
+                self.notify(match became {
+                    Became::Changed => said,
+                    Became::Yours => format!("{said} Yours now, in place of the built-in."),
+                    Became::BuiltIn => format!("{said} That is the built-in again, so it is built in."),
+                });
+            }
+            Err(ChangeError::NoFrontMatter) => {
+                self.notify(format!("{name}'s file has no settings at its top to change: e opens it to fix that."))
+            }
+            Err(ChangeError::Io(e)) => self.notify(format!("Couldn't change {name}: {}", plain_io(&e))),
         }
     }
 
@@ -97,6 +156,18 @@ impl App {
             self.open_squad();
         } else if i < self.sqt.list.len() {
             self.sqt.selected = i;
+        }
+    }
+
+    /// A click on a setting of the open squad: picks it; on the picked one, changes it.
+    pub(super) fn click_squad_setting(&mut self, i: usize) {
+        if !self.sqt.open {
+            return;
+        }
+        if self.sqt.field == Some(i) {
+            self.change_squad_setting();
+        } else {
+            self.sqt.field = Some(i);
         }
     }
 

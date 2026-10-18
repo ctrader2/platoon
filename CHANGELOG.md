@@ -51,6 +51,10 @@ here.
   leaves them over is asked for again once, then the notes stay as they were); the first time it condenses notes that
   were over, the old file is kept as `project.md.bak`. Notes you write past the limit are sent to sessions cut at a line
   end, with a line saying so, and the project's screen warns about it.
+- **A squad's settings without an editor**: open a squad on the Squads tab (`enter`), pick its Model, Verdict model or
+  Plans first line with `↑` `↓` (or a click) and `enter` changes it to the next choice (opus, sonnet, haiku, fable; the
+  verdict model also "the same as the model"; yes or no). Only that line of the file changes; a built-in is copied to
+  your squads folder first, and is built in again when changed back.
 
 ### Removed
 
