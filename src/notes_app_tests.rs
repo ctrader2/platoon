@@ -65,7 +65,7 @@ fn on_the_notes(name: &str) -> (World, App, String) {
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
     shift(&mut app, KeyCode::Right);

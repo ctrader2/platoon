@@ -112,7 +112,7 @@ fn v_with_nothing_selected_asks_for_a_folder_and_typing_v_there_is_a_letter() {
     assert_eq!(opened(&mut app), vec![s(&w.base)]);
 
     // The Projects list asks too.
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     v(&mut app);
     assert!(matches!(app.mode, Mode::Picker) && app.picker.editor);
     key(&mut app, KeyCode::Esc);
@@ -156,7 +156,7 @@ fn lab(name: &str, state: State) -> Lab {
     git(&wt, &["commit", "-q", "-m", "basket"]);
     let mut l = Lab { w, app, project, shop, made, wt };
     l.set(state);
-    key(&mut l.app, KeyCode::Char('2'));
+    key(&mut l.app, KeyCode::Char('3'));
     assert!(l.app.board_showing() && l.app.ticket(1).is_some());
     l
 }

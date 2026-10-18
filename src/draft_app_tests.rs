@@ -201,7 +201,7 @@ fn enter_makes_them_not_started_with_their_squads_from_the_session() {
     let (w, mut app, fake, project, shop) = draft_world("draft-make", &three(), true);
     let project = project.unwrap();
     // From the project's screen: the Tasks tab shows them after.
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.open_project.as_deref(), Some(project.as_str()));
     drafted(&mut app);

@@ -178,7 +178,7 @@ impl Lab {
 
     /// Open the project's screen with the notes pane in focus.
     fn open_notes(&self, t: &mut Term) {
-        t.send(b"3");
+        t.send(b"2");
         t.wait_for_flat("WB Web");
         t.send(b"\r");
         t.wait_for("╭ Notes");
@@ -261,7 +261,7 @@ fn the_stop_hook_starts_a_helper_that_updates_the_notes_and_platoon_shows_and_un
     // Now the screen: the description on the Projects list and across the top of the project's own screen, when
     // the notes last changed, what changed, and undoing it.
     let mut t = Term::spawn(&[], &lab.env(), &lab.base, 40, 120);
-    t.send(b"3");
+    t.send(b"2");
     t.wait_for_flat("WB Web");
     t.wait_for("A sock shop, now with a basket that adds up.");
     t.send(b"\r");

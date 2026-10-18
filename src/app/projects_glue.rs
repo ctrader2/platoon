@@ -7,10 +7,10 @@ use crate::projects::{Project, SLOTS};
 use std::fs;
 
 /// The top-level tabs, on `1` to `4`.
-pub const TOPS: &[&str] = &["Sessions", "Tasks", "Projects", "Squads"];
+pub const TOPS: &[&str] = &["Sessions", "Projects", "Tasks", "Squads"];
 pub const TOP_SESSIONS: usize = 0;
-pub const TOP_TASKS: usize = 1;
-pub const TOP_PROJECTS: usize = 2;
+pub const TOP_PROJECTS: usize = 1;
+pub const TOP_TASKS: usize = 2;
 pub const TOP_SQUADS: usize = 3;
 
 /// Active and Archived on the Projects tab: the label and what the tab says when it has nothing in it.
@@ -158,8 +158,8 @@ impl App {
         self.pview.get(self.pselected).map(|&i| &self.projects.all()[i])
     }
 
-    /// `1` to `4`: a top-level tab. From a project's screen, `3` goes back to the Projects tab's list; from a task
-    /// opened on the Tasks tab, `2` goes back to the board; from a squad opened on the Squads tab, `4` to its list.
+    /// `1` to `4`: a top-level tab. From a project's screen, `2` goes back to the Projects tab's list; from a task
+    /// opened on the Tasks tab, `3` goes back to the board; from a squad opened on the Squads tab, `4` to its list.
     pub fn switch_top(&mut self, i: usize) {
         if i >= TOPS.len() {
             return;
@@ -289,7 +289,7 @@ impl App {
         }
     }
 
-    /// One of the top-level lists (Sessions, Tasks, Projects, Squads) with nothing open over it: where quit quits.
+    /// One of the top-level lists (Sessions, Projects, Tasks, Squads) with nothing open over it: where quit quits.
     pub fn at_top_level(&self) -> bool {
         self.open_project.is_none() && !(self.top == TOP_TASKS && self.tk.open.is_some()) && !(self.top == TOP_SQUADS && self.sqt.open)
     }

@@ -238,7 +238,7 @@ fn put_in(app: &mut App, session: &str, project: &str) {
 }
 
 fn make_project(app: &mut App, name: &str) -> String {
-    key(app, KeyCode::Char('3'));
+    key(app, KeyCode::Char('2'));
     key(app, KeyCode::Char('n'));
     type_str(app, name);
     key(app, KeyCode::Enter);
@@ -302,7 +302,7 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     make_project(&mut app, "Web shop");
     make_project(&mut app, "Tiny");
     app.notice = None;
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     let mut term = Terminal::new(TestBackend::new(200, 20)).unwrap();
     // The name column is the badge (` WS `, four cells), a space and the longest name, plus the gap - and
     // then its share of the wide screen's spare width, the share SESSIONS (24 cells) gets or one cell more
@@ -326,7 +326,7 @@ fn the_projects_list_sizes_its_name_column_to_the_projects_on_show() {
     // A name past the cap stops there and is cut.
     let long = "L".repeat(crate::projects::NAME_MAX);
     make_project(&mut app, &long);
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     app.notice = None;
     let lines = draw(&mut term, &app);
     let head = &lines[TITLES];

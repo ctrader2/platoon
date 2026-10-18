@@ -6,7 +6,7 @@
 use crate::app::{App, TOP_SESSIONS, TOP_TASKS, TOPS};
 
 /// The Projects tab, as `app.top` numbers it (`TOPS`).
-const TOP_PROJECTS: usize = 2;
+const TOP_PROJECTS: usize = 1;
 
 #[test]
 fn the_tab_numbers_here_are_the_apps() {
@@ -137,7 +137,7 @@ fn the_next_key_or_click_puts_it_away_and_still_does_what_it_does() {
     let w = world("vn-key");
     let mut app = with_news(&w, CLAUDE);
     assert_eq!(app.news_showing(), Some(CLAUDE));
-    app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE));
+    app.on_key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE));
     assert_eq!(app.news_showing(), None);
     assert_eq!(app.top, TOP_PROJECTS, "the key went to the Projects tab as well");
     app.on_key(KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE));

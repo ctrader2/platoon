@@ -6,7 +6,7 @@ folders in an editor.
 
 ## The list
 
-The header has four tabs, **Sessions**, **Tasks**, **Projects** and **Squads** (`1` to `4`, or click them). Under Sessions
+The header has four tabs, **Sessions**, **Projects**, **Tasks** and **Squads** (`1` to `4`, or click them). Under Sessions
 and Projects, each has **Active** and **Archived**, with how many each holds, at the right of the line under the tabs (on a
 narrow terminal, on the row under it): the left and right arrow keys switch them (or click them). After the tabs, the
 header says how many tasks need you (**● 2 need you**, see [the Tasks tab](tasks-and-squads.md#the-tasks-tab)) and how
@@ -76,7 +76,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 | `h` | [hand this work on](projects.md#handing-work-on-to-a-new-session) to a new session in the same project (needs the smart features) |
 | `t` | [draft tasks](tasks-and-squads.md#making-tasks-from-a-conversation) from this conversation: Claude reads it in the background (the row says **Drafting tasks…**) and the tasks it suggests open in a popup, where you change them and make them, or make nothing (needs the smart features) |
 | `v` | open the conversation's folders in [your code editor](#opening-the-editor-v) |
-| `1` to `4` | switch between the Sessions, [Tasks](tasks-and-squads.md#the-tasks-tab), Projects and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
+| `1` to `4` | switch between the Sessions, Projects, [Tasks](tasks-and-squads.md#the-tasks-tab) and [Squads](tasks-and-squads.md#the-squads-tab) tabs (or click them); the current tab is underlined |
 | `←` `→` | switch between Active and Archived |
 | `/` | [search](#search): narrow the list as you type, or find a conversation by the words you typed in it |
 | `r` | [rename](#renaming) the selected conversation |

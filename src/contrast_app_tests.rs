@@ -93,7 +93,7 @@ fn hint_words_read_at_4_5_to_1_in_every_theme_in_the_footer_the_tabs_and_the_hel
         }
         assert_eq!(cells_of(&buf, "search")[0].fg, ui::hint_fg(&t), "{}: the hint words are the hint color", t.id);
         // The tabs' keys are hints too, on the current tab's fill as on the page.
-        for name in ["1 Sessions", "2 Tasks", "3 Projects"] {
+        for name in ["1 Sessions", "3 Tasks", "2 Projects"] {
             let k = cells_of(&buf, name)[0];
             assert!(contrast(k.fg, k.bg) >= MIN_SUBTEXT, "{}: the key of {name} is {:.2}:1", t.id, contrast(k.fg, k.bg));
         }

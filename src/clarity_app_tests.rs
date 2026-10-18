@@ -255,7 +255,7 @@ fn a_help_heading_is_never_the_last_line_in_view() {
         .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     key(&mut app, KeyCode::Enter);
     assert!(app.tk.open.is_some(), "a task's screen");
     let headings = ["On this screen", "Anywhere in platoon", "Good to know"];

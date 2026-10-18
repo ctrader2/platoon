@@ -37,7 +37,7 @@ here.
 - **The Tasks tab** has four sections, Needs you, Working, Not started and Done, and few keys: `n` new, `s` start,
   `enter` open, `e` edit, `c` cancel. Tasks drafted from a conversation (`t`) come with a suggested squad and are made
   Not started.
-- The tabs are Sessions, Tasks, Projects and Squads (`1` to `4`).
+- The tabs are Sessions, Projects, Tasks and Squads (`1` to `4`): Projects comes second, next to the sessions it groups.
 
 ### Added
 

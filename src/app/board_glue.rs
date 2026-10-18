@@ -1,4 +1,4 @@
-//! The Tasks tab inside the app (`2`): every task across all projects and the ones in no project, in the board's
+//! The Tasks tab inside the app (`3`): every task across all projects and the ones in no project, in the board's
 //! sections (`board.rs`), with the picked task's details beside the list on a wide terminal. Its keys: `n` makes a
 //! task (the project first, then its title; a task in no project picks its folder), `s` starts the picked one, `enter`
 //! opens it (its session, or its text when it never started), `e` edits its text, `c` cancels it, `/` narrows the list.

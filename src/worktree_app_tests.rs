@@ -91,7 +91,7 @@ fn lab(name: &str, state: State) -> Lab {
     })
     .unwrap();
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     assert!(app.board_showing() && app.ticket(1).is_some());
     Lab { w, app, project, shop, made, wt, tip }
 }

@@ -103,7 +103,7 @@ fn lab(name: &str, tasks: &[(&str, &str, State)]) -> (World, App, String, String
             .unwrap();
     }
     app.reload_for_test();
-    key(&mut app, KeyCode::Char('2'));
+    key(&mut app, KeyCode::Char('3'));
     assert!(app.board_showing());
     (w, app, project, folder)
 }

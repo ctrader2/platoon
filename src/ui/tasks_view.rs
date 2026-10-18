@@ -1,4 +1,4 @@
-//! The Tasks tab (`2`): the board's sections and their two-line rows, the picked task's details beside the list from
+//! The Tasks tab (`3`): the board's sections and their two-line rows, the picked task's details beside the list from
 //! `SPLIT_MIN_WIDTH` columns (its state and why, its squad, its folder and branch, its plan when one is ready, its "Done
 //! when" boxes, its tests and what it has spent), a task's own screen (the same details and its text), the list of
 //! squads a task starts with (`s`) and the project picker of a new task (`n`).

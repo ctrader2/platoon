@@ -204,7 +204,7 @@ fn on_the_tasks(name: &str) -> (World, App) {
     store.add(NewTicket { title: "Basket page".into(), folder: Some("/tmp".into()), ..Default::default() }).unwrap();
     store.add(NewTicket { title: "Checkout".into(), folder: Some("/tmp".into()), ..Default::default() }).unwrap();
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     assert!(app.board_showing());
     (w, app)
 }
@@ -249,7 +249,7 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
         app.projects.create(name).unwrap();
     }
     app.reload_for_test();
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     ch(&mut app, 'j');
     assert_eq!(app.pselected, 1);
     ch(&mut app, 'k');

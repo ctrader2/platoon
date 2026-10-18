@@ -30,7 +30,7 @@ fn anywhere(app: &App) -> Vec<(String, String)> {
     vec![
         (format!("1-{}", TOPS.len()), format!("the tabs: {}", TOPS.join(", "))),
         (app.back_label().to_string(), "back one level (esc does the same)".into()),
-        (app.quit_label().to_string(), "quit platoon, on the Sessions, Tasks, Projects and Squads lists (elsewhere it goes back)".into()),
+        (app.quit_label().to_string(), "quit platoon, on the Sessions, Projects, Tasks and Squads lists (elsewhere it goes back)".into()),
         ("?".into(), "this help".into()),
     ]
 }

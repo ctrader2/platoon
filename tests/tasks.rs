@@ -261,7 +261,7 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     t.wait_for("Working · 1");
     t.send(b"1");
     t.wait_for("#1 task-1");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for("Working · 1");
 
     // Its hooks, as Claude Code runs them: a plan to approve, then approved; a question, then answered; the turn ends.
@@ -316,7 +316,7 @@ fn a_task_with_no_folder_asks_for_one_before_its_squad() {
     fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
     t.wait_for("The order email is HTML only");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_all(&["Not started · 1", "No folder yet · s starts it"]);
     t.send(b"s");
     t.wait_for_all(&["The folder task #1 works in", "enter pick a squad"]);
@@ -358,7 +358,7 @@ fn the_check_of_the_work_sends_it_back_once_then_needs_you_with_what_it_found() 
     .unwrap();
     let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
     t.wait_for("The order email is HTML only");
-    t.send(b"2");
+    t.send(b"3");
     t.wait_for_all(&["Working · 1", "#1 Text mails"]);
     let stop = json!({"session_id": "s-9", "hook_event_name": "Stop", "cwd": lab.shop, "permission_mode": "acceptEdits",
         "last_assistant_message": "I added the text part."});

@@ -141,7 +141,7 @@ fn h_works_on_the_project_screen_too_and_the_old_key_does_not() {
     fake.reply_default(BRIEF);
     let mut app = app_of(&w, &fake);
     // On to the Projects tab and into the project: its sessions pane has the focus.
-    key(&mut app, KeyCode::Char('3'));
+    key(&mut app, KeyCode::Char('2'));
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
     select(&mut app, "sess-1");

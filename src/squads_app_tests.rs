@@ -298,7 +298,7 @@ fn a_change_made_by_hand_shows_at_the_next_refresh_and_the_help_has_the_tabs_key
     ch(&mut app, '?');
     let mut term = Terminal::new(TestBackend::new(120, 50)).unwrap();
     let text = flat(&draw(&mut term, &app));
-    for want in ["enter open", "e edit", "n new squad", "1-4 the tabs: Sessions, Tasks, Projects, Squads", "A squad is a Markdown file"] {
+    for want in ["enter open", "e edit", "n new squad", "1-4 the tabs: Sessions, Projects, Tasks, Squads", "A squad is a Markdown file"] {
         assert!(text.contains(want), "{want}\n{text}");
     }
 }

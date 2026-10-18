@@ -7,7 +7,7 @@ session like any other: it shows on the Sessions tab, marked with the task's num
 
 ## The Tasks tab
 
-The second tab, `2` **Tasks**, lists every task across your projects (and the ones in no project) in four sections, each
+The third tab, `3` **Tasks**, lists every task across your projects (and the ones in no project) in four sections, each
 with how many it has:
 
 - **Needs you**: its session stopped for you. Its plan is ready for your yes, it asks a question, it waits at a

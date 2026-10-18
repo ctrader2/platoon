@@ -69,7 +69,7 @@ fn on_the_project(name: &str) -> (World, App) {
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     Tickets::open(&w.config, &id).add(NewTicket { title: "Basket page".into(), ..Default::default() }).unwrap();
     app.reload_for_test();
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some(), "the project's screen is open");
     (w, app)
@@ -77,7 +77,7 @@ fn on_the_project(name: &str) -> (World, App) {
 
 /// Task #1's own screen, from the Tasks tab (it never started: enter shows its text).
 fn open_ticket(app: &mut App) {
-    ch(app, '2');
+    ch(app, '3');
     key(app, KeyCode::Enter);
     assert_eq!(app.tk.open, Some(1), "the task's screen is open");
 }

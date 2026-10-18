@@ -161,9 +161,9 @@ fn every_popup_fades_the_screen_behind_it() {
         ('1', 'n', |m| matches!(m, Mode::Picker)),
         ('1', 's', |m| matches!(m, Mode::Settings)),
         ('1', '?', |_| true),
-        ('2', 'n', |m| matches!(m, Mode::TaskProject)),
-        ('3', 'n', |m| matches!(m, Mode::ProjectName)),
-        ('3', 'c', |m| matches!(m, Mode::Look)),
+        ('3', 'n', |m| matches!(m, Mode::TaskProject)),
+        ('2', 'n', |m| matches!(m, Mode::ProjectName)),
+        ('2', 'c', |m| matches!(m, Mode::Look)),
     ];
     // Wide enough that the top left corner is never under a popup.
     for (tab, k, is) in cases {
@@ -235,7 +235,7 @@ fn on_a_project(name: &str) -> (World, App, String) {
         .add(crate::tickets::NewTicket { title: "Coupon totals".into(), ..Default::default() })
         .unwrap();
     app.reload_for_test();
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     key(&mut app, KeyCode::Enter);
     assert!(app.open_project().is_some());
     (w, app, id)
@@ -275,13 +275,13 @@ fn the_help_says_the_same_about_platoon_everywhere_and_lists_settings_and_search
     // The three tabs, and a task's own screen.
     ch(&mut app, '1');
     check(&app, "Sessions", true, true);
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     check(&app, "Tasks", false, false);
     key(&mut app, KeyCode::Enter);
     assert!(app.tk.open.is_some());
     check(&app, "task", false, false);
     key(&mut app, KeyCode::Esc);
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     check(&app, "Projects", true, true);
     let first = seen[0].1.clone();
     for (place, anywhere) in &seen {
@@ -324,7 +324,7 @@ fn the_states_read_in_sentence_case_and_a_task_that_never_started_says_not_start
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("1 open"), "{f}");
     // On the Tasks tab: the section and what to press.
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     let f = flat(&draw(&mut term, &app));
     assert!(f.contains("Not started · 1") && f.contains("#1 Coupon totals"), "{f}");
     assert!(f.contains("No folder yet · s starts it"), "{f}");
@@ -410,7 +410,7 @@ fn a_shop(name: &str) -> (World, App) {
             .unwrap();
     }
     app.reload_for_test();
-    ch(&mut app, '2');
+    ch(&mut app, '3');
     (w, app)
 }
 
@@ -470,7 +470,7 @@ fn a_session_folder_in_the_project_pane_is_cut_where_a_folder_starts() {
     let id = app.projects.create("Web shop").unwrap();
     app.projects.assign("aaa-1", Some(&id)).unwrap();
     app.reload_for_test();
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     key(&mut app, KeyCode::Enter);
     let mut term = sized(&mut app, 80, 24);
     let lines = draw(&mut term, &app);
@@ -495,7 +495,7 @@ fn a_notice_stays_with_the_screen_it_was_given_on() {
     assert!(said.starts_with("Renamed to"), "{said}");
     assert!(draw(&mut term, &app).last().unwrap().contains(&said));
     // Another tab: it doesn't follow.
-    ch(&mut app, '3');
+    ch(&mut app, '2');
     assert_eq!(app.active_notice(), None);
     let lines = draw(&mut term, &app);
     assert!(!lines.iter().any(|l| l.contains("Renamed to")), "{}", lines.join("\n"));
