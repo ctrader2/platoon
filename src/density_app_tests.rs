@@ -112,7 +112,7 @@ fn the_selection_and_the_hover_cover_both_lines_of_a_row_and_nothing_else() {
 }
 
 #[test]
-fn at_80_and_60_columns_the_columns_keep_apart_and_the_bar_goes_before_dir() {
+fn at_80_and_60_columns_the_columns_keep_apart_and_context_goes_before_dir() {
     let w = ten("d-cols");
     let mut app = w.app();
     app.notice = None;
@@ -127,7 +127,7 @@ fn at_80_and_60_columns_the_columns_keep_apart_and_the_bar_goes_before_dir() {
     for t in ["NAME", "DIR", "STATUS", "LAST"] {
         assert!(head.contains(t), "60: {t}: {head}");
     }
-    assert!(!head.contains("CONTEXT"), "60: the bar goes before DIR and NAME: {head}");
+    assert!(!head.contains("CONTEXT"), "60: CONTEXT goes before DIR and NAME: {head}");
     // A blank cell before every title, and before every value under it.
     let row = &lines[row_of(&lines, "project-0 ")];
     for t in ["DIR", "STATUS", "LAST"] {
@@ -149,10 +149,43 @@ fn the_context_column_is_blank_for_a_conversation_nothing_is_known_about() {
     let (lines, _) = shown(&app, 80, 24);
     let known = &lines[row_of(&lines, "known ")];
     let bare = &lines[row_of(&lines, "bare ")];
-    assert!(known.contains('%') && known.contains('━'), "a bar where there is data: {known}");
-    assert!(!bare.contains('%') && !bare.contains('━'), "blank, not an empty bar at 0%: {bare}");
+    assert!(known.contains(" 25% "), "the figure where there is data: {known}");
+    assert!(!bare.contains('%'), "blank, not 0%: {bare}");
     // Blank, but the row still lines up: LAST ends where it does on the other row.
     assert_eq!(bare.trim_end_matches(['│', ' ']).chars().count(), known.trim_end_matches(['│', ' ']).chars().count());
+}
+
+#[test]
+fn the_context_column_says_how_full_each_conversation_is_and_warns_above_80_percent() {
+    let w = World::new("d-context-pct");
+    let at = crate::testkit::now_ms();
+    // The last reply's input, from the cache and not: 120k of a 200k window is 60%; 170k is 85%; 160k is 80% exactly.
+    let talk = |id: &str, cwd: &str, mins: u64, input: u64, write: u64, read: u64| {
+        let t = at - mins * 60_000;
+        let lines = [
+            serde_json::json!({"type":"user","cwd":cwd,"timestamp":crate::testkit::iso(t - 5000),"message":{"role":"user","content":format!("talk {id}")}}),
+            serde_json::json!({"type":"assistant","cwd":cwd,"timestamp":crate::testkit::iso(t),"message":{"model":"claude-opus-5-5",
+                "usage":{"input_tokens":input,"cache_creation_input_tokens":write,"cache_read_input_tokens":read,"output_tokens":50}}}),
+        ];
+        w.transcript_lines(id, &lines.map(|l| l.to_string()));
+    };
+    talk("sixty-1", "/srv/sixty", 1, 1_000, 19_000, 100_000);
+    talk("full-2", "/srv/full", 2, 0, 0, 170_000);
+    talk("edge-3", "/srv/edge", 3, 0, 0, 160_000);
+    let mut app = w.app();
+    app.notice = None;
+    let t = app.theme.clone();
+    let (lines, term) = shown(&app, 80, 24);
+    let head = &lines[row_of(&lines, "STATUS")];
+    let x = col_of(head, "CONTEXT");
+    let figure = |name: &str, want: &str| {
+        let y = row_of(&lines, name);
+        assert_eq!(lines[y].chars().skip(x).take(want.len()).collect::<String>(), want, "{name}: under CONTEXT\n{}", lines.join("\n"));
+        term.backend().buffer()[(x as u16, y as u16)].fg
+    };
+    assert_eq!(figure("sixty ", "60%"), t.subtext);
+    assert_eq!(figure("edge ", "80%"), t.subtext, "80% is not above 80%");
+    assert_eq!(figure("full ", "85%"), t.warn, "above 80%: the warning colour");
 }
 
 /// The tab strip of the settings popup, at the top of its border: the line under "╭ Settings".

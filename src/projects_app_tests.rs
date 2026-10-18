@@ -362,9 +362,9 @@ fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     assert_ne!(tiny, color, "each project its own color");
     assert_eq!(col_of(&lines[pill_rows(&lines, tiny)[0]], " Tiny "), Some(proj_x));
 
-    // At 120 columns there is less room than that: the column gives way so NAME and DIR keep their least, and
+    // At 113 columns there is less room than that: the column gives way so NAME and DIR keep their least, and
     // the name is cut shorter.
-    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let mut term = Terminal::new(TestBackend::new(113, 30)).unwrap();
     draw(&mut term, &app);
     let lines = cells(&term);
     let h = header_row(&lines);
@@ -373,7 +373,7 @@ fn a_long_project_name_is_cut_and_below_90_columns_the_pill_shows_the_badge() {
     let row = &lines[pill_rows(&lines, color)[0]];
     assert!(text_of(row).contains("A project with") && text_of(row).contains('…') && !text_of(row).contains("goes on"), "{}", text_of(row));
     for l in &lines {
-        assert_eq!(text_of(l).chars().count(), 120, "nothing runs past the right edge");
+        assert_eq!(text_of(l).chars().count(), 113, "nothing runs past the right edge");
     }
 
     // Below 90 columns (where BRANCH goes): the badge letters, the column as wide as its title needs.
@@ -458,7 +458,7 @@ fn with_a_project_column_every_row_still_fits_the_width() {
             assert!(line.ends_with(' '), "{width}: nothing runs to the terminal's edge: {line}");
         }
         let has_col = head.contains("PROJECT");
-        // (The table is the terminal less a column of air at each side. Below 66 columns the CONTEXT bar has gone,
+        // (The table is the terminal less a column of air at each side. Below 66 columns CONTEXT has gone,
         // which leaves NAME and DIR room to share with it: at every size platoon draws in, the column shows.)
         assert!(has_col, "{width}: {head}");
         assert_eq!(pill_rows(&lines, color).is_empty(), !has_col, "{width}");

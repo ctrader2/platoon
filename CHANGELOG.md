@@ -38,6 +38,9 @@ here.
   `enter` open, `e` edit, `c` cancel. Tasks drafted from a conversation (`t`) come with a suggested squad and are made
   Not started.
 - The tabs are Sessions, Projects, Tasks and Squads (`1` to `4`): Projects comes second, next to the sessions it groups.
+- **CONTEXT** on a session's row is a plain figure, `62%` of the model's window (the last reply's input; a 1M window
+  when the model's name says so or the conversation is past 200,000 tokens), in the warning colour above 80%. It
+  replaces the bar and its `~`.
 
 ### Added
 

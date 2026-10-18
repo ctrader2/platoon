@@ -82,16 +82,15 @@ fn on_a_wide_screen_the_columns_share_the_spare_width_and_the_row_fills_it() {
         let shares: Vec<usize> = starts.windows(2).zip(wanted).map(|(x, want)| x[1] - x[0] - want).collect();
         let (lo, hi) = (shares.iter().min().unwrap(), shares.iter().max().unwrap());
         assert!(hi - lo <= 1 && *lo > 0, "{width}: the columns share what is over: {shares:?}\n{head}");
-        // The context bar itself keeps its size; its column's share is the air after the percentage.
-        let pct = col_of(row, "%").expect("the bar's percentage");
-        assert_eq!(pct + 1, starts[5] + BAR + 5, "{width}: the bar is not stretched\n{head}\n{row}");
+        // The context figure sits at the start of its column, under its title; the share is the air after it.
+        assert_eq!(col_of(row, "25%"), Some(starts[5]), "{width}: the figure under CONTEXT\n{head}\n{row}");
         // Nothing is cut: the text sits at the left of its column, the share is clear air after it.
         assert!(row.contains("alpha-one") && row.contains("/srv/alpha-one"), "{row}");
     }
 }
 
-/// The context bar keeps its own width: how full it looks is what it means.
-const BAR: usize = 10;
+/// The CONTEXT column: its title and a blank cell.
+const CONTEXT: usize = 8;
 
 #[test]
 fn a_narrow_screen_still_shares_the_room_between_name_and_dir_as_it_did() {
@@ -106,7 +105,7 @@ fn a_narrow_screen_still_shares_the_room_between_name_and_dir_as_it_did() {
         let head = &lines[TITLES];
         let table = width as usize - 2;
         let (branch, model) = (if table >= 100 { 16 } else { 0 }, if table >= 88 { 12 } else { 0 });
-        let flex = table - (3 + BAR + 5 + 6 + 11 + branch + model);
+        let flex = table - (3 + CONTEXT + 6 + 11 + branch + model);
         let starts = column_starts(head);
         // Two fifths of what there is to NAME, the rest to DIR, exactly as before: nothing is over to share.
         assert_eq!(starts[1] - starts[0], flex * 2 / 5, "{width}: NAME's old share\n{head}");
@@ -179,12 +178,12 @@ fn the_header_and_the_rows_are_the_same_width_at_every_terminal_width() {
 }
 
 #[test]
-fn as_the_table_narrows_branch_then_model_then_the_context_bar_then_dir_go() {
+fn as_the_table_narrows_branch_then_model_then_context_then_dir_go() {
     let w = short("l-drop");
     let mut app = w.app();
     app.notice = None;
     // The rules go by the table's width, which is the terminal less the side margins (2 cells). NAME, STATUS and LAST
-    // stay to the end: a conversation's name says more than a bar. (Below 60 columns platoon only says it needs more.)
+    // stay to the end: a conversation's name says more than how full it is. (Below 60 columns platoon only says it needs more.)
     for width in [60u16, 65, 66, 80, 89, 90, 101, 102, 120] {
         let mut term = Terminal::new(TestBackend::new(width, 20)).unwrap();
         let lines = draw(&mut term, &app);
@@ -378,7 +377,7 @@ fn added_folders_follow_the_folder_in_the_dir_column_and_are_counted_when_they_d
     assert!(row_of(&lines, "~/repos/plain").contains("~/repos/plain  "), "a conversation without added folders is as before");
 
     // Narrow: the main folder is cut at the front and the rest counted.
-    // (At 60 columns the CONTEXT bar has gone and DIR has room for a short list: one more, longer, folder makes it too long.)
+    // (At 60 columns CONTEXT has gone and DIR has room for a short list: one more, longer, folder makes it too long.)
     if let Some(s) = app.sessions.iter_mut().find(|s| s.id == "one-added") {
         s.extra_dirs.push("/another/added/folder/far/away".into());
     }

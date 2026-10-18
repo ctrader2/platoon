@@ -321,8 +321,14 @@ pub fn pretty_model(id: &str) -> String {
     }
 }
 
-/// The transcript doesn't record the model's window size, so infer it: 200k until the session is seen
-/// past 200k tokens, then 1M for good (compaction shrinks usage but not the window).
+/// Does a model id name the 1M-token window itself: `claude-opus-5-5[1m]`, or a `context-1m` variant?
+fn says_large_window(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    m.ends_with("[1m]") || m.contains("context-1m")
+}
+
+/// The transcript doesn't record the model's window size, so infer it: 200k until the model id names the 1M window
+/// or the session is seen past 200k tokens, then 1M for good (compaction shrinks usage but not the window).
 pub fn window_size(tokens: u64, large: &mut bool) -> u64 {
     if tokens > DEFAULT_WINDOW {
         *large = true;
@@ -738,7 +744,7 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
                         }
                         let n = |k: &str| u[k].as_u64().unwrap_or(0);
                         t.context_tokens = n("input_tokens") + n("cache_creation_input_tokens") + n("cache_read_input_tokens");
-                        if t.context_tokens > DEFAULT_WINDOW {
+                        if t.context_tokens > DEFAULT_WINDOW || t.model.as_deref().is_some_and(says_large_window) {
                             t.large_window = true;
                         }
                         usage = true;
@@ -1203,6 +1209,45 @@ mod tests {
         assert_eq!(window_size(210_000, &mut large), 1_000_000);
         // After compaction the usage drops, but the window is still the large one.
         assert_eq!(window_size(60_000, &mut large), 1_000_000);
+    }
+
+    #[test]
+    fn the_context_is_the_last_main_replys_input_and_a_model_id_can_name_the_large_window() {
+        let dir = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-claude-ctx-{}", std::process::id())));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let reply = |model: &str, input: u64, write: u64, read: u64, side: bool| {
+            serde_json::json!({"type":"assistant","isSidechain":side,"message":{"model":model,
+                "usage":{"input_tokens":input,"cache_creation_input_tokens":write,"cache_read_input_tokens":read,"output_tokens":9}}})
+            .to_string()
+        };
+        let read_with = |name: &str, lines: &[String]| {
+            let p = dir.join(name);
+            fs::write(&p, lines.join("\n") + "\n").unwrap();
+            read_transcript(&p, None).unwrap()
+        };
+        // The three input counts of the last reply of the conversation itself; a subagent's later reply is not it.
+        let t = read_with(
+            "a.jsonl",
+            &[
+                reply("claude-opus-5-5", 1, 1, 1, false),
+                reply("claude-opus-5-5", 2_000, 8_000, 110_000, false),
+                reply("claude-haiku-5-5", 7, 0, 0, true),
+            ],
+        );
+        assert_eq!((t.context_tokens, t.large_window), (120_000, false));
+        let mut large = t.large_window;
+        assert_eq!(t.context_tokens * 100 / window_size(t.context_tokens, &mut large), 60);
+        // A model id that names the 1M window: the same use is a small share of it.
+        for model in ["claude-opus-5-5[1m]", "claude-sonnet-5-context-1m"] {
+            let t = read_with("b.jsonl", &[reply(model, 2_000, 8_000, 110_000, false)]);
+            assert!(t.large_window, "{model}");
+            let mut large = t.large_window;
+            assert_eq!(window_size(t.context_tokens, &mut large), 1_000_000, "{model}");
+        }
+        // Past 200k the window must be the large one, whatever the id says.
+        assert!(read_with("c.jsonl", &[reply("claude-opus-5-5", 0, 0, 250_000, false)]).large_window);
+        let _ = fs::remove_dir_all(&dir);
     }
 }
 

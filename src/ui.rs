@@ -1072,7 +1072,7 @@ struct Cols {
     branch: usize,
     model: usize,
     status: usize,
-    /// The CONTEXT bar's column; 0 when the table is too narrow for it.
+    /// The CONTEXT column (how full the conversation's context is); 0 when the table is too narrow for it.
     context: usize,
     /// The spare width of a wide terminal, shared out between the columns (see `Pad`).
     pad: Pad,
@@ -1192,14 +1192,16 @@ fn content_widths(app: &App, rows: &[usize]) -> (usize, usize) {
 }
 
 /// The widths at which the optional columns of the Sessions table show, measured on the area the table is given.
-/// As the table narrows they go in this order: BRANCH, MODEL, the CONTEXT bar, then DIR. NAME (with the prompt line
-/// under it), STATUS and LAST stay to the end: a conversation's name says more than a bar.
+/// As the table narrows they go in this order: BRANCH, MODEL, CONTEXT, then DIR. NAME (with the prompt line under it),
+/// STATUS and LAST stay to the end: a conversation's name says more than how full it is.
 const BRANCH_FROM: usize = 100;
 const MODEL_FROM: usize = 88;
 const CONTEXT_FROM: usize = 64;
 const DIR_FROM: usize = 44;
-/// The CONTEXT column: the bar, its percentage and a space.
-const CONTEXT_W: usize = BAR_WIDTH + 5;
+/// The CONTEXT column: its title and a space (the figure, `100%` at most, is narrower).
+const CONTEXT_W: usize = "CONTEXT".len() + 1;
+/// Above this share of its window a conversation's context figure is drawn in the warning colour.
+pub const CONTEXT_WARN_ABOVE: u8 = 80;
 
 /// The columns of the Sessions table at `width`, with a PROJECT column that wants `project` cells (0 for
 /// none) and NAME/DIR that want `want` (see `content_widths`). Every column keeps a blank cell at its end
@@ -1393,13 +1395,11 @@ fn draw_row(f: &mut Frame, app: &App, s: &Session, selected: bool, hover: bool, 
         Span::styled(fit(status_text, c.status), base.fg(status_color)),
         gap(c.pad.status, base),
     ]);
-    // The bar keeps its own size, whatever the screen: how full it looks is what it means. Its column's
-    // share of the spare width sits after the percentage. Where nothing is known about the context yet (no figure
-    // from Claude, and nothing to estimate from), the column is left blank rather than showing an empty bar.
+    // How full the conversation's context is, as a share of its model's window: `62%`, in the warning colour above
+    // `CONTEXT_WARN_ABOVE`. Where nothing is known yet (no figure from Claude, and nothing to estimate from), blank.
     if c.context > 0 {
         if context_known(s) {
-            l1.extend(bar_bg(t, s.context_pct, bg, s.context_exact, s.archived));
-            l1.push(gap(c.context - CONTEXT_W, base));
+            l1.push(Span::styled(cell(&context_text(s.context_pct), c.context), base.fg(context_color(t, s.context_pct, s.archived))));
         } else {
             l1.push(gap(c.context, base));
         }
@@ -1430,6 +1430,20 @@ fn task_mark(app: &App, id: &str, name_w: usize) -> String {
 
 /// What a session's row says while tasks are drafted from it.
 pub(crate) const DRAFTING: &str = "Drafting tasks…";
+
+/// A context figure as the CONTEXT column shows it: `62%`.
+fn context_text(pct: u8) -> String {
+    format!("{pct}%")
+}
+
+/// The colour of a context figure: the warning colour above `CONTEXT_WARN_ABOVE`, quiet otherwise (dim when archived).
+fn context_color(t: &Theme, pct: u8, archived: bool) -> Color {
+    match (archived, pct > CONTEXT_WARN_ABOVE) {
+        (true, _) => t.dim,
+        (false, true) => t.warn,
+        (false, false) => t.subtext,
+    }
+}
 
 /// Is anything known about how full this conversation's context is: Claude's own figure, or an estimate above 0?
 /// (A conversation with nothing read from it yet has neither: its CONTEXT column stays blank.)
@@ -2289,7 +2303,7 @@ fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
         let look = row_look(t, status, unread, true, app.tick);
         // The status word goes first when the panel is narrow.
         let status_w = if w >= 36 { 8 } else { 0 };
-        let name_w = w.saturating_sub(3 + status_w + BAR_WIDTH + 5);
+        let name_w = w.saturating_sub(3 + status_w + CONTEXT_W);
         let name_style = if unread { base.fg(t.ok).add_modifier(Modifier::BOLD) } else { base.fg(t.text) };
         let mut spans = vec![
             if selected { Span::styled("▎", base.fg(t.accent)) } else { Span::styled(" ", base) },
@@ -2299,7 +2313,7 @@ fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
         if status_w > 0 {
             spans.push(Span::styled(fit(look.status, status_w), base.fg(look.status_color)));
         }
-        spans.extend(bar_bg(t, pct, bg, true, false));
+        spans.push(Span::styled(context_text(pct), base.fg(context_color(t, pct, false))));
         Line::from(spans)
     };
     let chips = {
@@ -3557,17 +3571,13 @@ fn pct_color(t: &Theme, pct: u8) -> Color {
     }
 }
 
+/// `━━━━━━────  62%`, colored by how full it is: the plan usage in the header.
 fn bar(t: &Theme, pct: u8) -> Vec<Span<'static>> {
-    bar_bg(t, pct, t.bg, true, false)
-}
-
-/// `━━━━━━────  62%`, colored by how full it is. A `~` marks an estimate rather than Claude's own figure.
-fn bar_bg(t: &Theme, pct: u8, bg: Color, exact: bool, dimmed: bool) -> Vec<Span<'static>> {
     let filled = (pct as usize * BAR_WIDTH + 50) / 100;
     vec![
-        Span::styled("━".repeat(filled), Style::new().fg(if dimmed { t.dim } else { pct_color(t, pct) }).bg(bg)),
-        Span::styled("━".repeat(BAR_WIDTH - filled), Style::new().fg(t.border).bg(bg)),
-        Span::styled(format!("{}{pct:>3}%", if exact { " " } else { "~" }), Style::new().fg(t.subtext).bg(bg)),
+        Span::styled("━".repeat(filled), Style::new().fg(pct_color(t, pct)).bg(t.bg)),
+        Span::styled("━".repeat(BAR_WIDTH - filled), Style::new().fg(t.border).bg(t.bg)),
+        Span::styled(format!(" {pct:>3}%"), Style::new().fg(t.subtext).bg(t.bg)),
     ]
 }
 
@@ -3826,11 +3836,11 @@ mod tests {
                 }
             }
         }
-        // From 126 columns there is room for the widest column (a 40-character name in full) with NAME and DIR
+        // From 119 columns there is room for the widest column (a 40-character name in full) with NAME and DIR
         // keeping their least; a little narrower it shrinks to what is over, and at the narrowest there is none.
-        assert_eq!(cols(126, PROJECT_MAX, GREEDY).project, PROJECT_MAX);
-        assert!(cols(125, PROJECT_MAX, GREEDY).project < PROJECT_MAX);
-        let c = cols(114, PROJECT_MAX, GREEDY);
+        assert_eq!(cols(119, PROJECT_MAX, GREEDY).project, PROJECT_MAX);
+        assert!(cols(118, PROJECT_MAX, GREEDY).project < PROJECT_MAX);
+        let c = cols(107, PROJECT_MAX, GREEDY);
         assert_eq!((c.project, c.name + c.dir), (31, NAME_DIR_MIN), "it gives way before NAME and DIR drop below their least");
         assert_eq!(cols(40, PROJECT_MAX, GREEDY).project, 0);
     }
@@ -3841,7 +3851,7 @@ mod tests {
             for want in [(6, 5), (20, 34), (NAME_MAX, 12), (12, DIR_MAX), GREEDY] {
                 for project in [0, PROJECT_MIN, PROJECT_MAX] {
                     let c = cols(width, project, want);
-                    let rest = 3 + c.context + LAST_W; // marker, context bar (when it shows), last active
+                    let rest = 3 + c.context + LAST_W; // marker, CONTEXT (when it shows), last active
                     let fixed = rest + 11; // and the status column
                     let want = if (width as usize) < DIR_FROM { (want.0, 0) } else { want }; // no DIR: NAME wants it all
                     let total = rest + c.name + c.project + c.dir + c.branch + c.model + c.status + c.pad.sum();

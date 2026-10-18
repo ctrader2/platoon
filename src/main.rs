@@ -699,7 +699,7 @@ mod tests {
             "write the docs",
             "Sonnet 5",
             "main",
-            "~ 25%",
+            "25%",
         ] {
             assert!(flat(&text).contains(want), "missing {want:?}:\n{text}");
         }
@@ -728,7 +728,7 @@ mod tests {
         assert_eq!((s.context_pct, s.context_exact), (61, true));
         let mut term = Terminal::new(TestBackend::new(120, 20)).unwrap();
         let text = draw(&mut term, &app);
-        assert!(text.contains(" 61%") && !text.contains("~ 25%") && !text.contains("~"), "{text}");
+        assert!(text.contains(" 61%") && !text.contains("25%") && !text.contains("~"), "{text}");
     }
 
     // --- one row per conversation (the earlier pid-per-row bug) ------------------------------------
@@ -2892,7 +2892,7 @@ mod tests {
             assert!(has(&|c| c.bg == t.surface && c.symbol() != " "), "{}: the selected row has a surface band with text on it", t.id);
             assert!(has(&|c| c.bg == t.accent && c.fg == t.on_accent), "{}: the current tab's count badge is on_accent on accent", t.id);
             assert!(has(&|c| c.fg == t.busy), "{}: the working session is in the busy color", t.id);
-            assert!(has(&|c| c.fg == t.ok && c.symbol() == "━"), "{}: a low context bar is ok", t.id);
+            assert!(has(&|c| c.fg == t.subtext && c.symbol() == "%"), "{}: a context figure under the warning line is quiet", t.id);
             assert!(has(&|c| c.fg == t.dim), "{}", t.id);
             assert!(has(&|c| c.fg == t.subtext), "{}", t.id);
             assert!(has(&|c| c.fg == t.accent && c.symbol() == "━"), "{}: the current tab is underlined", t.id);

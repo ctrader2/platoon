@@ -24,11 +24,16 @@ session keeps its size until there is room to show it again.
 ### What a row shows
 
 One row per conversation, built from Claude Code's saved history, so everything you've ever run is there whether or not
-it's running. Each row shows the name, directory, branch, model, a status, how full the context is (`~` marks platoon's
-estimate rather than Claude's own figure), when it was last active, and a one-line description. Newest activity first.
+it's running. Each row shows the name, directory, branch, model, a status, how full the context is, when it was last
+active, and a one-line description. Newest activity first.
 Each conversation takes two lines, its name line and its prompt line; the selected one is highlighted across both, with a
-`▎` in front of each. Conversations that only ever held slash commands are hidden. CONTEXT is left blank for a
-conversation platoon knows nothing about yet (no figure from Claude and nothing to estimate from).
+`▎` in front of each. Conversations that only ever held slash commands are hidden.
+
+**CONTEXT** says how full a conversation's context is, as a share of its model's window: `62%`, in the warning colour
+above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has
+reported one, else platoon's: the last reply's input (what it read from the cache, what it wrote to it, and the rest)
+over the window, which is 1,000,000 tokens when the model's name says so (`[1m]`) or the conversation has already gone
+past 200,000, else 200,000. It is left blank for a conversation with no reply yet. A project's screen shows it too.
 
 Status is `working`, `done` (Claude finished and you haven't looked yet), `idle` (running, waiting for you: `●`),
 `Background`, or `moved away` (see [Background sessions](#background-sessions)). A conversation nothing runs right now
@@ -58,11 +63,10 @@ hold what they always did.
 Whatever a wide terminal has over once every column has what it needs is then **shared equally between the columns**, so
 the row fills the screen and LAST sits at the right edge; the odd cell that does not divide evenly goes to the leftmost
 columns. Each value stays at the left of its column, so a short one simply leaves a wider gap after it than a long one,
-and the context bar keeps its own size (how full it looks is what it means) with its share of the spare width as clear
-air after the percentage. Every column ends with at least one blank cell, so no two ever touch.
+and a short figure under CONTEXT has its share of the spare width as clear air after it. Every column ends with at least one blank cell, so no two ever touch.
 
 On a narrow terminal, where the content already wants more room than there is, nothing is over to share, and columns go
-as it narrows: BRANCH first, then MODEL, then the CONTEXT bar, then DIR; NAME (and the prompt line under it), STATUS and
+as it narrows: BRANCH first, then MODEL, then CONTEXT, then DIR; NAME (and the prompt line under it), STATUS and
 LAST stay to the end. NAME and DIR share whatever room is left.
 
 ### Keys
