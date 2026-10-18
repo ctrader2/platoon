@@ -373,7 +373,7 @@ fn sessions_platoon_starts_are_told_to_offer_making_tasks() {
     env.push(("FAKE_HOOK", BIN.to_string()));
     let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
     t.wait_for("fix the docker build");
-    t.send(b"3");
+    t.send(b"2");
     t.wait_for_flat("WB Web");
     t.send(b"\r");
     t.wait_for("╭ Sessions");

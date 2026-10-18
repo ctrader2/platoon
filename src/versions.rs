@@ -231,7 +231,9 @@ pub fn decide(state: &State, claude: Option<&str>, running: &str, checked: &str,
 /// Run `program args`, wait at most `wait`, and give back what it printed when it succeeded. A program that is
 /// missing, fails or takes too long gives nothing (one that took too long is stopped: it is ours).
 fn output_of(program: &str, args: &[&str], wait: Duration) -> Option<String> {
-    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let mut child =
+        crate::ai::spawn_retrying(Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()))
+            .ok()?;
     let start = Instant::now();
     let status = loop {
         match child.try_wait() {
