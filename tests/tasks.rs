@@ -43,7 +43,7 @@ for a in "$@"; do
   prev="$a"
 done
 printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%s,"status":"idle"}' $$ "$sid" "$(pwd)" "$(date +%s)000" > "$CLAUDE_CONFIG_DIR/sessions/$$.json"
-echo "FAKE SESSION sid:$sid in:$(pwd)"
+echo "FAKE SESSION sid:$sid offer:${PLATOON_OFFER_TASKS:-none} in:$(pwd)"
 exec sh
 "#;
 
@@ -181,7 +181,10 @@ impl Drop for Lab {
 #[test]
 fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them_along() {
     let lab = Lab::new("tasks-flow");
-    let mut t = Term::spawn(&[], &lab.env(), &lab.shop, 40, 150);
+    // platoon itself started from a session told to offer making tasks: a task's session is never told.
+    let mut env = lab.env();
+    env.push(("PLATOON_OFFER_TASKS", "1".into()));
+    let mut t = Term::spawn(&[], &env, &lab.shop, 40, 150);
     t.wait_for_all(&["The order email is HTML only", "t draft tasks"]);
 
     // t: the draft, each task with the squad that suits it.
@@ -226,7 +229,7 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     t.wait_for_unwrapped(&format!("in:{}", wt.to_string_lossy()));
     let one = lab.task(1);
     let session = one["session"].as_str().unwrap().to_string();
-    t.wait_for(&format!("FAKE SESSION sid:{session}"));
+    t.wait_for(&format!("FAKE SESSION sid:{session} offer:none"));
     assert_eq!((one["state"].as_str(), one["squad"].as_str()), (Some("working"), Some("feature")), "{one}");
     assert_eq!(one["worktree"]["branch"], "task/1");
     assert_eq!(one["worktree"]["path"], json!(wt.to_string_lossy()));

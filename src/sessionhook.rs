@@ -7,6 +7,12 @@
 //! A session platoon started under a project carries `PLATOON_PROJECT=<id>`: a brand-new session (source
 //! `startup` or `clear`) that is in no project yet is placed in that one here, before platoon itself has seen it.
 //!
+//! A session platoon started in one of its hosts (new or resumed, never a task's own session) also carries
+//! `PLATOON_OFFER_TASKS=1`: the hook then adds a short instruction (`offer_text`) telling Claude to ask once,
+//! when the conversation settles on concrete work, "Ready to create tasks?" and on a yes to make them itself with
+//! `platoon task add`. It is context the hook gives at every start, like the notes, so it needs nothing on the
+//! command line and works with any stand-in for `claude`.
+//!
 //! It must never get in a session's way: it is quick, prints nothing unless it has notes to give, and exits 0
 //! whatever happens.
 
@@ -49,17 +55,22 @@ pub fn mark_sent(cache: &Path, session: &str, hash: &str) {
     let _ = projects::write_atomic(&sent_path(cache, session), hash);
 }
 
-/// The line that goes in front of a project's notes wherever they are handed to a session. The same words in both
-/// hooks, so a conversation that gets them twice reads the same thing.
+/// The line that goes in front of a project's notes wherever they are handed to a session, then the notes, cut at
+/// the cap (`notes::for_sessions`). The same words in both hooks, so a conversation that gets them twice reads the
+/// same thing.
 pub fn context_text(project_name: &str, notes: &str) -> String {
     format!(
         "These are the notes of the project \"{project_name}\" that this session belongs to (kept in platoon by the user):\n\n{}",
-        notes.trim_end()
+        crate::notes::for_sessions(notes).trim_end()
     )
 }
 
-/// What the hook prints for `input` (the hook's JSON), or None for nothing. Records what it sends.
-pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cache: &Path) -> Option<String> {
+/// The variable a session platoon hosts carries when it is to offer making tasks (`offer_text`).
+pub const OFFER_ENV: &str = "PLATOON_OFFER_TASKS";
+
+/// What the hook prints for `input` (the hook's JSON), or None for nothing. Records what it sends. `offer_by` is
+/// the platoon program the session should run to make tasks, when it is to offer them (see `offer_text`).
+pub fn session_start(input: &str, env_project: Option<&str>, offer_by: Option<&str>, config: &Path, cache: &Path) -> Option<String> {
     let v: Value = serde_json::from_str(input).ok()?;
     let session = v.get("session_id")?.as_str()?;
     if !safe_name(session) {
@@ -69,30 +80,78 @@ pub fn session_start(input: &str, env_project: Option<&str>, config: &Path, cach
     let mut projects = Projects::open(config);
     if projects.of(session).is_none() {
         let fresh = matches!(source, "startup" | "clear");
-        match env_project.filter(|p| fresh && !p.is_empty()) {
-            Some(p) if projects.get(p).is_some() => {
-                if projects.place(session, p).ok()? {
-                    // A session placed here has joined a project without any turn ending, so the notes are told:
-                    // an update runs a few minutes later instead of waiting for someone to resume it.
-                    crate::notesrun::mark_joined(config, cache, p, session, crate::notesrun::now_ms());
-                }
-            }
-            _ => return None,
+        if let Some(p) = env_project.filter(|p| fresh && !p.is_empty() && projects.get(p).is_some())
+            && projects.place(session, p).unwrap_or(false)
+        {
+            // A session placed here has joined a project without any turn ending, so the notes are told: an
+            // update runs a few minutes later instead of waiting for someone to resume it.
+            crate::notesrun::mark_joined(config, cache, p, session, crate::notesrun::now_ms());
         }
     }
-    let project = projects.of(session)?.clone();
+    let project = projects.of(session).cloned();
+    let notes = project.as_ref().and_then(|p| notes_context(&projects, p, session, source, cache));
+    let offer = offer_by.map(|exe| {
+        let folder = v.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty());
+        offer_text(exe, project.as_ref().map(|p| p.id.as_str()), folder, &crate::squads::all(config))
+    });
+    let context = [notes, offer].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    (!context.is_empty())
+        .then(|| json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}).to_string())
+}
+
+/// The project's notes for this session, when it hasn't been given this version yet (or after a compaction, which
+/// drops what Claude was told earlier). Records what it gives.
+fn notes_context(projects: &Projects, project: &projects::Project, session: &str, source: &str, cache: &Path) -> Option<String> {
     let notes = fs::read_to_string(projects.notes_path(&project.id)).ok()?;
     if notes.trim().is_empty() {
         return None;
     }
     let hash = notes_hash(&project.id, &notes);
-    // A compaction drops what Claude was told earlier, so the notes go again even unchanged.
     if source != "compact" && sent_hash(cache, session).as_deref() == Some(hash.as_str()) {
         return None;
     }
     mark_sent(cache, session, &hash);
-    let context = context_text(&project.name, &notes);
-    Some(json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}).to_string())
+    Some(context_text(&project.name, &notes))
+}
+
+/// `text` as one word for `sh`: as it is when nothing in it is special, else in single quotes.
+fn sh_word(text: &str) -> String {
+    if !text.is_empty() && text.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+:,@%=".contains(c)) {
+        text.to_string()
+    } else {
+        format!("'{}'", text.replace('\'', "'\\''"))
+    }
+}
+
+/// The instruction a session platoon hosts is given: ask once, when the conversation settles on concrete work,
+/// "Ready to create tasks?", and on a yes make each task with `exe task add` (the session's project and folder, the
+/// squad that suits it), then say how many and where they are, without starting them. The squads are the ones
+/// there are when the session starts, each with its one-line description.
+pub fn offer_text(exe: &str, project: Option<&str>, folder: Option<&str>, squads: &[crate::squads::Squad]) -> String {
+    let mut cmd = format!("{} task add", sh_word(exe));
+    if let Some(p) = project {
+        cmd.push_str(&format!(" --project {}", sh_word(p)));
+    }
+    if let Some(f) = folder {
+        cmd.push_str(&format!(" --folder {}", sh_word(f)));
+    }
+    cmd.push_str(" --squad <squad> --title '<short title>' <<'TASK'");
+    let mut t = String::from(
+        "Making tasks (platoon, the app that started this session, asks this): when this conversation settles on concrete \
+         work that could be handed off and done on its own, ask the user once, with the AskUserQuestion tool: \"Ready to \
+         create tasks?\" Don't ask again in this conversation unless the user brings it up.\n\
+         If they say yes, make each task with one command:\n\n",
+    );
+    t.push_str(&format!("{cmd}\n## What it should do\n\n<what to do and why, enough for someone who hasn't seen this conversation>\n\n## Done when\n\n- [ ] <a check anyone can make>\n- [ ] <another>\nTASK\n\n"));
+    t.push_str("Pick the squad that suits each task:\n");
+    for s in squads.iter().filter(|s| s.usable()) {
+        t.push_str(&format!("- {}: {}\n", s.id, s.description));
+    }
+    t.push_str(
+        "\nThen tell the user how many tasks you made and that they are on platoon's Tasks tab. Don't start them, and \
+         don't do their work in this conversation.",
+    );
+    t
 }
 
 pub fn run() -> i32 {
@@ -102,7 +161,14 @@ pub fn run() -> i32 {
             return;
         }
         let env = std::env::var("PLATOON_PROJECT").ok();
-        if let Some(out) = session_start(&input, env.as_deref(), &crate::archive::config_dir(), &crate::usage::cache_dir()) {
+        // The program to run is this one, by its full path: it works without platoon on the PATH.
+        let offer_by = std::env::var(OFFER_ENV)
+            .is_ok_and(|v| v == "1")
+            .then(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
+            .flatten();
+        if let Some(out) =
+            session_start(&input, env.as_deref(), offer_by.as_deref(), &crate::archive::config_dir(), &crate::usage::cache_dir())
+        {
             println!("{out}");
         }
     });
@@ -130,6 +196,7 @@ mod tests {
             session_start(
                 &json!({"session_id": session, "source": source, "cwd": "/tmp", "hook_event_name": "SessionStart"}).to_string(),
                 env,
+                None,
                 &self.config,
                 &self.cache,
             )
@@ -186,7 +253,7 @@ mod tests {
         r.notes(&p, &id, "  \n\n");
         assert_eq!(r.run("member", "startup", None), None, "empty notes");
         for bad in ["", "{", "[]", r#"{"source":"startup"}"#, r#"{"session_id":"../../x"}"#, r#"{"session_id":5}"#] {
-            assert_eq!(session_start(bad, Some(&id), &r.config, &r.cache), None, "{bad}");
+            assert_eq!(session_start(bad, Some(&id), Some("/p/platoon"), &r.config, &r.cache), None, "{bad}");
         }
         assert!(!r.cache.join("notes-sent").exists() || fs::read_dir(r.cache.join("notes-sent")).unwrap().count() == 0);
     }
@@ -213,6 +280,75 @@ mod tests {
         assert!(Projects::open(&r.config).of("x").is_none());
     }
 
+    fn with_offer(r: &Rig, session: &str, source: &str, cwd: &str) -> Option<String> {
+        let input = json!({"session_id": session, "source": source, "cwd": cwd, "hook_event_name": "SessionStart"}).to_string();
+        session_start(&input, None, Some("/opt/my tools/platoon"), &r.config, &r.cache)
+    }
+
+    #[test]
+    fn a_session_platoon_hosts_is_told_to_offer_making_tasks_every_time_it_starts() {
+        let r = Rig::new("offer");
+        let mut p = Projects::open(&r.config);
+        let id = p.create("Web shop").unwrap();
+        p.assign("in-shop", Some(&id)).unwrap();
+        r.notes(&p, &id, "# Summary\nsell socks\n");
+        let text = context(&with_offer(&r, "in-shop", "startup", "/home/u/shop").unwrap());
+        // The notes first, then the offer.
+        assert!(
+            text.starts_with("These are the notes of the project \"Web shop\"") && text.contains("sell socks\n\nMaking tasks"),
+            "{text}"
+        );
+        for want in [
+            "ask the user once, with the AskUserQuestion tool: \"Ready to create tasks?\"",
+            "Don't ask again in this conversation unless the user brings it up.",
+            &format!(
+                "'/opt/my tools/platoon' task add --project {id} --folder /home/u/shop --squad <squad> --title '<short title>' <<'TASK'"
+            ),
+            "## What it should do",
+            "## Done when\n\n- [ ] <a check anyone can make>",
+            "- feature: New or changed behaviour in code",
+            "- bug-fix: ",
+            "- docs: ",
+            "how many tasks you made and that they are on platoon's Tasks tab. Don't start them",
+        ] {
+            assert!(text.contains(want), "{want:?} missing from:\n{text}");
+        }
+        // Resumed with the notes already given: the offer alone, again.
+        let again = context(&with_offer(&r, "in-shop", "resume", "/home/u/shop").unwrap());
+        assert!(again.starts_with("Making tasks") && !again.contains("sell socks"), "{again}");
+        // In no project: no --project, and a folder with a quote in it stays one word.
+        let loose = context(&with_offer(&r, "loose", "startup", "/home/u/bob's shop").unwrap());
+        assert!(loose.contains("'/opt/my tools/platoon' task add --folder '/home/u/bob'\\''s shop' --squad"), "{loose}");
+        // A squad of the user's that can't be used is left out; their own good one is listed.
+        fs::create_dir_all(crate::squads::dir(&r.config)).unwrap();
+        fs::write(crate::squads::path(&r.config, "broken"), "no front matter").unwrap();
+        fs::write(
+            crate::squads::path(&r.config, "triage"),
+            "---\nname: Triage\ndescription: Sort the bug reports.\nmodel: sonnet\nverdict_model: sonnet\nplan_first: false\n---\n1. Read them.\n",
+        )
+        .unwrap();
+        let mine = context(&with_offer(&r, "loose", "resume", "/w").unwrap());
+        assert!(mine.contains("- triage: Sort the bug reports.") && !mine.contains("- broken"), "{mine}");
+        // Without the variable nothing is offered (and a session with nothing else to be told gets nothing).
+        assert_eq!(r.run("loose", "startup", None), None);
+    }
+
+    #[test]
+    fn notes_over_the_cap_are_sent_cut_with_a_line_saying_so() {
+        let r = Rig::new("cap");
+        let mut p = Projects::open(&r.config);
+        let id = p.create("Web shop").unwrap();
+        p.assign("s", Some(&id)).unwrap();
+        let line = format!("{}\n", "n".repeat(99));
+        r.notes(&p, &id, &format!("# Summary\n{}", line.repeat(100)));
+        let text = context(&r.run("s", "startup", None).unwrap());
+        assert!(
+            text.ends_with("[platoon cut the notes here: they are 10,010 characters and only the first 8,000 are given to sessions.]"),
+            "{text}"
+        );
+        assert!(crate::notes::chars(&text) < crate::notes::CAP + 300);
+    }
+
     #[test]
     fn many_hooks_at_once_leave_readable_records() {
         let r = Rig::new("many");
@@ -227,7 +363,7 @@ mod tests {
                     // Half of them on the same session, all at once.
                     let s = if i % 2 == 0 { "shared".to_string() } else { format!("s{i}") };
                     let input = json!({"session_id": s, "source": "startup"}).to_string();
-                    session_start(&input, Some(&id), &config, &cache)
+                    session_start(&input, Some(&id), None, &config, &cache)
                 })
             })
             .collect();

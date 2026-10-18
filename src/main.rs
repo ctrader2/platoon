@@ -214,9 +214,9 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, and two hooks
                   that hand a project's notes to its sessions and keep them up to date
-  task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>]
+  task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
                   make a task and print its number (#N); with no --folder it works in the
-                  current folder
+                  current folder; --squad suggests the squad that starts it
   task list [--project <name>] [--json]   the tasks, open ones first
   themes          list the color themes: the built-in ones and your own
   tokens [test]   show how many Claude tokens the smart features used today; `test` makes one tiny call
@@ -515,7 +515,9 @@ mod tests {
     #[test]
     fn the_usage_text_names_tasks_and_the_task_hooks() {
         assert!(USAGE.contains("task add | task list"), "{USAGE}");
-        assert!(!USAGE.contains("ticket") && !USAGE.contains("squad") && !USAGE.contains("to-tickets"), "{USAGE}");
+        // No `platoon squads` any more; `task add --squad` names one.
+        assert!(!USAGE.contains("ticket") && !USAGE.contains("squads") && !USAGE.contains("to-tickets"), "{USAGE}");
+        assert!(USAGE.contains("[--squad <id>]"), "{USAGE}");
         assert!(USAGE.contains("  task add [--project") && USAGE.contains("  task list [--project"));
         for h in crate::taskrun::HOOKS {
             assert!(USAGE.contains(&format!("hook {h}")), "{h}");

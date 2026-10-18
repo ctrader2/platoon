@@ -59,6 +59,17 @@ box; then [the check of the work](#the-check-of-the-work) judges each box itself
 the squad that suits it. They open in a popup: `↑` `↓` move, `e` edits one in your editor, `x` removes one, `enter` makes
 them all as **Not started**, `esc` makes nothing. Nothing starts until you press `s` on each.
 
+### Claude offers to make them
+
+A session platoon starts or resumes (not a task's own session) is told, through platoon's SessionStart hook, to watch
+for the moment the conversation settles on concrete work that could be handed off. Then it asks you once, with Claude
+Code's question tool: **Ready to create tasks?** On a yes it makes each task itself with `platoon task add` (by
+platoon's full path, so it works without `platoon` on your PATH), in the session's project and folder, with a **Done
+when** list and the squad that suits it; then it says how many it made and that they are on the Tasks tab. It starts
+none of them. It doesn't ask again in that conversation unless you bring it up. It needs the **Project notes** line of
+[`platoon setup`](install-and-setup.md#set-it-up-platoon-setup) (that is the SessionStart hook); sessions you start with
+plain `claude` outside platoon are not asked.
+
 ## Starting a task
 
 `s`, then `enter` on a squad. platoon:
@@ -180,6 +191,10 @@ in `~/.config/platoon/tasks.json` and `~/.config/platoon/tasks/`. Numbers are ne
 From a shell:
 
 ```
-platoon task add --project "Web shop" --title "Order emails in plain text" [--body-file text.md] [--folder ~/src/shop]
+platoon task add --project "Web shop" --title "Order emails in plain text" [--body-file text.md] [--folder ~/src/shop] [--squad bug-fix]
 platoon task list [--project "Web shop"] [--json]
 ```
+
+The text comes from `--body-file`, else from what is piped in, else the template. `--squad` suggests the squad that
+starts it: an id from the Squads tab (one there isn't is refused, naming the ones there are). Each task made prints one
+line, its number (`#4`).

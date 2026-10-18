@@ -786,7 +786,7 @@ fn the_session_start_hook_marks_the_project_it_places_a_session_into() {
     let _ = fs::remove_file(crate::notesrun::due_path(&w.cache, &id));
     let input =
         serde_json::json!({"session_id": "brand-new", "source": "startup", "cwd": "x", "hook_event_name": "SessionStart"}).to_string();
-    let out = crate::sessionhook::session_start(&input, Some(&id), &w.config, &w.cache);
+    let out = crate::sessionhook::session_start(&input, Some(&id), None, &w.config, &w.cache);
     assert!(out.is_some_and(|o| o.contains("Sell socks.")), "the notes still go to the session");
     assert_eq!(Projects::open(&w.config).project_id_of("brand-new"), Some(id.as_str()));
     assert!(due(&w, &id).is_some(), "and the project is marked");
@@ -794,7 +794,7 @@ fn the_session_start_hook_marks_the_project_it_places_a_session_into() {
     // A session that was already in the project (a plain resume) places nothing and marks nothing new.
     let was = due(&w, &id);
     let input = serde_json::json!({"session_id": "sess-1", "source": "resume", "cwd": "x", "hook_event_name": "SessionStart"}).to_string();
-    crate::sessionhook::session_start(&input, Some(&id), &w.config, &w.cache);
+    crate::sessionhook::session_start(&input, Some(&id), None, &w.config, &w.cache);
     assert_eq!(due(&w, &id), was);
 }
 

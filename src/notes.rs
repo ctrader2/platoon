@@ -35,6 +35,67 @@ pub const TEMPLATE: &str = "\
 
 ";
 
+/// The most characters of a project's notes that go to its sessions. The notes update keeps the notes under it
+/// (`notesupdate.rs`); notes the user wrote past it are sent cut (`for_sessions`) and the project's screen says so.
+pub const CAP: usize = 8_000;
+
+/// How long these notes are, in characters: what the cap counts.
+pub fn chars(text: &str) -> usize {
+    text.chars().count()
+}
+
+/// The warning on a project's screen for notes over the cap, or None when they fit.
+pub fn over_cap_warning(text: &str) -> Option<String> {
+    let n = chars(text);
+    (n > CAP).then(|| {
+        format!(
+            "Notes are {} characters; only the first {} go to sessions.",
+            crate::settings::thousands(n as u64),
+            crate::settings::thousands(CAP as u64)
+        )
+    })
+}
+
+/// The notes as a session is given them: whole when they fit the cap, else cut at the last line end within it,
+/// with one line saying they were cut.
+pub fn for_sessions(text: &str) -> String {
+    let n = chars(text);
+    if n <= CAP {
+        return text.to_string();
+    }
+    let at = text.char_indices().nth(CAP).map_or(text.len(), |(i, _)| i);
+    // The line the cap falls in is left out whole; a first line longer than the cap is cut where the cap falls.
+    let kept = match text[..at].rfind('\n') {
+        Some(nl) if nl > 0 => &text[..nl],
+        _ => &text[..at],
+    };
+    format!(
+        "{}\n\n[platoon cut the notes here: they are {} characters and only the first {} are given to sessions.]",
+        kept.trim_end(),
+        crate::settings::thousands(n as u64),
+        crate::settings::thousands(CAP as u64)
+    )
+}
+
+/// Keep `text` (the notes as they were before an update condensed them) as `<notes>.bak`, the first time only: a
+/// copy that is already there is never replaced. True when it was written now.
+pub fn keep_backup_once(config: &Path, id: &str, text: &str) -> io::Result<bool> {
+    use std::io::Write;
+    match fs::OpenOptions::new().write(true).create_new(true).open(backup_path(config, id)) {
+        Ok(mut f) => f.write_all(text.as_bytes()).map(|()| true),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// `<notes>.bak`: the notes as they were the first time an update condensed them.
+pub fn backup_path(config: &Path, id: &str) -> PathBuf {
+    let notes = crate::projects::notes_path(config, id);
+    let mut name = notes.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    notes.with_file_name(name)
+}
+
 /// The notes without one of platoon's old lines at the top (and the blank lines after it); anything else as it is.
 pub fn without_preamble(text: &str) -> &str {
     let rest = text.trim_start_matches('\n');
@@ -277,6 +338,39 @@ mod tests {
 
     fn now(config: &Path) -> String {
         fs::read_to_string(notes_path(config, "p1")).unwrap_or_default()
+    }
+
+    #[test]
+    fn notes_over_the_cap_go_to_sessions_cut_at_a_line_end_with_a_line_saying_so() {
+        let short = "# Summary\n\nSocks.\n";
+        assert_eq!(for_sessions(short), short);
+        assert_eq!(over_cap_warning(short), None);
+        // Exactly the cap fits.
+        let exact = format!("# Summary\n{}", "x".repeat(CAP - 10));
+        assert_eq!(chars(&exact), CAP);
+        assert_eq!(for_sessions(&exact), exact);
+        // 12,400 characters of lines of 99 + a line break: cut at the last line end before 8,000.
+        let line = format!("{}\n", "é".repeat(99));
+        let long = line.repeat(124);
+        assert_eq!(chars(&long), 12_400);
+        let sent = for_sessions(&long);
+        let (kept, note) = sent.rsplit_once("\n\n").unwrap();
+        assert_eq!(kept, line.repeat(80).trim_end(), "80 whole lines, none cut in the middle");
+        assert_eq!(note, "[platoon cut the notes here: they are 12,400 characters and only the first 8,000 are given to sessions.]");
+        assert!(chars(kept) <= CAP);
+        assert_eq!(over_cap_warning(&long).as_deref(), Some("Notes are 12,400 characters; only the first 8,000 go to sessions."));
+        // One line longer than the cap is cut where the cap falls.
+        let one = "y".repeat(CAP + 5);
+        assert!(for_sessions(&one).starts_with(&"y".repeat(CAP)) && !for_sessions(&one).contains(&"y".repeat(CAP + 1)));
+    }
+
+    #[test]
+    fn the_backup_is_written_once_and_never_replaced() {
+        let d = dir("bak");
+        assert!(keep_backup_once(&d, "p1", "first\n").unwrap());
+        assert!(!keep_backup_once(&d, "p1", "second\n").unwrap());
+        assert_eq!(fs::read_to_string(backup_path(&d, "p1")).unwrap(), "first\n");
+        assert!(backup_path(&d, "p1").to_string_lossy().ends_with("project.md.bak"));
     }
 
     #[test]

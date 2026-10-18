@@ -237,6 +237,19 @@ fn a_tasks_session_is_marked_with_its_number_on_the_sessions_tab() {
     assert_eq!(shown.matches("#1 ").count(), 1, "only the task's session: {shown}");
 }
 
+#[test]
+fn sessions_platoon_starts_offer_to_make_tasks_but_a_tasks_own_session_does_not() {
+    let (w, mut app, project, folder) = lab("tasks-offer", &[("Write the guide", "docs", State::NotStarted)]);
+    Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
+    w.transcript("task-sess", &folder, "Task #1: Write the guide", 1);
+    app.reload_for_test();
+    assert!(app.offers_tasks(&[]), "a new session");
+    assert!(app.offers_tasks(&["a prompt to start with"]), "a new session from a hand-off");
+    assert!(app.offers_tasks(&["--resume", "user-1"]), "a resumed one");
+    assert!(!app.offers_tasks(&["--resume", "task-sess"]), "a task's own session");
+    assert!(!app.offers_tasks(&["attach", "abcd1234"]), "claude attach");
+}
+
 /// Write the check's answer (and whether it runs now) on task `n`.
 fn checked(w: &World, project: &str, n: u32, v: Option<crate::tickets::Verdict>, checking: bool) {
     Tickets::open(&w.config, project)

@@ -411,7 +411,7 @@ mod tests {
         let id = r.project("sess-1", "# Overview\nSell socks.\n");
         let start = |source: &str| {
             let input = serde_json::json!({"session_id": "sess-1", "source": source, "cwd": "/home/x/work"}).to_string();
-            crate::sessionhook::session_start(&input, None, &r.config, &r.cache)
+            crate::sessionhook::session_start(&input, None, None, &r.config, &r.cache)
         };
         // The session starts: the SessionStart hook hands them over, so the first prompt after it does not.
         assert!(start("startup").is_some());

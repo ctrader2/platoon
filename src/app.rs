@@ -2512,11 +2512,23 @@ impl App {
         self.launch_in(dir, args, None, false)
     }
 
+    /// Is the session started with `args` told to offer making tasks? A new one or a resumed one, but not a task's
+    /// own session and not `claude attach` (which shows a background session, started elsewhere).
+    pub(crate) fn offers_tasks(&self, args: &[&str]) -> bool {
+        let resumes = args.windows(2).find(|w| w[0] == "--resume").map(|w| w[1]);
+        args.first() != Some(&"attach") && resumes.is_none_or(|id| self.sq.task_of(id).is_none())
+    }
+
     /// `launch`, for a session of `project`: claude gets `PLATOON_PROJECT` (so the notes hook knows), and with
     /// `place` (a new session) the process is remembered until its session id shows up and is put in the project.
+    /// A session (new or resumed, not a task's own, not `claude attach`) is told to offer making tasks
+    /// (`sessionhook::OFFER_ENV`).
     fn launch_in(&mut self, dir: String, args: &[&str], project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
-        let env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+        let mut env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+        if self.offers_tasks(args) {
+            env.push((crate::sessionhook::OFFER_ENV, "1"));
+        }
         let at_ms = usage::now().saturating_sub(2) * 1000;
         match host::launch(&self.host_dirs(), &self.program, &dir, args, &env, rows, cols) {
             Ok((info, child)) => {

@@ -61,6 +61,17 @@ pub(super) fn entries(app: &App) -> Vec<Entry> {
     out.push(Entry::Note(
         "platoon uses the mouse itself: to select text with your terminal's own selection, hold Shift while you drag.".into(),
     ));
+    // Where sessions are listed: what a session platoon starts is told to offer.
+    if !app.projects_list_showing() && !app.board_showing() && !app.squads_showing() {
+        out.push(Entry::Note(
+            "A session platoon starts or resumes asks you once \"Ready to create tasks?\" when the conversation settles on work to hand off; on a yes it makes them on the Tasks tab, not started.".into(),
+        ));
+    }
+    if app.open_project().is_some() {
+        out.push(Entry::Note(
+            "Notes go to the project's sessions up to 8,000 characters. Updates keep them under that; past it, only the first 8,000 are sent, and the notes pane says so.".into(),
+        ));
+    }
     // Where tasks are: how a task runs, and what the Tests line means.
     if app.board_showing() {
         out.push(Entry::Note(

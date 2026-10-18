@@ -103,6 +103,14 @@ project's sessions have the version that is on disk now:
 These notes go to every session in this project; 2 of 3 have the latest version.
 ```
 
+**At most 8,000 characters go to a session** (about 2,000 tokens). The updates keep the notes under that (see
+[Kept short](#kept-short)). Notes you write past it are sent cut at the last line end before 8,000 characters, with one
+line saying they were cut, and the notes pane says so in the warning colour:
+
+```
+Notes are 12,400 characters; only the first 8,000 go to sessions.
+```
+
 ## Archiving and deleting a project
 
 - **Archiving** a project archives its active sessions too (stopping the ones that are running, as archiving a single
@@ -147,8 +155,8 @@ colors. `u` puts the previous version back, and that counts as a change of its o
 platoon never writes the file while an editor it started is open, and always reads the file from disk before showing it:
 if something else changed it, what is on disk wins.
 
-**Length is whatever the project needs.** Nothing is ever cut and platoon doesn't nag about it; the pane does say how many
-of the project's sessions already have the notes as they are now.
+**Length: 8,000 characters reach the sessions.** platoon keeps the notes it writes under that; past it, the pane says
+so and only the first 8,000 characters are sent (see [The notes reach every session](#the-notes-reach-every-session)).
 
 ## The shape of the notes
 
@@ -208,7 +216,7 @@ session to - is read in full once: its first message and its last 20.
 | Summary | rewrite it, keeping it short; it is added at the top if it isn't there |
 | The sections in between | add one, reword **what platoon itself wrote** in one, rename one, fold two into one, put them in another order |
 | Open questions | rewrite it; take out what has been answered. **A line of yours there may only go in the same update that adds its answer to Decisions**; it may move to another subheading |
-| Decisions | append dated entries; nothing already there is ever changed. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
+| Decisions | append dated entries; nothing already there is changed, except when the notes are over 8,000 characters: then older entries may be merged into fewer dated lines, and **every line of yours there** (one that doesn't start with `- ` and a date) has to come back word for word. platoon writes the date, so a date the answer put at the front of an entry is taken off rather than written twice |
 
 platoon remembers exactly which sentences it wrote itself, under which heading, so every other line of a section is yours.
 If an answer comes back without one of your lines in it, word for word, that section is **left exactly as it was** - and
@@ -216,6 +224,18 @@ that holds when a heading is renamed too: your lines have to turn up under the n
 isn't understood and for notes that changed on disk while the request was out: what is on disk wins, and platoon works the
 merge out again or leaves it alone. A line of yours that an answer had to repeat stays yours: platoon only ever counts its
 own words as its own.
+
+### Kept short
+
+The notes stay under **8,000 characters**, the most that goes to a session. Each request says how long the notes are;
+the instructions ask Claude to condense when they near it: shorter and merged older detail in platoon's own sections,
+sections folded together, older Decisions merged, and what was decided and what is still open kept. An answer that
+leaves the notes over 8,000 characters (and no shorter than they were) is asked for again **once**, condensed; if the
+second answer is still too long, the notes stay as they were. Notes that are over because of what you wrote are let
+shrink a step at a time: an answer that makes them shorter goes in even while they are still over.
+
+The first time an update condenses notes that were over the limit, the file as it was is kept beside it as
+`project.md.bak`, once: a copy that is already there is never replaced (the usual history copies are kept as well).
 
 ### Seeing it
 

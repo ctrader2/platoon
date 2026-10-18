@@ -1010,11 +1010,12 @@ pub fn find_project<'a>(projects: &'a crate::projects::Projects, want: &str) -> 
     }
 }
 
-const USAGE: &str = "usage: platoon task add [--project <name or id>] --title <text> [--body-file <path>] [--folder <path>]
+const USAGE: &str = "usage: platoon task add [--project <name or id>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
        platoon task list [--project <name or id>] [--json]
   add    make a task and print its number (#N). The text comes from --body-file, else from what is piped in,
          else the template. Without --folder the task works in the current folder. With no --project, the task
-         goes in the project whose sessions worked in the current folder, or in no project (\"No project\")
+         goes in the project whose sessions worked in the current folder, or in no project (\"No project\").
+         --squad suggests the squad that starts it (an id from the Squads tab)
   list   the tasks, open ones first, then the Done and Cancelled ones";
 
 /// Where the command line looks when no project is named: the sessions' folders (the index platoon keeps in its
@@ -1107,11 +1108,20 @@ fn cli_add(
     stdin_is_terminal: bool,
     cwd: &Path,
 ) -> Result<u32, String> {
-    let (mut project, mut title, mut body_file, mut folder) = (None, None, None, None);
+    let (mut project, mut title, mut body_file, mut folder, mut squad) = (None, None, None, None, String::new());
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--project" => project = Some(value(args, &mut i, "--project")?.to_string()),
+            "--squad" => {
+                let want = value(args, &mut i, "--squad")?.trim().to_string();
+                let all = crate::squads::all(config);
+                if !all.iter().any(|s| s.id == want) {
+                    let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
+                    return Err(format!("there is no squad \"{want}\" (there are: {})", ids.join(", ")));
+                }
+                squad = want;
+            }
             "--title" => title = Some(value(args, &mut i, "--title")?.to_string()),
             "--body-file" => body_file = Some(value(args, &mut i, "--body-file")?.to_string()),
             "--folder" => {
@@ -1156,7 +1166,7 @@ fn cli_add(
     if tickets.is_corrupt() {
         return Err(CORRUPT.into());
     }
-    tickets.add(NewTicket { title, body, folder: Some(folder), ..Default::default() }).map_err(|e| plain(&e))
+    tickets.add(NewTicket { title, body, folder: Some(folder), squad, ..Default::default() }).map_err(|e| plain(&e))
 }
 
 fn plain(e: &io::Error) -> String {
@@ -1514,6 +1524,13 @@ mod tests {
         );
         assert_eq!(v[1]["number"], 1, "the Done one last");
         assert!(v[0]["file"].as_str().unwrap().ends_with("/tasks/02-basket.md"));
+        // --squad: a squad there is, else refused with the ones there are.
+        let (code, out, _) = run(&d, &["add", "--project", "Web shop", "--title", "Fix it", "--squad", "bug-fix"], "", true);
+        assert_eq!((code, out.as_str()), (0, "#3\n"));
+        assert_eq!(Tickets::open(&d, &id).get(3).unwrap().squad, "bug-fix");
+        let (code, out, err) = run(&d, &["add", "--project", "Web shop", "--title", "x", "--squad", "nope"], "", true);
+        assert!(code == 1 && out.is_empty() && err.contains("no squad \"nope\"") && err.contains("feature, "), "{err}");
+        assert!(Tickets::open(&d, &id).get(4).is_none(), "nothing made");
     }
 
     #[test]

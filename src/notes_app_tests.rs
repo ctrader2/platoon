@@ -484,3 +484,44 @@ fn typing_in_the_editor_reaches_it_and_ctrl_space_gets_out_of_a_wedged_one() {
     key(&mut app, KeyCode::Char('y'));
     assert!(matches!(app.mode, Mode::List) && !app.notes_busy(), "back on the project's screen");
 }
+
+#[test]
+fn notes_past_the_cap_are_warned_about_in_the_warning_colour() {
+    let (w, app, id) = on_the_notes("notes-cap");
+    let mut term = Terminal::new(TestBackend::new(140, 30)).unwrap();
+    set_notes(&w, &id, "# Summary\n\nA shop.\n");
+    assert!(!flat(&draw(&mut term, &app)).contains("go to sessions"), "short notes: no warning");
+    // 12,400 characters.
+    let long = format!("# Summary\n\nA shop.\n\n# Mine\n\n{}", format!("{}\n", "a".repeat(99)).repeat(120));
+    let long = format!("{long}{}", "b".repeat(12_400 - notes::chars(&long)));
+    assert_eq!(notes::chars(&long), 12_400);
+    set_notes(&w, &id, &long);
+    let warning = "Notes are 12,400 characters; only the first 8,000 go to sessions.";
+    assert!(flat(&draw(&mut term, &app)).contains(warning), "{}", draw(&mut term, &app));
+    let buf = term.backend().buffer().clone();
+    let warn = app.effective_theme().warn;
+    let found = (0..buf.area.height).find_map(|y| {
+        let row: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        row.find("Notes are 12,400").map(|at| (row[..at].chars().count() as u16, y))
+    });
+    let (x, y) = found.expect("the warning is on one line");
+    for dx in 0.."Notes are 12,400".len() as u16 {
+        assert_eq!(buf[(x + dx, y)].fg, warn, "in the warning colour");
+    }
+}
+
+#[test]
+fn the_help_says_where_the_notes_cap_and_the_offer_to_make_tasks_apply() {
+    let (_w, mut app, _id) = on_the_notes("notes-cap-help");
+    let mut term = Terminal::new(TestBackend::new(150, 70)).unwrap();
+    key(&mut app, KeyCode::Char('?'));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("Notes go to the project's sessions up to 8,000 characters."), "{shown}");
+    assert!(shown.contains("asks you once \"Ready to create tasks?\""), "the project's sessions are listed here too: {shown}");
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Esc);
+    key(&mut app, KeyCode::Char('1'));
+    key(&mut app, KeyCode::Char('?'));
+    let shown = flat(&draw(&mut term, &app));
+    assert!(shown.contains("\"Ready to create tasks?\"") && !shown.contains("8,000"), "{shown}");
+}

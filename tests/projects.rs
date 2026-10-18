@@ -36,7 +36,7 @@ printf '{"pid":%s,"sessionId":"%s","cwd":"%s","kind":"interactive","startedAt":%
 if [ -n "$FAKE_HOOK" ]; then
   printf '{"session_id":"%s","source":"startup","cwd":"%s","hook_event_name":"SessionStart"}' "$sid" "$(pwd)" | "$FAKE_HOOK" hook session-start > "$FAKE_DIR/hook-out-$n"
 fi
-echo "fake-claude args:$* project:${PLATOON_PROJECT:-none} sid:$sid"
+echo "fake-claude args:$* project:${PLATOON_PROJECT:-none} sid:$sid offer:${PLATOON_OFFER_TASKS:-none}"
 exec sh
 "#;
 
@@ -351,7 +351,7 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
     assert_eq!(t.wait_exit(), 1);
     // By name, ignoring case: a new session here, carrying the project.
     let mut t = Term::spawn(&["open", "--project", "web"], &env, &lab.work, 24, 90);
-    t.wait_for("project:pweb sid:new-0001");
+    t.wait_for("project:pweb sid:new-0001 offer:1");
     assert!(t.text().contains("args: "), "a new session, no resume: {}", t.text());
     // The hook (run by the stand-in with its own environment, as Claude runs hooks) put it in the project and gave
     // it the notes.
@@ -364,6 +364,48 @@ fn open_with_a_project_starts_a_session_in_it_and_the_hook_places_it_and_hands_i
     t.wait_exit();
 }
 
+#[test]
+fn sessions_platoon_starts_are_told_to_offer_making_tasks() {
+    let lab = Lab::new("proj-offer");
+    lab.save("aaaa-0001", "fix the docker build", 5);
+    lab.project(&["aaaa-0001"], None);
+    let mut env = lab.env();
+    env.push(("FAKE_HOOK", BIN.to_string()));
+    let mut t = Term::spawn(&[], &env, &lab.work, 30, 110);
+    t.wait_for("fix the docker build");
+    t.send(b"3");
+    t.wait_for_flat("WB Web");
+    t.send(b"\r");
+    t.wait_for("╭ Sessions");
+    // A new session in the project: the variable is set, and the hook (run with the session's environment, as
+    // Claude runs hooks) tells it to offer, with this platoon's full path, the project and the folder.
+    t.send(b"n");
+    t.wait_for("New session in Web");
+    t.send(b"\r");
+    t.wait_for("sid:new-0001 offer:1");
+    until("the hook to have run", || lab.base.join("hook-out-1").exists());
+    let out = fs::read_to_string(lab.base.join("hook-out-1")).unwrap();
+    let v: Value = serde_json::from_str(out.trim()).unwrap();
+    let ctx = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+    // (The folder as the session sees it: on macOS a temp folder may read through a link.)
+    for want in ["\"Ready to create tasks?\"", &format!("{BIN} task add --project pweb --folder /"), "/work --squad <squad>", "- bug-fix: "]
+    {
+        assert!(ctx.contains(want), "{want:?} missing from:\n{ctx}");
+    }
+    t.send(&[0]);
+    t.wait_for_flat("WB Web 2 active");
+    // A resumed one is told too.
+    t.send(b"\x1b[B\r");
+    t.wait_for("args:--resume aaaa-0001 project:pweb sid:aaaa-0001 offer:1");
+    t.send(&[0]);
+    t.wait_for_flat("WB Web 2 active");
+    t.send(b"\x1b");
+    t.wait_for("PROJECT");
+    t.send(b"q");
+    t.wait_for("running: platoon picks");
+    t.wait_exit();
+}
+
 fn hook(lab: &Lab, input: &str, project: Option<&str>) -> (i32, String) {
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
@@ -372,6 +414,7 @@ fn hook(lab: &Lab, input: &str, project: Option<&str>) -> (i32, String) {
         .env("PLATOON_CACHE_DIR", &lab.cache)
         .env("PLATOON_CONFIG_DIR", &lab.config)
         .env_remove("PLATOON_PROJECT")
+        .env_remove("PLATOON_OFFER_TASKS")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

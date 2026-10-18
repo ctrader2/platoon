@@ -464,6 +464,8 @@ pub enum Round {
     Failed(String),
     /// Claude's answer could not be understood, so nothing was changed.
     BadReply,
+    /// Asked twice, the answer still left the notes over the cap (`notes::CAP`) and no shorter: nothing changed.
+    TooLong,
     /// It ran and the answer came to nothing (the same words back again, or every section refused).
     Unchanged,
     /// The notes were written. (sections rewritten, decisions added)
@@ -520,42 +522,59 @@ pub fn update_once(env: &Env, id: &str) -> Round {
     if material.is_empty() {
         return Round::NothingNew;
     }
-    let text = notesupdate::prompt(&Doc::parse(&before), &state, &material);
-    let mut req = Request::new(FEATURE, notesupdate::system_with(&instructions::guidance(&env.config, instructions::NOTES)), text);
-    req.timeout = CALL_TIMEOUT;
+    let first = notesupdate::prompt(&Doc::parse(&before), &state, &material);
+    let system = notesupdate::system_with(&instructions::guidance(&env.config, instructions::NOTES));
+    let mut text = first.clone();
+    // An answer that leaves the notes over the cap is asked for again once, condensed; then the notes stay as they are.
+    let mut tries = 0;
+    let (merged, outcome) = loop {
+        tries += 1;
+        let mut req = Request::new(FEATURE, system.clone(), text.clone());
+        req.timeout = CALL_TIMEOUT;
+        let running = running_path(&env.cache, id);
+        set_marker(&running);
+        let answer = env.runner().run(&settings, &req);
+        clear_marker(&running);
 
-    let running = running_path(&env.cache, id);
-    set_marker(&running);
-    let answer = env.runner().run(&settings, &req);
-    clear_marker(&running);
+        let reply = match answer {
+            Ok(r) => r.text,
+            Err(AiError::Refused(r)) => return Round::Refused(r.plain()),
+            Err(e) => return Round::Failed(e.plain()),
+        };
+        let Some(update) = notesupdate::parse_update(&reply) else { return Round::BadReply };
 
-    let reply = match answer {
-        Ok(r) => r.text,
-        Err(AiError::Refused(r)) => return Round::Refused(r.plain()),
-        Err(e) => return Round::Failed(e.plain()),
-    };
-    let Some(update) = notesupdate::parse_update(&reply) else { return Round::BadReply };
-
-    // What is on disk now is what counts: the user may have written the notes while the call was out, and then
-    // the merge is worked out again against what they wrote (and refused if it no longer fits).
-    let _lock = crate::projects::lock(&notes_path);
-    let current = fs::read_to_string(&notes_path).unwrap_or_default();
-    if current.trim().is_empty() {
-        return Round::NoNotes;
-    }
-    if being_edited(&env.cache, id) {
-        return Round::Busy;
-    }
-    let merged = notesupdate::merge(&current, &state, &update, now);
-    let outcome = if merged.changed {
-        if notes::write(&env.config, id, &merged.text).is_err() {
-            return Round::Failed("the notes couldn't be written".into());
+        // What is on disk now is what counts: the user may have written the notes while the call was out, and then
+        // the merge is worked out again against what they wrote (and refused if it no longer fits).
+        let _lock = crate::projects::lock(&notes_path);
+        let current = fs::read_to_string(&notes_path).unwrap_or_default();
+        if current.trim().is_empty() {
+            return Round::NoNotes;
         }
-        Round::Written { sections: merged.wrote.len(), decisions: merged.added.len() }
-    } else {
-        Round::Unchanged
+        if being_edited(&env.cache, id) {
+            return Round::Busy;
+        }
+        let merged = notesupdate::merge(&current, &state, &update, now);
+        if notesupdate::too_long(&current, &merged.text) {
+            if tries < 2 {
+                text = notesupdate::condense_again(&first, &merged.text);
+                continue;
+            }
+            return Round::TooLong;
+        }
+        let outcome = if merged.changed {
+            // The first time notes over the cap are condensed, the file as it was is kept beside it, once.
+            if notes::chars(&current) > notes::CAP {
+                let _ = notes::keep_backup_once(&env.config, id, &current);
+            }
+            if notes::write(&env.config, id, &merged.text).is_err() {
+                return Round::Failed("the notes couldn't be written".into());
+            }
+            Round::Written { sections: merged.wrote.len(), decisions: merged.added.len() }
+        } else {
+            Round::Unchanged
+        };
+        break (merged, outcome);
     };
-    drop(_lock);
 
     // The material was read and paid for, so it is not read again; what platoon wrote is remembered, so the next
     // update can tell its own sentences from the user's.
@@ -1130,6 +1149,87 @@ mod tests {
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
         let after = fs::read_to_string(&path).unwrap();
         assert!(after.contains("There is a basket and a checkout page.") && after.contains("We never sell hats."), "{after}");
+    }
+
+    /// Notes over the cap: 25 sections platoon wrote (400 characters each) and 30 dated decisions.
+    fn long_project(r: &Rig) -> (String, String) {
+        let mut text = String::from("# Summary\n\nA shop.\n\n");
+        let mut state = State::default();
+        for n in 1..=25 {
+            let body = format!("- {}", "w".repeat(400));
+            text.push_str(&format!("# Part {n}\n\n{body}\n\n"));
+            state.set_mine(&format!("Part {n}"), &body);
+        }
+        text.push_str("# Decisions\n\n");
+        for n in 1..=30 {
+            text.push_str(&format!("- 2026-09-{:02}: Decision number {n} about the shop.\n", n % 28 + 1));
+        }
+        assert!(notes::chars(&text) > notes::CAP);
+        let id = r.project(&text);
+        state.save(&r.env.config, &id).unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        (id, text)
+    }
+
+    /// An answer that folds every part into one and condenses the decisions.
+    fn condensed() -> String {
+        let was: Vec<String> = (1..=25).map(|n| format!("Part {n}")).collect();
+        json!({
+            "sections": [{"heading": "History", "body": "- Twenty-five parts, condensed.", "was": was}],
+            "decisions_condensed": "- 2026-09: Thirty decisions about the shop.",
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn an_answer_over_the_cap_is_asked_for_again_once_condensed_and_the_old_notes_are_kept_once() {
+        let r = Rig::new("cap-retry");
+        let (id, before) = long_project(&r);
+        // The first answer only adds: still over and longer. The second condenses.
+        r.fake.reply(1, r#"{"decisions":["Baskets are session based"]}"#);
+        r.fake.reply(2, &condensed());
+        assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
+        assert_eq!(r.fake.calls(), 2);
+        let again = r.fake.stdin(2);
+        assert!(again.contains("Your last answer would have left the notes at") && again.contains("over the 8,000"), "{again}");
+        assert!(!r.fake.stdin(1).contains("Your last answer"));
+        let after = r.notes(&id);
+        assert!(notes::chars(&after) <= notes::CAP, "{after}");
+        assert!(after.contains("# History\n\n- Twenty-five parts, condensed.") && after.contains("- 2026-09: Thirty decisions"), "{after}");
+        assert!(!after.contains("# Part 1\n"));
+        // The notes as they were, kept beside them, once.
+        assert_eq!(fs::read_to_string(notes::backup_path(&r.env.config, &id)).unwrap(), before);
+        // The user writes them long again; the next condense leaves the first copy alone.
+        let path = Projects::open(&r.env.config).notes_path(&id);
+        fs::write(&path, format!("{after}\n# Mine\n\n{}\n", "m".repeat(notes::CAP))).unwrap();
+        r.session(&id, "s1", &["Add a basket page to the shop", "And a checkout"], "Done.");
+        r.fake.reply(3, r#"{"sections":[{"heading":"History","body":"- Parts."}]}"#);
+        let round = update_once(&r.env, &id);
+        assert_eq!(round, Round::Written { sections: 1, decisions: 0 }, "over but shorter: on the way down; calls {}", r.fake.calls());
+        assert!(notes::chars(&r.notes(&id)) > notes::CAP);
+        assert_eq!(fs::read_to_string(notes::backup_path(&r.env.config, &id)).unwrap(), before, "never replaced");
+    }
+
+    #[test]
+    fn an_answer_still_over_the_cap_after_the_retry_changes_nothing() {
+        let r = Rig::new("cap-twice");
+        let (id, before) = long_project(&r);
+        r.fake.reply_default(r#"{"decisions":["Baskets are session based"]}"#);
+        assert_eq!(update_once(&r.env, &id), Round::TooLong);
+        assert_eq!(r.fake.calls(), 2, "one retry, no more");
+        assert_eq!(r.notes(&id), before);
+        assert!(!notes::backup_path(&r.env.config, &id).exists());
+        // Not counted as read: the next update sends it again.
+        assert!(State::load(&r.env.config, &id).seen.is_empty());
+        // An answer that pushes notes under the cap over it is refused the same way.
+        let r = Rig::new("cap-push");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let huge =
+            json!({"sections": (0..3).map(|n| json!({"heading": format!("Big {n}"), "body": "z".repeat(3_900)})).collect::<Vec<_>>()});
+        r.fake.reply_default(&huge.to_string());
+        assert_eq!(update_once(&r.env, &id), Round::TooLong);
+        assert_eq!(r.notes(&id), NOTES);
     }
 
     #[test]

@@ -12,7 +12,7 @@ and how to take it out again.
 | --- | --- | --- |
 | Status line | `statusLine`: `<platoon> statusline` | Claude Code hands it the plan usage and the session's context percentage; platoon keeps those figures in its cache and prints the status line |
 | Session guard | a `UserPromptSubmit` hook: `<platoon> hook guard` | refuses a message in a second copy of a conversation that is already running, and passes a project's changed notes to a running session |
-| Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted |
+| Project notes | a `SessionStart` hook: `<platoon> hook session-start` | hands a project's notes to a session when it starts, resumes, is cleared or compacted (at most 8,000 characters); a session platoon starts or resumes (it carries `PLATOON_OFFER_TASKS=1`) is also told to offer making tasks with `platoon task add` |
 | Notes updates | a `Stop` hook: `<platoon> hook stop` | notes that a project's session finished answering, so its notes can be brought up to date later |
 
 Before it writes the file, setup copies it to `settings.json.platoon-bak` beside it. Everything else in the file is left
@@ -78,7 +78,7 @@ because they would be lost or cost tokens to make again.
 
 - `settings.json`, `keys.json` (yours; platoon never writes it), `setup.json` (what an earlier setup remembered)
 - `names.json` (names you gave), `archive.json` (archived conversations), `summaries.json` (smart names and summaries)
-- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `notes-state.json`, and the tasks
+- `projects.json`, and `projects/<id>/`: the notes (`project.md`), their `history/`, `project.md.bak` (the notes as they were the first time an update condensed them), `notes-state.json`, and the tasks
   (`tasks.json`, `tasks/` with each task's text and its own folder: the squad it was started with, its plan, its last
   test output); `tasks.json` and `tasks/` at the top for tasks in no project
 - `squads/` (your own squads, and built-in ones you replaced, `<id>.md`), `prompts/` (system prompts you changed),

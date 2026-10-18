@@ -40,6 +40,14 @@ here.
   its steps and what is wrong with it. `e` opens a squad's file in your editor (a built-in's text is copied into
   `~/.config/platoon/squads/` first, and the copy goes again if you leave it unchanged), `n` makes a new one from a
   template, `d` deletes one of yours after asking (kept as `<id>.md.bak`; a built-in it replaced comes back).
+- **Sessions offer to make tasks.** A session platoon starts or resumes (not a task's own) asks you once, when the
+  conversation settles on concrete work, "Ready to create tasks?", and on a yes makes them itself with `platoon task add`
+  in its project and folder, each with "Done when" lines and a suggested squad, Not started. `platoon task add` takes
+  `--squad <id>`.
+- **Project notes are kept under 8,000 characters.** The notes update condenses them when they near it (an answer that
+  leaves them over is asked for again once, then the notes stay as they were); the first time it condenses notes that
+  were over, the old file is kept as `project.md.bak`. Notes you write past the limit are sent to sessions cut at a line
+  end, with a line saying so, and the project's screen warns about it.
 
 ### Removed
 

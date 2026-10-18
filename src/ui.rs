@@ -877,6 +877,13 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         }
         top_lines.push(Line::raw(""));
     }
+    // Notes past the cap reach sessions cut: said plainly, in the warning colour.
+    if let Some(warning) = notes.as_deref().and_then(crate::notes::over_cap_warning) {
+        for line in wrap(&warning, area.width as usize) {
+            top_lines.push(Line::styled(line, Style::new().fg(t.warn)));
+        }
+        top_lines.push(Line::raw(""));
+    }
     let used = (top_lines.len() as u16).min(area.height);
     if used > 0 {
         f.render_widget(Paragraph::new(top_lines), Rect::new(area.x, area.y, area.width, used));

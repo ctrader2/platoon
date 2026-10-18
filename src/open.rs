@@ -65,7 +65,8 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     let hosts = host::discover();
     let Some(arg) = arg else {
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-        return host::launch(&host::Dirs::from_env(), &program(), &cwd.to_string_lossy(), &[], &[], rows, cols).map(|(h, _)| h);
+        let env = [(crate::sessionhook::OFFER_ENV, "1")];
+        return host::launch(&host::Dirs::from_env(), &program(), &cwd.to_string_lossy(), &[], &env, rows, cols).map(|(h, _)| h);
     };
 
     let live = guard::live_entries(&root);
@@ -120,7 +121,11 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     }
     // A session of a project keeps carrying the project, so the notes hook can tell.
     let projects = Projects::open(&crate::archive::config_dir());
-    let env: Vec<(&str, &str)> = projects.project_id_of(&id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    let mut env: Vec<(&str, &str)> = projects.project_id_of(&id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    // A session that is not a task's own is told to offer making tasks.
+    if crate::tickets::find_session(&crate::archive::config_dir(), &id).is_none() {
+        env.push((crate::sessionhook::OFFER_ENV, "1"));
+    }
     host::launch(&host::Dirs::from_env(), &program(), &cwd, &["--resume", &id], &env, rows, cols).map(|(h, _)| h)
 }
 
@@ -133,8 +138,15 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     }
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let at_ms = crate::usage::now().saturating_sub(2) * 1000;
-    let (info, _) =
-        host::launch(&host::Dirs::from_env(), &program(), &cwd.to_string_lossy(), &[], &[("PLATOON_PROJECT", p.id.as_str())], rows, cols)?;
+    let (info, _) = host::launch(
+        &host::Dirs::from_env(),
+        &program(),
+        &cwd.to_string_lossy(),
+        &[],
+        &[("PLATOON_PROJECT", p.id.as_str()), (crate::sessionhook::OFFER_ENV, "1")],
+        rows,
+        cols,
+    )?;
     // Placed in the project once its session id shows up (by any platoon window, or by the notes hook).
     projects::note_launch(&crate::usage::cache_dir(), info.claude_pid, &p.id, at_ms)
         .map_err(|e| format!("couldn't note the project: {e}"))?;
