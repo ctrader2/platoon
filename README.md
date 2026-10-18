@@ -22,10 +22,10 @@ platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude drafts tasks from
   the conversation, each with the squad that suits it), then start it: one Claude Code session in a copy of your folder
   (a git worktree on the branch `task/<N>`), following a squad, a short Markdown file of steps for that kind of work
-  (Feature, Bug fix, Refactor, Explain, Review, Docs, or your own). It can show you its plan first and wait for your yes,
-  and it asks you before a push, a pull request or a release. It runs your repo's tests itself, and when it stops a
-  fresh Claude checks its work against the task before it is Done. The Tasks tab shows every task across your projects
-  and what each one needs from you.
+  (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or your own). It can show you its plan first and wait
+  for your yes, and it asks you before a push, a pull request or a release. It runs your repo's tests itself, and when
+  it stops a fresh Claude checks its work against the task before it is Done. The Tasks tab shows every task across
+  your projects and what each one needs from you.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)

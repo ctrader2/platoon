@@ -99,7 +99,7 @@ fn exists(p: &Path) -> bool {
 fn the_tab_lists_every_squad_with_where_it_comes_from_and_the_picked_one_beside_it() {
     let (_w, mut app) = squads_world("squads-list");
     let ids: Vec<&str> = app.sqt.list.iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, ["feature", "bug-fix", "refactor", "explain", "review", "docs", "sloppy"]);
+    assert_eq!(ids, ["feature", "bug-fix", "incident", "refactor", "explain", "review", "docs", "sloppy"]);
     let mut term = Terminal::new(TestBackend::new(120, 40)).unwrap();
     let shown = draw(&mut term, &app);
     let text = flat(&shown);

@@ -26,9 +26,10 @@ use std::{
 };
 
 /// The built-in squads, in the order they are listed: (id, the file's text).
-pub const BUILT_IN: [(&str, &str); 6] = [
+pub const BUILT_IN: [(&str, &str); 7] = [
     ("feature", include_str!("squads/feature.md")),
     ("bug-fix", include_str!("squads/bug-fix.md")),
+    ("incident", include_str!("squads/incident.md")),
     ("refactor", include_str!("squads/refactor.md")),
     ("explain", include_str!("squads/explain.md")),
     ("review", include_str!("squads/review.md")),
@@ -315,7 +316,10 @@ mod tests {
     fn every_built_in_squad_parses_with_no_problems_and_says_what_it_is_for() {
         let d = dir_for("built-in");
         let all = all(&d);
-        assert_eq!(all.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["feature", "bug-fix", "refactor", "explain", "review", "docs"]);
+        assert_eq!(
+            all.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["feature", "bug-fix", "incident", "refactor", "explain", "review", "docs"]
+        );
         for s in &all {
             assert!(s.problems.is_empty(), "{}: {:?}", s.id, s.problems);
             assert_eq!(s.origin, Origin::BuiltIn);
@@ -334,6 +338,28 @@ mod tests {
         for id in ["explain", "review"] {
             let s = by(id);
             assert_eq!((s.model.as_str(), s.verdict_model.as_str(), s.plan_first), ("opus", "sonnet", false), "{id}");
+        }
+        let incident = by("incident");
+        assert_eq!((incident.model.as_str(), incident.verdict_model.as_str(), incident.plan_first), ("opus", "fable", false));
+        // Stop the damage first, asking before anything others see; prove the cause; a postmortem at the end.
+        for want in [
+            "Stabilise first",
+            "ask the user with `AskUserQuestion` before you do it",
+            "MCP tools",
+            "`Agent` tool",
+            "timeline",
+            "Prove the cause before you believe it",
+            "Write a test that fails",
+            "postmortem",
+            "what would have caught it sooner",
+        ] {
+            assert!(incident.body.contains(want), "{want}");
+        }
+        // Every squad that changes code runs the repo's tests where it verifies, and names them at the end.
+        for id in ["feature", "bug-fix", "incident", "refactor"] {
+            let body = by(id).body.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(body.contains("find how this repo runs its tests (its CLAUDE.md, README, or build files) and run them all"), "{id}");
+            assert!(body.contains("test command you ran and its result"), "{id}");
         }
         let docs = by("docs");
         assert_eq!((docs.model.as_str(), docs.verdict_model.as_str(), docs.plan_first), ("sonnet", "opus", false));
@@ -389,7 +415,11 @@ mod tests {
         fs::write(dir(&d).join("coding.json"), "{}").unwrap();
         let all = all(&d);
         let ids: Vec<&str> = all.iter().map(|s| s.id.as_str()).collect();
-        assert_eq!(ids, ["feature", "bug-fix", "refactor", "explain", "review", "docs", "broken", "zebra"], "not a .md file: not a squad");
+        assert_eq!(
+            ids,
+            ["feature", "bug-fix", "incident", "refactor", "explain", "review", "docs", "broken", "zebra"],
+            "not a .md file: not a squad"
+        );
         let review = all.iter().find(|s| s.id == "review").unwrap();
         assert_eq!((review.name.as_str(), review.origin, review.verdict_model.as_str()), ("Our review", Origin::Replaces, ""));
         assert!(review.usable());

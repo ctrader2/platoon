@@ -14,13 +14,14 @@ here.
   message. It is a session like any other: it shows on the Sessions tab marked `#N`, and `enter` on the task opens it.
   The leader, its team of agents, the commander, the squad line and the hand-over popup are gone.
 - **A squad is a Markdown file of steps**: front matter (`name`, `description`, `model`, `verdict_model`, `plan_first`)
-  and the steps. Six are built in (Feature, Bug fix, Refactor, Explain, Review, Docs), adapted from pstack's playbooks;
-  a file of yours in `~/.config/platoon/squads/<id>.md` adds one, or replaces the built-in of that id.
+  and the steps. Seven are built in (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs), adapted from pstack's
+  playbooks (Incident from its bug-fix and runtime-forensics playbooks and its postmortem sources); a file of yours in
+  `~/.config/platoon/squads/<id>.md` adds one, or replaces the built-in of that id.
 - **The task's state comes from its session's hooks**: a plan to approve, a question, a permission prompt (Needs you),
   Working again once answered or typed into, and Done when it stops and the check of its work passes.
 - **The session runs the tests, not platoon.** platoon's rules for every task tell the session to find how its repo runs
   its tests (its `CLAUDE.md`, README or build files), run them before it finishes and name the command and the result
-  in its last message; the Feature, Bug fix and Refactor squads say so where they verify.
+  in its last message; the Feature, Bug fix, Incident and Refactor squads say so where they verify.
 - **A task is Done only when a check of its work says so.** When its session stops, a fresh `claude -p` on the squad's `verdict_model` reads the task, the session's last message and the change,
   with tools that only read, and judges each "Done when" box with the evidence. Not done goes back to the session once
   with what it found (`file:line: problem`, each quote checked in the code), then the task needs you; a check that can't

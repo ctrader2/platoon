@@ -252,7 +252,7 @@ fn drafted_tasks_start_as_one_session_with_their_squad_and_their_hooks_move_them
     let squad_md = fs::read_to_string(task_dir.join("squad.md")).unwrap();
     assert!(squad_md.contains(&format!("You work in {} on the branch `task/1`", wt.to_string_lossy())), "{squad_md}");
     assert!(squad_md.contains("# The squad: Feature"), "{squad_md}");
-    for id in ["feature", "bug-fix", "refactor", "explain", "review", "docs"] {
+    for id in ["feature", "bug-fix", "incident", "refactor", "explain", "review", "docs"] {
         assert!(task_dir.join("squads").join(format!("{id}.md")).is_file(), "{id}");
     }
 

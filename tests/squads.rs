@@ -98,8 +98,8 @@ fn the_tab_shows_every_squad_and_e_and_d_change_a_built_in_and_bring_it_back() {
     let (row, col) = t.find("built in").unwrap();
     assert_ne!(t.fg_at(row, col), WARN);
 
-    // Down to Docs (the sixth), and e: its text is written to the squads folder and opens in the editor.
-    t.send(b"jjjjj");
+    // Down to Docs (the seventh), and e: its text is written to the squads folder and opens in the editor.
+    t.send(b"jjjjjj");
     t.wait_for("Model          sonnet");
     t.send(b"e");
     t.wait_for("╭ Edit the squad with");

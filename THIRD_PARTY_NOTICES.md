@@ -116,12 +116,13 @@ tree_magic_mini), MIT/Apache-2.0 (wl-clipboard-rs) and Apache-2.0 (gethostname).
 
 ## The built-in squads
 
-The six built-in squads in `src/squads/` (Feature, Bug fix, Refactor, Explain, Review, Docs) are adapted from the
-playbooks and skills of pstack: Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), as ported to
-Claude Code by Michael Denyer ([pstack-claude](https://github.com/michael-denyer/pstack-claude)). platoon took the
-substance of its `poteto-mode` skill and its feature, bug-fix, refactoring and investigation playbooks, and of its
-`how`, `interrogate`, `technical-writing` and `unslop` skills, and rewrote and renamed it as squads. No text was taken
-from the skills that pstack-claude marks as Cursor's. pstack is published under this license:
+The seven built-in squads in `src/squads/` (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs) are adapted
+from the playbooks and skills of pstack: Lauren Tan's [pstack](https://github.com/cursor/plugins/tree/main/pstack), as
+ported to Claude Code by Michael Denyer ([pstack-claude](https://github.com/michael-denyer/pstack-claude)). platoon took
+the substance of its `poteto-mode` skill and its feature, bug-fix, refactoring, investigation and runtime-forensics
+playbooks, and of its `how`, `why` (with its incident and postmortem sources), `interrogate`, `technical-writing` and
+`unslop` skills, and rewrote and renamed it as squads. No text was taken from the skills that pstack-claude marks as
+Cursor's. pstack is published under this license:
 
 ```
 MIT License
