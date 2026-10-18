@@ -46,6 +46,11 @@ use std::{
 /// The feature id in `ai::FEATURES`: the switch, the gate and the ledger all go by it.
 pub const FEATURE: &str = "project_notes";
 
+/// The notes are written on Sonnet whatever the smart features' model is: they go into every session of the project,
+/// and on Haiku an update dropped a reversal it had been shown (a feature taken back out stayed in the notes), and
+/// condensing kept about twice as many lines that were no longer true.
+pub const MODEL: &str = "sonnet";
+
 /// How long a project must be quiet before one update runs, when the settings can't be read at all. The setting
 /// itself ("Update notes after", `notes_quiet_minutes`) is what normally decides, and its own default is 3 minutes.
 pub const DEFAULT_QUIET_SECS: u64 = 180;
@@ -550,6 +555,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         tries += 1;
         let mut req = Request::new(FEATURE, system.clone(), text.clone());
         req.timeout = CALL_TIMEOUT;
+        req.model = Some(MODEL.into());
         let running = running_path(&env.cache, id);
         set_marker(&running);
         let answer = env.runner().run(&settings, &req);
@@ -1343,6 +1349,8 @@ mod tests {
         r.fake.reply(2, &condensed());
         assert!(matches!(update_once(&r.env, &id), Round::Written { .. }));
         assert_eq!(r.fake.calls(), 2);
+        assert!(r.fake.has_arg(1, "sonnet") && r.fake.has_arg(2, "sonnet"), "notes are written on Sonnet: {:?}", r.fake.argv(1));
+        assert!(!r.fake.has_arg(1, "haiku"), "not the smart features' model");
         let again = r.fake.stdin(2);
         assert!(again.contains("Your last answer would have left the notes at") && again.contains("over the 8,000"), "{again}");
         assert!(!r.fake.stdin(1).contains("Your last answer"));

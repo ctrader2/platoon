@@ -45,7 +45,7 @@ Whether your Claude plan is used at all, and how much (see [Features that use to
 | Smart names and summaries, Find a session by description, Project notes, Project descriptions | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off / On (the two project ones are On once the master switch is) |
 | Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
 | Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
-| Model for smart features | Which Claude model does the work. | Haiku (default), Sonnet |
+| Model for smart features | Which Claude model does the work. Project notes always use Sonnet. | Haiku (default), Sonnet |
 
 ### Sessions
 

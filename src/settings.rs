@@ -840,7 +840,7 @@ fn smart_items() -> Vec<Item> {
         },
         Item {
             name: "Model for smart features",
-            explain: "Haiku is the smallest and uses the least of your plan. Sonnet writes better names but costs more.",
+            explain: "Haiku is the smallest and uses the least of your plan. Sonnet writes better names but costs more. Project notes always use Sonnet.",
             kind: Kind::Steps,
             choices: &[0, 1],
             get: |s| MODELS.iter().position(|m| *m == s.ai_model).unwrap_or(0) as u64,

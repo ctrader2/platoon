@@ -8,6 +8,9 @@ here.
 
 ### Changed
 
+- **Project notes are written on Sonnet.** Whatever the model for smart features is, a notes update now uses Sonnet. On
+  Haiku, an update could leave out a change it had just been shown (a feature taken back out stayed in the notes), and
+  shortening notes over the limit kept about twice as many lines that were no longer true.
 - **A project's notes start by themselves.** A project with no notes file gets one from the template the first time
   one of its sessions finishes answering, or a session joins it, and the first update fills it in a few minutes later;
   you no longer have to press `e` first. A notes file you emptied is left to you, and nothing starts with Project

@@ -183,7 +183,8 @@ session started under a project, or one the SessionStart hook places there all m
 few minutes later without you having to resume anything (a conversation you never open again would otherwise never be read
 at all). The helper waits until the project has been quiet for as long as **Update notes after** says (3 minutes unless you
 change it, in the [settings](settings-and-keys.md#projects) on the Projects tab: 1, 3, 5, 15 or 30 minutes; another turn
-starts that timer over) and then makes **one** request to Claude. Only one helper runs per project, and it works whether
+starts that timer over) and then makes **one** request to Claude, always on Sonnet whatever the model for smart features is (the notes go into
+every session, and Haiku left out changes it had been shown). Only one helper runs per project, and it works whether
 the platoon window is open or closed. **A project with no notes file yet gets one**: the hook writes the template
 first, then marks the project as above, so the first update has something to fill in. Archived projects and archived
 sessions are skipped entirely, and so is a notes file that is there but empty: if you emptied it, platoon leaves it to
