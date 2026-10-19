@@ -30,7 +30,7 @@ pub const FEATURE: &str = "verdict";
 pub const TIMEOUT: Duration = Duration::from_secs(600);
 
 /// The tools it may use: reading only.
-pub const TOOLS: &str = "Read,Grep,Glob";
+pub const TOOLS: crate::agents::Tools = crate::agents::Tools::ReadOnly;
 
 /// How far from the line it names a finding's quote may be, in lines.
 pub const QUOTE_SLACK: u64 = 3;
@@ -304,7 +304,7 @@ pub fn keep(file: &Path, raw: &str) {
     let _ = crate::projects::write_atomic(file, &text);
 }
 
-/// Run the check: `claude -p` on `model` in `folder`, read-only, with the schema. The answer's text (JSON) and the
+/// Run the check: a one-shot call on `model` in `folder`, read-only, with the schema. The answer's text (JSON) and the
 /// tokens it used, or why it could not run with the tokens used anyway.
 pub fn run(runner: &Runner, model: &str, folder: &Path, prompt: String, timeout: Duration) -> Result<(String, u64), (String, u64)> {
     let mut req = Request::new(FEATURE, SYSTEM, prompt);

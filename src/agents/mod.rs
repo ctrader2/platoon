@@ -2,9 +2,11 @@
 //! Code) that is the only place that knows its files, flags, hooks and models; the rest of platoon goes through this
 //! one: the `Agent` it is dealing with, and the agent-neutral shapes below, which an agent's module produces.
 
+use crate::ai::{Outcome, Request};
 use std::{
     fs,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 pub mod claude;
@@ -77,6 +79,21 @@ impl Agent {
         }
     }
 
+    /// Make `cmd` (the agent's program) a one-shot call of `model` for `req`: no session kept, the prompt on stdin,
+    /// the answer as JSON.
+    pub fn one_shot(self, cmd: &mut Command, model: &str, req: &Request) {
+        match self {
+            Agent::Claude => claude::one_shot(cmd, model, req),
+        }
+    }
+
+    /// What a one-shot call's output says: its answer, or why there is none, and what it used.
+    pub fn one_shot_outcome(self, stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
+        match self {
+            Agent::Claude => claude::interpret(stdout, stderr, exited_ok),
+        }
+    }
+
     /// How many tokens of context the conversation's model has room for.
     pub fn context_window(self, t: &Transcript) -> u64 {
         match self {
@@ -128,6 +145,16 @@ pub struct TaskLaunch {
     pub exe: String,
     /// The first message (a new session only).
     pub first: Option<String>,
+}
+
+// ---- a one-shot call (platoon's own: names, notes, the check of a task's work) ---------------------------------------
+
+/// The tools a one-shot call may use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tools {
+    None,
+    /// Reading files and searching them, nothing that changes anything.
+    ReadOnly,
 }
 
 // ---- hooks -----------------------------------------------------------------------------------------------------------

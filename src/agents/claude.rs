@@ -3,14 +3,18 @@
 //! knowledge of them lives in this file.
 
 use super::{
-    Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Transcript, TurnEnd,
+    Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Tools, Transcript,
+    TurnEnd,
 };
+use crate::ai::{Outcome, Request, classify, extract_json};
+use crate::ledger::{FailKind, Usage};
 use crate::procs::pid_alive;
 use serde_json::{Value, json};
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
+    process::Command,
 };
 
 const TAIL_BYTES: u64 = 512 * 1024;
@@ -238,6 +242,85 @@ fn still_working(v: Option<&Value>) -> bool {
         Some(Value::Bool(b)) => *b,
         _ => false,
     }
+}
+
+// ---- a one-shot call (`claude -p`) ---------------------------------------------------------------------------------
+
+/// The arguments and environment of a one-shot call of `model` for `req`: `claude -p` with the user's normal login,
+/// no settings, no saved session, no slash commands, no MCP servers, the caller's system prompt and effort, the
+/// answer as JSON (`--output-format json`), following `req.json_schema` when it gives one. The prompt goes in on
+/// stdin. Never `--bare`: it needs an API key, which subscribers don't have.
+pub fn one_shot(cmd: &mut Command, model: &str, req: &Request) {
+    let tools = match req.tools {
+        Tools::None => "",
+        Tools::ReadOnly => "Read,Grep,Glob",
+    };
+    cmd.args(["-p", "--model", model, "--tools", tools, "--setting-sources", ""])
+        .args(["--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"])
+        .args(["--system-prompt", req.system.as_str(), "--effort", req.effort, "--output-format", "json"]);
+    if let Some(schema) = &req.json_schema {
+        cmd.args(["--json-schema", schema.as_str()]);
+    }
+    if req.effort == "low" {
+        // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
+        cmd.env("MAX_THINKING_TOKENS", "0");
+    }
+}
+
+/// What came out of a run of `claude -p`, understood. Pure: the runner feeds it the bytes. With `--json-schema` the
+/// answer is `structured_output`, else `result`; the usage is `usage`, the cost `total_cost_usd`.
+pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
+    let out = String::from_utf8_lossy(stdout);
+    let err = String::from_utf8_lossy(stderr);
+    let mut value = extract_json(&out);
+    // Older Claude Code versions print a list of events; the answer is the one of type "result".
+    if let Some(Value::Array(events)) = &value {
+        value = events.iter().rev().find(|e| e.get("type").and_then(Value::as_str) == Some("result")).or(events.last()).cloned();
+    }
+    let Some(v) = value.filter(Value::is_object) else {
+        let both = format!("{out} {err}");
+        let detail = cut(both.trim(), 200);
+        let kind = classify(&both);
+        let detail = if detail.is_empty() { "no output".to_string() } else { detail };
+        return Outcome { result: Err((kind, detail)), usage: None, cost_usd: 0.0 };
+    };
+    let number = |o: &Value, k: &str| o.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let usage = v.get("usage").filter(|u| u.is_object()).map(|u| Usage {
+        input: number(u, "input_tokens"),
+        cache_creation: number(u, "cache_creation_input_tokens"),
+        cache_read: number(u, "cache_read_input_tokens"),
+        output: number(u, "output_tokens"),
+    });
+    let cost_usd = v.get("total_cost_usd").and_then(Value::as_f64).filter(|c| c.is_finite() && *c >= 0.0).unwrap_or(0.0);
+    // With `--json-schema` the answer is `structured_output`; `result` may then be empty or a sentence about it.
+    let structured = v.get("structured_output").filter(|s| !s.is_null()).map(Value::to_string);
+    let text = structured.as_deref().or_else(|| v.get("result").and_then(Value::as_str));
+    let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+    let result = match text {
+        Some(t) if !is_error && exited_ok && !t.trim().is_empty() => Ok(t.to_string()),
+        _ => {
+            let both = format!("{} {}", text.unwrap_or(""), err);
+            let mut kind = classify(&both);
+            if kind == FailKind::Other
+                && v.get("subtype").and_then(Value::as_str).is_some_and(|s| s.contains("rate") || s.contains("limit"))
+            {
+                kind = FailKind::RateLimited;
+            }
+            let detail = match (text.filter(|t| !t.trim().is_empty()), exited_ok) {
+                (Some(t), _) => cut(t, 200),
+                (None, _) if !err.trim().is_empty() => cut(&err, 200),
+                (None, true) if !is_error => "Claude sent back an empty answer".to_string(),
+                _ => "Claude reported an error".to_string(),
+            };
+            Err((kind, detail))
+        }
+    };
+    Outcome { result, usage, cost_usd }
+}
+
+fn cut(s: &str, n: usize) -> String {
+    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if one_line.chars().count() <= n { one_line } else { format!("{}…", one_line.chars().take(n).collect::<String>()) }
 }
 
 // ---- a task's session ------------------------------------------------------------------------------------------------

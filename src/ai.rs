@@ -29,6 +29,7 @@
 // Step C is the first caller of most of this.
 #![allow(dead_code)]
 
+use crate::agents::{Agent, Tools};
 use crate::ledger::{Backoff, FailKind, Ledger, Usage, local_day};
 use crate::settings::Settings;
 use crate::usage;
@@ -397,13 +398,13 @@ pub struct Request {
     pub user_initiated: bool,
     /// A model of its own for this call; None: the smart features' model.
     pub model: Option<String>,
-    /// The tools it may use (`--tools`): "" for none.
-    pub tools: &'static str,
+    /// The tools it may use.
+    pub tools: Tools,
     /// The folder it runs in; None: the one work folder (`work_dir`), where nothing it does is shown as a session.
     pub cwd: Option<PathBuf>,
-    /// A JSON Schema the answer follows (`--json-schema`): the answer is then Claude's `structured_output`, as JSON.
+    /// A JSON Schema the answer follows: the answer is then JSON that follows it.
     pub json_schema: Option<String>,
-    /// `--effort`. At "low" hidden thinking is turned off too (`MAX_THINKING_TOKENS=0`).
+    /// How hard the model thinks: "low" or "medium". At "low" hidden thinking is turned off too.
     pub effort: &'static str,
 }
 
@@ -417,7 +418,7 @@ impl Request {
             cancel: Cancel::new(),
             user_initiated: false,
             model: None,
-            tools: "",
+            tools: Tools::None,
             cwd: None,
             json_schema: None,
             effort: "low",
@@ -641,67 +642,13 @@ pub fn extract_json(text: &str) -> Option<Value> {
     None
 }
 
-fn cut(s: &str, n: usize) -> String {
-    let one_line = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if one_line.chars().count() <= n { one_line } else { format!("{}…", one_line.chars().take(n).collect::<String>()) }
-}
-
-/// What came out of a run of `claude -p`, understood. Pure: the runner feeds it the bytes.
+/// What came out of a one-shot call, understood (by its agent: `Agent::one_shot_outcome`).
 pub struct Outcome {
     /// The answer, or why there isn't one.
     pub result: Result<String, (FailKind, String)>,
     /// What Claude reported (present even for a failed call, when the JSON had it).
     pub usage: Option<Usage>,
     pub cost_usd: f64,
-}
-
-pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
-    let out = String::from_utf8_lossy(stdout);
-    let err = String::from_utf8_lossy(stderr);
-    let mut value = extract_json(&out);
-    // Older Claude Code versions print a list of events; the answer is the one of type "result".
-    if let Some(Value::Array(events)) = &value {
-        value = events.iter().rev().find(|e| e.get("type").and_then(Value::as_str) == Some("result")).or(events.last()).cloned();
-    }
-    let Some(v) = value.filter(Value::is_object) else {
-        let both = format!("{out} {err}");
-        let detail = cut(both.trim(), 200);
-        let kind = classify(&both);
-        let detail = if detail.is_empty() { "no output".to_string() } else { detail };
-        return Outcome { result: Err((kind, detail)), usage: None, cost_usd: 0.0 };
-    };
-    let number = |o: &Value, k: &str| o.get(k).and_then(Value::as_u64).unwrap_or(0);
-    let usage = v.get("usage").filter(|u| u.is_object()).map(|u| Usage {
-        input: number(u, "input_tokens"),
-        cache_creation: number(u, "cache_creation_input_tokens"),
-        cache_read: number(u, "cache_read_input_tokens"),
-        output: number(u, "output_tokens"),
-    });
-    let cost_usd = v.get("total_cost_usd").and_then(Value::as_f64).filter(|c| c.is_finite() && *c >= 0.0).unwrap_or(0.0);
-    // With `--json-schema` the answer is `structured_output`; `result` may then be empty or a sentence about it.
-    let structured = v.get("structured_output").filter(|s| !s.is_null()).map(Value::to_string);
-    let text = structured.as_deref().or_else(|| v.get("result").and_then(Value::as_str));
-    let is_error = v.get("is_error").and_then(Value::as_bool).unwrap_or(false);
-    let result = match text {
-        Some(t) if !is_error && exited_ok && !t.trim().is_empty() => Ok(t.to_string()),
-        _ => {
-            let both = format!("{} {}", text.unwrap_or(""), err);
-            let mut kind = classify(&both);
-            if kind == FailKind::Other
-                && v.get("subtype").and_then(Value::as_str).is_some_and(|s| s.contains("rate") || s.contains("limit"))
-            {
-                kind = FailKind::RateLimited;
-            }
-            let detail = match (text.filter(|t| !t.trim().is_empty()), exited_ok) {
-                (Some(t), _) => cut(t, 200),
-                (None, _) if !err.trim().is_empty() => cut(&err, 200),
-                (None, true) if !is_error => "Claude sent back an empty answer".to_string(),
-                _ => "Claude reported an error".to_string(),
-            };
-            Err((kind, detail))
-        }
-    };
-    Outcome { result, usage, cost_usd }
 }
 
 /// The one folder every call runs in, under platoon's cache folder. Defined here only: whatever must recognise or
@@ -721,7 +668,7 @@ pub struct Runner {
 impl Runner {
     /// The program is PLATOON_CLAUDE_BIN, else `claude`.
     pub fn from_env(cache: &Path) -> Runner {
-        Runner { program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()), cache: cache.to_path_buf(), offset: 0 }
+        Runner { program: Agent::Claude.program(), cache: cache.to_path_buf(), offset: 0 }
     }
 
     pub fn with_program(cache: &Path, program: &str) -> Runner {
@@ -777,13 +724,10 @@ impl Runner {
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
 
         let model = req.model.clone().unwrap_or_else(|| settings.ai_model.clone());
+        // platoon's own calls run on Claude Code.
+        let agent = Agent::Claude;
         let mut cmd = Command::new(&self.program);
-        cmd.args(["-p", "--model", model.as_str(), "--tools", req.tools, "--setting-sources", ""])
-            .args(["--no-session-persistence", "--disable-slash-commands", "--strict-mcp-config"])
-            .args(["--system-prompt", req.system.as_str(), "--effort", req.effort, "--output-format", "json"]);
-        if let Some(schema) = &req.json_schema {
-            cmd.args(["--json-schema", schema.as_str()]);
-        }
+        agent.one_shot(&mut cmd, &model, req);
         cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))
             .env("PLATOON_AI", "1")
             .stdin(Stdio::piped())
@@ -791,10 +735,6 @@ impl Runner {
             .stderr(Stdio::piped())
             // Its own process group: what it starts dies with it, and nothing else is ever signalled.
             .process_group(0);
-        if req.effort == "low" {
-            // No hidden "thinking": with it on, a naming call spent 3 to 4 times more output tokens than its JSON needs.
-            cmd.env("MAX_THINKING_TOKENS", "0");
-        }
         // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
         // to carry (which ones, and why: `claude::SESSION_MARKERS`).
         for k in crate::agents::inherited_session_markers() {
@@ -861,7 +801,7 @@ impl Runner {
                 detail: format!("no answer within {} seconds", req.timeout.as_secs()),
             });
         }
-        let outcome = interpret(&stdout, &stderr, status.is_some_and(|s| s.success()));
+        let outcome = agent.one_shot_outcome(&stdout, &stderr, status.is_some_and(|s| s.success()));
         let ok = outcome.result.is_ok();
         // Whatever Claude said it used counts, even if the call failed. If it said nothing about a good call, a rough
         // figure still counts, so the daily limit can't be silently bypassed.
@@ -1113,6 +1053,7 @@ fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cach
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::agents::claude::interpret;
     use std::{fs, os::unix::fs::PermissionsExt, sync::atomic::AtomicUsize};
 
     static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -1712,7 +1653,7 @@ pub(crate) mod tests {
         assert!(before.is_some());
         let mut req = Request::new(crate::verdict::FEATURE, "sys", "prompt");
         req.model = Some("fable".into());
-        req.tools = "Read,Grep,Glob";
+        req.tools = Tools::ReadOnly;
         req.cwd = Some(folder.clone());
         req.json_schema = Some(r#"{"type":"object"}"#.into());
         req.effort = "medium";
