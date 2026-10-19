@@ -268,7 +268,9 @@ fn the_prompt_index_reads_transcripts_once_then_only_new_bytes_and_a_search_stay
     let snapshot = store.snapshot();
     let with_reply = snapshot
         .iter()
-        .filter(|f| f.reply.as_ref().is_some_and(|r| r.starts_with("lorem ipsum") && r.chars().count() == crate::claude::REPLY_CHARS))
+        .filter(|f| {
+            f.reply.as_ref().is_some_and(|r| r.starts_with("lorem ipsum") && r.chars().count() == crate::agents::claude::REPLY_CHARS)
+        })
         .count();
     println!("prompt index: {with_reply} of {} conversations have a last reply", snapshot.len());
     assert_eq!(with_reply, snapshot.len(), "every conversation with prompts ends with a reply");

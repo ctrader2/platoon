@@ -5,7 +5,7 @@
 //! working, and the session keeps running when you detach with the back key (Ctrl+Space unless `keys.json` says
 //! otherwise; see keys.rs, read once as this starts).
 
-use crate::claude::{self, Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
+use crate::agents::claude::{self, Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
 use crate::guard;
 use crate::host::{self, F_INPUT, F_OUTPUT, F_RESIZE, HostInfo, read_frame, size_payload, write_frame};
 use crate::projects::{self, Projects};

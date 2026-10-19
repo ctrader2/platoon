@@ -492,7 +492,7 @@ fn in_a_git_repository_platoon_fills_the_branch_the_commits_and_the_files_itself
 fn a_session_still_running_says_so_and_its_spend_counts_its_subagents_and_each_answer_once() {
     let (mut w, fake) = world("handoff-running");
     // The old session is still running, and its transcript has one answer written as two lines, and a subagent.
-    let path = crate::claude::find_transcript(&w.root, "sess-1").unwrap();
+    let path = crate::agents::claude::find_transcript(&w.root, "sess-1").unwrap();
     let answer = serde_json::json!({"type":"assistant","message":{"id":"msg-9","model":"claude-sonnet-5","usage":{"input_tokens":1,"cache_creation_input_tokens":2_000,"cache_read_input_tokens":30_000,"output_tokens":700}}}).to_string();
     let mut t = fs::read_to_string(&path).unwrap();
     t.push_str(&format!("{answer}\n{answer}\n"));

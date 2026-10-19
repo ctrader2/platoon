@@ -332,7 +332,7 @@ pub struct Facts {
     /// Whether the previous session is still running, as the list knew it when `h` was pressed.
     pub running: Option<bool>,
     /// What the previous session spent, from its transcript.
-    pub tokens: Option<crate::claude::Spent>,
+    pub tokens: Option<crate::agents::claude::Spent>,
 }
 
 /// A moment in the user's own time zone: `2026-09-25 14:03`. None if the system can't say (then it is left out).
@@ -461,7 +461,7 @@ pub fn facts_block(f: &Facts) -> String {
 
 /// What the previous session spent, in plain words: what went in and what came out, and - said apart, because it
 /// is mostly the same conversation sent again each turn - what was read back from the cache. Never money.
-fn tokens_line(t: &crate::claude::Spent) -> String {
+fn tokens_line(t: &crate::agents::claude::Spent) -> String {
     let n = crate::settings::thousands;
     let mut line = format!("- Tokens the previous session used: {} sent to Claude and {} written by Claude", n(t.input), n(t.output));
     if t.cache_read > 0 {
@@ -575,7 +575,7 @@ pub fn why_not(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claude::Spent;
+    use crate::agents::claude::Spent;
     use crate::gitfacts::{Change, Kind, Since, Upstream};
 
     fn material() -> Material {

@@ -11,8 +11,8 @@
 //! A host also stops its own session when nobody has used it for a while (see `Watchdog`), so forgotten
 //! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
 
+use crate::agents::claude::{claude_root, pid_alive, registry_status};
 use crate::archive::config_dir;
-use crate::claude::{claude_root, pid_alive, registry_status};
 use crate::mcp::{self, Blocker, Tracked};
 use crate::procs;
 use crate::settings::SettingsStore;
@@ -138,7 +138,7 @@ impl HostInfo {
     /// Such a host's own process is only an attach client: it has no registry entry, and the session it shows
     /// is run by Claude's service, which nothing here ever signals.
     pub fn attaches_to(&self, attach_id: &str) -> bool {
-        self.args == crate::claude::attach_args(attach_id)
+        self.args == crate::agents::claude::attach_args(attach_id)
     }
 }
 
@@ -271,7 +271,7 @@ pub fn run(args: &[String]) -> i32 {
     // If platoon itself was started from inside Claude Code, don't leak that session's markers into the child (with
     // CLAUDE_CODE_CHILD_SESSION inherited, a session saves no transcript: no resume, no tokens, no list row). Which
     // ones, and why: `claude::SESSION_MARKERS`.
-    for k in crate::claude::inherited_session_markers() {
+    for k in crate::agents::claude::inherited_session_markers() {
         cmd.env_remove(k);
     }
     let mut child = match pair.slave.spawn_command(cmd) {
@@ -1158,7 +1158,7 @@ mod tests {
             ("cache_dir", std::panic::catch_unwind(cache_dir).is_ok()),
             ("config_dir", std::panic::catch_unwind(config_dir).is_ok()),
             ("claude_root", std::panic::catch_unwind(claude_root).is_ok()),
-            ("claude_json_path", std::panic::catch_unwind(crate::claude::claude_json_path).is_ok()),
+            ("claude_json_path", std::panic::catch_unwind(crate::agents::claude::claude_json_path).is_ok()),
             ("hosts_dir", std::panic::catch_unwind(hosts_dir).is_ok()),
             ("discover", std::panic::catch_unwind(discover).is_ok()),
             ("Dirs::from_env", std::panic::catch_unwind(Dirs::from_env).is_ok()),

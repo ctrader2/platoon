@@ -48,8 +48,8 @@ impl Sources {
     /// environment claude was started with).
     pub fn from_env(cwd: &str) -> Self {
         Self {
-            root: crate::claude::claude_root(),
-            claude_json: crate::claude::claude_json_path(),
+            root: crate::agents::claude::claude_root(),
+            claude_json: crate::agents::claude::claude_json_path(),
             cwd: PathBuf::from(cwd),
             home: std::env::var("HOME").unwrap_or_default(),
             vars: std::env::vars().collect(),

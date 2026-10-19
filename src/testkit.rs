@@ -1,8 +1,8 @@
 //! Fixtures for unit tests: a throwaway Claude config dir, platoon cache dir and platoon config dir, so
 //! no test ever reads or writes the real `~/.claude`, `~/.cache/platoon` or `~/.config/platoon`.
 
+use crate::agents::claude::Reader;
 use crate::app::App;
-use crate::claude::Reader;
 use crate::usage;
 use serde_json::json;
 use std::{
@@ -213,7 +213,7 @@ impl Drop for World {
 }
 
 pub fn alive(pid: u32) -> bool {
-    crate::claude::pid_alive(pid)
+    crate::agents::claude::pid_alive(pid)
 }
 
 /// Wait for `pid` (a process of the test's own) to have ended, for as long as a loaded machine could need, and fail

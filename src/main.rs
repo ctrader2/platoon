@@ -1,10 +1,10 @@
+mod agents;
 mod ai;
 mod app;
 mod archive;
 mod board;
 #[cfg(test)]
 mod clarity_app_tests;
-mod claude;
 mod client;
 mod clipboard;
 mod colordepth;
@@ -163,7 +163,7 @@ fn main() -> io::Result<()> {
             let cwd = std::env::current_dir().unwrap_or_default();
             let (mut out, mut err) = (io::stdout(), io::stderr());
             let terminal = io::stdin().is_terminal();
-            let (claude_root, cache, config) = (claude::claude_root(), usage::cache_dir(), archive::config_dir());
+            let (claude_root, cache, config) = (agents::claude::claude_root(), usage::cache_dir(), archive::config_dir());
             let roots = tickets::Roots { claude_root: &claude_root, cache: &cache };
             std::process::exit(tickets::cli(&args, &config, Some(roots), &mut io::stdin().lock(), terminal, &cwd, &mut out, &mut err));
         }
@@ -241,7 +241,7 @@ fn statusline() -> io::Result<()> {
 /// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
 fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_none() {
-        let states = setup::check(&claude::claude_root());
+        let states = setup::check(&agents::claude::claude_root());
         if !setup::ready(&states) {
             eprintln!("{}", setup::render_blocked(&states, use_color(true)));
             std::process::exit(1);
@@ -264,7 +264,7 @@ fn themes() -> io::Result<()> {
 }
 
 fn setup() -> io::Result<()> {
-    let root = claude::claude_root();
+    let root = agents::claude::claude_root();
     match setup::run(&root) {
         Ok(mut report) => {
             // A Claude Code newer than the one this platoon was checked with is said here every time.
@@ -2410,7 +2410,7 @@ mod tests {
         // The settings directory can't be created: something that isn't a directory is in the way.
         let blocker = w.base.join("blocker");
         std::fs::write(&blocker, "x").unwrap();
-        let mut app = App::with_dirs(crate::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
+        let mut app = App::with_dirs(crate::agents::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
         open_numeric_settings(&mut app);
         key(&mut app, KeyCode::Right);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
@@ -3231,7 +3231,7 @@ mod tests {
         let w = theme_world("tl-fail");
         let blocker = w.base.join("blocker");
         std::fs::write(&blocker, "x").unwrap();
-        let mut app = App::with_dirs(crate::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
+        let mut app = App::with_dirs(crate::agents::claude::Reader::with_root(w.root.clone()), w.cache.clone(), blocker.join("config"));
         open_themes(&mut app);
         key(&mut app, KeyCode::Down);
         assert_eq!(app.effective_theme().id, "catppuccin-macchiato");

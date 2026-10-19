@@ -8,7 +8,7 @@
 //! Scanning runs on a background thread (`Indexer::spawn`) and streams results back in batches, newest
 //! files first, so the list fills in while the UI is already usable.
 
-use crate::claude::{Hidden, Transcript, read_transcript};
+use crate::agents::claude::{Hidden, Transcript, read_transcript};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(e.t.first_prompt.as_deref(), Some("fix the parser"));
         assert_eq!(e.t.ai_title.as_deref(), Some("Parser fix"));
         assert_eq!((e.t.branch.as_deref(), e.t.model.as_deref(), e.t.context_tokens), (Some("main"), Some("claude-sonnet-5"), 50_000));
-        assert_eq!(e.last_active_ms(), crate::claude::parse_iso_ms("2026-09-19T01:05:00.000Z").unwrap());
+        assert_eq!(e.last_active_ms(), crate::agents::claude::parse_iso_ms("2026-09-19T01:05:00.000Z").unwrap());
     }
 
     #[test]

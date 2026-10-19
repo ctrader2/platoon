@@ -10,8 +10,8 @@
 //! runs the work, keeps the box and starts the session.
 
 use super::*;
+use crate::agents::claude::Spent;
 use crate::ai::{AiError, Reply, Request};
-use crate::claude::Spent;
 use crate::gitfacts::{self, GitFacts};
 use crate::handoff::{self, Brief, Facts};
 use crate::instructions;
@@ -346,7 +346,8 @@ impl App {
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
         let never = cfg!(test) && program == "claude";
         thread::spawn(move || {
-            let transcript = if req.cancel.is_cancelled() { None } else { crate::claude::find_transcript(&transcript.0, &transcript.1) };
+            let transcript =
+                if req.cancel.is_cancelled() { None } else { crate::agents::claude::find_transcript(&transcript.0, &transcript.1) };
             let (started_ms, messages) = match transcript.as_deref() {
                 Some(path) if !req.cancel.is_cancelled() => read_transcript(path, &mut material),
                 _ => (None, None),
@@ -355,7 +356,7 @@ impl App {
                 let _ = tx.send(HandoffAnswer::Nothing);
                 return;
             }
-            let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(crate::claude::spent) };
+            let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(crate::agents::claude::spent) };
             let git = if req.cancel.is_cancelled() {
                 None
             } else {
@@ -557,7 +558,7 @@ impl App {
 fn read_transcript(path: &Path, material: &mut handoff::Material) -> (Option<u64>, Option<usize>) {
     #[cfg(test)]
     wait_at_read_gate(path);
-    let started_ms = crate::claude::started_ms(path);
+    let started_ms = crate::agents::claude::started_ms(path);
     let read = crate::notesrun::read_session(path, handoff::MESSAGE_CHARS);
     let mut messages: Vec<String> = read.recent.iter().rev().take(handoff::MESSAGES).rev().cloned().collect();
     // What it set out to do matters as much as what was said last, so the first message comes too.

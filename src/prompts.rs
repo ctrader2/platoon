@@ -15,7 +15,7 @@
 //! The in-memory side keeps, per conversation, its prompts and one lower-case copy of them for searching:
 //! a search is a substring scan over that text.
 
-use crate::claude::{REPLY_CHARS, may_be_reply, prompt_in_line, reply_in_line};
+use crate::agents::claude::{REPLY_CHARS, may_be_reply, prompt_in_line, reply_in_line};
 use crate::index::Entry;
 use serde_json::{Value, json};
 use std::{

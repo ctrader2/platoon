@@ -204,7 +204,7 @@ impl App {
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
         let never = cfg!(test) && program == "claude";
         thread::spawn(move || {
-            if let Some(path) = crate::claude::find_transcript(&transcript.0, &transcript.1) {
+            if let Some(path) = crate::agents::claude::find_transcript(&transcript.0, &transcript.1) {
                 read_conversation(&path, &mut material);
             }
             if material.is_empty() {

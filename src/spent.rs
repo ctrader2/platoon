@@ -1,7 +1,7 @@
 //! What a task's session spent, as its transcript says (read by `claude::read_session_log`, off the UI thread, with
 //! its subagents' transcripts beside it), said short for a row and in full for the details. Pure.
 
-use crate::claude::Spent;
+use crate::agents::claude::Spent;
 
 /// A count of tokens, short: 950, 12K, 1.2M (one decimal below ten).
 pub fn short(n: u64) -> String {

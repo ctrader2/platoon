@@ -15,7 +15,8 @@
 //!
 //! Claude Code's conversations are never touched.
 
-use crate::{claude, setup, tickets, versions};
+use crate::agents::claude;
+use crate::{setup, tickets, versions};
 use serde_json::Value;
 use std::{
     fs,

@@ -3,7 +3,7 @@
 //! and time). Only the sessions of the tasks on the board are read. What is shown from it is worked out in `spent.rs`.
 
 use super::*;
-use crate::claude::{SessionLog, Spent};
+use crate::agents::claude::{SessionLog, Spent};
 use crate::tickets::Ticket;
 use std::sync::mpsc::TryRecvError;
 use std::time::SystemTime;

@@ -1,6 +1,6 @@
+use crate::agents::claude::{self, Live, Reader};
 use crate::ai;
 use crate::archive::{self, Archive};
-use crate::claude::{self, Live, Reader};
 use crate::client::{Client, key_bytes};
 use crate::clipboard::Clipboard;
 use crate::dirs;

@@ -21,9 +21,9 @@
 //! on top of that the hook refuses outright when `PLATOON_AI` is set or the session's folder is that work folder,
 //! and a session that is in no project is turned away after one small read.
 
+use crate::agents::claude;
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
-use crate::claude;
 use crate::describe;
 use crate::instructions;
 use crate::notes;

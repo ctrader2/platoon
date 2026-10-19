@@ -797,7 +797,7 @@ impl Runner {
         }
         // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
         // to carry (which ones, and why: `claude::SESSION_MARKERS`).
-        for k in crate::claude::inherited_session_markers() {
+        for k in crate::agents::claude::inherited_session_markers() {
             cmd.env_remove(k);
         }
         let mut child = match spawn_retrying(&mut cmd) {
@@ -1189,7 +1189,7 @@ pub(crate) mod tests {
     }
 
     fn alive(pid: &str) -> bool {
-        pid.trim().parse::<u32>().is_ok_and(crate::claude::pid_alive)
+        pid.trim().parse::<u32>().is_ok_and(crate::agents::claude::pid_alive)
     }
 
     /// Longer than a process ever takes to end or start even on a loaded machine: waits return as soon as it has.
@@ -1865,7 +1865,7 @@ pub(crate) mod tests {
         assert_eq!(result, Err(AiError::Cancelled));
         wait_dead(&f.dir.join("pid"));
         wait_dead(&f.dir.join("sleep"));
-        assert!(crate::claude::pid_alive(bystander.id()), "a process that isn't ours is left alone");
+        assert!(crate::agents::claude::pid_alive(bystander.id()), "a process that isn't ours is left alone");
         let _ = bystander.kill();
         let _ = bystander.wait();
         assert_eq!(Ledger::open(&f.cache).load().backoff, None, "cancelling is not a failure");
