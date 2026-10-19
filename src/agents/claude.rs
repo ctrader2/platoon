@@ -2,7 +2,9 @@
 //! formats (`~/.claude/sessions/<pid>.json` and `~/.claude/projects/*/<id>.jsonl`), so all
 //! knowledge of them lives in this file.
 
-use super::{Hidden, Live, SessionLog, Spent, Start, TaskLaunch, Transcript};
+use super::{
+    Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Transcript, TurnEnd,
+};
 use crate::procs::pid_alive;
 use serde_json::{Value, json};
 use std::{
@@ -151,6 +153,91 @@ pub fn attaches(args: &[String]) -> bool {
 /// or `--resume`.
 pub fn session_of_args(args: &[String]) -> Option<String> {
     args.windows(2).find(|w| w[0] == "--session-id" || w[0] == "--resume").map(|w| w[1].clone()).filter(|s| !s.is_empty())
+}
+
+// ---- hooks -----------------------------------------------------------------------------------------------------------
+//
+// Claude Code calls each hook with one JSON object on stdin (`session_id`, `cwd`, and the event's own fields), and
+// reads its answer from stdout (JSON) or, for a refused prompt, from stderr with exit code 2.
+
+/// Read one call of a hook (see `Agent::hook_input`).
+pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
+    let v: Value = serde_json::from_str(input).ok()?;
+    let session = v.get("session_id")?.as_str()?.to_string();
+    let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("").to_string();
+    let text = |k: &str| v.get(k).and_then(Value::as_str);
+    let tool_input = v.get("tool_input").unwrap_or(&Value::Null);
+    let event = match kind {
+        HookKind::SessionStart => HookEvent::SessionStart { source: text("source").unwrap_or("startup").to_string() },
+        HookKind::Prompt => HookEvent::PromptSubmitted,
+        HookKind::BeforeTool(tool) => {
+            let said = match tool {
+                Tool::Plan => tool_input.get("plan").and_then(Value::as_str).unwrap_or_default().to_string(),
+                Tool::Question => questions(tool_input),
+                Tool::Other => String::new(),
+            };
+            HookEvent::BeforeTool { tool, said }
+        }
+        HookKind::AfterTool => HookEvent::AfterTool(match text("tool_name").unwrap_or_default() {
+            "ExitPlanMode" => Tool::Plan,
+            "AskUserQuestion" => Tool::Question,
+            _ => Tool::Other,
+        }),
+        HookKind::PermissionWait if is_permission_notice(&v) => HookEvent::PermissionWait(text("message").map(String::from)),
+        HookKind::PermissionWait => return None,
+        HookKind::Stop => HookEvent::Stop(TurnEnd {
+            planning: text("permission_mode") == Some("plan"),
+            last_message: text("last_assistant_message").map(String::from),
+            subagents_working: still_working(v.get("background_tasks")),
+        }),
+    };
+    Some(HookInput { session, cwd, event })
+}
+
+/// What a hook says back (see `Agent::hook_answer`): context as `hookSpecificOutput.additionalContext`, a stop sent
+/// back as `{"decision": "block", "reason": ...}`, and a refused prompt as its reason on stderr with exit code 2.
+pub fn hook_answer(reply: &HookReply) -> HookAnswer {
+    let context = |event: &str, text: &str| json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}).to_string();
+    let out = |stdout: String| HookAnswer { stdout, stderr: String::new(), code: 0 };
+    match reply {
+        HookReply::StartContext(text) => out(context("SessionStart", text)),
+        HookReply::PromptContext(text) => out(context("UserPromptSubmit", text)),
+        HookReply::SendBack(reason) => out(json!({"decision": "block", "reason": reason}).to_string()),
+        HookReply::Refuse(why) => HookAnswer { stdout: String::new(), stderr: why.clone(), code: 2 },
+    }
+}
+
+/// The questions of an `AskUserQuestion` call: each question's text, joined ("" when it has none).
+fn questions(input: &Value) -> String {
+    let qs: Vec<String> = input
+        .get("questions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|q| q.get("question").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from))
+        .collect();
+    qs.join(" / ")
+}
+
+/// Does this `Notification` input say Claude waits for the user's permission? `notification_type`
+/// "permission_prompt" says so, else a `message` that mentions permission ("Claude needs your permission to use Bash").
+fn is_permission_notice(v: &Value) -> bool {
+    if let Some(kind) = v.get("notification_type").and_then(Value::as_str) {
+        return kind == "permission_prompt";
+    }
+    v.get("message").and_then(Value::as_str).is_some_and(|m| m.to_lowercase().contains("permission"))
+}
+
+/// Claude Code's `background_tasks`: anything in it means subagents are still at work, so the turn's end isn't the
+/// end of the work.
+fn still_working(v: Option<&Value>) -> bool {
+    match v {
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        Some(Value::Number(n)) => n.as_u64().is_some_and(|n| n > 0),
+        Some(Value::Bool(b)) => *b,
+        _ => false,
+    }
 }
 
 // ---- a task's session ------------------------------------------------------------------------------------------------
@@ -999,6 +1086,71 @@ mod tests {
         assert!(!attaches(&start_args(Start::Resume("x"))) && !attaches(&[]));
         assert_eq!(session_of_args(&start_args(Start::Resume("dffac639-c805"))).as_deref(), Some("dffac639-c805"));
         assert_eq!(session_of_args(&start_args(Start::New(Some("--resume")))), None);
+    }
+
+    #[test]
+    fn a_hooks_input_is_read_for_the_kind_of_hook_it_was_given_to() {
+        let read = |kind: HookKind, v: Value| hook_input(kind, &v.to_string());
+        let start = read(HookKind::SessionStart, json!({"session_id": "s1", "cwd": "/w", "source": "compact"})).unwrap();
+        assert_eq!((start.session.as_str(), start.cwd.as_str()), ("s1", "/w"));
+        assert_eq!(start.event, HookEvent::SessionStart { source: "compact".into() });
+        let bare = read(HookKind::SessionStart, json!({"session_id": "s1"})).unwrap();
+        assert_eq!((bare.cwd.as_str(), bare.event), ("", HookEvent::SessionStart { source: "startup".into() }));
+        assert_eq!(read(HookKind::Prompt, json!({"session_id": "s1", "prompt": "hi"})).unwrap().event, HookEvent::PromptSubmitted);
+        let plan = json!({"session_id": "s1", "tool_name": "ExitPlanMode", "tool_input": {"plan": "1. Do it"}});
+        assert_eq!(
+            read(HookKind::BeforeTool(Tool::Plan), plan).unwrap().event,
+            HookEvent::BeforeTool { tool: Tool::Plan, said: "1. Do it".into() }
+        );
+        let q = json!({"session_id": "s1", "tool_input": {"questions": [{"question": " Which page? "}, {"question": ""}, {"question": "Red?"}]}});
+        assert_eq!(
+            read(HookKind::BeforeTool(Tool::Question), q).unwrap().event,
+            HookEvent::BeforeTool { tool: Tool::Question, said: "Which page? / Red?".into() }
+        );
+        let none = read(HookKind::BeforeTool(Tool::Question), json!({"session_id": "s1"})).unwrap();
+        assert_eq!(none.event, HookEvent::BeforeTool { tool: Tool::Question, said: String::new() });
+        for (name, tool) in [("ExitPlanMode", Tool::Plan), ("AskUserQuestion", Tool::Question), ("Bash", Tool::Other)] {
+            assert_eq!(
+                read(HookKind::AfterTool, json!({"session_id": "s1", "tool_name": name})).unwrap().event,
+                HookEvent::AfterTool(tool)
+            );
+        }
+        let asks =
+            json!({"session_id": "s1", "notification_type": "permission_prompt", "message": "Claude needs your permission to use Bash"});
+        assert_eq!(
+            read(HookKind::PermissionWait, asks).unwrap().event,
+            HookEvent::PermissionWait(Some("Claude needs your permission to use Bash".into()))
+        );
+        let worded = json!({"session_id": "s1", "message": "Needs Permission"});
+        assert_eq!(read(HookKind::PermissionWait, worded).unwrap().event, HookEvent::PermissionWait(Some("Needs Permission".into())));
+        assert_eq!(read(HookKind::PermissionWait, json!({"session_id": "s1", "notification_type": "idle_prompt"})), None);
+        let end = json!({"session_id": "s1", "permission_mode": "plan", "last_assistant_message": "Red or blue?", "background_tasks": [{"id": "a"}]});
+        assert_eq!(
+            read(HookKind::Stop, end).unwrap().event,
+            HookEvent::Stop(TurnEnd { planning: true, last_message: Some("Red or blue?".into()), subagents_working: true })
+        );
+        let plain = read(HookKind::Stop, json!({"session_id": "s1", "background_tasks": []})).unwrap();
+        assert_eq!(plain.event, HookEvent::Stop(TurnEnd { planning: false, last_message: None, subagents_working: false }));
+        for bad in ["", "{", "[]", "null", r#"{"cwd":"/x"}"#, r#"{"session_id":5}"#] {
+            assert_eq!(hook_input(HookKind::Prompt, bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_hook_is_answered_in_exactly_the_words_claude_code_reads() {
+        let said = |r: HookReply| hook_answer(&r);
+        assert_eq!(
+            said(HookReply::StartContext("the notes".into())).stdout,
+            r#"{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"the notes"}}"#
+        );
+        assert_eq!(
+            said(HookReply::PromptContext("the notes".into())).stdout,
+            r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"the notes"}}"#
+        );
+        let back = said(HookReply::SendBack("Fix it".into()));
+        assert_eq!((back.stdout.as_str(), back.stderr.as_str(), back.code), (r#"{"decision":"block","reason":"Fix it"}"#, "", 0));
+        let refused = said(HookReply::Refuse("Exit this copy".into()));
+        assert_eq!((refused.stdout.as_str(), refused.stderr.as_str(), refused.code), ("", "Exit this copy", 2));
     }
 
     #[test]

@@ -21,10 +21,11 @@
 //!   itself: the rules (`rules`) tell the session to find and run the repo's tests and report them, and the check
 //!   holds it to that.
 
+use crate::agents::{Agent, HookEvent, HookKind, HookReply, Tool, TurnEnd};
 use crate::squads::Squad;
 use crate::tickets::{self, Need, State, Ticket, Tickets};
 use crate::verdict;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     fs,
     io::{self, Read},
@@ -132,39 +133,6 @@ pub fn write_task_files(task_dir: &Path, squad: &Squad, squads: &[Squad], r: &Ru
 
 // ---- the hooks -----------------------------------------------------------------------------------------------------
 
-/// The text of the first question of an `AskUserQuestion` call (each question's text, joined).
-fn questions(input: &Value) -> String {
-    let qs: Vec<String> = input
-        .get("questions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|q| q.get("question").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(String::from))
-        .collect();
-    if qs.is_empty() { "It asked you something: see its session.".into() } else { qs.join(" / ") }
-}
-
-/// Does this `Notification` input say Claude waits for the user's permission? `notification_type`
-/// "permission_prompt" says so, else a `message` that mentions permission ("Claude needs your permission to use Bash").
-pub fn is_permission_notice(v: &Value) -> bool {
-    if let Some(kind) = v.get("notification_type").and_then(Value::as_str) {
-        return kind == "permission_prompt";
-    }
-    v.get("message").and_then(Value::as_str).is_some_and(|m| m.to_lowercase().contains("permission"))
-}
-
-/// Claude Code's `background_tasks`: anything in it means subagents are still at work, so the turn's end isn't the
-/// end of the work.
-fn still_working(v: Option<&Value>) -> bool {
-    match v {
-        Some(Value::Array(a)) => !a.is_empty(),
-        Some(Value::Object(o)) => !o.is_empty(),
-        Some(Value::Number(n)) => n.as_u64().is_some_and(|n| n > 0),
-        Some(Value::Bool(b)) => *b,
-        _ => false,
-    }
-}
-
 /// What a hook says back: the text for its stdout (None: nothing).
 pub type Said = Option<String>;
 
@@ -177,18 +145,31 @@ pub struct Places {
     pub check_timeout: Duration,
 }
 
-/// Run hook `name` on its JSON `input`: what it says back. Nothing happens for a session that is no task's.
+/// The kind of hook each of the task's hook commands is installed as (see `HOOKS`).
+fn kind(name: &str) -> Option<HookKind> {
+    Some(match name {
+        "task-plan" => HookKind::BeforeTool(Tool::Plan),
+        "task-question" => HookKind::BeforeTool(Tool::Question),
+        "task-notify" => HookKind::PermissionWait,
+        "task-tool" => HookKind::AfterTool,
+        "task-prompt" => HookKind::Prompt,
+        "task-stop" => HookKind::Stop,
+        _ => return None,
+    })
+}
+
+/// Run hook `name` on its JSON `input` (Claude Code's: its hooks are the ones that call these): what it says back.
+/// Nothing happens for a session that is no task's.
 pub fn hook(name: &str, input: &str, at: &Places) -> Said {
+    let agent = Agent::Claude;
     let config = at.config.as_path();
-    let v: Value = serde_json::from_str(input).ok()?;
-    let session = v.get("session_id").and_then(Value::as_str)?;
-    let (project, number) = tickets::find_session(config, session)?;
+    let input = agent.hook_input(kind(name)?, input)?;
+    let (project, number) = tickets::find_session(config, &input.session)?;
     let mut store = Tickets::open(config, &project);
     let t = store.get(number)?.clone();
     if matches!(t.state, State::NotStarted | State::Cancelled) {
         return None;
     }
-    let tool = v.get("tool_name").and_then(Value::as_str).unwrap_or_default().to_string();
     let set = |store: &mut Tickets, f: &dyn Fn(&Ticket) -> Option<State>| {
         let _ = store.update(number, |t| match f(t) {
             Some(s) if s != t.state => {
@@ -198,32 +179,32 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
             _ => false,
         });
     };
-    match name {
-        "task-plan" => {
-            let plan = v.get("tool_input").and_then(|i| i.get("plan")).and_then(Value::as_str).unwrap_or_default();
+    match input.event {
+        HookEvent::BeforeTool { tool: Tool::Plan, said: plan } => {
             let file = tickets::plan_file(config, &project, number);
             if let Some(dir) = file.parent() {
                 let _ = fs::create_dir_all(dir);
             }
-            let _ = crate::projects::write_atomic(&file, plan);
+            let _ = crate::projects::write_atomic(&file, &plan);
             set(&mut store, &|_| Some(State::NeedsYou(Need::Plan)));
         }
-        "task-question" => {
-            let q = tickets::clean(&questions(v.get("tool_input").unwrap_or(&Value::Null)), tickets::WHY_MAX);
+        HookEvent::BeforeTool { tool: Tool::Question, said } => {
+            let said = if said.is_empty() { "It asked you something: see its session.".into() } else { said };
+            let q = tickets::clean(&said, tickets::WHY_MAX);
             set(&mut store, &|_| Some(State::NeedsYou(Need::Question(q.clone()))));
         }
-        "task-notify" if is_permission_notice(&v) => {
-            let msg = v.get("message").and_then(Value::as_str).unwrap_or("It waits for your permission: see its session.");
-            let msg = tickets::clean(msg, tickets::WHY_MAX);
+        HookEvent::PermissionWait(msg) => {
+            let msg = msg.unwrap_or_else(|| "It waits for your permission: see its session.".into());
+            let msg = tickets::clean(&msg, tickets::WHY_MAX);
             set(&mut store, &|t| (t.state == State::Working).then(|| State::NeedsYou(Need::Permission(msg.clone()))));
         }
-        "task-tool" => set(&mut store, &|t| match &t.state {
-            State::NeedsYou(Need::Plan) if tool == "ExitPlanMode" => Some(State::Working),
-            State::NeedsYou(Need::Question(_)) if tool == "AskUserQuestion" => Some(State::Working),
+        HookEvent::AfterTool(tool) => set(&mut store, &|t| match &t.state {
+            State::NeedsYou(Need::Plan) if tool == Tool::Plan => Some(State::Working),
+            State::NeedsYou(Need::Question(_)) if tool == Tool::Question => Some(State::Working),
             State::NeedsYou(Need::Permission(_)) => Some(State::Working),
             _ => None,
         }),
-        "task-prompt" => {
+        HookEvent::PromptSubmitted => {
             let _ = store.update(number, |t| {
                 let reopen = matches!(t.state, State::NeedsYou(_) | State::Done);
                 if !reopen && t.checks_refused == 0 && t.checking.is_none() {
@@ -238,20 +219,23 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
                 true
             });
         }
-        "task-stop" => return stop(&v, at, &project, &mut store, &t),
-        _ => {}
+        HookEvent::Stop(end) => {
+            let reason = stop(&end, at, &project, &mut store, &t)?;
+            return Some(agent.hook_answer(&HookReply::SendBack(reason)).stdout);
+        }
+        HookEvent::BeforeTool { tool: Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
     }
     None
 }
 
-/// The `Stop` hook: the end of a turn.
-fn stop(v: &Value, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) -> Said {
+/// The `Stop` hook: the end of a turn. Some reason when the stop is refused.
+fn stop(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) -> Option<String> {
     // Waiting for the user already (a plan to approve, a question), or subagents still at work: nothing to do.
-    if t.state != State::Working || still_working(v.get("background_tasks")) {
+    if t.state != State::Working || end.subagents_working {
         return None;
     }
-    if v.get("permission_mode").and_then(Value::as_str) == Some("plan") {
-        let said = v.get("last_assistant_message").and_then(Value::as_str).map(|m| tickets::clean(m, tickets::WHY_MAX));
+    if end.planning {
+        let said = end.last_message.as_deref().map(|m| tickets::clean(m, tickets::WHY_MAX));
         let why = said.filter(|s| !s.is_empty()).unwrap_or_else(|| "It stopped while planning: see its session.".into());
         let _ = store.update(t.number, |x| {
             x.state = State::NeedsYou(Need::Question(why));
@@ -259,7 +243,7 @@ fn stop(v: &Value, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) 
         });
         return None;
     }
-    check(v, at, project, store, t.number)
+    check(end, at, project, store, t.number)
 }
 
 /// The model a task's work is checked with: the `verdict_model` of the squad it started with (its copy in the task's
@@ -279,7 +263,7 @@ fn verdict_model(config: &Path, project: &str, t: &Ticket) -> String {
 /// The end of a turn: check the work (`verdict.rs`). Done, refused once with what it found, or
 /// Needs you. While it runs the task is Working with `checking` set; a message the user types meanwhile clears that,
 /// and then the answer is kept but moves nothing.
-fn check(v: &Value, at: &Places, project: &str, store: &mut Tickets, number: u32) -> Said {
+fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number: u32) -> Option<String> {
     let started = crate::usage::now();
     let _ = store.update(number, |x| {
         x.checking = Some(started);
@@ -287,7 +271,7 @@ fn check(v: &Value, at: &Places, project: &str, store: &mut Tickets, number: u32
     });
     let t = store.get(number)?.clone();
     let model = verdict_model(&at.config, project, &t);
-    let claim = v.get("last_assistant_message").and_then(Value::as_str).unwrap_or_default();
+    let claim = end.last_message.as_deref().unwrap_or_default();
     let m = verdict::gather("git", &t, &store.body(&t), claim);
     let runner = crate::ai::Runner::with_program(&at.cache, &at.claude);
     let ran = verdict::run(&runner, &model, Path::new(&m.folder), verdict::prompt(&m), at.check_timeout);
@@ -329,7 +313,7 @@ fn check(v: &Value, at: &Places, project: &str, store: &mut Tickets, number: u32
         }
         true
     });
-    refuse.then(|| json!({"decision": "block", "reason": verdict::refusal(&found)}).to_string())
+    refuse.then(|| verdict::refusal(&found))
 }
 
 /// `platoon hook <name>`: always 0, with what the hook says on stdout. It never fails the session.
@@ -359,6 +343,7 @@ mod tests {
     use crate::agents::claude::shell_word;
     use crate::agents::{Agent, TaskLaunch};
     use crate::tickets::NewTicket;
+    use serde_json::Value;
 
     fn dir(name: &str) -> PathBuf {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-taskrun-{name}-{}", std::process::id())));

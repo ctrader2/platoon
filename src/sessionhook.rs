@@ -16,8 +16,8 @@
 //! It must never get in a session's way: it is quick, prints nothing unless it has notes to give, and exits 0
 //! whatever happens.
 
+use crate::agents::{Agent, HookEvent, HookKind, HookReply};
 use crate::projects::{self, Projects};
-use serde_json::{Value, json};
 use std::{fs, io::Read, path::Path};
 
 /// FNV-1a, 64 bits: stable across builds and Rust versions (a changed hash would only resend the notes once).
@@ -71,12 +71,15 @@ pub const OFFER_ENV: &str = "PLATOON_OFFER_TASKS";
 /// What the hook prints for `input` (the hook's JSON), or None for nothing. Records what it sends. `offer_by` is
 /// the platoon program the session should run to make tasks, when it is to offer them (see `offer_text`).
 pub fn session_start(input: &str, env_project: Option<&str>, offer_by: Option<&str>, config: &Path, cache: &Path) -> Option<String> {
-    let v: Value = serde_json::from_str(input).ok()?;
-    let session = v.get("session_id")?.as_str()?;
+    // Claude Code's hook: it is the one that calls this.
+    let agent = Agent::Claude;
+    let input = agent.hook_input(HookKind::SessionStart, input)?;
+    let session = input.session.as_str();
     if !safe_name(session) {
         return None;
     }
-    let source = v.get("source").and_then(Value::as_str).unwrap_or("startup");
+    let HookEvent::SessionStart { source } = &input.event else { return None };
+    let source = source.as_str();
     let mut projects = Projects::open(config);
     if projects.of(session).is_none() {
         let fresh = matches!(source, "startup" | "clear");
@@ -91,12 +94,11 @@ pub fn session_start(input: &str, env_project: Option<&str>, offer_by: Option<&s
     let project = projects.of(session).cloned();
     let notes = project.as_ref().and_then(|p| notes_context(&projects, p, session, source, cache));
     let offer = offer_by.map(|exe| {
-        let folder = v.get("cwd").and_then(Value::as_str).filter(|c| !c.is_empty());
+        let folder = Some(input.cwd.as_str()).filter(|c| !c.is_empty());
         offer_text(exe, project.as_ref().map(|p| p.id.as_str()), folder, &crate::squads::all(config))
     });
     let context = [notes, offer].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-    (!context.is_empty())
-        .then(|| json!({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": context}}).to_string())
+    (!context.is_empty()).then(|| agent.hook_answer(&HookReply::StartContext(context)).stdout)
 }
 
 /// The project's notes for this session, when it hasn't been given this version yet (or after a compaction, which
@@ -178,6 +180,7 @@ pub fn run() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{Value, json};
     use std::path::PathBuf;
 
     struct Rig {

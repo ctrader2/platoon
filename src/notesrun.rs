@@ -22,6 +22,7 @@
 //! and a session that is in no project is turned away after one small read.
 
 use crate::agents::claude;
+use crate::agents::{Agent, HookKind};
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::describe;
@@ -31,7 +32,6 @@ use crate::notesupdate::{self, Doc, Material, SessionMaterial, State};
 use crate::projects::Projects;
 use crate::settings::Settings;
 use crate::usage;
-use serde_json::Value;
 use std::{
     collections::{BTreeMap, VecDeque},
     fs,
@@ -189,12 +189,13 @@ pub fn stop_mark(input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms
     if ai_child {
         return None;
     }
-    let v: Value = serde_json::from_str(input).ok()?;
-    let session = v.get("session_id")?.as_str()?;
+    // Claude Code's hook: it is the one that calls this.
+    let input = Agent::Claude.hook_input(HookKind::Stop, input)?;
+    let session = input.session.as_str();
     if !crate::sessionhook::safe_name(session) {
         return None;
     }
-    let cwd = v.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let cwd = input.cwd.as_str();
     if !cwd.is_empty() && Path::new(cwd) == ai::work_dir(cache) {
         return None;
     }

@@ -18,13 +18,13 @@
 //! every step is a small read that swallows its own errors, and a prompt is never refused or delayed because of
 //! them.
 
-use crate::agents::claude::{claude_root, parked_job};
+use crate::agents::claude::{Reader, claude_root};
+use crate::agents::{Agent, HookInput, HookKind, HookReply};
 use crate::host;
 use crate::procs::pid_alive;
 use crate::procs::ppid;
 use crate::sessionhook;
 use crate::usage::cache_dir;
-use serde_json::{Value, json};
 use std::{
     collections::HashSet,
     fs,
@@ -54,25 +54,15 @@ pub enum Verdict {
     Stale,
 }
 
-/// Live interactive processes and the session each is running.
+/// Live interactive processes and the session each is running (in Claude Code's registry under `root`). Never a
+/// background session: Claude's own service runs it, so it can never be a second copy.
 pub fn live_entries(root: &Path) -> Vec<Entry> {
-    let mut out = Vec::new();
-    for e in fs::read_dir(root.join("sessions")).into_iter().flatten().flatten() {
-        let Some(v) = fs::read_to_string(e.path()).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
-        if v["kind"].as_str() != Some("interactive") {
-            continue;
-        }
-        let (Some(pid), Some(id)) = (v["pid"].as_u64(), v["sessionId"].as_str()) else { continue };
-        if pid_alive(pid as u32) {
-            out.push(Entry {
-                pid: pid as u32,
-                id: id.to_string(),
-                started_at: v["startedAt"].as_u64().unwrap_or(0),
-                parked: parked_job(&v).is_some(),
-            });
-        }
-    }
-    out
+    Reader::with_root(root.to_path_buf())
+        .live()
+        .into_iter()
+        .filter(|l| !l.is_background())
+        .map(|l| Entry { parked: l.is_parked(), pid: l.pid, id: l.id, started_at: l.started_at })
+        .collect()
 }
 
 /// The live processes that write to the conversation `sid`: its entries, less the parked ones.
@@ -169,15 +159,15 @@ fn message(v: &Verdict, sid: &str) -> String {
 /// archived session or project, notes that are missing or empty, a version this session already has, and the
 /// runner's own `claude -p` calls (which work in `<cache>/ai-work` with `PLATOON_AI` set, so the helper can never
 /// feed itself its own notes). What it returns is recorded as sent, so neither hook sends this version again.
-pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool) -> Option<String> {
+pub fn notes_context(input: &HookInput, config: &Path, cache: &Path, ai_child: bool) -> Option<String> {
     if ai_child {
         return None;
     }
-    let session = input.get("session_id")?.as_str()?;
+    let session = input.session.as_str();
     if !sessionhook::safe_name(session) {
         return None;
     }
-    let cwd = input.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let cwd = input.cwd.as_str();
     if !cwd.is_empty() && Path::new(cwd) == crate::ai::work_dir(cache) {
         return None;
     }
@@ -201,11 +191,6 @@ pub fn notes_context(input: &Value, config: &Path, cache: &Path, ai_child: bool)
     Some(sessionhook::context_text(&project.name, &notes))
 }
 
-/// What the hook prints when it lets a prompt through and the notes have changed: context for the conversation.
-fn notes_output(context: &str) -> String {
-    json!({"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": context}}).to_string()
-}
-
 /// `platoon hook guard`. Exit 0 allows the prompt; exit 2 refuses it and shows stderr to the user.
 pub fn run_guard() -> i32 {
     std::panic::catch_unwind(guard_inner).unwrap_or(0)
@@ -216,8 +201,10 @@ fn guard_inner() -> i32 {
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 0;
     }
-    let Some(v) = serde_json::from_str::<Value>(&input).ok() else { return 0 };
-    let Some(sid) = v["session_id"].as_str().map(String::from) else { return 0 };
+    // Claude Code's hook: it is the one that calls this.
+    let agent = Agent::Claude;
+    let Some(input) = agent.hook_input(HookKind::Prompt, &input) else { return 0 };
+    let sid = input.session.clone();
     let cache = cache_dir();
     // The guard's own answer first, exactly as before: nothing below may change it. A parked process is not a copy
     // that writes (see `Entry::parked`).
@@ -237,14 +224,13 @@ fn guard_inner() -> i32 {
         if let Some(me) = me {
             mark_stale(&cache, me.pid, me.started_at);
         }
-        eprintln!("{}", message(&verdict, &sid));
-        return 2;
+        return agent.hook_answer(&HookReply::Refuse(message(&verdict, &sid))).print();
     }
     // Allowed. Anything that goes wrong from here on is simply no notes; the prompt goes through either way.
     let _ = std::panic::catch_unwind(|| {
         let ai_child = std::env::var_os("PLATOON_AI").is_some();
-        if let Some(context) = notes_context(&v, &crate::archive::config_dir(), &cache, ai_child) {
-            println!("{}", notes_output(&context));
+        if let Some(context) = notes_context(&input, &crate::archive::config_dir(), &cache, ai_child) {
+            agent.hook_answer(&HookReply::PromptContext(context)).print();
         }
     });
     0
@@ -253,6 +239,7 @@ fn guard_inner() -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn e(pid: u32, started_at: u64) -> Entry {
         Entry { pid, id: "s".into(), started_at, parked: false }
@@ -375,7 +362,7 @@ mod tests {
 
         fn prompt_in(&self, session: &str, cwd: &str, ai_child: bool) -> Option<String> {
             let input = serde_json::json!({"session_id": session, "cwd": cwd, "hook_event_name": "UserPromptSubmit", "prompt": "carry on"});
-            notes_context(&input, &self.config, &self.cache, ai_child)
+            notes_context(&Agent::Claude.hook_input(HookKind::Prompt, &input.to_string()).unwrap(), &self.config, &self.cache, ai_child)
         }
     }
 
@@ -457,7 +444,8 @@ mod tests {
             serde_json::json!({"session_id": "../../x"}),
             serde_json::json!(null),
         ] {
-            assert_eq!(notes_context(&bad, &r.config, &r.cache, false), None, "{bad}");
+            let input = Agent::Claude.hook_input(HookKind::Prompt, &bad.to_string());
+            assert_eq!(input.and_then(|i| notes_context(&i, &r.config, &r.cache, false)), None, "{bad}");
         }
         // Nothing was written down for any of them.
         let sent = r.cache.join("notes-sent");
@@ -469,7 +457,7 @@ mod tests {
 
     #[test]
     fn what_the_guard_prints_for_a_prompt_is_context_for_that_conversation() {
-        let out = notes_output("the notes");
+        let out = Agent::Claude.hook_answer(&HookReply::PromptContext("the notes".into())).stdout;
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
         assert_eq!(v["hookSpecificOutput"]["additionalContext"], "the notes");

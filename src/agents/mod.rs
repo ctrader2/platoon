@@ -62,6 +62,21 @@ impl Agent {
         }
     }
 
+    /// Read one call of a hook platoon installed for `kind`: None when the input isn't one (not JSON, no session id),
+    /// or is an event of that kind platoon has nothing to do with.
+    pub fn hook_input(self, kind: HookKind, input: &str) -> Option<HookInput> {
+        match self {
+            Agent::Claude => claude::hook_input(kind, input),
+        }
+    }
+
+    /// What a hook's process says back for `reply`.
+    pub fn hook_answer(self, reply: &HookReply) -> HookAnswer {
+        match self {
+            Agent::Claude => claude::hook_answer(reply),
+        }
+    }
+
     /// How many tokens of context the conversation's model has room for.
     pub fn context_window(self, t: &Transcript) -> u64 {
         match self {
@@ -113,6 +128,105 @@ pub struct TaskLaunch {
     pub exe: String,
     /// The first message (a new session only).
     pub first: Option<String>,
+}
+
+// ---- hooks -----------------------------------------------------------------------------------------------------------
+
+/// Which of platoon's hooks was called: each `platoon hook ...` command is installed for one event of the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookKind {
+    SessionStart,
+    /// The user sent a prompt.
+    Prompt,
+    /// The agent is about to use this tool.
+    BeforeTool(Tool),
+    /// The agent has used a tool.
+    AfterTool,
+    /// The agent says it is waiting, perhaps for the user's permission.
+    PermissionWait,
+    /// The agent has finished its turn.
+    Stop,
+}
+
+/// A tool whose use moves a task along.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tool {
+    /// Presents a plan for the user to approve.
+    Plan,
+    /// Asks the user a question.
+    Question,
+    Other,
+}
+
+/// One call of a hook, read: the session it is about, the folder it works in ("" when not said), and what happened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookInput {
+    pub session: String,
+    pub cwd: String,
+    pub event: HookEvent,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HookEvent {
+    /// A session started: `source` is "startup", "resume", "clear" or "compact".
+    SessionStart {
+        source: String,
+    },
+    PromptSubmitted,
+    /// The agent is about to use `tool`; `said` is the plan it presents or the question it asks ("" when none).
+    BeforeTool {
+        tool: Tool,
+        said: String,
+    },
+    AfterTool(Tool),
+    /// The agent waits for the user's permission, and says what for when it does.
+    PermissionWait(Option<String>),
+    Stop(TurnEnd),
+}
+
+/// How a turn ended.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TurnEnd {
+    /// The session is planning (in plan mode).
+    pub planning: bool,
+    /// The agent's last message, when it says.
+    pub last_message: Option<String>,
+    /// Subagents are still at work: the turn's end isn't the end of the work.
+    pub subagents_working: bool,
+}
+
+/// What platoon answers a hook with.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HookReply {
+    /// Context added to the conversation as the session starts.
+    StartContext(String),
+    /// Context added to the conversation with the prompt.
+    PromptContext(String),
+    /// The prompt is refused, and the user is told why.
+    Refuse(String),
+    /// The stop is refused: the agent carries on, with this as its reason.
+    SendBack(String),
+}
+
+/// What a hook's process says back: its standard output and error ("" for nothing) and its exit code.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HookAnswer {
+    pub stdout: String,
+    pub stderr: String,
+    pub code: i32,
+}
+
+impl HookAnswer {
+    /// Say it, and give the exit code.
+    pub fn print(&self) -> i32 {
+        if !self.stdout.is_empty() {
+            println!("{}", self.stdout);
+        }
+        if !self.stderr.is_empty() {
+            eprintln!("{}", self.stderr);
+        }
+        self.code
+    }
 }
 
 // ---- what platoon reads about conversations and the processes running them ----------------------------------------
