@@ -159,8 +159,10 @@ pub fn running_sessions(cache: &Path, root: &Path) -> Vec<Running> {
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
             .unwrap_or_default();
         let entry = live.iter().find(|l| l.pid == pid);
-        let attach = args.first().is_some_and(|a| a == "attach");
-        let id = if attach { args.get(1).cloned() } else { entry.map(|l| l.id.clone()).or_else(|| crate::host::session_of_args(&args)) };
+        // A host runs Claude Code (`host::HostInfo::agent`).
+        let agent = crate::agents::Agent::Claude;
+        let attach = agent.attaches(&args);
+        let id = if attach { args.get(1).cloned() } else { entry.map(|l| l.id.clone()).or_else(|| agent.session_of_args(&args)) };
         out.push(Running {
             claude_pid: pid,
             dir: v.get("dir").and_then(Value::as_str).unwrap_or("").to_string(),

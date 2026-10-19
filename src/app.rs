@@ -1,5 +1,5 @@
 use crate::agents::claude::{self, Reader};
-use crate::agents::{Agent, Hidden, Live};
+use crate::agents::{Agent, Hidden, Live, Start};
 use crate::ai;
 use crate::archive::{self, Archive};
 use crate::client::{Client, key_bytes};
@@ -676,7 +676,7 @@ pub struct App {
     last_auto_archive: Option<Instant>,
     /// A settings change is waiting to take effect in auto-archive, which is on hold until then.
     apply_after: Option<Instant>,
-    /// The program that runs a conversation: `claude`, or PLATOON_CLAUDE_BIN (a wrapper, or a stand-in in tests).
+    /// The program that runs a conversation of Claude Code's (`Agent::program`, read once).
     program: String,
     guard_on: bool,
     /// What `view` and `counts` were computed from: (filter, tab, generation, top tab, projects tab, open
@@ -855,7 +855,7 @@ impl App {
             viewing: None,
             last_auto_archive: None,
             apply_after: None,
-            program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+            program: Agent::Claude.program(),
             guard_on: false,
             view_for: (String::new(), usize::MAX, 0, 0, 0, None),
             rev: 0,
@@ -966,7 +966,7 @@ impl App {
     /// Is something running this session now: a Claude Code process seen for it (`Session::running`), or a platoon
     /// host started on it (`--resume`/`--session-id`) that is still alive, whether or not its claude has said so yet.
     pub fn session_running(&self, s: &Session) -> bool {
-        s.running() || self.hosts.iter().any(|h| host::session_of_args(&h.args).as_deref() == Some(s.id.as_str()))
+        s.running() || self.hosts.iter().any(|h| h.session().as_deref() == Some(s.id.as_str()))
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -1512,7 +1512,7 @@ impl App {
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
         let model = t.model.as_deref().map(|m| agent.model_name(m));
-        let mut s = self.session(e.id.clone(), cwd, branch, model, est, description, e.last_active_ms());
+        let mut s = self.session(agent, e.id.clone(), cwd, branch, model, est, description, e.last_active_ms());
         if !t.extra_dirs.is_empty() {
             s.extra_dirs = t.extra_dirs.iter().map(|d| dirs::tilde(d, &self.home)).collect();
             s.rehaystack();
@@ -1520,14 +1520,16 @@ impl App {
         s
     }
 
-    /// A running conversation whose transcript isn't saved yet (nothing sent), described by its registry entry.
+    /// A running conversation whose transcript isn't saved yet (nothing sent), described by its registry entry
+    /// (Claude Code's: the reader is its).
     fn session_from_live(&self, l: &Live) -> Session {
-        self.session(l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
+        self.session(Agent::Claude, l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
     }
 
     #[allow(clippy::too_many_arguments)]
     fn session(
         &self,
+        agent: Agent,
         id: String,
         cwd: String,
         branch: Option<String>,
@@ -1552,6 +1554,7 @@ impl App {
         let haystack = Session::make_haystack(&name, &dir, &[], branch.as_deref(), &description, &summary);
         Session {
             id,
+            agent,
             name,
             name_source,
             summary,
@@ -1668,7 +1671,7 @@ impl App {
             (Action::Confirm, Mode::Picker) => {
                 if let Some(dir) = self.picker.results.get(self.picker.selected).cloned() {
                     let project = self.picker.project.clone();
-                    self.launch_in(dir, &[], project.as_deref(), true);
+                    self.launch_in(Agent::Claude, dir, Start::New(None), project.as_deref(), true);
                 }
             }
             (Action::Confirm, Mode::Themes) => self.keep_theme(),
@@ -2275,7 +2278,7 @@ impl App {
     pub(crate) fn jump_to(&mut self, id: &str) {
         let Some(s) = self.sessions.iter().find(|s| s.id == id) else { return };
         let Some(plan) = self.jump_plan_of(s) else { return };
-        let (id, name, cwd, restore) = (s.id.clone(), s.name.clone(), s.cwd.clone(), s.archived);
+        let (id, name, cwd, restore, agent) = (s.id.clone(), s.name.clone(), s.cwd.clone(), s.archived, s.agent);
         match plan {
             JumpPlan::Attach(pid) => {
                 self.attach(pid);
@@ -2288,7 +2291,7 @@ impl App {
                     return;
                 }
                 let project = self.projects.project_id_of(&id).map(String::from);
-                if self.launch_in(cwd, &["--resume", &id], project.as_deref(), false) {
+                if self.launch_in(agent, cwd, Start::Resume(&id), project.as_deref(), false) {
                     self.note_opened(&id, restore);
                 }
             }
@@ -2296,8 +2299,7 @@ impl App {
                 if !self.cwd_exists(&name, &cwd) {
                     return;
                 }
-                let args = claude::attach_args(&attach_id);
-                if self.launch(cwd, &[args[0].as_str(), args[1].as_str()]) {
+                if self.launch(agent, cwd, Start::Attach(&attach_id)) {
                     self.note_opened(&id, restore);
                 }
             }
@@ -2333,7 +2335,9 @@ impl App {
             return;
         }
         let project = self.projects.project_id_of(id).map(String::from);
-        if self.launch_in(cwd, &["--resume", id], project.as_deref(), false) {
+        // The row it was picked on, unless a refresh took it away meanwhile: then Claude Code's, like every row.
+        let agent = self.sessions.iter().find(|s| s.id == id).map_or(Agent::Claude, |s| s.agent);
+        if self.launch_in(agent, cwd, Start::Resume(id), project.as_deref(), false) {
             self.note_opened(id, restore);
         }
     }
@@ -2515,30 +2519,37 @@ impl App {
             .is_some_and(|p| p.stale || guard::is_stale(&self.cache, p.pid, p.started_at))
     }
 
-    /// Start `args` under a new host in `dir` and attach to it. False if it couldn't be started.
-    fn launch(&mut self, dir: String, args: &[&str]) -> bool {
-        self.launch_in(dir, args, None, false)
+    /// Start a session of `agent` as `start` says under a new host in `dir` and attach to it. False if it couldn't be
+    /// started.
+    fn launch(&mut self, agent: Agent, dir: String, start: Start) -> bool {
+        self.launch_in(agent, dir, start, None, false)
     }
 
-    /// Is the session started with `args` told to offer making tasks? A new one or a resumed one, but not a task's
-    /// own session and not `claude attach` (which shows a background session, started elsewhere).
-    pub(crate) fn offers_tasks(&self, args: &[&str]) -> bool {
-        let resumes = args.windows(2).find(|w| w[0] == "--resume").map(|w| w[1]);
-        args.first() != Some(&"attach") && resumes.is_none_or(|id| self.sq.task_of(id).is_none())
+    /// Is the session started as `start` says told to offer making tasks? A new one or a resumed one, but not a
+    /// task's own session and not a background session attached to (started elsewhere).
+    pub(crate) fn offers_tasks(&self, start: Start) -> bool {
+        match start {
+            Start::New(_) => true,
+            Start::Resume(id) => self.sq.task_of(id).is_none(),
+            Start::Attach(_) => false,
+        }
     }
 
     /// `launch`, for a session of `project`: claude gets `PLATOON_PROJECT` (so the notes hook knows), and with
     /// `place` (a new session) the process is remembered until its session id shows up and is put in the project.
     /// A session (new or resumed, not a task's own, not `claude attach`) is told to offer making tasks
     /// (`sessionhook::OFFER_ENV`).
-    fn launch_in(&mut self, dir: String, args: &[&str], project: Option<&str>, place: bool) -> bool {
+    fn launch_in(&mut self, agent: Agent, dir: String, start: Start, project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
         let mut env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-        if self.offers_tasks(args) {
+        if self.offers_tasks(start) {
             env.push((crate::sessionhook::OFFER_ENV, "1"));
         }
         let at_ms = usage::now().saturating_sub(2) * 1000;
-        match host::launch(&self.host_dirs(), &self.program, &dir, args, &env, rows, cols) {
+        let program = match agent {
+            Agent::Claude => self.program.clone(),
+        };
+        match host::launch(&self.host_dirs(), &program, &dir, &agent.args(start), &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 if let (Some(p), true) = (project, place)
@@ -2631,7 +2642,7 @@ impl App {
 
     #[cfg(test)]
     pub fn picker_launch_for_test(&mut self, dir: String) {
-        self.launch(dir, &[]);
+        self.launch(Agent::Claude, dir, Start::New(None));
     }
 
     #[cfg(test)]

@@ -3,6 +3,7 @@
 //! with its squad's model and plan mode (nothing is really started in a unit test: what would have been is noted),
 //! `c` asking before it cancels, and a task's session marked with its number on the Sessions tab.
 
+use crate::agents::Start;
 use crate::app::{App, Confirm, Mode};
 use crate::testkit::World;
 use crate::tickets::{Need, NewTicket, State, Tickets};
@@ -244,11 +245,11 @@ fn sessions_platoon_starts_offer_to_make_tasks_but_a_tasks_own_session_does_not(
     Tickets::open(&w.config, &project).start(1, "docs", "task-sess", None).unwrap();
     w.transcript("task-sess", &folder, "Task #1: Write the guide", 1);
     app.reload_for_test();
-    assert!(app.offers_tasks(&[]), "a new session");
-    assert!(app.offers_tasks(&["a prompt to start with"]), "a new session from a hand-off");
-    assert!(app.offers_tasks(&["--resume", "user-1"]), "a resumed one");
-    assert!(!app.offers_tasks(&["--resume", "task-sess"]), "a task's own session");
-    assert!(!app.offers_tasks(&["attach", "abcd1234"]), "claude attach");
+    assert!(app.offers_tasks(Start::New(None)), "a new session");
+    assert!(app.offers_tasks(Start::New(Some("a prompt to start with"))), "a new session from a hand-off");
+    assert!(app.offers_tasks(Start::Resume("user-1")), "a resumed one");
+    assert!(!app.offers_tasks(Start::Resume("task-sess")), "a task's own session");
+    assert!(!app.offers_tasks(Start::Attach("abcd1234")), "claude attach");
 }
 
 /// Write the check's answer (and whether it runs now) on task `n`.

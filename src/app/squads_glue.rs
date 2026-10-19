@@ -2,14 +2,15 @@
 //! enter starts it. A task with no folder asks for one first (the folder picker). Then, off the UI thread, its worktree
 //! is made (`worktrees::prepare`; none for a folder not in git); then `squad.md` and the squads are written into the
 //! task's own folder (`taskrun::write_task_files`), the session is written on the task (Working) and started in a
-//! platoon host (`taskrun::args`), and the user is taken into it. `enter` on a started task opens its session: the
+//! platoon host (`Agent::task_args`), and the user is taken into it. `enter` on a started task opens its session: the
 //! running one, or the same session continued (its worktree made again from its branch first when it was removed
 //! after the work). Also here: which sessions are tasks' (for the Sessions tab's mark), and stopping a cancelled task's
 //! session.
 
 use super::*;
+use crate::agents::TaskLaunch;
 use crate::squads::Squad;
-use crate::taskrun::{self, Launch, Rules};
+use crate::taskrun::{self, Rules};
 use crate::tickets::{State, Ticket, Tickets, Worktree};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::time::SystemTime;
@@ -109,7 +110,7 @@ impl App {
 
     /// The platoon host running this session, if one is: the one started with its id (as a new session, or resumed).
     pub fn task_host(&self, session: &str) -> Option<&HostInfo> {
-        self.hosts.iter().find(|h| h.args.iter().any(|a| a == session))
+        self.hosts.iter().find(|h| h.session().as_deref() == Some(session))
     }
 
     /// Is this task session running now (hosted by a platoon, or registered by Claude Code)?
@@ -317,17 +318,17 @@ impl App {
         }
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));
-        let launch = Launch {
+        let launch = TaskLaunch {
             session,
             resume,
             name: taskrun::session_name(&t),
             model: squad.model.clone(),
             plan,
             task_dir,
-            settings: taskrun::settings_json(&exe),
+            exe,
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
         };
-        let args = taskrun::args(&launch);
+        let args = Agent::Claude.task_args(&launch);
         // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
         #[cfg(test)]
         {
@@ -338,11 +339,10 @@ impl App {
         }
         #[cfg(not(test))]
         {
-            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let env: Vec<(&str, &str)> =
                 (project != crate::tickets::NO_PROJECT_ID).then_some(("PLATOON_PROJECT", project)).into_iter().collect();
             let (rows, cols) = self.pty_size();
-            let (info, child) = host::launch(&self.host_dirs(), &self.program, &dir, &refs, &env, rows, cols)?;
+            let (info, child) = host::launch(&self.host_dirs(), &self.program, &dir, &args, &env, rows, cols)?;
             let pid = info.claude_pid;
             self.spawned.push(child);
             self.hosts.push(info);

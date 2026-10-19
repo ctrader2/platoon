@@ -797,7 +797,7 @@ impl Runner {
         }
         // Started from inside a Claude Code session, platoon inherits that session's markers; they aren't this call's
         // to carry (which ones, and why: `claude::SESSION_MARKERS`).
-        for k in crate::agents::claude::inherited_session_markers() {
+        for k in crate::agents::inherited_session_markers() {
             cmd.env_remove(k);
         }
         let mut child = match spawn_retrying(&mut cmd) {

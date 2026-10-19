@@ -17,10 +17,48 @@ pub enum Agent {
 }
 
 impl Agent {
+    /// Every agent platoon knows.
+    pub const ALL: [Agent; 1] = [Agent::Claude];
+
     /// A model id as a row shows it (`claude-sonnet-5` -> `Sonnet 5`).
     pub fn model_name(self, id: &str) -> String {
         match self {
             Agent::Claude => claude::pretty_model(id),
+        }
+    }
+
+    /// The program that is this agent here.
+    pub fn program(self) -> String {
+        match self {
+            Agent::Claude => claude::program(),
+        }
+    }
+
+    /// The arguments the agent's program is started with for `start`.
+    pub fn args(self, start: Start) -> Vec<String> {
+        match self {
+            Agent::Claude => claude::start_args(start),
+        }
+    }
+
+    /// Do a host's arguments show a background session (`Start::Attach`)?
+    pub fn attaches(self, args: &[String]) -> bool {
+        match self {
+            Agent::Claude => claude::attaches(args),
+        }
+    }
+
+    /// The session a host's arguments name, when they do (a task's session, a resumed one).
+    pub fn session_of_args(self, args: &[String]) -> Option<String> {
+        match self {
+            Agent::Claude => claude::session_of_args(args),
+        }
+    }
+
+    /// The arguments a task's session is started (or continued) with.
+    pub fn task_args(self, l: &TaskLaunch) -> Vec<String> {
+        match self {
+            Agent::Claude => claude::task_args(l),
         }
     }
 
@@ -30,6 +68,51 @@ impl Agent {
             Agent::Claude => claude::window_size(t.context_tokens, &mut t.large_window.clone()),
         }
     }
+}
+
+/// The variables in this process's own environment that describe an agent's session it was started from (platoon run
+/// from inside Claude Code, say): a session platoon starts, or a one-shot call, must not get them, or it takes itself
+/// for a part of that session.
+pub fn inherited_session_markers() -> Vec<String> {
+    Agent::ALL
+        .iter()
+        .flat_map(|a| match a {
+            Agent::Claude => claude::inherited_session_markers(),
+        })
+        .collect()
+}
+
+// ---- starting a session ---------------------------------------------------------------------------------------------
+
+/// How a session is started in a platoon host.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Start<'a> {
+    /// A new conversation, with this first message when there is one (a hand-off).
+    New(Option<&'a str>),
+    /// The saved conversation with this id, continued.
+    Resume(&'a str),
+    /// A background session the agent's own service runs, shown by attaching to it (see `Live::background`).
+    Attach(&'a str),
+}
+
+/// What a task's session is started (or continued) with. Its id is chosen by platoon before it starts, so the task
+/// names its session from the first moment.
+#[derive(Clone, Debug)]
+pub struct TaskLaunch {
+    pub session: String,
+    /// Continue the session rather than start it.
+    pub resume: bool,
+    /// Its name: "#N title".
+    pub name: String,
+    pub model: String,
+    /// Start in plan mode.
+    pub plan: bool,
+    /// The task's own folder, with `squad.md` in it.
+    pub task_dir: PathBuf,
+    /// The platoon program the session's hooks call.
+    pub exe: String,
+    /// The first message (a new session only).
+    pub first: Option<String>,
 }
 
 // ---- what platoon reads about conversations and the processes running them ----------------------------------------

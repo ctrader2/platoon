@@ -283,13 +283,7 @@ fn setup() -> io::Result<()> {
     // Yes now, or yes before and nothing named yet: the first pass over the active conversations, right here.
     if matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
         let (config, cache) = (archive::config_dir(), usage::cache_dir());
-        let env = scan::ScanEnv {
-            config: &config,
-            cache: &cache,
-            root: &root,
-            program: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
-            interactive,
-        };
+        let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, program: agents::Agent::Claude.program(), interactive };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
     }
     Ok(())

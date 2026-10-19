@@ -1,3 +1,5 @@
+use crate::agents::Agent;
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Status {
     Busy,
@@ -46,6 +48,8 @@ pub enum NameSource {
 /// One conversation (a session id), whether or not anything is running it.
 pub struct Session {
     pub id: String,
+    /// The agent the conversation is with: what resumes it, and how its model and window read.
+    pub agent: Agent,
     pub name: String,
     pub name_source: NameSource,
     /// The summary platoon generated for it, empty if there is none.

@@ -5,7 +5,8 @@
 //! working, and the session keeps running when you detach with the back key (Ctrl+Space unless `keys.json` says
 //! otherwise; see keys.rs, read once as this starts).
 
-use crate::agents::claude::{self, Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
+use crate::agents::claude::{Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
+use crate::agents::{Agent, Start};
 use crate::guard;
 use crate::host::{self, F_INPUT, F_OUTPUT, F_RESIZE, HostInfo, read_frame, size_payload, write_frame};
 use crate::projects::{self, Projects};
@@ -25,10 +26,6 @@ use std::{
 /// Undo anything claude switched on in the terminal (mouse reporting, bracketed paste, alt screen,
 /// kitty keyboard mode, hidden cursor) so the shell you return to behaves normally.
 const RESET_TERMINAL: &[u8] = b"\x1b[<u\x1b[?2004l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1049l\x1b[?25h\x1b[0m";
-
-fn program() -> String {
-    std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
-}
 
 /// Match `arg` against known session ids: exact, or a unique prefix of at least 4 characters.
 fn resolve_id(arg: &str, mut known: Vec<String>) -> Result<String, String> {
@@ -61,12 +58,15 @@ fn ask(question: &str) -> bool {
 
 /// Find, resume, or start the session's host. Returns where to connect.
 fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String> {
+    // The sessions found here are Claude Code's, and a new one is too.
+    let agent = Agent::Claude;
     let root = claude_root();
     let hosts = host::discover();
     let Some(arg) = arg else {
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         let env = [(crate::sessionhook::OFFER_ENV, "1")];
-        return host::launch(&host::Dirs::from_env(), &program(), &cwd.to_string_lossy(), &[], &env, rows, cols).map(|(h, _)| h);
+        let args = agent.args(Start::New(None));
+        return host::launch(&host::Dirs::from_env(), &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols).map(|(h, _)| h);
     };
 
     let live = guard::live_entries(&root);
@@ -95,9 +95,8 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         let cwd = Some(bg.cwd.clone()).filter(|c| Path::new(c).is_dir());
         let cwd =
             cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
-        let args = claude::attach_args(&attach_id);
-        return host::launch(&host::Dirs::from_env(), &program(), &cwd, &[args[0].as_str(), args[1].as_str()], &[], rows, cols)
-            .map(|(h, _)| h);
+        let args = agent.args(Start::Attach(&attach_id));
+        return host::launch(&host::Dirs::from_env(), &agent.program(), &cwd, &args, &[], rows, cols).map(|(h, _)| h);
     }
 
     // A parked process platoon hosts is joined like an idle one; one outside platoon is left alone (never ended).
@@ -126,7 +125,7 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     if crate::tickets::find_session(&crate::archive::config_dir(), &id).is_none() {
         env.push((crate::sessionhook::OFFER_ENV, "1"));
     }
-    host::launch(&host::Dirs::from_env(), &program(), &cwd, &["--resume", &id], &env, rows, cols).map(|(h, _)| h)
+    host::launch(&host::Dirs::from_env(), &agent.program(), &cwd, &agent.args(Start::Resume(&id)), &env, rows, cols).map(|(h, _)| h)
 }
 
 /// `platoon open --project <name>`: a new session in this folder, in that project.
@@ -138,11 +137,13 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     }
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let at_ms = crate::usage::now().saturating_sub(2) * 1000;
+    // A new session is Claude Code's.
+    let agent = Agent::Claude;
     let (info, _) = host::launch(
         &host::Dirs::from_env(),
-        &program(),
+        &agent.program(),
         &cwd.to_string_lossy(),
-        &[],
+        &agent.args(Start::New(None)),
         &[("PLATOON_PROJECT", p.id.as_str()), (crate::sessionhook::OFFER_ENV, "1")],
         rows,
         cols,

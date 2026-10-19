@@ -12,6 +12,7 @@
 //! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
 
 use crate::agents::claude::{claude_root, registry_status};
+use crate::agents::{Agent, Start};
 use crate::archive::config_dir;
 use crate::mcp::{self, Blocker, Tracked};
 use crate::procs;
@@ -135,11 +136,21 @@ pub struct HostInfo {
 }
 
 impl HostInfo {
+    /// The agent running inside. A host's file names none: every host platoon starts runs Claude Code.
+    pub fn agent(&self) -> Agent {
+        Agent::Claude
+    }
+
     /// True when this host is showing the background session `attach_id` (running `claude attach <id>`).
     /// Such a host's own process is only an attach client: it has no registry entry, and the session it shows
     /// is run by Claude's service, which nothing here ever signals.
     pub fn attaches_to(&self, attach_id: &str) -> bool {
-        self.args == crate::agents::claude::attach_args(attach_id)
+        self.args == self.agent().args(Start::Attach(attach_id))
+    }
+
+    /// The session this host runs, when its arguments name it (a task's session, a resumed one).
+    pub fn session(&self) -> Option<String> {
+        self.agent().session_of_args(&self.args)
     }
 }
 
@@ -187,7 +198,7 @@ pub fn launch(
     dirs: &Dirs,
     program: &str,
     dir: &str,
-    args: &[&str],
+    args: &[String],
     env: &[(&str, &str)],
     rows: u16,
     cols: u16,
@@ -272,7 +283,7 @@ pub fn run(args: &[String]) -> i32 {
     // If platoon itself was started from inside Claude Code, don't leak that session's markers into the child (with
     // CLAUDE_CODE_CHILD_SESSION inherited, a session saves no transcript: no resume, no tokens, no list row). Which
     // ones, and why: `claude::SESSION_MARKERS`.
-    for k in crate::agents::claude::inherited_session_markers() {
+    for k in crate::agents::inherited_session_markers() {
         cmd.env_remove(k);
     }
     let mut child = match pair.slave.spawn_command(cmd) {
@@ -435,17 +446,11 @@ struct Watchdog {
     /// Where the MCP configuration lives, for the session's directory.
     sources: mcp::Sources,
     leftover_grace: Duration,
-    /// The session this host runs, when its arguments name it (`--session-id` or `--resume`): a task's session is
+    /// The session this host runs, when its arguments name it (a task's session, a resumed one): a task's session is
     /// found by it.
     session: Option<String>,
     /// platoon's config folder, where the tasks are.
     config: PathBuf,
-}
-
-/// The session id a host's arguments name: the value after `--session-id` (a new session platoon chose the id of)
-/// or `--resume`.
-pub fn session_of_args(args: &[String]) -> Option<String> {
-    args.windows(2).find(|w| w[0] == "--session-id" || w[0] == "--resume").map(|w| w[1].clone()).filter(|s| !s.is_empty())
 }
 
 impl Watchdog {
@@ -460,7 +465,8 @@ impl Watchdog {
             check_every: if scaled.is_some() { Duration::from_millis(200) } else { IDLE_CHECK_EVERY },
             sources: mcp::Sources::from_env(dir),
             leftover_grace: if scaled.is_some() { Duration::from_secs(1) } else { LEFTOVER_GRACE },
-            session: session_of_args(args),
+            // The host runs Claude Code (see `HostInfo::agent`).
+            session: Agent::Claude.session_of_args(args),
             config: config_dir(),
         }
     }
@@ -666,6 +672,7 @@ pub fn end_processes_within(pids: &[u32], wait: Duration) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::claude::session_of_args;
     use crate::settings::{Settings, save};
     use std::process::Child;
 

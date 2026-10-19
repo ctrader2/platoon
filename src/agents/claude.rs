@@ -2,9 +2,9 @@
 //! formats (`~/.claude/sessions/<pid>.json` and `~/.claude/projects/*/<id>.jsonl`), so all
 //! knowledge of them lives in this file.
 
-use super::{Hidden, Live, SessionLog, Spent, Transcript};
+use super::{Hidden, Live, SessionLog, Spent, Start, TaskLaunch, Transcript};
 use crate::procs::pid_alive;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Seek, SeekFrom},
@@ -123,6 +123,148 @@ pub fn attach_args(attach_id: &str) -> [String; 2] {
 /// which is how Claude itself prints it.
 pub fn short_id(session_id: &str) -> String {
     session_id.chars().take(8).collect()
+}
+
+// ---- starting a session ---------------------------------------------------------------------------------------------
+
+/// The program that is Claude Code here: `PLATOON_CLAUDE_BIN` (a wrapper, or a test's stand-in), else `claude`.
+pub fn program() -> String {
+    std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
+}
+
+/// The arguments `claude` is started with for `start`: nothing for a new session (or its first message alone),
+/// `--resume <id>`, or `attach <id>`.
+pub fn start_args(start: Start) -> Vec<String> {
+    match start {
+        Start::New(first) => first.into_iter().map(String::from).collect(),
+        Start::Resume(id) => vec!["--resume".into(), id.into()],
+        Start::Attach(id) => attach_args(id).into(),
+    }
+}
+
+/// Do these arguments show a background session (`claude attach <id>`)?
+pub fn attaches(args: &[String]) -> bool {
+    args.first().is_some_and(|a| a == "attach")
+}
+
+/// The session id a host's arguments name: the value after `--session-id` (a new session platoon chose the id of)
+/// or `--resume`.
+pub fn session_of_args(args: &[String]) -> Option<String> {
+    args.windows(2).find(|w| w[0] == "--session-id" || w[0] == "--resume").map(|w| w[1].clone()).filter(|s| !s.is_empty())
+}
+
+// ---- a task's session ------------------------------------------------------------------------------------------------
+//
+// A task runs as one ordinary interactive `claude` session (`task_args`), started with:
+// - `--session-id` (platoon picks it, so the task names it before it starts) and `-n "#N title"`;
+// - `--model`, the squad's model, and `--permission-mode plan` for a squad that plans first, else `acceptEdits`;
+// - `--settings`, the task's hooks for this session only (the user's own settings stay as they are), with
+//   `permissions.ask` rules so pushing, opening or merging pull requests and publishing wait at Claude Code's own
+//   permission prompt (`ASK`);
+// - `--append-system-prompt-file <task folder>/squad.md`: platoon's fixed rules and the squad's steps;
+// - `--add-dir <task folder>`, so the session can read those files;
+// - the task's text as its first message.
+
+/// Commands that publish: they wait at Claude Code's permission prompt (`permissions.ask`), whatever mode the session
+/// is in. Claude Code matches a rule against each part of a compound command (`cd x && git push` asks too) and past a
+/// leading `VAR=value`, and a `*` may stand anywhere, so the forms of `git push` with options before `push` (`git -C
+/// <dir> push`, `git -c k=v push`, `--git-dir`, `--work-tree`) have rules of their own. Not caught (Claude Code's own
+/// list of what a rule doesn't match): another spelling of the program (`/usr/bin/git push`, `git 'push'`), a shell
+/// that runs it (`sh -c '...'`), and a script or tool that pushes for you. A commit whose message has " push " in it
+/// after `git -C <dir>` asks too.
+pub const ASK: &[&str] = &[
+    "Bash(git push:*)",
+    "Bash(git -C * push)",
+    "Bash(git -C * push *)",
+    "Bash(git -c * push)",
+    "Bash(git -c * push *)",
+    "Bash(git --git-dir* push)",
+    "Bash(git --git-dir* push *)",
+    "Bash(git --work-tree* push)",
+    "Bash(git --work-tree* push *)",
+    "Bash(gh pr create:*)",
+    "Bash(gh pr merge:*)",
+    "Bash(gh release:*)",
+    "Bash(gh api -X *)",
+    "Bash(gh api --method *)",
+    "Bash(gh api -f *)",
+    "Bash(gh api -F *)",
+    "Bash(gh api --field *)",
+    "Bash(gh api --raw-field *)",
+    "Bash(gh api --input *)",
+    "Bash(gh api * -X *)",
+    "Bash(gh api * --method *)",
+    "Bash(gh api * -f *)",
+    "Bash(gh api * -F *)",
+    "Bash(gh api * --field *)",
+    "Bash(gh api * --raw-field *)",
+    "Bash(gh api * --input *)",
+    "Bash(glab:*)",
+    "Bash(cargo publish:*)",
+    "Bash(npm publish:*)",
+];
+
+/// How much longer than the check of the work may take the `Stop` hook is given before Claude Code gives up on it, in
+/// seconds.
+const STOP_MARGIN: u64 = 60;
+
+/// A program path as one word for a shell (the hook commands run through one).
+pub fn shell_word(s: &str) -> String {
+    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c)) {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules. The `Stop`
+/// hook waits as long as the check of the work may take, and a little more.
+pub fn settings_json(exe: &str) -> String {
+    let exe = shell_word(exe);
+    let cmd = |name: &str| json!({"type": "command", "command": format!("{exe} hook {name}")});
+    let mut stop = cmd("task-stop");
+    if let Some(o) = stop.as_object_mut() {
+        o.insert("timeout".into(), json!(crate::verdict::TIMEOUT.as_secs() + STOP_MARGIN));
+    }
+    json!({
+        "permissions": {"ask": ASK},
+        "hooks": {
+            "PreToolUse": [
+                {"matcher": "ExitPlanMode", "hooks": [cmd("task-plan")]},
+                {"matcher": "AskUserQuestion", "hooks": [cmd("task-question")]},
+            ],
+            "Notification": [{"hooks": [cmd("task-notify")]}],
+            "PostToolUse": [{"matcher": "*", "hooks": [cmd("task-tool")]}],
+            "UserPromptSubmit": [{"hooks": [cmd("task-prompt")]}],
+            "Stop": [{"hooks": [stop]}],
+        }
+    })
+    .to_string()
+}
+
+/// The arguments `claude` gets for a task's session. `--add-dir` comes first, so it can't take the first message for
+/// a folder.
+pub fn task_args(l: &TaskLaunch) -> Vec<String> {
+    let mut a: Vec<String> = vec!["--add-dir".into(), l.task_dir.to_string_lossy().into_owned()];
+    if l.resume {
+        a.extend(["--resume".into(), l.session.clone()]);
+    } else {
+        a.extend(["--session-id".into(), l.session.clone(), "-n".into(), l.name.clone()]);
+    }
+    a.extend([
+        "--model".into(),
+        l.model.clone(),
+        "--permission-mode".into(),
+        if l.plan { "plan" } else { "acceptEdits" }.into(),
+        "--settings".into(),
+        settings_json(&l.exe),
+        "--append-system-prompt-file".into(),
+        l.task_dir.join(crate::taskrun::SQUAD_FILE).to_string_lossy().into_owned(),
+    ]);
+    if let (false, Some(m)) = (l.resume, &l.first) {
+        a.push(m.clone());
+    }
+    a
 }
 
 pub struct Reader {
@@ -844,6 +986,74 @@ mod tests {
         assert_eq!(empty.background.as_deref(), Some("dffac639"));
         assert_eq!(short_id("xyz"), "xyz");
         assert_eq!(attach_args("dffac639"), ["attach", "dffac639"]);
+    }
+
+    #[test]
+    fn a_session_is_started_resumed_and_attached_to_with_exactly_these_arguments() {
+        let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(start_args(Start::New(None)), v(&[]));
+        assert_eq!(start_args(Start::New(Some("Carry on from here"))), v(&["Carry on from here"]));
+        assert_eq!(start_args(Start::Resume("dffac639-c805")), v(&["--resume", "dffac639-c805"]));
+        assert_eq!(start_args(Start::Attach("abc12345")), v(&["attach", "abc12345"]));
+        assert!(attaches(&start_args(Start::Attach("abc12345"))));
+        assert!(!attaches(&start_args(Start::Resume("x"))) && !attaches(&[]));
+        assert_eq!(session_of_args(&start_args(Start::Resume("dffac639-c805"))).as_deref(), Some("dffac639-c805"));
+        assert_eq!(session_of_args(&start_args(Start::New(Some("--resume")))), None);
+    }
+
+    #[test]
+    fn a_tasks_session_gets_exactly_these_arguments_in_this_order() {
+        let l = TaskLaunch {
+            session: "abc".into(),
+            resume: false,
+            name: "#5 Login".into(),
+            model: "opus".into(),
+            plan: true,
+            task_dir: PathBuf::from("/c/tasks/05-work"),
+            exe: "/opt/platoon/bin/platoon".into(),
+            first: Some("Task #5: Login\n\nDo it.".into()),
+        };
+        let settings = settings_json("/opt/platoon/bin/platoon");
+        let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            task_args(&l),
+            v(&[
+                "--add-dir",
+                "/c/tasks/05-work",
+                "--session-id",
+                "abc",
+                "-n",
+                "#5 Login",
+                "--model",
+                "opus",
+                "--permission-mode",
+                "plan",
+                "--settings",
+                &settings,
+                "--append-system-prompt-file",
+                "/c/tasks/05-work/squad.md",
+                "Task #5: Login\n\nDo it.",
+            ])
+        );
+        let again = TaskLaunch { resume: true, plan: false, ..l };
+        assert_eq!(
+            task_args(&again),
+            v(&[
+                "--add-dir",
+                "/c/tasks/05-work",
+                "--resume",
+                "abc",
+                "--model",
+                "opus",
+                "--permission-mode",
+                "acceptEdits",
+                "--settings",
+                &settings,
+                "--append-system-prompt-file",
+                "/c/tasks/05-work/squad.md",
+            ])
+        );
+        assert_eq!(session_of_args(&task_args(&again)).as_deref(), Some("abc"));
     }
 
     #[test]

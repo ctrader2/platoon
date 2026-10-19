@@ -466,7 +466,8 @@ impl App {
             return;
         }
         self.mode = Mode::List;
-        if self.launch_in(cwd, &[text.as_str()], Some(&project), true) {
+        // The new session is Claude Code's.
+        if self.launch_in(Agent::Claude, cwd, Start::New(Some(&text)), Some(&project), true) {
             self.notify(format!("Started a new session in the project \"{name}\" with the hand-off as its first message."));
         }
     }

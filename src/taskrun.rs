@@ -1,16 +1,12 @@
 //! A task's session: what it is started with, and the hooks that move the task along while it works.
 //!
-//! A task runs as one ordinary interactive `claude` session in a platoon host, in the task's worktree (or its folder,
-//! when that is not in git). It is started with (`args`):
-//! - `--session-id` (platoon picks it, so the task names it before it starts) and `-n "#N title"`;
-//! - `--model`, the squad's model, and `--permission-mode plan` for a squad that plans first, else `acceptEdits`;
-//! - `--settings`, the hooks below for this session only (the user's own settings stay as they are), with
-//!   `permissions.ask` rules so pushing, opening or merging pull requests and publishing wait at Claude Code's own
-//!   permission prompt (`ASK`);
-//! - `--append-system-prompt-file <task folder>/squad.md`: platoon's fixed rules (`rules`) and the squad's steps, frozen
-//!   when the task starts, with every squad copied beside it (`<task folder>/squads/<id>.md`) so a step can name one;
-//! - `--add-dir <task folder>`, so the session can read those files;
-//! - the task's text as its first message.
+//! A task runs as one ordinary interactive session of its agent in a platoon host, in the task's worktree (or its
+//! folder, when that is not in git). It is started (`agents::TaskLaunch`, `Agent::task_args`; Claude Code's flags are
+//! in `agents/claude.rs`) with the id platoon chose for it, its name "#N title", the squad's model, plan mode for a
+//! squad that plans first, the hooks below for this session only, `<task folder>/squad.md` added to its system prompt:
+//! platoon's fixed rules (`rules`) and the squad's steps, frozen when the task starts, with every squad copied beside
+//! it (`<task folder>/squads/<id>.md`) so a step can name one; the task's folder readable; and the task's text as its
+//! first message.
 //!
 //! The hooks (`platoon hook task-...`), each reading the hook's JSON on stdin and finding the task by its session:
 //! - `task-plan`, `PreToolUse` on `ExitPlanMode`: the plan is saved as the task's `plan.md`; Needs you, a plan to approve.
@@ -38,128 +34,8 @@ use std::{
 
 // ---- what the session is started with -----------------------------------------------------------------------------
 
-/// Commands that publish: they wait at Claude Code's permission prompt (`permissions.ask`), whatever mode the session
-/// is in. Claude Code matches a rule against each part of a compound command (`cd x && git push` asks too) and past a
-/// leading `VAR=value`, and a `*` may stand anywhere, so the forms of `git push` with options before `push` (`git -C
-/// <dir> push`, `git -c k=v push`, `--git-dir`, `--work-tree`) have rules of their own. Not caught (Claude Code's own
-/// list of what a rule doesn't match): another spelling of the program (`/usr/bin/git push`, `git 'push'`), a shell
-/// that runs it (`sh -c '...'`), and a script or tool that pushes for you. A commit whose message has " push " in it
-/// after `git -C <dir>` asks too.
-pub const ASK: &[&str] = &[
-    "Bash(git push:*)",
-    "Bash(git -C * push)",
-    "Bash(git -C * push *)",
-    "Bash(git -c * push)",
-    "Bash(git -c * push *)",
-    "Bash(git --git-dir* push)",
-    "Bash(git --git-dir* push *)",
-    "Bash(git --work-tree* push)",
-    "Bash(git --work-tree* push *)",
-    "Bash(gh pr create:*)",
-    "Bash(gh pr merge:*)",
-    "Bash(gh release:*)",
-    "Bash(gh api -X *)",
-    "Bash(gh api --method *)",
-    "Bash(gh api -f *)",
-    "Bash(gh api -F *)",
-    "Bash(gh api --field *)",
-    "Bash(gh api --raw-field *)",
-    "Bash(gh api --input *)",
-    "Bash(gh api * -X *)",
-    "Bash(gh api * --method *)",
-    "Bash(gh api * -f *)",
-    "Bash(gh api * -F *)",
-    "Bash(gh api * --field *)",
-    "Bash(gh api * --raw-field *)",
-    "Bash(gh api * --input *)",
-    "Bash(glab:*)",
-    "Bash(cargo publish:*)",
-    "Bash(npm publish:*)",
-];
-
 /// The hooks, by the name `platoon hook <name>` takes.
 pub const HOOKS: [&str; 6] = ["task-plan", "task-question", "task-notify", "task-tool", "task-prompt", "task-stop"];
-
-/// How much longer than the check of the work may take the `Stop` hook is given before Claude Code gives up on it, in
-/// seconds.
-const STOP_MARGIN: u64 = 60;
-
-/// A program path as one word for a shell (the hook commands run through one).
-pub fn shell_word(s: &str) -> String {
-    if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "/._-+=:@%,".contains(c)) {
-        s.to_string()
-    } else {
-        format!("'{}'", s.replace('\'', "'\\''"))
-    }
-}
-
-/// The `--settings` JSON of a task's session: its hooks, calling the platoon `exe`, and the `ask` rules. The `Stop`
-/// hook waits as long as the check of the work may take, and a little more.
-pub fn settings_json(exe: &str) -> String {
-    let exe = shell_word(exe);
-    let cmd = |name: &str| json!({"type": "command", "command": format!("{exe} hook {name}")});
-    let mut stop = cmd("task-stop");
-    if let Some(o) = stop.as_object_mut() {
-        o.insert("timeout".into(), json!(verdict::TIMEOUT.as_secs() + STOP_MARGIN));
-    }
-    json!({
-        "permissions": {"ask": ASK},
-        "hooks": {
-            "PreToolUse": [
-                {"matcher": "ExitPlanMode", "hooks": [cmd("task-plan")]},
-                {"matcher": "AskUserQuestion", "hooks": [cmd("task-question")]},
-            ],
-            "Notification": [{"hooks": [cmd("task-notify")]}],
-            "PostToolUse": [{"matcher": "*", "hooks": [cmd("task-tool")]}],
-            "UserPromptSubmit": [{"hooks": [cmd("task-prompt")]}],
-            "Stop": [{"hooks": [stop]}],
-        }
-    })
-    .to_string()
-}
-
-/// What a task's session is started (or continued) with.
-#[derive(Clone, Debug)]
-pub struct Launch {
-    pub session: String,
-    /// Continue the session (`--resume`) rather than start it.
-    pub resume: bool,
-    /// Its name: "#N title".
-    pub name: String,
-    pub model: String,
-    /// Start in plan mode.
-    pub plan: bool,
-    /// The task's own folder, with `squad.md` in it.
-    pub task_dir: PathBuf,
-    /// The `--settings` JSON.
-    pub settings: String,
-    /// The first message (a new session only).
-    pub first: Option<String>,
-}
-
-/// The arguments `claude` gets. `--add-dir` comes first, so it can't take the first message for a folder.
-pub fn args(l: &Launch) -> Vec<String> {
-    let mut a: Vec<String> = vec!["--add-dir".into(), l.task_dir.to_string_lossy().into_owned()];
-    if l.resume {
-        a.extend(["--resume".into(), l.session.clone()]);
-    } else {
-        a.extend(["--session-id".into(), l.session.clone(), "-n".into(), l.name.clone()]);
-    }
-    a.extend([
-        "--model".into(),
-        l.model.clone(),
-        "--permission-mode".into(),
-        if l.plan { "plan" } else { "acceptEdits" }.into(),
-        "--settings".into(),
-        l.settings.clone(),
-        "--append-system-prompt-file".into(),
-        l.task_dir.join(SQUAD_FILE).to_string_lossy().into_owned(),
-    ]);
-    if let (false, Some(m)) = (l.resume, &l.first) {
-        a.push(m.clone());
-    }
-    a
-}
 
 /// The session's name.
 pub fn session_name(t: &Ticket) -> String {
@@ -464,7 +340,7 @@ pub fn run_hook(name: &str) -> i32 {
         let at = Places {
             config: crate::archive::config_dir(),
             cache: crate::usage::cache_dir(),
-            claude: std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into()),
+            claude: crate::agents::Agent::Claude.program(),
             check_timeout: verdict::TIMEOUT,
         };
         hook(name, &input, &at)
@@ -480,6 +356,8 @@ pub fn run_hook(name: &str) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::claude::shell_word;
+    use crate::agents::{Agent, TaskLaunch};
     use crate::tickets::NewTicket;
 
     fn dir(name: &str) -> PathBuf {
@@ -576,17 +454,17 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
 
     #[test]
     fn the_launch_starts_the_squads_model_in_plan_mode_with_the_hooks_the_ask_rules_and_squad_md() {
-        let l = Launch {
+        let l = TaskLaunch {
             session: "abc".into(),
             resume: false,
             name: "#5 Login".into(),
             model: "opus".into(),
             plan: true,
             task_dir: PathBuf::from("/c/tasks/05-work"),
-            settings: settings_json("/opt/platoon/bin/platoon"),
+            exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
         };
-        let a = args(&l);
+        let a = Agent::Claude.task_args(&l);
         assert_eq!(&a[..2], ["--add-dir", "/c/tasks/05-work"], "first, so it can't take the message");
         let at = |flag: &str| a.iter().position(|x| x == flag).map(|i| a[i + 1].clone());
         assert_eq!(at("--session-id").as_deref(), Some("abc"));
@@ -653,7 +531,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         let mut again = l.clone();
         again.plan = false;
         again.resume = true;
-        let a = args(&again);
+        let a = Agent::Claude.task_args(&again);
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(a.windows(2).any(|w| w == ["--resume", "abc"]));
         assert!(!a.iter().any(|x| x == "--session-id" || x == "-n" || x.starts_with("Task #5")));
