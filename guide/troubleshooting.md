@@ -38,6 +38,18 @@ archived. Try again. See [Archive](sessions.md#archive).
 before ending that copy and reopening the conversation from its saved history. See
 [See a session live from a regular terminal](sessions.md#see-a-session-live-from-a-regular-terminal).
 
+**A Codex conversation says it is open in another Codex window.** Codex lets one window have a conversation open, and
+platoon never opens it a second time or stops that window. Close it there (or quit that Codex), then `enter` opens it in
+platoon. Codex's shared background server can hold conversations too: quitting Codex lets them go. See
+[Codex conversations](sessions.md#codex-conversations).
+
+**A Codex conversation opened in platoon asks whether to trust its folder.** That is Codex's own question, asked once
+per folder: answer it there, in the session. See [Codex conversations](sessions.md#codex-conversations).
+
+**My Codex conversations aren't listed.** platoon reads them from `~/.codex` (or `$CODEX_HOME` when it is set): check
+that it is the folder your Codex uses. platoon reads only the saved sessions in its `sessions` folder.
+Deleting `~/.cache/platoon/codex-index.json` is harmless. See [Codex conversations](sessions.md#codex-conversations).
+
 ## Keys and the mouse
 
 **The back key doesn't work, or I want another one.** Set it in `keys.json`. A key that breaks the rules is left out with a

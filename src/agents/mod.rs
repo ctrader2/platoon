@@ -1,6 +1,7 @@
 //! The AI coding agents platoon runs, behind one seam. Each agent has a module of its own here (`claude.rs`: Claude
-//! Code) that is the only place that knows its files, flags, hooks and models; the rest of platoon goes through this
-//! one: the `Agent` it is dealing with, and the agent-neutral shapes below, which an agent's module produces.
+//! Code; `codex.rs`: OpenAI's Codex CLI) that is the only place that knows its files, flags, hooks and models; the rest
+//! of platoon goes through this one: the `Agent` it is dealing with, and the agent-neutral shapes below, which an
+//! agent's module produces.
 
 use crate::ai::{Outcome, Request};
 use std::{
@@ -10,22 +11,72 @@ use std::{
 };
 
 pub mod claude;
+pub mod codex;
 
 /// An AI coding agent platoon runs. Closed on purpose: a new agent makes the compiler name every place that must
 /// answer for it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Agent {
     Claude,
+    Codex,
 }
 
 impl Agent {
     /// Every agent platoon knows.
-    pub const ALL: [Agent; 1] = [Agent::Claude];
+    pub const ALL: [Agent; 2] = [Agent::Claude, Agent::Codex];
 
-    /// A model id as a row shows it (`claude-sonnet-5` -> `Sonnet 5`).
+    /// The word for it in platoon's own files and on its command line (`--agent codex`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+        }
+    }
+
+    /// The agent `id` names; None for a word platoon doesn't know.
+    pub fn from_id(id: &str) -> Option<Agent> {
+        Agent::ALL.into_iter().find(|a| a.id() == id)
+    }
+
+    /// Its name, as the user knows it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    /// A model id as a row shows it (`claude-sonnet-5` -> `Sonnet 5`, `gpt-6-luna` -> `GPT-6-Luna`).
     pub fn model_name(self, id: &str) -> String {
         match self {
             Agent::Claude => claude::pretty_model(id),
+            Agent::Codex => codex::pretty_model(id),
+        }
+    }
+
+    /// What a row's MODEL cell says before the conversation's first reply names a model.
+    pub fn no_model_yet(self) -> &'static str {
+        match self {
+            Agent::Claude => "-",
+            Agent::Codex => "Codex",
+        }
+    }
+
+    /// The agent's own folder on this computer (Claude Code's `~/.claude`, Codex's `~/.codex`, or what the environment
+    /// names). The user's real one: never in a unit test.
+    pub fn home(self) -> PathBuf {
+        match self {
+            Agent::Claude => claude::claude_root(),
+            Agent::Codex => codex::codex_root(),
+        }
+    }
+
+    /// Does the agent say the session that process `pid` runs (conversation `session`, when known) is idle: not
+    /// working, not waiting on anything? `root` is the agent's folder. Anything unclear is not idle.
+    pub fn known_idle(self, root: &Path, pid: u32, session: Option<&str>) -> bool {
+        match self {
+            Agent::Claude => claude::registry_status(root, pid).as_deref() == Some("idle"),
+            Agent::Codex => session.and_then(|s| codex::find_rollout(root, s)).and_then(|p| codex::busy(&p)) == Some(false),
         }
     }
 
@@ -33,6 +84,7 @@ impl Agent {
     pub fn program(self) -> String {
         match self {
             Agent::Claude => claude::program(),
+            Agent::Codex => codex::program(),
         }
     }
 
@@ -40,6 +92,7 @@ impl Agent {
     pub fn args(self, start: Start) -> Vec<String> {
         match self {
             Agent::Claude => claude::start_args(start),
+            Agent::Codex => codex::start_args(start),
         }
     }
 
@@ -47,6 +100,7 @@ impl Agent {
     pub fn attaches(self, args: &[String]) -> bool {
         match self {
             Agent::Claude => claude::attaches(args),
+            Agent::Codex => false,
         }
     }
 
@@ -54,6 +108,7 @@ impl Agent {
     pub fn session_of_args(self, args: &[String]) -> Option<String> {
         match self {
             Agent::Claude => claude::session_of_args(args),
+            Agent::Codex => codex::session_of_args(args),
         }
     }
 
@@ -61,6 +116,7 @@ impl Agent {
     pub fn task_args(self, l: &TaskLaunch) -> Vec<String> {
         match self {
             Agent::Claude => claude::task_args(l),
+            Agent::Codex => codex::task_args(l),
         }
     }
 
@@ -69,6 +125,7 @@ impl Agent {
     pub fn hook_input(self, kind: HookKind, input: &str) -> Option<HookInput> {
         match self {
             Agent::Claude => claude::hook_input(kind, input),
+            Agent::Codex => codex::hook_input(kind, input),
         }
     }
 
@@ -76,14 +133,19 @@ impl Agent {
     pub fn hook_answer(self, reply: &HookReply) -> HookAnswer {
         match self {
             Agent::Claude => claude::hook_answer(reply),
+            Agent::Codex => codex::hook_answer(reply),
         }
     }
 
     /// Make `cmd` (the agent's program) a one-shot call of `model` for `req`: no session kept, the prompt on stdin,
-    /// the answer as JSON.
-    pub fn one_shot(self, cmd: &mut Command, model: &str, req: &Request) {
+    /// the answer as JSON. Err (said plainly) when this agent can't make platoon's own calls yet: nothing is run then.
+    pub fn one_shot(self, cmd: &mut Command, model: &str, req: &Request) -> Result<(), String> {
         match self {
-            Agent::Claude => claude::one_shot(cmd, model, req),
+            Agent::Claude => {
+                claude::one_shot(cmd, model, req);
+                Ok(())
+            }
+            Agent::Codex => Err(codex::NO_ONE_SHOT.into()),
         }
     }
 
@@ -91,6 +153,9 @@ impl Agent {
     pub fn one_shot_outcome(self, stdout: &[u8], stderr: &[u8], exited_ok: bool) -> Outcome {
         match self {
             Agent::Claude => claude::interpret(stdout, stderr, exited_ok),
+            Agent::Codex => {
+                Outcome { result: Err((crate::ledger::FailKind::Other, codex::NO_ONE_SHOT.into())), usage: None, cost_usd: 0.0 }
+            }
         }
     }
 
@@ -98,8 +163,107 @@ impl Agent {
     pub fn context_window(self, t: &Transcript) -> u64 {
         match self {
             Agent::Claude => claude::window_size(t.context_tokens, &mut t.large_window.clone()),
+            Agent::Codex => codex::window_size(t),
         }
     }
+
+    /// The conversation a saved transcript of this agent's holds, from its path; None when the path isn't one.
+    pub fn session_id_of_path(self, path: &Path) -> Option<String> {
+        match self {
+            Agent::Claude => Some(path.file_stem()?.to_str()?.to_string()),
+            Agent::Codex => codex::id_of_path(path),
+        }
+    }
+
+    /// Every saved transcript of this agent's under its folder `root`.
+    pub fn transcript_paths(self, root: &Path) -> Vec<PathBuf> {
+        match self {
+            Agent::Claude => claude::transcript_paths(root),
+            Agent::Codex => codex::rollout_paths(root),
+        }
+    }
+
+    /// The saved transcript of conversation `id`, under the agent's folder `root`.
+    pub fn find_transcript(self, root: &Path, id: &str) -> Option<PathBuf> {
+        match self {
+            Agent::Claude => claude::find_transcript(root, id),
+            Agent::Codex => codex::find_rollout(root, id),
+        }
+    }
+
+    /// Read a transcript cheaply, whatever its size (see `claude::read_transcript`). `prev`: the earlier reading of the
+    /// same file, whose facts are kept when they aren't found again.
+    pub fn read_transcript(self, path: &Path, prev: Option<&Transcript>) -> Option<Transcript> {
+        match self {
+            Agent::Claude => claude::read_transcript(path, prev),
+            Agent::Codex => codex::read_rollout(path, prev),
+        }
+    }
+
+    /// The folder a conversation was run in, from its transcript.
+    pub fn transcript_cwd(self, path: &Path) -> Option<String> {
+        match self {
+            Agent::Claude => claude::transcript_cwd(path),
+            Agent::Codex => codex::rollout_cwd(path),
+        }
+    }
+
+    /// The user's real prompt in one line of a transcript, if it holds one, cut to `cap` characters. Cheap on the lines
+    /// that can't be one (most of a transcript): turned down without being parsed.
+    pub fn prompt_in_line(self, line: &str, cap: usize) -> Option<String> {
+        match self {
+            Agent::Claude => claude::prompt_in_line(line, cap),
+            Agent::Codex => codex::prompt_in_line(line, cap),
+        }
+    }
+
+    /// Could this line of a transcript be something the agent said in words? A substring test only.
+    pub fn may_be_reply(self, line: &str) -> bool {
+        match self {
+            Agent::Claude => claude::may_be_reply(line),
+            Agent::Codex => codex::may_be_reply(line),
+        }
+    }
+
+    /// The words the agent said in this line, as one line cut to `cap` characters.
+    pub fn reply_in_line(self, line: &str, cap: usize) -> Option<String> {
+        match self {
+            Agent::Claude => claude::reply_in_line(line, cap),
+            Agent::Codex => codex::reply_in_line(line, cap),
+        }
+    }
+
+    /// The words the agent said in this line as it wrote them, lines kept, cleaned and cut (`tidy_reply`).
+    pub fn reply_text_in_line(self, line: &str, cap: usize) -> Option<String> {
+        match self {
+            Agent::Claude => claude::reply_text_in_line(line, cap),
+            Agent::Codex => codex::reply_text_in_line(line, cap),
+        }
+    }
+
+    /// Do platoon's own AI features (smart names and summaries, "Describe it", the hand-off, tasks drafted from a
+    /// conversation) read this agent's conversations? Not Codex's yet: those features are built on Claude Code's.
+    pub fn smart_reads(self) -> bool {
+        match self {
+            Agent::Claude => true,
+            Agent::Codex => false,
+        }
+    }
+
+    /// Does the agent itself keep one window per conversation? Codex does (its writer lock): a copy platoon didn't
+    /// start is never stopped, taken over or opened a second time; the user closes it where it is.
+    pub fn keeps_one_writer(self) -> bool {
+        match self {
+            Agent::Claude => false,
+            Agent::Codex => true,
+        }
+    }
+}
+
+/// The agent a hook's command line names after its kind (`platoon hook stop --agent codex`): none, or one platoon
+/// doesn't know, is Claude Code, whose hooks name none.
+pub fn agent_arg(args: &[String]) -> Agent {
+    args.windows(2).find(|w| w[0] == "--agent").and_then(|w| Agent::from_id(&w[1])).unwrap_or(Agent::Claude)
 }
 
 /// The variables in this process's own environment that describe an agent's session it was started from (platoon run
@@ -110,6 +274,9 @@ pub fn inherited_session_markers() -> Vec<String> {
         .iter()
         .flat_map(|a| match a {
             Agent::Claude => claude::inherited_session_markers(),
+            // None known: nothing Codex puts in its shells' environment is known to make a session take itself for
+            // a part of another.
+            Agent::Codex => Vec::new(),
         })
         .collect()
 }
@@ -282,6 +449,8 @@ pub fn agent_of(model: &str) -> Agent {
 /// A live agent process running a conversation, as its agent registers it.
 #[derive(Debug)]
 pub struct Live {
+    /// The agent running it.
+    pub agent: Agent,
     pub pid: u32,
     pub id: String,
     pub cwd: String,
@@ -322,6 +491,8 @@ pub struct Transcript {
     /// Raw model id from the latest assistant message.
     pub model: Option<String>,
     pub context_tokens: u64,
+    /// The model's context window, when the transcript records it (Codex's do). See `Agent::context_window`.
+    pub window: Option<u64>,
     /// The model's large context window is in use (the agent's model id says so, or the conversation has been seen
     /// past the default window). Never flips back. See `Agent::context_window`.
     pub large_window: bool,
@@ -351,6 +522,75 @@ pub struct Spent {
 pub struct SessionLog {
     pub spent: Spent,
     pub last_at: Option<u64>,
+}
+
+// ---- reading what agents write ---------------------------------------------------------------------------------------
+
+/// `2026-09-19T03:53:40.091Z` -> ms since the epoch. Only the UTC form both agents write is understood.
+pub fn parse_iso_ms(s: &str) -> Option<u64> {
+    let b = s.as_bytes();
+    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
+        return None;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
+    let (y, mo, d, h, mi, sec) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
+    let frac: u64 = match b.get(19) {
+        Some(b'.') => {
+            let digits: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
+            format!("{digits:0<3}").parse().ok()?
+        }
+        _ => 0,
+    };
+    // Days since 1970-01-01 (Howard Hinnant's civil-from-days, inverted).
+    let y = if mo <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + h * 3600 + mi * 60 + sec;
+    u64::try_from(secs).ok().map(|s| s * 1000 + frac)
+}
+
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_to(s: String, cap: usize) -> String {
+    match s.char_indices().nth(cap) {
+        Some((at, _)) => s[..at].to_string(),
+        None => s,
+    }
+}
+
+/// A reply as the agent wrote it, for the notes updater: each line cleaned of escape sequences and control
+/// characters, runs of blank lines folded into one, and the whole cut to `cap` characters with `…` where it was cut.
+/// None when there is no text.
+fn tidy_reply(raw: &str, cap: usize) -> Option<String> {
+    // A reply can be enormous: far more than could ever be kept is not even looked at.
+    let raw: String = raw.chars().take(cap.saturating_mul(4).max(64)).collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut blank = false;
+    for l in raw.split('\n') {
+        let l = crate::smart::clean_text(l, cap.max(1));
+        if l.trim().is_empty() {
+            blank = !lines.is_empty();
+            continue;
+        }
+        if blank {
+            lines.push(String::new());
+            blank = false;
+        }
+        lines.push(l);
+    }
+    let text = lines.join("\n");
+    if text.is_empty() {
+        return None;
+    }
+    Some(match text.char_indices().nth(cap) {
+        Some((at, _)) => format!("{}…", text[..at].trim_end()),
+        None => text,
+    })
 }
 
 /// A working folder whose sessions are not conversations to show: the folder platoon's own `claude -p` calls run in.

@@ -1,6 +1,6 @@
 //! A local index of what the user typed, for searching the words of past conversations.
 //!
-//! Only the user's real prompts are kept (what `claude::prompt_in_line` accepts), which is a tiny part of a
+//! Only the user's real prompts are kept (what the agent's `prompt_in_line` accepts), which is a tiny part of a
 //! transcript: on the user's own files 0.1 to 1%, the rest is tool output. Transcripts only ever grow at the end,
 //! so each file is remembered with how many bytes of it have been read, and the next pass reads only the bytes
 //! after that. A file that got shorter, or whose first bytes are no longer the same, was rewritten: it is read
@@ -12,10 +12,14 @@
 //! file, not everything), which is separate from `index.json` so that one stays small and quick to load. A missing,
 //! corrupt or old-format file is simply an empty index that fills again. Nothing is written anywhere else.
 //!
+//! Claude Code's transcripts and Codex's rollouts are both read here, each line by its own agent's rules
+//! (`Agent::prompt_in_line`, `Agent::reply_in_line`); a Codex file's line in the saved file says so (`"a": "codex"`).
+//!
 //! The in-memory side keeps, per conversation, its prompts and one lower-case copy of them for searching:
 //! a search is a substring scan over that text.
 
-use crate::agents::claude::{REPLY_CHARS, may_be_reply, prompt_in_line, reply_in_line};
+use crate::agents::Agent;
+use crate::agents::claude::REPLY_CHARS;
 use crate::index::Entry;
 use serde_json::{Value, json};
 use std::{
@@ -113,6 +117,7 @@ impl FilePrompts {
 
 /// What a scan remembers about one transcript.
 struct FileState {
+    agent: Agent,
     mtime: u64,
     size: u64,
     /// Bytes read so far: always the end of a complete line.
@@ -147,7 +152,8 @@ struct Read1 {
 }
 
 /// Bring one file up to date, reading only what is new when that is safe.
-fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Option<&FileState>) -> Option<Read1> {
+fn read_file(e: &Entry, cap: usize, prev: Option<&FileState>) -> Option<Read1> {
+    let (agent, path, id, mtime, size) = (e.agent, e.path.as_path(), e.id.as_str(), e.mtime, e.size);
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
     let mut rebuilt = false;
@@ -182,12 +188,10 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
         let chunk = String::from_utf8_lossy(&pending[..end]);
         let mut newest: Option<&str> = None;
         for line in chunk.split('\n') {
-            // A user entry is never an assistant one, so the second test only runs on the rest.
-            if line.contains("\"type\":\"user\"") {
-                if let Some(p) = prompt_in_line(line, cap) {
-                    prompts.push(p);
-                }
-            } else if may_be_reply(line) {
+            // A prompt is never a reply, so the second test only runs on the rest (both are substring tests first).
+            if let Some(p) = agent.prompt_in_line(line, cap) {
+                prompts.push(p);
+            } else if agent.may_be_reply(line) {
                 newest = Some(line);
             }
         }
@@ -206,7 +210,7 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
             (n, if n == 0 { 0 } else { head_hash(&mut file, n)? })
         }
     };
-    let reply = reply_line.and_then(|l| reply_in_line(&l, REPLY_CHARS));
+    let reply = reply_line.and_then(|l| agent.reply_in_line(&l, REPLY_CHARS));
     let (data, changed) = match keep {
         Some(p) if prompts.is_empty() && reply.as_ref().is_none_or(|r| p.data.reply.as_ref() == Some(r)) => (p.data.clone(), false),
         Some(p) => (Arc::new(p.data.extended(prompts, reply)), true),
@@ -218,7 +222,7 @@ fn read_file(path: &Path, id: &str, mtime: u64, size: u64, cap: usize, prev: Opt
             (data, changed)
         }
     };
-    Some(Read1 { state: FileState { mtime, size, offset, fp_len, fingerprint, data }, bytes: consumed, rebuilt, changed })
+    Some(Read1 { state: FileState { agent, mtime, size, offset, fp_len, fingerprint, data }, bytes: consumed, rebuilt, changed })
 }
 
 /// One batch of changes from a scan.
@@ -317,7 +321,7 @@ impl Store {
         let mut batch = Vec::new();
         let mut sent = Instant::now();
         for (i, e) in changed.into_iter().enumerate() {
-            if let Some(r) = read_file(&e.path, &e.id, e.mtime, e.size, self.cap, self.files.get(&e.path)) {
+            if let Some(r) = read_file(e, self.cap, self.files.get(&e.path)) {
                 stats.read += 1;
                 stats.bytes += r.bytes;
                 stats.rebuilt += usize::from(r.rebuilt);
@@ -354,7 +358,10 @@ impl Store {
             writeln!(out, "{}", json!({ "version": VERSION, "cap": self.cap }))?;
             for (path, s) in &self.files {
                 let Some(path) = path.to_str() else { continue };
-                let v = json!({ "p": path, "m": s.mtime, "s": s.size, "o": s.offset, "n": s.fp_len, "h": s.fingerprint, "t": s.data.prompts, "r": s.data.reply });
+                let mut v = json!({ "p": path, "m": s.mtime, "s": s.size, "o": s.offset, "n": s.fp_len, "h": s.fingerprint, "t": s.data.prompts, "r": s.data.reply });
+                if let (Agent::Codex, Some(o)) = (s.agent, v.as_object_mut()) {
+                    o.insert("a".into(), json!(Agent::Codex.id()));
+                }
                 writeln!(out, "{v}")?;
             }
             out.flush()?;
@@ -371,13 +378,19 @@ impl Store {
 
 fn state_from_json(v: &Value) -> Option<(PathBuf, FileState)> {
     let path = PathBuf::from(v["p"].as_str()?);
-    let id = path.file_stem()?.to_str()?.to_string();
+    // Claude Code's lines name no agent.
+    let agent = match v.get("a") {
+        None => Agent::Claude,
+        Some(a) => Agent::from_id(a.as_str()?)?,
+    };
+    let id = agent.session_id_of_path(&path)?;
     let prompts: Vec<String> = v["t"].as_array()?.iter().map(|p| p.as_str().map(String::from)).collect::<Option<_>>()?;
     let (offset, fp_len) = (v["o"].as_u64()?, v["n"].as_u64()?);
     if fp_len > offset.min(FINGERPRINT_BYTES) {
         return None;
     }
     let state = FileState {
+        agent,
         mtime: v["m"].as_u64()?,
         size: v["s"].as_u64()?,
         offset,
@@ -713,6 +726,7 @@ mod tests {
         let meta = fs::metadata(path).unwrap();
         let mtime = meta.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
         Arc::new(Entry {
+            agent: Agent::Claude,
             id: path.file_stem().unwrap().to_str().unwrap().to_string(),
             path: path.to_path_buf(),
             mtime,

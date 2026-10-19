@@ -180,6 +180,7 @@ impl Lab {
     /// The task's session runs in a platoon host.
     fn session_hosted(&mut self) {
         let host = HostInfo {
+            agent: crate::agents::Agent::Claude,
             claude_pid: 4242,
             host_pid: 0,
             dir: s(&self.wt),

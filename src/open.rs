@@ -6,7 +6,7 @@
 //! otherwise; see keys.rs, read once as this starts).
 
 use crate::agents::claude::{Reader, claude_root, find_transcript, saved_session_ids, transcript_cwd};
-use crate::agents::{Agent, Start};
+use crate::agents::{Agent, Start, codex};
 use crate::guard;
 use crate::host::{self, F_INPUT, F_OUTPUT, F_RESIZE, HostInfo, read_frame, size_payload, write_frame};
 use crate::projects::{self, Projects};
@@ -58,7 +58,7 @@ fn ask(question: &str) -> bool {
 
 /// Find, resume, or start the session's host. Returns where to connect.
 fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String> {
-    // The sessions found here are Claude Code's, and a new one is too.
+    // A new session is Claude Code's, and so is a saved one unless it is Codex's.
     let agent = Agent::Claude;
     let root = claude_root();
     let hosts = host::discover();
@@ -66,17 +66,29 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
         let env = [(crate::sessionhook::OFFER_ENV, "1")];
         let args = agent.args(Start::New(None));
-        return host::launch(&host::Dirs::from_env(), &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols).map(|(h, _)| h);
+        return host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd.to_string_lossy(), &args, &env, rows, cols)
+            .map(|(h, _)| h);
     };
 
     let live = guard::live_entries(&root);
     let all = Reader::with_root(root.clone()).live();
     // Sessions Claude's own service runs in the background: opened with `claude attach`, never `--resume`.
     let background: Vec<&crate::agents::Live> = all.iter().filter(|l| l.is_background()).collect();
+    let codex = codex::Reader::new();
+    let codex_live = codex.live();
+    let codex_ids: Vec<String> = codex::rollout_paths(codex.root())
+        .iter()
+        .filter_map(|p| codex::id_of_path(p))
+        .chain(codex_live.iter().map(|l| l.id.clone()))
+        .collect();
     let mut known: Vec<String> = saved_session_ids(&root);
     known.extend(live.iter().map(|e| e.id.clone()));
     known.extend(background.iter().map(|l| l.id.clone()));
+    known.extend(codex_ids.iter().cloned());
     let id = resolve_id(arg, known)?;
+    if codex_ids.contains(&id) {
+        return codex_host_for(&id, &codex, &codex_live, &hosts, rows, cols);
+    }
 
     // Copies that write to the conversation; a parked one handed it over to a background session (as in the list).
     let copies: Vec<&guard::Entry> = live.iter().filter(|e| e.id == id && !e.parked).collect();
@@ -96,7 +108,7 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         let cwd =
             cwd.map(Ok).unwrap_or_else(|| std::env::current_dir().map(|d| d.to_string_lossy().into_owned()).map_err(|e| e.to_string()))?;
         let args = agent.args(Start::Attach(&attach_id));
-        return host::launch(&host::Dirs::from_env(), &agent.program(), &cwd, &args, &[], rows, cols).map(|(h, _)| h);
+        return host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &args, &[], rows, cols).map(|(h, _)| h);
     }
 
     // A parked process platoon hosts is joined like an idle one; one outside platoon is left alone (never ended).
@@ -125,7 +137,41 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     if crate::tickets::find_session(&crate::archive::config_dir(), &id).is_none() {
         env.push((crate::sessionhook::OFFER_ENV, "1"));
     }
-    host::launch(&host::Dirs::from_env(), &agent.program(), &cwd, &agent.args(Start::Resume(&id)), &env, rows, cols).map(|(h, _)| h)
+    host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &agent.args(Start::Resume(&id)), &env, rows, cols).map(|(h, _)| h)
+}
+
+/// `host_for` a conversation of Codex's. Codex keeps one window per conversation itself: one platoon hosts is joined,
+/// one open anywhere else (another terminal, Codex's background server) is left alone and said, never ended or opened
+/// a second time. Otherwise it is resumed under a new host.
+fn codex_host_for(
+    id: &str,
+    codex: &codex::Reader,
+    live: &[crate::agents::Live],
+    hosts: &[HostInfo],
+    rows: u16,
+    cols: u16,
+) -> Result<HostInfo, String> {
+    let agent = Agent::Codex;
+    let ours = |pid: u32| hosts.iter().find(|h| h.claude_pid == pid || guard::ancestors(pid).contains(&h.claude_pid));
+    if let Some(l) = live.iter().find(|l| l.id == id) {
+        return match ours(l.pid) {
+            Some(h) => Ok(h.clone()),
+            None => Err(format!("session {id} is open in another Codex window (pid {}). Close it there to open it here.", l.pid)),
+        };
+    }
+    // Started a moment ago by platoon, before Codex said it holds the conversation.
+    if let Some(h) = hosts.iter().find(|h| h.session().as_deref() == Some(id)) {
+        return Ok(h.clone());
+    }
+    let cwd = codex::find_rollout(codex.root(), id)
+        .and_then(|p| codex::rollout_cwd(&p))
+        .ok_or_else(|| format!("couldn't find where session {id} was run"))?;
+    if !Path::new(&cwd).is_dir() {
+        return Err(format!("session {id} was run in {cwd}, which no longer exists"));
+    }
+    let projects = Projects::open(&crate::archive::config_dir());
+    let env: Vec<(&str, &str)> = projects.project_id_of(id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &agent.args(Start::Resume(id)), &env, rows, cols).map(|(h, _)| h)
 }
 
 /// `platoon open --project <name>`: a new session in this folder, in that project.
@@ -141,6 +187,7 @@ fn host_in_project(name: &str, rows: u16, cols: u16) -> Result<HostInfo, String>
     let agent = Agent::Claude;
     let (info, _) = host::launch(
         &host::Dirs::from_env(),
+        agent,
         &agent.program(),
         &cwd.to_string_lossy(),
         &agent.args(Start::New(None)),

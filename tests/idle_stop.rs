@@ -92,6 +92,9 @@ impl Rig {
     fn start(&mut self, program: &str, args: &[&str]) -> u32 {
         let mut cmd = Command::new(BIN);
         cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+        for (k, v) in common::NO_REAL_CODEX {
+            cmd.env(k, v); // never the real Codex: its folder or its program
+        }
         cmd.args(["host", "--program", program, "--dir"])
             .arg(&self.work)
             .args(["--rows", "24", "--cols", "80", "--"])

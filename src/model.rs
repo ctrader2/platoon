@@ -95,6 +95,12 @@ impl Session {
         self.procs.iter().any(|p| !p.parked)
     }
 
+    /// Is it open in a window of an agent that keeps one window per conversation itself (Codex), which platoon didn't
+    /// start? Then platoon never opens it a second time, never stops it and never archives it: the user closes it there.
+    pub fn held_elsewhere(&self) -> bool {
+        self.agent.keeps_one_writer() && self.procs.iter().any(|p| !p.hosted)
+    }
+
     pub fn rehaystack(&mut self) {
         self.haystack =
             Self::make_haystack(&self.name, &self.dir, &self.extra_dirs, self.branch.as_deref(), &self.description, &self.summary);

@@ -143,6 +143,9 @@ impl Lab {
     fn stop_hook(&self, session: &str, cwd: &str) -> std::process::Output {
         let mut cmd = std::process::Command::new(BIN);
         cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+        for (k, v) in common::NO_REAL_CODEX {
+            cmd.env(k, v); // never the real Codex: its folder or its program
+        }
         cmd.args(["hook", "stop"]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         for (k, v) in self.env() {
             cmd.env(k, v);
@@ -158,6 +161,9 @@ impl Lab {
     fn run_helper(&self, extra: &[(&str, &str)]) -> std::process::Output {
         let mut cmd = std::process::Command::new(BIN);
         cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+        for (k, v) in common::NO_REAL_CODEX {
+            cmd.env(k, v); // never the real Codex: its folder or its program
+        }
         cmd.args(["notes-update", "pweb"]);
         for (k, v) in self.env() {
             cmd.env(k, v);
@@ -324,6 +330,9 @@ fn the_notes_pane_says_while_an_update_is_running() {
     // The helper is started here as a child of the test, so the test owns it and waits for it.
     let mut cmd = std::process::Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.args(["notes-update", "pweb"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     for (k, v) in lab.env() {
         cmd.env(k, v);

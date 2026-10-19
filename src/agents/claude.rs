@@ -3,8 +3,8 @@
 //! knowledge of them lives in this file.
 
 use super::{
-    Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Tools, Transcript,
-    TurnEnd,
+    Agent, Hidden, HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, SessionLog, Spent, Start, TaskLaunch, Tool, Tools,
+    Transcript, TurnEnd, one_line, parse_iso_ms, tidy_reply, truncate_to,
 };
 use crate::ai::{Outcome, Request, classify, extract_json};
 use crate::ledger::{FailKind, Usage};
@@ -517,6 +517,7 @@ fn live_from(v: &Value) -> Option<Live> {
     let background = background.then(|| v["jobId"].as_str().filter(|j| !j.is_empty()).map_or_else(|| short_id(&id), String::from));
     let parked = parked_job(v);
     Some(Live {
+        agent: Agent::Claude,
         pid,
         id,
         cwd: v["cwd"].as_str().unwrap_or("").to_string(),
@@ -612,6 +613,24 @@ pub fn saved_session_ids(root: &Path) -> Vec<String> {
         }
     }
     ids
+}
+
+/// Every saved conversation's transcript: `projects/*/<id>.jsonl`, the top level of each project folder only. Its
+/// subfolders hold tool results, memory and subagent transcripts, none of which are conversations.
+pub fn transcript_paths(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in fs::read_dir(root.join("projects")).into_iter().flatten().flatten() {
+        if !dir.file_type().is_ok_and(|t| t.is_dir()) {
+            continue;
+        }
+        for f in fs::read_dir(dir.path()).into_iter().flatten().flatten() {
+            let path = f.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") && f.file_type().is_ok_and(|t| t.is_file()) {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
@@ -979,71 +998,11 @@ pub fn reply_text_in_line(line: &str, cap: usize) -> Option<String> {
         }
         _ => return None,
     };
-    // A reply can be enormous: far more than could ever be kept is not even looked at.
-    let raw: String = raw.chars().take(cap.saturating_mul(4).max(64)).collect();
-    let mut lines: Vec<String> = Vec::new();
-    let mut blank = false;
-    for l in raw.split('\n') {
-        let l = crate::smart::clean_text(l, cap.max(1));
-        if l.trim().is_empty() {
-            blank = !lines.is_empty();
-            continue;
-        }
-        if blank {
-            lines.push(String::new());
-            blank = false;
-        }
-        lines.push(l);
-    }
-    let text = lines.join("\n");
-    if text.is_empty() {
-        return None;
-    }
-    Some(match text.char_indices().nth(cap) {
-        Some((at, _)) => format!("{}…", text[..at].trim_end()),
-        None => text,
-    })
-}
-
-fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+    tidy_reply(&raw, cap)
 }
 
 fn truncate(s: String) -> String {
     truncate_to(s, TEXT_MAX)
-}
-
-fn truncate_to(s: String, cap: usize) -> String {
-    match s.char_indices().nth(cap) {
-        Some((at, _)) => s[..at].to_string(),
-        None => s,
-    }
-}
-
-/// `2026-09-19T03:53:40.091Z` -> ms since the epoch. Only the UTC form Claude Code writes is understood.
-pub fn parse_iso_ms(s: &str) -> Option<u64> {
-    let b = s.as_bytes();
-    if b.len() < 20 || b[4] != b'-' || b[7] != b'-' || b[10] != b'T' || b[13] != b':' || b[16] != b':' {
-        return None;
-    }
-    let num = |r: std::ops::Range<usize>| s.get(r)?.parse::<i64>().ok();
-    let (y, mo, d, h, mi, sec) = (num(0..4)?, num(5..7)?, num(8..10)?, num(11..13)?, num(14..16)?, num(17..19)?);
-    let frac: u64 = match b.get(19) {
-        Some(b'.') => {
-            let digits: String = s[20..].chars().take_while(|c| c.is_ascii_digit()).take(3).collect();
-            format!("{digits:0<3}").parse().ok()?
-        }
-        _ => 0,
-    };
-    // Days since 1970-01-01 (Howard Hinnant's civil-from-days, inverted).
-    let y = if mo <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (if mo > 2 { mo - 3 } else { mo + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    let secs = days * 86_400 + h * 3600 + mi * 60 + sec;
-    u64::try_from(secs).ok().map(|s| s * 1000 + frac)
 }
 
 #[cfg(test)]

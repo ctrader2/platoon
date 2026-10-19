@@ -15,6 +15,9 @@ use std::{
 fn start_host(cache: &Path, program: &str) -> (u32, PathBuf) {
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.args(["host", "--program", program, "--dir", "/tmp", "--rows", "24", "--cols", "80", "--"])
         .env("PLATOON_CACHE_DIR", cache)
         // The host reads Claude's registry and platoon's settings: point them at nothing real.

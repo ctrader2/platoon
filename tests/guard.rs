@@ -79,6 +79,7 @@ impl Fake {
         );
         let child = Command::new("sh")
             .args(["-c", &script])
+            .envs(common::NO_REAL_CODEX)
             .env("CLAUDE_CONFIG_DIR", &env.root)
             .env("PLATOON_CACHE_DIR", &env.cache)
             .env("PLATOON_CONFIG_DIR", &env.config)

@@ -148,8 +148,14 @@ impl Lab {
 
     /// `platoon hook <name>` with `input` on stdin, as Claude Code runs a task session's hook: what it prints.
     fn hook(&self, name: &str, input: Value) -> String {
-        let mut child =
-            Command::new(BIN).args(["hook", name]).envs(self.env()).stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut child = Command::new(BIN)
+            .args(["hook", name])
+            .envs(self.env())
+            .envs(common::NO_REAL_CODEX)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
         child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
         let out = child.wait_with_output().unwrap();
         assert!(out.status.success(), "{name}: {out:?}");

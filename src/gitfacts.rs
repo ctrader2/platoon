@@ -443,14 +443,14 @@ mod tests {
         r.commit("During the session", Some("2026-09-24T12:00:00Z"));
         r.write("later.txt", "l");
         r.commit("Also during", Some("2026-09-24T13:00:00Z"));
-        let start = crate::agents::claude::parse_iso_ms("2026-09-24T11:00:00.000Z").unwrap();
+        let start = crate::agents::parse_iso_ms("2026-09-24T11:00:00.000Z").unwrap();
         let f = r.facts(Some(start)).unwrap();
         let since = f.since.unwrap();
         assert_eq!(since.commits, 2);
         assert_eq!(since.files, ["later.txt", "before.txt", "during.txt"], "newest commit first (git sorts within one), each once");
         assert_eq!(f.last.unwrap().1, "Also during");
         // A start after every commit: none.
-        let late = crate::agents::claude::parse_iso_ms("2026-09-25T00:00:00.000Z").unwrap();
+        let late = crate::agents::parse_iso_ms("2026-09-25T00:00:00.000Z").unwrap();
         assert_eq!(r.facts(Some(late)).unwrap().since, Some(Since::default()));
     }
 
@@ -606,7 +606,7 @@ mod tests {
         }
         r.write("a", "evil");
         r.commit(&format!("Evil \u{1b}[2J subject {}", "x".repeat(400)), Some("2026-09-24T13:00:00Z"));
-        let start = crate::agents::claude::parse_iso_ms("2026-09-24T11:00:00.000Z").unwrap();
+        let start = crate::agents::parse_iso_ms("2026-09-24T11:00:00.000Z").unwrap();
         let since = r.facts(Some(start)).unwrap().since.unwrap();
         assert_eq!(since.commits, 13);
         assert_eq!(since.subjects.len(), 13, "all of them are kept here; the document decides how many to show");

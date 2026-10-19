@@ -1,15 +1,15 @@
-//! A persistent, incremental index of every saved conversation.
+//! A persistent, incremental index of every saved conversation, Claude Code's and Codex's.
 //!
 //! With thousands of transcripts (some 10MB+) nothing may read them all on each refresh. The index
-//! remembers what `claude::read_transcript` found for each file, keyed by path with the file's
+//! remembers what the agent's reader (`Agent::read_transcript`) found for each file, keyed by path with the file's
 //! (mtime, size). A scan lists the transcripts, compares those two numbers, and only re-reads files that
-//! changed. It is saved to `<cache>/index.json` so the next start begins warm.
+//! changed. Each agent's files are scanned and saved apart (`<cache>/index.json` for Claude Code's,
+//! `<cache>/codex-index.json` for Codex's), so the next start begins warm and neither's format reaches the other's.
 //!
 //! Scanning runs on a background thread (`Indexer::spawn`) and streams results back in batches, newest
 //! files first, so the list fills in while the UI is already usable.
 
-use crate::agents::claude::read_transcript;
-use crate::agents::{Hidden, Transcript};
+use crate::agents::{Agent, Hidden, Transcript, codex};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
@@ -37,7 +37,9 @@ const SAVE_NOW_PARSED: usize = 50;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry {
-    /// Session id: the transcript's file name.
+    /// The agent the conversation is with.
+    pub agent: Agent,
+    /// Session id: from the transcript's file name (`Agent::session_id_of_path`).
     pub id: String,
     pub path: PathBuf,
     /// Modified time in ms and size in bytes when it was read: the "has it changed" key.
@@ -49,17 +51,22 @@ pub struct Entry {
 impl Entry {
     fn to_json(&self) -> Value {
         let t = &self.t;
-        json!({
+        let mut v = json!({
             "m": self.mtime, "s": self.size,
             "cwd": t.cwd, "dirs": t.extra_dirs, "branch": t.branch, "model": t.model, "tokens": t.context_tokens, "large": t.large_window,
             "title": t.ai_title, "prompt": t.first_prompt, "active": t.last_active_ms,
-        })
+        });
+        if let (Some(w), Some(o)) = (t.window, v.as_object_mut()) {
+            o.insert("window".into(), json!(w));
+        }
+        v
     }
 
-    fn from_json(path: &Path, v: &Value) -> Option<Self> {
+    fn from_json(agent: Agent, path: &Path, v: &Value) -> Option<Self> {
         let text = |k: &str| v[k].as_str().map(String::from);
         Some(Entry {
-            id: path.file_stem()?.to_str()?.to_string(),
+            agent,
+            id: agent.session_id_of_path(path)?,
             path: path.to_path_buf(),
             mtime: v["m"].as_u64()?,
             size: v["s"].as_u64()?,
@@ -69,6 +76,7 @@ impl Entry {
                 branch: text("branch"),
                 model: text("model"),
                 context_tokens: v["tokens"].as_u64().unwrap_or(0),
+                window: v["window"].as_u64(),
                 large_window: v["large"].as_bool().unwrap_or(false),
                 ai_title: text("title"),
                 first_prompt: text("prompt"),
@@ -101,14 +109,27 @@ pub struct Stats {
     pub removed: usize,
 }
 
-/// The scanning half: owns the persistent map and does the file work. Runs on whichever thread calls it.
+/// The scanning half for one agent's transcripts: owns the persistent map and does the file work. Runs on whichever
+/// thread calls it.
 pub struct Scanner {
+    agent: Agent,
     root: PathBuf,
     file: PathBuf,
     map: HashMap<PathBuf, Arc<Entry>>,
     unsaved: bool,
     /// None until this run has saved once; the first change is saved at once, later ones are throttled.
     last_save: Option<Instant>,
+    /// Codex's: the names it gave conversations (`codex::names`), with the (modified time, size) of the file they were
+    /// read from. They are written apart from the conversations, so a new name doesn't change the conversation's file.
+    names: Option<((u64, u64), HashMap<String, String>)>,
+}
+
+/// The file an agent's part of the index is saved in, in the cache folder.
+fn index_file(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Claude => "index.json",
+        Agent::Codex => "codex-index.json",
+    }
 }
 
 fn ms(t: SystemTime) -> u64 {
@@ -116,21 +137,26 @@ fn ms(t: SystemTime) -> u64 {
 }
 
 impl Scanner {
-    /// Start from the saved index, if there is a usable one. A missing, corrupt or old-format file is
-    /// just an empty index: everything gets read again.
+    /// Claude Code's transcripts under `claude_root` (see `load_for`).
     pub fn load(claude_root: &Path, cache: &Path) -> Self {
-        let file = cache.join("index.json");
+        Self::load_for(Agent::Claude, claude_root, cache)
+    }
+
+    /// `agent`'s transcripts under its folder `root`. Starts from the saved index, if there is a usable one. A missing,
+    /// corrupt or old-format file is just an empty index: everything gets read again.
+    pub fn load_for(agent: Agent, root: &Path, cache: &Path) -> Self {
+        let file = cache.join(index_file(agent));
         let mut map = HashMap::new();
         let saved = fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok());
         if let Some(v) = saved.filter(|v| v["version"].as_u64() == Some(VERSION)) {
             for (p, e) in v["files"].as_object().into_iter().flatten() {
                 let path = PathBuf::from(p);
-                if let Some(entry) = Entry::from_json(&path, e) {
+                if let Some(entry) = Entry::from_json(agent, &path, e) {
                     map.insert(path, Arc::new(entry));
                 }
             }
         }
-        Self { root: claude_root.to_path_buf(), file, map, unsaved: false, last_save: None }
+        Self { agent, root: root.to_path_buf(), file, map, unsaved: false, last_save: None, names: None }
     }
 
     /// What was loaded from disk, for showing rows before the first scan finishes.
@@ -138,32 +164,44 @@ impl Scanner {
         self.map.values().cloned().collect()
     }
 
-    /// Top-level `projects/*/<id>.jsonl` only. Subdirectories hold tool results, memory and subagent
-    /// transcripts, none of which are conversations.
+    /// The agent's transcripts (`Agent::transcript_paths`), with their (modified time, size).
     fn list(&self) -> Vec<(PathBuf, u64, u64)> {
-        let mut out = Vec::new();
-        for dir in fs::read_dir(self.root.join("projects")).into_iter().flatten().flatten() {
-            if !dir.file_type().is_ok_and(|t| t.is_dir()) {
-                continue;
-            }
-            for f in fs::read_dir(dir.path()).into_iter().flatten().flatten() {
-                let path = f.path();
-                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                    continue;
+        let stat = |p: PathBuf| {
+            let meta = fs::metadata(&p).ok()?;
+            Some((p, meta.modified().map(ms).unwrap_or(0), meta.len()))
+        };
+        self.agent.transcript_paths(&self.root).into_iter().filter_map(stat).collect()
+    }
+
+    /// Read Codex's names again when their file changed. True when they did.
+    fn refresh_names(&mut self) -> bool {
+        match self.agent {
+            Agent::Claude => false,
+            Agent::Codex => {
+                let path = codex::names_path(&self.root);
+                let key = fs::metadata(&path).map(|m| (m.modified().map(ms).unwrap_or(0), m.len())).unwrap_or((0, 0));
+                if self.names.as_ref().is_some_and(|(k, _)| *k == key) {
+                    return false;
                 }
-                let Ok(meta) = f.metadata() else { continue };
-                if meta.is_file() {
-                    out.push((path, meta.modified().map(ms).unwrap_or(0), meta.len()));
-                }
+                self.names = Some((key, codex::names(&self.root)));
+                true
             }
         }
-        out
+    }
+
+    /// `t` with the name its agent gave the conversation, when that is kept apart from the transcript (Codex's).
+    fn named(&self, id: &str, mut t: Transcript) -> Transcript {
+        if let Some((_, names)) = &self.names {
+            t.ai_title = names.get(id).cloned();
+        }
+        t
     }
 
     /// One pass: stat everything, read only what changed, send results through `emit` as they come
     /// (return false from it to abandon the scan), and save the index when it's worth it.
     pub fn scan(&mut self, emit: &mut dyn FnMut(Update) -> bool) -> Stats {
         let listing = self.list();
+        let renamed = self.refresh_names();
         let mut stats = Stats { listed: listing.len(), ..Stats::default() };
 
         let present: HashSet<&PathBuf> = listing.iter().map(|(p, _, _)| p).collect();
@@ -186,13 +224,30 @@ impl Scanner {
         }
         let total = changed.len();
         let mut batch = Vec::new();
+        // A conversation Codex named (or renamed) since it was read, whose file is unchanged.
+        if renamed {
+            let rereading: HashSet<&PathBuf> = changed.iter().map(|(p, _, _)| p).collect();
+            let stale: Vec<Arc<Entry>> = self
+                .map
+                .values()
+                .filter(|e| !rereading.contains(&e.path) && self.named(&e.id, e.t.clone()).ai_title != e.t.ai_title)
+                .cloned()
+                .collect();
+            for e in stale {
+                let entry = Arc::new(Entry { t: self.named(&e.id, e.t.clone()), ..(*e).clone() });
+                self.map.insert(e.path.clone(), entry.clone());
+                batch.push(entry);
+                self.unsaved = true;
+            }
+        }
         let mut sent = Instant::now();
         for (i, (path, mtime, size)) in changed.into_iter().enumerate() {
             // (mtime, size) were taken before reading: a write during the read just triggers another pass.
             let prev = self.map.get(&path).map(|e| &e.t);
             stats.parsed += 1;
-            if let (Some(t), Some(id)) = (read_transcript(&path, prev), path.file_stem().and_then(|s| s.to_str())) {
-                let entry = Arc::new(Entry { id: id.to_string(), path: path.clone(), mtime, size, t });
+            if let (Some(t), Some(id)) = (self.agent.read_transcript(&path, prev), self.agent.session_id_of_path(&path)) {
+                let t = self.named(&id, t);
+                let entry = Arc::new(Entry { agent: self.agent, id, path: path.clone(), mtime, size, t });
                 self.map.insert(path, entry.clone());
                 batch.push(entry);
                 self.unsaved = true;
@@ -238,7 +293,7 @@ enum Backend {
     Thread { rx: Receiver<Update>, wake: Sender<()>, busy: Arc<AtomicBool> },
     /// Scans on the caller's thread, to completion, on each poll. For tests, which need determinism.
     #[cfg(test)]
-    Inline(Scanner),
+    Inline(Vec<Scanner>),
 }
 
 /// What the UI holds: the current entries plus a way to keep them fresh.
@@ -259,11 +314,18 @@ pub struct Indexer {
     hidden_memo: HashMap<String, bool>,
 }
 
+/// A scanner for Claude Code's transcripts under `claude_root`, and one for Codex's under `codex_root` when there is
+/// one to read.
+fn scanners(claude_root: &Path, codex_root: Option<&Path>, cache: &Path) -> Vec<Scanner> {
+    std::iter::once(Scanner::load(claude_root, cache)).chain(codex_root.map(|r| Scanner::load_for(Agent::Codex, r, cache))).collect()
+}
+
 impl Indexer {
-    /// Load the saved index right away (so rows can show on the first frame) and scan in the background.
-    pub fn spawn(claude_root: &Path, cache: &Path) -> Self {
-        let mut scanner = Scanner::load(claude_root, cache);
-        let entries = scanner.entries().into_iter().map(|e| (e.path.clone(), e)).collect();
+    /// Load the saved index right away (so rows can show on the first frame) and scan in the background: Claude Code's
+    /// transcripts under `claude_root`, and Codex's under `codex_root` when given.
+    pub fn spawn(claude_root: &Path, codex_root: Option<&Path>, cache: &Path) -> Self {
+        let mut scanners = scanners(claude_root, codex_root, cache);
+        let entries = scanners.iter().flat_map(Scanner::entries).map(|e| (e.path.clone(), e)).collect();
         let (tx, rx) = channel::<Update>();
         let (wake, woken) = channel::<()>();
         let busy = Arc::new(AtomicBool::new(true)); // the first scan starts immediately
@@ -271,10 +333,15 @@ impl Indexer {
         thread::spawn(move || {
             loop {
                 let mut cancelled = false;
-                scanner.scan(&mut |u| {
-                    cancelled = tx.send(u).is_err();
-                    !cancelled
-                });
+                for scanner in &mut scanners {
+                    scanner.scan(&mut |u| {
+                        cancelled = tx.send(u).is_err();
+                        !cancelled
+                    });
+                    if cancelled {
+                        break;
+                    }
+                }
                 worker_busy.store(false, Ordering::SeqCst);
                 if cancelled || woken.recv().is_err() {
                     break;
@@ -295,11 +362,11 @@ impl Indexer {
 
     /// Scan on the calling thread on every poll.
     #[cfg(test)]
-    pub fn inline(claude_root: &Path, cache: &Path) -> Self {
-        let scanner = Scanner::load(claude_root, cache);
-        let entries = scanner.entries().into_iter().map(|e| (e.path.clone(), e)).collect();
+    pub fn inline(claude_root: &Path, codex_root: Option<&Path>, cache: &Path) -> Self {
+        let scanners = scanners(claude_root, codex_root, cache);
+        let entries = scanners.iter().flat_map(Scanner::entries).map(|e| (e.path.clone(), e)).collect();
         Self {
-            backend: Backend::Inline(scanner),
+            backend: Backend::Inline(scanners),
             entries,
             generation: 1,
             remaining: 0,
@@ -346,11 +413,13 @@ impl Indexer {
                 }
             }
             #[cfg(test)]
-            Backend::Inline(scanner) => {
-                scanner.scan(&mut |u| {
-                    updates.push(u);
-                    true
-                });
+            Backend::Inline(scanners) => {
+                for scanner in scanners {
+                    scanner.scan(&mut |u| {
+                        updates.push(u);
+                        true
+                    });
+                }
                 self.first_scan_done = true;
             }
         }
@@ -447,7 +516,7 @@ mod tests {
         assert_eq!(e.t.first_prompt.as_deref(), Some("fix the parser"));
         assert_eq!(e.t.ai_title.as_deref(), Some("Parser fix"));
         assert_eq!((e.t.branch.as_deref(), e.t.model.as_deref(), e.t.context_tokens), (Some("main"), Some("claude-sonnet-5"), 50_000));
-        assert_eq!(e.last_active_ms(), crate::agents::claude::parse_iso_ms("2026-09-19T01:05:00.000Z").unwrap());
+        assert_eq!(e.last_active_ms(), crate::agents::parse_iso_ms("2026-09-19T01:05:00.000Z").unwrap());
     }
 
     #[test]
@@ -457,7 +526,7 @@ mod tests {
             write(&root, "-work-x", &format!("id{i}"), &[user("hello", "2026-09-19T01:00:00.000Z")]);
         }
         // An older run's saved index describes conversations as they were then, not as they are now.
-        let mut idx = Indexer::spawn(&root, &cache);
+        let mut idx = Indexer::spawn(&root, None, &cache);
         assert!(!idx.first_scan_done, "nothing has been scanned yet");
         let start = Instant::now();
         while !idx.first_scan_done {
@@ -467,7 +536,7 @@ mod tests {
         }
         assert_eq!((idx.entries.len(), idx.remaining), (5, 0), "done means every result is already in");
         let inline = {
-            let mut i = Indexer::inline(&root, &cache);
+            let mut i = Indexer::inline(&root, None, &cache);
             assert!(!i.first_scan_done);
             i.poll();
             i.first_scan_done
@@ -547,7 +616,7 @@ mod tests {
         let s = Scanner::load(&root, &cache);
         assert_eq!((dirs(&s, "aaa"), dirs(&s, "bbb")), (vec!["/".to_string(), "/srv/data".to_string()], vec![]), "a round trip keeps them");
         for e in s.entries() {
-            let back = Entry::from_json(&e.path, &e.to_json()).unwrap();
+            let back = Entry::from_json(e.agent, &e.path, &e.to_json()).unwrap();
             assert_eq!(&back, e.as_ref(), "every fact survives a round trip");
         }
 
@@ -591,7 +660,7 @@ mod tests {
         for i in 0..200 {
             write(&root, "-p", &format!("id{i:03}"), &[user(&format!("prompt {i}"), "2026-09-19T01:00:00.000Z")]);
         }
-        let mut ix = Indexer::spawn(&root, &cache);
+        let mut ix = Indexer::spawn(&root, None, &cache);
         assert!(ix.entries.is_empty(), "nothing is read on the caller's thread");
         let start = Instant::now();
         while ix.entries.len() < 200 {
@@ -610,7 +679,7 @@ mod tests {
         assert_eq!(ix.generation, g);
         // Reopened, the saved index gives rows on the very first frame.
         assert!(cache.join("index.json").exists());
-        let again = Indexer::spawn(&root, &cache);
+        let again = Indexer::spawn(&root, None, &cache);
         assert_eq!(again.entries.len(), 200);
     }
 
@@ -634,7 +703,7 @@ mod tests {
             v
         };
         // Hidden after the saved index was loaded: purged at once.
-        let mut ix = Indexer::inline(&root, &cache);
+        let mut ix = Indexer::inline(&root, None, &cache);
         ix.poll();
         assert_eq!(ids(&ix), ["helper", "near", "real"]);
         let before = ix.generation;
@@ -647,7 +716,7 @@ mod tests {
         ix.poll();
         assert_eq!(ids(&ix), ["near", "real"]);
         // A fresh indexer that reads the saved index (which knows all four files) hides them from the start.
-        let mut again = Indexer::inline(&root, &cache);
+        let mut again = Indexer::inline(&root, None, &cache);
         again.hide(Hidden::new(&work));
         again.poll();
         assert_eq!(ids(&again), ["near", "real"]);

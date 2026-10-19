@@ -81,6 +81,9 @@ impl Lab {
     fn run(&self, args: &[&str], bin: &str) -> Output {
         let mut c = Command::new(BIN);
         c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+        for (k, v) in common::NO_REAL_CODEX {
+            c.env(k, v); // never the real Codex: its folder or its program
+        }
         c.args(args).env("NO_COLOR", "1").env("PLATOON_FORBID_REAL_CLAUDE", "1").env("CLAUDE_CODE_CHILD_SESSION", "1").stdin(Stdio::null());
         for (k, v) in self.env(bin) {
             c.env(k, v);
@@ -255,6 +258,9 @@ fn a_test_that_forgets_to_name_a_fake_never_reaches_the_real_claude() {
     lab.on();
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.args(["tokens", "test"])
         .env("PLATOON_CACHE_DIR", lab.cache())
         .env("PLATOON_CONFIG_DIR", lab.config())
@@ -372,6 +378,9 @@ fn setup_without_a_terminal_asks_nothing_leaves_everything_off_and_prints_one_li
     let lab = Lab::new("tok-setup-pipe");
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.arg("setup").env("NO_COLOR", "1").stdin(Stdio::null());
     for (k, v) in setup_env(&lab) {
         c.env(k, v);
@@ -391,6 +400,9 @@ fn setup_without_a_terminal_asks_nothing_leaves_everything_off_and_prints_one_li
     // With piped input too: a `y` on stdin is not an answer when stdout is not a terminal.
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.arg("setup").env("NO_COLOR", "1").stdin(Stdio::piped()).stdout(Stdio::piped());
     for (k, v) in setup_env(&lab) {
         c.env(k, v);
@@ -410,6 +422,9 @@ fn the_question_never_holds_up_starting_platoon_or_changes_the_gate() {
     // Before setup, the gate still blocks with exit 1 and no question.
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.env("NO_COLOR", "1").stdin(Stdio::null());
     for (k, v) in setup_env(&lab) {
         c.env(k, v);
@@ -420,6 +435,9 @@ fn the_question_never_holds_up_starting_platoon_or_changes_the_gate() {
     // After a non-interactive setup (question unanswered), platoon starts straight into the list.
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.arg("setup").stdin(Stdio::null());
     for (k, v) in setup_env(&lab) {
         c.env(k, v);

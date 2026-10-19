@@ -344,7 +344,7 @@ impl App {
             let env: Vec<(&str, &str)> =
                 (project != crate::tickets::NO_PROJECT_ID).then_some(("PLATOON_PROJECT", project)).into_iter().collect();
             let (rows, cols) = self.pty_size();
-            let (info, child) = host::launch(&self.host_dirs(), &self.program_of(agent), &dir, &args, &env, rows, cols)?;
+            let (info, child) = host::launch(&self.host_dirs(), agent, &self.program_of(agent), &dir, &args, &env, rows, cols)?;
             let pid = info.claude_pid;
             self.spawned.push(child);
             self.hosts.push(info);

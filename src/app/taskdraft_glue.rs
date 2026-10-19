@@ -130,6 +130,10 @@ impl App {
             self.notify("That session isn't in platoon's list any more.");
             return;
         };
+        if !s.agent.smart_reads() {
+            self.notify(format!("Tasks are drafted from Claude Code conversations only, for now: \"{}\" is {}'s.", s.name, s.agent.name()));
+            return;
+        }
         let (name, cwd) = (s.name.clone(), s.cwd.clone());
         let project = match self.projects.of(id) {
             Some(p) if p.archived => {

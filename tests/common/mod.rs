@@ -117,6 +117,12 @@ pub fn find_host(cache: &Path) -> Option<(u32, PathBuf)> {
     None
 }
 
+/// The environment that keeps a test's platoon away from the user's real Codex: its folder (`CODEX_HOME`) and its program
+/// (`PLATOON_CODEX_BIN`) are places that can't exist, so nothing of Codex's is read, and nothing finds Codex installed.
+/// A test that wants Codex names its own folder and stand-in after these.
+pub const NO_REAL_CODEX: [(&str, &str); 2] =
+    [("CODEX_HOME", "/nonexistent/platoon-test/codex-home"), ("PLATOON_CODEX_BIN", "/nonexistent/platoon-test/codex")];
+
 /// A command running in a real terminal we can type into and read.
 pub struct Term {
     child: Box<dyn Child + Send + Sync>,
@@ -143,6 +149,9 @@ impl Term {
         cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         cmd.env("PLATOON_FORBID_REAL_CLAUDE", "1"); // ...nor the real `claude`, if a test forgets to name a stand-in
         cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
+        for (k, v) in NO_REAL_CODEX {
+            cmd.env(k, v); // ...nor the real Codex's folder or program
+        }
         for (k, v) in env {
             cmd.env(k, v);
         }

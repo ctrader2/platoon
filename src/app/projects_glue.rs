@@ -691,7 +691,7 @@ impl App {
         self.sessions
             .iter()
             .filter(|s| self.projects.project_id_of(&s.id) == Some(project))
-            .filter(|s| !s.archived && !self.stopping.contains_key(&s.id) && s.status != Status::Background)
+            .filter(|s| !s.archived && !self.stopping.contains_key(&s.id) && s.status != Status::Background && !s.held_elsewhere())
             .collect()
     }
 

@@ -70,9 +70,14 @@ pub const OFFER_ENV: &str = "PLATOON_OFFER_TASKS";
 
 /// What the hook prints for `input` (the hook's JSON), or None for nothing. Records what it sends. `offer_by` is
 /// the platoon program the session should run to make tasks, when it is to offer them (see `offer_text`).
-pub fn session_start(input: &str, env_project: Option<&str>, offer_by: Option<&str>, config: &Path, cache: &Path) -> Option<String> {
-    // Claude Code's hook: it is the one that calls this.
-    let agent = Agent::Claude;
+pub fn session_start(
+    agent: Agent,
+    input: &str,
+    env_project: Option<&str>,
+    offer_by: Option<&str>,
+    config: &Path,
+    cache: &Path,
+) -> Option<String> {
     let input = agent.hook_input(HookKind::SessionStart, input)?;
     let session = input.session.as_str();
     if !safe_name(session) {
@@ -156,20 +161,22 @@ pub fn offer_text(exe: &str, project: Option<&str>, folder: Option<&str>, squads
     t
 }
 
-pub fn run() -> i32 {
+/// `platoon hook session-start [--agent codex]`: the hook of `agent`'s sessions.
+pub fn run(agent: Agent) -> i32 {
     let _ = std::panic::catch_unwind(|| {
         let mut input = String::new();
         if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() {
             return;
         }
         let env = std::env::var("PLATOON_PROJECT").ok();
-        // The program to run is this one, by its full path: it works without platoon on the PATH.
+        // The program to run is this one, by its full path: it works without platoon on the PATH. The offer is worded
+        // for Claude Code (it names its question tool).
         let offer_by = std::env::var(OFFER_ENV)
-            .is_ok_and(|v| v == "1")
+            .is_ok_and(|v| v == "1" && agent == Agent::Claude)
             .then(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
             .flatten();
         if let Some(out) =
-            session_start(&input, env.as_deref(), offer_by.as_deref(), &crate::archive::config_dir(), &crate::usage::cache_dir())
+            session_start(agent, &input, env.as_deref(), offer_by.as_deref(), &crate::archive::config_dir(), &crate::usage::cache_dir())
         {
             println!("{out}");
         }
@@ -197,6 +204,7 @@ mod tests {
         }
         fn run(&self, session: &str, source: &str, env: Option<&str>) -> Option<String> {
             session_start(
+                Agent::Claude,
                 &json!({"session_id": session, "source": source, "cwd": "/tmp", "hook_event_name": "SessionStart"}).to_string(),
                 env,
                 None,
@@ -256,7 +264,7 @@ mod tests {
         r.notes(&p, &id, "  \n\n");
         assert_eq!(r.run("member", "startup", None), None, "empty notes");
         for bad in ["", "{", "[]", r#"{"source":"startup"}"#, r#"{"session_id":"../../x"}"#, r#"{"session_id":5}"#] {
-            assert_eq!(session_start(bad, Some(&id), Some("/p/platoon"), &r.config, &r.cache), None, "{bad}");
+            assert_eq!(session_start(Agent::Claude, bad, Some(&id), Some("/p/platoon"), &r.config, &r.cache), None, "{bad}");
         }
         assert!(!r.cache.join("notes-sent").exists() || fs::read_dir(r.cache.join("notes-sent")).unwrap().count() == 0);
     }
@@ -285,7 +293,7 @@ mod tests {
 
     fn with_offer(r: &Rig, session: &str, source: &str, cwd: &str) -> Option<String> {
         let input = json!({"session_id": session, "source": source, "cwd": cwd, "hook_event_name": "SessionStart"}).to_string();
-        session_start(&input, None, Some("/opt/my tools/platoon"), &r.config, &r.cache)
+        session_start(Agent::Claude, &input, None, Some("/opt/my tools/platoon"), &r.config, &r.cache)
     }
 
     #[test]
@@ -366,7 +374,7 @@ mod tests {
                     // Half of them on the same session, all at once.
                     let s = if i % 2 == 0 { "shared".to_string() } else { format!("s{i}") };
                     let input = json!({"session_id": s, "source": "startup"}).to_string();
-                    session_start(&input, Some(&id), None, &config, &cache)
+                    session_start(Agent::Claude, &input, Some(&id), None, &config, &cache)
                 })
             })
             .collect();

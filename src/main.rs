@@ -7,6 +7,8 @@ mod board;
 mod clarity_app_tests;
 mod client;
 mod clipboard;
+#[cfg(test)]
+mod codex_app_tests;
 mod colordepth;
 #[cfg(test)]
 mod contrast_app_tests;
@@ -138,9 +140,10 @@ fn main() -> io::Result<()> {
             let args: Vec<String> = std::env::args().skip(2).collect();
             std::process::exit(open::run(&args));
         }
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run()),
-        Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook()),
+        // Claude Code's hooks name no agent; Codex's say `--agent codex`.
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard(hook_agent())),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run(hook_agent())),
+        Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook(hook_agent())),
         // Given only to a task's session, with `--settings` (never installed in the user's own settings).
         Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
             std::process::exit(taskrun::run_hook(&std::env::args().nth(2).unwrap_or_default()))
@@ -190,6 +193,11 @@ fn main() -> io::Result<()> {
     Ok(())
 }
 
+/// The agent a `platoon hook <kind> [--agent <id>]` is for.
+fn hook_agent() -> agents::Agent {
+    agents::agent_arg(&std::env::args().skip(3).collect::<Vec<_>>())
+}
+
 /// What quitting says about the sessions platoon's hosts keep running: in the list they read `● idle` (or working),
 /// and the next platoon picks them up. Nothing when none runs.
 fn quit_line(running: usize) -> Option<String> {
@@ -227,7 +235,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook task-plan, hook task-question,
                   hook task-notify, hook task-tool, hook task-prompt, hook task-stop,
-                  notes-update   internal: run by Claude Code, or by platoon itself";
+                  notes-update   internal: run by Claude Code (and by Codex: hook guard,
+                  hook session-start and hook stop with --agent codex), or by platoon itself";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
 fn statusline() -> io::Result<()> {
@@ -594,7 +603,14 @@ mod tests {
     }
 
     fn hosted(pid: u32) -> crate::host::HostInfo {
-        crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() }
+        crate::host::HostInfo {
+            agent: crate::agents::Agent::Claude,
+            claude_pid: pid,
+            host_pid: 0,
+            dir: "/tmp".into(),
+            args: Vec::new(),
+            sock: Default::default(),
+        }
     }
 
     fn row_of(app: &App, id: &str) -> usize {

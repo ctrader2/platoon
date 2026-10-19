@@ -106,6 +106,7 @@ fn a_running_idle_session_says_idle_with_a_filled_mark_and_one_nothing_runs_says
     assert!(saved.contains("○ beta") && !saved.contains("idle"), "{saved}\n{ctx}");
     // A platoon host started on it runs it too, before its claude has said so.
     app.hosts.push(crate::host::HostInfo {
+        agent: crate::agents::Agent::Claude,
         claude_pid: 1,
         host_pid: 1,
         dir: "/srv/beta".into(),

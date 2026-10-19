@@ -263,6 +263,10 @@ impl App {
             self.notify("No session selected");
             return;
         };
+        if !s.agent.smart_reads() {
+            self.notify(format!("The hand-off reads Claude Code conversations only, for now: \"{}\" is {}'s.", s.name, s.agent.name()));
+            return;
+        }
         let (session, session_name, cwd) = (s.id.clone(), s.name.clone(), s.cwd.clone());
         // What the list already knows about it, for the facts. A figure it doesn't have is left out.
         let mut facts = Facts {

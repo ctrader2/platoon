@@ -81,8 +81,8 @@ because they would be lost or cost tokens to make again.
 **Cache** (`~/.cache/platoon`, or `$XDG_CACHE_HOME/platoon`, or `$PLATOON_CACHE_DIR`): things platoon can make again, or
 small marks its parts leave for each other.
 
-- `index.json` and `prompts.jsonl`: the index of your conversations and the messages you typed, for the list and search.
-  Deleting them is harmless: they are rebuilt.
+- `index.json` (and `codex-index.json`, for Codex's conversations) and `prompts.jsonl`: the index of your conversations
+  and the messages you typed, for the list and search. Deleting them is harmless: they are rebuilt.
 - `hosts/`: one small file and one socket per session platoon runs, in a folder only you can enter
 - `status/`: the figures the status line reports, per session
 - `ai-usage.json`: tokens used per day (numbers only), and `ai-work/`, the empty folder the `claude -p` calls run in
@@ -105,7 +105,8 @@ saved by Claude Code like any other.
 - Each session started in platoon runs under a small background host, which keeps running when platoon closes. A host
   stops its own session after it has sat unused for the time in the settings (2 hours unless you change it).
 - On its own, platoon only stops sessions it runs. Ending any other copy of a conversation (archiving one that runs in a
-  terminal platoon didn't start, or opening one platoon can't share) asks you first.
+  terminal platoon didn't start, or opening one platoon can't share) asks you first. A Codex conversation open in a Codex
+  window platoon didn't start (or in Codex's background server) is never stopped at all: platoon says where it is.
 - After stopping a session, platoon asks the MCP servers that session had started to exit too, and never any other
   process.
 - The project notes helper runs in the background, one per project, for at most half an hour.
@@ -136,8 +137,12 @@ it always does, and so do the `claude -p` calls of the features you switch on.
 
 To list your conversations, platoon reads Claude Code's files: the transcripts under `~/.claude/projects`, the registry of
 running sessions in `~/.claude/sessions`, and your MCP servers in `~/.claude.json` (for idle stop it matches their
-commands to running processes). These files are
-not a documented interface, so **a Claude Code update can break platoon**. It was last checked with Claude Code 2.1.288.
+commands to running processes). When Codex is installed it reads Codex's too, in `~/.codex` (or `$CODEX_HOME`): the saved
+sessions under `sessions/`, the names in `session_index.jsonl`, which conversations are open (who holds the lock files in
+`thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`), and, for idle
+stop, the MCP servers in `config.toml`. It never writes Codex's conversations or `config.toml`. These files are
+not a documented interface, so **a Claude Code (or Codex) update can break platoon**. Codex support was checked with Codex
+0.163.0. It was last checked with Claude Code 2.1.288.
 When your Claude Code is newer than that, platoon says so once (it runs `claude --version` when it starts), and
 `platoon setup` says so each time it runs.
 

@@ -206,10 +206,12 @@ impl App {
         self.smart.prev_archived = Some(now);
     }
 
-    /// Everything the scheduler looks at: the conversations that have a transcript with something in it.
+    /// Everything the scheduler looks at: the conversations that have a transcript with something in it (of an agent
+    /// whose conversations the smart features read: `Agent::smart_reads`).
     fn convs(&self) -> Vec<smart::Conv<'_>> {
         self.sessions
             .iter()
+            .filter(|s| s.agent.smart_reads())
             .filter_map(|s| {
                 let fp = self.prompts.get(&s.id)?;
                 Some(smart::Conv { id: &s.id, fp, archived: s.archived, last_active_ms: s.last_active, busy: s.status == Status::Busy })
@@ -509,7 +511,10 @@ impl App {
     /// The conversations a description search may pick from, the local way: by index into `sessions`.
     fn find_pool(&self, settings: &Settings) -> Vec<usize> {
         (0..self.sessions.len())
-            .filter(|&i| !(self.sessions[i].archived && !settings.search_archived) && self.in_scope(&self.sessions[i]))
+            .filter(|&i| {
+                let s = &self.sessions[i];
+                !(s.archived && !settings.search_archived) && self.in_scope(s) && s.agent.smart_reads()
+            })
             .collect()
     }
 

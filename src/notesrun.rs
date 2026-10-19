@@ -3,7 +3,8 @@
 //! small files the two use to tell each other (and platoon's window) what is going on.
 //!
 //! How it hangs together:
-//! - Claude Code runs `platoon hook stop` whenever a session finishes answering. The hook is instant, silent,
+//! - Claude Code runs `platoon hook stop` whenever a session finishes answering (Codex runs `platoon hook stop --agent
+//!   codex`, and a Codex session of a project counts the same way: its rollout is read with Codex's own rules). The hook is instant, silent,
 //!   spends no tokens and exits 0 whatever happens. If the session belongs to an active project, it writes the time
 //!   into `<cache>/notes-due/<project id>` and starts the helper; a project with no notes file yet gets one from the
 //!   template first, so its first update has something to fill in. Any later turn rewrites that time, which is what
@@ -21,8 +22,7 @@
 //! on top of that the hook refuses outright when `PLATOON_AI` is set or the session's folder is that work folder,
 //! and a session that is in no project is turned away after one small read.
 
-use crate::agents::claude;
-use crate::agents::{Agent, HookKind};
+use crate::agents::{Agent, HookKind, claude, codex};
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::describe;
@@ -183,14 +183,13 @@ fn max_life_secs() -> u64 {
 /// What the hook does with one hook input: the project it marked, or None for "nothing to do", which costs one
 /// small read of `projects.json` and nothing else. It never writes anything but the mark (and, for a project with
 /// no notes file yet, the notes from the template: `notes_to_keep`) and never prints.
-pub fn stop_mark(input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms: u64) -> Option<String> {
+pub fn stop_mark(agent: Agent, input: &str, config: &Path, cache: &Path, ai_child: bool, at_ms: u64) -> Option<String> {
     // The helper's own calls must never come back here. (They load no settings, so Claude Code runs no hook for
     // them at all; these two checks are the belt to that brace.)
     if ai_child {
         return None;
     }
-    // Claude Code's hook: it is the one that calls this.
-    let input = Agent::Claude.hook_input(HookKind::Stop, input)?;
+    let input = agent.hook_input(HookKind::Stop, input)?;
     let session = input.session.as_str();
     if !crate::sessionhook::safe_name(session) {
         return None;
@@ -261,7 +260,8 @@ pub fn spawn_helper(id: &str) -> io::Result<()> {
 }
 
 /// `platoon hook stop`. Always 0, always silent: a hook that gets in a session's way is worse than no hook.
-pub fn run_hook() -> i32 {
+/// `platoon hook stop [--agent codex]`: the hook of `agent`'s sessions.
+pub fn run_hook(agent: Agent) -> i32 {
     let _ = std::panic::catch_unwind(|| {
         let mut input = String::new();
         if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() {
@@ -269,7 +269,7 @@ pub fn run_hook() -> i32 {
         }
         let ai_child = std::env::var_os("PLATOON_AI").is_some();
         let (config, cache) = (crate::archive::config_dir(), usage::cache_dir());
-        if let Some(id) = stop_mark(&input, &config, &cache, ai_child, now_ms()) {
+        if let Some(id) = stop_mark(agent, &input, &config, &cache, ai_child, now_ms()) {
             let _ = spawn_helper(&id);
         }
     });
@@ -330,12 +330,13 @@ pub struct Read1 {
 /// and Claude's last reply. Only the last `KEEP_RECENT` messages are held, so a huge conversation costs no more
 /// memory than a small one.
 pub fn read_session(path: &Path, cap: usize) -> Read1 {
-    read_session_with(path, cap, None)
+    read_session_with(Agent::Claude, path, cap, None)
 }
 
-/// `read_session`, with Claude's last reply read the way the notes need it: up to `reply_chars` characters, its
-/// lines kept (`claude::reply_text_in_line`). None: one line of it, as everything else reads it.
-pub fn read_session_with(path: &Path, cap: usize, reply_chars: Option<usize>) -> Read1 {
+/// `read_session` of a transcript of `agent`'s, with the agent's last reply read the way the notes need it: up to
+/// `reply_chars` characters, its lines kept (`Agent::reply_text_in_line`). None: one line of it, as everything else
+/// reads it.
+pub fn read_session_with(agent: Agent, path: &Path, cap: usize, reply_chars: Option<usize>) -> Read1 {
     let Ok(file) = fs::File::open(path) else { return Read1::default() };
     let mut reader = BufReader::new(file);
     let mut out = Read1::default();
@@ -358,7 +359,7 @@ pub fn read_session_with(path: &Path, cap: usize, reply_chars: Option<usize>) ->
             continue;
         }
         let Ok(text) = std::str::from_utf8(&line) else { continue };
-        if let Some(p) = claude::prompt_in_line(text, cap) {
+        if let Some(p) = agent.prompt_in_line(text, cap) {
             if crate::smart::is_substantive(&p) {
                 out.total += 1;
                 if out.first.is_none() {
@@ -369,10 +370,10 @@ pub fn read_session_with(path: &Path, cap: usize, reply_chars: Option<usize>) ->
                     recent.pop_front();
                 }
             }
-        } else if claude::may_be_reply(text) {
+        } else if agent.may_be_reply(text) {
             let reply = match reply_chars {
-                Some(n) => claude::reply_text_in_line(text, n),
-                None => claude::reply_in_line(text, claude::REPLY_CHARS),
+                Some(n) => agent.reply_text_in_line(text, n),
+                None => agent.reply_in_line(text, claude::REPLY_CHARS),
             };
             if let Some(r) = reply {
                 out.reply = Some(r);
@@ -391,8 +392,17 @@ fn folder_of(path: &Path, cwd: Option<String>) -> String {
         .unwrap_or_else(|| path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default())
 }
 
-/// What is new in this project since the last update, and how much of each session has now been read.
-pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, settings: &Settings) -> (Material, BTreeMap<String, usize>) {
+/// What is new in this project since the last update, and how much of each session has now been read. A session's
+/// transcript is looked for in Claude Code's folder `root`, then in Codex's `codex` when there is one.
+pub fn gather(
+    config: &Path,
+    root: &Path,
+    codex: Option<&Path>,
+    id: &str,
+    name: &str,
+    state: &State,
+    settings: &Settings,
+) -> (Material, BTreeMap<String, usize>) {
     let projects = Projects::open(config);
     let archive = Archive::open(config);
     let per = settings.ai_prompts_per_session as usize;
@@ -403,8 +413,12 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
         if archive.contains(&sid) {
             continue; // archived sessions are skipped entirely
         }
-        let Some(path) = claude::find_transcript(root, &sid) else { continue };
-        let read = read_session_with(&path, cap, Some(settings.notes_reply_chars as usize));
+        let found = Agent::Claude
+            .find_transcript(root, &sid)
+            .map(|p| (Agent::Claude, p))
+            .or_else(|| codex.and_then(|c| Agent::Codex.find_transcript(c, &sid)).map(|p| (Agent::Codex, p)));
+        let Some((agent, path)) = found else { continue };
+        let read = read_session_with(agent, &path, cap, Some(settings.notes_reply_chars as usize));
         if read.total == 0 {
             continue;
         }
@@ -439,7 +453,7 @@ pub fn gather(config: &Path, root: &Path, id: &str, name: &str, state: &State, s
             .unwrap_or(0);
         sessions.push((
             modified,
-            SessionMaterial { folder: folder_of(&path, claude::transcript_cwd(&path)), messages, reply: read.reply, first_read },
+            SessionMaterial { folder: folder_of(&path, agent.transcript_cwd(&path)), messages, reply: read.reply, first_read },
         ));
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
@@ -456,13 +470,21 @@ pub struct Env {
     pub cache: PathBuf,
     /// Claude's own folder, where the transcripts are.
     pub root: PathBuf,
+    /// Codex's folder, where its sessions' rollouts are; None when there is none to read.
+    pub codex: Option<PathBuf>,
     /// The program that runs a call; None means `PLATOON_CLAUDE_BIN`, else `claude`.
     pub program: Option<String>,
 }
 
 impl Env {
     pub fn from_env() -> Env {
-        Env { config: crate::archive::config_dir(), cache: usage::cache_dir(), root: claude::claude_root(), program: None }
+        Env {
+            config: crate::archive::config_dir(),
+            cache: usage::cache_dir(),
+            root: claude::claude_root(),
+            codex: Some(codex::codex_root()),
+            program: None,
+        }
     }
 
     fn runner(&self) -> Runner {
@@ -543,7 +565,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         return Round::NoNotes;
     }
     let mut state = State::load(&env.config, id);
-    let (material, seen) = gather(&env.config, &env.root, id, &project.name, &state, &settings);
+    let (material, seen) = gather(&env.config, &env.root, env.codex.as_deref(), id, &project.name, &state, &settings);
     if material.is_empty() {
         return Round::NothingNew;
     }
@@ -800,7 +822,7 @@ mod tests {
                 fs::create_dir_all(d).unwrap();
             }
             let fake = AiFake::new(name);
-            let env = Env { config, cache, root, program: Some(fake.script.clone()) };
+            let env = Env { config, cache, root, codex: None, program: Some(fake.script.clone()) };
             let mut s = Settings { tokens_enabled: true, ..Settings::default() };
             s.set_feature(FEATURE, true);
             crate::settings::save(&env.config, &s).unwrap();
@@ -847,7 +869,7 @@ mod tests {
 
         fn hook(&self, sid: &str) -> Option<String> {
             let input = json!({"session_id": sid, "cwd": "/home/x/work", "hook_event_name": "Stop"}).to_string();
-            stop_mark(&input, &self.env.config, &self.env.cache, false, now_ms())
+            stop_mark(Agent::Claude, &input, &self.env.config, &self.env.cache, false, now_ms())
         }
     }
 
@@ -874,17 +896,17 @@ mod tests {
         assert_eq!(r.hook("loose"), None);
         // Bad input of every shape.
         for bad in ["", "{", "[]", "null", r#"{"cwd":"/x"}"#, r#"{"session_id":5}"#, r#"{"session_id":"../../etc"}"#] {
-            assert_eq!(stop_mark(bad, &r.env.config, &r.env.cache, false, 1), None, "{bad}");
+            assert_eq!(stop_mark(Agent::Claude, bad, &r.env.config, &r.env.cache, false, 1), None, "{bad}");
         }
         // The helper's own session: by its environment, and by the folder it works in.
         assert_eq!(
-            stop_mark(&json!({"session_id":"in-project"}).to_string(), &r.env.config, &r.env.cache, true, 1),
+            stop_mark(Agent::Claude, &json!({"session_id":"in-project"}).to_string(), &r.env.config, &r.env.cache, true, 1),
             None,
             "PLATOON_AI is set"
         );
         let work = ai::work_dir(&r.env.cache).display().to_string();
         assert_eq!(
-            stop_mark(&json!({"session_id":"in-project","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1),
+            stop_mark(Agent::Claude, &json!({"session_id":"in-project","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1),
             None,
             "the work folder"
         );
@@ -979,10 +1001,13 @@ mod tests {
         // A session in no project, the helper's own calls, its work folder.
         assert_eq!(r.hook("loose"), None);
         no_notes("a session in no project");
-        assert_eq!(stop_mark(&json!({"session_id":"s1"}).to_string(), &r.env.config, &r.env.cache, true, 1), None);
+        assert_eq!(stop_mark(Agent::Claude, &json!({"session_id":"s1"}).to_string(), &r.env.config, &r.env.cache, true, 1), None);
         no_notes("PLATOON_AI is set");
         let work = ai::work_dir(&r.env.cache).display().to_string();
-        assert_eq!(stop_mark(&json!({"session_id":"s1","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1), None);
+        assert_eq!(
+            stop_mark(Agent::Claude, &json!({"session_id":"s1","cwd":work}).to_string(), &r.env.config, &r.env.cache, false, 1),
+            None
+        );
         no_notes("the work folder");
         // An archived session, by the hook and by joining.
         let mut archive = Archive::open(&r.env.config);
@@ -1187,7 +1212,7 @@ mod tests {
         r.session(&id, "s1", &refs, "I did all of that.");
         let settings = crate::settings::load(&r.env.config).0;
         // Never read before: the first message and the latest ones, capped.
-        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
         assert_eq!(seen.get("s1"), Some(&30));
         let sent = &m.sessions[0];
         assert!(sent.first_read);
@@ -1199,20 +1224,20 @@ mod tests {
         // Read before: only what came after, under the per-session cap.
         let mut state = State::default();
         state.seen.insert("s1".into(), 28);
-        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
         assert!(!m.sessions[0].first_read);
         assert_eq!(m.sessions[0].messages, [many[28].clone(), many[29].clone()]);
         // Nothing new at all.
         state.seen.insert("s1".into(), 30);
-        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
         assert!(m.is_empty() && m.sessions.is_empty());
         // Filler ("yes", "ok") is not new material.
         r.session(&id, "s2", &["ok", "yes please", "thanks"], "Right.");
-        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &state, &settings);
+        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
         assert!(m.sessions.is_empty() && !seen.contains_key("s2"), "{m:?}");
         // An archived session is skipped entirely.
         Archive::open(&r.env.config).archive("s1", usage::now()).unwrap();
-        let (m, seen) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
         assert!(m.sessions.is_empty() && seen.is_empty());
     }
 
@@ -1227,7 +1252,7 @@ mod tests {
         r.session(&id, "s1", &["Add a basket page to the shop"], &reply);
         let mut settings = crate::settings::load(&r.env.config).0;
         assert_eq!(settings.notes_reply_chars, 1500, "about 1500 characters unless the user says otherwise");
-        let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
         let got = m.sessions[0].reply.clone().unwrap();
         assert!(got.starts_with("Done.\n\nStill open:\n- Which card provider?\n- Does VAT go in the total?"), "{got}");
         assert_eq!(got.chars().count(), 1501, "cut at the setting, with a mark where");
@@ -1237,7 +1262,7 @@ mod tests {
         assert!(p.contains("Claude's last reply:\n  Done.\n\n  Still open:\n  - Which card provider?"), "{p}");
         for chars in [500u64, 3000] {
             settings.notes_reply_chars = chars;
-            let (m, _) = gather(&r.env.config, &r.env.root, &id, "Web shop", &State::default(), &settings);
+            let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
             assert_eq!(m.sessions[0].reply.as_ref().unwrap().chars().count() as u64, chars + 1);
         }
         // Everything else that reads a session still gets one line of the reply.

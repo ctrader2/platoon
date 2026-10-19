@@ -299,6 +299,9 @@ fn setup_without_a_terminal_scans_nothing_and_says_one_line_and_its_exit_code_is
     lab.on();
     let mut c = Command::new(BIN);
     c.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        c.env(k, v); // never the real Codex: its folder or its program
+    }
     c.arg("setup").env("NO_COLOR", "1").env("PLATOON_FORBID_REAL_CLAUDE", "1").stdin(Stdio::null());
     for (k, v) in setup_env(&lab, &fake) {
         c.env(k, v);

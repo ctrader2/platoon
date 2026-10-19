@@ -1,5 +1,5 @@
 use crate::agents::claude::{self, Reader};
-use crate::agents::{Agent, Hidden, Live, Start};
+use crate::agents::{Agent, Hidden, Live, Start, codex};
 use crate::ai;
 use crate::archive::{self, Archive};
 use crate::client::{Client, key_bytes};
@@ -268,6 +268,9 @@ pub enum AdoptKind {
 pub enum JumpPlan {
     /// A copy platoon hosts and that is in sync: just show it.
     Attach(u32),
+    /// An agent that keeps one window per conversation itself (Codex) has it open in a window platoon didn't start: it
+    /// is never opened a second time, nor ended. The user is told where it is.
+    Elsewhere,
     /// Nothing is running it: start it again from its saved history.
     Resume,
     /// Claude's own service runs it in the background and no platoon host is showing it yet: start one running
@@ -643,6 +646,9 @@ pub struct App {
     pub pages: Pages,
     size: (u16, u16),
     reader: Reader,
+    /// Codex's conversations open right now (its writer locks), when Codex's folder is read (None in a unit test that
+    /// gave it none).
+    codex: Option<codex::Reader>,
     indexer: Indexer,
     /// What the user typed in every conversation, for the full-text search. Step C's names and summaries come from it.
     prompts: PromptIndex,
@@ -678,6 +684,8 @@ pub struct App {
     apply_after: Option<Instant>,
     /// The program that runs a conversation of Claude Code's (`Agent::program`, read once).
     program: String,
+    /// The program that runs a conversation of Codex's, read once too.
+    codex_program: String,
     guard_on: bool,
     /// What `view` and `counts` were computed from: (filter, tab, generation, top tab, projects tab, open
     /// project). Recomputed when it changes.
@@ -698,9 +706,10 @@ impl App {
     /// The real thing: rows appear as the background index reads them.
     pub fn new() -> Self {
         let reader = Reader::new();
+        let codex = codex::Reader::new();
         let cache = usage::cache_dir();
-        let indexer = Indexer::spawn(reader.root(), &cache);
-        let mut app = Self::build(reader, cache, archive::config_dir(), indexer, true);
+        let indexer = Indexer::spawn(reader.root(), Some(codex.root()), &cache);
+        let mut app = Self::build(reader, Some(codex), cache, archive::config_dir(), indexer, true);
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
@@ -715,12 +724,26 @@ impl App {
     /// the real ones. The index is read on the calling thread, so tests see rows straight away.
     #[cfg(test)]
     pub fn with_dirs(reader: Reader, cache: PathBuf, config: PathBuf) -> Self {
-        let indexer = Indexer::inline(reader.root(), &cache);
-        Self::build(reader, cache, config, indexer, false)
+        let indexer = Indexer::inline(reader.root(), None, &cache);
+        Self::build(reader, None, cache, config, indexer, false)
+    }
+
+    /// `with_dirs`, reading Codex's conversations too, from its folder `codex`.
+    #[cfg(test)]
+    pub fn with_codex_dirs(reader: Reader, codex: codex::Reader, cache: PathBuf, config: PathBuf) -> Self {
+        let indexer = Indexer::inline(reader.root(), Some(codex.root()), &cache);
+        Self::build(reader, Some(codex), cache, config, indexer, false)
     }
 
     /// `threaded`: the prompt index reads in the background (the real thing) rather than on the calling thread (tests).
-    fn build(mut reader: Reader, cache: PathBuf, config: PathBuf, mut indexer: Indexer, threaded: bool) -> Self {
+    fn build(
+        mut reader: Reader,
+        codex: Option<codex::Reader>,
+        cache: PathBuf,
+        config: PathBuf,
+        mut indexer: Indexer,
+        threaded: bool,
+    ) -> Self {
         // platoon's own `claude -p` helper runs in one folder of ours. It registers itself like any session, but it is
         // not a conversation: dropped here, at the two doors (running processes and saved transcripts), so nothing
         // downstream (rows, counts, search, naming, archive) ever sees it.
@@ -838,6 +861,7 @@ impl App {
             pages: Pages::default(),
             size: (80, 24),
             reader,
+            codex,
             indexer,
             prompts,
             prompt_cap,
@@ -856,6 +880,7 @@ impl App {
             last_auto_archive: None,
             apply_after: None,
             program: Agent::Claude.program(),
+            codex_program: Agent::Codex.program(),
             guard_on: false,
             view_for: (String::new(), usize::MAX, 0, 0, 0, None),
             rev: 0,
@@ -1267,7 +1292,7 @@ impl App {
         if self.reread_tickets() {
             self.built.0 = u64::MAX;
         }
-        let live = self.reader.live();
+        let live = self.live_now();
         self.note_running_tasks(&live);
         // Where sessions are working now: no worktree is removed from under one.
         self.note_busy_dirs(&live);
@@ -1478,6 +1503,24 @@ impl App {
         }
     }
 
+    /// Every process running a conversation now, Claude Code's and Codex's. A Codex conversation is held by the process
+    /// that has its writer lock: when that runs under one of platoon's hosts (the host's child, or one of its children),
+    /// it is told by the host's child, which is the process platoon attaches to and stops. Anything else holding it
+    /// (another terminal, Codex's shared background server) is never platoon's.
+    fn live_now(&self) -> Vec<Live> {
+        let mut live = self.reader.live();
+        let codex = self.codex.as_ref().map(codex::Reader::live).unwrap_or_default();
+        for mut l in codex {
+            if !self.hosts.iter().any(|h| h.claude_pid == l.pid)
+                && let Some(h) = self.hosts.iter().find(|h| crate::guard::ancestors(l.pid).contains(&h.claude_pid))
+            {
+                l.pid = h.claude_pid;
+            }
+            live.push(l);
+        }
+        live
+    }
+
     /// The conversations to list: every saved one that has a real prompt, plus anything running (even before
     /// its first prompt is saved), newest activity first. Running-state fields are filled in by the caller.
     fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
@@ -1506,8 +1549,7 @@ impl App {
     fn session_from(&self, e: &Entry) -> Session {
         let t = &e.t;
         let cwd = t.cwd.clone().unwrap_or_default();
-        // The index reads Claude Code's transcripts.
-        let agent = Agent::Claude;
+        let agent = e.agent;
         let est = (t.context_tokens * 100 / agent.context_window(t)).min(100) as u8;
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
@@ -1520,10 +1562,10 @@ impl App {
         s
     }
 
-    /// A running conversation whose transcript isn't saved yet (nothing sent), described by its registry entry
-    /// (Claude Code's: the reader is its).
+    /// A running conversation whose transcript isn't saved yet (nothing sent), described by what its agent says of
+    /// the process running it.
     fn session_from_live(&self, l: &Live) -> Session {
-        self.session(Agent::Claude, l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
+        self.session(l.agent, l.id.clone(), l.cwd.clone(), None, None, 0, String::new(), l.started_at)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2235,7 +2277,14 @@ impl App {
     /// and reopening from the saved history, which is destructive, so it is confirmed first.
     fn jump_plan_of(&self, s: &Session) -> Option<JumpPlan> {
         if s.procs.is_empty() {
-            return Some(JumpPlan::Resume);
+            // A host platoon just started for it, whose process hasn't said which conversation it runs yet: that one.
+            return Some(match self.hosts.iter().find(|h| h.session().as_deref() == Some(s.id.as_str())) {
+                Some(h) => JumpPlan::Attach(h.claude_pid),
+                None => JumpPlan::Resume,
+            });
+        }
+        if s.held_elsewhere() {
+            return Some(JumpPlan::Elsewhere);
         }
         // Claude's own service runs it: open its screen with `claude attach`, in a platoon host of our own (or
         // the one already showing it). Ending or resuming it is not on offer.
@@ -2285,6 +2334,9 @@ impl App {
                 if self.attached_pid().is_some() {
                     self.note_opened(&id, restore);
                 }
+            }
+            JumpPlan::Elsewhere => {
+                self.notify(format!("\"{name}\" is open in another {} window. Close it there to open it here.", agent.name()))
             }
             JumpPlan::Resume => {
                 if !self.cwd_exists(&name, &cwd) {
@@ -2353,6 +2405,11 @@ impl App {
             self.notify(format!("\"{name}\" runs in the background, so platoon can't archive it"));
             return;
         }
+        if s.held_elsewhere() {
+            // Archiving stops what runs the conversation, and this window isn't platoon's to stop.
+            self.notify(format!("\"{name}\" is open in another {} window. Close it there to archive it.", s.agent.name()));
+            return;
+        }
         if s.archived {
             match self.archive.restore(&id, usage::now()) {
                 Ok(()) => self.notify(format!("Restored \"{name}\"")),
@@ -2380,12 +2437,13 @@ impl App {
         if self.stopping.contains_key(id) {
             return; // already on its way
         }
-        // Never a background session's process: Claude's own service owns it (the archive key refuses those rows).
+        // Never a background session's process: Claude's own service owns it (the archive key refuses those rows). Nor a
+        // window of an agent that keeps one per conversation, unless platoon started it (`Session::held_elsewhere`).
         let pids: Vec<u32> = self
             .sessions
             .iter()
             .filter(|s| s.id == id)
-            .flat_map(|s| s.procs.iter().filter(|p| p.background.is_none()).map(|p| p.pid))
+            .flat_map(|s| s.procs.iter().filter(|p| p.background.is_none() && (p.hosted || !s.agent.keeps_one_writer())).map(|p| p.pid))
             .collect();
         if pids.is_empty() {
             self.record_archived(id, name);
@@ -2436,7 +2494,7 @@ impl App {
         let Some(Stopping { name, pids }) = self.stopping.remove(&done.id) else { return false };
         match done.result {
             Ok(()) => {
-                let again = self.reader.live().iter().any(|l| l.id == done.id && l.background.is_none() && !pids.contains(&l.pid));
+                let again = self.live_now().iter().any(|l| l.id == done.id && l.background.is_none() && !pids.contains(&l.pid));
                 if again {
                     self.notify(format!("\"{name}\" was opened again, so it stays in the list."));
                 } else {
@@ -2529,6 +2587,7 @@ impl App {
     pub(crate) fn program_of(&self, agent: Agent) -> String {
         match agent {
             Agent::Claude => self.program.clone(),
+            Agent::Codex => self.codex_program.clone(),
         }
     }
 
@@ -2549,11 +2608,12 @@ impl App {
     fn launch_in(&mut self, agent: Agent, dir: String, start: Start, project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
         let mut env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-        if self.offers_tasks(start) {
+        // The offer is worded for Claude Code (it names its question tool).
+        if agent == Agent::Claude && self.offers_tasks(start) {
             env.push((crate::sessionhook::OFFER_ENV, "1"));
         }
         let at_ms = usage::now().saturating_sub(2) * 1000;
-        match host::launch(&self.host_dirs(), &self.program_of(agent), &dir, &agent.args(start), &env, rows, cols) {
+        match host::launch(&self.host_dirs(), agent, &self.program_of(agent), &dir, &agent.args(start), &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 if let (Some(p), true) = (project, place)
@@ -2569,7 +2629,7 @@ impl App {
             }
             Err(e) => {
                 self.mode = Mode::List;
-                self.notify(format!("Couldn't start claude: {e}"));
+                self.notify(format!("Couldn't start {}: {e}", agent.id()));
                 false
             }
         }
@@ -2625,7 +2685,7 @@ impl App {
     /// The index read on a background thread, as `App::new` has it (`with_dirs` reads it on the calling thread).
     #[cfg(test)]
     pub fn index_in_background_for_test(&mut self) {
-        self.indexer = Indexer::spawn(self.reader.root(), &self.cache);
+        self.indexer = Indexer::spawn(self.reader.root(), self.codex.as_ref().map(codex::Reader::root), &self.cache);
     }
 
     #[cfg(test)]

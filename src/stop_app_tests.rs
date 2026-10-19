@@ -23,7 +23,14 @@ fn ch(app: &mut App, c: char) {
 }
 
 fn hosted(pid: u32) -> HostInfo {
-    HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() }
+    HostInfo {
+        agent: crate::agents::Agent::Claude,
+        claude_pid: pid,
+        host_pid: 0,
+        dir: "/tmp".into(),
+        args: Vec::new(),
+        sock: Default::default(),
+    }
 }
 
 fn ids(app: &App) -> Vec<String> {

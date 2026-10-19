@@ -191,21 +191,40 @@ pub fn notes_context(input: &HookInput, config: &Path, cache: &Path, ai_child: b
     Some(sessionhook::context_text(&project.name, &notes))
 }
 
-/// `platoon hook guard`. Exit 0 allows the prompt; exit 2 refuses it and shows stderr to the user.
-pub fn run_guard() -> i32 {
-    std::panic::catch_unwind(guard_inner).unwrap_or(0)
+/// `platoon hook guard [--agent codex]`. Exit 0 allows the prompt; exit 2 refuses it and shows stderr to the user. For
+/// an agent that keeps one window per conversation itself (Codex) there is nothing to guard: only the notes are
+/// carried in.
+pub fn run_guard(agent: Agent) -> i32 {
+    std::panic::catch_unwind(|| guard_inner(agent)).unwrap_or(0)
 }
 
-fn guard_inner() -> i32 {
+fn guard_inner(agent: Agent) -> i32 {
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 0;
     }
-    // Claude Code's hook: it is the one that calls this.
-    let agent = Agent::Claude;
     let Some(input) = agent.hook_input(HookKind::Prompt, &input) else { return 0 };
-    let sid = input.session.clone();
     let cache = cache_dir();
+    if !agent.keeps_one_writer()
+        && let Some(refused) = guard_claude(&input, &cache)
+    {
+        return refused;
+    }
+    // Allowed. Anything that goes wrong from here on is simply no notes; the prompt goes through either way.
+    let _ = std::panic::catch_unwind(|| {
+        let ai_child = std::env::var_os("PLATOON_AI").is_some();
+        if let Some(context) = notes_context(&input, &crate::archive::config_dir(), &cache, ai_child) {
+            agent.hook_answer(&HookReply::PromptContext(context)).print();
+        }
+    });
+    0
+}
+
+/// The guard itself, for a prompt in a Claude Code session: the exit code of a refusal (said to the user), or None when
+/// the prompt may go.
+fn guard_claude(input: &HookInput, cache: &Path) -> Option<i32> {
+    let agent = Agent::Claude;
+    let sid = input.session.clone();
     // The guard's own answer first, exactly as before: nothing below may change it. A parked process is not a copy
     // that writes (see `Entry::parked`).
     let same: Vec<Entry> = writers(live_entries(&claude_root()), &sid);
@@ -217,23 +236,16 @@ fn guard_inner() -> i32 {
         None => Verdict::Allow,
         Some(me) => {
             let hosted: HashSet<u32> = host::discover().into_iter().map(|h| h.claude_pid).collect();
-            decide(&same, me.pid, &|p| hosted.contains(&p), is_stale(&cache, me.pid, me.started_at))
+            decide(&same, me.pid, &|p| hosted.contains(&p), is_stale(cache, me.pid, me.started_at))
         }
     };
-    if verdict != Verdict::Allow {
-        if let Some(me) = me {
-            mark_stale(&cache, me.pid, me.started_at);
-        }
-        return agent.hook_answer(&HookReply::Refuse(message(&verdict, &sid))).print();
+    if verdict == Verdict::Allow {
+        return None;
     }
-    // Allowed. Anything that goes wrong from here on is simply no notes; the prompt goes through either way.
-    let _ = std::panic::catch_unwind(|| {
-        let ai_child = std::env::var_os("PLATOON_AI").is_some();
-        if let Some(context) = notes_context(&input, &crate::archive::config_dir(), &cache, ai_child) {
-            agent.hook_answer(&HookReply::PromptContext(context)).print();
-        }
-    });
-    0
+    if let Some(me) = me {
+        mark_stale(cache, me.pid, me.started_at);
+    }
+    Some(agent.hook_answer(&HookReply::Refuse(message(&verdict, &sid))).print())
 }
 
 #[cfg(test)]
@@ -399,7 +411,7 @@ mod tests {
         let id = r.project("sess-1", "# Overview\nSell socks.\n");
         let start = |source: &str| {
             let input = serde_json::json!({"session_id": "sess-1", "source": source, "cwd": "/home/x/work"}).to_string();
-            crate::sessionhook::session_start(&input, None, None, &r.config, &r.cache)
+            crate::sessionhook::session_start(crate::agents::Agent::Claude, &input, None, None, &r.config, &r.cache)
         };
         // The session starts: the SessionStart hook hands them over, so the first prompt after it does not.
         assert!(start("startup").is_some());

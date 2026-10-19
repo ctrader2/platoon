@@ -11,7 +11,6 @@
 //! A host also stops its own session when nobody has used it for a while (see `Watchdog`), so forgotten
 //! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
 
-use crate::agents::claude::{claude_root, registry_status};
 use crate::agents::{Agent, Start};
 use crate::archive::config_dir;
 use crate::mcp::{self, Blocker, Tracked};
@@ -127,6 +126,9 @@ pub fn hosts_dir_in(cache: &Path) -> io::Result<PathBuf> {
 
 #[derive(Clone, Debug)]
 pub struct HostInfo {
+    /// The agent running inside, as the host's file names it (a host of a platoon from before agents were named in
+    /// it runs Claude Code).
+    pub agent: Agent,
     pub claude_pid: u32,
     pub host_pid: u32,
     pub dir: String,
@@ -136,22 +138,23 @@ pub struct HostInfo {
 }
 
 impl HostInfo {
-    /// The agent running inside. A host's file names none: every host platoon starts runs Claude Code.
-    pub fn agent(&self) -> Agent {
-        Agent::Claude
-    }
-
     /// True when this host is showing the background session `attach_id` (running `claude attach <id>`).
     /// Such a host's own process is only an attach client: it has no registry entry, and the session it shows
     /// is run by Claude's service, which nothing here ever signals.
     pub fn attaches_to(&self, attach_id: &str) -> bool {
-        self.args == self.agent().args(Start::Attach(attach_id))
+        self.agent.attaches(&self.args) && self.args == self.agent.args(Start::Attach(attach_id))
     }
 
     /// The session this host runs, when its arguments name it (a task's session, a resumed one).
     pub fn session(&self) -> Option<String> {
-        self.agent().session_of_args(&self.args)
+        self.agent.session_of_args(&self.args)
     }
+}
+
+/// The agent a host's file (`<pid>.json`) says it runs. A host of a platoon from before agents were named there runs
+/// Claude Code.
+pub fn agent_of_info(v: &Value) -> Agent {
+    v.get("agent").and_then(Value::as_str).map_or(Some(Agent::Claude), Agent::from_id).unwrap_or(Agent::Claude)
 }
 
 /// Live hosts in the real cache folder. Entries whose claude has gone are cleaned up.
@@ -178,6 +181,7 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
         }
         let args = v["args"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
         out.push(HostInfo {
+            agent: agent_of_info(&v),
             claude_pid: claude_pid as u32,
             host_pid: host_pid as u32,
             dir: v["dir"].as_str().unwrap_or("").to_string(),
@@ -188,14 +192,17 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
     out
 }
 
-/// Start a detached host running `program args` in `dir` and wait until it is ready to connect to.
+/// Start a detached host running `program args` (a session of `agent`) in `dir` and wait until it is ready to connect
+/// to.
 /// The returned `Child` should be polled with `try_wait` so it is reaped when the host exits.
 /// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT` and
 /// `PLATOON_OFFER_TASKS` are only ever what `env` says: ones platoon itself inherited (say, started from inside a
 /// project's session) are not passed on.
 /// The host keeps its files in `dirs.cache`, and is told so when that is not the one its environment names.
+#[allow(clippy::too_many_arguments)]
 pub fn launch(
     dirs: &Dirs,
+    agent: Agent,
     program: &str,
     dir: &str,
     args: &[String],
@@ -216,7 +223,8 @@ pub fn launch(
     let real = Dirs { cache: PathBuf::new(), config: PathBuf::new() };
     cmd.envs(dirs.child_env(&real));
     cmd.envs(env.iter().copied());
-    cmd.args(["host", "--program", program, "--dir", dir, "--rows", &rows.to_string(), "--cols", &cols.to_string(), "--"])
+    cmd.args(["host", "--agent", agent.id(), "--program", program, "--dir", dir, "--rows", &rows.to_string(), "--cols", &cols.to_string()])
+        .arg("--")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -249,12 +257,14 @@ pub fn launch(
 /// `platoon host ...`: runs until the program inside exits. Returns the process exit code.
 pub fn run(args: &[String]) -> i32 {
     let (mut dir, mut program, mut rows, mut cols) = (".".to_string(), "claude".to_string(), 24u16, 80u16);
+    let mut agent = Agent::Claude;
     let mut rest: Vec<String> = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--dir" => dir = it.next().cloned().unwrap_or(dir),
             "--program" => program = it.next().cloned().unwrap_or(program),
+            "--agent" => agent = it.next().and_then(|a| Agent::from_id(a)).unwrap_or(agent),
             "--rows" => rows = it.next().and_then(|s| s.parse().ok()).unwrap_or(rows),
             "--cols" => cols = it.next().and_then(|s| s.parse().ok()).unwrap_or(cols),
             "--" => {
@@ -332,7 +342,7 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // Publish only once the socket is listening, so a discovered host is always connectable.
-    let info = json!({ "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
+    let info = json!({ "agent": agent.id(), "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
     let tmp = hdir.join(format!(".{claude_pid}.tmp"));
     if fs::write(&tmp, info.to_string()).and_then(|_| fs::rename(&tmp, &info_path)).is_err() {
         return fail("couldn't write host info".into());
@@ -340,7 +350,7 @@ pub fn run(args: &[String]) -> i32 {
 
     {
         let shared = shared.clone();
-        let dog = Watchdog::new(claude_pid, me, &dir, &rest);
+        let dog = Watchdog::new(agent, claude_pid, me, &dir, &rest);
         thread::spawn(move || watch(&shared, dog));
     }
 
@@ -405,7 +415,7 @@ enum Reason {
     IdleStopOff,
     /// A window is attached.
     Viewer,
-    /// claude's own status isn't a known `idle`.
+    /// The agent doesn't say the session is idle (`Agent::known_idle`).
     NotIdle,
     /// Not quiet for the whole threshold yet: recent output, or a window left recently.
     RecentOutput,
@@ -437,14 +447,16 @@ enum Reason {
 /// Tests can shrink time with `PLATOON_IDLE_SECS_PER_MINUTE=N`: a "minute" of the setting then lasts N
 /// seconds and the check runs every 200 ms instead of every 30 s.
 struct Watchdog {
+    agent: Agent,
     claude_pid: u32,
     host_pid: u32,
+    /// The agent's own folder (`Agent::home`), where it says whether the session is idle.
     root: PathBuf,
     settings: SettingsStore,
     secs_per_minute: u64,
     check_every: Duration,
-    /// Where the MCP configuration lives, for the session's directory.
-    sources: mcp::Sources,
+    /// Where the MCP configuration lives, for the session's agent and directory.
+    sources: mcp::Where,
     leftover_grace: Duration,
     /// The session this host runs, when its arguments name it (a task's session, a resumed one): a task's session is
     /// found by it.
@@ -454,19 +466,19 @@ struct Watchdog {
 }
 
 impl Watchdog {
-    fn new(claude_pid: u32, host_pid: u32, dir: &str, args: &[String]) -> Self {
+    fn new(agent: Agent, claude_pid: u32, host_pid: u32, dir: &str, args: &[String]) -> Self {
         let scaled = std::env::var("PLATOON_IDLE_SECS_PER_MINUTE").ok().and_then(|v| v.parse::<u64>().ok());
         Self {
+            agent,
             claude_pid,
             host_pid,
-            root: claude_root(),
+            root: agent.home(),
             settings: SettingsStore::open(&config_dir()),
             secs_per_minute: scaled.unwrap_or(60),
             check_every: if scaled.is_some() { Duration::from_millis(200) } else { IDLE_CHECK_EVERY },
-            sources: mcp::Sources::from_env(dir),
+            sources: mcp::Where::from_env(agent, dir),
             leftover_grace: if scaled.is_some() { Duration::from_secs(1) } else { LEFTOVER_GRACE },
-            // The host runs Claude Code (see `HostInfo::agent`).
-            session: Agent::Claude.session_of_args(args),
+            session: agent.session_of_args(args),
             config: config_dir(),
         }
     }
@@ -481,7 +493,7 @@ impl Watchdog {
     /// `now` and the window count are passed in so the decision can be tested.
     fn decide(&mut self, now: Instant, viewers: usize, quiet_since: &mut Instant) -> Decision {
         self.settings.refresh();
-        let idle = registry_status(&self.root, self.claude_pid).as_deref() == Some("idle");
+        let idle = self.agent.known_idle(&self.root, self.claude_pid, self.session.as_deref());
         if !idle {
             *quiet_since = (*quiet_since).max(now);
         }
@@ -513,7 +525,7 @@ impl Watchdog {
         if !ignore_mcp {
             return Decision::Keep(Reason::AnyProcessBlocks(first));
         }
-        let cfg = mcp::load(&self.sources);
+        let cfg = self.sources.load();
         let Some(split) = mcp::split(&rows, self.claude_pid, &cfg, &procs::cmdline) else { return unknown };
         match split.blocker {
             None => Decision::Stop(split.ignored),
@@ -672,7 +684,7 @@ pub fn end_processes_within(pids: &[u32], wait: Duration) -> Result<(), String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::claude::session_of_args;
+    use crate::agents::claude::{claude_root, registry_status, session_of_args};
     use crate::settings::{Settings, save};
     use std::process::Child;
 
@@ -691,19 +703,20 @@ mod tests {
             save(&dir.join("config"), &settings).unwrap();
             let child = Command::new("sleep").arg("60").spawn().unwrap();
             let dog = Watchdog {
+                agent: Agent::Claude,
                 claude_pid: child.id(),
                 host_pid: std::process::id(),
                 root: dir.join("claude"),
                 settings: SettingsStore::open(&dir.join("config")),
                 secs_per_minute: 60,
                 check_every: IDLE_CHECK_EVERY,
-                sources: mcp::Sources {
+                sources: mcp::Where::Claude(mcp::Sources {
                     root: dir.join("claude"),
                     claude_json: dir.join("claude.json"),
                     cwd: dir.join("work"),
                     home: dir.join("home").to_string_lossy().into_owned(),
                     vars: [("PATH".to_string(), std::env::var("PATH").unwrap_or_default())].into(),
-                },
+                }),
                 leftover_grace: Duration::from_millis(300),
                 session: None,
                 config: dir.join("config"),
@@ -814,6 +827,7 @@ mod tests {
     #[test]
     fn a_host_knows_which_background_session_it_shows_from_its_arguments() {
         let info = |args: &[&str]| HostInfo {
+            agent: crate::agents::Agent::Claude,
             claude_pid: 1,
             host_pid: 2,
             dir: String::new(),
@@ -986,6 +1000,55 @@ mod tests {
             }
             other => panic!("expected a stop, got {other:?}"),
         }
+    }
+
+    /// A Codex session platoon hosts: idle is what its rollout's last turn record says, its MCP servers are the ones in
+    /// Codex's `config.toml`, and anything unclear keeps it.
+    #[test]
+    fn a_codex_session_stops_only_when_its_rollout_says_idle_and_only_config_tomls_servers_are_ignored() {
+        let mut rig = Rig::new("codex", Settings::default());
+        let codex = rig.dir.join("codex");
+        let id = "01a1517c-414d-7902-93d1-efa74830493d";
+        let day = codex.join("sessions/2026/10/18");
+        fs::create_dir_all(&day).unwrap();
+        let rollout = day.join(format!("rollout-2026-10-18T20-07-40-{id}.jsonl"));
+        let turn =
+            |kind: &str| json!({"timestamp": "2026-10-19T00:07:40.187Z", "type": "event_msg", "payload": {"type": kind}}).to_string();
+        fs::write(&rollout, [turn("task_started"), turn("task_complete")].join("\n") + "\n").unwrap();
+        fs::write(codex.join("config.toml"), "[mcp_servers.docs]\ncommand = \"sleep\"\nargs = [\"621\"]\n").unwrap();
+        rig.dog.agent = Agent::Codex;
+        rig.dog.root = codex.clone();
+        rig.dog.session = Agent::Codex.session_of_args(&Agent::Codex.args(Start::Resume(id)));
+        rig.dog.sources = mcp::Where::Codex(mcp::CodexSources {
+            config: codex.join("config.toml"),
+            home: rig.dir.join("home").to_string_lossy().into_owned(),
+            vars: [("PATH".to_string(), std::env::var("PATH").unwrap_or_default())].into(),
+        });
+
+        let s = Session::start(&mut rig, "sleep 621 & sleep 622 & read x", 2);
+        assert_eq!(rig.decide(), Decision::Keep(Reason::OtherProcess(s.pid_with("sleep 622"))), "not one of Codex's servers");
+        drop(s);
+        let s = Session::start(&mut rig, "sleep 621 & read x", 1);
+        assert_eq!(pids(&rig.decide()), [s.pid_with("sleep 621")], "the configured server alone doesn't keep it");
+
+        // In the middle of a turn: not idle.
+        fs::write(&rollout, [turn("task_complete"), turn("task_started")].join("\n") + "\n").unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        // An interrupted turn has ended.
+        fs::write(&rollout, [turn("task_started"), turn("turn_aborted")].join("\n") + "\n").unwrap();
+        assert!(matches!(rig.decide(), Decision::Stop(_)));
+        // Nothing to tell from: no turn record, no rollout, no session named.
+        fs::write(&rollout, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        fs::write(&rollout, [turn("task_complete")].join("\n") + "\n").unwrap();
+        rig.dog.session = Some("01a1517c-0000-7000-8000-000000000000".into());
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        rig.dog.session = None;
+        assert_eq!(rig.decide(), Decision::Keep(Reason::NotIdle));
+        rig.dog.session = Some(id.into());
+        // A config.toml that isn't TOML: no server can be recognised, so the server's process is work.
+        fs::write(codex.join("config.toml"), "[mcp_servers.docs\n").unwrap();
+        assert_eq!(rig.decide(), Decision::Keep(Reason::ConfigUnreadable(s.pid_with("sleep 621"))));
     }
 
     #[test]

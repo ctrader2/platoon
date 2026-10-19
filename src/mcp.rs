@@ -20,7 +20,12 @@
 //! Entries of another `type` than `stdio` (http, sse) have no local process and are skipped. Names in
 //! `disabledMcpServers` / `disabledMcpjsonServers` and plugins switched off in a settings file are skipped
 //! too: claude doesn't start them, so a process that looks like one is somebody else's.
+//!
+//! A Codex session's servers are the ones in Codex's `config.toml` (`codex::mcp_servers`, read the same way every
+//! time; see `Where`). Codex's own built-in servers are not configured there: a process of theirs counts as work,
+//! like anything else that isn't recognised.
 
+use crate::agents::{Agent, codex};
 use crate::procs::{self, Row};
 use serde_json::{Map, Value};
 use std::{
@@ -55,6 +60,64 @@ impl Sources {
             vars: std::env::vars().collect(),
         }
     }
+}
+
+/// Where a Codex session's configuration is read from.
+pub struct CodexSources {
+    /// Codex's `config.toml`.
+    pub config: PathBuf,
+    pub home: String,
+    /// The environment the session was started with (its `PATH` finds a server's program).
+    pub vars: HashMap<String, String>,
+}
+
+/// Where a session's MCP configuration is read from: its agent's.
+pub enum Where {
+    Claude(Sources),
+    Codex(CodexSources),
+}
+
+impl Where {
+    /// The real locations for a session of `agent` started in `cwd`, with this process's environment.
+    pub fn from_env(agent: Agent, cwd: &str) -> Self {
+        match agent {
+            Agent::Claude => Where::Claude(Sources::from_env(cwd)),
+            Agent::Codex => Where::Codex(CodexSources {
+                config: codex::config_path(&codex::codex_root()),
+                home: std::env::var("HOME").unwrap_or_default(),
+                vars: std::env::vars().collect(),
+            }),
+        }
+    }
+
+    /// Every stdio server that could be running under the session.
+    pub fn load(&self) -> Config {
+        match self {
+            Where::Claude(src) => load(src),
+            Where::Codex(src) => load_codex(src),
+        }
+    }
+}
+
+/// The servers of a Codex session: `config.toml`'s, as written there (Codex doesn't fill in variables). A file that
+/// is there but can't be read, or isn't TOML, is `unreadable`.
+fn load_codex(src: &CodexSources) -> Config {
+    let path = std::env::split_paths(src.vars.get("PATH").map(String::as_str).unwrap_or("")).collect();
+    let mut cfg = Config { home: src.home.clone(), path, ..Config::default() };
+    match fs::read_to_string(&src.config) {
+        Ok(text) => match codex::mcp_servers(&text) {
+            Ok(servers) => {
+                cfg.servers = servers
+                    .into_iter()
+                    .map(|s| Server { name: s.name, argv: std::iter::once(s.command).chain(s.args).collect() })
+                    .collect();
+            }
+            Err(_) => cfg.unreadable = true,
+        },
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => cfg.unreadable = true,
+    }
+    cfg
 }
 
 /// One configured stdio server: what claude runs to start it.

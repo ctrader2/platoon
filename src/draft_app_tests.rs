@@ -340,8 +340,14 @@ fn a_draft_ready_while_you_are_in_a_session_waits_and_says_so_once() {
     app.client = Some(client);
     app.mode = Mode::Attached(pid);
     // (Hosted, as far as the app knows: a refresh keeps the session open.)
-    app.hosts =
-        vec![crate::host::HostInfo { claude_pid: pid, host_pid: 1, dir: "/tmp".into(), args: vec![], sock: w.base.join("none.sock") }];
+    app.hosts = vec![crate::host::HostInfo {
+        agent: crate::agents::Agent::Claude,
+        claude_pid: pid,
+        host_pid: 1,
+        dir: "/tmp".into(),
+        args: vec![],
+        sock: w.base.join("none.sock"),
+    }];
     app.refresh_until_for_test(20, "the draft", |a| a.task_draft().is_some());
     assert!(matches!(app.mode, Mode::Attached(_)), "a session isn't taken over");
     assert_eq!(app.active_notice(), Some("The tasks from \"Stripe checkout\" are drafted: ctrl+space shows them."));

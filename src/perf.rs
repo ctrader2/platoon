@@ -190,7 +190,7 @@ fn a_background_index_of_thousands_fills_progressively_without_blocking_the_call
     let w = World::new("perf-bg");
     generate(&w.root, 1500);
     let t = Instant::now();
-    let mut ix = Indexer::spawn(&w.root, &w.cache);
+    let mut ix = Indexer::spawn(&w.root, None, &w.cache);
     assert!(t.elapsed() < Duration::from_millis(500), "spawn must return at once, took {:?}", t.elapsed());
     while ix.entries.len() < 1500 {
         ix.poll();
@@ -449,8 +449,14 @@ fn the_smart_scheduler_costs_next_to_nothing_when_a_big_history_is_all_named() {
 #[test]
 fn archiving_never_waits_for_a_process_and_stays_quick_with_five_thousand_rows() {
     let key = |app: &mut crate::app::App, c: char| app.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-    let hosted =
-        |pid| crate::host::HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() };
+    let hosted = |pid| crate::host::HostInfo {
+        agent: crate::agents::Agent::Claude,
+        claude_pid: pid,
+        host_pid: 0,
+        dir: "/tmp".into(),
+        args: Vec::new(),
+        sock: Default::default(),
+    };
     let limit = Duration::from_millis(500);
 
     // A few conversations, the process takes 1.5 s to exit.

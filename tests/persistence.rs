@@ -115,6 +115,9 @@ fn host_outlives_clients_and_reattach_restores_the_screen() {
     let cache = cache("proto");
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.args(["host", "--program", "sh", "--dir", "/tmp", "--rows", "24", "--cols", "80", "--"])
         .env("PLATOON_CACHE_DIR", &cache)
         .env("CLAUDE_CONFIG_DIR", cache.join("claude"))
@@ -156,6 +159,9 @@ fn quitting_the_ui_leaves_the_session_running() {
     let pair = native_pty_system().openpty(PtySize { rows: 30, cols: 100, pixel_width: 0, pixel_height: 0 }).unwrap();
     let mut cmd = CommandBuilder::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.env("PLATOON_CACHE_DIR", &cache);
     // Nothing of the real ~/.claude or ~/.config/platoon is read or written.
     cmd.env("CLAUDE_CONFIG_DIR", cache.join("claude"));
@@ -238,6 +244,9 @@ fn enter_right_after_starting_attaches_to_a_session_platoon_already_hosts() {
     // registered the way Claude registers a session.
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.args(["host", "--program", "sh", "--dir"])
         .arg(&work)
         .args(["--rows", "24", "--cols", "80", "--", "-c", "echo reopened-$((40+2)); exec sleep 60"])

@@ -1,8 +1,8 @@
 # Sessions
 
-The Sessions tab lists every Claude Code conversation you have ever had, in every folder, whether or not it is running.
-This page covers the list and everything you do with a session: open, search, rename, archive, copy text, and open its
-folders in an editor.
+The Sessions tab lists every Claude Code conversation you have ever had, in every folder, whether or not it is running,
+and every [Codex](#codex-conversations) conversation beside them when Codex is on this computer. This page covers the list
+and everything you do with a session: open, search, rename, archive, copy text, and open its folders in an editor.
 
 ## The list
 
@@ -33,7 +33,8 @@ Each conversation takes two lines, its name line and its prompt line; the select
 above 80% (time to start fresh or let Claude Code compact). The figure is Claude Code's own when its status line has
 reported one, else platoon's: the last reply's input (what it read from the cache, what it wrote to it, and the rest)
 over the window, which is 1,000,000 tokens when the model's name says so (`[1m]`) or the conversation has already gone
-past 200,000, else 200,000. It is left blank for a conversation with no reply yet. A project's screen shows it too.
+past 200,000, else 200,000. It is left blank for a conversation with no reply yet. A project's screen shows it too. A Codex conversation's window
+is the one Codex itself wrote down for it, so its figure is never a guess about the window.
 
 Status is `working`, `done` (Claude finished and you haven't looked yet), `idle` (running, waiting for you: `●`),
 `Background`, or `moved away` (see [Background sessions](#background-sessions)). A conversation nothing runs right now
@@ -73,7 +74,7 @@ LAST stay to the end. NAME and DIR share whatever room is left.
 
 | Key | Does |
 | --- | --- |
-| `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach` |
+| `enter` | open: shows it live if platoon is running it, otherwise resumes it from its saved history in its own directory; a `Background` one is opened with `claude attach`; a Codex one open in another Codex window is [left where it is](#codex-conversations) |
 | `n` | new session (pick a folder) |
 | `a` | archive the selected conversation (on the Archived tab: restore it) |
 | `m` | put the selected conversation in a [project](projects.md), move it to another, or take it out ("No project") |
@@ -110,7 +111,8 @@ on; `tab` (or a click on its name) switches between them and keeps what you type
   spread over different messages of the same conversation count. Each result shows the conversation's name and, under it,
   the matching message with your words in the accent color. `↑` `↓` (or `PgUp` `PgDn`, or the wheel) pick a result and
   `enter` (or a second click) closes the dialog and selects that conversation in the list, on the Archived tab if that is
-  where it is. Only what you typed is searched: Claude's answers and the output of tools are not.
+  where it is. Only what you typed is searched: Claude's answers and the output of tools are not. Codex conversations are
+  searched the same way (what you typed in them, not Codex's own text around it).
 - **Describe it** (only while "Enable features which require tokens" and "Find a session by description" are both on):
   for when you remember what a conversation was about but not the words. Type a few words about it and press `enter`:
   platoon picks about 50 conversations that share words with your description (their names, summaries and what you typed;
@@ -139,6 +141,34 @@ How much a search lists and how much of each message it keeps are [settings](set
 automatic one back. A name you give is kept in platoon's own file, `~/.config/platoon/names.json` (`$PLATOON_CONFIG_DIR`),
 never in Claude's files, and other things in that file are left alone when platoon writes it. It shows in the NAME column
 and is found by both searches.
+
+## Codex conversations
+
+When OpenAI's Codex CLI is on this computer, its conversations are in the list too, mixed in with Claude Code's by when
+they were last used. platoon reads them from Codex's own folder (`~/.codex`, or `$CODEX_HOME`): the saved sessions in
+`sessions/` and the names Codex gives them in `session_index.jsonl`. A Codex row looks like any other:
+
+- **MODEL** is the model's name (`GPT-6-Luna`), or `Codex` before the first reply (where a Claude Code row shows `-`).
+- The name Codex gave the conversation is its description line, as Claude Code's own titles are.
+- **CONTEXT** comes from the figures Codex writes down after each reply.
+- It is `working` while Codex is in the middle of a reply, and `idle` (`●`) while a Codex window has it open and is
+  waiting for you. Codex keeps a lock on a conversation while a window has it open; platoon only looks at who holds it
+  and never takes it.
+
+Archive, projects (`m`), rename (`r`), both searches, `v` and auto-archive work as for Claude Code's conversations.
+`enter` opens it under platoon with `codex resume <id> --no-daemon`, in its own folder, live in platoon like any session
+(`--no-daemon` keeps it in the process platoon started, rather than in Codex's shared background server). If Codex
+hasn't been told to trust that folder yet, Codex asks you there, in the session: answer it as you would in a terminal.
+`platoon open <id>` works for a Codex id too.
+
+Codex lets only one window have a conversation open, and platoon keeps to that: a conversation **open in another Codex
+window** (in another terminal, or in Codex's own background server) shows as running, and `enter` only says
+`"repo" is open in another Codex window. Close it there to open it here.` platoon never opens it a second time, never
+stops it, and won't archive it while it is open there (`a` says so); archiving a project leaves it out.
+
+Not for Codex conversations yet: the [smart features](tokens.md) (generated names and summaries, "Describe it"), the
+hand-off (`h`) and drafting tasks (`t`) work on Claude Code conversations only, and say so on a Codex row. New sessions
+(`n`, `platoon open` with no id) and [tasks](tasks-and-squads.md) are Claude Code's.
 
 ## Background sessions
 
@@ -189,6 +219,9 @@ Details worth knowing:
 - A session is only stopped when Claude itself says it is idle. If anything is running under it (a dev server, a
   background job) it is left alone, because stopping Claude would end those too. Sessions started in a plain terminal,
   and anything with a window open on it, are never stopped.
+- For a Codex session, idle is what Codex's saved session says (its last reply has finished), and its MCP servers are
+  the ones in Codex's `config.toml` (`[mcp_servers.<name>]`, read only; one switched off with `enabled = false`, or reached
+  by `url`, has no process). Anything else under it keeps it running, as for Claude.
 - The exception is MCP servers: the helper programs Claude starts with every session (the ones you added with
   `claude mcp add`, put in a project's `.mcp.json`, or that come with a Claude Code plugin). Almost every real session has
   some, and they are closed when the session stops and started again when you open it, so by default they don't count as
@@ -208,8 +241,8 @@ Details worth knowing:
 
 ## Big histories
 
-platoon keeps an index of your transcripts in `~/.cache/platoon/index.json` and only re-reads files that changed, in the
-background, so it opens at once even with thousands of conversations (a small `indexing N…` shows in the header while it
+platoon keeps an index of your transcripts in `~/.cache/platoon/index.json` (Codex's in `codex-index.json` beside it) and
+only re-reads files that changed, in the background, so it opens at once even with thousands of conversations (a small `indexing N…` shows in the header while it
 catches up). Deleting the file is harmless: it is rebuilt. The words for the [full-text search](#search) (and, for the
 smart names, one line of Claude's last reply) are kept the same way in `prompts.jsonl` next to it, by remembering how far
 into each transcript it has read.
@@ -278,7 +311,8 @@ platoon open --project shop   # start a new session in this directory, in a proj
 The session is shared, tmux-style: every window shows it live and any of them can type. The session is sized to the
 smallest window attached. The [back key](settings-and-keys.md#keys-back-and-quit) (`ctrl+space`) detaches; the session
 keeps running. A session running in a plain `claude` platoon doesn't own can't be shared, so opening it asks before ending
-it and reopening the same conversation from its saved history.
+it and reopening the same conversation from its saved history. A Codex conversation open in another Codex window is never
+ended: `platoon open` says where it is and stops.
 
 ## Opening the editor (`v`)
 

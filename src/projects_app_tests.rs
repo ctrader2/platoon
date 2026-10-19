@@ -56,7 +56,14 @@ fn select(app: &mut App, id: &str) {
 }
 
 fn hosted(pid: u32) -> HostInfo {
-    HostInfo { claude_pid: pid, host_pid: 0, dir: "/tmp".into(), args: Vec::new(), sock: Default::default() }
+    HostInfo {
+        agent: crate::agents::Agent::Claude,
+        claude_pid: pid,
+        host_pid: 0,
+        dir: "/tmp".into(),
+        args: Vec::new(),
+        sock: Default::default(),
+    }
 }
 
 /// Four conversations: alpha and beta in /srv/a, gamma and delta in /srv/b (each prompt names a fruit).

@@ -1,5 +1,5 @@
-//! Fixtures for unit tests: a throwaway Claude config dir, platoon cache dir and platoon config dir, so
-//! no test ever reads or writes the real `~/.claude`, `~/.cache/platoon` or `~/.config/platoon`.
+//! Fixtures for unit tests: a throwaway Claude config dir, Codex folder, platoon cache dir and platoon config dir, so
+//! no test ever reads or writes the real `~/.claude`, `~/.codex`, `~/.cache/platoon` or `~/.config/platoon`.
 
 use crate::agents::claude::Reader;
 use crate::app::App;
@@ -97,6 +97,29 @@ impl World {
 
     pub fn app(&self) -> App {
         App::with_dirs(Reader::with_root(self.root.clone()), self.cache.clone(), self.config.clone())
+    }
+
+    /// This world's Codex folder (made by `codex_samples`, or by the test).
+    pub fn codex(&self) -> PathBuf {
+        self.base.join("codex")
+    }
+
+    /// An app that reads this world's Codex folder too.
+    pub fn codex_app(&self) -> App {
+        let codex = crate::agents::codex::Reader::with_root(self.codex());
+        App::with_codex_dirs(Reader::with_root(self.root.clone()), codex, self.cache.clone(), self.config.clone())
+    }
+
+    /// Copy the sample Codex sessions (`src/testdata/codex`: three conversations, their names) into this world's Codex
+    /// folder.
+    pub fn codex_samples(&self) {
+        let data = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex"));
+        let day = "sessions/2026/10/18";
+        fs::create_dir_all(self.codex().join(day)).unwrap();
+        for f in fs::read_dir(data.join(day)).unwrap().flatten() {
+            fs::copy(f.path(), self.codex().join(day).join(f.file_name())).unwrap();
+        }
+        fs::copy(data.join("session_index.jsonl"), self.codex().join("session_index.jsonl")).unwrap();
     }
 
     /// A saved conversation: a real prompt, an assistant reply using `tokens`, last active `mins_ago` minutes ago.

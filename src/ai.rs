@@ -726,7 +726,7 @@ impl Runner {
         let model = req.model.clone().unwrap_or_else(|| settings.ai_model.clone());
         let agent = crate::agents::agent_of(&model);
         let mut cmd = Command::new(&self.program);
-        agent.one_shot(&mut cmd, &model, req);
+        agent.one_shot(&mut cmd, &model, req).map_err(other)?;
         cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))
             .env("PLATOON_AI", "1")
             .stdin(Stdio::piped())

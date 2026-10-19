@@ -136,6 +136,8 @@ pub struct Running {
     pub name: Option<String>,
     /// It only shows a background session (`claude attach <id>`): stopping it leaves that session running.
     pub attach: bool,
+    /// The agent running it.
+    pub agent: crate::agents::Agent,
 }
 
 /// The sessions platoon's hosts run (`<cache>/hosts/*.json` whose `claude` is alive). Only reads: nothing is cleaned up
@@ -159,8 +161,7 @@ pub fn running_sessions(cache: &Path, root: &Path) -> Vec<Running> {
             .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
             .unwrap_or_default();
         let entry = live.iter().find(|l| l.pid == pid);
-        // A host runs Claude Code (`host::HostInfo::agent`).
-        let agent = crate::agents::Agent::Claude;
+        let agent = crate::host::agent_of_info(&v);
         let attach = agent.attaches(&args);
         let id = if attach { args.get(1).cloned() } else { entry.map(|l| l.id.clone()).or_else(|| agent.session_of_args(&args)) };
         out.push(Running {
@@ -169,6 +170,7 @@ pub fn running_sessions(cache: &Path, root: &Path) -> Vec<Running> {
             id,
             name: entry.and_then(|l| l.name.clone()),
             attach,
+            agent,
         });
     }
     out.sort_by_key(|r| r.claude_pid);
@@ -288,10 +290,11 @@ fn session_line(r: &Running) -> String {
         (None, _) => "a session".to_string(),
     };
     let dir = if r.dir.is_empty() { String::new() } else { format!(" in {}", r.dir) };
-    let again = match (&r.id, r.attach) {
-        (Some(id), true) => format!(": `claude attach {id}` shows it again"),
-        (Some(id), false) => format!(": `claude --resume {id}` opens it again"),
-        (None, _) => String::new(),
+    let again = match (&r.id, r.attach, r.agent) {
+        (Some(id), true, _) => format!(": `claude attach {id}` shows it again"),
+        (Some(id), false, crate::agents::Agent::Claude) => format!(": `claude --resume {id}` opens it again"),
+        (Some(id), false, crate::agents::Agent::Codex) => format!(": `codex resume {id}` opens it again"),
+        (None, _, _) => String::new(),
     };
     format!("  - {what}{dir} (pid {}){again}", r.claude_pid)
 }
@@ -351,7 +354,11 @@ pub fn run(
         for r in &plan.running {
             let _ = writeln!(out, "{}", session_line(r));
         }
-        let _ = writeln!(out, "Their conversations are saved: `claude --resume <id>` opens them again.");
+        if plan.running.iter().any(|r| r.agent == crate::agents::Agent::Codex) {
+            let _ = writeln!(out, "Their conversations are saved: `claude --resume <id>` (or `codex resume <id>`) opens them again.");
+        } else {
+            let _ = writeln!(out, "Their conversations are saved: `claude --resume <id>` opens them again.");
+        }
         let yes = if opts.stop_sessions {
             let _ = writeln!(out, "Stopping them (--stop-sessions).");
             true

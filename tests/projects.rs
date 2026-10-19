@@ -409,6 +409,9 @@ fn sessions_platoon_starts_are_told_to_offer_making_tasks() {
 fn hook(lab: &Lab, input: &str, project: Option<&str>) -> (i32, String) {
     let mut cmd = Command::new(BIN);
     cmd.env("PLATOON_NO_UPDATE_CHECK", "1"); // no version checks: never the network, never `claude --version`
+    for (k, v) in common::NO_REAL_CODEX {
+        cmd.env(k, v); // never the real Codex: its folder or its program
+    }
     cmd.args(["hook", "session-start"])
         .env("CLAUDE_CONFIG_DIR", &lab.claude)
         .env("PLATOON_CACHE_DIR", &lab.cache)
