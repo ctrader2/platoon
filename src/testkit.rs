@@ -213,7 +213,7 @@ impl Drop for World {
 }
 
 pub fn alive(pid: u32) -> bool {
-    crate::agents::claude::pid_alive(pid)
+    crate::procs::pid_alive(pid)
 }
 
 /// Wait for `pid` (a process of the test's own) to have ended, for as long as a loaded machine could need, and fail

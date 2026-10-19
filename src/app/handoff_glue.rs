@@ -10,7 +10,7 @@
 //! runs the work, keeps the box and starts the session.
 
 use super::*;
-use crate::agents::claude::Spent;
+use crate::agents::Spent;
 use crate::ai::{AiError, Reply, Request};
 use crate::gitfacts::{self, GitFacts};
 use crate::handoff::{self, Brief, Facts};

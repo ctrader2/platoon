@@ -139,7 +139,7 @@ pub fn clear_marker(path: &Path) {
 pub fn marker_alive(path: &Path) -> bool {
     let Ok(text) = fs::read_to_string(path) else { return false };
     let Ok(pid) = text.trim().parse::<u32>() else { return false };
-    if claude::pid_alive(pid) {
+    if crate::procs::pid_alive(pid) {
         return true;
     }
     let _ = fs::remove_file(path);

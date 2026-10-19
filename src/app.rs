@@ -1,4 +1,5 @@
-use crate::agents::claude::{self, Live, Reader};
+use crate::agents::claude::{self, Reader};
+use crate::agents::{Agent, Hidden, Live};
 use crate::ai;
 use crate::archive::{self, Archive};
 use crate::client::{Client, key_bytes};
@@ -723,7 +724,7 @@ impl App {
         // platoon's own `claude -p` helper runs in one folder of ours. It registers itself like any session, but it is
         // not a conversation: dropped here, at the two doors (running processes and saved transcripts), so nothing
         // downstream (rows, counts, search, naming, archive) ever sees it.
-        let helper = claude::Hidden::new(&ai::work_dir(&cache));
+        let helper = Hidden::new(&ai::work_dir(&cache));
         reader.hide(helper.clone());
         indexer.hide(helper);
         let settings = SettingsStore::open(&config);
@@ -1276,7 +1277,7 @@ impl App {
             live.iter().filter(|l| !l.is_background()).map(|l| (l.pid, l.id.clone(), l.started_at)).collect();
         // A session platoon started under a project is placed here; that is a membership change like any other,
         // so its project is told there is something new (the same as pressing `m`).
-        for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &claude::pid_alive) {
+        for (session, project) in projects_mod::resolve_launches(&self.cache, &mut self.projects, &ids, &crate::procs::pid_alive) {
             self.joined_project(&project, &session);
         }
         if self.open_project.as_ref().is_some_and(|p| self.projects.get(p).is_none()) {
@@ -1505,13 +1506,13 @@ impl App {
     fn session_from(&self, e: &Entry) -> Session {
         let t = &e.t;
         let cwd = t.cwd.clone().unwrap_or_default();
-        let mut large = t.large_window;
-        let window = claude::window_size(t.context_tokens, &mut large);
-        let est = (t.context_tokens * 100 / window).min(100) as u8;
+        // The index reads Claude Code's transcripts.
+        let agent = Agent::Claude;
+        let est = (t.context_tokens * 100 / agent.context_window(t)).min(100) as u8;
         let description = t.ai_title.clone().or_else(|| t.first_prompt.clone()).unwrap_or_default();
         let branch = t.branch.clone().filter(|b| b != "HEAD");
-        let mut s =
-            self.session(e.id.clone(), cwd, branch, t.model.as_deref().map(claude::pretty_model), est, description, e.last_active_ms());
+        let model = t.model.as_deref().map(|m| agent.model_name(m));
+        let mut s = self.session(e.id.clone(), cwd, branch, model, est, description, e.last_active_ms());
         if !t.extra_dirs.is_empty() {
             s.extra_dirs = t.extra_dirs.iter().map(|d| dirs::tilde(d, &self.home)).collect();
             s.rehaystack();

@@ -11,10 +11,11 @@
 //! A host also stops its own session when nobody has used it for a while (see `Watchdog`), so forgotten
 //! sessions don't pile up. Nothing is lost by that: the conversation resumes from its saved history.
 
-use crate::agents::claude::{claude_root, pid_alive, registry_status};
+use crate::agents::claude::{claude_root, registry_status};
 use crate::archive::config_dir;
 use crate::mcp::{self, Blocker, Tracked};
 use crate::procs;
+use crate::procs::pid_alive;
 use crate::settings::SettingsStore;
 use crate::usage::cache_dir;
 use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};

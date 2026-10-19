@@ -8,7 +8,8 @@
 //! Scanning runs on a background thread (`Indexer::spawn`) and streams results back in batches, newest
 //! files first, so the list fills in while the UI is already usable.
 
-use crate::agents::claude::{Hidden, Transcript, read_transcript};
+use crate::agents::claude::read_transcript;
+use crate::agents::{Hidden, Transcript};
 use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},

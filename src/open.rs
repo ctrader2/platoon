@@ -72,7 +72,7 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     let live = guard::live_entries(&root);
     let all = Reader::with_root(root.clone()).live();
     // Sessions Claude's own service runs in the background: opened with `claude attach`, never `--resume`.
-    let background: Vec<&claude::Live> = all.iter().filter(|l| l.is_background()).collect();
+    let background: Vec<&crate::agents::Live> = all.iter().filter(|l| l.is_background()).collect();
     let mut known: Vec<String> = saved_session_ids(&root);
     known.extend(live.iter().map(|e| e.id.clone()));
     known.extend(background.iter().map(|l| l.id.clone()));

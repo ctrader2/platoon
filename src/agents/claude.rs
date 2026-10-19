@@ -2,6 +2,8 @@
 //! formats (`~/.claude/sessions/<pid>.json` and `~/.claude/projects/*/<id>.jsonl`), so all
 //! knowledge of them lives in this file.
 
+use super::{Hidden, Live, SessionLog, Spent, Transcript};
+use crate::procs::pid_alive;
 use serde_json::Value;
 use std::{
     fs::{self, File},
@@ -39,36 +41,6 @@ fn claude_json_in(config_dir: Option<std::ffi::OsString>, home: &str) -> PathBuf
     match config_dir {
         Some(dir) => PathBuf::from(dir).join(".claude.json"),
         None => Path::new(home).join(".claude.json"),
-    }
-}
-
-/// A live Claude Code process, from its registry file.
-#[derive(Debug)]
-pub struct Live {
-    pub pid: u32,
-    pub id: String,
-    pub cwd: String,
-    /// Only a name the user chose; Claude's derived placeholder is dropped.
-    pub name: Option<String>,
-    pub started_at: u64,
-    pub busy: bool,
-    /// Set for a background session: one run by Claude's own service (`claude --bg`, `claude agents`) rather than in
-    /// a terminal. It is `claude attach <id>`, never `claude --resume`, that opens it. Holds that id.
-    pub background: Option<String>,
-    /// Set for an interactive session that handed its conversation to a background session (Claude Code's
-    /// `parkedJobId`): holds the id of that background session's job (the id `claude attach` takes). Its process
-    /// stays alive but no longer works on the conversation, and Claude never sets its registry status back to idle,
-    /// so a parked entry is never `busy` and never counts as a copy that writes to the conversation.
-    pub parked: Option<String>,
-}
-
-impl Live {
-    pub fn is_background(&self) -> bool {
-        self.background.is_some()
-    }
-
-    pub fn is_parked(&self) -> bool {
-        self.parked.is_some()
     }
 }
 
@@ -151,50 +123,6 @@ pub fn attach_args(attach_id: &str) -> [String; 2] {
 /// which is how Claude itself prints it.
 pub fn short_id(session_id: &str) -> String {
     session_id.chars().take(8).collect()
-}
-
-/// A working folder whose sessions are not conversations to show: the folder platoon's own `claude -p` calls run in.
-/// A process registered there, or a transcript recorded there, is platoon's own helper, never something the user
-/// opened. Compared after resolving `.`, `..` and symlinks, so a different spelling of the same folder still counts,
-/// while a folder that only has a similar name (`ai-work-2`, or `ai-work` somewhere else) does not.
-#[derive(Clone, Debug)]
-pub struct Hidden {
-    resolved: PathBuf,
-}
-
-impl Hidden {
-    pub fn new(dir: &Path) -> Hidden {
-        Hidden { resolved: resolve_path(dir) }
-    }
-
-    /// Is `cwd` this folder, or somewhere inside it?
-    pub fn covers(&self, cwd: &str) -> bool {
-        !cwd.is_empty() && resolve_path(Path::new(cwd)).starts_with(&self.resolved)
-    }
-}
-
-/// `p` with symlinks and `..` resolved as far as it exists; the part that doesn't exist (yet, or any more) is
-/// tidied up in writing only.
-fn resolve_path(p: &Path) -> PathBuf {
-    use std::path::Component;
-    if let Ok(c) = fs::canonicalize(p) {
-        return c;
-    }
-    let comps: Vec<Component> = p.components().collect();
-    let (mut out, from) = (0..comps.len())
-        .rev()
-        .find_map(|k| fs::canonicalize(comps[..k].iter().collect::<PathBuf>()).ok().filter(|_| k > 0).map(|c| (c, k)))
-        .unwrap_or_default();
-    for c in &comps[from..] {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
 }
 
 pub struct Reader {
@@ -363,104 +291,8 @@ pub fn saved_session_ids(root: &Path) -> Vec<String> {
     ids
 }
 
-pub fn pid_alive(pid: u32) -> bool {
-    // Signal 0 checks existence only. EPERM means it exists but belongs to someone else.
-    let exists = unsafe { libc::kill(pid as i32, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) };
-    alive_verdict(exists, read_proc_stat(pid))
-}
-
-/// What reading `/proc/<pid>/stat` came to.
-#[derive(Debug, PartialEq)]
-#[allow(dead_code)] // each platform makes only some of these (macOS only `Zombie`, `Vanished`, `Unreadable`)
-enum StatRead {
-    /// No `/proc` on this platform (macOS), or it is not mounted: the file says nothing either way.
-    NoProc,
-    /// The process vanished under us: the file is gone (NotFound), or the kernel refused the read because
-    /// the process was ending (ESRCH, "No such process": it shows up as an unclassified error, not NotFound).
-    Vanished,
-    /// Some other trouble reading (permission, ...).
-    Unreadable,
-    Text(String),
-    /// No `/proc`, but the kernel said whether it is a zombie (macOS: `procs::zombie`).
-    Zombie(bool),
-}
-
-#[cfg(target_os = "macos")]
-fn read_proc_stat(pid: u32) -> StatRead {
-    match crate::procs::zombie(pid) {
-        Ok(z) => StatRead::Zombie(z),
-        Err(libc::ESRCH) => StatRead::Vanished,
-        Err(_) => StatRead::Unreadable,
-    }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn read_proc_stat(pid: u32) -> StatRead {
-    if !cfg!(target_os = "linux") {
-        return StatRead::NoProc;
-    }
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(s) => StatRead::Text(s),
-        Err(e) => classify_read_error(&e, std::path::Path::new("/proc/self/stat").exists()),
-    }
-}
-
-#[cfg_attr(target_os = "macos", allow(dead_code))]
-fn classify_read_error(e: &std::io::Error, proc_is_there: bool) -> StatRead {
-    if e.kind() == std::io::ErrorKind::NotFound || e.raw_os_error() == Some(libc::ESRCH) {
-        // Every pid looks "not found" when /proc is not mounted at all: then we cannot tell.
-        if proc_is_there { StatRead::Vanished } else { StatRead::NoProc }
-    } else {
-        StatRead::Unreadable
-    }
-}
-
-/// The decision behind `pid_alive`, kept pure so the race can be tested without timing.
-///
-/// A process that has exited stays a zombie (state `Z`) until its parent reaps it, and a zombie still
-/// answers signal 0, though it is gone as far as anyone using it is concerned. And if the parent reaps it
-/// between our signal 0 and our read of `/proc/<pid>/stat`, the read fails (NotFound or ESRCH): that also
-/// means gone (reading it as "not a zombie, so alive" made a dead process look alive for one call). macOS has
-/// no `/proc`: there the kernel is asked directly (`StatRead::Zombie`). Any other read error (say, permission),
-/// an unparseable line, or no way to ask at all leaves what the signal said: it exists.
-fn alive_verdict(exists_per_kill: bool, stat: StatRead) -> bool {
-    if !exists_per_kill {
-        return false;
-    }
-    match stat {
-        StatRead::NoProc | StatRead::Unreadable => true,
-        StatRead::Vanished => false,
-        StatRead::Zombie(z) => !z,
-        StatRead::Text(s) => {
-            let state = s.rsplit_once(')').and_then(|(_, rest)| rest.split_whitespace().next().map(str::to_owned));
-            !matches!(state.as_deref(), Some("Z" | "X" | "x"))
-        }
-    }
-}
-
 pub fn find_transcript(root: &Path, id: &str) -> Option<PathBuf> {
     fs::read_dir(root.join("projects")).ok()?.flatten().map(|d| d.path().join(format!("{id}.jsonl"))).find(|p| p.exists())
-}
-
-/// What platoon knows about one saved conversation, read from its transcript.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct Transcript {
-    /// Working directory the conversation started in (the first `cwd` recorded).
-    pub cwd: Option<String>,
-    /// Folders added beside it (`/add-dir`, `--add-dir`), as of the latest environment snapshot read. Empty when
-    /// none were added, or the transcript is older than those snapshots.
-    pub extra_dirs: Vec<String>,
-    pub branch: Option<String>,
-    /// Raw model id from the latest assistant message.
-    pub model: Option<String>,
-    pub context_tokens: u64,
-    /// Once a session has gone past 200k tokens it must have a large window. Never flips back.
-    pub large_window: bool,
-    pub ai_title: Option<String>,
-    /// First real user prompt. None means nothing but slash-command echoes and injected blocks: junk.
-    pub first_prompt: Option<String>,
-    /// Timestamp of the latest user or assistant entry, ms since the epoch.
-    pub last_active_ms: Option<u64>,
 }
 
 /// Read a transcript cheaply, whatever its size: the first real prompt and cwd from the head, and the
@@ -516,19 +348,6 @@ pub fn started_ms(path: &Path) -> Option<u64> {
         }
     }
     None
-}
-
-/// What one conversation spent, summed from the usage records in its transcript (and its subagents' transcripts).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Spent {
-    /// Sent to the model and not read from its cache: `input_tokens` plus `cache_creation_input_tokens`.
-    pub input: u64,
-    /// Written by the model (`output_tokens`, thinking included).
-    pub output: u64,
-    /// Read back from the model's cache (`cache_read_input_tokens`): the conversation so far, sent again each turn.
-    pub cache_read: u64,
-    /// Some of it was spent by the conversation's subagents.
-    pub subagents: bool,
 }
 
 type Usages = std::collections::HashMap<String, (u64, u64, u64)>;
@@ -598,14 +417,6 @@ fn usage_of(v: &Value, seen: &mut Usages, unkeyed: &mut usize) -> bool {
     };
     seen.insert(key, counts);
     true
-}
-
-/// What a task's session has used, and when it last wrote: what its transcript and its subagents' transcripts spent
-/// (`spent`), and the latest time any of those files was written (ms since the epoch).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SessionLog {
-    pub spent: Spent,
-    pub last_at: Option<u64>,
 }
 
 /// Read a task's session's transcript (see `SessionLog`). None when there is no transcript yet. It reads every line:
@@ -917,79 +728,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn liveness_is_decided_by_the_signal_and_then_the_state_line() {
-        use StatRead::{NoProc, Unreadable, Vanished};
-        // Not there per the signal: never alive, whatever the state file says.
-        assert!(!alive_verdict(false, stat("S")));
-        for r in [NoProc, Vanished, Unreadable, StatRead::Text(String::new())] {
-            assert!(!alive_verdict(false, r));
-        }
-        // There, and running, sleeping, waiting: alive (comm with spaces and a ')' is parsed past).
-        for st in ["R", "S", "D", "T", "t", "I"] {
-            assert!(alive_verdict(true, stat(st)), "{st}");
-        }
-        // There but a zombie or dead: gone.
-        for st in ["Z", "X", "x"] {
-            assert!(!alive_verdict(true, stat(st)), "{st}");
-        }
-        // The race: the signal worked, then the parent reaped it before we read the state (file gone, or
-        // the kernel said ESRCH): gone.
-        assert!(!alive_verdict(true, Vanished));
-        // Other read trouble, or a line we cannot read, or no /proc (macOS): the signal stands.
-        assert!(alive_verdict(true, Unreadable));
-        // macOS: the kernel's answer about a zombie decides.
-        assert!(alive_verdict(true, StatRead::Zombie(false)) && !alive_verdict(true, StatRead::Zombie(true)));
-        assert!(!alive_verdict(false, StatRead::Zombie(false)));
-        assert!(alive_verdict(true, StatRead::Text("garbage".into())));
-        assert!(alive_verdict(true, StatRead::Text(String::new())));
-        assert!(alive_verdict(true, NoProc));
-    }
-
-    #[test]
-    fn a_failed_read_of_the_state_file_is_sorted_into_gone_or_unknown() {
-        use std::io::{Error, ErrorKind};
-        let esrch = Error::from_raw_os_error(libc::ESRCH);
-        assert_eq!(classify_read_error(&Error::from(ErrorKind::NotFound), true), StatRead::Vanished);
-        assert_eq!(classify_read_error(&esrch, true), StatRead::Vanished, "the kernel says ESRCH for a process that is ending");
-        assert_eq!(classify_read_error(&Error::from(ErrorKind::NotFound), false), StatRead::NoProc, "no /proc: cannot tell");
-        assert_eq!(classify_read_error(&Error::from(ErrorKind::PermissionDenied), true), StatRead::Unreadable);
-        assert_eq!(classify_read_error(&Error::from_raw_os_error(libc::EIO), true), StatRead::Unreadable);
-    }
-
-    #[test]
-    fn a_child_that_has_exited_but_was_not_reaped_yet_is_not_alive() {
-        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        let pid = child.id();
-        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-        // Not reaped: a zombie. The kill takes a moment to land, so wait for it (generously: a loaded machine).
-        let start = std::time::Instant::now();
-        while pid_alive(pid) {
-            assert!(start.elapsed() < std::time::Duration::from_secs(30), "a killed child nobody reaped still reads as alive");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0, "it is a zombie, which still answers a signal: only its state tells");
-        child.wait().unwrap();
-    }
-
-    #[test]
-    fn pid_alive_tells_a_running_process_from_a_reaped_one() {
-        let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
-        let pid = child.id();
-        assert!(pid_alive(pid));
-        child.kill().unwrap();
-        child.wait().unwrap(); // reaped: gone for good
-        assert!(!pid_alive(pid));
-        assert!(pid_alive(std::process::id()));
-    }
-
-    #[test]
     fn the_user_config_lives_in_the_config_dir_when_that_is_set_and_next_to_the_dot_claude_dir_otherwise() {
         assert_eq!(claude_json_in(Some("/x/cfg".into()), "/home/u"), Path::new("/x/cfg/.claude.json"));
         assert_eq!(claude_json_in(None, "/home/u"), Path::new("/home/u/.claude.json"));
-    }
-
-    fn stat(state: &str) -> StatRead {
-        StatRead::Text(format!("123 (a b) c) {state} 1 123 123 0 -1"))
     }
 
     #[test]
@@ -1376,53 +1117,12 @@ mod transcript_tests {
 #[cfg(test)]
 mod hidden_tests {
     use super::*;
-    use std::os::unix::fs::symlink;
 
     fn tmp(name: &str) -> PathBuf {
         let d = crate::testkit::removed_at_exit(std::env::temp_dir().join(format!("platoon-hidden-{name}-{}", std::process::id())));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
-    }
-
-    #[test]
-    fn a_folder_is_hidden_however_it_is_spelled_and_a_similar_name_is_not() {
-        let base = tmp("spell");
-        let work = base.join("cache/ai-work");
-        fs::create_dir_all(&work).unwrap();
-        fs::create_dir_all(base.join("cache/ai-work-2")).unwrap();
-        fs::create_dir_all(base.join("other/ai-work")).unwrap();
-        fs::create_dir_all(base.join("cache/x")).unwrap();
-        symlink(&work, base.join("link")).unwrap();
-        let h = Hidden::new(&work);
-        let s = |p: PathBuf| p.display().to_string();
-        for yes in [
-            s(work.clone()),
-            format!("{}/", work.display()),
-            s(base.join("cache/x/../ai-work")),
-            s(base.join("./cache/./ai-work")),
-            s(base.join("link")),
-            s(work.join("inside")),
-            s(base.join("link/deeper/still")),
-        ] {
-            assert!(h.covers(&yes), "{yes}");
-        }
-        for no in [
-            "",
-            "/",
-            "relative/ai-work",
-            &s(base.join("cache")),
-            &s(base.join("cache/ai-work-2")),
-            &s(base.join("other/ai-work")),
-            &s(base.join("cache/ai-wor")),
-        ] {
-            assert!(!h.covers(no), "{no}");
-        }
-        // Hidden before the folder exists (nothing has been called yet).
-        let ahead = Hidden::new(&base.join("cache/not-yet/ai-work"));
-        assert!(ahead.covers(&s(base.join("cache/not-yet/ai-work"))) && ahead.covers(&s(base.join("cache/x/../not-yet/ai-work"))));
-        assert!(!ahead.covers(&s(base.join("cache/not-yet/ai-work-2"))));
-        let _ = fs::remove_dir_all(&base);
     }
 
     #[test]

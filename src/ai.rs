@@ -11,7 +11,7 @@
 //! - It always runs in one fixed neutral folder (`work_dir`: `<cache dir>/ai-work`) with `PLATOON_AI=1` in its
 //!   environment, because Claude makes an empty folder under `~/.claude/projects` for every working directory it is
 //!   run in. The child registers itself with Claude like any session, so platoon hides everything whose working
-//!   folder is that one (`claude::Hidden`): it is never a row, a count or a candidate.
+//!   folder is that one (`agents::Hidden`): it is never a row, a count or a candidate.
 //! - `MAX_THINKING_TOKENS=0` is set in the child's environment: `--effort low` alone still let the model spend hidden
 //!   thinking tokens (a batch of 4 conversations cost 2,137 output tokens where the JSON needs about 250).
 //! - The prompt goes in on stdin, so a big batch can't hit the limit on argument length.
@@ -1189,7 +1189,7 @@ pub(crate) mod tests {
     }
 
     fn alive(pid: &str) -> bool {
-        pid.trim().parse::<u32>().is_ok_and(crate::agents::claude::pid_alive)
+        pid.trim().parse::<u32>().is_ok_and(crate::procs::pid_alive)
     }
 
     /// Longer than a process ever takes to end or start even on a loaded machine: waits return as soon as it has.
@@ -1865,7 +1865,7 @@ pub(crate) mod tests {
         assert_eq!(result, Err(AiError::Cancelled));
         wait_dead(&f.dir.join("pid"));
         wait_dead(&f.dir.join("sleep"));
-        assert!(crate::agents::claude::pid_alive(bystander.id()), "a process that isn't ours is left alone");
+        assert!(crate::procs::pid_alive(bystander.id()), "a process that isn't ours is left alone");
         let _ = bystander.kill();
         let _ = bystander.wait();
         assert_eq!(Ledger::open(&f.cache).load().backoff, None, "cancelling is not a failure");

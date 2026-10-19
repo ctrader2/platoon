@@ -25,7 +25,7 @@ pub struct Proc {
     pub background: Option<String>,
     /// This process must not write to the conversation any more: its memory can't be trusted to match it.
     pub stale: bool,
-    /// An interactive process that handed the conversation to a background session (`claude::Live::parked`). It is
+    /// An interactive process that handed the conversation to a background session (`agents::Live::parked`). It is
     /// never working, never a copy that writes to the conversation, and platoon never offers to take it over.
     pub parked: bool,
     /// For a parked process whose background session is still running: that session's job id (what

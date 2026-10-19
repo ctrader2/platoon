@@ -150,7 +150,7 @@ pub fn running_sessions(cache: &Path, root: &Path) -> Vec<Running> {
         }
         let Some(v) = fs::read_to_string(&path).ok().and_then(|s| serde_json::from_str::<Value>(&s).ok()) else { continue };
         let Some(pid) = v.get("claude_pid").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) else { continue };
-        if pid <= 1 || !claude::pid_alive(pid) {
+        if pid <= 1 || !crate::procs::pid_alive(pid) {
             continue;
         }
         let args: Vec<String> = v

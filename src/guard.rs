@@ -18,8 +18,9 @@
 //! every step is a small read that swallows its own errors, and a prompt is never refused or delayed because of
 //! them.
 
-use crate::agents::claude::{claude_root, parked_job, pid_alive};
+use crate::agents::claude::{claude_root, parked_job};
 use crate::host;
+use crate::procs::pid_alive;
 use crate::procs::ppid;
 use crate::sessionhook;
 use crate::usage::cache_dir;
