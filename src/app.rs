@@ -2525,6 +2525,13 @@ impl App {
         self.launch_in(agent, dir, start, None, false)
     }
 
+    /// The program that runs `agent`'s sessions.
+    pub(crate) fn program_of(&self, agent: Agent) -> String {
+        match agent {
+            Agent::Claude => self.program.clone(),
+        }
+    }
+
     /// Is the session started as `start` says told to offer making tasks? A new one or a resumed one, but not a
     /// task's own session and not a background session attached to (started elsewhere).
     pub(crate) fn offers_tasks(&self, start: Start) -> bool {
@@ -2546,10 +2553,7 @@ impl App {
             env.push((crate::sessionhook::OFFER_ENV, "1"));
         }
         let at_ms = usage::now().saturating_sub(2) * 1000;
-        let program = match agent {
-            Agent::Claude => self.program.clone(),
-        };
-        match host::launch(&self.host_dirs(), &program, &dir, &agent.args(start), &env, rows, cols) {
+        match host::launch(&self.host_dirs(), &self.program_of(agent), &dir, &agent.args(start), &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;
                 if let (Some(p), true) = (project, place)

@@ -724,8 +724,7 @@ impl Runner {
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
 
         let model = req.model.clone().unwrap_or_else(|| settings.ai_model.clone());
-        // platoon's own calls run on Claude Code.
-        let agent = Agent::Claude;
+        let agent = crate::agents::agent_of(&model);
         let mut cmd = Command::new(&self.program);
         agent.one_shot(&mut cmd, &model, req);
         cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))

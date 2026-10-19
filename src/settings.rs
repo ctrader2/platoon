@@ -90,8 +90,9 @@ pub const MAX_FIND_RESULTS: u64 = 20;
 pub const DEFAULT_FIND_WIDE: u64 = 200;
 pub const MIN_FIND_WIDE: u64 = 50;
 pub const MAX_FIND_WIDE: u64 = 1000;
-/// The models the token features can use, cheapest first: what the file says, and the first is the default.
-pub const MODELS: [&str; 2] = ["haiku", "sonnet"];
+/// The models the token features can use, cheapest first: what the file says, and the first is the default. Two of
+/// the catalog's (`agents::models`), Claude Code's.
+pub const MODELS: [&str; 2] = [crate::agents::claude::HAIKU, crate::agents::claude::SONNET];
 
 /// For the two automatic clean-ups, 0 means the feature is off.
 #[derive(Clone, Debug, PartialEq, Eq)]

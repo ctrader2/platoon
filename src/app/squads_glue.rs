@@ -328,7 +328,9 @@ impl App {
             exe,
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
         };
-        let args = Agent::Claude.task_args(&launch);
+        // The squad's model decides the agent.
+        let agent = crate::agents::agent_of(&squad.model);
+        let args = agent.task_args(&launch);
         // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
         #[cfg(test)]
         {
@@ -342,7 +344,7 @@ impl App {
             let env: Vec<(&str, &str)> =
                 (project != crate::tickets::NO_PROJECT_ID).then_some(("PLATOON_PROJECT", project)).into_iter().collect();
             let (rows, cols) = self.pty_size();
-            let (info, child) = host::launch(&self.host_dirs(), &self.program, &dir, &args, &env, rows, cols)?;
+            let (info, child) = host::launch(&self.host_dirs(), &self.program_of(agent), &dir, &args, &env, rows, cols)?;
             let pid = info.claude_pid;
             self.spawned.push(child);
             self.hosts.push(info);

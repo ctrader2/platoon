@@ -529,6 +529,17 @@ fn live_from(v: &Value) -> Option<Live> {
     })
 }
 
+// ---- models ---------------------------------------------------------------------------------------------------------
+
+/// Claude Code's model aliases: each always means the latest model of its family, so they need no list to be read.
+pub const OPUS: &str = "opus";
+pub const SONNET: &str = "sonnet";
+pub const HAIKU: &str = "haiku";
+pub const FABLE: &str = "fable";
+
+/// Claude Code's models in the catalog, in the order the squads' settings go round them.
+pub const MODELS: [&str; 4] = [OPUS, SONNET, HAIKU, FABLE];
+
 /// `claude-sonnet-5` -> `Sonnet 5`, `claude-fable-5-1` -> `Fable 5.1`, `claude-haiku-4-5-20251001` -> `Haiku 4.5`.
 /// Handles the older `claude-3-5-sonnet-...` ordering too. Anything unrecognised is shown as-is.
 pub fn pretty_model(id: &str) -> String {

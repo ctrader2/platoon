@@ -304,9 +304,6 @@ pub fn name_of(squads: &[Squad], id: &str) -> String {
 
 // ---- the settings changed from the Squads tab ------------------------------------------------------------------------
 
-/// The models a squad's settings are picked from on the Squads tab (its file may name any other).
-pub const MODELS: [&str; 4] = ["opus", "sonnet", "haiku", "fable"];
-
 /// A front matter setting the Squads tab changes without an editor. The description and the steps are the editor's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Setting {
@@ -346,15 +343,16 @@ impl Setting {
         }
     }
 
-    /// The value after `s`'s, as its file writes it: the models in `MODELS`' order, round (a model not in it goes to the
-    /// first); the verdict model the same, then "the same as the model" (None: no `verdict_model` line); plans first
-    /// yes or no.
+    /// The value after `s`'s, as its file writes it: the models in the catalog's order (`agents::models`; its file may
+    /// name any other), round (a model not in it goes to the first); the verdict model the same, then "the same as the
+    /// model" (None: no `verdict_model` line); plans first yes or no.
     pub fn next(self, s: &Squad) -> Option<String> {
-        let after = |m: &str| MODELS.iter().position(|x| *x == m).map(|i| i + 1);
+        let models: Vec<&str> = crate::agents::models().iter().map(|m| m.id).collect();
+        let after = |m: &str| models.iter().position(|x| *x == m).map(|i| i + 1);
         match self {
-            Setting::Model => Some(MODELS[after(&s.model).unwrap_or(0) % MODELS.len()].to_string()),
-            Setting::VerdictModel if s.verdict_model.is_empty() => Some(MODELS[0].to_string()),
-            Setting::VerdictModel => MODELS.get(after(&s.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
+            Setting::Model => Some(models[after(&s.model).unwrap_or(0) % models.len()].to_string()),
+            Setting::VerdictModel if s.verdict_model.is_empty() => Some(models[0].to_string()),
+            Setting::VerdictModel => models.get(after(&s.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
             Setting::PlanFirst => Some((!s.plan_first).to_string()),
         }
     }

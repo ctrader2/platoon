@@ -256,6 +256,27 @@ impl HookAnswer {
     }
 }
 
+// ---- models ---------------------------------------------------------------------------------------------------------
+
+/// A model platoon can run, and the agent that runs it: the model decides the agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Model {
+    /// As a squad's file, the settings and the agent's command line name it.
+    pub id: &'static str,
+    pub agent: Agent,
+}
+
+/// Every model platoon offers, in the order the squads' settings go round them: Claude Code's.
+pub fn models() -> Vec<Model> {
+    claude::MODELS.iter().map(|&id| Model { id, agent: Agent::Claude }).collect()
+}
+
+/// The agent that runs `model`. One the catalog doesn't name (a squad's file may give a full Claude model id) is
+/// Claude Code's.
+pub fn agent_of(model: &str) -> Agent {
+    models().into_iter().find(|m| m.id == model).map_or(Agent::Claude, |m| m.agent)
+}
+
 // ---- what platoon reads about conversations and the processes running them ----------------------------------------
 
 /// A live agent process running a conversation, as its agent registers it.
@@ -436,5 +457,16 @@ mod tests {
         assert_eq!(a.context_window(&t), 200_000);
         assert_eq!(a.context_window(&Transcript { large_window: true, ..t.clone() }), 1_000_000);
         assert_eq!(a.context_window(&Transcript { context_tokens: 250_000, ..t }), 1_000_000);
+    }
+
+    #[test]
+    fn the_catalog_holds_claude_codes_models_in_the_squads_order_and_the_model_decides_the_agent() {
+        let ids: Vec<&str> = models().iter().map(|m| m.id).collect();
+        assert_eq!(ids, ["opus", "sonnet", "haiku", "fable"]);
+        assert!(models().iter().all(|m| m.agent == Agent::Claude));
+        assert_eq!(crate::settings::MODELS, ["haiku", "sonnet"], "the smart features' two, the default first");
+        for m in ["opus", "fable", "claude-opus-4-1", ""] {
+            assert_eq!(agent_of(m), Agent::Claude, "{m}");
+        }
     }
 }
