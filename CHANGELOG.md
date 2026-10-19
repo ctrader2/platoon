@@ -59,6 +59,16 @@ here.
 
 ### Added
 
+- **Codex conversations in the list.** When OpenAI's Codex CLI is installed, its conversations show beside Claude
+  Code's, newest activity first, with their model's name (`GPT-6-Luna`, or `Codex` before the first reply), the name
+  Codex gave them, how full their context is and whether they are working. Search, archive, projects, rename and `v`
+  work on them; `enter` opens one in platoon (`codex resume <id> --no-daemon`), and `platoon open <id>` takes a Codex id.
+  One open in another Codex window is shown running and never opened a second time or stopped: platoon says where it
+  is. A Codex session platoon runs stops itself when idle like any other, its MCP servers read from Codex's
+  `config.toml`. The smart features, the hand-off and task drafts stay on Claude Code's conversations for now.
+- **Project notes reach Codex sessions too.** `platoon setup` adds three hooks to Codex's `hooks.json` when Codex is
+  installed (notes at the start, changed notes with a message, notes updates after a turn); Codex asks you once to trust
+  them. They never block starting platoon, and `platoon uninstall` takes them out again.
 - **The Squads tab** (`4`) lists every squad, built in or yours, with where it comes from and **needs fixing** when its
   file has something wrong, and shows the picked one beside the list: what it is for, its models, whether it plans first,
   its steps and what is wrong with it. `e` opens a squad's file in your editor (a built-in's text is copied into

@@ -5,6 +5,9 @@
 - Linux or macOS.
 - Claude Code, installed as `claude` and signed in. platoon runs
   your sessions with it and reads its files (see [What platoon changes](what-platoon-changes.md)).
+- Optional: OpenAI's Codex CLI (`codex`). When it is on this computer, platoon lists and opens its conversations too
+  (see [Codex conversations](sessions.md#codex-conversations)), and `platoon setup` gives its sessions the project notes
+  hooks.
 - Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
 - `git`, for [tasks](tasks-and-squads.md#starting-a-task) (they work in git worktrees) and for the git facts in a [hand-off](projects.md#handing-work-on-to-a-new-session). Everything else works
@@ -52,6 +55,27 @@ first, as `settings.json.platoon-bak` beside it, and leaves everything else in i
 The status line and the session guard are the two platoon can't start without. If you already have a status line of
 your own, setup leaves it alone and says so: make your own also run `platoon statusline` if you want plan usage in
 platoon.
+
+### Codex
+
+When Codex is on this computer (its folder `~/.codex`, or `$CODEX_HOME`, is there, or `codex` is on your path), setup also
+adds three hooks to Codex's `hooks.json` in that folder, so a [project's](projects.md) notes reach its Codex sessions as
+they reach Claude Code's:
+
+| Step | Why |
+| --- | --- |
+| Project notes | Hands a project's notes to its Codex sessions when they start (Codex starts them with your first message) |
+| Changed notes | Passes notes that changed since to a running Codex session, with your next message |
+| Notes updates | Lets platoon keep a project's notes up to date after its Codex sessions stop |
+
+Each is a fixed command, the same for every session (`<platoon> hook session-start --agent codex`, `hook guard --agent
+codex`, `hook stop --agent codex`). The file is backed up first (`hooks.json.platoon-bak`), and everything else in it is
+left as it was. None of these steps is needed to start platoon, and if `hooks.json` can't be read setup says so and
+leaves it alone.
+
+**Codex asks you once to trust them.** Codex runs a hook only after you have reviewed it: the next time you start Codex,
+it says the new hooks need review. Approve them there, once. Until you do they simply don't run; nothing else in platoon
+waits for them. platoon never marks them trusted itself.
 
 After the checklist, setup asks one more question: may platoon use your Claude plan for its
 [smart features](tokens.md)? The answer is "no" unless you say yes; see
@@ -142,6 +166,9 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
+   **Codex's hooks.** It takes the three hooks setup added out of Codex's `hooks.json` the same way (backup first, as
+   `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks and Codex's record of which hooks
+   you trusted included. If that file can't be read, it says so and leaves it as it is.
 4. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
    said yes. Folders older platoons made are removed too, if they are there: `~/.local/share/platoon` and
    `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment
@@ -159,8 +186,8 @@ where it is, so you can run it again.
 
    `git worktree remove` refuses a worktree with changes not yet committed, so nothing is lost by accident.
 
-It ends with what was removed and what was kept. Your conversations are never touched: they are Claude Code's, and
-`claude --resume` opens any of them. Run on its own (not by the script), its last line says how to remove the program.
+It ends with what was removed and what was kept. Your conversations are never touched: they are Claude Code's (and
+Codex's), and `claude --resume` (or `codex resume`) opens any of them. Run on its own (not by the script), its last line says how to remove the program.
 Running it again is harmless: it says "Nothing of platoon's was left to remove."
 
 | Flag | What it does |

@@ -21,6 +21,22 @@ as it was, including your own hooks. A status line of your own is never replaced
 The hooks are quick and quiet. Each one finishes in a moment, and the guard is the only one that ever stops anything (a
 message typed into a second copy of a conversation).
 
+## In Codex's hooks
+
+When Codex is on this computer, [`platoon setup`](install-and-setup.md#codex) adds three hooks to Codex's `hooks.json`
+(`~/.codex/hooks.json`, or the one in `CODEX_HOME`), each running the platoon that ran setup by its full path, and the
+same for every session:
+
+| What | Where in `hooks.json` | What it does |
+| --- | --- | --- |
+| Project notes | a `SessionStart` hook: `<platoon> hook session-start --agent codex` | hands a project's notes to its Codex session when it starts (at most 8,000 characters) |
+| Changed notes | a `UserPromptSubmit` hook: `<platoon> hook guard --agent codex` | passes a project's changed notes to a running Codex session; it never refuses a message (Codex keeps one window per conversation itself) |
+| Notes updates | a `Stop` hook: `<platoon> hook stop --agent codex` | notes that a project's Codex session finished answering, so its notes can be brought up to date later |
+
+Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it; everything else in the file stays as it
+was. Codex runs a hook only once you have trusted it: it asks you the next time it starts. platoon never writes Codex's
+`config.toml`, where Codex keeps that record (and the rest of its settings).
+
 ## No Claude Code skill
 
 platoon adds no skill to Claude Code. Earlier platoons installed one, `/to-tickets` (`~/.claude/skills/to-tickets/`);
@@ -95,6 +111,8 @@ small marks its parts leave for each other.
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 
+**In Codex's folder**: only what setup adds to `hooks.json`, and the backup beside it.
+
 **In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it.
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
 `~/.claude/projects` for platoon's `claude -p` calls, and the sessions platoon starts are ordinary Claude Code sessions,
@@ -159,7 +177,8 @@ If you'd rather do it yourself, or the uninstaller can't:
 
 1. **The settings.** Open Claude Code's `settings.json` and delete the `statusLine` entry (if its command ends in
    `platoon statusline`) and each hook whose command ends in `platoon hook guard`, `platoon hook session-start` or
-   `platoon hook stop`. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
+   `platoon hook stop`. In Codex's `hooks.json`, delete each hook whose command ends in `platoon hook guard --agent
+   codex`, `platoon hook session-start --agent codex` or `platoon hook stop --agent codex`. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
    copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
 2. **The skill**, if an earlier platoon installed it: delete `~/.claude/skills/to-tickets/`.

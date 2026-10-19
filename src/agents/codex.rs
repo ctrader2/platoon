@@ -59,6 +59,17 @@ pub fn program() -> String {
     std::env::var("PLATOON_CODEX_BIN").unwrap_or_else(|_| "codex".into())
 }
 
+/// Is Codex on this computer: its folder `root` is there, or its program can be found on `path` (a `PATH` value)?
+pub fn installed(root: &Path, program: &str, path: &str) -> bool {
+    if root.is_dir() {
+        return true;
+    }
+    if program.contains('/') {
+        return Path::new(program).is_file();
+    }
+    std::env::split_paths(path).any(|d| d.join(program).is_file())
+}
+
 // ---- starting a session ---------------------------------------------------------------------------------------------
 
 /// The arguments `codex` is started with for `start`. Always `--no-daemon`: the session runs in the process platoon
@@ -97,6 +108,20 @@ pub fn task_args(l: &TaskLaunch) -> Vec<String> {
 // `cwd`, `model`, `permission_mode`, `prompt`, `source`, `stop_hook_active`, `last_assistant_message`, `tool_name`,
 // `tool_input`), and reads context from stdout (`hookSpecificOutput.additionalContext`) or a decision. Its
 // SessionStart fires when the first message is sent, not when the window opens.
+
+/// The hooks `platoon setup` puts in Codex's `hooks.json`: (event, what the command says after the program). Fixed
+/// text: Codex asks the user to trust each hook once, by its exact command, so one that changed would be asked about
+/// again.
+pub const HOOKS: [(&str, &str); 3] = [
+    ("SessionStart", "hook session-start --agent codex"),
+    ("UserPromptSubmit", "hook guard --agent codex"),
+    ("Stop", "hook stop --agent codex"),
+];
+
+/// Codex's hooks file under its folder.
+pub fn hooks_path(root: &Path) -> PathBuf {
+    root.join("hooks.json")
+}
 
 /// Read one call of a hook (see `Agent::hook_input`).
 pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
@@ -936,6 +961,9 @@ mod tests {
         assert_eq!(a.stdout, r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"newer notes"}}"#);
         let a = hook_answer(&HookReply::SendBack("Run the tests.".into()));
         assert_eq!((a.stdout.as_str(), a.code), (r#"{"decision":"block","reason":"Run the tests."}"#, 0));
+        for (event, args) in HOOKS {
+            assert!(args.ends_with("--agent codex") && !args.contains('\''), "{event}: fixed text, the same for every session");
+        }
     }
 
     #[test]

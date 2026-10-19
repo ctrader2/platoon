@@ -222,7 +222,8 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   open --project <name>   start a new session here, in that project
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, and two hooks
-                  that hand a project's notes to its sessions and keep them up to date
+                  that hand a project's notes to its sessions and keep them up to date; and,
+                  when Codex is installed, the notes hooks to Codex's hooks.json
   task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
                   make a task and print its number (#N); with no --folder it works in the
                   current folder; --squad suggests the squad that starts it
@@ -276,6 +277,12 @@ fn setup() -> io::Result<()> {
     let root = agents::claude::claude_root();
     match setup::run(&root) {
         Ok(mut report) => {
+            // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
+            let codex = agents::codex::codex_root();
+            let path = std::env::var("PATH").unwrap_or_default();
+            if agents::codex::installed(&codex, &agents::codex::program(), &path) {
+                report.codex = Some(setup::run_codex(&codex));
+            }
             // A Claude Code newer than the one this platoon was checked with is said here every time.
             report.notes.extend(versions::setup_line(versions::claude_program().as_deref(), versions::off_by_env()));
             println!("{}", setup::render_report(&report, &root, use_color(false)));

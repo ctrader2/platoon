@@ -97,6 +97,7 @@ deletable() {
     esac
     case "$HOME/" in "$1"/*) return 1 ;; esac
     case "$CLAUDE_ROOT/" in "$1"/*) return 1 ;; esac
+    case "$CODEX_ROOT/" in "$1"/*) return 1 ;; esac
     return 0
 }
 
@@ -265,6 +266,13 @@ by_hand_notes() {
         say "each hook whose command ends in \`platoon hook guard\`, \`platoon hook session-start\` or \`platoon hook stop\`."
         say "Until then Claude Code reports those hooks failing. More: $GUIDE"
     fi
+    hooks="$CODEX_ROOT/hooks.json"
+    if [ -f "$hooks" ] && grep -q 'platoon' "$hooks" 2>/dev/null; then
+        BY_HAND=1
+        say ""
+        say "Codex's hooks still mention platoon. Open $hooks and delete each hook whose command ends in"
+        say "\`platoon hook guard --agent codex\`, \`platoon hook session-start --agent codex\` or \`platoon hook stop --agent codex\`."
+    fi
 }
 
 # ---- the program ------------------------------------------------------------------------------------------------
@@ -369,13 +377,14 @@ main() {
 
     # The folders, found the way platoon finds them.
     CLAUDE_ROOT=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+    CODEX_ROOT=${CODEX_HOME:-$HOME/.codex}
     CONFIG=${PLATOON_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/platoon}
     CACHE=${PLATOON_CACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/platoon}
     DATA=${XDG_DATA_HOME:-$HOME/.local/share}
     RECEIPT_DIR=${XDG_CONFIG_HOME:-$HOME/.config}/platoon-tui
 
     if [ -n "${PLATOON_UNINSTALL_TEST_HOME:-}" ]; then
-        for p in "$HOME" "$CLAUDE_ROOT" "$CONFIG" "$CACHE" "$DATA" "$RECEIPT_DIR" "${CARGO_HOME:-$HOME}" "${ZDOTDIR:-$HOME}"; do
+        for p in "$HOME" "$CLAUDE_ROOT" "$CODEX_ROOT" "$CONFIG" "$CACHE" "$DATA" "$RECEIPT_DIR" "${CARGO_HOME:-$HOME}" "${ZDOTDIR:-$HOME}"; do
             case "$p/" in
                 "$PLATOON_UNINSTALL_TEST_HOME"/*) ;;
                 *)

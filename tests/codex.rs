@@ -121,3 +121,90 @@ fn a_codex_conversation_open_elsewhere_is_never_opened_a_second_time() {
     let _ = holder.kill();
     let _ = holder.wait();
 }
+
+/// `platoon <args>` with `input` on stdin, in this world, with no terminal: (exit code, stdout, stderr).
+fn run(w: &World, args: &[&str], input: &str) -> (i32, String, String) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let mut child = Command::new(BIN)
+        .args(args)
+        .envs(w.env())
+        .env("PLATOON_NO_UPDATE_CHECK", "1")
+        .env("PLATOON_NOTES_HELPER", "off")
+        .env("NO_COLOR", "1")
+        .env_remove("PLATOON_SKIP_SETUP_CHECK")
+        .env_remove("PLATOON_PROJECT")
+        .env_remove("PLATOON_OFFER_TASKS")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(input.as_bytes()).unwrap();
+    let out = child.wait_with_output().unwrap();
+    (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
+}
+
+#[test]
+fn setup_adds_platoons_three_codex_hooks_says_codex_will_ask_to_trust_them_and_never_blocks_on_them() {
+    let w = World::new("codex-setup");
+    let (code, out, err) = run(&w, &["setup"], "");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("\nCodex\n") && out.contains("Codex asks you once to trust these hooks"), "{out}");
+    let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.codex.join("hooks.json")).unwrap()).unwrap();
+    for (event, args) in [
+        ("SessionStart", "hook session-start --agent codex"),
+        ("UserPromptSubmit", "hook guard --agent codex"),
+        ("Stop", "hook stop --agent codex"),
+    ] {
+        assert_eq!(v["hooks"][event][0]["hooks"][0]["command"], format!("{BIN} {args}"), "{event}");
+    }
+    let (_, again, _) = run(&w, &["setup"], "");
+    assert!(again.matches("already done").count() >= 7, "{again}");
+    assert!(!again.contains("trust these hooks"), "nothing new to trust: {again}");
+
+    // An unreadable hooks file is said and left alone; Claude Code's steps are done and platoon starts.
+    fs::write(w.codex.join("hooks.json"), "{ broken").unwrap();
+    let (code, out, _) = run(&w, &["setup"], "");
+    assert_eq!(code, 0, "{out}");
+    assert!(out.contains("Codex hooks") && out.contains("left the file alone"), "{out}");
+    assert_eq!(fs::read_to_string(w.codex.join("hooks.json")).unwrap(), "{ broken");
+}
+
+#[test]
+fn codexs_hooks_hand_a_projects_notes_to_its_sessions_and_mark_the_notes_due_after_a_turn() {
+    let w = World::new("codex-hooks");
+    let members = serde_json::json!({FINISHED: "pweb"});
+    let projects = serde_json::json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": members});
+    fs::write(w.base.join("config/projects.json"), projects.to_string()).unwrap();
+    fs::create_dir_all(w.base.join("config/projects/pweb")).unwrap();
+    fs::write(w.base.join("config/projects/pweb/project.md"), "# Web\n\nThe shop's notes.\n").unwrap();
+    // Notes that keep themselves up to date are on (no call is made: the helper is off).
+    let settings = serde_json::json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": true}});
+    fs::write(w.base.join("config/settings.json"), settings.to_string()).unwrap();
+    let sample =
+        |name: &str| fs::read_to_string(Path::new(SAMPLES).join("hooks").join(format!("{name}.json"))).unwrap().replace(PLANNING, FINISHED);
+
+    let (code, out, err) = run(&w, &["hook", "session-start", "--agent", "codex"], &sample("SessionStart"));
+    assert_eq!((code, err.as_str()), (0, ""));
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
+    let context = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+    assert!(context.contains("\"Web\"") && context.contains("The shop's notes."), "{context}");
+    assert!(!context.contains("Ready to create tasks"), "the offer is Claude Code's");
+
+    // A prompt: nothing until the notes change, then the new version; never refused (Codex keeps one window itself).
+    let (code, out, _) = run(&w, &["hook", "guard", "--agent", "codex"], &sample("UserPromptSubmit"));
+    assert_eq!((code, out.as_str()), (0, ""));
+    fs::write(w.base.join("config/projects/pweb/project.md"), "# Web\n\nNew notes.\n").unwrap();
+    let (code, out, _) = run(&w, &["hook", "guard", "--agent", "codex"], &sample("UserPromptSubmit"));
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
+    assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("New notes."));
+
+    // The end of a turn marks the project's notes due (the helper is off here), silently.
+    let (code, out, err) = run(&w, &["hook", "stop", "--agent", "codex"], &sample("Stop-first"));
+    assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""));
+    assert!(w.cache.join("notes-due/pweb").exists());
+}

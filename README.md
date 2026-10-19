@@ -61,6 +61,8 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 - **Claude Code's `settings.json`**: a status line and three hooks (a guard against two copies of one conversation,
   and two that carry a project's notes to its sessions). Nothing else in the file is touched, and a status line of your
   own is left alone.
+- **Codex's `hooks.json`**, only when Codex is installed: three hooks that carry a project's notes to its Codex sessions.
+  Codex asks you once to trust them.
 - **Its own folders**: `~/.config/platoon` and `~/.cache/platoon`, and a `<repo>-worktrees` folder beside a repository
   when a task works on it.
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update

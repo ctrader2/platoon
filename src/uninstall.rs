@@ -2,7 +2,8 @@
 //! way it was installed decides how that goes: `scripts/uninstall.sh` does it, or the last line says how).
 //!
 //! What it does, in this order, so a "no" leaves everything as it was:
-//! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes), the
+//! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes) and in
+//!    Codex's `hooks.json` (`setup::take_out_codex`; Codex's own records of which hooks the user trusted stay), the
 //!    sessions platoon's hosts are running, the worktrees tasks recorded, and the folders.
 //! 2. Ask: whether to stop the running sessions (no: stop here, nothing changed; `--stop-sessions` says yes), then
 //!    whether to delete the config folder (the user's projects, notes, tasks and settings: default keep; `--all`
@@ -13,9 +14,9 @@
 //!    older platoons' leftovers.
 //! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
-//! Claude Code's conversations are never touched.
+//! Claude Code's and Codex's conversations are never touched.
 
-use crate::agents::claude;
+use crate::agents::{claude, codex};
 use crate::{setup, tickets, versions};
 use serde_json::Value;
 use std::{
@@ -68,6 +69,8 @@ pub fn parse_args(args: &[String]) -> Result<Option<Options>, String> {
 pub struct Places {
     /// Claude Code's folder (`CLAUDE_CONFIG_DIR`, else `~/.claude`).
     pub root: PathBuf,
+    /// Codex's folder (`CODEX_HOME`, else `~/.codex`), there or not.
+    pub codex: PathBuf,
     pub config: PathBuf,
     pub cache: PathBuf,
     /// Older platoons' folders, removed when they are there: (folder, what it was).
@@ -87,11 +90,18 @@ impl Places {
         if cfg!(target_os = "macos") {
             leftovers.push((home.join("Library/Application Support/platoon"), "an older platoon's data folder"));
         }
-        Self { root: claude::claude_root(), config: crate::archive::config_dir(), cache: crate::usage::cache_dir(), leftovers, home }
+        Self {
+            root: claude::claude_root(),
+            codex: codex::codex_root(),
+            config: crate::archive::config_dir(),
+            cache: crate::usage::cache_dir(),
+            leftovers,
+            home,
+        }
     }
 
     fn all(&self) -> Vec<&Path> {
-        let mut v = vec![self.root.as_path(), &self.config, &self.cache, &self.home];
+        let mut v = vec![self.root.as_path(), &self.codex, &self.config, &self.cache, &self.home];
         v.extend(self.leftovers.iter().map(|(p, _)| p.as_path()));
         v
     }
@@ -115,7 +125,7 @@ fn deletable(dir: &Path, places: &Places) -> Result<(), String> {
     if dir.components().count() < 3 {
         return Err(format!("{} is too near the top of the disk", dir.display()));
     }
-    for (other, what) in [(&places.home, "your home folder"), (&places.root, "Claude Code's folder")] {
+    for (other, what) in [(&places.home, "your home folder"), (&places.root, "Claude Code's folder"), (&places.codex, "Codex's folder")] {
         if !other.as_os_str().is_empty() && other.starts_with(dir) {
             return Err(format!("{} is {what} or holds it", dir.display()));
         }
@@ -242,6 +252,10 @@ pub fn kept_worktrees(config: &Path, git: &str) -> Vec<KeptWorktree> {
 pub struct Plan {
     settings: Option<(PathBuf, Value, setup::TakenOut)>,
     settings_error: Option<String>,
+    /// Codex's `hooks.json` with platoon's hooks taken out, when it is there and could be read.
+    codex_hooks: Option<(PathBuf, Value, setup::TakenOut)>,
+    /// Why Codex's `hooks.json` was left alone: it is there but can't be read or isn't a JSON object.
+    codex_error: Option<String>,
     pub running: Vec<Running>,
     worktrees: Vec<KeptWorktree>,
     config_there: bool,
@@ -262,9 +276,25 @@ pub fn look(places: &Places, git: &str) -> Plan {
             Err(e) => settings_error = Some(format!("{} isn't valid JSON ({e})", path.display())),
         },
     }
+    let (mut codex_hooks, mut codex_error) = (None, None);
+    let hooks = codex::hooks_path(&places.codex);
+    match fs::read_to_string(&hooks) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => codex_error = Some(format!("couldn't read {}: {e}", hooks.display())),
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(mut v) if v.is_object() => {
+                let taken = setup::take_out_codex(&mut v);
+                codex_hooks = Some((hooks, v, taken));
+            }
+            Ok(_) => codex_error = Some(format!("{} isn't a JSON object", hooks.display())),
+            Err(e) => codex_error = Some(format!("{} isn't valid JSON ({e})", hooks.display())),
+        },
+    }
     Plan {
         settings,
         settings_error,
+        codex_hooks,
+        codex_error,
         running: running_sessions(&places.cache, &places.root),
         worktrees: kept_worktrees(&places.config, git),
         config_there: places.config.exists(),
@@ -440,6 +470,34 @@ pub fn run(
         }
     }
 
+    if let Some((path, v, taken)) = &plan.codex_hooks {
+        if !taken.removed.is_empty() {
+            let backup = places.codex.join("hooks.json.platoon-bak");
+            let written = fs::copy(path, &backup)
+                .map_err(|e| format!("couldn't back up {}: {e}", path.display()))
+                .and_then(|_| serde_json::to_string_pretty(v).map_err(|e| e.to_string()))
+                .and_then(|text| {
+                    crate::projects::write_atomic(path, &(text + "\n")).map_err(|e| format!("couldn't write {}: {e}", path.display()))
+                });
+            match written {
+                Ok(()) => removed.push(format!(
+                    "from Codex's hooks ({}): {}. The file as it was is kept as hooks.json.platoon-bak",
+                    path.display(),
+                    taken.removed.join(", ")
+                )),
+                Err(e) => failed.push(e),
+            }
+        }
+        for c in &taken.left {
+            kept.push(format!("in Codex's hooks, your own command that runs platoon: {c} (take the platoon part out by hand)"));
+        }
+    }
+    if let Some(e) = &plan.codex_error {
+        failed.push(format!(
+            "Codex's hooks were left alone, so platoon's may still be in them: {e}. Fix the file, or take them out by hand ({GUIDE})"
+        ));
+    }
+
     let remove_dir = |dir: &Path, what: &str, removed: &mut Vec<String>, failed: &mut Vec<String>| -> bool {
         if !dir.exists() {
             return false;
@@ -486,6 +544,11 @@ pub fn run(
             .status();
     }
     kept.push("your conversations: they are Claude Code's, and `claude --resume` opens any of them".into());
+    if places.codex.is_dir() {
+        kept.push(
+            "your Codex conversations and Codex's own settings, including which hooks you trusted: `codex resume` opens any of them".into(),
+        );
+    }
 
     // ---- say what happened ----
     if removed.is_empty() {
@@ -544,6 +607,7 @@ mod tests {
         fs::create_dir_all(&home).unwrap();
         Places {
             root: home.join(".claude"),
+            codex: home.join(".codex"),
             config: home.join(".config/platoon"),
             cache: home.join(".cache/platoon"),
             leftovers: vec![(home.join(".local/share/platoon"), "an older platoon's data folder")],
@@ -661,6 +725,43 @@ mod tests {
         assert!(said.contains("your own command that runs platoon: sh -c 'my-line; platoon statusline'"), "{said}");
         assert!(said.contains("platoon hook session-start --verbose"), "{said}");
         assert!(said.contains("the session guard hook") && !said.contains("the status line,"), "{said}");
+    }
+
+    #[test]
+    fn platoons_codex_hooks_go_too_and_everything_else_of_codexs_stays() {
+        let p = places(&tmp("codex"));
+        set_up(&p, json!({}));
+        fs::create_dir_all(&p.codex).unwrap();
+        let hooks = json!({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook session-start --agent codex"}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook guard --agent codex"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "my-stop"}, {"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]
+        }});
+        let before = serde_json::to_string_pretty(&hooks).unwrap();
+        fs::write(p.codex.join("hooks.json"), &before).unwrap();
+        fs::write(p.codex.join("config.toml"), "[hooks.state]\ntrusted = true\n").unwrap();
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("from Codex's hooks") && out.contains("the Codex notes updates hook"), "{out}");
+        assert!(out.contains("your Codex conversations and Codex's own settings"), "{out}");
+        let v: Value = serde_json::from_str(&fs::read_to_string(p.codex.join("hooks.json")).unwrap()).unwrap();
+        assert_eq!(v, json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop"}]}]}}));
+        assert_eq!(fs::read_to_string(p.codex.join("hooks.json.platoon-bak")).unwrap(), before);
+        assert_eq!(fs::read_to_string(p.codex.join("config.toml")).unwrap(), "[hooks.state]\ntrusted = true\n", "Codex's own records stay");
+    }
+
+    #[test]
+    fn a_codex_hooks_file_that_cant_be_parsed_is_said_and_left_alone_and_the_rest_still_goes() {
+        let p = places(&tmp("codex-bad"));
+        set_up(&p, json!({}));
+        fs::create_dir_all(&p.codex).unwrap();
+        fs::write(p.codex.join("hooks.json"), "{ not json").unwrap();
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 1, "{out}");
+        assert!(out.contains("Codex's hooks were left alone") && out.contains("isn't valid JSON"), "{out}");
+        assert_eq!(fs::read_to_string(p.codex.join("hooks.json")).unwrap(), "{ not json");
+        assert!(!p.codex.join("hooks.json.platoon-bak").exists());
+        assert!(settings(&p).get("statusLine").is_none(), "Claude Code's entries went all the same");
     }
 
     #[test]

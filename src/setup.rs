@@ -1,9 +1,12 @@
-//! `platoon setup`: the one-time changes platoon makes to Claude Code's settings, as a checklist.
+//! `platoon setup`: the one-time changes platoon makes to Claude Code's settings, as a checklist, and, when Codex is
+//! on this computer, the same notes hooks in Codex's `hooks.json` (`run_codex`).
 //!
 //! Every step's status is computed from the settings file itself, so "done" is always a fact about the
 //! files as they are now: `platoon` refuses to start until every step is done, running `setup` again
-//! is harmless, and it repairs a step whose command points at a platoon that no longer exists.
+//! is harmless, and it repairs a step whose command points at a platoon that no longer exists. Codex's steps never
+//! block starting platoon.
 
+use crate::agents::codex;
 use crate::{ai, settings};
 use serde_json::{Value, json};
 use std::{
@@ -39,6 +42,23 @@ pub const STEPS: [Step; 4] = [
     },
 ];
 
+/// The steps for Codex, in `codex::HOOKS` order. None of them blocks starting platoon.
+pub const CODEX_STEPS: [Step; 3] = [
+    Step {
+        name: "Project notes",
+        what: "hands a project's notes to its Codex sessions when they start",
+        blocking: false,
+        missing_note: "",
+    },
+    Step { name: "Changed notes", what: "passes a project's changed notes to a running Codex session", blocking: false, missing_note: "" },
+    Step {
+        name: "Notes updates",
+        what: "lets platoon keep a project's notes up to date after its Codex sessions stop",
+        blocking: false,
+        missing_note: "",
+    },
+];
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {
     Done,
@@ -55,7 +75,7 @@ impl State {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     AlreadyDone,
     Added,
@@ -68,6 +88,19 @@ pub struct Report {
     /// Set when settings.json was rewritten.
     pub saved: Option<PathBuf>,
     pub notes: Vec<String>,
+    /// Codex's part, when Codex is on this computer.
+    pub codex: Option<CodexReport>,
+}
+
+/// What setup did in Codex's `hooks.json`.
+#[derive(Debug, PartialEq, Eq)]
+pub struct CodexReport {
+    /// In `CODEX_STEPS` order; empty when the file couldn't be used (`error`).
+    pub outcomes: Vec<Outcome>,
+    /// Set when hooks.json was written.
+    pub saved: Option<PathBuf>,
+    /// Why the file was left alone: it is there but can't be read, or isn't a JSON object.
+    pub error: Option<String>,
 }
 
 fn read_settings(root: &Path) -> Option<Value> {
@@ -105,7 +138,7 @@ fn is_stop_hook(c: &str) -> bool {
     c.contains("platoon") && c.contains("hook stop")
 }
 
-fn hook_commands<'a>(v: &'a Value, event: &str, is_ours: fn(&str) -> bool) -> Vec<&'a str> {
+fn hook_commands<'a>(v: &'a Value, event: &str, is_ours: impl Fn(&str) -> bool) -> Vec<&'a str> {
     v["hooks"][event]
         .as_array()
         .into_iter()
@@ -197,13 +230,13 @@ fn remove_guard(v: &mut Value) {
 }
 
 /// Take our own hook commands out of `event`, and any group that holds nothing else. Other hooks stay.
-fn remove_hook(v: &mut Value, event: &str, is_ours: fn(&str) -> bool) {
+fn remove_hook(v: &mut Value, event: &str, is_ours: impl Fn(&str) -> bool) {
     // `get_mut`, not indexing: mutable indexing on a serde_json Value creates the missing keys as null.
     let groups = v.get_mut("hooks").and_then(|h| h.get_mut(event)).and_then(Value::as_array_mut);
     if let Some(groups) = groups {
         for g in groups.iter_mut() {
             if let Some(hs) = g.get_mut("hooks").and_then(Value::as_array_mut) {
-                hs.retain(|h| !h.get("command").and_then(Value::as_str).is_some_and(is_ours));
+                hs.retain(|h| !h.get("command").and_then(Value::as_str).is_some_and(&is_ours));
             }
         }
         groups.retain(|g| g.get("hooks").and_then(Value::as_array).is_none_or(|hs| !hs.is_empty()));
@@ -262,7 +295,27 @@ pub fn take_out(v: &mut Value) -> TakenOut {
         }
     }
     let ours: [(&str, &str); 3] = [("UserPromptSubmit", "hook guard"), ("SessionStart", "hook session-start"), ("Stop", "hook stop")];
-    for ((event, args), (_, label)) in ours.iter().zip(&ENTRIES[1..]) {
+    let hooks: Vec<(&str, &str, &'static str)> = ours.iter().zip(&ENTRIES[1..]).map(|((e, a), (_, label))| (*e, *a, *label)).collect();
+    take_out_hooks(v, &hooks, &mut out);
+    out
+}
+
+/// What Codex's hooks are called when `platoon uninstall` says what it took out, in `codex::HOOKS` order.
+pub const CODEX_ENTRIES: [&str; 3] = ["the Codex project notes hook", "the Codex changed notes hook", "the Codex notes updates hook"];
+
+/// Take platoon's own hooks out of Codex's `hooks.json` (read into `v`): exactly the commands setup writes there
+/// (`codex::HOOKS`), and the groups, events and `hooks` they leave empty, as `take_out` does. Every other key stays.
+pub fn take_out_codex(v: &mut Value) -> TakenOut {
+    let mut out = TakenOut::default();
+    let hooks: Vec<(&str, &str, &'static str)> = codex::HOOKS.iter().zip(CODEX_ENTRIES).map(|((e, a), label)| (*e, *a, label)).collect();
+    take_out_hooks(v, &hooks, &mut out);
+    out
+}
+
+/// Take out the hook commands that are exactly `(event, args)` (as setup writes them), saying `label` for each
+/// event they were taken out of; commands that only mention platoon are left and listed.
+fn take_out_hooks(v: &mut Value, hooks: &[(&str, &str, &'static str)], out: &mut TakenOut) {
+    for (event, args, label) in hooks {
         let all: Vec<String> = hook_commands(v, event, |c| c.contains("platoon")).into_iter().map(String::from).collect();
         let (mine, theirs): (Vec<String>, Vec<String>) = all.into_iter().partition(|c| exactly(c, args));
         out.left.extend(theirs);
@@ -298,22 +351,21 @@ pub fn take_out(v: &mut Value) -> TakenOut {
         }
         out.removed.push(label);
     }
-    out
 }
 
-/// Add one hook command to `event`, in a group of its own.
-fn add_hook(v: &mut Value, event: &str, command: String) -> Result<(), String> {
+/// Add one hook command to `event`, in a group of its own. `file` names the file for a message.
+fn add_hook(v: &mut Value, event: &str, command: String, file: &str) -> Result<(), String> {
     let list = v
         .as_object_mut()
-        .ok_or("settings.json isn't a JSON object")?
+        .ok_or_else(|| format!("{file} isn't a JSON object"))?
         .entry("hooks")
         .or_insert_with(|| json!({}))
         .as_object_mut()
-        .ok_or("\"hooks\" in settings.json isn't an object")?
+        .ok_or_else(|| format!("\"hooks\" in {file} isn't an object"))?
         .entry(event)
         .or_insert_with(|| json!([]))
         .as_array_mut()
-        .ok_or_else(|| format!("\"hooks.{event}\" in settings.json isn't a list"))?;
+        .ok_or_else(|| format!("\"hooks.{event}\" in {file} isn't a list"))?;
     list.push(json!({ "hooks": [{ "type": "command", "command": command }] }));
     Ok(())
 }
@@ -353,9 +405,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
     if !v.is_object() {
         return Err(format!("{} isn't a JSON object", path.display()));
     }
-    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let exe = exe.to_string_lossy().into_owned();
-    let quoted = if exe.contains(' ') { format!("'{exe}'") } else { exe.clone() };
+    let (exe, quoted) = this_program()?;
     let mut outcomes = Vec::new();
     let mut changed = false;
 
@@ -400,7 +450,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
             State::Done | State::Skipped(_) => Outcome::AlreadyDone,
             State::Missing | State::Broken(_) => {
                 remove_hook(&mut v, event, is_ours);
-                add_hook(&mut v, event, format!("{quoted} {command}"))?;
+                add_hook(&mut v, event, format!("{quoted} {command}"), "settings.json")?;
                 changed = true;
                 if state == State::Missing { Outcome::Added } else { Outcome::Repaired }
             }
@@ -423,7 +473,66 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { outcomes, saved, notes })
+    Ok(Report { outcomes, saved, notes, codex: None })
+}
+
+/// This platoon's full path, and as a hook command writes it (quoted when it holds a space).
+fn this_program() -> Result<(String, String), String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
+    let quoted = if exe.contains(' ') { format!("'{exe}'") } else { exe.clone() };
+    Ok((exe, quoted))
+}
+
+/// Codex's steps in its `hooks.json` under `codex_root` (`codex::HOOKS`, each a fixed command running this platoon):
+/// whatever is missing, or points at a platoon that no longer exists, is put in; everything else in the file stays as
+/// it was. A file that is there but can't be read or isn't a JSON object is reported and left alone. Never written
+/// when nothing changed; otherwise backed up first (`hooks.json.platoon-bak`).
+pub fn run_codex(codex_root: &Path) -> CodexReport {
+    let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, error: Some(error) };
+    let path = codex::hooks_path(codex_root);
+    let mut v: Value = match fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(v) if v.is_object() => v,
+            Ok(_) => return fail(format!("{} isn't a JSON object", path.display())),
+            Err(e) => return fail(format!("{} isn't valid JSON ({e})", path.display())),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({}),
+        Err(e) => return fail(format!("couldn't read {}: {e}", path.display())),
+    };
+    let (_, quoted) = match this_program() {
+        Ok(p) => p,
+        Err(e) => return fail(e),
+    };
+    let mut outcomes = Vec::new();
+    for (event, args) in codex::HOOKS {
+        let ours = |c: &str| c.contains("platoon") && args_of(c) == args;
+        let state = commands_state(&hook_commands(&v, event, ours));
+        outcomes.push(match state {
+            State::Done | State::Skipped(_) => Outcome::AlreadyDone,
+            State::Missing | State::Broken(_) => {
+                remove_hook(&mut v, event, ours);
+                if let Err(e) = add_hook(&mut v, event, format!("{quoted} {args}"), "hooks.json") {
+                    return fail(e);
+                }
+                if state == State::Missing { Outcome::Added } else { Outcome::Repaired }
+            }
+        });
+    }
+    if outcomes.iter().all(|o| *o == Outcome::AlreadyDone) {
+        return CodexReport { outcomes, saved: None, error: None };
+    }
+    let written = (|| -> Result<(), String> {
+        fs::create_dir_all(codex_root).map_err(|e| format!("couldn't make {}: {e}", codex_root.display()))?;
+        if path.exists() {
+            fs::copy(&path, codex_root.join("hooks.json.platoon-bak")).map_err(|e| format!("couldn't back up {}: {e}", path.display()))?;
+        }
+        let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
+        crate::projects::write_atomic(&path, &text).map_err(|e| format!("couldn't write {}: {e}", path.display()))
+    })();
+    match written {
+        Ok(()) => CodexReport { outcomes, saved: Some(path), error: None },
+        Err(e) => fail(e),
+    }
 }
 
 /// What became of the question about the features that use tokens.
@@ -529,12 +638,44 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         out.push(format!("Saved {} (backup: settings.json.platoon-bak).", root.join("settings.json").display()));
         out.push("Claude Code picks up hook changes live. Restart running sessions for the status line.".into());
     }
-    if r.saved.is_none() {
+    let codex_saved = r.codex.as_ref().is_some_and(|c| c.saved.is_some());
+    if r.saved.is_none() && !codex_saved {
         out.push("Nothing to change.".into());
+    }
+    if let Some(c) = &r.codex {
+        out.extend(render_codex(c, color));
     }
     out.extend(r.notes.iter().cloned());
     out.push("All set. Run `platoon`.".into());
     out.join("\n")
+}
+
+/// Codex's part of the report: its steps, the file written, and the one thing Codex asks of the user about them.
+fn render_codex(c: &CodexReport, color: bool) -> Vec<String> {
+    let mut out = vec![String::new(), "Codex".to_string()];
+    if let Some(e) = &c.error {
+        let step = Step { name: "Codex hooks", what: "carry a project's notes to its Codex sessions", blocking: false, missing_note: "" };
+        out.push(row(None, &step, &format!("skipped: {e}. platoon left the file alone: fix it and run `platoon setup` again"), color));
+        return out;
+    }
+    for (step, o) in CODEX_STEPS.iter().zip(&c.outcomes) {
+        out.push(match o {
+            Outcome::AlreadyDone => row(Some(true), step, "already done", color),
+            Outcome::Added => row(Some(true), step, "added", color),
+            Outcome::Repaired => row(Some(true), step, "repaired: its command pointed at a platoon that no longer exists", color),
+            Outcome::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
+        });
+    }
+    if let Some(path) = &c.saved {
+        out.push(String::new());
+        out.push(format!("Saved {} (backup: hooks.json.platoon-bak).", path.display()));
+        out.push(
+            "Codex asks you once to trust these hooks: the next time you start Codex it says they need review. Approve them \
+             there; until you do they don't run (nothing else in platoon waits for them)."
+                .into(),
+        );
+    }
+    out
 }
 
 /// What `platoon` prints instead of starting when setup isn't complete.
@@ -834,5 +975,115 @@ mod tests {
         fs::create_dir_all(c.join("settings.json")).unwrap();
         let (q, _) = ask(&c, true, "");
         assert_eq!(q, TokenQuestion::SettingsUnreadable, "a folder where the file should be reads as unreadable");
+    }
+
+    fn codex_hooks(codex: &Path) -> Value {
+        serde_json::from_str(&fs::read_to_string(codex.join("hooks.json")).unwrap()).unwrap()
+    }
+
+    /// Every command in Codex's hooks for `event`.
+    fn codex_commands(v: &Value, event: &str) -> Vec<String> {
+        hook_commands(v, event, |_| true).into_iter().map(String::from).collect()
+    }
+
+    #[test]
+    fn codexs_three_hooks_are_added_once_as_fixed_commands_and_a_second_run_changes_nothing() {
+        let codex = tmp("codex-fresh").join("codex");
+        let r = run_codex(&codex);
+        assert_eq!((r.outcomes, r.error), (vec![Outcome::Added; 3], None));
+        assert_eq!(r.saved.as_deref(), Some(codex.join("hooks.json").as_path()));
+        assert!(!codex.join("hooks.json.platoon-bak").exists(), "there was nothing to back up");
+        let v = codex_hooks(&codex);
+        let (exe, _) = this_program().unwrap();
+        for (event, args) in codex::HOOKS {
+            assert_eq!(codex_commands(&v, event), [format!("{exe} {args}")], "{event}");
+        }
+        assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["type"], "command");
+        let text = fs::read_to_string(codex.join("hooks.json")).unwrap();
+        let again = run_codex(&codex);
+        assert_eq!((again.outcomes, again.saved), (vec![Outcome::AlreadyDone; 3], None));
+        assert_eq!(fs::read_to_string(codex.join("hooks.json")).unwrap(), text, "not written again");
+        assert!(!codex.join("hooks.json.platoon-bak").exists());
+    }
+
+    #[test]
+    fn codexs_hooks_file_keeps_every_key_and_hook_of_the_users_and_a_broken_one_of_ours_is_repaired() {
+        let codex = tmp("codex-keep");
+        let original = r#"{"version":2,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop","timeout":5}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"/gone/platoon hook session-start --agent codex"}]}]},"other":{"x":[1,2]}}"#;
+        fs::write(codex.join("hooks.json"), original).unwrap();
+        let r = run_codex(&codex);
+        assert_eq!(r.outcomes, [Outcome::Repaired, Outcome::Added, Outcome::Added]);
+        assert_eq!(fs::read_to_string(codex.join("hooks.json.platoon-bak")).unwrap(), original, "backed up first");
+        let v = codex_hooks(&codex);
+        assert_eq!((v["version"].clone(), v["other"].clone()), (json!(2), json!({"x": [1, 2]})));
+        assert_eq!(v["hooks"]["PreToolUse"], json!([{"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}]));
+        let stops = codex_commands(&v, "Stop");
+        assert_eq!(stops[0], "my-stop");
+        assert!(stops.len() == 2 && stops[1].ends_with(" hook stop --agent codex"), "{stops:?}");
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["timeout"], 5);
+        let starts = codex_commands(&v, "SessionStart");
+        assert!(starts.len() == 1 && !starts[0].starts_with("/gone/"), "repaired in place, not doubled: {starts:?}");
+        // The keys stay in the order they were in.
+        let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
+        assert_eq!(keys, ["version", "hooks", "other"]);
+    }
+
+    #[test]
+    fn a_codex_hooks_file_that_cant_be_parsed_is_reported_and_left_exactly_as_it_was() {
+        for (name, bad) in [("codex-bad", "{ not json"), ("codex-list", "[1,2]")] {
+            let codex = tmp(name);
+            fs::write(codex.join("hooks.json"), bad).unwrap();
+            let r = run_codex(&codex);
+            assert!(r.outcomes.is_empty() && r.saved.is_none(), "{name}");
+            assert!(r.error.as_deref().is_some_and(|e| e.contains("hooks.json")), "{:?}", r.error);
+            assert_eq!(fs::read_to_string(codex.join("hooks.json")).unwrap(), bad);
+            assert!(!codex.join("hooks.json.platoon-bak").exists());
+            let report = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, notes: vec![], codex: Some(r) };
+            let shown = render_report(&report, &codex, false);
+            assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
+        }
+    }
+
+    #[test]
+    fn the_report_says_what_codex_will_ask_and_a_claude_only_report_is_as_before() {
+        let root = tmp("codex-report");
+        let claude_only = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, notes: vec![], codex: None };
+        let shown = render_report(&claude_only, &root, false);
+        assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
+        let codex = run_codex(&root.join("codex"));
+        let shown = render_report(&Report { codex: Some(codex), ..claude_only }, &root, false);
+        assert_eq!(shown.matches("[✓]").count(), STEPS.len() + CODEX_STEPS.len(), "{shown}");
+        assert!(shown.contains("\nCodex\n") && shown.contains("hooks.json (backup: hooks.json.platoon-bak)"), "{shown}");
+        assert!(shown.contains("Codex asks you once to trust these hooks") && shown.contains("Approve them there"), "{shown}");
+        assert!(!shown.contains("Nothing to change"), "Codex's file changed: {shown}");
+    }
+
+    #[test]
+    fn uninstall_takes_out_exactly_platoons_codex_hooks() {
+        let mut v = json!({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook session-start --agent codex"}]}],
+            "UserPromptSubmit": [{"hooks": [
+                {"type": "command", "command": "mine"},
+                {"type": "command", "command": "/opt/x/bin/platoon hook guard --agent codex"}
+            ]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]},
+                     {"hooks": [{"type": "command", "command": "my-wrapper; platoon hook stop --agent codex"}]}],
+            "PreToolUse": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook guard"}]}]
+        }, "keep": true});
+        let taken = take_out_codex(&mut v);
+        assert_eq!(taken.removed, CODEX_ENTRIES);
+        assert_eq!(taken.left, ["my-wrapper; platoon hook stop --agent codex"]);
+        assert_eq!(
+            v,
+            json!({"hooks": {
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "mine"}]}],
+                "Stop": [{"hooks": [{"type": "command", "command": "my-wrapper; platoon hook stop --agent codex"}]}],
+                "PreToolUse": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook guard"}]}]
+            }, "keep": true})
+        );
+        let mut only =
+            json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]}});
+        assert_eq!(take_out_codex(&mut only).removed, [CODEX_ENTRIES[2]]);
+        assert_eq!(only, json!({}), "what platoon's hook left empty goes");
     }
 }
