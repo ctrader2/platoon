@@ -109,9 +109,10 @@ fn the_limits_step_through_their_choices_and_are_saved() {
     assert_eq!(on_disk(&w).ai_pause_percent, 0, "the first step is Never");
     key(&mut app, KeyCode::Right);
     assert_eq!(on_disk(&w).ai_pause_percent, 50);
+    // The models go as the catalog has them (opus, sonnet, haiku, fable): back from the default, Haiku, is Sonnet.
     select(&mut app, "Model for smart features");
-    key(&mut app, KeyCode::Right);
-    assert_eq!(on_disk(&w).ai_model, "sonnet");
+    key(&mut app, KeyCode::Left);
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("sonnet"));
     select(&mut app, "Sessions per call");
     key(&mut app, KeyCode::Right);
     assert_eq!(on_disk(&w).ai_batch_size, 50);
@@ -359,4 +360,121 @@ fn switching_a_feature_or_the_master_off_cancels_the_calls_in_flight() {
     app.refresh_for_test();
     assert!(again.is_cancelled(), "found on the next refresh");
     let _ = ai::FEATURES.len();
+}
+
+// ---- the model settings -------------------------------------------------------------------------------------------
+
+/// Claude Code (a stand-in, never run) and, with `codex`, a Codex folder holding the sample model list.
+fn providers(claude: bool, codex: Option<&str>) -> crate::agents::Providers {
+    crate::agents::Providers {
+        claude: claude.then(|| "/nonexistent/platoon-unit-test/claude".to_string()),
+        codex: codex.map(crate::agents::tests::codex_with_models),
+    }
+}
+
+/// The text and the foreground of the cell where `word` starts.
+fn word_fg(term: &Terminal<TestBackend>, word: &str) -> Option<ratatui::style::Color> {
+    let buf = term.backend().buffer();
+    (0..buf.area.height).find_map(|y| {
+        let text: String = (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        text.find(word).map(|i| buf[(text[..i].chars().count() as u16, y)].fg)
+    })
+}
+
+#[test]
+fn the_smart_features_model_offers_every_model_installed_in_one_order_by_name() {
+    let w = World::new("tok-models-all");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-models-all")));
+    let mut term = Terminal::new(TestBackend::new(110, 34)).unwrap();
+    select(&mut app, "Model for smart features");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("‹     Haiku     ›"), "the default, by its name:\n{shown}");
+    assert_eq!(on_disk(&w).ai_model, None, "nothing picked yet: nothing written");
+    let mut seen = Vec::new();
+    for _ in 0..5 {
+        key(&mut app, KeyCode::Right);
+        seen.push(on_disk(&w).ai_model.unwrap_or_default());
+    }
+    assert_eq!(
+        seen,
+        ["fable", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.6-luna"],
+        "Claude's, then Codex's; it stops at the end"
+    );
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("GPT-5.6-Luna") && !shown.contains("gpt-5.6-luna"), "shown by its name:\n{shown}");
+    assert_eq!(word_fg(&term, "GPT-5.6-Luna"), Some(app.theme.accent));
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("opus"), "enter goes round to the first");
+}
+
+#[test]
+fn a_saved_model_this_computer_cant_run_is_said_plainly_and_kept_until_another_is_picked() {
+    let w = World::new("tok-models-missing");
+    let mut s = on_disk(&w);
+    s.ai_model = Some("gpt-6-luna".into());
+    settings::save(&w.config, &s).unwrap();
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(110, 34)).unwrap();
+    select(&mut app, "Model for smart features");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("GPT-6-Luna (needs Codex, not installed)"), "{shown}");
+    assert_eq!(word_fg(&term, "GPT-6-Luna (needs Codex"), Some(app.theme.accent));
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("gpt-6-luna"), "kept as written: never swapped for another");
+    // The next step is the first model there is.
+    key(&mut app, KeyCode::Right);
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("opus"));
+    assert!(!screen(&mut term, &app).contains("not installed"));
+}
+
+#[test]
+fn project_notes_have_a_model_setting_of_their_own_sonnet_unless_another_is_picked() {
+    let w = World::new("tok-models-notes");
+    let mut app = w.app();
+    let mut term = Terminal::new(TestBackend::new(110, 34)).unwrap();
+    select(&mut app, "Model for project notes");
+    assert_eq!(app.settings_tab, settings::TAB_PROJECTS, "with the project notes settings");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Sonnet") && shown.contains("Model for project notes"), "{shown}");
+    key(&mut app, KeyCode::Right);
+    let d = on_disk(&w);
+    assert_eq!((d.notes_model.as_deref(), d.ai_model.as_deref()), (Some("haiku"), None), "only the notes' own setting moved");
+}
+
+#[test]
+fn on_a_computer_with_only_codex_the_models_are_codexs_and_the_defaults_its_first() {
+    let w = World::new("tok-models-codex");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(false, Some("tok-models-codex")));
+    let mut term = Terminal::new(TestBackend::new(110, 34)).unwrap();
+    select(&mut app, "Model for smart features");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("‹  GPT-6-Luna   ›"), "{shown}");
+    assert_eq!(app.model_setting(settings::ModelFor::Smart).0, "GPT-6-Luna");
+    key(&mut app, KeyCode::Left);
+    assert_eq!(on_disk(&w).ai_model, None, "the first already: nothing to go back to");
+    key(&mut app, KeyCode::Right);
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("gpt-5.6-terra"));
+    select(&mut app, "Model for project notes");
+    assert!(screen(&mut term, &app).contains("GPT-6-Luna"));
+}
+
+#[test]
+fn codex_without_a_model_list_says_why_its_models_are_missing() {
+    let w = World::new("tok-models-nolist");
+    let mut app = w.app();
+    let mut p = providers(true, Some("tok-models-nolist"));
+    let root = p.codex.as_ref().unwrap().root.clone();
+    std::fs::remove_file(root.join("models_cache.json")).unwrap();
+    p.codex.as_mut().unwrap().root = root;
+    app.set_providers_for_test(p);
+    let mut term = Terminal::new(TestBackend::new(110, 40)).unwrap();
+    select(&mut app, "Model for smart features");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Codex's models aren't listed"), "{shown}");
+    assert_eq!(word_fg(&term, "Codex's models aren't listed"), Some(app.theme.subtext));
+    select(&mut app, "Model for project notes");
+    assert!(screen(&mut term, &app).contains("Codex's models aren't listed"));
+    select(&mut app, "Sessions per call");
+    assert!(!screen(&mut term, &app).contains("Codex's models"), "only where the model settings are");
 }

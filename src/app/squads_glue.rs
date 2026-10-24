@@ -221,6 +221,10 @@ impl App {
             self.notify(format!("The {} squad can't be used: {first}", if squad.name.is_empty() { &squad.id } else { &squad.name }));
             return;
         }
+        if let Err(why) = self.task_agent(&squad) {
+            self.notify(why);
+            return;
+        }
         self.mode = Mode::List;
         let (project, number) = self.sq.pick_task.clone();
         let Some(t) = Tickets::open(&self.config, &project).get(number).cloned() else { return };
@@ -328,8 +332,7 @@ impl App {
             exe,
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
         };
-        // The squad's model decides the agent.
-        let agent = crate::agents::agent_of(&squad.model);
+        let agent = self.task_agent(&squad)?;
         let args = agent.task_args(&launch);
         // A unit test's program is the test binary itself: nothing is started, what would have been is noted.
         #[cfg(test)]
@@ -352,6 +355,24 @@ impl App {
                 self.attach(pid);
             }
             Ok(())
+        }
+    }
+
+    /// The agent a task's session runs on: its squad's model decides, and a task's session runs on Claude Code for now
+    /// (a squad's own model is picked among Claude Code's only, until phase 3 of Codex support). Err, plainly, when
+    /// nothing here can run it.
+    pub(super) fn task_agent(&self, squad: &Squad) -> Result<Agent, String> {
+        let catalog = self.catalog();
+        let name = squad.name_or_id();
+        match catalog.agent_of(&squad.model) {
+            Some(Agent::Claude) => Ok(Agent::Claude),
+            Some(agent) => Err(format!(
+                "The {name} squad's model, {}, runs on {}, and a task's session runs on Claude Code for now. Pick one of \
+                 Claude's models for it on the Squads tab.",
+                catalog.name(&squad.model),
+                agent.name()
+            )),
+            None => Err(format!("The {name} squad's model can't be used: {}", catalog.missing(&squad.model).unwrap_or_default())),
         }
     }
 

@@ -45,7 +45,28 @@ Whether your Claude plan is used at all, and how much (see [Features that use to
 | Smart names and summaries, Find a session by description, Project notes, Project descriptions | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off / On (the two project ones are On once the master switch is) |
 | Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
 | Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
-| Model for smart features | Which Claude model does the work. Project notes always use Sonnet. | Haiku (default), Sonnet |
+| Model for smart features | Which model names and summarizes sessions, finds one by description, describes projects, writes hand-offs and drafts tasks. See [Choosing a model](#choosing-a-model). | Every model installed (Haiku by default where Claude Code is installed) |
+
+#### Choosing a model
+
+The model settings (this one, **Model for project notes** on the Projects tab, and a squad's models on the
+[Squads tab](tasks-and-squads.md#the-squads-tab)) offer the models of the AI programs on this computer, each by its name:
+
+- **Claude Code's**, when Claude Code is installed (`claude` on your path, or `PLATOON_CLAUDE_BIN` set): Opus, Sonnet,
+  Haiku and Fable. Each always means the newest model of its kind.
+- **Codex's**, when Codex is installed: the models Codex itself lists, in its order, read from `models_cache.json` in
+  Codex's folder (Codex writes that file when it starts; platoon never runs Codex to ask). If there is none yet, or it
+  can't be read, the tab says so under the entries.
+
+The model decides the program: a Claude model runs on Claude Code, an OpenAI model on Codex (see
+[Calls on Codex](tokens.md#calls-on-codex)). `←` `→` step through them in that order, Claude's first.
+
+A model you picked stays exactly as you picked it. If it can't run here any more (say Codex was uninstalled), the setting
+says so, for example **GPT-6-Luna (needs Codex, not installed)**, and what would use it stops and says what is missing;
+platoon never swaps in another model by itself. Pick another to go on.
+
+Until you pick one, the default follows what this computer has: Haiku for the smart features and Sonnet for the notes
+where Claude Code is installed, and Codex's first model on a computer with only Codex.
 
 ### Sessions
 
@@ -69,6 +90,7 @@ What naming and summarizing your conversations reads, and how often. Under the e
 | --- | --- | --- |
 | Update notes after | How long a project has to be quiet before platoon brings its [notes](projects.md#notes-that-keep-themselves-up-to-date) up to date. A new answer in any of its sessions starts the wait again. | 1, 3 (default), 5, 15, 30 minutes |
 | Read Claude's last reply up to | How much of Claude's last answer in each session platoon reads when it brings a project's notes up to date. What is still open is usually in Claude's answers; more of them uses a little more of your plan. | 500, 1500 (default), 3000 characters |
+| Model for project notes | Which model keeps a project's notes up to date (see [Choosing a model](#choosing-a-model)). Sonnet by default: on Haiku an update could leave out a change it had just been shown. | Every model installed (Sonnet by default where Claude Code is installed) |
 | System prompt for project notes, for project descriptions, for the hand-off, for tasks from a conversation | How platoon asks Claude to write a project's notes, the line under a project's name, a hand-off, and the tasks it drafts from a session (`t`; see [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation) and [System prompts](#system-prompts-for-each-smart-feature)). | Enter to change, User Modified |
 
 ### Editors
@@ -118,7 +140,10 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
 - The search numbers: 5 to 500 results, 30 to 400 preview characters and 200 to 20000 message characters.
 - `theme` is one of the [theme](themes.md) ids (`user:...` for one of your own).
 - The token numbers: 20,000 to 100,000,000 tokens a day (there is no "unlimited"), 10 to 100 percent (`0` means never
-  pause), 1 to 100 conversations and 1 to 100 messages; `ai_model` is `haiku` or `sonnet`.
+  pause), 1 to 100 conversations and 1 to 100 messages.
+- `ai_model` (smart features) and `notes_model` (project notes) are a model's id as its program names it (`haiku`,
+  `sonnet`, `gpt-6-luna`), kept exactly as written; they are not in the file until you pick one, and until then the
+  default for this computer applies (see [Choosing a model](#choosing-a-model)).
 - `notes_editor` is the editor you used last, by its command (`code`, `nano`), or `ask` while you haven't used one; an
   editor this computer no longer has is simply not starred and stays in the file until you use another.
 - `files_editor` is empty until you choose (the first editor found opens) or an editor's id (`code`, `cursor`, `zed`,

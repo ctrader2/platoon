@@ -46,11 +46,6 @@ use std::{
 /// The feature id in `ai::FEATURES`: the switch, the gate and the ledger all go by it.
 pub const FEATURE: &str = "project_notes";
 
-/// The notes are written on Sonnet whatever the smart features' model is: they go into every session of the project,
-/// and on Haiku an update dropped a reversal it had been shown (a feature taken back out stayed in the notes), and
-/// condensing kept about twice as many lines that were no longer true.
-pub const MODEL: &str = "sonnet";
-
 /// How long a project must be quiet before one update runs, when the settings can't be read at all. The setting
 /// itself ("Update notes after", `notes_quiet_minutes`) is what normally decides, and its own default is 3 minutes.
 pub const DEFAULT_QUIET_SECS: u64 = 180;
@@ -578,7 +573,10 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         tries += 1;
         let mut req = Request::new(FEATURE, system.clone(), text.clone());
         req.timeout = CALL_TIMEOUT;
-        req.model = Some(MODEL.into());
+        // The notes model setting's, not the smart features' (`Settings::model_for`): Sonnet unless the user picks
+        // another, because the notes go into every session of the project, and on Haiku an update dropped a reversal it
+        // had been shown (a feature taken back out stayed in the notes) and condensing kept about twice as many lines
+        // that were no longer true.
         let running = running_path(&env.cache, id);
         set_marker(&running);
         let answer = env.runner().run(&settings, &req);
@@ -1417,6 +1415,27 @@ mod tests {
         r.fake.reply_default(&huge.to_string());
         assert_eq!(update_once(&r.env, &id), Round::TooLong);
         assert_eq!(r.notes(&id), NOTES);
+    }
+
+    #[test]
+    fn the_notes_are_written_with_their_own_model_setting_and_never_the_smart_features_one() {
+        let r = Rig::new("notes-model");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let mut s = crate::settings::load(&r.env.config).0;
+        s.ai_model = Some("haiku".into());
+        s.notes_model = Some("opus".into());
+        crate::settings::save(&r.env.config, &s).unwrap();
+        r.fake.reply(1, r#"{"decisions":["Baskets are session based"]}"#);
+        update_once(&r.env, &id);
+        assert!(r.fake.has_arg(1, "opus") && !r.fake.has_arg(1, "haiku"), "{:?}", r.fake.argv(1));
+        // A notes model this computer can't run: said, and nothing is sent.
+        s.notes_model = Some("gpt-6-luna".into());
+        crate::settings::save(&r.env.config, &s).unwrap();
+        r.session(&id, "s2", &["Now the checkout"], "Done too.");
+        let Round::Refused(why) = update_once(&r.env, &id) else { panic!("refused") };
+        assert!(why.starts_with("GPT-6-Luna needs Codex") && why.contains("Model for project notes"), "{why}");
+        assert_eq!(r.fake.calls(), 1);
     }
 
     #[test]

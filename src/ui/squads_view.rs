@@ -166,12 +166,13 @@ pub(super) fn squad_lines(app: &App, s: &Squad, w: usize, fit: Option<usize>, pi
     head.push(Line::raw(""));
     const LABEL: usize = 15;
     const CHANGES: &str = "   enter changes";
+    let catalog = app.catalog();
     // The three settings, one line each (the one picked lit, with what enter does).
     for (i, setting) in Setting::ALL.into_iter().enumerate() {
         let lit = picked == Some(i);
         let base = if lit { Style::new().bg(t.surface) } else { Style::new() };
         let room = w.saturating_sub(LABEL + if lit { CHANGES.width() } else { 0 });
-        let value = Some(setting.words(s)).filter(|v| !v.is_empty()).unwrap_or_else(|| "none".into());
+        let value = Some(setting.words(s, &catalog)).filter(|v| !v.is_empty()).unwrap_or_else(|| "none".into());
         let value = fit_end(&value, room);
         let mut spans =
             vec![Span::styled(format!("{:<LABEL$}", setting.label()), base.fg(t.subtext)), Span::styled(value.clone(), base.fg(t.text))];

@@ -427,22 +427,242 @@ impl HookAnswer {
 // ---- models ---------------------------------------------------------------------------------------------------------
 
 /// A model platoon can run, and the agent that runs it: the model decides the agent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {
     /// As a squad's file, the settings and the agent's command line name it.
-    pub id: &'static str,
+    pub id: String,
     pub agent: Agent,
+    /// Its name where the user sees it: `Sonnet`, `GPT-6-Luna`.
+    pub name: String,
+    /// The tokens of context it has room for, when its agent says.
+    pub window: Option<u64>,
 }
 
-/// Every model platoon offers, in the order the squads' settings go round them: Claude Code's.
-pub fn models() -> Vec<Model> {
-    claude::MODELS.iter().map(|&id| Model { id, agent: Agent::Claude }).collect()
+/// The AI programs on this computer that platoon can use. What models there are follows from it (`Catalog`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Providers {
+    /// Claude Code's program, when Claude Code is installed.
+    pub claude: Option<String>,
+    /// Codex's program and folder, when Codex is installed.
+    pub codex: Option<CodexAt>,
 }
 
-/// The agent that runs `model`. One the catalog doesn't name (a squad's file may give a full Claude model id) is
-/// Claude Code's.
-pub fn agent_of(model: &str) -> Agent {
-    models().into_iter().find(|m| m.id == model).map_or(Agent::Claude, |m| m.agent)
+/// Where Codex is: its program, and its folder (`codex::codex_root`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CodexAt {
+    pub program: String,
+    pub root: PathBuf,
+}
+
+impl Providers {
+    /// What this computer has: Claude Code when `PLATOON_CLAUDE_BIN` names it or `claude` is on the PATH, Codex as
+    /// `codex::installed` decides. Reads the user's real Codex folder: never in a unit test.
+    pub fn here() -> Providers {
+        let path = std::env::var("PATH").unwrap_or_default();
+        let claude = claude::installed(&path).then(claude::program);
+        let (root, program) = (codex::codex_root(), codex::program());
+        let codex = codex::installed(&root, &program, &path).then_some(CodexAt { program, root });
+        Providers { claude, codex }
+    }
+
+    /// The program that is `agent` here, when it is installed.
+    pub fn program(&self, agent: Agent) -> Option<&str> {
+        match agent {
+            Agent::Claude => self.claude.as_deref(),
+            Agent::Codex => self.codex.as_ref().map(|c| c.program.as_str()),
+        }
+    }
+
+    /// Codex's folder, when Codex is installed.
+    pub fn codex_root(&self) -> Option<&Path> {
+        self.codex.as_ref().map(|c| c.root.as_path())
+    }
+
+    /// The models of the agents installed here.
+    pub fn catalog(&self) -> Catalog {
+        Catalog::of(self)
+    }
+}
+
+/// Every model platoon can offer on this computer: Claude Code's (its aliases, built in: Claude Code has no command
+/// that lists models), then Codex's (the ones its `models_cache.json` lists, in its order), each only while its agent
+/// is installed. A model that is in no installed agent's list is not installed: nothing runs it, and it is never taken
+/// for another agent's.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Catalog {
+    models: Vec<Model>,
+    claude: bool,
+    /// Codex's list as it was read: None while Codex isn't installed.
+    codex: Option<CodexList>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum CodexList {
+    /// Read: the models it keeps out of its own picker are here, so a file naming one still finds it.
+    Read { hidden: Vec<String> },
+    /// Missing or not understood (`codex::ListProblem`).
+    Unread(codex::ListProblem),
+}
+
+impl Catalog {
+    pub fn of(p: &Providers) -> Catalog {
+        let mut models: Vec<Model> = Vec::new();
+        if p.claude.is_some() {
+            models.extend(claude::MODELS.iter().map(|&id| Model {
+                id: id.into(),
+                agent: Agent::Claude,
+                name: claude::alias_name(id),
+                window: None,
+            }));
+        }
+        let codex = p.codex_root().map(|root| match codex::models(root) {
+            Ok(list) => {
+                let (listed, hidden): (Vec<_>, Vec<_>) = list.into_iter().partition(|m| m.listed);
+                models.extend(listed.into_iter().map(|m| Model { id: m.slug, agent: Agent::Codex, name: m.name, window: m.window }));
+                CodexList::Read { hidden: hidden.into_iter().map(|m| m.slug).collect() }
+            }
+            Err(problem) => CodexList::Unread(problem),
+        });
+        Catalog { models, claude: p.claude.is_some(), codex }
+    }
+
+    /// The models to offer, in order.
+    pub fn models(&self) -> &[Model] {
+        &self.models
+    }
+
+    /// The models of one agent, in order.
+    pub fn of_agent(&self, agent: Agent) -> impl Iterator<Item = &Model> {
+        self.models.iter().filter(move |m| m.agent == agent)
+    }
+
+    /// Is `agent` installed here?
+    pub fn installed(&self, agent: Agent) -> bool {
+        match agent {
+            Agent::Claude => self.claude,
+            Agent::Codex => self.codex.is_some(),
+        }
+    }
+
+    pub fn find(&self, id: &str) -> Option<&Model> {
+        self.models.iter().find(|m| m.id == id)
+    }
+
+    /// The agent that runs `model` here; None when no installed agent does. Besides the models offered: Claude Code
+    /// takes a full model name (`claude-opus-4-1`) as well as its aliases, Codex a model it keeps out of its picker,
+    /// and, while its list can't be read, any name of its own kind (`needs`), which Codex then judges itself.
+    pub fn agent_of(&self, model: &str) -> Option<Agent> {
+        if let Some(m) = self.find(model) {
+            return Some(m.agent);
+        }
+        match needs(model)? {
+            Agent::Claude if self.claude && model.starts_with("claude-") => Some(Agent::Claude),
+            Agent::Codex => match &self.codex {
+                Some(CodexList::Read { hidden }) if hidden.iter().any(|h| h == model) => Some(Agent::Codex),
+                Some(CodexList::Unread(_)) => Some(Agent::Codex),
+                _ => None,
+            },
+            Agent::Claude => None,
+        }
+    }
+
+    /// `model`'s name where the user sees it: the catalog's, else as its agent would show it.
+    pub fn name(&self, model: &str) -> String {
+        match self.find(model) {
+            Some(m) => m.name.clone(),
+            None => match needs(model) {
+                Some(Agent::Claude) => claude::alias_name(model),
+                Some(a) => a.model_name(model),
+                None => model.to_string(),
+            },
+        }
+    }
+
+    /// `model` as a setting shows it: its name, and, when nothing here runs it, why in a few words
+    /// ("GPT-6-Luna (needs Codex, not installed)").
+    pub fn label(&self, model: &str) -> String {
+        match self.missing_words(model) {
+            None => self.name(model),
+            Some(why) => format!("{} ({why})", self.name(model)),
+        }
+    }
+
+    /// Why nothing here runs `model`, in a few words; None when something does.
+    fn missing_words(&self, model: &str) -> Option<String> {
+        if self.agent_of(model).is_some() {
+            return None;
+        }
+        Some(match needs(model) {
+            Some(a) if !self.installed(a) => format!("needs {}, not installed", a.name()),
+            Some(a) => format!("{} doesn't offer it", a.name()),
+            None => "not a model platoon knows".into(),
+        })
+    }
+
+    /// Why nothing here runs `model`, as a sentence that says what is missing; None when something does.
+    pub fn missing(&self, model: &str) -> Option<String> {
+        if self.agent_of(model).is_some() {
+            return None;
+        }
+        let name = self.name(model);
+        Some(match needs(model) {
+            Some(a) if !self.installed(a) => format!("{name} needs {}, which isn't installed on this computer.", a.name()),
+            Some(a) => format!("{} doesn't offer {name} on this computer.", a.name()),
+            None if model.is_empty() => "No model is chosen.".to_string(),
+            None => format!("\"{name}\" isn't a model of Claude Code's or Codex's."),
+        })
+    }
+
+    /// The model the smart features use unless the user picked one: Claude Code's smallest (`haiku`) where Claude
+    /// Code is installed, else the first model Codex lists. None with neither.
+    pub fn default_smart(&self) -> Option<String> {
+        self.default_with(claude::HAIKU)
+    }
+
+    /// The model project notes are written with unless the user picked one: Sonnet where Claude Code is installed
+    /// (decided 2026-10-18), else the first model Codex lists.
+    pub fn default_notes(&self) -> Option<String> {
+        self.default_with(claude::SONNET)
+    }
+
+    fn default_with(&self, claude_model: &str) -> Option<String> {
+        if self.claude {
+            return Some(claude_model.to_string());
+        }
+        self.of_agent(Agent::Codex).next().map(|m| m.id.clone())
+    }
+
+    /// Why Codex adds no models although it is installed, in plain words; None when it isn't installed or its list
+    /// was read.
+    pub fn codex_problem(&self) -> Option<String> {
+        match &self.codex {
+            Some(CodexList::Unread(p)) => Some(p.plain()),
+            _ => None,
+        }
+    }
+}
+
+/// The agent whose kind of name `model` is, whether or not it is installed: Claude Code's aliases and `claude-...`
+/// names, OpenAI's `gpt-...`, `codex-...` and `o<digit>...`. None for anything else.
+pub fn needs(model: &str) -> Option<Agent> {
+    if claude::MODELS.contains(&model) || model.starts_with("claude-") {
+        Some(Agent::Claude)
+    } else if model.starts_with("gpt-")
+        || model.starts_with("codex-")
+        || model.strip_prefix('o').is_some_and(|r| r.starts_with(|c: char| c.is_ascii_digit()))
+    {
+        Some(Agent::Codex)
+    } else {
+        None
+    }
+}
+
+/// Is `program` on `path` (a `PATH` value)? A name with a `/` is looked at where it says.
+pub fn on_path(program: &str, path: &str) -> bool {
+    if program.contains('/') {
+        return Path::new(program).is_file();
+    }
+    !program.is_empty() && std::env::split_paths(path).any(|d| d.join(program).is_file())
 }
 
 // ---- what platoon reads about conversations and the processes running them ----------------------------------------
@@ -639,7 +859,7 @@ fn resolve_path(p: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
 
@@ -700,14 +920,134 @@ mod tests {
         assert_eq!(a.context_window(&Transcript { context_tokens: 250_000, ..t }), 1_000_000);
     }
 
+    /// A computer with Claude Code (a stand-in that is never run) and no Codex.
+    pub(crate) fn claude_catalog() -> Catalog {
+        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None }.catalog()
+    }
+
+    /// A Codex folder (a temp dir) holding the sample `models_cache.json`, as a real Codex 0.163 wrote it (account
+    /// fields left out): GPT-6-Luna, GPT-5.6-Terra and GPT-5.6-Luna listed, two hidden.
+    pub(crate) fn codex_with_models(name: &str) -> CodexAt {
+        let root = tmp(&format!("codex-models-{name}"));
+        fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/models_cache.json"), root.join("models_cache.json")).unwrap();
+        CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root }
+    }
+
+    fn ids(c: &Catalog) -> Vec<&str> {
+        c.models().iter().map(|m| m.id.as_str()).collect()
+    }
+
     #[test]
-    fn the_catalog_holds_claude_codes_models_in_the_squads_order_and_the_model_decides_the_agent() {
-        let ids: Vec<&str> = models().iter().map(|m| m.id).collect();
-        assert_eq!(ids, ["opus", "sonnet", "haiku", "fable"]);
-        assert!(models().iter().all(|m| m.agent == Agent::Claude));
-        assert_eq!(crate::settings::MODELS, ["haiku", "sonnet"], "the smart features' two, the default first");
-        for m in ["opus", "fable", "claude-opus-4-1", ""] {
-            assert_eq!(agent_of(m), Agent::Claude, "{m}");
+    fn with_only_claude_code_the_catalog_is_its_four_aliases_and_an_openai_model_is_not_installed() {
+        let c = claude_catalog();
+        assert_eq!(ids(&c), ["opus", "sonnet", "haiku", "fable"]);
+        assert_eq!(c.models().iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Opus", "Sonnet", "Haiku", "Fable"]);
+        assert!(c.models().iter().all(|m| m.agent == Agent::Claude));
+        // The model decides the agent; a full Claude model name is Claude Code's too.
+        for m in ["opus", "fable", "claude-opus-4-1"] {
+            assert_eq!(c.agent_of(m), Some(Agent::Claude), "{m}");
+        }
+        // Anything else is not installed: never taken for Claude Code's.
+        for m in ["gpt-6-luna", "", "mystery", "claudette"] {
+            assert_eq!(c.agent_of(m), None, "{m}");
+        }
+        assert_eq!(c.label("gpt-6-luna"), "GPT-6-Luna (needs Codex, not installed)");
+        assert_eq!(c.label("sonnet"), "Sonnet");
+        assert_eq!(c.label("mystery"), "mystery (not a model platoon knows)");
+        assert_eq!(c.missing("gpt-6-luna").as_deref(), Some("GPT-6-Luna needs Codex, which isn't installed on this computer."));
+        assert_eq!(c.missing("haiku"), None);
+        assert_eq!((c.default_smart().as_deref(), c.default_notes().as_deref()), (Some("haiku"), Some("sonnet")));
+        assert_eq!(c.codex_problem(), None, "Codex isn't installed: nothing to say about its list");
+    }
+
+    #[test]
+    fn with_only_codex_the_catalog_is_its_listed_models_in_its_order_and_a_claude_model_is_not_installed() {
+        let codex = codex_with_models("codex-only");
+        let c = Providers { claude: None, codex: Some(codex) }.catalog();
+        assert_eq!(ids(&c), ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"], "by priority; the hidden ones are not offered");
+        assert_eq!(c.models().iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["GPT-6-Luna", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
+        assert!(c.models().iter().all(|m| m.agent == Agent::Codex && m.window == Some(272_000)));
+        assert_eq!(c.agent_of("gpt-5.6-terra"), Some(Agent::Codex));
+        assert_eq!(c.agent_of("gpt-reserve"), Some(Agent::Codex), "a hidden model a file names still runs on Codex");
+        assert_eq!(c.agent_of("gpt-9"), None, "Codex's list is what it offers");
+        assert_eq!(c.label("gpt-9"), "GPT-9 (Codex doesn't offer it)");
+        for m in ["haiku", "opus", "claude-opus-4-1"] {
+            assert_eq!(c.agent_of(m), None, "{m}");
+        }
+        assert_eq!(c.label("haiku"), "Haiku (needs Claude Code, not installed)");
+        assert_eq!(c.missing("sonnet").as_deref(), Some("Sonnet needs Claude Code, which isn't installed on this computer."));
+        // The defaults are Codex's first model, for the smart features and the notes alike.
+        assert_eq!((c.default_smart().as_deref(), c.default_notes().as_deref()), (Some("gpt-6-luna"), Some("gpt-6-luna")));
+    }
+
+    #[test]
+    fn with_both_claudes_models_come_first_and_the_defaults_stay_claudes() {
+        let codex = codex_with_models("both");
+        let c = Providers { claude: Some("claude".into()), codex: Some(codex) }.catalog();
+        assert_eq!(ids(&c), ["opus", "sonnet", "haiku", "fable", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"]);
+        assert_eq!(c.agent_of("haiku"), Some(Agent::Claude));
+        assert_eq!(c.agent_of("gpt-6-luna"), Some(Agent::Codex));
+        assert_eq!(c.of_agent(Agent::Claude).count(), 4);
+        assert_eq!((c.default_smart().as_deref(), c.default_notes().as_deref()), (Some("haiku"), Some("sonnet")));
+    }
+
+    #[test]
+    fn with_neither_there_is_no_model_and_no_default() {
+        let c = Providers::default().catalog();
+        assert!(c.models().is_empty());
+        assert_eq!((c.default_smart(), c.default_notes()), (None, None));
+        assert_eq!(c.label("haiku"), "Haiku (needs Claude Code, not installed)");
+        assert_eq!(c.label("gpt-6-luna"), "GPT-6-Luna (needs Codex, not installed)");
+        assert!(!c.installed(Agent::Claude) && !c.installed(Agent::Codex));
+    }
+
+    #[test]
+    fn a_missing_or_broken_model_list_adds_no_codex_models_says_why_and_leaves_codexs_own_names_to_codex() {
+        let root = tmp("codex-no-list");
+        let codex = CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: root.clone() };
+        let p = Providers { claude: None, codex: Some(codex) };
+        let c = p.catalog();
+        assert!(c.models().is_empty() && c.installed(Agent::Codex));
+        let why = c.codex_problem().unwrap();
+        assert!(why.contains("models_cache.json") && why.contains("Start Codex once"), "{why}");
+        // Codex is there: a name of its kind is left to it (it says itself if it doesn't know it); Claude's is not installed.
+        assert_eq!(c.agent_of("gpt-6-luna"), Some(Agent::Codex));
+        assert_eq!(c.agent_of("haiku"), None);
+        assert_eq!(c.default_smart(), None, "no listed model to default to");
+        for broken in ["not json", "[]", r#"{"models": "nope"}"#, r#"{"other": []}"#] {
+            fs::write(root.join("models_cache.json"), broken).unwrap();
+            let c = p.catalog();
+            assert!(c.models().is_empty(), "{broken}");
+            assert!(c.codex_problem().unwrap().contains("couldn't be read"), "{broken}");
+        }
+        // Entries that make no sense are skipped, the rest kept, in Codex's order; a name without a display name is
+        // shown as a row would show it. The file is read again once it changes.
+        fs::write(
+            root.join("models_cache.json"),
+            r#"{"models":[{"slug":"gpt-b","visibility":"list","priority":2},{"display_name":"No slug","visibility":"list"},
+               {"slug":"gpt-a","display_name":"GPT-A","visibility":"list","priority":1,"context_window":400000},
+               {"slug":"has space","visibility":"list"},{"slug":"gpt-c","visibility":"hide","priority":0}]}"#,
+        )
+        .unwrap();
+        let c = p.catalog();
+        assert_eq!(ids(&c), ["gpt-a", "gpt-b"]);
+        assert_eq!((c.models()[0].window, c.models()[1].name.as_str()), (Some(400_000), "GPT-B"));
+        assert_eq!(c.codex_problem(), None);
+    }
+
+    #[test]
+    fn the_kind_of_name_says_which_agent_a_model_needs() {
+        for (m, a) in [
+            ("opus", Some(Agent::Claude)),
+            ("claude-sonnet-5", Some(Agent::Claude)),
+            ("gpt-6-luna", Some(Agent::Codex)),
+            ("codex-auto-review", Some(Agent::Codex)),
+            ("o3", Some(Agent::Codex)),
+            ("o", None),
+            ("ollama", None),
+            ("", None),
+        ] {
+            assert_eq!(needs(m), a, "{m}");
         }
     }
 }

@@ -29,9 +29,9 @@
 // Step C is the first caller of most of this.
 #![allow(dead_code)]
 
-use crate::agents::{Agent, Tools};
+use crate::agents::{Agent, Catalog, Providers, Tools};
 use crate::ledger::{Backoff, FailKind, Ledger, Usage, local_day};
-use crate::settings::Settings;
+use crate::settings::{ModelFor, Settings};
 use crate::usage;
 use serde_json::Value;
 use std::{
@@ -182,6 +182,8 @@ pub enum Refusal {
     OverBudget { used: u64, cap: u64 },
     /// The plan is used above the pause point.
     PlanBusy { pct: u8, limit: u64, window: &'static str },
+    /// No installed agent runs the model it would use: what is missing, in a sentence or two.
+    NoModel(String),
 }
 
 pub fn wait_text(secs: u64) -> String {
@@ -225,6 +227,7 @@ impl Refusal {
                     "Your Claude plan is {pct}% used ({window}), above the pause point of {limit}%. Smart features wait until it drops."
                 )
             }
+            Refusal::NoModel(why) => why.clone(),
         }
     }
 
@@ -240,7 +243,7 @@ impl Refusal {
         match self {
             Refusal::MasterOff | Refusal::FeatureOff(_) => "Press s for the settings to switch it back on.",
             Refusal::PlanBusy { .. } => "Press s for the settings to change the pause point.",
-            Refusal::BackedOff { .. } | Refusal::OverBudget { .. } | Refusal::UnknownFeature(_) => "",
+            Refusal::BackedOff { .. } | Refusal::OverBudget { .. } | Refusal::UnknownFeature(_) | Refusal::NoModel(_) => "",
         }
     }
 
@@ -264,6 +267,7 @@ impl Refusal {
             }
             Refusal::OverBudget { cap, .. } => format!("smart features paused · today's {} limit is used up", thousands(*cap)),
             Refusal::PlanBusy { pct, window, .. } => format!("smart features paused · your Claude plan is {pct}% used ({window})"),
+            Refusal::NoModel(_) => "smart features stopped · their model isn't installed".into(),
         }
     }
 }
@@ -657,22 +661,29 @@ pub fn work_dir(cache: &Path) -> PathBuf {
     cache.join("ai-work")
 }
 
-/// Runs `claude -p` for a request, honoring every gate. Cheap to make; blocking; use it from a thread.
+/// Runs a one-shot call for a request on the agent its model needs (`claude -p`, `codex exec`), honoring every gate.
+/// Cheap to make; blocking; use it from a thread.
 pub struct Runner {
-    program: String,
+    /// The AI programs it may run: what decides the models there are, and which program a model runs on.
+    providers: Providers,
     cache: PathBuf,
     /// Seconds added to the clock this runner reads (tests move it to cross midnight without waiting).
     offset: u64,
 }
 
 impl Runner {
-    /// The program is PLATOON_CLAUDE_BIN, else `claude`.
+    /// The AI programs this computer has (`Providers::here`).
     pub fn from_env(cache: &Path) -> Runner {
-        Runner { program: Agent::Claude.program(), cache: cache.to_path_buf(), offset: 0 }
+        Runner::new(cache, Providers::here())
     }
 
+    pub fn new(cache: &Path, providers: Providers) -> Runner {
+        Runner { providers, cache: cache.to_path_buf(), offset: 0 }
+    }
+
+    /// Claude Code only, run as `program` (a stand-in, in tests).
     pub fn with_program(cache: &Path, program: &str) -> Runner {
-        Runner { program: program.to_string(), cache: cache.to_path_buf(), offset: 0 }
+        Runner::new(cache, Providers { claude: Some(program.to_string()), codex: None })
     }
 
     /// The same runner with its clock `secs` seconds ahead.
@@ -690,14 +701,17 @@ impl Runner {
         work_dir(&self.cache)
     }
 
-    /// The real `claude` must never be reached by a test: in unit tests it panics, and in a test run of the binary
-    /// (PLATOON_FORBID_REAL_CLAUDE set) it is refused.
-    fn check_program(&self) -> Result<(), AiError> {
-        if self.program != "claude" {
+    /// The real `claude` or `codex` must never be reached by a test: in unit tests it panics, and in a test run of the
+    /// binary (PLATOON_FORBID_REAL_CLAUDE set) the real `claude` is refused (the tests' `codex` is never a bare name).
+    fn check_program(program: &str) -> Result<(), AiError> {
+        if program != "claude" && program != "codex" {
             return Ok(());
         }
         if cfg!(test) {
-            panic!("a test tried to run the real `claude`: set PLATOON_CLAUDE_BIN or use Runner::with_program with a fake");
+            panic!("a test tried to run the real `{program}`: give the runner a stand-in (Runner::with_program, Providers)");
+        }
+        if program == "codex" {
+            return Ok(());
         }
         if std::env::var_os("PLATOON_FORBID_REAL_CLAUDE").is_some() {
             return Err(AiError::Failed {
@@ -714,18 +728,18 @@ impl Runner {
         if gated {
             gate_for(settings, req.feature, &self.cache, start, req.user_initiated).map_err(AiError::Refused)?;
         }
+        let (model, agent) = model_of(settings, req, &self.providers.catalog()).map_err(AiError::Refused)?;
         if req.cancel.is_cancelled() {
             return Err(AiError::Cancelled);
         }
-        self.check_program()?;
+        let program = self.providers.program(agent).unwrap_or_default().to_string();
+        Self::check_program(&program)?;
         let ledger = Ledger::open(&self.cache);
         let other = |detail: String| AiError::Failed { kind: FailKind::Other, detail };
         let work = self.work_dir();
         std::fs::create_dir_all(&work).map_err(|e| other(format!("couldn't create the work folder: {e}")))?;
 
-        let model = req.model.clone().unwrap_or_else(|| settings.ai_model.clone());
-        let agent = crate::agents::agent_of(&model);
-        let mut cmd = Command::new(&self.program);
+        let mut cmd = Command::new(&program);
         agent.one_shot(&mut cmd, &model, req).map_err(other)?;
         cmd.current_dir(req.cwd.as_deref().unwrap_or(&work))
             .env("PLATOON_AI", "1")
@@ -743,9 +757,9 @@ impl Runner {
             Ok(c) => c,
             Err(e) => {
                 let why = if e.kind() == io::ErrorKind::NotFound {
-                    format!("couldn't find `{}` to run", self.program)
+                    format!("couldn't find `{program}` to run")
                 } else {
-                    format!("couldn't start `{}`: {e}", self.program)
+                    format!("couldn't start `{program}`: {e}")
                 };
                 if gated {
                     let _ = ledger.note_failure(self.now(), FailKind::Other);
@@ -839,6 +853,31 @@ impl Runner {
     }
 }
 
+/// The model `req` runs on and the agent that runs it: its own model, else the one the settings pick for its feature
+/// (on this computer, `catalog`). Refused, saying what is missing, when no installed agent runs that model.
+pub fn model_of(settings: &Settings, req: &Request, catalog: &Catalog) -> Result<(String, Agent), Refusal> {
+    let (model, setting) = match &req.model {
+        Some(m) => (Some(m.clone()), None),
+        None => {
+            let (m, which) = settings.model_for(req.feature, catalog);
+            (m, Some(which))
+        }
+    };
+    let Some(model) = model else {
+        return Err(Refusal::NoModel("Neither Claude Code nor Codex is installed on this computer, so there is no model to ask.".into()));
+    };
+    match catalog.agent_of(&model) {
+        Some(agent) => Ok((model, agent)),
+        None => {
+            let mut why = catalog.missing(&model).unwrap_or_default();
+            if let Some(which) = setting {
+                why.push_str(&format!(" Pick another for \"{}\" in platoon's settings.", which.setting_name()));
+            }
+            Err(Refusal::NoModel(why))
+        }
+    }
+}
+
 /// Start the process, trying again a few times if the program is a script that another thread has only just finished
 /// writing ("text file busy").
 pub(crate) fn spawn_retrying(cmd: &mut Command) -> io::Result<std::process::Child> {
@@ -913,7 +952,7 @@ pub fn interrupted() -> bool {
 }
 
 /// `platoon tokens [test]`. Returns the exit code: 0 fine, 1 the call failed, 2 usage, 3 refused by a gate.
-pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Providers, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let (store, now) = (crate::settings::SettingsStore::open(config), usage::now());
     let settings = store.get();
     match args.first().map(String::as_str) {
@@ -924,7 +963,11 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
             for (f, on) in &s.features {
                 let _ = writeln!(out, "  {}: {}", f.label, onoff(*on));
             }
-            let _ = writeln!(out, "Model: {}", settings.ai_model);
+            let catalog = providers.catalog();
+            for which in [ModelFor::Smart, ModelFor::Notes] {
+                let model = which.in_effect(&settings, &catalog);
+                let _ = writeln!(out, "{}: {}", which.setting_name(), model.map_or_else(|| "none".into(), |m| model_words(&catalog, &m)));
+            }
             let _ =
                 writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(s.used_today), crate::settings::thousands(s.cap));
             // What each feature spent today, so it is clear where the tokens went.
@@ -957,7 +1000,7 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
             let _ = writeln!(out, "Settings file: {}", store.path().display());
             0
         }
-        Some("test") if args.len() == 1 => tokens_test(&settings, &store, cache, out, err),
+        Some("test") if args.len() == 1 => tokens_test(&settings, &store, cache, providers, out, err),
         Some(_) => {
             let _ = writeln!(
                 err,
@@ -968,18 +1011,38 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, out: &mut dyn Wr
     }
 }
 
-fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cache: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    if let Err(r) = gate(settings, TEST_FEATURE, cache, usage::now()) {
-        let _ = writeln!(err, "Not run: {}", r.plain());
-        if r.is_switch() {
-            let _ = writeln!(err, "{}", enable_hint(&store.path()));
-        }
-        return 3;
+/// A model as `platoon tokens` says it: its name and the program that runs it ("Haiku (Claude Code)"), or why nothing
+/// here does.
+fn model_words(catalog: &Catalog, model: &str) -> String {
+    match catalog.agent_of(model) {
+        Some(agent) => format!("{} ({})", catalog.name(model), agent.name()),
+        None => catalog.label(model),
     }
-    let _ = writeln!(out, "Asking Claude ({}) to reply with one word...", settings.ai_model);
-    let _ = out.flush();
+}
+
+fn tokens_test(
+    settings: &Settings,
+    store: &crate::settings::SettingsStore,
+    cache: &Path,
+    providers: &Providers,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
     let mut req =
         Request::new(TEST_FEATURE, "You are a test. Reply with exactly the word asked for, nothing else.", "Reply with the single word ok");
+    let refused = gate(settings, TEST_FEATURE, cache, usage::now()).and_then(|()| model_of(settings, &req, &providers.catalog()));
+    let (model, agent) = match refused {
+        Ok(found) => found,
+        Err(r) => {
+            let _ = writeln!(err, "Not run: {}", r.plain());
+            if r.is_switch() {
+                let _ = writeln!(err, "{}", enable_hint(&store.path()));
+            }
+            return 3;
+        }
+    };
+    let _ = writeln!(out, "Asking {} ({}) to reply with one word...", agent.name(), providers.catalog().name(&model));
+    let _ = out.flush();
     req.timeout = Duration::from_secs(60);
     // Ctrl+C reaches us but not Claude (it has its own process group), so stop it ourselves.
     INTERRUPTED.store(false, Ordering::SeqCst);
@@ -999,7 +1062,7 @@ fn tokens_test(settings: &Settings, store: &crate::settings::SettingsStore, cach
             }
         })
     };
-    let result = Runner::from_env(cache).run(settings, &req);
+    let result = Runner::new(cache, providers.clone()).run(settings, &req);
     done.store(true, Ordering::SeqCst);
     let _ = watcher.join();
     let today = |out: &mut dyn Write| {
@@ -1601,7 +1664,7 @@ pub(crate) mod tests {
     fn the_model_setting_is_passed_on_and_a_big_prompt_goes_through_stdin() {
         let f = Fake::ok("model");
         let mut s = on();
-        s.ai_model = "sonnet".into();
+        s.ai_model = Some("sonnet".into());
         let big = "x".repeat(2_000_000);
         let r = Request::new("names", "s", big.clone());
         let reply = f.runner().run(&s, &r).unwrap();
@@ -1687,6 +1750,38 @@ pub(crate) mod tests {
         Ledger::open(&f.cache).record_call(usage::now(), "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true).unwrap();
         assert!(matches!(f.runner().run(&s, &req()), Err(AiError::Refused(Refusal::OverBudget { .. }))));
         assert!(!f.ran());
+    }
+
+    #[test]
+    fn a_model_nothing_here_runs_is_refused_plainly_never_swapped_and_nothing_starts() {
+        let f = Fake::ok("no-model");
+        // The smart features' model, saved when Codex was there: said, with the setting to change.
+        let mut s = on();
+        s.ai_model = Some("gpt-6-luna".into());
+        let Err(AiError::Refused(r)) = f.runner().run(&s, &req()) else { panic!("refused") };
+        assert_eq!(
+            r.plain(),
+            "GPT-6-Luna needs Codex, which isn't installed on this computer. Pick another for \"Model for smart features\" in platoon's settings."
+        );
+        assert!(!r.is_switch());
+        // The notes' own model setting is named for a notes call.
+        let mut s = on();
+        s.set_feature(crate::notesrun::FEATURE, true);
+        s.notes_model = Some("gpt-6-luna".into());
+        let notes = Request::new(crate::notesrun::FEATURE, "s", "p");
+        let Err(AiError::Refused(r)) = f.runner().run(&s, &notes) else { panic!("refused") };
+        assert!(r.plain().ends_with("Pick another for \"Model for project notes\" in platoon's settings."), "{}", r.plain());
+        // A call's own model (a task's check, from its squad) is refused too, outside the gate as it is.
+        let mut check = Request::new(crate::verdict::FEATURE, "s", "p");
+        check.model = Some("gpt-6-luna".into());
+        let Err(AiError::Refused(r)) = f.runner().run(&Settings::default(), &check) else { panic!("refused") };
+        assert_eq!(r.plain(), "GPT-6-Luna needs Codex, which isn't installed on this computer.");
+        // With no AI program at all there is no model to ask.
+        let none = Runner::new(&f.cache, Providers::default());
+        let Err(AiError::Refused(r)) = none.run(&on(), &req()) else { panic!("refused") };
+        assert!(r.plain().starts_with("Neither Claude Code nor Codex is installed"), "{}", r.plain());
+        assert!(!f.ran(), "nothing was started");
+        assert!(Ledger::open(&f.cache).load().backoff.is_none(), "not a failure: nothing backs off");
     }
 
     #[test]
@@ -1854,7 +1949,8 @@ pub(crate) mod tests {
     fn cli(args: &[&str], f: &Fake, config: &Path) -> (i32, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        let code = tokens_cli(&args, &f.cache, config, &mut out, &mut err);
+        let providers = Providers { claude: Some(f.script.clone()), codex: None };
+        let code = tokens_cli(&args, &f.cache, config, &providers, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
     }
 

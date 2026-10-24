@@ -156,7 +156,7 @@ fn first_time_names_go_to_active_conversations_newest_first_in_batches_of_the_se
 fn a_call_is_small_and_made_the_agreed_way() {
     let w = World::new("sm-argv");
     simple(&w, "aaa", "please fix the login redirect", 300);
-    smart(&w, |s| s.ai_model = "sonnet".into());
+    smart(&w, |s| s.ai_model = Some("sonnet".into()));
     let fake = AiFake::new("sm-argv");
     let mut app = app_with(&w, &fake);
     app.settle_ai_for_test(10);

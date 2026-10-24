@@ -106,9 +106,10 @@ fastest.
 
 ### The check of the work
 
-When a task's session stops, a fresh Claude, on the squad's `verdict_model`,
+When a task's session stops, a fresh call, on the squad's `verdict_model` (Claude's, or one of Codex's),
 judges whether the work does what the task asked. It didn't do the work, it can only read (the files in the worktree:
-no shell, no edits), and it is given the task's text with its **Done when** boxes, the session's last message (what it
+on Claude Code no shell and no edits; on Codex its read-only sandbox, where it can also run commands that change
+nothing), and it is given the task's text with its **Done when** boxes, the session's last message (what it
 says it did) and the change on the task's branch since it started (what isn't committed yet is listed too). It says, for
 each box, whether it is met, and what is missing or wrong, each with the file, the line and the exact text there. The
 task shows **Working · checking the work** meanwhile (10 minutes at most).
@@ -121,8 +122,8 @@ task shows **Working · checking the work** meanwhile (10 minutes at most).
   problems**, with what it found in its details.
 - platoon looks for the text the check quotes at each line it names. A finding whose text isn't there is left out; a
   "not done" with nothing left that holds up counts as done, and the Verdict line says so.
-- **The check could not run** (it took too long, its answer couldn't be read, `claude` wasn't found): the task needs
-  you, with why. It never holds the session up for longer than its 10 minutes.
+- **The check could not run** (it took too long, its answer couldn't be read, `claude` or `codex` wasn't found, its
+  model isn't installed here): the task needs you, with why. It never holds the session up for longer than its 10 minutes.
 
 Typing into the session counts the tries from nothing again. The check's whole answer is
 `verdict.json` in the task's own folder. It needs no switch: it is part of the task, like its session (see
@@ -175,7 +176,15 @@ plan_first: false
 
 `description` is what the drafting reads to suggest a squad; `model` is the session's model; `plan_first: true` starts
 it in plan mode; `verdict_model` is the model that [checks the work](#the-check-of-the-work) (the session's own model
-when it has none). A file of your own in `~/.config/platoon/squads/<id>.md` is a squad of yours, and one named like a
+when it has none). A model is written as its program names it (`opus`, a full Claude model name, or one of Codex's such
+as `gpt-6-luna`) and kept exactly so; the model decides the program that runs it.
+
+- **The session's model is one of Claude's, for now.** A task's session runs on Claude Code; running one on Codex comes
+  later. A squad whose model is a Codex model, or one this computer can't run (say Claude Code isn't installed), doesn't
+  start: `s` says why, and nothing is made.
+- **The verdict model can be any model installed**, Claude's or Codex's (see
+  [Choosing a model](settings-and-keys.md#choosing-a-model)): the check is one call, which either program can make. On
+  Codex it runs in Codex's read-only sandbox in the task's folder (see [Calls on Codex](tokens.md#calls-on-codex)). A file of your own in `~/.config/platoon/squads/<id>.md` is a squad of yours, and one named like a
 built-in (`feature.md`) replaces it. A file with something wrong in it is listed as **needs fixing** and can't start a
 task; the list says what is wrong. A started task keeps the squad it started with (its copy is in the task's own folder).
 
@@ -183,14 +192,15 @@ task; the list says what is wrong. A started task keeps the squad it started wit
 
 The fourth tab, `4` **Squads**, lists every squad: the built-ins first, then yours by name, each with what it is for and
 where it comes from (**built in**, **yours**, or **yours, replaces the built-in**), and **needs fixing** when its file has
-something wrong. From 80 columns the picked squad is beside the list: what it is for, its model and verdict model,
-whether it plans first, its steps, and under them what is wrong with its file, one line each.
+something wrong. From 80 columns the picked squad is beside the list: what it is for, its model and verdict model (by
+their names, and **(needs Codex, not installed)** or the like for one this computer can't run), whether it plans first,
+its steps, and under them what is wrong with its file, one line each.
 
 | Key (Squads tab) | Does |
 | --- | --- |
 | `enter` | the squad in the whole width, with its **Model** line picked; `esc` goes back to the list |
 | `↑` `↓` (squad open) | pick its **Model**, **Verdict model** or **Plans first** line; past them, scroll the squad |
-| `enter` (squad open) | change the picked line to the next choice: the model goes opus, sonnet, haiku, fable; the verdict model the same four, then **the same as the model**; plans first yes or no. A click on a line picks it, a click on the picked one changes it |
+| `enter` (squad open) | change the picked line to the next choice: the model goes Opus, Sonnet, Haiku, Fable (Claude's models only, for now); the verdict model goes round every model installed, Claude's then Codex's, then **the same as the model**; plans first yes or no. A click on a line picks it, a click on the picked one changes it |
 | `e` | open its file in your editor (the same list of editors as the notes); the tab reads it again when the editor is done. On a built-in, its text is copied to `~/.config/platoon/squads/<id>.md` first, and if you leave it unchanged the copy goes again, so a built-in becomes yours only when you change it |
 | `n` | a new squad: its name, then its file (`~/.config/platoon/squads/<name>.md`, the Feature squad's settings and one step to write over) opens in your editor |
 | `d` | delete one of yours, after asking. The file is kept as `<id>.md.bak`; a built-in it replaced comes back |

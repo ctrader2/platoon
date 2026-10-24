@@ -138,6 +138,11 @@ pub fn program() -> String {
     std::env::var("PLATOON_CLAUDE_BIN").unwrap_or_else(|_| "claude".into())
 }
 
+/// Is Claude Code on this computer: `PLATOON_CLAUDE_BIN` names it, or `claude` is on `path` (a `PATH` value)?
+pub fn installed(path: &str) -> bool {
+    std::env::var_os("PLATOON_CLAUDE_BIN").is_some_and(|p| !p.is_empty()) || super::on_path("claude", path)
+}
+
 /// The arguments `claude` is started with for `start`: nothing for a new session (or its first message alone),
 /// `--resume <id>`, or `attach <id>`.
 pub fn start_args(start: Start) -> Vec<String> {
@@ -540,6 +545,17 @@ pub const FABLE: &str = "fable";
 
 /// Claude Code's models in the catalog, in the order the squads' settings go round them.
 pub const MODELS: [&str; 4] = [OPUS, SONNET, HAIKU, FABLE];
+
+/// An alias as the user sees it (`opus` -> `Opus`); anything else as it is shown in a row (`pretty_model`).
+pub fn alias_name(id: &str) -> String {
+    match id {
+        OPUS => "Opus".into(),
+        SONNET => "Sonnet".into(),
+        HAIKU => "Haiku".into(),
+        FABLE => "Fable".into(),
+        other => pretty_model(other),
+    }
+}
 
 /// `claude-sonnet-5` -> `Sonnet 5`, `claude-fable-5-1` -> `Fable 5.1`, `claude-haiku-4-5-20251001` -> `Haiku 4.5`.
 /// Handles the older `claude-3-5-sonnet-...` ordering too. Anything unrecognised is shown as-is.

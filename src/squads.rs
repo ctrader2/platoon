@@ -20,6 +20,7 @@
 //! suggested by, and `verdict_model` is the model of the check of a task's work before it is Done (`verdict.rs`). Each thing wrong with a file is
 //! one line that says where (`problems`); a squad with problems can't be started.
 
+use crate::agents::{Agent, Catalog};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -333,28 +334,42 @@ impl Setting {
         }
     }
 
-    /// What `s` has for it, in the pane's words.
-    pub fn words(self, s: &Squad) -> String {
+    /// What `s` has for it, in the pane's words: a model by its name, and said when nothing here runs it
+    /// (`Catalog::label`).
+    pub fn words(self, s: &Squad, catalog: &Catalog) -> String {
         match self {
-            Setting::Model => s.model.clone(),
+            Setting::Model if s.model.is_empty() => String::new(),
+            Setting::Model => catalog.label(&s.model),
             Setting::VerdictModel if s.verdict_model.is_empty() => "the same as the model".into(),
-            Setting::VerdictModel => s.verdict_model.clone(),
+            Setting::VerdictModel => catalog.label(&s.verdict_model),
             Setting::PlanFirst => if s.plan_first { "yes, then waits for your yes" } else { "no" }.into(),
         }
     }
 
-    /// The value after `s`'s, as its file writes it: the models in the catalog's order (`agents::models`; its file may
-    /// name any other), round (a model not in it goes to the first); the verdict model the same, then "the same as the
-    /// model" (None: no `verdict_model` line); plans first yes or no.
-    pub fn next(self, s: &Squad) -> Option<String> {
-        let models: Vec<&str> = crate::agents::models().iter().map(|m| m.id).collect();
-        let after = |m: &str| models.iter().position(|x| *x == m).map(|i| i + 1);
+    /// The models it goes round: for the verdict model, every model of this computer's (the check is a one-shot call,
+    /// which any agent can make); for the session's own model, Claude Code's only, until a task's session can run on
+    /// Codex (phase 3 of Codex support). Empty for plans first.
+    pub fn models(self, catalog: &Catalog) -> Vec<&str> {
         match self {
+            Setting::Model => catalog.of_agent(Agent::Claude).map(|m| m.id.as_str()).collect(),
+            Setting::VerdictModel => catalog.models().iter().map(|m| m.id.as_str()).collect(),
+            Setting::PlanFirst => Vec::new(),
+        }
+    }
+
+    /// The value after `s`'s, as its file writes it: the models in the catalog's order (`models`; its file may name
+    /// any other), round (a model not in it goes to the first); the verdict model the same, then "the same as the
+    /// model" (None: no `verdict_model` line); plans first yes or no. Err when there is no model to go to.
+    pub fn next(self, s: &Squad, catalog: &Catalog) -> Result<Option<String>, ChangeError> {
+        let models = self.models(catalog);
+        let after = |m: &str| models.iter().position(|x| *x == m).map(|i| i + 1);
+        Ok(match self {
+            Setting::PlanFirst => Some((!s.plan_first).to_string()),
+            _ if models.is_empty() => return Err(ChangeError::NoModels(self)),
             Setting::Model => Some(models[after(&s.model).unwrap_or(0) % models.len()].to_string()),
             Setting::VerdictModel if s.verdict_model.is_empty() => Some(models[0].to_string()),
             Setting::VerdictModel => models.get(after(&s.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
-            Setting::PlanFirst => Some((!s.plan_first).to_string()),
-        }
+        })
     }
 }
 
@@ -421,13 +436,15 @@ pub enum Became {
 pub enum ChangeError {
     /// The file has no front matter to change (it needs the editor).
     NoFrontMatter,
+    /// There is no model to go to for this setting on this computer (`Setting::models` is empty).
+    NoModels(Setting),
     Io(std::io::Error),
 }
 
 /// Change squad `id`'s `setting` to the next value (`Setting::next`) in its file: the user's file, or, for a built-in
 /// not yet theirs, a copy of its text written to the user's folder first (as `e` does). Only that one line changes. A
 /// file that can't be read is never written over; a copy left the same as the built-in is removed, so it stays built in.
-pub fn change(config: &Path, id: &str, setting: Setting) -> Result<(Squad, Became), ChangeError> {
+pub fn change(config: &Path, id: &str, setting: Setting, catalog: &Catalog) -> Result<(Squad, Became), ChangeError> {
     let p = path(config, id);
     let (text, copied) = match fs::read_to_string(&p) {
         Ok(text) => (text, false),
@@ -435,7 +452,7 @@ pub fn change(config: &Path, id: &str, setting: Setting) -> Result<(Squad, Becam
         Err(e) => return Err(ChangeError::Io(e)),
     };
     let origin = if copied { Origin::BuiltIn } else { Origin::Own };
-    let value = setting.next(&parse(id, &text, origin));
+    let value = setting.next(&parse(id, &text, origin), catalog)?;
     let new = set_line(&text, setting.key(), value.as_deref()).ok_or(ChangeError::NoFrontMatter)?;
     let became = if built_in_text(id) == Some(new.as_str()) {
         if !copied {
@@ -665,65 +682,68 @@ mod tests {
 
     #[test]
     fn each_setting_goes_round_its_choices() {
+        let cat = crate::agents::tests::claude_catalog();
         let mut s = parse("x", "---\nname: X\ndescription: D\nmodel: opus\n---\nGo.\n", Origin::Own);
         let mut seen = Vec::new();
         for _ in 0..5 {
-            let next = Setting::Model.next(&s).unwrap();
+            let next = Setting::Model.next(&s, &cat).unwrap().unwrap();
             seen.push(next.clone());
             s.model = next;
         }
         assert_eq!(seen, ["sonnet", "haiku", "fable", "opus", "sonnet"]);
         s.model = "claude-some-full-name".into();
-        assert_eq!(Setting::Model.next(&s).as_deref(), Some("opus"), "a model of the file's own goes to the first");
+        assert_eq!(Setting::Model.next(&s, &cat).unwrap().as_deref(), Some("opus"), "a model of the file's own goes to the first");
         let mut seen = Vec::new();
         for _ in 0..6 {
-            let next = Setting::VerdictModel.next(&s);
+            let next = Setting::VerdictModel.next(&s, &cat).unwrap();
             seen.push(next.clone().unwrap_or_else(|| "same".into()));
             s.verdict_model = next.unwrap_or_default();
         }
         assert_eq!(seen, ["opus", "sonnet", "haiku", "fable", "same", "opus"]);
-        assert_eq!(Setting::VerdictModel.words(&Squad { verdict_model: String::new(), ..s.clone() }), "the same as the model");
-        assert_eq!(Setting::PlanFirst.next(&s).as_deref(), Some("true"));
+        assert_eq!(Setting::VerdictModel.words(&Squad { verdict_model: String::new(), ..s.clone() }, &cat), "the same as the model");
+        assert_eq!(Setting::PlanFirst.next(&s, &cat).unwrap().as_deref(), Some("true"));
         s.plan_first = true;
-        assert_eq!(Setting::PlanFirst.next(&s).as_deref(), Some("false"));
+        assert_eq!(Setting::PlanFirst.next(&s, &cat).unwrap().as_deref(), Some("false"));
     }
 
     #[test]
     fn changing_a_built_ins_setting_makes_it_yours_and_changing_it_back_makes_it_built_in_again() {
         let d = dir_for("change");
-        let (docs, became) = change(&d, "docs", Setting::Model).unwrap();
+        let cat = crate::agents::tests::claude_catalog();
+        let (docs, became) = change(&d, "docs", Setting::Model, &cat).unwrap();
         assert_eq!((docs.model.as_str(), docs.origin, became), ("haiku", Origin::Replaces, Became::Yours));
         let text = fs::read_to_string(path(&d, "docs")).unwrap();
         assert_eq!(text, built_in_text("docs").unwrap().replace("\nmodel: sonnet\n", "\nmodel: haiku\n"), "only that line");
         // Round again: the copy is the built-in's text once more, so it goes.
-        change(&d, "docs", Setting::Model).unwrap();
-        change(&d, "docs", Setting::Model).unwrap();
-        let (docs, became) = change(&d, "docs", Setting::Model).unwrap();
+        change(&d, "docs", Setting::Model, &cat).unwrap();
+        change(&d, "docs", Setting::Model, &cat).unwrap();
+        let (docs, became) = change(&d, "docs", Setting::Model, &cat).unwrap();
         assert_eq!((docs.model.as_str(), docs.origin, became), ("sonnet", Origin::BuiltIn, Became::BuiltIn));
         assert!(!path(&d, "docs").exists());
         // The verdict model "the same as the model" is no line at all.
-        let (feature, _) = change(&d, "feature", Setting::VerdictModel).unwrap();
+        let (feature, _) = change(&d, "feature", Setting::VerdictModel, &cat).unwrap();
         assert_eq!(feature.verdict_model, "", "fable was the last choice");
         assert!(!fs::read_to_string(path(&d, "feature")).unwrap().contains("verdict_model"));
-        let (feature, became) = change(&d, "feature", Setting::PlanFirst).unwrap();
+        let (feature, became) = change(&d, "feature", Setting::PlanFirst, &cat).unwrap();
         assert_eq!((feature.plan_first, became), (false, Became::Changed));
     }
 
     #[test]
     fn a_setting_never_writes_over_a_file_it_cant_read_or_change() {
         let d = dir_for("change-refused");
+        let cat = crate::agents::tests::claude_catalog();
         fs::create_dir_all(path(&d, "odd")).unwrap();
-        assert!(matches!(change(&d, "odd", Setting::Model), Err(ChangeError::Io(_))));
+        assert!(matches!(change(&d, "odd", Setting::Model, &cat), Err(ChangeError::Io(_))));
         assert!(path(&d, "odd").is_dir());
-        assert!(matches!(change(&d, "nobody", Setting::Model), Err(ChangeError::Io(_))), "neither a file nor a built-in");
+        assert!(matches!(change(&d, "nobody", Setting::Model, &cat), Err(ChangeError::Io(_))), "neither a file nor a built-in");
         assert!(!path(&d, "nobody").exists());
         fs::write(path(&d, "loose"), "just steps\n").unwrap();
-        assert!(matches!(change(&d, "loose", Setting::Model), Err(ChangeError::NoFrontMatter)));
+        assert!(matches!(change(&d, "loose", Setting::Model, &cat), Err(ChangeError::NoFrontMatter)));
         assert_eq!(fs::read_to_string(path(&d, "loose")).unwrap(), "just steps\n");
         // An own squad changes in place, its unknown text kept.
         let own = "---\nname: Mine\ndescription: D\nmodel: opus\nmood: calm\n---\n1. Go.\n";
         fs::write(path(&d, "mine"), own).unwrap();
-        let (mine, became) = change(&d, "mine", Setting::Model).unwrap();
+        let (mine, became) = change(&d, "mine", Setting::Model, &cat).unwrap();
         assert_eq!((mine.model.as_str(), mine.origin, became), ("sonnet", Origin::Own, Became::Changed));
         assert_eq!(fs::read_to_string(path(&d, "mine")).unwrap(), own.replace("model: opus", "model: sonnet"));
     }

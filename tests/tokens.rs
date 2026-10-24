@@ -184,9 +184,12 @@ fn the_test_call_runs_the_fake_the_agreed_way_and_prints_the_reply_usage_cost_an
     // And `platoon tokens` reports it.
     let s = text(&lab.run(&["tokens"], &bin).stdout);
     assert!(
-        s.contains("Features that use tokens: on") && s.contains("Used today: 844 of 500,000 tokens") && s.contains("Model: haiku"),
+        s.contains("Features that use tokens: on")
+            && s.contains("Used today: 844 of 500,000 tokens")
+            && s.contains("Model for smart features: Haiku (Claude Code)"),
         "{s}"
     );
+    assert!(s.contains("Model for project notes: Sonnet (Claude Code)"), "the notes' own model: {s}");
     // Where the tokens went, feature by feature, so the spend of each one is visible.
     assert!(s.contains("  Token test: 844 tokens in 2 calls"), "work with no switch of its own still says what it spent: {s}");
     assert!(s.contains("Project notes: on") && s.contains("Project descriptions: on"), "every feature has its own line: {s}");
@@ -261,16 +264,23 @@ fn a_test_that_forgets_to_name_a_fake_never_reaches_the_real_claude() {
     for (k, v) in common::NO_REAL_CODEX {
         c.env(k, v); // never the real Codex: its folder or its program
     }
+    // A `claude` on the path makes Claude Code installed; the one here only leaves a mark if it is ever run.
+    let path = lab.base.join("path");
+    fs::create_dir_all(&path).unwrap();
+    let ran = lab.base.join("real-claude-ran");
+    fs::write(path.join("claude"), format!("#!/bin/sh\n: > '{}'\n", ran.display())).unwrap();
+    fs::set_permissions(path.join("claude"), fs::Permissions::from_mode(0o755)).unwrap();
     c.args(["tokens", "test"])
         .env("PLATOON_CACHE_DIR", lab.cache())
         .env("PLATOON_CONFIG_DIR", lab.config())
         .env("PLATOON_FORBID_REAL_CLAUDE", "1")
         .env_remove("PLATOON_CLAUDE_BIN")
-        .env("PATH", "/nonexistent")
+        .env("PATH", &path)
         .stdin(Stdio::null());
     let out = c.output().unwrap();
     assert_eq!(out.status.code(), Some(1));
     assert!(text(&out.stderr).contains("refusing to run the real claude"), "{}", text(&out.stderr));
+    assert!(!ran.exists(), "the `claude` on the path was never run");
 }
 
 #[test]
@@ -288,7 +298,9 @@ fn in_a_terminal_the_test_call_reads_well_and_when_refused_says_how_to_enable() 
     assert_eq!(t.wait_exit(), 0);
     let screen = t.text();
     assert!(
-        screen.contains("Asking Claude (haiku)") && screen.contains("Reply: ok") && screen.contains("Used today: 422 of 500,000 tokens"),
+        screen.contains("Asking Claude Code (Haiku)")
+            && screen.contains("Reply: ok")
+            && screen.contains("Used today: 422 of 500,000 tokens"),
         "{screen}"
     );
 }

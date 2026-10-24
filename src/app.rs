@@ -1,5 +1,5 @@
 use crate::agents::claude::{self, Reader};
-use crate::agents::{Agent, Hidden, Live, Start, codex};
+use crate::agents::{Agent, Catalog, CodexAt, Hidden, Live, Providers, Start, codex};
 use crate::ai;
 use crate::archive::{self, Archive};
 use crate::client::{Client, key_bytes};
@@ -16,7 +16,7 @@ use crate::names::{self, Names};
 use crate::projects::{self as projects_mod, Projects};
 use crate::prompts::{self, PromptIndex};
 use crate::select::{Click, Point, Selection, Unit, click_count, extract};
-use crate::settings::{EditorFor, Item, Kind, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
+use crate::settings::{EditorFor, Item, Kind, ModelFor, Settings, SettingsStore, Step, TABS as SETTINGS_TABS};
 use crate::setup;
 use crate::summaries::Summaries;
 use crate::theme::Theme;
@@ -686,6 +686,8 @@ pub struct App {
     program: String,
     /// The program that runs a conversation of Codex's, read once too.
     codex_program: String,
+    /// The AI programs this computer has (read once): what decides the models offered and what a call runs on.
+    providers: Providers,
     guard_on: bool,
     /// What `view` and `counts` were computed from: (filter, tab, generation, top tab, projects tab, open
     /// project). Recomputed when it changes.
@@ -702,6 +704,25 @@ pub struct App {
     stop_times: StopTimes,
 }
 
+/// The option `step` leads to from `id` among `options` (id, name): back and on stop at the ends, `Cycle` goes round;
+/// an id that isn't one of them goes to the first. None when that is where it is already, or there are none.
+fn step_among(options: &[(String, String)], id: &str, step: Step) -> Option<String> {
+    let last = options.len().checked_sub(1)?;
+    let next = match (options.iter().position(|(o, _)| o == id), step) {
+        (None, _) => 0,
+        (Some(i), Step::Prev) => i.saturating_sub(1),
+        (Some(i), Step::Next) => (i + 1).min(last),
+        (Some(i), Step::Cycle) => {
+            if i >= last {
+                0
+            } else {
+                i + 1
+            }
+        }
+    };
+    Some(options[next].0.clone()).filter(|chosen| chosen != id)
+}
+
 impl App {
     /// The real thing: rows appear as the background index reads them.
     pub fn new() -> Self {
@@ -710,6 +731,7 @@ impl App {
         let cache = usage::cache_dir();
         let indexer = Indexer::spawn(reader.root(), Some(codex.root()), &cache);
         let mut app = Self::build(reader, Some(codex), cache, archive::config_dir(), indexer, true);
+        app.providers = Providers::here();
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
@@ -881,6 +903,7 @@ impl App {
             apply_after: None,
             program: Agent::Claude.program(),
             codex_program: Agent::Codex.program(),
+            providers: Providers::default(),
             guard_on: false,
             view_for: (String::new(), usize::MAX, 0, 0, 0, None),
             rev: 0,
@@ -891,6 +914,15 @@ impl App {
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
         };
         app.theme = app.settings.get().theme(&app.themes);
+        // A unit test's app has Claude Code, and Codex when it was given a Codex folder that is there; never the real
+        // `codex` (`set_providers_for_test` gives it a stand-in).
+        app.providers = Providers {
+            claude: Some(app.program.clone()),
+            codex: app.codex.as_ref().filter(|c| c.root().is_dir()).map(|c| CodexAt {
+                program: if cfg!(test) { "/nonexistent/platoon-unit-test/codex".into() } else { app.codex_program.clone() },
+                root: c.root().to_path_buf(),
+            }),
+        };
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app.say_keys_problems();
@@ -899,6 +931,22 @@ impl App {
 
     pub fn settings(&self) -> &SettingsStore {
         &self.settings
+    }
+
+    /// The AI programs this computer has.
+    pub fn providers(&self) -> &Providers {
+        &self.providers
+    }
+
+    /// The models of the AI programs this computer has.
+    pub fn catalog(&self) -> Catalog {
+        self.providers.catalog()
+    }
+
+    /// Give a unit test's app other AI programs (a computer with only Codex, a stand-in `codex`).
+    #[cfg(test)]
+    pub fn set_providers_for_test(&mut self, providers: Providers) {
+        self.providers = providers;
     }
 
     /// This window's own folders, which the hosts it looks for and starts use too (a unit test's are temporary).
@@ -1049,6 +1097,37 @@ impl App {
             now: usage::now(),
             install: versions::install_here(),
         }));
+    }
+
+    /// How a model setting reads on the settings screen: the model in effect (the one picked, else this computer's
+    /// default) by its name, said plainly when nothing here runs it; the widest value it can take; and whether it can
+    /// go no further back or on.
+    pub fn model_setting(&self, which: ModelFor) -> (String, usize, bool, bool) {
+        let catalog = self.catalog();
+        let current = which.in_effect(&self.settings.get(), &catalog);
+        let options = catalog.models();
+        let at = current.as_deref().and_then(|m| options.iter().position(|o| o.id == m));
+        let label = match &current {
+            Some(m) => catalog.label(m),
+            None => "None installed".to_string(),
+        };
+        let widest = options.iter().map(|m| m.name.chars().count()).chain([label.chars().count()]).max().unwrap_or(0);
+        let n = options.len();
+        (label, widest, at == Some(0) || n == 0, at.is_some_and(|i| i + 1 >= n) || n == 0)
+    }
+
+    /// Step a model setting through the models this computer has, and save it at once. A model nothing here runs
+    /// goes to the first one.
+    fn step_model_setting(&mut self, which: ModelFor, step: Step) {
+        let catalog = self.catalog();
+        let options: Vec<(String, String)> = catalog.models().iter().map(|m| (m.id.clone(), m.name.clone())).collect();
+        let current = which.in_effect(&self.settings.get(), &catalog).unwrap_or_default();
+        let Some(chosen) = step_among(&options, &current, step) else { return };
+        let mut s = self.settings.get();
+        which.set(&mut s, chosen);
+        let saved = self.settings.update(&s);
+        self.sync_ai();
+        self.report_save(saved);
     }
 
     /// Pick up the checks' answer, and put a notice on screen once one of the top-level lists shows: only then are its
@@ -2135,6 +2214,10 @@ impl App {
             self.step_editor_setting(which, step);
             return;
         }
+        if let Kind::Model(which) = item.kind {
+            self.step_model_setting(which, step);
+            return;
+        }
         if item.kind == Kind::Theme {
             match step {
                 Step::Cycle => self.open_theme_list(),
@@ -2195,26 +2278,7 @@ impl App {
     /// Step an editor setting through the editors this computer has, and save it at once.
     fn step_editor_setting(&mut self, which: EditorFor, step: Step) {
         let (options, id) = self.editor_setting_options(which);
-        if options.is_empty() {
-            return;
-        }
-        let last = options.len() - 1;
-        let next = match (options.iter().position(|(o, _)| *o == id), step) {
-            (None, _) => 0,
-            (Some(i), Step::Prev) => i.saturating_sub(1),
-            (Some(i), Step::Next) => (i + 1).min(last),
-            (Some(i), Step::Cycle) => {
-                if i >= last {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-        };
-        let chosen = options[next].0.clone();
-        if chosen == id {
-            return;
-        }
+        let Some(chosen) = step_among(&options, &id, step) else { return };
         let mut s = self.settings.get();
         match which {
             EditorFor::Text => s.notes_editor = chosen,

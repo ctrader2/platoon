@@ -65,9 +65,9 @@ fn the_arrows_pick_a_setting_lit_and_enter_writes_the_next_choice_to_that_line()
     let t = app.effective_theme().clone();
     // The Model line is picked as the squad opens: lit, with what enter does at its end.
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("Model          sonnet") && shown.contains("enter changes"), "{shown}");
-    assert_eq!(at(&shown, "enter changes").1, at(&shown, "Model          sonnet").1, "on the Model line: {shown}");
-    assert_eq!(colors(&term, &shown, "Model          sonnet").1, t.surface, "the picked line is lit");
+    assert!(shown.contains("Model          Sonnet") && shown.contains("enter changes"), "{shown}");
+    assert_eq!(at(&shown, "enter changes").1, at(&shown, "Model          Sonnet").1, "on the Model line: {shown}");
+    assert_eq!(colors(&term, &shown, "Model          Sonnet").1, t.surface, "the picked line is lit");
     assert_eq!(colors(&term, &shown, "enter changes").0, ui::hint_fg(&t));
     assert_ne!(colors(&term, &shown, "Verdict model").1, t.surface, "the others are not");
     assert!(shown.lines().last().unwrap().contains("enter change"), "the footer says so: {shown}");
@@ -77,9 +77,9 @@ fn the_arrows_pick_a_setting_lit_and_enter_writes_the_next_choice_to_that_line()
     let file = squads::path(&w.config, "docs");
     let built_in = squads::built_in_text("docs").unwrap();
     assert_eq!(fs::read_to_string(&file).unwrap(), built_in.replace("\nmodel: sonnet\n", "\nmodel: haiku\n"));
-    assert_eq!(app.active_notice(), Some("Docs: Model haiku. Yours now, in place of the built-in."));
+    assert_eq!(app.active_notice(), Some("Docs: Model Haiku. Yours now, in place of the built-in."));
     let shown = draw(&mut term, &app);
-    assert!(shown.contains("Model          haiku") && !shown.contains("File "), "{shown}");
+    assert!(shown.contains("Model          Haiku") && !shown.contains("File "), "{shown}");
 
     // ↓ the verdict model, ↓ plans first: each its own line, the rest of the file as it was.
     key(&mut app, KeyCode::Down);
@@ -218,4 +218,74 @@ fn a_file_without_settings_at_its_top_is_left_alone_and_e_is_the_way() {
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.active_notice(), Some("loose's file has no settings at its top to change: e opens it to fix that."));
     assert_eq!(fs::read_to_string(&mine).unwrap(), "just steps\n");
+}
+
+/// Claude Code (a stand-in, never run) and Codex with the sample model list.
+fn with_codex(app: &mut App, name: &str) {
+    let codex = crate::agents::tests::codex_with_models(name);
+    app.set_providers_for_test(crate::agents::Providers {
+        claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+        codex: Some(codex),
+    });
+}
+
+#[test]
+fn the_verdict_model_goes_round_every_model_and_the_sessions_model_round_claudes_only() {
+    let (w, mut app) = open("squad-settings-all", "feature");
+    with_codex(&mut app, "squad-settings-all");
+    let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+    // Feature runs on opus: its own model goes round Claude Code's four, never a Codex model (until Codex tasks).
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        key(&mut app, KeyCode::Enter);
+        seen.push(app.sqt.picked().unwrap().model.clone());
+    }
+    assert_eq!(seen, ["sonnet", "haiku", "fable", "opus"]);
+    // Its verdict model (fable) goes on to Codex's, by name on screen, then "the same as the model".
+    key(&mut app, KeyCode::Down);
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        key(&mut app, KeyCode::Enter);
+        seen.push(app.sqt.picked().unwrap().verdict_model.clone());
+        if seen.len() == 1 {
+            let shown = draw(&mut term, &app);
+            assert!(shown.contains("Verdict model  GPT-6-Luna"), "{shown}");
+            assert_eq!(app.active_notice(), Some("Feature: Verdict model GPT-6-Luna. Yours now, in place of the built-in."));
+        }
+    }
+    assert_eq!(seen, ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", ""]);
+    let text = fs::read_to_string(squads::path(&w.config, "feature")).unwrap();
+    assert!(!text.contains("verdict_model") && text.contains("\nmodel: opus\n"), "{text}");
+}
+
+#[test]
+fn a_model_this_computer_cant_run_is_said_on_the_squad_and_with_no_claude_code_there_is_none_to_pick() {
+    let (w, mut app) = open("squad-settings-missing", "feature");
+    fs::create_dir_all(w.config.join("squads")).unwrap();
+    fs::write(
+        squads::path(&w.config, "feature"),
+        "---\nname: Feature\ndescription: Ours\nmodel: opus\nverdict_model: gpt-6-luna\n---\n\n1. Go.\n",
+    )
+    .unwrap();
+    app.refresh_for_test();
+    let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Verdict model  GPT-6-Luna (needs Codex, not installed)"), "{shown}");
+    assert_eq!(colors(&term, &shown, "GPT-6-Luna (needs").0, app.effective_theme().text);
+    // On a computer with only Codex: Claude Code's models are the ones not installed, and a session's model has
+    // nothing to go to; the verdict model has Codex's.
+    with_codex(&mut app, "squad-settings-missing");
+    app.set_providers_for_test(crate::agents::Providers { claude: None, ..app.providers().clone() });
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Model          Opus (needs Claude Code, not installed)"), "{shown}");
+    assert!(shown.contains("Verdict model  GPT-6-Luna") && !shown.contains("GPT-6-Luna (needs"), "{shown}");
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(
+        app.active_notice(),
+        Some("A task's session runs on Claude Code for now, and Claude Code isn't installed on this computer: there is no model to pick.")
+    );
+    assert!(fs::read_to_string(squads::path(&w.config, "feature")).unwrap().contains("\nmodel: opus\n"), "the file as it was");
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.sqt.picked().unwrap().verdict_model, "gpt-5.6-terra");
 }

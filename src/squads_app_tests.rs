@@ -112,7 +112,7 @@ fn the_tab_lists_every_squad_with_where_it_comes_from_and_the_picked_one_beside_
     assert_eq!(fg_of(&term, "needs fixing"), t.warn, "needs fixing is in the warning colour");
     assert_ne!(fg_of(&term, "built in"), t.warn);
     // Beside the list: Feature, picked first.
-    for want in ["Model opus", "Verdict model fable", "Plans first yes, then waits for your yes", "Steps", "1. Learn how"] {
+    for want in ["Model Opus", "Verdict model Fable", "Plans first yes, then waits for your yes", "Steps", "1. Learn how"] {
         assert!(text.contains(want), "{want}\n{shown}");
     }
     assert!(!text.contains("Needs fixing"), "nothing wrong with Feature");
@@ -151,7 +151,7 @@ fn below_two_panes_the_list_is_alone_and_enter_opens_the_squad_full_width() {
     assert!(app.sqt.open && !app.at_top_level());
     let shown = draw(&mut term, &app);
     let text = flat(&shown);
-    assert!(text.contains("Bug fix") && text.contains("Verdict model fable") && text.contains("Steps"), "{shown}");
+    assert!(text.contains("Bug fix") && text.contains("Verdict model Fable") && text.contains("Steps"), "{shown}");
     assert!(text.contains("more lines"), "a long squad says what is below: {shown}");
     assert!(shown.lines().last().unwrap().contains("esc back"), "{shown}");
     // The arrows go through its three settings, then scroll it; esc goes back to the list, on the same squad.

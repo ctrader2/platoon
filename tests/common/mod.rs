@@ -123,6 +123,11 @@ pub fn find_host(cache: &Path) -> Option<(u32, PathBuf)> {
 pub const NO_REAL_CODEX: [(&str, &str); 2] =
     [("CODEX_HOME", "/nonexistent/platoon-test/codex-home"), ("PLATOON_CODEX_BIN", "/nonexistent/platoon-test/codex")];
 
+/// Claude Code as a test's platoon sees it unless the test names its own stand-in: installed (`PLATOON_CLAUDE_BIN` names
+/// it, as it would on a computer with `claude` on its path), but a program that can't exist, so nothing ever runs it.
+/// A test of a computer without Claude Code takes the variable out.
+pub const NO_REAL_CLAUDE: (&str, &str) = ("PLATOON_CLAUDE_BIN", "/nonexistent/platoon-test/claude");
+
 /// A command running in a real terminal we can type into and read.
 pub struct Term {
     child: Box<dyn Child + Send + Sync>,
@@ -148,6 +153,7 @@ impl Term {
         cmd.env("PLATOON_COLORS", "truecolor"); // and the same colors
         cmd.env("PLATOON_CLIPBOARD", "osc52"); // a test must never touch the real clipboard
         cmd.env("PLATOON_FORBID_REAL_CLAUDE", "1"); // ...nor the real `claude`, if a test forgets to name a stand-in
+        cmd.env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1); // Claude Code is installed, whatever the PATH, unless a test says
         cmd.env("PLATOON_FORBID_REAL_EDITOR", "1"); // ...nor a real editor: a test names its own stand-ins
         for (k, v) in NO_REAL_CODEX {
             cmd.env(k, v); // ...nor the real Codex's folder or program

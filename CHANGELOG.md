@@ -8,9 +8,17 @@ here.
 
 ### Changed
 
-- **Project notes are written on Sonnet.** Whatever the model for smart features is, a notes update now uses Sonnet. On
-  Haiku, an update could leave out a change it had just been shown (a feature taken back out stayed in the notes), and
-  shortening notes over the limit kept about twice as many lines that were no longer true.
+- **Project notes have a model of their own, Sonnet by default.** Whatever the model for smart features is, a notes
+  update uses **Model for project notes** (Settings, Projects tab), which is Sonnet unless you pick another. On Haiku, an
+  update could leave out a change it had just been shown (a feature taken back out stayed in the notes), and shortening
+  notes over the limit kept about twice as many lines that were no longer true.
+- **Every model setting offers the models installed, by name.** The model for smart features, the new model for project
+  notes and a squad's verdict model offer Claude Code's models (Opus, Sonnet, Haiku, Fable) when Claude Code is
+  installed and Codex's (as Codex lists them in its `models_cache.json`) when Codex is; the model decides the program
+  that runs it. A squad's own model stays one of Claude's until a task's session can run on Codex. A model you picked
+  is kept as you wrote it: one this computer can't run is shown as such (**GPT-6-Luna (needs Codex, not installed)**)
+  and whatever would use it stops and says what is missing, never quietly using another. The Squads tab and
+  `platoon tokens` show models by their names.
 - **A project's notes start by themselves.** A project with no notes file gets one from the template the first time
   one of its sessions finishes answering, or a session joins it, and the first update fills it in a few minutes later;
   you no longer have to press `e` first. A notes file you emptied is left to you, and nothing starts with Project

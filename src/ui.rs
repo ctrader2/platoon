@@ -1895,6 +1895,12 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
             notes.extend(wrap(&format!("Naming is waiting: {why}"), w).into_iter().map(|l| (l, t.warn)));
         }
     }
+    // Codex is installed but adds no models to choose from: why, where the model settings are.
+    if (tab == crate::settings::TAB_SMART || tab == crate::settings::TAB_PROJECTS)
+        && let Some(why) = app.catalog().codex_problem()
+    {
+        notes.extend(wrap(&why, w).into_iter().map(|l| (l, t.subtext)));
+    }
     if tab == crate::settings::TAB_SESSIONS {
         let e = app.archived_estimate();
         let archived = if e.conversations == 0 {
@@ -2027,6 +2033,8 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
         .filter_map(|it| match it.kind {
             Kind::Steps | Kind::Feature(_) => Some(it.choices.iter().map(|&c| (it.label)(c).width()).max().unwrap_or(0)),
             Kind::Editor(which) => Some(app.editor_setting(which).1.min(26)),
+            // The names of the models there are; a long "(needs Codex, not installed)" widens only its own value.
+            Kind::Model(_) => Some(app.catalog().models().iter().map(|m| m.name.width()).max().unwrap_or(0).min(26)),
             Kind::Theme => Some(app.themes().all().iter().map(|t| t.name.width()).max().unwrap_or(0).min(24)),
             Kind::Instructions(_) => None,
         })
@@ -2076,6 +2084,13 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             Kind::Editor(which) => {
                 let (label, widest, at_start, at_end) = app.editor_setting(which);
                 let vw = shared.max(widest.min(4));
+                (fit_end(&label, vw), vw, at_start, at_end, false)
+            }
+            // A model nothing here runs says so in full, as far as the row has room beside the name.
+            Kind::Model(which) => {
+                let (label, _, at_start, at_end) = app.model_setting(which);
+                let room = (row.width as usize).saturating_sub(item.name.width() + 9);
+                let vw = shared.max(label.width().min(room)).max(4);
                 (fit_end(&label, vw), vw, at_start, at_end, false)
             }
             Kind::Theme => {

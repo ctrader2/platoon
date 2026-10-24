@@ -133,7 +133,8 @@ fn main() -> io::Result<()> {
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (mut out, mut err) = (io::stdout(), io::stderr());
-            std::process::exit(ai::tokens_cli(&args, &usage::cache_dir(), &archive::config_dir(), &mut out, &mut err));
+            let providers = agents::Providers::here();
+            std::process::exit(ai::tokens_cli(&args, &usage::cache_dir(), &archive::config_dir(), &providers, &mut out, &mut err));
         }
         Some("open") => {
             require_setup();

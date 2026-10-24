@@ -61,13 +61,7 @@ pub fn program() -> String {
 
 /// Is Codex on this computer: its folder `root` is there, or its program can be found on `path` (a `PATH` value)?
 pub fn installed(root: &Path, program: &str, path: &str) -> bool {
-    if root.is_dir() {
-        return true;
-    }
-    if program.contains('/') {
-        return Path::new(program).is_file();
-    }
-    std::env::split_paths(path).any(|d| d.join(program).is_file())
+    root.is_dir() || super::on_path(program, path)
 }
 
 // ---- starting a session ---------------------------------------------------------------------------------------------
@@ -195,6 +189,95 @@ pub fn pretty_model(id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("-")
+}
+
+/// One model of Codex's list (`models_cache.json`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListedModel {
+    pub slug: String,
+    /// Its `display_name` (else the slug as a row shows it).
+    pub name: String,
+    /// In Codex's own picker (`visibility: list`); `hide` ones are not offered.
+    pub listed: bool,
+    pub window: Option<u64>,
+    /// Codex's order: the lower first.
+    pub priority: i64,
+}
+
+/// Why Codex's list of models couldn't be had.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListProblem {
+    /// There is no `models_cache.json` (yet).
+    Missing,
+    /// It is there but isn't what platoon understands.
+    Unreadable,
+}
+
+impl ListProblem {
+    pub fn plain(&self) -> String {
+        match self {
+            ListProblem::Missing => "Codex's models aren't listed: Codex keeps its list of them in models_cache.json in its folder, \
+                                     and there is none yet. Start Codex once and they show here."
+                .into(),
+            ListProblem::Unreadable => "Codex's models aren't listed: its list of them (models_cache.json in its folder) couldn't \
+                                        be read."
+                .into(),
+        }
+    }
+}
+
+/// The file Codex keeps its list of models in, under its folder.
+pub fn models_path(root: &Path) -> PathBuf {
+    root.join("models_cache.json")
+}
+
+/// Codex's list of models, from `models_cache.json` (what `codex debug models` prints; platoon never runs Codex for
+/// it): `models[]` with `slug`, `display_name`, `visibility`, `context_window`, `priority`, in Codex's order (by
+/// `priority`, the lower first). A model without a slug is skipped. Read again only when the file changes (its time
+/// and size), so a settings screen can ask on every frame.
+pub fn models(root: &Path) -> Result<Vec<ListedModel>, ListProblem> {
+    type Seen = (Option<(std::time::SystemTime, u64)>, Result<Vec<ListedModel>, ListProblem>);
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, Seen>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    let path = models_path(root);
+    let stamp = fs::metadata(&path).ok().map(|m| (m.modified().unwrap_or(UNIX_EPOCH), m.len()));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((seen, list)) = cache.get(&path)
+        && *seen == stamp
+        && stamp.is_some()
+    {
+        return list.clone();
+    }
+    let list = match fs::read_to_string(&path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Err(ListProblem::Missing),
+        Err(_) => Err(ListProblem::Unreadable),
+        Ok(text) => parse_models(&text).ok_or(ListProblem::Unreadable),
+    };
+    cache.insert(path, (stamp, list.clone()));
+    list
+}
+
+/// `models_cache.json`'s text, read; None when it isn't an object with a `models` list.
+fn parse_models(text: &str) -> Option<Vec<ListedModel>> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let mut out: Vec<ListedModel> = v
+        .get("models")?
+        .as_array()?
+        .iter()
+        .filter_map(|m| {
+            let slug = m.get("slug")?.as_str()?.trim();
+            (!slug.is_empty() && !slug.chars().any(char::is_whitespace)).then_some(())?;
+            let name = m.get("display_name").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+            Some(ListedModel {
+                slug: slug.to_string(),
+                name: name.map_or_else(|| pretty_model(slug), |n| crate::smart::clean_text(n, 60)),
+                listed: m.get("visibility").and_then(Value::as_str) == Some("list"),
+                window: m.get("context_window").and_then(Value::as_u64).filter(|w| *w > 0),
+                priority: m.get("priority").and_then(Value::as_i64).unwrap_or(i64::MAX),
+            })
+        })
+        .collect();
+    out.sort_by_key(|m| m.priority);
+    Some(out)
 }
 
 /// The window a conversation's model has: what its rollout says, else the usual one.

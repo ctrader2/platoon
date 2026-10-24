@@ -614,7 +614,7 @@ pub(super) fn draw_squad_list(f: &mut Frame, app: &App, area: Rect) {
         Some(s) => {
             let mut v = wrap(&s.description, iw);
             let plan = if s.plan_first { "plans first, then waits for your yes" } else { "starts working at once" };
-            v.push(format!("Model {} · {plan}", s.model));
+            v.push(format!("Model {} · {plan}", app.catalog().label(&s.model)));
             v
         }
         None => Vec::new(),

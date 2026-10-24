@@ -100,7 +100,7 @@ fn the_tab_shows_every_squad_and_e_and_d_change_a_built_in_and_bring_it_back() {
 
     // Down to Docs (the seventh), and e: its text is written to the squads folder and opens in the editor.
     t.send(b"jjjjjj");
-    t.wait_for("Model          sonnet");
+    t.wait_for("Model          Sonnet");
     t.send(b"e");
     t.wait_for("╭ Edit the squad with");
     t.send(b"\r");
@@ -108,7 +108,7 @@ fn the_tab_shows_every_squad_and_e_and_d_change_a_built_in_and_bring_it_back() {
     assert!(fs::read_to_string(lab.squad("docs")).unwrap().contains("name: Docs"));
     t.send(b"s/^model: sonnet$/model: haiku/\r");
     t.wait_for("Saved Docs.");
-    t.wait_for_all(&["yours, replaces the built-in", "Model          haiku"]);
+    t.wait_for_all(&["yours, replaces the built-in", "Model          Haiku"]);
     assert!(fs::read_to_string(lab.squad("docs")).unwrap().contains("model: haiku"));
 
     // d asks, says the built-in comes back, and keeps the file.
@@ -116,7 +116,7 @@ fn the_tab_shows_every_squad_and_e_and_d_change_a_built_in_and_bring_it_back() {
     t.wait_for_all(&["Delete the squad \"Docs\"?", "comes back", "y delete"]);
     t.send(b"y");
     t.wait_gone("Delete the squad");
-    t.wait_for("Model          sonnet");
+    t.wait_for("Model          Sonnet");
     assert!(!lab.squad("docs").exists() && lab.config.join("squads/docs.md.bak").exists());
     t.send(&[3]);
     t.wait_exit();
@@ -154,11 +154,11 @@ fn enter_on_an_open_squads_setting_changes_that_line_of_its_file() {
     t.wait_for("n new squad");
     // Docs is the seventh: open it, and the Model line is picked.
     t.send(b"jjjjjj");
-    t.wait_for("Model          sonnet");
+    t.wait_for("Model          Sonnet");
     t.send(b"\r");
     t.wait_for_all(&["enter changes", "enter change", "esc back"]);
     t.send(b"\r");
-    t.wait_for_all(&["Model          haiku", "Docs: Model haiku. Yours now, in place of the built-in."]);
+    t.wait_for_all(&["Model          Haiku", "Docs: Model Haiku. Yours now, in place of the built-in."]);
     let text = fs::read_to_string(lab.squad("docs")).unwrap();
     assert!(text.contains("\nmodel: haiku\n") && text.contains("name: Docs") && !text.contains("model: sonnet"), "{text}");
     // Down to Plans first: it says yes now, and the file's line with it.

@@ -9,6 +9,7 @@
 //! re-reads the file when it changes (`SettingsStore::refresh`), so an edit applies without restarting
 //! anything, including the session hosts that outlive platoon.
 
+use crate::agents::Catalog;
 use crate::ai::{FEATURES, MASTER_LABEL};
 use crate::archive::keep_backup;
 use crate::theme::{DEFAULT_ID, Theme};
@@ -90,10 +91,6 @@ pub const MAX_FIND_RESULTS: u64 = 20;
 pub const DEFAULT_FIND_WIDE: u64 = 200;
 pub const MIN_FIND_WIDE: u64 = 50;
 pub const MAX_FIND_WIDE: u64 = 1000;
-/// The models the token features can use, cheapest first: what the file says, and the first is the default. Two of
-/// the catalog's (`agents::models`), Claude Code's.
-pub const MODELS: [&str; 2] = [crate::agents::claude::HAIKU, crate::agents::claude::SONNET];
-
 /// For the two automatic clean-ups, 0 means the feature is off.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
@@ -131,8 +128,13 @@ pub struct Settings {
     pub ai_daily_tokens: u64,
     /// Background token work pauses above this percent of the plan; 0 means never.
     pub ai_pause_percent: u64,
-    /// Which model does the work: one of `MODELS`.
-    pub ai_model: String,
+    /// The model the smart features use, exactly as the file says (any model of the catalog's, `agents::Catalog`, or
+    /// one this computer no longer has, which is said, never swapped for another). None: the default for this
+    /// computer (`Catalog::default_smart`).
+    pub ai_model: Option<String>,
+    /// The model project notes are written with, the same way; None: Sonnet where Claude Code is installed
+    /// (`Catalog::default_notes`).
+    pub notes_model: Option<String>,
     /// How many of a conversation's latest messages a naming call carries, and how long each may be (characters).
     pub ai_prompts_per_session: u64,
     pub ai_prompt_chars: u64,
@@ -183,7 +185,8 @@ impl Default for Settings {
             ai_batch_size: DEFAULT_BATCH,
             ai_daily_tokens: DEFAULT_DAILY_TOKENS,
             ai_pause_percent: DEFAULT_PAUSE_PERCENT,
-            ai_model: MODELS[0].into(),
+            ai_model: None,
+            notes_model: None,
             ai_prompts_per_session: DEFAULT_PROMPTS_PER_SESSION,
             ai_prompt_chars: DEFAULT_PROMPT_SEND_CHARS,
             ai_quiet_seconds: DEFAULT_QUIET_SECONDS,
@@ -218,7 +221,6 @@ impl Settings {
             } else {
                 self.ai_pause_percent.clamp(MIN_PAUSE_PERCENT, MAX_PAUSE_PERCENT)
             },
-            ai_model: if MODELS.contains(&self.ai_model.as_str()) { self.ai_model } else { MODELS[0].into() },
             ai_prompts_per_session: self.ai_prompts_per_session.clamp(MIN_PROMPTS_PER_SESSION, MAX_PROMPTS_PER_SESSION),
             ai_prompt_chars: self.ai_prompt_chars.clamp(MIN_PROMPT_SEND_CHARS, MAX_PROMPT_SEND_CHARS),
             ai_quiet_seconds: self.ai_quiet_seconds.min(MAX_QUIET_SECONDS),
@@ -229,6 +231,26 @@ impl Settings {
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
             ..self
+        }
+    }
+
+    /// The model the smart features use on a computer with these models: the one picked, else the default.
+    pub fn smart_model_in(&self, catalog: &Catalog) -> Option<String> {
+        self.ai_model.clone().filter(|m| !m.is_empty()).or_else(|| catalog.default_smart())
+    }
+
+    /// The model project notes are written with on a computer with these models: the one picked, else the default.
+    pub fn notes_model_in(&self, catalog: &Catalog) -> Option<String> {
+        self.notes_model.clone().filter(|m| !m.is_empty()).or_else(|| catalog.default_notes())
+    }
+
+    /// The model a call for `feature` uses when it names none of its own, and the setting that picks it: project notes
+    /// have one of their own; everything else uses the smart features' one.
+    pub fn model_for(&self, feature: &str, catalog: &Catalog) -> (Option<String>, ModelFor) {
+        if feature == crate::notesrun::FEATURE {
+            (self.notes_model_in(catalog), ModelFor::Notes)
+        } else {
+            (self.smart_model_in(catalog), ModelFor::Smart)
         }
     }
 
@@ -297,7 +319,8 @@ fn parse(text: &str) -> Option<Settings> {
             ai_batch_size: number("ai_batch_size", d.ai_batch_size),
             ai_daily_tokens: number("ai_daily_tokens", d.ai_daily_tokens),
             ai_pause_percent: number("ai_pause_percent", d.ai_pause_percent),
-            ai_model: o.get("ai_model").and_then(Value::as_str).map_or(d.ai_model.clone(), str::to_string),
+            ai_model: o.get("ai_model").and_then(Value::as_str).filter(|m| !m.trim().is_empty()).map(str::to_string),
+            notes_model: o.get("notes_model").and_then(Value::as_str).filter(|m| !m.trim().is_empty()).map(str::to_string),
             ai_prompts_per_session: number("ai_prompts_per_session", d.ai_prompts_per_session),
             ai_prompt_chars: number("ai_prompt_chars", d.ai_prompt_chars),
             ai_quiet_seconds: number("ai_quiet_seconds", d.ai_quiet_seconds),
@@ -387,7 +410,13 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_batch_size".into(), json!(s.ai_batch_size));
     object.insert("ai_daily_tokens".into(), json!(s.ai_daily_tokens));
     object.insert("ai_pause_percent".into(), json!(s.ai_pause_percent));
-    object.insert("ai_model".into(), json!(s.ai_model));
+    // A model is written only once one has been picked: until then the default follows what this computer has.
+    if let Some(m) = &s.ai_model {
+        object.insert("ai_model".into(), json!(m));
+    }
+    if let Some(m) = &s.notes_model {
+        object.insert("notes_model".into(), json!(m));
+    }
     object.insert("ai_prompts_per_session".into(), json!(s.ai_prompts_per_session));
     object.insert("ai_prompt_chars".into(), json!(s.ai_prompt_chars));
     object.insert("ai_quiet_seconds".into(), json!(s.ai_quiet_seconds));
@@ -445,7 +474,48 @@ pub enum Kind {
     /// The on/off switch of one token feature (`ai::FEATURES`), by id. It reads and writes `Settings::token_features`
     /// instead of a field, so a new feature is a new row in that table and nothing else here.
     Feature(&'static str),
+    /// A model, chosen among the models of the AI programs this computer has (`agents::Catalog`, known only at run
+    /// time, like the themes): the app steps through them, and `choices`, `get`, `set` and `label` are unused.
+    Model(ModelFor),
 }
+
+/// What a model setting picks the model of.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ModelFor {
+    /// The smart features, the hand-off and tasks drafted from a conversation: `Settings::ai_model`.
+    Smart,
+    /// Project notes: `Settings::notes_model`.
+    Notes,
+}
+
+impl ModelFor {
+    /// The setting's name, as the settings screen shows it.
+    pub fn setting_name(self) -> &'static str {
+        match self {
+            ModelFor::Smart => SMART_MODEL_NAME,
+            ModelFor::Notes => NOTES_MODEL_NAME,
+        }
+    }
+
+    pub fn set(self, s: &mut Settings, model: String) {
+        match self {
+            ModelFor::Smart => s.ai_model = Some(model),
+            ModelFor::Notes => s.notes_model = Some(model),
+        }
+    }
+
+    /// The model in effect on a computer with these models: the one picked, else the default.
+    pub fn in_effect(self, s: &Settings, catalog: &Catalog) -> Option<String> {
+        match self {
+            ModelFor::Smart => s.smart_model_in(catalog),
+            ModelFor::Notes => s.notes_model_in(catalog),
+        }
+    }
+}
+
+/// The two model settings' names on the settings screen.
+pub const SMART_MODEL_NAME: &str = "Model for smart features";
+pub const NOTES_MODEL_NAME: &str = "Model for project notes";
 
 /// What an editor setting chooses the editor for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -566,6 +636,7 @@ impl Tab {
 /// The tabs by position, for the code that treats one of them specially (see `tabs`).
 pub const TAB_SMART: usize = 2;
 pub const TAB_SESSIONS: usize = 3;
+pub const TAB_PROJECTS: usize = 4;
 #[cfg(test)]
 pub const TAB_EDITORS: usize = 5;
 
@@ -629,6 +700,20 @@ fn editors_items() -> Vec<Item> {
             off: Some(0),
         },
     ]
+}
+
+/// The entry that picks a model.
+fn model_item(which: ModelFor, explain: &'static str) -> Item {
+    Item {
+        name: which.setting_name(),
+        explain,
+        kind: Kind::Model(which),
+        choices: &[],
+        get: |_| 0,
+        set: |_, _| {},
+        label: |_| String::new(),
+        off: None,
+    }
 }
 
 /// The entry that edits the instructions of one AI action.
@@ -839,16 +924,11 @@ fn smart_items() -> Vec<Item> {
             label: percent_label,
             off: Some(0),
         },
-        Item {
-            name: "Model for smart features",
-            explain: "Haiku is the smallest and uses the least of your plan. Sonnet writes better names but costs more. Project notes always use Sonnet.",
-            kind: Kind::Steps,
-            choices: &[0, 1],
-            get: |s| MODELS.iter().position(|m| *m == s.ai_model).unwrap_or(0) as u64,
-            set: |s, v| s.ai_model = MODELS[(v as usize).min(MODELS.len() - 1)].into(),
-            label: |v| if v == 0 { "Haiku".into() } else { "Sonnet".into() },
-            off: None,
-        },
+        model_item(
+            ModelFor::Smart,
+            "Names and summaries, the description search, project descriptions, the hand-off and tasks from a conversation. \
+             Claude's models run on Claude Code, OpenAI's on Codex. Haiku is Claude's smallest and uses the least of your plan.",
+        ),
     ]);
     v
 }
@@ -955,6 +1035,11 @@ fn projects_items() -> Vec<Item> {
             label: chars_label,
             off: None,
         },
+        model_item(
+            ModelFor::Notes,
+            "The model that keeps project notes up to date: Sonnet unless you pick another. Claude's models run on Claude \
+             Code, OpenAI's on Codex.",
+        ),
         instructions_item(crate::instructions::NOTES),
         instructions_item(crate::instructions::DESCRIPTION),
         instructions_item(crate::instructions::HANDOFF),
@@ -1249,7 +1334,6 @@ mod tests {
                 "ai_batch_size",
                 "ai_daily_tokens",
                 "ai_pause_percent",
-                "ai_model",
                 "ai_prompts_per_session",
                 "ai_prompt_chars",
                 "ai_quiet_seconds",
@@ -1476,7 +1560,9 @@ mod tests {
         assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
         assert!(!all_items().any(|i| i.name == "Edit notes with"), "the old name of the notes editor's setting is gone");
         assert!(
-            all_items().skip(1).all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_))),
+            all_items()
+                .skip(1)
+                .all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_) | Kind::Model(_))),
             "the theme is the only one of its kind"
         );
         assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
@@ -1542,6 +1628,7 @@ mod tests {
             [
                 "Update notes after",
                 "Read Claude's last reply up to",
+                "Model for project notes",
                 "System prompt for project notes",
                 "System prompt for project descriptions",
                 "System prompt for the hand-off",
@@ -1683,10 +1770,11 @@ mod tests {
     fn the_token_settings_default_to_off_with_a_daily_limit_that_is_never_unlimited() {
         let d = Settings::default();
         assert!(!d.tokens_enabled && d.token_features.is_empty() && !d.tokens_asked);
-        assert_eq!(
-            (d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent, d.ai_model.as_str()),
-            (5, 30, 500_000, 80, "haiku")
-        );
+        assert_eq!((d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent), (5, 30, 500_000, 80));
+        // No model picked: each follows what this computer has (where Claude Code is: Haiku, and Sonnet for the notes).
+        assert_eq!((d.ai_model.as_deref(), d.notes_model.as_deref()), (None, None));
+        let claude = crate::agents::Providers { claude: Some("claude-stand-in".into()), codex: None }.catalog();
+        assert_eq!((d.smart_model_in(&claude).as_deref(), d.notes_model_in(&claude).as_deref()), (Some("haiku"), Some("sonnet")));
         for f in FEATURES {
             // The master switch is off, so nothing may spend anything; a feature added later is on once it is on.
             assert!(!d.feature_on(f.id), "{}", f.id);
@@ -1708,8 +1796,8 @@ mod tests {
         let s = load(&d).0;
         assert!(s.tokens_enabled && s.tokens_asked && s.feature_on("names") && !s.feature_on("find"));
         assert_eq!(
-            (s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent, s.ai_model.as_str()),
-            (10, 50, 1_000_000, 90, "sonnet")
+            (s.ai_refresh_messages, s.ai_batch_size, s.ai_daily_tokens, s.ai_pause_percent, s.ai_model.as_deref()),
+            (10, 50, 1_000_000, 90, Some("sonnet"))
         );
         // Silly numbers are clamped: never zero messages or conversations, and never an unlimited day.
         write(&d, r#"{"ai_refresh_messages":0,"ai_batch_size":0,"ai_daily_tokens":0,"ai_pause_percent":3}"#);
@@ -1727,9 +1815,10 @@ mod tests {
         // 0 for the pause point means "never pause" and stays 0.
         write(&d, r#"{"ai_pause_percent":0}"#);
         assert_eq!(load(&d).0.ai_pause_percent, 0);
-        // A model that is not on the list is the default one; wrong types keep every default.
-        write(&d, r#"{"ai_model":"gpt-9"}"#);
-        assert_eq!(load(&d).0.ai_model, "haiku");
+        // A model is kept exactly as written, one this computer doesn't have too (it is said, never swapped for
+        // another); wrong types keep every default.
+        write(&d, r#"{"ai_model":"gpt-9","notes_model":"opus"}"#);
+        assert_eq!((load(&d).0.ai_model.as_deref(), load(&d).0.notes_model.as_deref()), (Some("gpt-9"), Some("opus")));
         for odd in ["\"yes\"", "1", "null", "[]", "{}"] {
             write(
                 &d,
@@ -1738,9 +1827,11 @@ mod tests {
                 ),
             );
             let s = load(&d).0;
+            // Text is a model's name, kept as written; anything else is no model picked.
+            let model = (odd == "\"yes\"").then_some("yes");
             assert_eq!(
-                (s.tokens_enabled, s.tokens_asked, s.token_features.len(), s.ai_model.as_str(), s.auto_archive_days),
-                (false, false, 0, "haiku", 9),
+                (s.tokens_enabled, s.tokens_asked, s.token_features.len(), s.ai_model.as_deref(), s.auto_archive_days),
+                (false, false, 0, model, 9),
                 "{odd}"
             );
         }
@@ -1781,7 +1872,7 @@ mod tests {
         assert_eq!(s.token_features.get("future"), Some(&true));
         s.tokens_enabled = true;
         s.set_feature("names", true);
-        s.ai_model = "sonnet".into();
+        s.ai_model = Some("sonnet".into());
         save(&d, &s).unwrap();
         let v = saved(&d);
         assert_eq!(
@@ -1862,7 +1953,7 @@ mod tests {
                 "On",
                 "500K tokens",
                 "80%",
-                "Haiku",
+                "",
                 "30 sessions",
                 "5 messages",
                 "1 minute",
@@ -1873,6 +1964,7 @@ mod tests {
                 "",
                 "3 minutes",
                 "1500 characters",
+                "",
                 "",
                 "",
                 "",
@@ -1895,15 +1987,6 @@ mod tests {
             [0, 15, 45, 60, 90, 120, 600].map(seconds_label),
             ["No wait", "15 seconds", "45 seconds", "1 minute", "90 seconds", "2 minutes", "10 minutes"]
         );
-        // The model entry goes both ways.
-        let mut s = Settings::default();
-        let model = by_name("Model for smart features");
-        model.assign(&mut s, 1);
-        assert_eq!(s.ai_model, "sonnet");
-        model.assign(&mut s, 0);
-        assert_eq!(s.ai_model, "haiku");
-        s.ai_model = "unknown".into();
-        assert_eq!(model.value(&s), 0);
     }
 
     #[test]

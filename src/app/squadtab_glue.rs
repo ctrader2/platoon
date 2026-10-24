@@ -124,13 +124,14 @@ impl App {
             return;
         }
         let name = s.name_or_id();
-        match squads::change(&self.config, &s.id, setting) {
+        let catalog = self.catalog();
+        match squads::change(&self.config, &s.id, setting, &catalog) {
             Ok((now, became)) => {
                 self.reload_squads(Some(&s.id));
                 let value = match setting {
                     Setting::PlanFirst if now.plan_first => "yes".to_string(),
                     Setting::PlanFirst => "no".to_string(),
-                    _ => setting.words(&now),
+                    _ => setting.words(&now, &catalog),
                 };
                 let said = format!("{name}: {} {value}.", setting.label());
                 self.notify(match became {
@@ -141,6 +142,12 @@ impl App {
             }
             Err(ChangeError::NoFrontMatter) => {
                 self.notify(format!("{name}'s file has no settings at its top to change: e opens it to fix that."))
+            }
+            Err(ChangeError::NoModels(Setting::Model)) => self.notify(
+                "A task's session runs on Claude Code for now, and Claude Code isn't installed on this computer: there is no model to pick.",
+            ),
+            Err(ChangeError::NoModels(_)) => {
+                self.notify("Neither Claude Code nor Codex is installed on this computer: there is no model to pick.")
             }
             Err(ChangeError::Io(e)) => self.notify(format!("Couldn't change {name}: {}", plain_io(&e))),
         }

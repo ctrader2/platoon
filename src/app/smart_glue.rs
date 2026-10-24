@@ -7,6 +7,7 @@
 //! Indexing only happens while the platoon window is open: nothing here starts anything that outlives it.
 
 use super::*;
+use crate::agents::Providers;
 use crate::ai::{AiError, Reply, Request, Runner};
 use crate::instructions;
 use crate::smart::{self, Digest, Estimate, FindItem, Misses, Rules};
@@ -142,9 +143,12 @@ impl App {
         self.smart.program.clone().unwrap_or_else(|| self.program.clone())
     }
 
-    /// The runner every call of the app goes through: the stand-in `claude` in tests, and the test clock.
+    /// The runner every call of the app goes through: Claude Code run as `program` (the stand-in `claude` in tests),
+    /// Codex as this computer has it, and the test clock.
     pub(super) fn ai_runner(&self, program: &str) -> Runner {
-        Runner::with_program(&self.cache, program).with_clock_offset(self.smart.offset)
+        let providers =
+            Providers { claude: self.providers().claude.as_ref().map(|_| program.to_string()), codex: self.providers().codex.clone() };
+        Runner::new(&self.cache, providers).with_clock_offset(self.smart.offset)
     }
 
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.
