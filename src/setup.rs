@@ -87,6 +87,8 @@ pub struct Report {
     pub outcomes: Vec<Outcome>,
     /// Set when settings.json was rewritten.
     pub saved: Option<PathBuf>,
+    /// The file there was is kept as `settings.json.platoon-bak` (there was none to keep when setup made it).
+    pub backed_up: bool,
     pub notes: Vec<String>,
     /// Codex's part, when Codex is on this computer.
     pub codex: Option<CodexReport>,
@@ -99,6 +101,8 @@ pub struct CodexReport {
     pub outcomes: Vec<Outcome>,
     /// Set when hooks.json was written.
     pub saved: Option<PathBuf>,
+    /// The file there was is kept as `hooks.json.platoon-bak` (there was none to keep when setup made it).
+    pub backed_up: bool,
     /// Why the file was left alone: it is there but can't be read, or isn't a JSON object.
     pub error: Option<String>,
 }
@@ -458,10 +462,12 @@ pub fn run(root: &Path) -> Result<Report, String> {
     }
 
     let mut saved = None;
+    let mut backed_up = false;
     let mut notes = Vec::new();
     if changed {
         if path.exists() {
             fs::copy(&path, root.join("settings.json.platoon-bak")).map_err(|e| format!("couldn't back up settings: {e}"))?;
+            backed_up = true;
         }
         fs::write(&path, serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n")
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
@@ -473,7 +479,7 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { outcomes, saved, notes, codex: None })
+    Ok(Report { outcomes, saved, backed_up, notes, codex: None })
 }
 
 /// This platoon's full path, and as a hook command writes it (quoted when it holds a space).
@@ -488,7 +494,7 @@ fn this_program() -> Result<(String, String), String> {
 /// it was. A file that is there but can't be read or isn't a JSON object is reported and left alone. Never written
 /// when nothing changed; otherwise backed up first (`hooks.json.platoon-bak`).
 pub fn run_codex(codex_root: &Path) -> CodexReport {
-    let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, error: Some(error) };
+    let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, backed_up: false, error: Some(error) };
     let path = codex::hooks_path(codex_root);
     let mut v: Value = match fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
@@ -519,18 +525,20 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
         });
     }
     if outcomes.iter().all(|o| *o == Outcome::AlreadyDone) {
-        return CodexReport { outcomes, saved: None, error: None };
+        return CodexReport { outcomes, saved: None, backed_up: false, error: None };
     }
-    let written = (|| -> Result<(), String> {
+    let written = (|| -> Result<bool, String> {
         fs::create_dir_all(codex_root).map_err(|e| format!("couldn't make {}: {e}", codex_root.display()))?;
-        if path.exists() {
+        let backed_up = path.exists();
+        if backed_up {
             fs::copy(&path, codex_root.join("hooks.json.platoon-bak")).map_err(|e| format!("couldn't back up {}: {e}", path.display()))?;
         }
         let text = serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n";
-        crate::projects::write_atomic(&path, &text).map_err(|e| format!("couldn't write {}: {e}", path.display()))
+        crate::projects::write_atomic(&path, &text).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+        Ok(backed_up)
     })();
     match written {
-        Ok(()) => CodexReport { outcomes, saved: Some(path), error: None },
+        Ok(backed_up) => CodexReport { outcomes, saved: Some(path), backed_up, error: None },
         Err(e) => fail(e),
     }
 }
@@ -635,7 +643,7 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     }
     out.push(String::new());
     if r.saved.is_some() {
-        out.push(format!("Saved {} (backup: settings.json.platoon-bak).", root.join("settings.json").display()));
+        out.push(saved_line(&root.join("settings.json"), r.backed_up.then_some("settings.json.platoon-bak")));
         out.push("Claude Code picks up hook changes live. Restart running sessions for the status line.".into());
     }
     let codex_saved = r.codex.as_ref().is_some_and(|c| c.saved.is_some());
@@ -648,6 +656,14 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     out.extend(r.notes.iter().cloned());
     out.push("All set. Run `platoon`.".into());
     out.join("\n")
+}
+
+/// "Saved <file>.", naming the backup only when one was made.
+fn saved_line(path: &Path, backup: Option<&str>) -> String {
+    match backup {
+        Some(b) => format!("Saved {} (backup: {b}).", path.display()),
+        None => format!("Saved {}.", path.display()),
+    }
 }
 
 /// Codex's part of the report: its steps, the file written, and the one thing Codex asks of the user about them.
@@ -668,7 +684,7 @@ fn render_codex(c: &CodexReport, color: bool) -> Vec<String> {
     }
     if let Some(path) = &c.saved {
         out.push(String::new());
-        out.push(format!("Saved {} (backup: hooks.json.platoon-bak).", path.display()));
+        out.push(saved_line(path, c.backed_up.then_some("hooks.json.platoon-bak")));
         out.push(
             "Codex asks you once to trust these hooks: the next time you start Codex it says they need review. Approve them \
              there; until you do they don't run (nothing else in platoon waits for them)."
@@ -1038,7 +1054,7 @@ mod tests {
             assert!(r.error.as_deref().is_some_and(|e| e.contains("hooks.json")), "{:?}", r.error);
             assert_eq!(fs::read_to_string(codex.join("hooks.json")).unwrap(), bad);
             assert!(!codex.join("hooks.json.platoon-bak").exists());
-            let report = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, notes: vec![], codex: Some(r) };
+            let report = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(r) };
             let shown = render_report(&report, &codex, false);
             assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
         }
@@ -1047,13 +1063,15 @@ mod tests {
     #[test]
     fn the_report_says_what_codex_will_ask_and_a_claude_only_report_is_as_before() {
         let root = tmp("codex-report");
-        let claude_only = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, notes: vec![], codex: None };
+        let claude_only = Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: None };
         let shown = render_report(&claude_only, &root, false);
         assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
         let codex = run_codex(&root.join("codex"));
         let shown = render_report(&Report { codex: Some(codex), ..claude_only }, &root, false);
         assert_eq!(shown.matches("[✓]").count(), STEPS.len() + CODEX_STEPS.len(), "{shown}");
-        assert!(shown.contains("\nCodex\n") && shown.contains("hooks.json (backup: hooks.json.platoon-bak)"), "{shown}");
+        // No hooks.json before: nothing was backed up, so no backup is named (decided 2026-10-23; it used to be).
+        let saved = format!("Saved {}.", root.join("codex/hooks.json").display());
+        assert!(shown.contains("\nCodex\n") && shown.contains(&saved) && !shown.contains("(backup:"), "{shown}");
         assert!(shown.contains("Codex asks you once to trust these hooks") && shown.contains("Approve them there"), "{shown}");
         assert!(!shown.contains("Nothing to change"), "Codex's file changed: {shown}");
     }
@@ -1085,5 +1103,34 @@ mod tests {
             json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]}});
         assert_eq!(take_out_codex(&mut only).removed, [CODEX_ENTRIES[2]]);
         assert_eq!(only, json!({}), "what platoon's hook left empty goes");
+    }
+
+    #[test]
+    fn saved_names_a_backup_only_when_there_was_a_file_to_back_up() {
+        let root = tmp("backup-none");
+        let r = run(&root).unwrap();
+        assert!(!r.backed_up && !root.join("settings.json.platoon-bak").exists());
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains(&format!("Saved {}.\n", root.join("settings.json").display())) && !shown.contains("(backup:"), "{shown}");
+        let root = tmp("backup-some");
+        fs::write(root.join("settings.json"), "{}").unwrap();
+        let r = run(&root).unwrap();
+        assert!(r.backed_up && root.join("settings.json.platoon-bak").exists());
+        let shown = render_report(&r, &root, false);
+        assert!(shown.contains(&format!("Saved {} (backup: settings.json.platoon-bak).", root.join("settings.json").display())), "{shown}");
+        // Codex's hooks.json the same way.
+        let codex = tmp("backup-codex-none").join("codex");
+        let c = run_codex(&codex);
+        let shown = render_codex(&c, false).join("\n");
+        assert!(!c.backed_up && shown.contains(&format!("Saved {}.", codex.join("hooks.json").display())), "{shown}");
+        assert!(!shown.contains("(backup:"), "{shown}");
+        let codex = tmp("backup-codex-some");
+        fs::write(codex.join("hooks.json"), "{}").unwrap();
+        let c = run_codex(&codex);
+        let shown = render_codex(&c, false).join("\n");
+        assert!(
+            c.backed_up && shown.contains(&format!("Saved {} (backup: hooks.json.platoon-bak).", codex.join("hooks.json").display())),
+            "{shown}"
+        );
     }
 }

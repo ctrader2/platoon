@@ -42,8 +42,9 @@ Whichever you choose, platoon was last checked with the Claude Code version name
 ## Set it up: `platoon setup`
 
 `platoon setup` is a one-time step, and `platoon` won't start until it's done. It shows a checklist of what it changes in
-Claude Code's `settings.json` (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`). It backs that file up
-first, as `settings.json.platoon-bak` beside it, and leaves everything else in it alone, your own hooks included.
+Claude Code's `settings.json` (`~/.claude/settings.json`, or the one in `CLAUDE_CONFIG_DIR`). When that file is already
+there, it backs it up first, as `settings.json.platoon-bak` beside it (and says so), and leaves everything else in it
+alone, your own hooks included.
 
 | Step | Why |
 | --- | --- |
@@ -69,8 +70,8 @@ they reach Claude Code's:
 | Notes updates | Lets platoon keep a project's notes up to date after its Codex sessions stop |
 
 Each is a fixed command, the same for every session (`<platoon> hook session-start --agent codex`, `hook guard --agent
-codex`, `hook stop --agent codex`). The file is backed up first (`hooks.json.platoon-bak`), and everything else in it is
-left as it was. None of these steps is needed to start platoon, and if `hooks.json` can't be read setup says so and
+codex`, `hook stop --agent codex`). A file that is already there is backed up first (`hooks.json.platoon-bak`), and
+everything else in it is left as it was. None of these steps is needed to start platoon, and if `hooks.json` can't be read setup says so and
 leaves it alone.
 
 **Codex asks you once to trust them.** Codex runs a hook only after you have reviewed it: the next time you start Codex,

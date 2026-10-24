@@ -33,8 +33,8 @@ same for every session:
 | Changed notes | a `UserPromptSubmit` hook: `<platoon> hook guard --agent codex` | passes a project's changed notes to a running Codex session; it never refuses a message (Codex keeps one window per conversation itself) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop --agent codex` | notes that a project's Codex session finished answering, so its notes can be brought up to date later |
 
-Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it; everything else in the file stays as it
-was. Codex runs a hook only once you have trusted it: it asks you the next time it starts. platoon never writes Codex's
+Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it (when there was one); everything else
+in the file stays as it was. Codex runs a hook only once you have trusted it: it asks you the next time it starts. platoon never writes Codex's
 `config.toml`, where Codex keeps that record (and the rest of its settings).
 
 ## No Claude Code skill

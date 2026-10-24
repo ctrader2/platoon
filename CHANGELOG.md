@@ -98,6 +98,7 @@ here.
 
 ### Fixed
 
+- `platoon setup` names a backup ("Saved … (backup: settings.json.platoon-bak)") only when there was a file to back up.
 - With no sessions yet, the list says so ("No sessions yet. Press n to start one.") as soon as platoon has looked,
   instead of "Reading your sessions…" and `indexing…` coming back at every once-a-second pass on a busy computer.
 
