@@ -21,6 +21,13 @@ here.
 
 ### Changed
 
+- **The header names each program's plan usage.** Its right end reads
+  `Claude  5h ━━━━━━  12%  7d ━━━━━━  40%  │  Codex  30d ━━━━━━   2%`, so the figures before Codex's are plainly
+  Claude's. With less room it shows bare percentages, then each plan's fullest window (the one that stops you first:
+  `Claude 40%  Codex 2%`), where it used to show the first. Without a figure it says so in plain words
+  (`Claude  waiting for a session`, `Codex  no figure yet`), or `–` where there is less room, instead of `n/a`. The
+  bars are shorter (six cells) so both programs fit beside the tabs more often.
+
 - **A Codex task's last message no longer calls its work uncommitted.** Codex's rules now say that platoon commits the
   work when the session stops, so its final message says so instead of "not committed".
 

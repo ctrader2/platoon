@@ -106,8 +106,12 @@ All of this is enforced in one place before any call starts:
 - **Pause above plan usage** (default 80%), for background work, on the plan of the program the call would use: Claude's
   as Claude Code's status line reports it (its 5-hour and weekly windows), your ChatGPT plan's Codex limits as Codex's
   saved sessions last recorded them (whatever windows the plan has: a free plan has one of 30 days). With no figure yet,
-  nothing pauses. The header shows each installed program's windows: `5h ━━ 47%   7d ━ 21%   Codex 30d ━ 12%`
-  (bare percentages when there is less room).
+  nothing pauses. The header shows each installed program's windows under its name:
+  `Claude  5h ━━━━━━  47%  7d ━━━━━━  21%  │  Codex  30d ━━━━━━  12%`. With less room it shows bare percentages
+  (`Claude 5h 47% 7d 21%  │  Codex 30d 12%`), then only each plan's fullest window, the one that stops you first
+  (`Claude 47%  Codex 12%`). Before there is a figure it says so: `Claude  waiting for a session` (no Claude Code session
+  has reported it yet), ``Claude  off · run `platoon setup` `` (the status line isn't set up), `Codex  no figure yet`, or
+  just `–` where there is less room.
 - **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls
   on that program for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed
   out or over the plan limit); the other program's calls go on. A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the

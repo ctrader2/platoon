@@ -24,7 +24,8 @@ use ratatui::{
 };
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-const BAR_WIDTH: usize = 10;
+/// The header's usage bars, short enough that both programs' fit beside the tabs at common widths.
+const BAR_WIDTH: usize = 6;
 /// The session's own text color is kept on a selected cell as long as it reads this well against the highlight.
 const SELECTION_MIN_FG_CONTRAST: f64 = 3.0;
 
@@ -1066,10 +1067,10 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
 
     let width = |spans: &[Span]| spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
     // The tabs matter most. When the usage readout doesn't fit beside them it shrinks to bare percentages, then to the
-    // first window of each plan (the one that runs out first), then goes.
+    // fullest window of each plan (the one that stops you first), then goes.
     let room = (area.width as usize).saturating_sub(width(&left) + 2);
     let mut right = usage_spans(app, Readout::Bars);
-    for smaller in [Readout::Percentages, Readout::FirstOnly] {
+    for smaller in [Readout::Percentages, Readout::Fullest] {
         if width(&right) > room {
             right = usage_spans(app, smaller);
         }
@@ -1091,66 +1092,66 @@ enum Readout {
     Bars,
     /// Each window's percentage alone.
     Percentages,
-    /// The first window of each plan (the one that runs out first), its percentage alone.
-    FirstOnly,
+    /// The fullest window of each plan (the one that stops you first), its percentage alone, without its label.
+    Fullest,
 }
 
-/// The plan usage of each AI program installed, for the header's right end: Claude Code's 5-hour and weekly windows
-/// (from its status line), then Codex's windows, whatever they are (from its saved sessions; a free plan has one of 30
-/// days), after the word Codex.
+/// The plan usage of each AI program installed and switched on, for the header's right end, each under its own name:
+/// Claude's 5-hour and weekly windows (from Claude Code's status line), then Codex's windows, whatever they are (from
+/// its saved sessions; a free plan has one of 30 days). A faint `│` between the two, while there is room for it.
 fn usage_spans(app: &App, how: Readout) -> Vec<Span<'static>> {
     let t = app.effective_theme();
     let dim = Style::new().fg(t.dim);
-    let mut out: Vec<Span<'static>> = Vec::new();
-    let figures = |out: &mut Vec<Span<'static>>, prefix: &str, windows: &[(String, Option<u8>)]| {
-        let windows = if how == Readout::FirstOnly { &windows[..windows.len().min(1)] } else { windows };
-        for (i, (label, pct)) in windows.iter().enumerate() {
-            let gap = match (out.is_empty(), how) {
-                (true, _) => "",
-                (false, Readout::Bars) => "   ",
-                (false, _) => "  ",
-            };
-            let lead = if i == 0 { prefix } else { "" };
-            match how {
-                Readout::Bars => {
-                    out.push(Span::styled(format!("{gap}{lead}{label} "), dim));
-                    match pct {
-                        Some(p) => out.extend(bar(t, *p)),
-                        None => out.push(Span::styled("n/a", dim)),
-                    }
-                }
-                _ => {
-                    out.push(Span::styled(format!("{gap}{lead}{label} "), dim));
-                    out.push(Span::styled(pct.map_or("n/a".to_string(), |p| format!("{p}%")), Style::new().fg(t.subtext)));
-                }
-            }
-        }
-    };
+    // Each plan: its name, its windows (none while there is no figure), and the words for that in the Bars level.
+    type Windows = Vec<(String, Option<u8>)>;
+    let mut plans: Vec<(&str, Windows, &str)> = Vec::new();
     if app.providers().claude.is_some() {
-        match &app.usage {
-            Usage::Ready(u) => {
-                figures(&mut out, "", &[("5h".into(), u.five_hour.map(|w| w.pct)), ("7d".into(), u.seven_day.map(|w| w.pct))]);
-            }
-            Usage::Waiting if how == Readout::Bars => out.push(Span::styled("plan usage: waiting for a session to report", dim)),
-            Usage::NotSetUp if how == Readout::Bars => out.push(Span::styled("plan usage: off · run `platoon setup`", dim)),
-            Usage::Waiting | Usage::NotSetUp => {}
-        }
+        plans.push(match &app.usage {
+            Usage::Ready(u) => ("Claude", vec![("5h".into(), u.five_hour.map(|w| w.pct)), ("7d".into(), u.seven_day.map(|w| w.pct))], ""),
+            Usage::Waiting => ("Claude", Vec::new(), "waiting for a session"),
+            Usage::NotSetUp => ("Claude", Vec::new(), "off · run `platoon setup`"),
+        });
     }
     if let Some(limits) = &app.codex_limits {
-        let windows: Vec<(String, Option<u8>)> = limits.iter().map(|l| (l.short(), Some(l.pct))).collect();
-        if windows.is_empty() {
-            // No Codex session has reported its plan yet (or its windows have all started over since).
-            let gap = if out.is_empty() {
-                ""
-            } else if how == Readout::Bars {
-                "   "
+        // Empty until a Codex session has reported its plan (or once its windows have all started over since).
+        plans.push(("Codex", limits.iter().map(|l| (l.short(), Some(l.pct))).collect(), "no figure yet"));
+    }
+    let figure = |p: Option<u8>| match p {
+        Some(p) => Span::styled(format!("{p}%"), Style::new().fg(t.subtext)),
+        None => Span::styled("–", dim),
+    };
+    let mut out: Vec<Span<'static>> = Vec::new();
+    for (i, (name, windows, no_figure)) in plans.into_iter().enumerate() {
+        if i > 0 {
+            if how == Readout::Fullest {
+                out.push(Span::styled("  ", dim));
             } else {
-                "  "
-            };
-            let words = if how == Readout::Bars { "Codex plan: no figure yet" } else { "Codex n/a" };
-            out.push(Span::styled(format!("{gap}{words}"), dim));
-        } else {
-            figures(&mut out, "Codex ", &windows);
+                out.extend([Span::styled("  ", dim), Span::styled("│", Style::new().fg(t.border)), Span::styled("  ", dim)]);
+            }
+        }
+        out.push(Span::styled(name.to_string(), Style::new().fg(t.text)));
+        match how {
+            Readout::Bars if windows.is_empty() => out.push(Span::styled(format!("  {no_figure}"), dim)),
+            Readout::Bars => {
+                for (label, pct) in windows {
+                    out.push(Span::styled(format!("  {label} "), dim));
+                    match pct {
+                        Some(p) => out.extend(bar(t, p)),
+                        None => out.push(figure(None)),
+                    }
+                }
+            }
+            Readout::Percentages if !windows.is_empty() => {
+                for (label, pct) in windows {
+                    out.push(Span::styled(format!(" {label} "), dim));
+                    out.push(figure(pct));
+                }
+            }
+            // No figure yet, or the fullest window alone.
+            Readout::Percentages | Readout::Fullest => {
+                out.push(Span::styled(" ", dim));
+                out.push(figure(windows.iter().filter_map(|(_, p)| *p).max()));
+            }
         }
     }
     out
@@ -2515,9 +2516,9 @@ fn draw_theme_sample(f: &mut Frame, app: &App, area: Rect) {
     };
     let usage = {
         let dim = Style::new().fg(t.dim);
-        let mut spans = vec![Span::styled("5h ", dim)];
+        let mut spans = vec![Span::styled("Claude ", Style::new().fg(t.text)), Span::styled("5h ", dim)];
         spans.extend(bar(t, 47));
-        if w >= 3 + BAR_WIDTH + 5 + 9 {
+        if w >= 7 + 3 + BAR_WIDTH + 5 + 9 {
             spans.push(Span::styled("   7d ", dim));
             spans.push(Span::styled("21%", Style::new().fg(t.subtext)));
         }
@@ -3804,7 +3805,7 @@ fn pct_color(t: &Theme, pct: u8) -> Color {
     }
 }
 
-/// `━━━━━━────  62%`, colored by how full it is: the plan usage in the header.
+/// `━━━━──  62%`, colored by how full it is: the plan usage in the header.
 fn bar(t: &Theme, pct: u8) -> Vec<Span<'static>> {
     let filled = (pct as usize * BAR_WIDTH + 50) / 100;
     vec![

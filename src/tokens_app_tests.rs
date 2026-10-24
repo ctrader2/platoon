@@ -545,48 +545,139 @@ fn header(app: &App, cols: u16) -> (String, Terminal<TestBackend>) {
     (shown.lines().next().unwrap().to_string(), term)
 }
 
-#[test]
-fn the_header_shows_each_installed_programs_plan_and_shrinks_the_same_way() {
-    use crate::model::{PlanUsage, Window};
-    use crate::usage::{Limit, Usage as Plan};
-    let w = World::new("tok-header-both");
-    let mut app = w.app();
-    app.set_providers_for_test(providers(true, Some("tok-header-both")));
-    app.usage = Plan::Ready(PlanUsage {
-        five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
-        seven_day: Some(Window { pct: 21, resets_at: 9_999_999_999 }),
-    });
-    app.codex_limits = Some(vec![Limit { minutes: 43_200, pct: 12, resets_at: 9_999_999_999 }]);
-    let (h, term) = header(&app, 160);
-    assert!(h.contains("5h ━") && h.contains("47%") && h.contains("7d ━") && h.contains("Codex 30d ━") && h.contains(" 12%"), "{h}");
-    assert!(h.find("7d").unwrap() < h.find("Codex").unwrap(), "Claude's first: {h}");
-    let t = app.effective_theme().clone();
-    assert_eq!(word_fg(&term, "Codex 30d"), Some(t.dim));
-    assert_eq!(word_fg(&term, " 12%"), Some(t.subtext));
-    // Less room: bare percentages, then the first window of each plan, then nothing; never the tabs.
-    let (h, _) = header(&app, 100);
-    assert!(h.contains("5h 47%  7d 21%  Codex 30d 12%") && !h.contains('━'), "{h}");
-    let (h, _) = header(&app, 82);
-    assert!(h.contains("5h 47%  Codex 30d 12%") && !h.contains("7d"), "{h}");
-    let (h, _) = header(&app, 60);
-    assert!(!h.contains("Codex") && h.contains("3 Tasks"), "{h}");
+/// The usage readout at the header's right end: from the first program's name to the end of the line.
+fn readout(h: &str) -> String {
+    let start = [h.find("Claude"), h.find("Codex")].into_iter().flatten().min();
+    start.map_or(String::new(), |i| h[i..].trim_end().to_string())
+}
+
+/// Every readout the header shows as the terminal narrows from 200 columns to the smallest platoon draws, in order,
+/// each once; the tabs whole at every width.
+fn ladder(app: &App) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for cols in (crate::app::MIN_WIDTH..=200).rev() {
+        let (h, _) = header(app, cols);
+        assert!(h.contains("1 Sessions") && h.contains("4 Squads"), "{cols}: the tabs always win: {h}");
+        let r = readout(&h);
+        if seen.last() != Some(&r) {
+            seen.push(r);
+        }
+    }
+    seen
+}
+
+fn window(pct: u8) -> Option<crate::model::Window> {
+    Some(crate::model::Window { pct, resets_at: 9_999_999_999 })
+}
+
+fn claude_plan(five_hour: Option<u8>, seven_day: Option<u8>) -> usage::Usage {
+    usage::Usage::Ready(crate::model::PlanUsage { five_hour: five_hour.and_then(window), seven_day: seven_day.and_then(window) })
+}
+
+fn codex_limit(minutes: u64, pct: u8) -> usage::Limit {
+    usage::Limit { minutes, pct, resets_at: 9_999_999_999 }
 }
 
 #[test]
-fn with_only_codex_the_header_shows_codexs_plan_alone_and_says_when_there_is_no_figure_yet() {
-    use crate::usage::{Limit, Usage as Plan};
+fn the_header_names_each_programs_plan_and_shrinks_to_percentages_then_the_fullest_window_of_each() {
+    let w = World::new("tok-header-both");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-header-both")));
+    app.usage = claude_plan(Some(47), Some(21));
+    app.codex_limits = Some(vec![codex_limit(43_200, 12)]);
+    // Bars, then bare percentages, then the fullest window of each, then nothing: never the tabs.
+    assert_eq!(
+        ladder(&app),
+        [
+            "Claude  5h ━━━━━━  47%  7d ━━━━━━  21%  │  Codex  30d ━━━━━━  12%",
+            "Claude 5h 47% 7d 21%  │  Codex 30d 12%",
+            "Claude 47%  Codex 12%",
+            "",
+        ]
+    );
+    // Each program's name in the text's color, the divider faint, the windows' labels dim, the figures in subtext,
+    // and the bar filled as far as the plan is used in the color of how full it is, its track in the border's.
+    let (h, term) = header(&app, 160);
+    let t = app.effective_theme().clone();
+    assert_eq!(word_fg(&term, "Claude"), Some(t.text));
+    assert_eq!(word_fg(&term, "Codex"), Some(t.text));
+    assert_eq!(word_fg(&term, "│"), Some(t.border));
+    assert_eq!(word_fg(&term, "5h"), Some(t.dim));
+    assert_eq!(word_fg(&term, "30d"), Some(t.dim));
+    assert_eq!(word_fg(&term, " 12%"), Some(t.subtext));
+    let buf = term.backend().buffer();
+    let bar_at = h[..h.find("5h ━").unwrap()].chars().count() as u16 + 3;
+    let cells: Vec<_> = (bar_at..bar_at + 6).map(|x| buf[(x, 0)].fg).collect();
+    assert_eq!(cells, [t.ok, t.ok, t.ok, t.border, t.border, t.border], "47% of six cells, in the color of under 60%");
+    // A plan nearly used up says so in its bar's color.
+    app.usage = claude_plan(Some(90), Some(21));
+    let (h, term) = header(&app, 160);
+    let bar_at = h[..h.find("5h ━").unwrap()].chars().count() as u16 + 3;
+    assert_eq!(term.backend().buffer()[(bar_at, 0)].fg, t.err);
+}
+
+#[test]
+fn the_narrowest_header_shows_each_programs_fullest_window_the_one_that_stops_you_first() {
+    let w = World::new("tok-header-fullest");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-header-fullest")));
+    app.codex_limits = Some(vec![codex_limit(300, 3), codex_limit(10_080, 30)]);
+    for (five_hour, seven_day, fullest) in [(12, 40, "Claude 40%  Codex 30%"), (70, 40, "Claude 70%  Codex 30%")] {
+        app.usage = claude_plan(Some(five_hour), Some(seven_day));
+        assert_eq!(ladder(&app)[2], fullest);
+    }
+}
+
+#[test]
+fn with_only_claude_the_header_names_claudes_plan_alone_and_says_plainly_when_there_is_no_figure() {
+    let w = World::new("tok-header-claude");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, None));
+    app.codex_limits = None;
+    app.usage = claude_plan(Some(12), Some(40));
+    assert_eq!(ladder(&app), ["Claude  5h ━━━━━━  12%  7d ━━━━━━  40%", "Claude 5h 12% 7d 40%", "Claude 40%", ""]);
+    // A window with no figure of its own: a dash, never "n/a".
+    app.usage = claude_plan(None, Some(40));
+    assert_eq!(ladder(&app), ["Claude  5h –  7d ━━━━━━  40%", "Claude 5h – 7d 40%", "Claude 40%", ""]);
+    let (_, term) = header(&app, 160);
+    assert_eq!(word_fg(&term, "–"), Some(app.effective_theme().dim));
+    // No session has reported the plan yet, or the status line isn't set up: said in words, then a dash.
+    app.usage = usage::Usage::Waiting;
+    assert_eq!(ladder(&app), ["Claude  waiting for a session", "Claude –", ""]);
+    app.usage = usage::Usage::NotSetUp;
+    assert_eq!(ladder(&app), ["Claude  off · run `platoon setup`", "Claude –", ""]);
+    let (_, term) = header(&app, 160);
+    let t = app.effective_theme().clone();
+    assert_eq!((word_fg(&term, "Claude"), word_fg(&term, "off ·")), (Some(t.text), Some(t.dim)));
+}
+
+#[test]
+fn claude_waiting_beside_codexs_figures_is_said_in_words_and_then_a_dash() {
+    let w = World::new("tok-header-waiting");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-header-waiting")));
+    app.usage = usage::Usage::Waiting;
+    app.codex_limits = Some(vec![codex_limit(43_200, 2)]);
+    assert_eq!(
+        ladder(&app),
+        ["Claude  waiting for a session  │  Codex  30d ━━━━━━   2%", "Claude –  │  Codex 30d 2%", "Claude –  Codex 2%", ""]
+    );
+}
+
+#[test]
+fn with_only_codex_the_header_names_codexs_plan_alone_and_says_when_there_is_no_figure_yet() {
     let w = World::new("tok-header-codex");
     let mut app = w.app();
     app.set_providers_for_test(providers(false, Some("tok-header-codex")));
-    app.usage = Plan::NotSetUp;
+    app.usage = usage::Usage::NotSetUp;
     app.codex_limits = Some(Vec::new());
-    let (h, term) = header(&app, 120);
-    assert!(h.contains("Codex plan: no figure yet") && !h.contains("plan usage: off") && !h.contains("5h"), "{h}");
-    assert_eq!(word_fg(&term, "Codex plan"), Some(app.effective_theme().dim));
-    app.codex_limits =
-        Some(vec![Limit { minutes: 300, pct: 3, resets_at: 9_999_999_999 }, Limit { minutes: 10_080, pct: 30, resets_at: 9_999_999_999 }]);
-    let (h, _) = header(&app, 140);
-    assert!(h.contains("Codex 5h ━") && h.contains("   7d ━") && h.contains(" 30%"), "a plan with two windows, both said: {h}");
+    assert_eq!(ladder(&app), ["Codex  no figure yet", "Codex –", ""]);
+    let (_, term) = header(&app, 120);
+    let t = app.effective_theme().clone();
+    assert_eq!((word_fg(&term, "Codex"), word_fg(&term, "no figure yet")), (Some(t.text), Some(t.dim)));
+    // A plan with two windows: both said, each with its own label.
+    app.codex_limits = Some(vec![codex_limit(300, 3), codex_limit(10_080, 30)]);
+    assert_eq!(ladder(&app), ["Codex  5h ━━━━━━   3%  7d ━━━━━━  30%", "Codex 5h 3% 7d 30%", "Codex 30%", ""]);
 }
 
 #[test]

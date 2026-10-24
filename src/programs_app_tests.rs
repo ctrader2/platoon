@@ -215,7 +215,7 @@ fn claude_code_switched_off_leaves_its_rows_and_usage_out_and_a_model_set_to_it_
     assert_eq!(settings::ModelFor::Notes.in_effect(&settings::load(&w.config).0, &catalog).as_deref(), Some("gpt-6-luna"));
     let mut term = Terminal::new(TestBackend::new(140, 24)).unwrap();
     let header = screen(&mut term, &app).lines().next().unwrap().to_string();
-    assert!(!header.contains("5h") && !header.contains("plan usage"), "Claude Code's plan isn't in the header: {header}");
+    assert!(!header.contains("Claude") && header.contains("Codex"), "Claude's plan isn't in the header, Codex's is: {header}");
     // On the settings screen, under Smart features.
     key(&mut app, KeyCode::Char('s'));
     app.switch_settings_tab(settings::TAB_SMART);

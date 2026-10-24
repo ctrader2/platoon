@@ -433,7 +433,7 @@ fn with_only_codex_platoon_starts_without_claude_codes_setup_and_setup_leaves_cl
     // And platoon starts: no setup gate for a program that isn't there, and Codex's plan in the header.
     let screen = run_in_terminal_on(&claude, &cache, &env, "No sessions yet");
     assert!(screen.contains("No sessions yet") && !screen.contains("one-time setup"), "{screen}");
-    assert!(screen.contains("Codex plan: no figure yet") && !screen.contains("plan usage: off"), "{screen}");
+    assert!(screen.contains("Codex  no figure yet") && !screen.contains("off · run"), "{screen}");
 }
 
 #[test]
