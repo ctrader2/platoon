@@ -1,7 +1,10 @@
-//! What platoon has spent of the user's Claude tokens, and whether it is currently backing off after a failure.
+//! What platoon has spent of the user's tokens, and whether it is currently backing off after a failure: for each agent
+//! the calls ran on apart (tokens of different providers aren't one currency, and one being signed out doesn't stop
+//! the other).
 //!
-//! One small file in the cache dir (`ai-usage.json`): totals per local calendar day (the four usage numbers
-//! Claude reports, the cost it reports, the calls, and the same per feature) and the back-off state. It never
+//! One small file in the cache dir (`ai-usage.json`): totals per local calendar day (the four usage numbers the agent
+//! reports, the cost it reports, the calls, and the same per feature) and the back-off state, Claude Code's at the top
+//! (as before there were two agents) and Codex's under `codex`. It never
 //! holds prompt text, replies or anything else a person typed. Writes are atomic (a temp file, then a rename)
 //! and serialized between platoon windows and `platoon tokens test` with a lock file, so two of them never
 //! lose each other's numbers. A file that can't be understood is treated as empty: the counting starts over
@@ -170,21 +173,43 @@ impl Day {
     }
 }
 
+/// One agent's part of the ledger.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Data {
+pub struct Book {
     /// Keyed by local calendar day, `YYYY-MM-DD` (so key order is date order).
     pub days: BTreeMap<String, Day>,
     pub backoff: Option<Backoff>,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Data {
+    pub claude: Book,
+    pub codex: Book,
+}
+
 impl Data {
+    pub fn of(&self, agent: Agent) -> &Book {
+        match agent {
+            Agent::Claude => &self.claude,
+            Agent::Codex => &self.codex,
+        }
+    }
+
+    fn of_mut(&mut self, agent: Agent) -> &mut Book {
+        match agent {
+            Agent::Claude => &mut self.claude,
+            Agent::Codex => &mut self.codex,
+        }
+    }
+
     fn to_json(&self) -> Value {
-        let days: Map<String, Value> = self.days.iter().map(|(k, d)| (k.clone(), d.to_json())).collect();
         let mut o = Map::new();
         o.insert("version".into(), json!(1));
-        o.insert("days".into(), Value::Object(days));
-        if let Some(b) = &self.backoff {
-            o.insert("backoff".into(), json!({"failures": b.failures, "since": b.since, "until": b.until, "kind": b.kind.name()}));
+        self.claude.write_json(&mut o);
+        if self.codex != Book::default() {
+            let mut c = Map::new();
+            self.codex.write_json(&mut c);
+            o.insert("codex".into(), Value::Object(c));
         }
         Value::Object(o)
     }
@@ -193,6 +218,21 @@ impl Data {
     fn parse(text: &str) -> Option<Data> {
         let v: Value = serde_json::from_str(text).ok()?;
         let o = v.as_object()?;
+        let codex = o.get("codex").and_then(Value::as_object).map(Book::from_json).unwrap_or_default();
+        Some(Data { claude: Book::from_json(o), codex })
+    }
+}
+
+impl Book {
+    fn write_json(&self, o: &mut Map<String, Value>) {
+        let days: Map<String, Value> = self.days.iter().map(|(k, d)| (k.clone(), d.to_json())).collect();
+        o.insert("days".into(), Value::Object(days));
+        if let Some(b) = &self.backoff {
+            o.insert("backoff".into(), json!({"failures": b.failures, "since": b.since, "until": b.until, "kind": b.kind.name()}));
+        }
+    }
+
+    fn from_json(o: &Map<String, Value>) -> Book {
         let days = o
             .get("days")
             .and_then(Value::as_object)
@@ -206,7 +246,17 @@ impl Data {
                 kind: FailKind::from_name(b.get("kind").and_then(Value::as_str).unwrap_or("")),
             })
         });
-        Some(Data { days, backoff })
+        Book { days, backoff }
+    }
+
+    /// The totals of the local day `now` falls on.
+    pub fn day(&self, now: u64) -> Day {
+        self.days.get(&local_day(now)).cloned().unwrap_or_default()
+    }
+
+    /// A back-off that is still running at `now`.
+    pub fn backoff_at(&self, now: u64) -> Option<Backoff> {
+        self.backoff.filter(|b| b.until > now)
     }
 }
 
@@ -276,9 +326,11 @@ impl Ledger {
         unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) };
         let mut data = self.load();
         change(&mut data);
-        while data.days.len() > KEEP_DAYS {
-            let oldest = data.days.keys().next().cloned().unwrap_or_default();
-            data.days.remove(&oldest);
+        for book in [&mut data.claude, &mut data.codex] {
+            while book.days.len() > KEEP_DAYS {
+                let oldest = book.days.keys().next().cloned().unwrap_or_default();
+                book.days.remove(&oldest);
+            }
         }
         let tmp = self.path.with_extension("json.tmp");
         let text = serde_json::to_string_pretty(&data.to_json()).unwrap_or_default();
@@ -289,15 +341,15 @@ impl Ledger {
         written
     }
 
-    /// The totals for the local day `now` falls on.
-    pub fn today(&self, now: u64) -> Day {
-        self.load().days.remove(&local_day(now)).unwrap_or_default()
+    /// What calls on `agent` used on the local day `now` falls on.
+    pub fn today(&self, now: u64, agent: Agent) -> Day {
+        self.load().of(agent).day(now)
     }
 
-    /// Add a finished call to today's totals. `ok` is false for a call that failed but still reported usage.
-    pub fn record_call(&self, now: u64, feature: &str, usage: &Usage, cost_usd: f64, ok: bool) -> io::Result<()> {
+    /// Add a finished call on `agent` to today's totals. `ok` is false for a call that failed but still reported usage.
+    pub fn record_call(&self, now: u64, agent: Agent, feature: &str, usage: &Usage, cost_usd: f64, ok: bool) -> io::Result<()> {
         self.update(|d| {
-            let day = d.days.entry(local_day(now)).or_default();
+            let day = d.of_mut(agent).days.entry(local_day(now)).or_default();
             day.usage.add(usage);
             day.cost_usd += if cost_usd.is_finite() && cost_usd > 0.0 { cost_usd } else { 0.0 };
             day.calls += 1;
@@ -311,36 +363,38 @@ impl Ledger {
     /// Tokens of today that went to archived conversations. Kept beside the per-feature numbers under a name of their
     /// own and NOT added to the day's total (the call that used them already was), so the share rule can tell what
     /// archived work has used.
-    pub fn note_archived(&self, now: u64, tokens: u64) -> io::Result<()> {
+    pub fn note_archived(&self, now: u64, agent: Agent, tokens: u64) -> io::Result<()> {
         self.update(|d| {
-            let f = d.days.entry(local_day(now)).or_default().features.entry(ARCHIVED_KEY.to_string()).or_default();
+            let day = d.of_mut(agent).days.entry(local_day(now)).or_default();
+            let f = day.features.entry(ARCHIVED_KEY.to_string()).or_default();
             f.tokens = f.tokens.saturating_add(tokens);
             f.calls += 1;
         })
     }
 
-    /// The tokens archived conversations have used on the local day `now` falls on.
-    pub fn archived_today(&self, now: u64) -> u64 {
-        self.load().days.get(&local_day(now)).and_then(|d| d.features.get(ARCHIVED_KEY)).map_or(0, |f| f.tokens)
+    /// The tokens archived conversations have used on `agent` on the local day `now` falls on.
+    pub fn archived_today(&self, now: u64, agent: Agent) -> u64 {
+        self.today(now, agent).features.get(ARCHIVED_KEY).map_or(0, |f| f.tokens)
     }
 
     /// A call failed: refuse calls for a while, twice as long as after the previous failure in this run of them,
     /// up to a limit that depends on why. The run's start is kept, so the notice appears once.
-    pub fn note_failure(&self, now: u64, kind: FailKind) -> io::Result<()> {
+    pub fn note_failure(&self, now: u64, agent: Agent, kind: FailKind) -> io::Result<()> {
         self.update(|d| {
-            let (failures, since) = d.backoff.map_or((1, now), |b| (b.failures.saturating_add(1), b.since));
+            let book = d.of_mut(agent);
+            let (failures, since) = book.backoff.map_or((1, now), |b| (b.failures.saturating_add(1), b.since));
             let (first, longest) = kind.delays();
             let delay = first.saturating_mul(1u64 << (failures - 1).min(20)).min(longest);
-            d.backoff = Some(Backoff { failures, since, until: now + delay, kind });
+            book.backoff = Some(Backoff { failures, since, until: now + delay, kind });
         })
     }
 
-    /// A call worked: the run of failures is over.
-    pub fn note_success(&self) -> io::Result<()> {
-        if self.load().backoff.is_none() {
+    /// A call on `agent` worked: its run of failures is over.
+    pub fn note_success(&self, agent: Agent) -> io::Result<()> {
+        if self.load().of(agent).backoff.is_none() {
             return Ok(());
         }
-        self.update(|d| d.backoff = None)
+        self.update(|d| d.of_mut(agent).backoff = None)
     }
 }
 
@@ -368,10 +422,10 @@ mod tests {
         let l = Ledger::open(&d);
         assert_eq!(l.load(), Data::default());
         assert!(!d.exists(), "reading creates nothing");
-        l.record_call(DAY1, "names", &u(400, 100, 3000, 20), 0.001, true).unwrap();
-        l.record_call(DAY1 + 60, "names", &u(1, 2, 3, 4), 0.0005, true).unwrap();
-        l.record_call(DAY1 + 90, "find", &u(10, 0, 0, 5), 0.0, false).unwrap();
-        let t = l.today(DAY1 + 100);
+        l.record_call(DAY1, Agent::Claude, "names", &u(400, 100, 3000, 20), 0.001, true).unwrap();
+        l.record_call(DAY1 + 60, Agent::Claude, "names", &u(1, 2, 3, 4), 0.0005, true).unwrap();
+        l.record_call(DAY1 + 90, Agent::Claude, "find", &u(10, 0, 0, 5), 0.0, false).unwrap();
+        let t = l.today(DAY1 + 100, Agent::Claude);
         assert_eq!(t.usage, u(411, 102, 3003, 29));
         assert_eq!(t.tokens(), 411 + 102 + 3003 + 29);
         assert_eq!((t.calls, t.failed), (3, 1));
@@ -384,12 +438,12 @@ mod tests {
     fn a_new_day_starts_at_zero_and_yesterday_is_kept() {
         let d = dir("rollover");
         let l = Ledger::open(&d);
-        l.record_call(DAY1, "names", &u(1000, 0, 0, 0), 0.0, true).unwrap();
-        assert_eq!(l.today(DAY2).tokens(), 0, "tomorrow starts from nothing");
-        l.record_call(DAY2, "names", &u(5, 0, 0, 0), 0.0, true).unwrap();
-        assert_eq!(l.today(DAY2).tokens(), 5);
-        assert_eq!(l.today(DAY1).tokens(), 1000, "yesterday is still there");
-        assert_eq!(l.load().days.len(), 2);
+        l.record_call(DAY1, Agent::Claude, "names", &u(1000, 0, 0, 0), 0.0, true).unwrap();
+        assert_eq!(l.today(DAY2, Agent::Claude).tokens(), 0, "tomorrow starts from nothing");
+        l.record_call(DAY2, Agent::Claude, "names", &u(5, 0, 0, 0), 0.0, true).unwrap();
+        assert_eq!(l.today(DAY2, Agent::Claude).tokens(), 5);
+        assert_eq!(l.today(DAY1, Agent::Claude).tokens(), 1000, "yesterday is still there");
+        assert_eq!(l.load().claude.days.len(), 2);
     }
 
     #[test]
@@ -397,12 +451,12 @@ mod tests {
         let d = dir("prune");
         let l = Ledger::open(&d);
         for i in 0..45u64 {
-            l.record_call(DAY1 + i * 86_400 * 2, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
+            l.record_call(DAY1 + i * 86_400 * 2, Agent::Claude, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
         }
         let data = l.load();
-        assert_eq!(data.days.len(), KEEP_DAYS);
-        assert!(data.days.contains_key(&local_day(DAY1 + 44 * 2 * 86_400)), "the newest is kept");
-        assert!(!data.days.contains_key(&local_day(DAY1)), "the oldest is gone");
+        assert_eq!(data.claude.days.len(), KEEP_DAYS);
+        assert!(data.claude.days.contains_key(&local_day(DAY1 + 44 * 2 * 86_400)), "the newest is kept");
+        assert!(!data.claude.days.contains_key(&local_day(DAY1)), "the oldest is gone");
     }
 
     #[test]
@@ -413,24 +467,24 @@ mod tests {
         for bad in ["{ nope", "[1]", "", "42", "\u{0}\u{0}"] {
             fs::write(l.path(), bad).unwrap();
             assert_eq!(l.load(), Data::default(), "{bad:?}");
-            assert_eq!(l.today(DAY1).tokens(), 0);
+            assert_eq!(l.today(DAY1, Agent::Claude).tokens(), 0);
         }
         fs::write(l.path(), "{ nope").unwrap();
-        l.record_call(DAY1, "names", &u(7, 0, 0, 0), 0.0, true).unwrap();
-        assert_eq!(l.today(DAY1).tokens(), 7);
+        l.record_call(DAY1, Agent::Claude, "names", &u(7, 0, 0, 0), 0.0, true).unwrap();
+        assert_eq!(l.today(DAY1, Agent::Claude).tokens(), 7);
         // Odd pieces inside a good file are ignored one by one, not fatal.
         fs::write(l.path(), r#"{"days":{"nonsense":{"usage":{"input":5}},"2026-01-02":{"usage":{"input":"many","output":3},"calls":"x"}},"backoff":{"until":"soon"}}"#).unwrap();
         let data = l.load();
-        assert_eq!(data.days.len(), 1);
-        assert_eq!(data.days["2026-01-02"].usage, u(0, 0, 0, 3));
-        assert_eq!(data.backoff, None);
+        assert_eq!(data.claude.days.len(), 1);
+        assert_eq!(data.claude.days["2026-01-02"].usage, u(0, 0, 0, 3));
+        assert_eq!(data.claude.backoff, None);
     }
 
     #[test]
     fn writes_are_atomic_and_leave_no_temp_file() {
         let d = dir("atomic");
         let l = Ledger::open(&d);
-        l.record_call(DAY1, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
+        l.record_call(DAY1, Agent::Claude, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
         assert!(!d.join("ai-usage.json.tmp").exists());
         let v: Value = serde_json::from_str(&fs::read_to_string(l.path()).unwrap()).unwrap();
         assert_eq!(v["version"], 1);
@@ -438,7 +492,7 @@ mod tests {
         let d2 = dir("atomic-fail");
         fs::create_dir_all(d2.join("ai-usage.json")).unwrap();
         let l2 = Ledger::open(&d2);
-        assert!(l2.record_call(DAY1, "names", &u(1, 0, 0, 0), 0.0, true).is_err());
+        assert!(l2.record_call(DAY1, Agent::Claude, "names", &u(1, 0, 0, 0), 0.0, true).is_err());
         assert!(!d2.join("ai-usage.json.tmp").exists());
     }
 
@@ -446,8 +500,8 @@ mod tests {
     fn the_file_never_holds_anything_but_numbers_and_names() {
         let d = dir("nothing-else");
         let l = Ledger::open(&d);
-        l.record_call(DAY1, "names", &u(1, 2, 3, 4), 0.5, true).unwrap();
-        l.note_failure(DAY1, FailKind::RateLimited).unwrap();
+        l.record_call(DAY1, Agent::Claude, "names", &u(1, 2, 3, 4), 0.5, true).unwrap();
+        l.note_failure(DAY1, Agent::Claude, FailKind::RateLimited).unwrap();
         let text = fs::read_to_string(l.path()).unwrap();
         for word in ["prompt", "reply", "result", "text"] {
             assert!(!text.contains(word), "{word} in {text}");
@@ -461,18 +515,18 @@ mod tests {
         let mut now = 1_000_000;
         let mut delays = Vec::new();
         for _ in 0..8 {
-            l.note_failure(now, FailKind::Network).unwrap();
-            let b = l.load().backoff.unwrap();
+            l.note_failure(now, Agent::Claude, FailKind::Network).unwrap();
+            let b = l.load().claude.backoff.unwrap();
             delays.push(b.until - now);
             assert_eq!(b.since, 1_000_000, "the run began at the first failure");
             now = b.until;
         }
         assert_eq!(delays, [30, 60, 120, 240, 480, 960, 1800, 1800], "doubling, then capped at half an hour");
-        assert_eq!(l.load().backoff.unwrap().failures, 8);
-        l.note_success().unwrap();
-        assert_eq!(l.load().backoff, None);
-        l.note_failure(now + 5, FailKind::Other).unwrap();
-        let b = l.load().backoff.unwrap();
+        assert_eq!(l.load().claude.backoff.unwrap().failures, 8);
+        l.note_success(Agent::Claude).unwrap();
+        assert_eq!(l.load().claude.backoff, None);
+        l.note_failure(now + 5, Agent::Claude, FailKind::Other).unwrap();
+        let b = l.load().claude.backoff.unwrap();
         assert_eq!((b.failures, b.until - (now + 5), b.since), (1, 30, now + 5), "a success resets the growth");
     }
 
@@ -480,16 +534,16 @@ mod tests {
     fn being_signed_out_or_over_the_plan_limit_waits_longer() {
         let d = dir("backoff-long");
         let l = Ledger::open(&d);
-        l.note_failure(0, FailKind::RateLimited).unwrap();
-        assert_eq!(l.load().backoff.unwrap().until, 15 * 60);
-        l.note_success().unwrap();
-        l.note_failure(0, FailKind::NotSignedIn).unwrap();
-        assert_eq!(l.load().backoff.unwrap().until, 30 * 60);
+        l.note_failure(0, Agent::Claude, FailKind::RateLimited).unwrap();
+        assert_eq!(l.load().claude.backoff.unwrap().until, 15 * 60);
+        l.note_success(Agent::Claude).unwrap();
+        l.note_failure(0, Agent::Claude, FailKind::NotSignedIn).unwrap();
+        assert_eq!(l.load().claude.backoff.unwrap().until, 30 * 60);
         let mut now = 0;
         let mut last = 0;
         for _ in 0..10 {
-            l.note_failure(now, FailKind::NotSignedIn).unwrap();
-            let until = l.load().backoff.unwrap().until;
+            l.note_failure(now, Agent::Claude, FailKind::NotSignedIn).unwrap();
+            let until = l.load().claude.backoff.unwrap().until;
             last = until - now;
             now = until;
         }
@@ -503,7 +557,7 @@ mod tests {
     #[test]
     fn success_with_nothing_to_clear_writes_nothing() {
         let d = dir("success-quiet");
-        Ledger::open(&d).note_success().unwrap();
+        Ledger::open(&d).note_success(Agent::Claude).unwrap();
         assert!(!d.exists());
     }
 
@@ -527,7 +581,7 @@ mod tests {
                 let l = l.clone();
                 std::thread::spawn(move || {
                     for _ in 0..25 {
-                        l.record_call(DAY1, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
+                        l.record_call(DAY1, Agent::Claude, "names", &u(1, 0, 0, 0), 0.0, true).unwrap();
                     }
                 })
             })
@@ -535,7 +589,7 @@ mod tests {
         for h in handles {
             h.join().unwrap();
         }
-        assert_eq!(l.today(DAY1).tokens(), 100);
-        assert_eq!(l.today(DAY1).calls, 100);
+        assert_eq!(l.today(DAY1, Agent::Claude).tokens(), 100);
+        assert_eq!(l.today(DAY1, Agent::Claude).calls, 100);
     }
 }

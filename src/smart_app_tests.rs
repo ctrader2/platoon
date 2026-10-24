@@ -2,6 +2,7 @@
 //! `claude` that records every call and answers from files, and what the list, the files and the screen show out. Every
 //! directory is a temp dir (`World`, `AiFake`); the real `claude` is never reached (the app refuses it in tests).
 
+use crate::agents::Agent;
 use crate::app::{App, Mode};
 use crate::ledger::Ledger;
 use crate::model::NameSource;
@@ -189,7 +190,7 @@ fn with_an_openai_model_claude_code_conversations_are_named_by_codex() {
     let root = crate::agents::tests::codex_with_models("sm-codex").root;
     app.set_providers_for_test(crate::agents::Providers { claude: Some(fake.script.clone()), codex: Some(codex.as_codex(&root)) });
     app.settle_ai_for_test(10);
-    assert_eq!((fake.calls(), codex.calls()), (0, 1), "the model decides the program");
+    assert_eq!((fake.calls(), codex.calls()), (0, 1), "the model decides the program: {:?}", app.smart_idle());
     assert_eq!(&codex.argv(1)[..8], ["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", "gpt-6-luna"]);
     assert!(codex.stdin(1).contains("please fix the login redirect"));
     assert_eq!(row(&app, "aaa").name, "Codex name 1.1");
@@ -624,7 +625,7 @@ fn archived_conversations_use_at_most_their_share_of_what_is_left_of_the_day_and
     // 20,000 - 600 = 19,400 left after the active one; a tenth of it is 1,940. Each archived call is estimated at a
     // little over 600, so three fit (three times 600 is 1,800 used) and a fourth would go past the share.
     let ledger = Ledger::open(&w.cache);
-    let (used, archived) = (ledger.today(usage::now()).tokens(), ledger.archived_today(usage::now()));
+    let (used, archived) = (ledger.today(usage::now(), Agent::Claude).tokens(), ledger.archived_today(usage::now(), Agent::Claude));
     assert_eq!(fake.calls(), 1 + 3, "the fourth archived conversation waits");
     assert_eq!((archived, used), (3 * 600, 4 * 600));
     assert!(archived <= 20_000 / 10, "within a tenth of the day's limit");
@@ -1198,7 +1199,7 @@ fn esc_calls_off_the_request_kills_it_and_stays_in_the_dialog_and_a_second_esc_c
     assert!(pids.iter().all(|&p| !crate::testkit::alive(p)), "the process and what it started are gone");
     assert_eq!(app.search.text, "the billing one", "the words are still there to change");
     // A cancelled call is no failure: nothing is paused.
-    assert!(Ledger::open(&w.cache).load().backoff.is_none());
+    assert!(Ledger::open(&w.cache).load().claude.backoff.is_none());
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
 }
@@ -1218,7 +1219,7 @@ fn the_refusals_are_shown_plainly_in_the_dialog_and_nothing_is_started() {
     type_str(&mut app, "the billing one");
     // The daily limit.
     Ledger::open(&w.cache)
-        .record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
+        .record_call(usage::now(), Agent::Claude, "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
         .unwrap();
     key(&mut app, KeyCode::Enter);
     let shown = screen(&mut term, &app);
@@ -1228,7 +1229,7 @@ fn the_refusals_are_shown_plainly_in_the_dialog_and_nothing_is_started() {
     // A back-off after a failure.
     let l = Ledger::open(&w.cache);
     let _ = fs::remove_file(l.path());
-    l.note_failure(usage::now(), crate::ledger::FailKind::Network).unwrap();
+    l.note_failure(usage::now(), Agent::Claude, crate::ledger::FailKind::Network).unwrap();
     key(&mut app, KeyCode::Enter);
     assert!(
         matches!(state(&app), FindState::Failed(ref m) if m.contains("paused after a failure") && m.contains("trying again in")),

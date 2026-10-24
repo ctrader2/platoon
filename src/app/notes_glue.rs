@@ -186,12 +186,12 @@ impl App {
     pub(super) fn poll_notes_status(&mut self) {
         let settings = self.settings.get();
         let now = self.clock();
-        self.ai_note = ai::header_note(&settings, &self.cache, now);
+        self.ai_note = ai::header_note(&settings, &self.cache, self.providers(), now);
         if self.open_project.is_none() {
             self.notes_stopped = None;
             return;
         }
-        self.notes_stopped = ai::stopped_reason(&settings, notesrun::FEATURE, &self.cache, now);
+        self.notes_stopped = ai::stopped_reason(&settings, notesrun::FEATURE, &self.cache, self.providers(), now);
     }
 
     // ---- starting an editor -----------------------------------------------------------------------------------

@@ -3,6 +3,7 @@
 //! session (that is `tests/handoff.rs`, with the real binary); every directory is a temp dir and the real
 //! `claude` is never reached.
 
+use crate::agents::Agent;
 use crate::app::{App, HandoffState, Mode};
 use crate::handoff;
 use crate::ledger::Ledger;
@@ -126,7 +127,7 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     assert!(!fake.argv(1).iter().any(|a| a.contains("sess-1")), "nor in the call's arguments: {:?}", fake.argv(1));
     // It is the user's own key press, so it goes as user-initiated work, and its spend is in the ledger.
     assert!(fake.argv(1).contains(&"-p".to_string()));
-    let day = Ledger::open(&w.cache).today(usage::now());
+    let day = Ledger::open(&w.cache).today(usage::now(), Agent::Claude);
     assert_eq!(day.features.get(handoff::FEATURE).map(|f| f.calls), Some(1));
     assert!(day.tokens() > 0);
 
@@ -383,7 +384,7 @@ fn hand_off_needs_a_project_a_live_project_and_the_gate_and_says_plainly_which_i
     s.tokens_enabled = true;
     settings::save(&w.config, &s).unwrap();
     let spent = crate::ledger::Usage { input: Settings::default().clamped().ai_daily_tokens + 1, ..Default::default() };
-    Ledger::open(&w.cache).record_call(usage::now(), "names", &spent, 0.0, true).unwrap();
+    Ledger::open(&w.cache).record_call(usage::now(), Agent::Claude, "names", &spent, 0.0, true).unwrap();
     app.refresh_with(Vec::new(), false);
     select(&mut app, "sess-1");
     key(&mut app, KeyCode::Char('h'));

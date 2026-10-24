@@ -18,6 +18,11 @@ here.
   request on standard input. Every token Codex reports counts against the daily limit; its own instructions are about
   20,000 tokens a call. `platoon tokens test` says which program it asks. Conversations of Codex's still aren't
   named, described or handed off.
+- **Limits per program.** Claude Code's calls and Codex's are counted apart: each against the daily limit, each with
+  its own back-off after a failure ("Codex isn't signed in" doesn't stop Claude's calls), and the pause above plan usage
+  follows the plan of the program the call would use. Codex's limits come from its saved sessions, whatever windows the
+  plan has (a free plan: one of 30 days). The header shows each installed program's windows
+  (`5h ━━ 47%   7d ━ 21%   Codex 30d ━ 12%`), and `platoon tokens` and the settings say each one's use.
 - **Every model setting offers the models installed, by name.** The model for smart features, the new model for project
   notes and a squad's verdict model offer Claude Code's models (Opus, Sonnet, Haiku, Fable) when Claude Code is
   installed and Codex's (as Codex lists them in its `models_cache.json`) when Codex is; the model decides the program

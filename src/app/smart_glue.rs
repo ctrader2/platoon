@@ -153,8 +153,7 @@ impl App {
 
     /// The agent the smart features' calls run on: their model's (Claude Code when it can't be told).
     pub(super) fn smart_agent(&self) -> Agent {
-        let catalog = self.catalog();
-        self.settings.get().smart_model_in(&catalog).and_then(|m| catalog.agent_of(&m)).unwrap_or(Agent::Claude)
+        ai::smart_agent(&self.settings.get(), &self.catalog())
     }
 
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.
@@ -269,7 +268,8 @@ impl App {
         // Progress: what has been done in this run and what is still to do. Archived work that isn't allowed to run
         // now (its share is used up) is not counted, so the indicator doesn't sit there for hours.
         let ledger = Ledger::open(&self.cache);
-        let (used, archived_used) = (ledger.today(now).tokens(), ledger.archived_today(now));
+        let agent = self.smart_agent();
+        let (used, archived_used) = (ledger.today(now, agent).tokens(), ledger.archived_today(now, agent));
         let mut counted = pending_active;
         let archived_open = settings.ai_archived
             && smart::archived_allowed(
@@ -291,7 +291,7 @@ impl App {
         if now < self.smart.retry_at {
             return;
         }
-        if let Err(r) = ai::gate(settings, "names", &self.cache, now) {
+        if let Err(r) = ai::gate(settings, "names", &self.cache, self.providers(), now) {
             self.smart.idle = Some(r.plain());
             self.smart.retry_at = now + IDLE_RECHECK_SECS;
             return;
@@ -343,7 +343,7 @@ impl App {
     /// Validate what came back, keep the good entries, remember the missing ones.
     fn take_names(&mut self, fl: Flight, reply: Reply, now: u64) {
         if fl.archived {
-            let _ = Ledger::open(&self.cache).note_archived(now, reply.usage.total());
+            let _ = Ledger::open(&self.cache).note_archived(now, self.smart_agent(), reply.usage.total());
         }
         let named = smart::parse_names(&reply.text, fl.ids.len());
         let mut changes: Vec<(String, Summary)> = Vec::new();
@@ -581,7 +581,7 @@ impl App {
         self.search.find.asked = self.search.text.clone();
         self.search.find.before_confirm = None;
         // The user asked for this themselves: the plan pause doesn't apply, everything else does.
-        if let Err(r) = ai::gate_for(&settings, "find", &self.cache, now, true) {
+        if let Err(r) = ai::gate_for(&settings, "find", &self.cache, self.providers(), now, true) {
             let mut text = r.plain();
             if r.is_switch() {
                 text.push(' ');
@@ -666,6 +666,14 @@ impl App {
     }
 
     // ---- for tests ---------------------------------------------------------------------------------------------
+
+    /// Give a unit test's app other AI programs (a computer with only Codex, a stand-in `codex`). The naming worker
+    /// looks again at once: what stopped it may have been the programs.
+    #[cfg(test)]
+    pub fn set_providers_for_test(&mut self, providers: Providers) {
+        self.providers = providers;
+        self.smart.retry_at = 0;
+    }
 
     /// Run calls through this program (a fake `claude`) instead of the real one.
     #[cfg(test)]

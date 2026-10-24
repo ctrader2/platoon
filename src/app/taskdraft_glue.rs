@@ -150,7 +150,7 @@ impl App {
         }
         let settings = self.settings.get();
         // The user asked for this themselves: the plan-usage pause doesn't apply, every other gate does.
-        if let Err(r) = ai::gate_for(&settings, taskdraft::FEATURE, &self.cache, self.clock(), true) {
+        if let Err(r) = ai::gate_for(&settings, taskdraft::FEATURE, &self.cache, self.providers(), self.clock(), true) {
             let mut text = r.plain();
             if r.is_switch() {
                 text.push_str(" Turn it on in the settings (press s, then the Smart features tab).");

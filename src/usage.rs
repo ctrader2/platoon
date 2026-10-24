@@ -98,6 +98,50 @@ pub fn record(input: &str, dir: &Path, ts: u64) -> String {
     parts.join(" · ")
 }
 
+/// One usage-limit window of a plan, as an agent reports it: how long the window is, how much of it is used, and when it
+/// starts over (seconds since the epoch; 0 when not known). Claude Code's are 5 hours and a week; Codex's are what the
+/// plan has (a free plan: one of 30 days).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limit {
+    pub minutes: u64,
+    pub pct: u8,
+    pub resets_at: u64,
+}
+
+impl Limit {
+    pub const FIVE_HOURS: u64 = 300;
+    pub const WEEK: u64 = 7 * 1440;
+
+    /// The window in a few characters, for the header: `5h`, `7d`, `30d`.
+    pub fn short(&self) -> String {
+        match self.minutes {
+            m if m > 0 && m % 1440 == 0 => format!("{}d", m / 1440),
+            m if m > 0 && m % 60 == 0 => format!("{}h", m / 60),
+            m => format!("{m}m"),
+        }
+    }
+
+    /// The window in words: `5-hour limit`, `weekly limit`, `30-day limit`.
+    pub fn name(&self) -> String {
+        match self.minutes {
+            Limit::WEEK => "weekly limit".into(),
+            m if m > 0 && m % 1440 == 0 => format!("{}-day limit", m / 1440),
+            m if m > 0 && m % 60 == 0 => format!("{}-hour limit", m / 60),
+            m => format!("{m}-minute limit"),
+        }
+    }
+}
+
+impl PlanUsage {
+    /// Claude Code's windows as limits, the 5-hour one first; the ones it hasn't reported are left out.
+    pub fn limits(&self) -> Vec<Limit> {
+        [(Limit::FIVE_HOURS, self.five_hour), (Limit::WEEK, self.seven_day)]
+            .into_iter()
+            .filter_map(|(minutes, w)| w.map(|w| Limit { minutes, pct: w.pct, resets_at: w.resets_at }))
+            .collect()
+    }
+}
+
 pub struct Snapshot {
     pub plan: Option<PlanUsage>,
     /// Exact context-window percentage per session id, as Claude Code itself reports it.
@@ -295,12 +339,14 @@ mod tests {
     fn a_window_that_has_not_started_never_pauses_the_smart_features() {
         let dir = tmp("no-pause");
         status(&dir, "empty", 1_000, None, Some((3, 9_000)));
-        assert_eq!(crate::ai::plan_percent(&dir, 1_001), Some((3, "weekly limit")), "the weekly figure is the highest");
+        let claude = crate::ai::tests::claude_here();
+        let percent = |now| crate::ai::plan_percent(crate::agents::Agent::Claude, &dir, &claude, now);
+        assert_eq!(percent(1_001), Some((3, "weekly limit".to_string())), "the weekly figure is the highest");
         status(&dir, "empty", 1_000, None, Some((0, 9_000)));
-        let (pct, _) = crate::ai::plan_percent(&dir, 1_001).unwrap();
+        let (pct, _) = percent(1_001).unwrap();
         assert_eq!(pct, 0);
         let settings = crate::settings::Settings { tokens_enabled: true, ai_pause_percent: 1, ..Default::default() };
-        let refused = crate::ai::gate(&settings, crate::ai::TEST_FEATURE, &dir, 1_001).err();
+        let refused = crate::ai::gate(&settings, crate::ai::TEST_FEATURE, &dir, &claude, 1_001).err();
         assert!(!matches!(refused, Some(crate::ai::Refusal::PlanBusy { .. })));
     }
 }

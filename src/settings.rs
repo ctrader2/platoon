@@ -904,8 +904,8 @@ fn smart_items() -> Vec<Item> {
     v.extend([
         Item {
             name: "Daily token limit",
-            explain: "The most tokens the smart features may use in one day, counting everything Claude reports. \
-                      When it is reached they wait until tomorrow. Saved summaries stay.",
+            explain: "The most tokens the smart features may use in one day, counting everything reported, on Claude Code and \
+                      on Codex each. When it is reached they wait until tomorrow. Saved summaries stay.",
             kind: Kind::Steps,
             choices: &[100_000, 250_000, 500_000, 1_000_000, 2_000_000, 5_000_000],
             get: |s| s.ai_daily_tokens,
@@ -915,8 +915,8 @@ fn smart_items() -> Vec<Item> {
         },
         Item {
             name: "Pause above plan usage",
-            explain: "Smart features stop asking Claude while your plan is used more than this much, so your own work isn't held up. \
-                      This needs a Claude session that has reported its usage.",
+            explain: "Smart features stop while the plan they would use is used more than this much, so your own work isn't held \
+                      up: Claude's as its sessions report it, Codex's as its sessions saved it.",
             kind: Kind::Steps,
             choices: &[0, 50, 60, 70, 80, 90],
             get: |s| s.ai_pause_percent,

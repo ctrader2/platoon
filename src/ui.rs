@@ -1062,52 +1062,96 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Vec<TabSpan> {
         left.push(Span::styled(format!("   {} {note}", app.marker()), Style::new().fg(t.dim)));
     }
 
-    let mut right = Vec::new();
-    let dim = Style::new().fg(t.dim);
-    match &app.usage {
-        Usage::Ready(u) => {
-            for (i, (label, w)) in [("5h", u.five_hour), ("7d", u.seven_day)].into_iter().enumerate() {
-                right.push(Span::styled(if i == 0 { format!("{label} ") } else { format!("   {label} ") }, dim));
-                match w {
-                    Some(w) => right.extend(bar(t, w.pct)),
-                    None => right.push(Span::styled("n/a", dim)),
-                }
-            }
-        }
-        Usage::Waiting => right.push(Span::styled("plan usage: waiting for a session to report", dim)),
-        Usage::NotSetUp => right.push(Span::styled("plan usage: off · run `platoon setup`", dim)),
-    }
-
     let width = |spans: &[Span]| spans.iter().map(|s| s.content.chars().count()).sum::<usize>();
-    // The tabs matter most. When the usage readout doesn't fit beside them it shrinks to bare percentages, then goes.
+    // The tabs matter most. When the usage readout doesn't fit beside them it shrinks to bare percentages, then to the
+    // first window of each plan (the one that runs out first), then goes.
     let room = (area.width as usize).saturating_sub(width(&left) + 2);
-    if width(&right) > room {
-        let compact = |windows: &[(&str, Option<crate::model::Window>)]| {
-            let mut compact = Vec::new();
-            for (label, w) in windows {
-                let pct = w.map_or("n/a".to_string(), |w| format!("{}%", w.pct));
-                compact.push(Span::styled(format!("{}{label} ", if compact.is_empty() { "" } else { "  " }), dim));
-                compact.push(Span::styled(pct, Style::new().fg(t.subtext)));
-            }
-            compact
-        };
-        right = match &app.usage {
-            Usage::Ready(u) => compact(&[("5h", u.five_hour), ("7d", u.seven_day)]),
-            _ => Vec::new(),
-        };
-        // Still too wide: the 5-hour figure alone (the one that runs out first), then nothing.
-        if let (true, Usage::Ready(u)) = (width(&right) > room, &app.usage) {
-            right = compact(&[("5h", u.five_hour)]);
-        }
+    let mut right = usage_spans(app, Readout::Bars);
+    for smaller in [Readout::Percentages, Readout::FirstOnly] {
         if width(&right) > room {
-            right.clear();
+            right = usage_spans(app, smaller);
         }
+    }
+    if width(&right) > room {
+        right.clear();
     }
     let right_w = width(&right) as u16;
     let [l, r] = Layout::horizontal([Constraint::Min(1), Constraint::Length(right_w)]).areas(area);
     f.render_widget(Paragraph::new(Line::from(left)), l);
     f.render_widget(Paragraph::new(Line::from(right)), r);
     spans
+}
+
+/// How much of the plan usage the header has room for.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Readout {
+    /// Each window with a bar, and words where there is no figure.
+    Bars,
+    /// Each window's percentage alone.
+    Percentages,
+    /// The first window of each plan (the one that runs out first), its percentage alone.
+    FirstOnly,
+}
+
+/// The plan usage of each AI program installed, for the header's right end: Claude Code's 5-hour and weekly windows
+/// (from its status line), then Codex's windows, whatever they are (from its saved sessions; a free plan has one of 30
+/// days), after the word Codex.
+fn usage_spans(app: &App, how: Readout) -> Vec<Span<'static>> {
+    let t = app.effective_theme();
+    let dim = Style::new().fg(t.dim);
+    let mut out: Vec<Span<'static>> = Vec::new();
+    let figures = |out: &mut Vec<Span<'static>>, prefix: &str, windows: &[(String, Option<u8>)]| {
+        let windows = if how == Readout::FirstOnly { &windows[..windows.len().min(1)] } else { windows };
+        for (i, (label, pct)) in windows.iter().enumerate() {
+            let gap = match (out.is_empty(), how) {
+                (true, _) => "",
+                (false, Readout::Bars) => "   ",
+                (false, _) => "  ",
+            };
+            let lead = if i == 0 { prefix } else { "" };
+            match how {
+                Readout::Bars => {
+                    out.push(Span::styled(format!("{gap}{lead}{label} "), dim));
+                    match pct {
+                        Some(p) => out.extend(bar(t, *p)),
+                        None => out.push(Span::styled("n/a", dim)),
+                    }
+                }
+                _ => {
+                    out.push(Span::styled(format!("{gap}{lead}{label} "), dim));
+                    out.push(Span::styled(pct.map_or("n/a".to_string(), |p| format!("{p}%")), Style::new().fg(t.subtext)));
+                }
+            }
+        }
+    };
+    if app.providers().claude.is_some() {
+        match &app.usage {
+            Usage::Ready(u) => {
+                figures(&mut out, "", &[("5h".into(), u.five_hour.map(|w| w.pct)), ("7d".into(), u.seven_day.map(|w| w.pct))]);
+            }
+            Usage::Waiting if how == Readout::Bars => out.push(Span::styled("plan usage: waiting for a session to report", dim)),
+            Usage::NotSetUp if how == Readout::Bars => out.push(Span::styled("plan usage: off · run `platoon setup`", dim)),
+            Usage::Waiting | Usage::NotSetUp => {}
+        }
+    }
+    if let Some(limits) = &app.codex_limits {
+        let windows: Vec<(String, Option<u8>)> = limits.iter().map(|l| (l.short(), Some(l.pct))).collect();
+        if windows.is_empty() {
+            // No Codex session has reported its plan yet (or its windows have all started over since).
+            let gap = if out.is_empty() {
+                ""
+            } else if how == Readout::Bars {
+                "   "
+            } else {
+                "  "
+            };
+            let words = if how == Readout::Bars { "Codex plan: no figure yet" } else { "Codex n/a" };
+            out.push(Span::styled(format!("{gap}{words}"), dim));
+        } else {
+            figures(&mut out, "Codex ", &windows);
+        }
+    }
+    out
 }
 
 /// Width of `tab_chip`: a space, the key, the label, and the count (in a padded square, or between round caps).
@@ -1888,9 +1932,17 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
     let t = app.effective_theme();
     let mut notes: Vec<(String, Color)> = Vec::new();
     if tab == crate::settings::TAB_SMART {
-        let (used, cap) = (app.tokens_today, app.settings().get().ai_daily_tokens);
-        let line = format!("Used today: {} of {} tokens", crate::settings::thousands(used), crate::settings::thousands(cap));
-        notes.push((line, if used >= cap { t.warn } else { t.subtext }));
+        let cap = app.settings().get().ai_daily_tokens;
+        let (thousands, over) = (crate::settings::thousands, app.tokens_today.iter().any(|(_, used)| *used >= cap));
+        // Each AI program installed has its own count against the limit; with one, it goes without saying which.
+        let line = match app.tokens_today.as_slice() {
+            [(_, used)] => format!("Used today: {} of {} tokens", thousands(*used), thousands(cap)),
+            each => {
+                let parts: Vec<String> = each.iter().map(|(a, used)| format!("{} on {}", thousands(*used), a.name())).collect();
+                format!("Used today: {}, of {} tokens each", parts.join(", "), thousands(cap))
+            }
+        };
+        notes.extend(wrap(&line, w).into_iter().map(|l| (l, if over { t.warn } else { t.subtext })));
         if let Some(why) = app.smart_idle() {
             notes.extend(wrap(&format!("Naming is waiting: {why}"), w).into_iter().map(|l| (l, t.warn)));
         }

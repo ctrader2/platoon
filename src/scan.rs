@@ -187,7 +187,8 @@ fn name_active(
     interrupted: &dyn Fn() -> bool,
 ) -> ScanOutcome {
     let ledger = Ledger::open(env.cache);
-    let used_before = ledger.today(usage::now()).tokens();
+    let agent = ai::smart_agent(settings, &env.providers.catalog());
+    let used_before = ledger.today(usage::now(), agent).tokens();
     let mut misses = Misses::default();
     let boosted = HashSet::new();
     let mut named = 0usize;
@@ -201,7 +202,7 @@ fn name_active(
         if !note.is_empty() {
             let _ = writeln!(out, "{note}");
         }
-        let used = Ledger::open(env.cache).today(usage::now()).tokens().saturating_sub(used_before);
+        let used = Ledger::open(env.cache).today(usage::now(), agent).tokens().saturating_sub(used_before);
         let _ = writeln!(out, "Used about {} tokens.", thousands(used));
         outcome
     };
@@ -225,7 +226,7 @@ fn name_active(
         if batch.is_empty() {
             break;
         }
-        if let Err(r) = ai::gate(settings, "names", env.cache, now) {
+        if let Err(r) = ai::gate(settings, "names", env.cache, &env.providers, now) {
             return finish(
                 out,
                 ScanOutcome::Stopped { named },
@@ -313,6 +314,7 @@ fn name_active(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::Agent;
     use crate::testkit::{AiFake, World};
     use std::fs;
 
@@ -556,7 +558,7 @@ mod tests {
         fill(&w, 2, 0);
         on(&w, |s| s.ai_daily_tokens = 20_000);
         Ledger::open(&w.cache)
-            .record_call(usage::now(), "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
+            .record_call(usage::now(), Agent::Claude, "names", &crate::ledger::Usage { input: 25_000, ..Default::default() }, 0.0, true)
             .unwrap();
         let fake = AiFake::new("sc-limit");
         let (outcome, shown) = run(&w, &fake, "\n", true, &never);
@@ -578,7 +580,7 @@ mod tests {
             shown.contains("Stopping: Claude isn't signed in.") && !shown.contains("Not logged in"),
             "Claude's own words are not shown: {shown}"
         );
-        assert!(Ledger::open(&w.cache).load().backoff.is_some());
+        assert!(Ledger::open(&w.cache).load().claude.backoff.is_some());
         assert!(!w.config.join("summaries.json").exists());
         // A program that isn't there.
         let w = World::new("sc-missing");

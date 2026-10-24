@@ -97,14 +97,18 @@ files.
 
 All of this is enforced in one place before any call starts:
 
-- **Daily limit** (default 500K tokens; every number Claude reports counts, input, cache writes, cache reads and output).
-  The day is your local calendar day. Every call is added to `~/.cache/platoon/ai-usage.json` (numbers only, kept for 30
-  days; nothing you typed or Claude answered is ever saved there).
-- **Pause above plan usage** (default 80%), using the figure Claude Code's status line reports, for background work. With
-  no figure yet, nothing pauses.
+- **Daily limit** (default 500K tokens; every number reported counts, input, cache writes, cache reads and output). The
+  day is your local calendar day. Claude Code's calls and Codex's are counted apart, each against the limit (tokens of
+  the two aren't one currency). Every call is added to `~/.cache/platoon/ai-usage.json` (numbers only, Codex's under
+  `codex`, kept for 30 days; nothing you typed or an AI answered is ever saved there).
+- **Pause above plan usage** (default 80%), for background work, on the plan of the program the call would use: Claude's
+  as Claude Code's status line reports it (its 5-hour and weekly windows), your ChatGPT plan's Codex limits as Codex's
+  saved sessions last recorded them (whatever windows the plan has: a free plan has one of 30 days). With no figure yet,
+  nothing pauses. The header shows each installed program's windows: `5h ━━ 47%   7d ━ 21%   Codex 30d ━ 12%`
+  (bare percentages when there is less room).
 - **Back off after a failure**: not signed in, plan limit reached, no connection, too slow, or any other error stops calls
-  for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed out or over the
-  plan limit). A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the
+  on that program for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed
+  out or over the plan limit); the other program's calls go on. A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the
   worker looks again every 30 seconds without repeating itself.
 - **Small calls**: `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and
   low effort, run in `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only
@@ -139,8 +143,9 @@ the switches, the daily limit and the back-off. The call is `codex exec` with yo
 
 ## `platoon tokens`
 
-`platoon tokens` shows whether the features are on (the master switch and each feature's switch) and today's total, and
-under it how many tokens each one used and in how many calls (the hand-off, tasks from a conversation, task checks and
+`platoon tokens` shows whether the features are on (the master switch and each feature's switch) and today's total
+(each installed program's apart, with its plan usage and any back-off), and under it how many tokens each feature used
+and in how many calls (the hand-off, tasks from a conversation, task checks and
 `platoon tokens test` appear there too, by name).
 
 It also names the model each setting uses and the program that runs it (`Model for smart features: Haiku (Claude

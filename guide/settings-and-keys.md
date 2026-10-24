@@ -36,15 +36,16 @@ stopped: that is how idle stop worked before this choice existed.
 
 ### Smart features
 
-Whether your Claude plan is used at all, and how much (see [Features that use tokens](tokens.md)). Under the entries:
-`Used today: N of M tokens`, and, when naming is held up, why (`Naming is waiting: ...`).
+Whether your plan is used at all, and how much (see [Features that use tokens](tokens.md)). Under the entries:
+`Used today: N of M tokens` (with Claude Code and Codex both installed, each one's count: `Used today: N on Claude Code,
+N on Codex, of M tokens each`), and, when naming is held up, why (`Naming is waiting: ...`).
 
 | Setting | What it does | Choices |
 | --- | --- | --- |
 | Enable features which require tokens | The master switch for everything that uses your Claude plan. | Off (default), On |
 | Smart names and summaries, Find a session by description, Project notes, Project descriptions | One switch per such feature. A feature runs only when the master switch and its own switch are both On. | Off / On (the two project ones are On once the master switch is) |
-| Daily token limit | The most tokens those features may use in a day; at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
-| Pause above plan usage | Background work stops asking Claude while your plan is used more than this much. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
+| Daily token limit | The most tokens those features may use in a day, on Claude Code and on Codex each (tokens of the two aren't one currency); at the limit they wait until tomorrow. | 100K, 250K, 500K (default), 1M, 2M, 5M tokens |
+| Pause above plan usage | Background work stops while the plan it would use is used more than this much: Claude's plan for a Claude model, your ChatGPT plan's Codex limits for an OpenAI one. (A search you ask for yourself ignores this.) | Never, 50%, 60%, 70%, 80% (default), 90% |
 | Model for smart features | Which model names and summarizes sessions, finds one by description, describes projects, writes hand-offs and drafts tasks. See [Choosing a model](#choosing-a-model). | Every model installed (Haiku by default where Claude Code is installed) |
 
 #### Choosing a model

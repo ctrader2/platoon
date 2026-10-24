@@ -482,11 +482,13 @@ impl Env {
         }
     }
 
+    /// The AI programs a call may run on.
+    fn providers(&self) -> crate::agents::Providers {
+        self.providers.clone().unwrap_or_else(crate::agents::Providers::here)
+    }
+
     fn runner(&self) -> Runner {
-        match &self.providers {
-            Some(p) => Runner::new(&self.cache, p.clone()),
-            None => Runner::from_env(&self.cache),
-        }
+        Runner::new(&self.cache, self.providers())
     }
 }
 
@@ -546,7 +548,7 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         return Round::NoNotes;
     }
     let now = usage::now();
-    if let Err(r) = ai::gate(&settings, FEATURE, &env.cache, now) {
+    if let Err(r) = ai::gate(&settings, FEATURE, &env.cache, &env.providers(), now) {
         return Round::Refused(r.plain());
     }
     if being_edited(&env.cache, id) {
@@ -665,7 +667,7 @@ pub fn describe_once(env: &Env, id: &str) -> Described {
         return Described::Nothing;
     }
     let now = usage::now();
-    if let Err(r) = ai::gate(&settings, describe::FEATURE, &env.cache, now) {
+    if let Err(r) = ai::gate(&settings, describe::FEATURE, &env.cache, &env.providers(), now) {
         return Described::Refused(r.plain());
     }
     let mut projects = Projects::open(&env.config);
@@ -1292,7 +1294,7 @@ mod tests {
         // The version before it is kept, so `c` and `u` work on it.
         assert_eq!(crate::notes::last_change(&r.env.config, &id).map(|(b, _)| b), Some(NOTES.to_string()));
         // The spend is in the ledger under this feature.
-        let day = Ledger::open(&r.env.cache).today(usage::now());
+        let day = Ledger::open(&r.env.cache).today(usage::now(), Agent::Claude);
         assert_eq!(day.features.get(FEATURE).map(|f| (f.tokens, f.calls)), Some((1020, 1)));
         assert_eq!(day.usage, Usage { input: 900, output: 120, ..Usage::default() });
         // What was sent: one call, in the work folder, with the project's name and no session id.
@@ -1458,8 +1460,8 @@ mod tests {
         assert_eq!(&argv[..8], ["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", "gpt-6-luna"]);
         assert!(codex.stdin(1).contains("Add a basket page to the shop"), "the material goes on stdin");
         assert!(r.notes(&id).contains("Baskets are session based"));
-        let day = Ledger::open(&r.env.cache).today(usage::now());
-        assert_eq!(day.features.get(FEATURE).map(|f| f.tokens), Some(30_100), "its tokens are counted, cached ones too");
+        let day = Ledger::open(&r.env.cache).today(usage::now(), Agent::Codex);
+        assert_eq!(day.features.get(FEATURE).map(|f| f.tokens), Some(30_100), "its tokens are counted as Codex's, cached ones too");
     }
 
     #[test]
@@ -1525,7 +1527,7 @@ mod tests {
         s.tokens_enabled = true;
         crate::settings::save(&r.env.config, &s).unwrap();
         let spent = Usage { input: s.clone().clamped().ai_daily_tokens + 1, ..Usage::default() };
-        Ledger::open(&r.env.cache).record_call(usage::now(), FEATURE, &spent, 0.0, true).unwrap();
+        Ledger::open(&r.env.cache).record_call(usage::now(), Agent::Claude, FEATURE, &spent, 0.0, true).unwrap();
         let refused = update_once(&r.env, &id);
         assert!(matches!(&refused, Round::Refused(why) if why.contains("limit")), "{refused:?}");
         assert_eq!(r.fake.calls(), 0, "nothing was ever asked");
@@ -1594,7 +1596,7 @@ mod tests {
         assert!(!sent.contains("s1") || !sent.contains("s2"), "no session ids: {sent}");
         assert_eq!(r.fake.calls(), 1);
         // The spend is in the ledger under its own feature.
-        let day = Ledger::open(&r.env.cache).today(usage::now());
+        let day = Ledger::open(&r.env.cache).today(usage::now(), Agent::Claude);
         assert_eq!(day.features.get(crate::describe::FEATURE).map(|f| f.calls), Some(1));
 
         // One an hour: straight away there is nothing to do, and no call is made.
@@ -1655,7 +1657,7 @@ mod tests {
         s.tokens_enabled = true;
         crate::settings::save(&r.env.config, &s).unwrap();
         let spent = Usage { input: s.clone().clamped().ai_daily_tokens + 1, ..Usage::default() };
-        Ledger::open(&r.env.cache).record_call(usage::now(), FEATURE, &spent, 0.0, true).unwrap();
+        Ledger::open(&r.env.cache).record_call(usage::now(), Agent::Claude, FEATURE, &spent, 0.0, true).unwrap();
         let refused = describe_once(&r.env, &id);
         assert!(matches!(&refused, Described::Refused(why) if why.contains("limit")), "{refused:?}");
 

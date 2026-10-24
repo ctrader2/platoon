@@ -1,6 +1,7 @@
 //! The token settings and their notice at the level of the app: real key events in, the settings file, the ledger
 //! reading and the screen out. Every directory is a temp dir (`World`); nothing here starts a `claude`.
 
+use crate::agents::Agent;
 use crate::ai::{self, FEATURES, MASTER_LABEL, TEST_FEATURE};
 use crate::app::{App, Mode};
 use crate::ledger::{FailKind, Ledger, Usage};
@@ -201,7 +202,14 @@ fn used_today_shows_the_ledger_against_the_limit_and_turns_to_a_warning_at_the_l
     let shown = screen(&mut term, &app);
     assert!(shown.contains("Used today: 0 of 500,000 tokens"), "{shown}");
     Ledger::open(&w.cache)
-        .record_call(usage::now(), "names", &Usage { input: 1000, cache_creation: 200, cache_read: 30_000, output: 5 }, 0.01, true)
+        .record_call(
+            usage::now(),
+            Agent::Claude,
+            "names",
+            &Usage { input: 1000, cache_creation: 200, cache_read: 30_000, output: 5 },
+            0.01,
+            true,
+        )
         .unwrap();
     app.refresh_for_test();
     let shown = screen(&mut term, &app);
@@ -215,7 +223,9 @@ fn used_today_shows_the_ledger_against_the_limit_and_turns_to_a_warning_at_the_l
         })
     };
     assert_eq!(color_of(&term, "Used today"), Some(app.theme.subtext));
-    Ledger::open(&w.cache).record_call(usage::now(), "names", &Usage { input: 500_000, ..Usage::default() }, 0.0, true).unwrap();
+    Ledger::open(&w.cache)
+        .record_call(usage::now(), Agent::Claude, "names", &Usage { input: 500_000, ..Usage::default() }, 0.0, true)
+        .unwrap();
     app.refresh_for_test();
     screen(&mut term, &app);
     assert_eq!(color_of(&term, "Used today"), Some(app.theme.warn), "the limit is used up");
@@ -293,19 +303,19 @@ fn a_failure_that_pauses_the_features_is_said_once_in_the_footer_per_run_of_fail
     app.refresh_for_test();
     assert_eq!(footer(&app), None, "nothing to say before anything failed");
     let ledger = Ledger::open(&w.cache);
-    ledger.note_failure(usage::now(), FailKind::RateLimited).unwrap();
+    ledger.note_failure(usage::now(), Agent::Claude, FailKind::RateLimited).unwrap();
     app.refresh_for_test();
     assert_eq!(footer(&app).as_deref(), Some("Smart features paused: your Claude plan limit was reached"));
     // Later failures of the same run, and every refresh, stay quiet.
     app.notice = None;
-    ledger.note_failure(usage::now(), FailKind::RateLimited).unwrap();
+    ledger.note_failure(usage::now(), Agent::Claude, FailKind::RateLimited).unwrap();
     for _ in 0..3 {
         app.refresh_for_test();
     }
     assert_eq!(footer(&app), None, "one line per run, not one per failure");
     // The notice is drawn on the list footer, as one line.
-    ledger.note_success().unwrap();
-    ledger.note_failure(usage::now() + 5, FailKind::NotSignedIn).unwrap();
+    ledger.note_success(Agent::Claude).unwrap();
+    ledger.note_failure(usage::now() + 5, Agent::Claude, FailKind::NotSignedIn).unwrap();
     app.refresh_for_test();
     let mut term = Terminal::new(TestBackend::new(100, 20)).unwrap();
     let shown = screen(&mut term, &app);
@@ -317,7 +327,7 @@ fn a_failure_that_pauses_the_features_is_said_once_in_the_footer_per_run_of_fail
 fn no_notice_while_the_features_are_off() {
     let w = World::new("tok-notice-off");
     let mut app = w.app();
-    Ledger::open(&w.cache).note_failure(usage::now(), FailKind::Network).unwrap();
+    Ledger::open(&w.cache).note_failure(usage::now(), Agent::Claude, FailKind::Network).unwrap();
     app.refresh_for_test();
     assert_eq!(footer(&app), None, "master off: nobody is waiting for the features");
     let mut s = on_disk(&w);
@@ -477,4 +487,78 @@ fn codex_without_a_model_list_says_why_its_models_are_missing() {
     assert!(screen(&mut term, &app).contains("Codex's models aren't listed"));
     select(&mut app, "Sessions per call");
     assert!(!screen(&mut term, &app).contains("Codex's models"), "only where the model settings are");
+}
+
+// ---- each program's plan and spend ----------------------------------------------------------------------------------
+
+/// The header's first line at `cols` columns.
+fn header(app: &App, cols: u16) -> (String, Terminal<TestBackend>) {
+    let mut term = Terminal::new(TestBackend::new(cols, 24)).unwrap();
+    let shown = screen(&mut term, app);
+    (shown.lines().next().unwrap().to_string(), term)
+}
+
+#[test]
+fn the_header_shows_each_installed_programs_plan_and_shrinks_the_same_way() {
+    use crate::model::{PlanUsage, Window};
+    use crate::usage::{Limit, Usage as Plan};
+    let w = World::new("tok-header-both");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-header-both")));
+    app.usage = Plan::Ready(PlanUsage {
+        five_hour: Some(Window { pct: 47, resets_at: 9_999_999_999 }),
+        seven_day: Some(Window { pct: 21, resets_at: 9_999_999_999 }),
+    });
+    app.codex_limits = Some(vec![Limit { minutes: 43_200, pct: 12, resets_at: 9_999_999_999 }]);
+    let (h, term) = header(&app, 160);
+    assert!(h.contains("5h ━") && h.contains("47%") && h.contains("7d ━") && h.contains("Codex 30d ━") && h.contains(" 12%"), "{h}");
+    assert!(h.find("7d").unwrap() < h.find("Codex").unwrap(), "Claude's first: {h}");
+    let t = app.effective_theme().clone();
+    assert_eq!(word_fg(&term, "Codex 30d"), Some(t.dim));
+    assert_eq!(word_fg(&term, " 12%"), Some(t.subtext));
+    // Less room: bare percentages, then the first window of each plan, then nothing; never the tabs.
+    let (h, _) = header(&app, 100);
+    assert!(h.contains("5h 47%  7d 21%  Codex 30d 12%") && !h.contains('━'), "{h}");
+    let (h, _) = header(&app, 82);
+    assert!(h.contains("5h 47%  Codex 30d 12%") && !h.contains("7d"), "{h}");
+    let (h, _) = header(&app, 60);
+    assert!(!h.contains("Codex") && h.contains("3 Tasks"), "{h}");
+}
+
+#[test]
+fn with_only_codex_the_header_shows_codexs_plan_alone_and_says_when_there_is_no_figure_yet() {
+    use crate::usage::{Limit, Usage as Plan};
+    let w = World::new("tok-header-codex");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(false, Some("tok-header-codex")));
+    app.usage = Plan::NotSetUp;
+    app.codex_limits = Some(Vec::new());
+    let (h, term) = header(&app, 120);
+    assert!(h.contains("Codex plan: no figure yet") && !h.contains("plan usage: off") && !h.contains("5h"), "{h}");
+    assert_eq!(word_fg(&term, "Codex plan"), Some(app.effective_theme().dim));
+    app.codex_limits =
+        Some(vec![Limit { minutes: 300, pct: 3, resets_at: 9_999_999_999 }, Limit { minutes: 10_080, pct: 30, resets_at: 9_999_999_999 }]);
+    let (h, _) = header(&app, 140);
+    assert!(h.contains("Codex 5h ━") && h.contains("   7d ━") && h.contains(" 30%"), "a plan with two windows, both said: {h}");
+}
+
+#[test]
+fn the_settings_say_what_each_program_used_today_against_its_own_limit() {
+    let w = World::new("tok-used-both");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-used-both")));
+    let now = usage::now();
+    let l = Ledger::open(&w.cache);
+    l.record_call(now, Agent::Claude, "names", &Usage { input: 1000, ..Usage::default() }, 0.0, true).unwrap();
+    l.record_call(now, Agent::Codex, "names", &Usage { input: 21_040, ..Usage::default() }, 0.0, true).unwrap();
+    app.refresh_for_test();
+    let mut term = Terminal::new(TestBackend::new(110, 40)).unwrap();
+    select(&mut app, "Daily token limit");
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Used today: 1,000 on Claude Code, 21,040 on Codex, of 500,000 tokens each"), "{shown}");
+    assert_eq!(word_fg(&term, "Used today"), Some(app.theme.subtext));
+    l.record_call(now, Agent::Codex, "names", &Usage { input: 500_000, ..Usage::default() }, 0.0, true).unwrap();
+    app.refresh_for_test();
+    screen(&mut term, &app);
+    assert_eq!(word_fg(&term, "Used today"), Some(app.theme.warn), "one of them at its limit");
 }

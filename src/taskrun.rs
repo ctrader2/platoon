@@ -690,7 +690,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         // Its whole answer in the task's folder; its tokens in the ledger as the task check's.
         let kept: Value = serde_json::from_str(&fs::read_to_string(tickets::task_dir(&d, &p, n).join("verdict.json")).unwrap()).unwrap();
         assert_eq!(kept["boxes"][0]["evidence"], "src/login.rs:3");
-        let day = crate::ledger::Ledger::open(&d.join("cache")).today(crate::usage::now());
+        let day = crate::ledger::Ledger::open(&d.join("cache")).today(crate::usage::now(), Agent::Claude);
         assert_eq!(day.features.get(verdict::FEATURE).map(|f| f.tokens), Some(1200));
         // The check is outside the token gate: the smart features are off here, and it ran all the same.
         assert!(!crate::settings::load(&d).0.tokens_enabled);

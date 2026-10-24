@@ -34,7 +34,7 @@
 #![allow(dead_code)]
 
 use crate::agents::{Agent, Catalog, Providers, Tools};
-use crate::ledger::{Backoff, FailKind, Ledger, Usage, local_day};
+use crate::ledger::{Backoff, FailKind, Ledger, Usage};
 use crate::settings::{ModelFor, Settings};
 use crate::usage;
 use serde_json::Value;
@@ -180,12 +180,12 @@ pub enum Refusal {
     FeatureOff(&'static str),
     /// A feature id that isn't in the table (a bug in the caller).
     UnknownFeature(String),
-    /// A recent failure: wait until `until` (seconds since the epoch).
-    BackedOff { kind: FailKind, until: u64, now: u64 },
-    /// Today's tokens have reached the daily limit.
+    /// A recent failure of a call on `agent`: wait until `until` (seconds since the epoch).
+    BackedOff { agent: Agent, kind: FailKind, until: u64, now: u64 },
+    /// Today's tokens on the agent the call would use have reached the daily limit.
     OverBudget { used: u64, cap: u64 },
-    /// The plan is used above the pause point.
-    PlanBusy { pct: u8, limit: u64, window: &'static str },
+    /// The plan of the agent the call would use is used above the pause point, in this window.
+    PlanBusy { agent: Agent, pct: u8, limit: u64, window: String },
     /// No installed agent runs the model it would use: what is missing, in a sentence or two.
     NoModel(String),
 }
@@ -212,10 +212,10 @@ impl Refusal {
             Refusal::MasterOff => format!("\"{MASTER_LABEL}\" is switched off."),
             Refusal::FeatureOff(label) => format!("\"{label}\" is switched off."),
             Refusal::UnknownFeature(id) => format!("There is no smart feature called \"{id}\"."),
-            Refusal::BackedOff { kind, until, now } => {
+            Refusal::BackedOff { agent, kind, until, now } => {
                 format!(
                     "Smart features are paused after a failure ({}); trying again in {}.",
-                    kind.plain(Agent::Claude),
+                    kind.plain(*agent),
                     wait_text(until.saturating_sub(*now))
                 )
             }
@@ -226,9 +226,10 @@ impl Refusal {
                     thousands(*cap)
                 )
             }
-            Refusal::PlanBusy { pct, limit, window } => {
+            Refusal::PlanBusy { agent, pct, limit, window } => {
                 format!(
-                    "Your Claude plan is {pct}% used ({window}), above the pause point of {limit}%. Smart features wait until it drops."
+                    "Your {} plan is {pct}% used ({window}), above the pause point of {limit}%. Smart features wait until it drops.",
+                    agent.short()
                 )
             }
             Refusal::NoModel(why) => why.clone(),
@@ -270,34 +271,67 @@ impl Refusal {
                 format!("smart features paused after a failure · trying again in {}", wait_text(until.saturating_sub(*now)))
             }
             Refusal::OverBudget { cap, .. } => format!("smart features paused · today's {} limit is used up", thousands(*cap)),
-            Refusal::PlanBusy { pct, window, .. } => format!("smart features paused · your Claude plan is {pct}% used ({window})"),
+            Refusal::PlanBusy { agent, pct, window, .. } => {
+                format!("smart features paused · your {} plan is {pct}% used ({window})", agent.short())
+            }
             Refusal::NoModel(_) => "smart features stopped · their model isn't installed".into(),
         }
     }
 }
 
-/// The plan's highest used percentage among the windows that are still running, with the window's name. None when no
-/// Claude session has reported a figure (Claude Code only reports it for Pro and Max, after its first answer): no
-/// figure never pauses anything. A window's figure only goes up until it resets, and a reset window is dropped by
-/// `usage::load`, so a figure that is still listed is a true lower bound however old the report. A 5-hour window that
-/// hasn't started is listed as 0% (see `usage::load`): also a lower bound, and never above any pause setting.
-pub fn plan_percent(cache: &Path, now: u64) -> Option<(u8, &'static str)> {
-    let plan = usage::load(cache, now).plan?;
-    [(plan.five_hour, "5-hour limit"), (plan.seven_day, "weekly limit")]
-        .into_iter()
-        .filter_map(|(w, name)| Some((w?.pct, name)))
-        .max_by_key(|(p, _)| *p)
+/// The windows of `agent`'s plan that are still running at `now`, as its program last reported them: Claude Code's
+/// from its status line (`usage::load`), Codex's from its saved sessions (`codex::rate_limits`). None when no figure
+/// has been reported (Claude Code only reports it for Pro and Max, after its first answer; Codex after a turn), or the
+/// agent isn't installed.
+pub fn plan_limits(agent: Agent, cache: &Path, providers: &Providers, now: u64) -> Option<Vec<usage::Limit>> {
+    match agent {
+        Agent::Claude => Some(usage::load(cache, now).plan?.limits()),
+        Agent::Codex => {
+            let running: Vec<usage::Limit> =
+                crate::agents::codex::rate_limits(providers.codex_root()?)?.into_iter().filter(|l| l.resets_at > now).collect();
+            (!running.is_empty()).then_some(running)
+        }
+    }
+}
+
+/// `agent`'s plan's highest used percentage among the windows that are still running, with the window's name. None
+/// when no figure has been reported: no figure never pauses anything. A window's figure only goes up until it resets,
+/// and a reset window is dropped, so a figure that is still listed is a true lower bound however old the report.
+/// Claude Code's 5-hour window that hasn't started is listed as 0% (see `usage::load`): also a lower bound, and never
+/// above any pause setting.
+pub fn plan_percent(agent: Agent, cache: &Path, providers: &Providers, now: u64) -> Option<(u8, String)> {
+    plan_limits(agent, cache, providers, now)?.into_iter().max_by_key(|l| l.pct).map(|l| (l.pct, l.name()))
+}
+
+/// The agent the smart features' calls run on: their model's; Claude Code when it can't be told (none installed).
+pub fn smart_agent(settings: &Settings, catalog: &Catalog) -> Agent {
+    settings.smart_model_in(catalog).and_then(|m| catalog.agent_of(&m)).unwrap_or(Agent::Claude)
 }
 
 /// May a background call for `feature` start now? Cheap checks first; reads only small files.
-pub fn gate(settings: &Settings, feature: &str, cache: &Path, now: u64) -> Result<(), Refusal> {
-    gate_for(settings, feature, cache, now, false)
+pub fn gate(settings: &Settings, feature: &str, cache: &Path, providers: &Providers, now: u64) -> Result<(), Refusal> {
+    gate_for(settings, feature, cache, providers, now, false)
 }
 
 /// The gate, saying who started the call. A call the user started by pressing a key (`user_initiated`: finding a
 /// conversation by description) ignores the plan-usage pause, which exists so background work doesn't take the plan
-/// from the person's own; it still needs the switches and the daily limit and still waits out a back-off.
-pub fn gate_for(settings: &Settings, feature: &str, cache: &Path, now: u64, user_initiated: bool) -> Result<(), Refusal> {
+/// from the person's own; it still needs the switches and the daily limit and still waits out a back-off. The limits,
+/// the back-off and the pause are those of the agent the feature's model runs on.
+pub fn gate_for(
+    settings: &Settings,
+    feature: &str,
+    cache: &Path,
+    providers: &Providers,
+    now: u64,
+    user_initiated: bool,
+) -> Result<(), Refusal> {
+    switches(settings, feature)?;
+    let (_, agent) = model_for(settings, feature, None, &providers.catalog())?;
+    limits(settings, agent, cache, providers, now, user_initiated)
+}
+
+/// The master switch and the feature's own.
+fn switches(settings: &Settings, feature: &str) -> Result<(), Refusal> {
     if !settings.tokens_enabled {
         return Err(Refusal::MasterOff);
     }
@@ -308,19 +342,25 @@ pub fn gate_for(settings: &Settings, feature: &str, cache: &Path, now: u64, user
             Some(_) => {}
         }
     }
+    Ok(())
+}
+
+/// What may stop a call on `agent` that the switches allow: its back-off, its share of today's limit, its plan's pause.
+fn limits(settings: &Settings, agent: Agent, cache: &Path, providers: &Providers, now: u64, user_initiated: bool) -> Result<(), Refusal> {
     let data = Ledger::open(cache).load();
-    if let Some(b) = data.backoff.filter(|b| b.until > now) {
-        return Err(Refusal::BackedOff { kind: b.kind, until: b.until, now });
+    let book = data.of(agent);
+    if let Some(b) = book.backoff_at(now) {
+        return Err(Refusal::BackedOff { agent, kind: b.kind, until: b.until, now });
     }
-    let used = data.days.get(&local_day(now)).map_or(0, |d| d.tokens());
+    let used = book.day(now).tokens();
     if used >= settings.ai_daily_tokens {
         return Err(Refusal::OverBudget { used, cap: settings.ai_daily_tokens });
     }
     if settings.ai_pause_percent > 0
         && !user_initiated
-        && let Some((pct, window)) = plan_percent(cache, now).filter(|(p, _)| u64::from(*p) > settings.ai_pause_percent)
+        && let Some((pct, window)) = plan_percent(agent, cache, providers, now).filter(|(p, _)| u64::from(*p) > settings.ai_pause_percent)
     {
-        return Err(Refusal::PlanBusy { pct, limit: settings.ai_pause_percent, window });
+        return Err(Refusal::PlanBusy { agent, pct, limit: settings.ai_pause_percent, window });
     }
     Ok(())
 }
@@ -330,68 +370,75 @@ pub struct Status {
     pub master: bool,
     /// (feature, its own switch)
     pub features: Vec<(&'static Feature, bool)>,
-    pub used_today: u64,
-    pub cap: u64,
-    /// Set while calls are being refused after a failure.
-    pub backoff: Option<Backoff>,
-    /// The plan's highest figure, if a session has reported one.
-    pub plan: Option<(u8, &'static str)>,
-    /// Why a feature that is switched on would be refused right now (budget, back-off, plan), if it would.
+    /// Why a feature that is switched on would be refused right now (budget, back-off, plan, a model not installed),
+    /// if it would: for the agent the smart features' model runs on.
     pub paused: Option<Refusal>,
 }
 
-pub fn status(settings: &Settings, cache: &Path, now: u64) -> Status {
-    let data = Ledger::open(cache).load();
-    let used_today = data.days.get(&local_day(now)).map_or(0, |d| d.tokens());
-    let backoff = data.backoff.filter(|b| b.until > now);
-    let plan = plan_percent(cache, now);
+pub fn status(settings: &Settings, cache: &Path, providers: &Providers, now: u64) -> Status {
     let mut all_on = settings.clone();
     all_on.tokens_enabled = true;
-    let paused = gate(&all_on, TEST_FEATURE, cache, now).err();
     Status {
         master: settings.tokens_enabled,
         features: FEATURES.iter().map(|f| (f, settings.feature_toggle(f.id))).collect(),
-        used_today,
+        paused: gate(&all_on, TEST_FEATURE, cache, providers, now).err(),
+    }
+}
+
+/// What calls on one agent have spent today, against what may stop them.
+pub struct Spend {
+    pub used_today: u64,
+    pub cap: u64,
+    /// Set while calls on it are being refused after a failure.
+    pub backoff: Option<Backoff>,
+    /// Its plan's highest figure, if its program has reported one.
+    pub plan: Option<(u8, String)>,
+}
+
+pub fn spend(settings: &Settings, cache: &Path, providers: &Providers, agent: Agent, now: u64) -> Spend {
+    let book = Ledger::open(cache).load().of(agent).clone();
+    Spend {
+        used_today: book.day(now).tokens(),
         cap: settings.ai_daily_tokens,
-        backoff,
-        plan,
-        paused,
+        backoff: book.backoff_at(now),
+        plan: plan_percent(agent, cache, providers, now),
     }
 }
 
 /// Why `feature` cannot run right now, in the words a screen shows: the gate's own reason plus where to change it.
 /// None while it can run. Nothing here is a new wording: `Refusal` says it (see `on_screen`).
-pub fn stopped_reason(settings: &Settings, feature: &str, cache: &Path, now: u64) -> Option<String> {
-    Some(gate(settings, feature, cache, now).err()?.on_screen())
+pub fn stopped_reason(settings: &Settings, feature: &str, cache: &Path, providers: &Providers, now: u64) -> Option<String> {
+    Some(gate(settings, feature, cache, providers, now).err()?.on_screen())
 }
 
 /// What the header says while the features are on but something has stopped them: the short form, and the same
 /// with where to change it for when there is room. None while they are running as they should.
 ///
-/// Only the three reasons that come out of nowhere and stop every feature at once are here - the daily limit, the
-/// plan pause, a back-off after failures - because those are the ones that go unnoticed. A switch the user turned
-/// off themselves is said where that feature lives (the notes pane says it for the notes) rather than following
-/// them around every tab for as long as they leave it off.
-pub fn header_note(settings: &Settings, cache: &Path, now: u64) -> Option<(String, String)> {
+/// Only the reasons that come out of nowhere and stop every feature at once are here - the daily limit, the plan
+/// pause, a back-off after failures, a model that is no longer installed - because those are the ones that go
+/// unnoticed. A switch the user turned off themselves is said where that feature lives (the notes pane says it for
+/// the notes) rather than following them around every tab for as long as they leave it off.
+pub fn header_note(settings: &Settings, cache: &Path, providers: &Providers, now: u64) -> Option<(String, String)> {
     if !settings.tokens_enabled {
         return None;
     }
-    let r = status(settings, cache, now).paused?;
+    let r = status(settings, cache, providers, now).paused?;
     let short = r.short();
-    // A back-off starts again by itself, so there is nothing to press; the other two are the user's to change.
+    // A back-off starts again by itself, so there is nothing to press; the others are the user's to change.
     let full = if matches!(r, Refusal::BackedOff { .. }) { short.clone() } else { format!("{short} · press s for the settings") };
     Some((short, full))
 }
 
 /// The one line for the footer when calls are being refused after a failure: `("<run id>", text)`. The id is the
 /// same for the whole run of failures, so a caller that remembers it shows the line once, not once per failure.
-/// None when the features are off (nobody is waiting for them) or no back-off is running.
+/// None when the features are off (nobody is waiting for them) or no back-off is running, on any agent.
 pub fn backoff_notice(settings: &Settings, cache: &Path, now: u64) -> Option<(String, String)> {
     if !settings.tokens_enabled {
         return None;
     }
-    let b = Ledger::open(cache).load().backoff.filter(|b| b.until > now)?;
-    Some((format!("{}:{}", b.since, b.kind.name()), format!("Smart features paused: {}", b.kind.plain(Agent::Claude))))
+    let data = Ledger::open(cache).load();
+    let (agent, b) = Agent::ALL.into_iter().find_map(|a| Some((a, data.of(a).backoff_at(now)?)))?;
+    Some((format!("{}:{}:{}", agent.id(), b.since, b.kind.name()), format!("Smart features paused: {}", b.kind.plain(agent))))
 }
 
 /// What one call needs. The caller writes the system prompt (short: Claude's own costs thousands of tokens) and the
@@ -732,9 +779,12 @@ impl Runner {
         let start = self.now();
         let gated = !part_of_a_task(req.feature);
         if gated {
-            gate_for(settings, req.feature, &self.cache, start, req.user_initiated).map_err(AiError::Refused)?;
+            switches(settings, req.feature).map_err(AiError::Refused)?;
         }
         let (model, agent) = model_of(settings, req, &self.providers.catalog()).map_err(AiError::Refused)?;
+        if gated {
+            limits(settings, agent, &self.cache, &self.providers, start, req.user_initiated).map_err(AiError::Refused)?;
+        }
         if req.cancel.is_cancelled() {
             return Err(AiError::Cancelled);
         }
@@ -776,7 +826,7 @@ impl Runner {
                     format!("couldn't start `{program}`: {e}")
                 };
                 if gated {
-                    let _ = ledger.note_failure(self.now(), FailKind::Other);
+                    let _ = ledger.note_failure(self.now(), agent, FailKind::Other);
                 }
                 return Err(other(why));
             }
@@ -821,7 +871,7 @@ impl Runner {
         }
         if timed_out {
             if gated {
-                let _ = ledger.note_failure(now, FailKind::TimedOut);
+                let _ = ledger.note_failure(now, agent, FailKind::TimedOut);
             }
             return Err(AiError::Failed {
                 agent,
@@ -847,12 +897,12 @@ impl Runner {
             (None, Err(_)) => (None, false),
         };
         if let Some(u) = &used {
-            let _ = ledger.record_call(now, req.feature, u, outcome.cost_usd, ok);
+            let _ = ledger.record_call(now, agent, req.feature, u, outcome.cost_usd, ok);
         }
         match outcome.result {
             Ok(text) => {
                 if gated {
-                    let _ = ledger.note_success();
+                    let _ = ledger.note_success(agent);
                 }
                 if req.cancel.is_cancelled() {
                     return Err(AiError::Cancelled); // finished, but the switch was turned off meanwhile: the result is thrown away
@@ -861,7 +911,7 @@ impl Runner {
             }
             Err((kind, detail)) => {
                 if gated {
-                    let _ = ledger.note_failure(now, kind);
+                    let _ = ledger.note_failure(now, agent, kind);
                 }
                 Err(AiError::Failed { agent, kind, detail })
             }
@@ -872,10 +922,15 @@ impl Runner {
 /// The model `req` runs on and the agent that runs it: its own model, else the one the settings pick for its feature
 /// (on this computer, `catalog`). Refused, saying what is missing, when no installed agent runs that model.
 pub fn model_of(settings: &Settings, req: &Request, catalog: &Catalog) -> Result<(String, Agent), Refusal> {
-    let (model, setting) = match &req.model {
-        Some(m) => (Some(m.clone()), None),
+    model_for(settings, req.feature, req.model.as_deref(), catalog)
+}
+
+/// `model_of` for a call of `feature` whose own model is `own`.
+fn model_for(settings: &Settings, feature: &str, own: Option<&str>, catalog: &Catalog) -> Result<(String, Agent), Refusal> {
+    let (model, setting) = match own {
+        Some(m) => (Some(m.to_string()), None),
         None => {
-            let (m, which) = settings.model_for(req.feature, catalog);
+            let (m, which) = settings.model_for(feature, catalog);
             (m, Some(which))
         }
     };
@@ -991,7 +1046,7 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Prov
     let settings = store.get();
     match args.first().map(String::as_str) {
         None | Some("status") => {
-            let s = status(&settings, cache, now);
+            let s = status(&settings, cache, providers, now);
             let onoff = |b: bool| if b { "on" } else { "off" };
             let _ = writeln!(out, "Features that use tokens: {}", onoff(s.master));
             for (f, on) in &s.features {
@@ -1002,35 +1057,48 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Prov
                 let model = which.in_effect(&settings, &catalog);
                 let _ = writeln!(out, "{}: {}", which.setting_name(), model.map_or_else(|| "none".into(), |m| model_words(&catalog, &m)));
             }
-            let _ =
-                writeln!(out, "Used today: {} of {} tokens", crate::settings::thousands(s.used_today), crate::settings::thousands(s.cap));
-            // What each feature spent today, so it is clear where the tokens went.
-            let day = Ledger::open(cache).today(now);
-            for (id, used) in &day.features {
-                let label = feature_label(id);
+            // Each program installed has its own count against the daily limit, its own plan and its own back-off; with
+            // only one, it goes without saying which.
+            let mut agents: Vec<Agent> = Agent::ALL.into_iter().filter(|a| catalog.installed(*a)).collect();
+            if agents.is_empty() {
+                agents.push(Agent::Claude);
+            }
+            let both = agents.len() > 1;
+            for agent in agents {
+                let (on, of) = if both { (format!(" on {}", agent.name()), format!(" of {}", agent.name())) } else { Default::default() };
+                let sp = spend(&settings, cache, providers, agent, now);
                 let _ = writeln!(
                     out,
-                    "  {label}: {} tokens in {} call{}",
-                    crate::settings::thousands(used.tokens),
-                    used.calls,
-                    if used.calls == 1 { "" } else { "s" }
+                    "Used today{on}: {} of {} tokens",
+                    crate::settings::thousands(sp.used_today),
+                    crate::settings::thousands(sp.cap)
                 );
-            }
-            match s.plan {
-                Some((pct, w)) => {
+                // What each feature spent today, so it is clear where the tokens went.
+                for (id, used) in &Ledger::open(cache).today(now, agent).features {
+                    let label = feature_label(id);
                     let _ = writeln!(
                         out,
-                        "Plan usage: {pct}% ({w}); pause above {}",
-                        crate::settings::percent_label(settings.ai_pause_percent)
+                        "  {label}: {} tokens in {} call{}",
+                        crate::settings::thousands(used.tokens),
+                        used.calls,
+                        if used.calls == 1 { "" } else { "s" }
                     );
                 }
-                None => {
-                    let _ = writeln!(out, "Plan usage: no figure reported yet (nothing pauses on it)");
+                match sp.plan {
+                    Some((pct, w)) => {
+                        let _ = writeln!(
+                            out,
+                            "Plan usage{of}: {pct}% ({w}); pause above {}",
+                            crate::settings::percent_label(settings.ai_pause_percent)
+                        );
+                    }
+                    None => {
+                        let _ = writeln!(out, "Plan usage{of}: no figure reported yet (nothing pauses on it)");
+                    }
                 }
-            }
-            if let Some(b) = s.backoff {
-                let _ =
-                    writeln!(out, "Paused after a failure ({}): {}", b.kind.plain(Agent::Claude), wait_text(b.until.saturating_sub(now)));
+                if let Some(b) = sp.backoff {
+                    let _ = writeln!(out, "Paused after a failure ({}): {}", b.kind.plain(agent), wait_text(b.until.saturating_sub(now)));
+                }
             }
             let _ = writeln!(out, "Settings file: {}", store.path().display());
             0
@@ -1065,7 +1133,8 @@ fn tokens_test(
 ) -> i32 {
     let mut req =
         Request::new(TEST_FEATURE, "You are a test. Reply with exactly the word asked for, nothing else.", "Reply with the single word ok");
-    let refused = gate(settings, TEST_FEATURE, cache, usage::now()).and_then(|()| model_of(settings, &req, &providers.catalog()));
+    let refused =
+        gate(settings, TEST_FEATURE, cache, providers, usage::now()).and_then(|()| model_of(settings, &req, &providers.catalog()));
     let (model, agent) = match refused {
         Ok(found) => found,
         Err(r) => {
@@ -1101,7 +1170,7 @@ fn tokens_test(
     done.store(true, Ordering::SeqCst);
     let _ = watcher.join();
     let today = |out: &mut dyn Write| {
-        let used = Ledger::open(cache).today(usage::now()).tokens();
+        let used = Ledger::open(cache).today(usage::now(), agent).tokens();
         let _ = writeln!(
             out,
             "Used today: {} of {} tokens",
@@ -1147,7 +1216,7 @@ fn tokens_test(
             if let AiError::Failed { agent, detail, .. } = &e {
                 let _ = writeln!(err, "  {} said: {detail}", agent.short());
             }
-            if let Some(b) = Ledger::open(cache).load().backoff {
+            if let Some(b) = Ledger::open(cache).load().of(agent).backoff {
                 let _ = writeln!(err, "Smart features now wait {} before trying again.", wait_text(b.until.saturating_sub(usage::now())));
             }
             today(out);
@@ -1219,6 +1288,11 @@ pub(crate) mod tests {
         format!(
             r#"{{"type":"result","subtype":"success","is_error":false,"result":"{text}","total_cost_usd":0.000612,"usage":{{"input_tokens":{input},"cache_creation_input_tokens":{cc},"cache_read_input_tokens":{cr},"output_tokens":{output}}},"session_id":"x"}}"#
         )
+    }
+
+    /// This computer as a test's gate sees it: Claude Code (a stand-in, never run by the gate) and no Codex.
+    pub(crate) fn claude_here() -> Providers {
+        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None }
     }
 
     pub(crate) fn on() -> Settings {
@@ -1295,9 +1369,9 @@ pub(crate) mod tests {
         }
         let cache = std::env::temp_dir().join("platoon-ai-never-created");
         for f in FEATURES {
-            assert_eq!(gate(&s, f.id, &cache, 1_800_000_000), Err(Refusal::MasterOff));
+            assert_eq!(gate(&s, f.id, &cache, &claude_here(), 1_800_000_000), Err(Refusal::MasterOff));
         }
-        assert_eq!(gate(&s, TEST_FEATURE, &cache, 1_800_000_000), Err(Refusal::MasterOff));
+        assert_eq!(gate(&s, TEST_FEATURE, &cache, &claude_here(), 1_800_000_000), Err(Refusal::MasterOff));
         assert!(!cache.exists(), "the gate creates nothing");
     }
 
@@ -1305,12 +1379,12 @@ pub(crate) mod tests {
     fn a_feature_needs_its_own_switch_and_the_test_call_does_not() {
         let cache = std::env::temp_dir().join("platoon-ai-gate-own");
         let mut s = Settings { tokens_enabled: true, ..Settings::default() };
-        assert_eq!(gate(&s, "names", &cache, 1_800_000_000), Err(Refusal::FeatureOff("Smart names and summaries")));
+        assert_eq!(gate(&s, "names", &cache, &claude_here(), 1_800_000_000), Err(Refusal::FeatureOff("Smart names and summaries")));
         s.set_feature("names", true);
-        assert_eq!(gate(&s, "names", &cache, 1_800_000_000), Ok(()));
-        assert_eq!(gate(&s, "find", &cache, 1_800_000_000), Err(Refusal::FeatureOff("Find a session by description")));
-        assert_eq!(gate(&s, TEST_FEATURE, &cache, 1_800_000_000), Ok(()));
-        assert_eq!(gate(&s, "nonsense", &cache, 1_800_000_000), Err(Refusal::UnknownFeature("nonsense".into())));
+        assert_eq!(gate(&s, "names", &cache, &claude_here(), 1_800_000_000), Ok(()));
+        assert_eq!(gate(&s, "find", &cache, &claude_here(), 1_800_000_000), Err(Refusal::FeatureOff("Find a session by description")));
+        assert_eq!(gate(&s, TEST_FEATURE, &cache, &claude_here(), 1_800_000_000), Ok(()));
+        assert_eq!(gate(&s, "nonsense", &cache, &claude_here(), 1_800_000_000), Err(Refusal::UnknownFeature("nonsense".into())));
     }
 
     #[test]
@@ -1320,15 +1394,16 @@ pub(crate) mod tests {
         s.ai_daily_tokens = 20_000;
         let now = 1_800_000_000;
         let l = Ledger::open(&f.cache);
-        l.record_call(now, "names", &Usage { input: 5000, cache_creation: 5000, cache_read: 5000, output: 4999 }, 0.0, true).unwrap();
-        assert_eq!(gate(&s, "names", &f.cache, now), Ok(()), "one under the limit still runs");
-        l.record_call(now, "names", &Usage { output: 1, ..Usage::default() }, 0.0, true).unwrap();
+        l.record_call(now, Agent::Claude, "names", &Usage { input: 5000, cache_creation: 5000, cache_read: 5000, output: 4999 }, 0.0, true)
+            .unwrap();
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now), Ok(()), "one under the limit still runs");
+        l.record_call(now, Agent::Claude, "names", &Usage { output: 1, ..Usage::default() }, 0.0, true).unwrap();
         assert_eq!(
-            gate(&s, "names", &f.cache, now),
+            gate(&s, "names", &f.cache, &claude_here(), now),
             Err(Refusal::OverBudget { used: 20_000, cap: 20_000 }),
             "all four numbers count, and at the limit is refused"
         );
-        assert_eq!(gate(&s, "names", &f.cache, now + 3 * 86_400), Ok(()), "another day is a fresh count");
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now + 3 * 86_400), Ok(()), "another day is a fresh count");
         let msg = Refusal::OverBudget { used: 20_000, cap: 20_000 }.plain();
         assert!(msg.contains("20,000 of 20,000") && msg.contains("tomorrow"), "{msg}");
     }
@@ -1340,8 +1415,8 @@ pub(crate) mod tests {
             Refusal::MasterOff,
             Refusal::FeatureOff("Project notes"),
             Refusal::OverBudget { used: 25_000, cap: 20_000 },
-            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" },
-            Refusal::BackedOff { kind: crate::ledger::FailKind::NotSignedIn, until: now + 1800, now },
+            Refusal::PlanBusy { agent: Agent::Claude, pct: 82, limit: 80, window: "weekly limit".into() },
+            Refusal::BackedOff { agent: Agent::Claude, kind: crate::ledger::FailKind::NotSignedIn, until: now + 1800, now },
         ];
         for r in &cases {
             let full = r.on_screen();
@@ -1364,7 +1439,7 @@ pub(crate) mod tests {
             "\"Project notes\" is switched off. Press s for the settings to switch it back on."
         );
         assert_eq!(
-            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" }.on_screen(),
+            Refusal::PlanBusy { agent: Agent::Claude, pct: 82, limit: 80, window: "weekly limit".into() }.on_screen(),
             "Your Claude plan is 82% used (weekly limit), above the pause point of 80%. Smart features wait until it drops. \
              Press s for the settings to change the pause point."
         );
@@ -1373,7 +1448,7 @@ pub(crate) mod tests {
             Refusal::OverBudget { used: 25_000, cap: 20_000 }.on_screen(),
             Refusal::OverBudget { used: 25_000, cap: 20_000 }.plain()
         );
-        let backed = Refusal::BackedOff { kind: crate::ledger::FailKind::Network, until: now + 300, now };
+        let backed = Refusal::BackedOff { agent: Agent::Claude, kind: crate::ledger::FailKind::Network, until: now + 300, now };
         assert_eq!(backed.on_screen(), backed.plain());
         assert!(backed.on_screen().contains("trying again in 5 minutes"), "{}", backed.on_screen());
         // The short forms, for the header.
@@ -1381,7 +1456,7 @@ pub(crate) mod tests {
         assert_eq!(Refusal::FeatureOff("Project notes").short(), "project notes off");
         assert_eq!(Refusal::OverBudget { used: 25_000, cap: 20_000 }.short(), "smart features paused · today's 20,000 limit is used up");
         assert_eq!(
-            Refusal::PlanBusy { pct: 82, limit: 80, window: "weekly limit" }.short(),
+            Refusal::PlanBusy { agent: Agent::Claude, pct: 82, limit: 80, window: "weekly limit".into() }.short(),
             "smart features paused · your Claude plan is 82% used (weekly limit)"
         );
         assert_eq!(backed.short(), "smart features paused after a failure · trying again in 5 minutes");
@@ -1393,18 +1468,21 @@ pub(crate) mod tests {
         let now = 1_800_000_000;
         let mut s = Settings::default();
         // The master switch off, then this feature's own switch off, then both on.
-        assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).as_deref(), Some(Refusal::MasterOff.on_screen().as_str()));
+        assert_eq!(
+            stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, &claude_here(), now).as_deref(),
+            Some(Refusal::MasterOff.on_screen().as_str())
+        );
         s.tokens_enabled = true;
         s.set_feature(crate::notesrun::FEATURE, false);
-        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).unwrap();
+        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, &claude_here(), now).unwrap();
         assert!(said.starts_with("\"Project notes\" is switched off."), "{said}");
         s.set_feature(crate::notesrun::FEATURE, true);
-        assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now), None, "nothing in the way: nothing to say");
+        assert_eq!(stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, &claude_here(), now), None, "nothing in the way: nothing to say");
         // The daily limit, spent.
         Ledger::open(&f.cache)
-            .record_call(now, crate::notesrun::FEATURE, &Usage { input: 600_000, ..Usage::default() }, 0.0, true)
+            .record_call(now, Agent::Claude, crate::notesrun::FEATURE, &Usage { input: 600_000, ..Usage::default() }, 0.0, true)
             .unwrap();
-        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, now).unwrap();
+        let said = stopped_reason(&s, crate::notesrun::FEATURE, &f.cache, &claude_here(), now).unwrap();
         assert!(said.contains("Today's token limit is used up (600,000 of 500,000 tokens)"), "{said}");
     }
 
@@ -1413,20 +1491,24 @@ pub(crate) mod tests {
         let f = Fake::ok("header");
         let now = 1_800_000_000;
         // Off by the user's own choice, or one feature's switch: not the header's business.
-        assert_eq!(header_note(&Settings::default(), &f.cache, now), None, "a master switch the user left off doesn't follow them around");
+        assert_eq!(
+            header_note(&Settings::default(), &f.cache, &claude_here(), now),
+            None,
+            "a master switch the user left off doesn't follow them around"
+        );
         let mut s = on();
         s.set_feature("names", false);
-        assert_eq!(header_note(&s, &f.cache, now), None, "nor does one feature's own switch");
+        assert_eq!(header_note(&s, &f.cache, &claude_here(), now), None, "nor does one feature's own switch");
         // The daily limit: said, with where to change it when there is room.
         s.ai_daily_tokens = 20_000;
-        Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 25_000, ..Usage::default() }, 0.0, true).unwrap();
-        let (short, full) = header_note(&s, &f.cache, now).expect("the header says so");
+        Ledger::open(&f.cache).record_call(now, Agent::Claude, "names", &Usage { input: 25_000, ..Usage::default() }, 0.0, true).unwrap();
+        let (short, full) = header_note(&s, &f.cache, &claude_here(), now).expect("the header says so");
         assert_eq!(short, "smart features paused · today's 20,000 limit is used up");
         assert_eq!(full, "smart features paused · today's 20,000 limit is used up · press s for the settings");
         // A back-off tries again by itself, so there is nothing to press.
         let f2 = Fake::ok("header-backoff");
-        Ledger::open(&f2.cache).note_failure(now, crate::ledger::FailKind::Network).unwrap();
-        let (short, full) = header_note(&on(), &f2.cache, now).expect("a back-off is said too");
+        Ledger::open(&f2.cache).note_failure(now, Agent::Claude, crate::ledger::FailKind::Network).unwrap();
+        let (short, full) = header_note(&on(), &f2.cache, &claude_here(), now).expect("a back-off is said too");
         assert_eq!(short, full);
         assert!(short.contains("after a failure"), "{short}");
     }
@@ -1443,29 +1525,32 @@ pub(crate) mod tests {
         let f = Fake::ok("pause");
         let s = on();
         let now = 1_800_000_000;
-        assert_eq!(gate(&s, "names", &f.cache, now), Ok(()), "no figure at all: nothing pauses, nothing is pretended");
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now), Ok(()), "no figure at all: nothing pauses, nothing is pretended");
         plan_report(&f.cache, 80, Some(10), now + 3600, now - 10);
-        assert_eq!(gate(&s, "names", &f.cache, now), Ok(()), "exactly at the pause point is not above it");
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now), Ok(()), "exactly at the pause point is not above it");
         plan_report(&f.cache, 81, Some(10), now + 3600, now - 10);
-        assert_eq!(gate(&s, "names", &f.cache, now), Err(Refusal::PlanBusy { pct: 81, limit: 80, window: "5-hour limit" }));
+        assert_eq!(
+            gate(&s, "names", &f.cache, &claude_here(), now),
+            Err(Refusal::PlanBusy { agent: Agent::Claude, pct: 81, limit: 80, window: "5-hour limit".into() })
+        );
         plan_report(&f.cache, 10, Some(95), now + 3600, now - 10);
         assert_eq!(
-            gate(&s, "names", &f.cache, now),
-            Err(Refusal::PlanBusy { pct: 95, limit: 80, window: "weekly limit" }),
+            gate(&s, "names", &f.cache, &claude_here(), now),
+            Err(Refusal::PlanBusy { agent: Agent::Claude, pct: 95, limit: 80, window: "weekly limit".into() }),
             "the higher window decides"
         );
         // A window that has reset says nothing any more.
-        assert_eq!(gate(&s, "names", &f.cache, now + 7200), Ok(()));
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now + 7200), Ok(()));
         // A different pause point, and "never".
         let mut lax = s.clone();
         lax.ai_pause_percent = 99;
-        assert_eq!(gate(&lax, "names", &f.cache, now), Ok(()));
+        assert_eq!(gate(&lax, "names", &f.cache, &claude_here(), now), Ok(()));
         let mut never = s.clone();
         never.ai_pause_percent = 0;
         plan_report(&f.cache, 100, None, now + 3600, now - 10);
-        assert_eq!(gate(&never, "names", &f.cache, now), Ok(()));
-        assert!(matches!(gate(&s, "names", &f.cache, now), Err(Refusal::PlanBusy { pct: 100, .. })));
-        assert!(Refusal::PlanBusy { pct: 90, limit: 80, window: "5-hour limit" }.plain().contains("90%"));
+        assert_eq!(gate(&never, "names", &f.cache, &claude_here(), now), Ok(()));
+        assert!(matches!(gate(&s, "names", &f.cache, &claude_here(), now), Err(Refusal::PlanBusy { pct: 100, .. })));
+        assert!(Refusal::PlanBusy { agent: Agent::Claude, pct: 90, limit: 80, window: "5-hour limit".into() }.plain().contains("90%"));
     }
 
     #[test]
@@ -1474,24 +1559,35 @@ pub(crate) mod tests {
         let s = on();
         let now = 1_800_000_000;
         plan_report(&f.cache, 95, Some(10), now + 3600, now - 10);
-        assert!(matches!(gate_for(&s, "find", &f.cache, now, false), Err(Refusal::PlanBusy { pct: 95, .. })), "background: paused");
-        assert_eq!(gate_for(&s, "find", &f.cache, now, true), Ok(()), "asked for by a key press: the plan's own pause is not for it");
-        assert_eq!(gate(&s, "find", &f.cache, now), gate_for(&s, "find", &f.cache, now, false), "`gate` is the background gate");
+        assert!(
+            matches!(gate_for(&s, "find", &f.cache, &claude_here(), now, false), Err(Refusal::PlanBusy { pct: 95, .. })),
+            "background: paused"
+        );
+        assert_eq!(
+            gate_for(&s, "find", &f.cache, &claude_here(), now, true),
+            Ok(()),
+            "asked for by a key press: the plan's own pause is not for it"
+        );
+        assert_eq!(
+            gate(&s, "find", &f.cache, &claude_here(), now),
+            gate_for(&s, "find", &f.cache, &claude_here(), now, false),
+            "`gate` is the background gate"
+        );
         // The switches still count...
         let mut off = s.clone();
         off.set_feature("find", false);
-        assert_eq!(gate_for(&off, "find", &f.cache, now, true), Err(Refusal::FeatureOff("Find a session by description")));
+        assert_eq!(gate_for(&off, "find", &f.cache, &claude_here(), now, true), Err(Refusal::FeatureOff("Find a session by description")));
         off = s.clone();
         off.tokens_enabled = false;
-        assert_eq!(gate_for(&off, "find", &f.cache, now, true), Err(Refusal::MasterOff));
+        assert_eq!(gate_for(&off, "find", &f.cache, &claude_here(), now, true), Err(Refusal::MasterOff));
         // ...and so do the daily limit and a running back-off.
         let mut small = s.clone();
         small.ai_daily_tokens = 20_000;
-        Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 20_000, ..Usage::default() }, 0.0, true).unwrap();
-        assert!(matches!(gate_for(&small, "find", &f.cache, now, true), Err(Refusal::OverBudget { .. })));
+        Ledger::open(&f.cache).record_call(now, Agent::Claude, "names", &Usage { input: 20_000, ..Usage::default() }, 0.0, true).unwrap();
+        assert!(matches!(gate_for(&small, "find", &f.cache, &claude_here(), now, true), Err(Refusal::OverBudget { .. })));
         let g = Fake::ok("user-gate-2");
-        Ledger::open(&g.cache).note_failure(now, FailKind::Network).unwrap();
-        assert!(matches!(gate_for(&s, "find", &g.cache, now + 1, true), Err(Refusal::BackedOff { .. })));
+        Ledger::open(&g.cache).note_failure(now, Agent::Claude, FailKind::Network).unwrap();
+        assert!(matches!(gate_for(&s, "find", &g.cache, &claude_here(), now + 1, true), Err(Refusal::BackedOff { .. })));
     }
 
     #[test]
@@ -1513,11 +1609,13 @@ pub(crate) mod tests {
         let f = Fake::ok("clock");
         let mut s = on();
         s.ai_daily_tokens = 20_000;
-        Ledger::open(&f.cache).record_call(usage::now(), "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true).unwrap();
+        Ledger::open(&f.cache)
+            .record_call(usage::now(), Agent::Claude, "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true)
+            .unwrap();
         assert!(matches!(f.runner().run(&s, &req()), Err(AiError::Refused(Refusal::OverBudget { .. }))));
         assert!(f.runner().with_clock_offset(2 * 86_400).run(&s, &req()).is_ok(), "two days on, today's use is a different day's");
         let day2 = crate::ledger::local_day(usage::now() + 2 * 86_400);
-        assert!(Ledger::open(&f.cache).load().days.contains_key(&day2), "and the call is recorded under that day");
+        assert!(Ledger::open(&f.cache).load().claude.days.contains_key(&day2), "and the call is recorded under that day");
     }
 
     #[test]
@@ -1525,13 +1623,13 @@ pub(crate) mod tests {
         let f = Fake::ok("backoff-gate");
         let s = on();
         let now = 1_800_000_000;
-        Ledger::open(&f.cache).note_failure(now, FailKind::RateLimited).unwrap();
+        Ledger::open(&f.cache).note_failure(now, Agent::Claude, FailKind::RateLimited).unwrap();
         assert_eq!(
-            gate(&s, "names", &f.cache, now + 10),
-            Err(Refusal::BackedOff { kind: FailKind::RateLimited, until: now + 900, now: now + 10 })
+            gate(&s, "names", &f.cache, &claude_here(), now + 10),
+            Err(Refusal::BackedOff { agent: Agent::Claude, kind: FailKind::RateLimited, until: now + 900, now: now + 10 })
         );
-        assert_eq!(gate(&s, "names", &f.cache, now + 900), Ok(()), "the wait is over");
-        let plain = Refusal::BackedOff { kind: FailKind::RateLimited, until: now + 900, now: now + 10 }.plain();
+        assert_eq!(gate(&s, "names", &f.cache, &claude_here(), now + 900), Ok(()), "the wait is over");
+        let plain = Refusal::BackedOff { agent: Agent::Claude, kind: FailKind::RateLimited, until: now + 900, now: now + 10 }.plain();
         assert!(plain.contains("plan limit") && plain.contains("15 minutes"), "{plain}");
     }
 
@@ -1540,17 +1638,21 @@ pub(crate) mod tests {
         let f = Fake::ok("status");
         let s = on();
         let now = 1_800_000_000;
-        let st = status(&s, &f.cache, now);
-        assert!(st.master && st.paused.is_none() && st.used_today == 0 && st.cap == 500_000 && st.plan.is_none() && st.backoff.is_none());
+        let st = status(&s, &f.cache, &claude_here(), now);
+        let sp = spend(&s, &f.cache, &claude_here(), Agent::Claude, now);
+        assert!(st.master && st.paused.is_none() && sp.used_today == 0 && sp.cap == 500_000 && sp.plan.is_none() && sp.backoff.is_none());
         assert_eq!(
             st.features.iter().map(|(f, on)| (f.id, *on)).collect::<Vec<_>>(),
             [("names", true), ("find", true), ("project_notes", true), ("project_description", true)]
         );
-        Ledger::open(&f.cache).record_call(now, "names", &Usage { input: 1234, ..Usage::default() }, 0.0, true).unwrap();
-        Ledger::open(&f.cache).note_failure(now, FailKind::Network).unwrap();
-        let st = status(&s, &f.cache, now + 1);
-        assert_eq!(st.used_today, 1234);
-        assert!(matches!(st.paused, Some(Refusal::BackedOff { kind: FailKind::Network, .. })) && st.backoff.is_some());
+        Ledger::open(&f.cache).record_call(now, Agent::Claude, "names", &Usage { input: 1234, ..Usage::default() }, 0.0, true).unwrap();
+        Ledger::open(&f.cache).note_failure(now, Agent::Claude, FailKind::Network).unwrap();
+        let st = status(&s, &f.cache, &claude_here(), now + 1);
+        let sp = spend(&s, &f.cache, &claude_here(), Agent::Claude, now + 1);
+        assert_eq!(sp.used_today, 1234);
+        assert!(
+            matches!(st.paused, Some(Refusal::BackedOff { agent: Agent::Claude, kind: FailKind::Network, .. })) && sp.backoff.is_some()
+        );
     }
 
     // ---- the notice ----
@@ -1562,20 +1664,20 @@ pub(crate) mod tests {
         let now = 1_800_000_000;
         assert_eq!(backoff_notice(&s, &f.cache, now), None);
         let l = Ledger::open(&f.cache);
-        l.note_failure(now, FailKind::NotSignedIn).unwrap();
+        l.note_failure(now, Agent::Claude, FailKind::NotSignedIn).unwrap();
         let (id, text) = backoff_notice(&s, &f.cache, now + 5).unwrap();
         assert_eq!(text, "Smart features paused: Claude isn't signed in");
         // The same run keeps the same id, however many failures follow.
-        l.note_failure(now + 2000, FailKind::NotSignedIn).unwrap();
-        l.note_failure(now + 9000, FailKind::NotSignedIn).unwrap();
+        l.note_failure(now + 2000, Agent::Claude, FailKind::NotSignedIn).unwrap();
+        l.note_failure(now + 9000, Agent::Claude, FailKind::NotSignedIn).unwrap();
         assert_eq!(backoff_notice(&s, &f.cache, now + 9001).unwrap().0, id);
         assert_eq!(backoff_notice(&s, &f.cache, now + 100_000), None, "nothing to say once the wait is over");
         let mut off = s.clone();
         off.tokens_enabled = false;
         assert_eq!(backoff_notice(&off, &f.cache, now + 9001), None, "features off: nobody is waiting");
         // A new run (after a success) is a new id.
-        l.note_success().unwrap();
-        l.note_failure(now + 200_000, FailKind::NotSignedIn).unwrap();
+        l.note_success(Agent::Claude).unwrap();
+        l.note_failure(now + 200_000, Agent::Claude, FailKind::NotSignedIn).unwrap();
         assert_ne!(backoff_notice(&s, &f.cache, now + 200_001).unwrap().0, id);
     }
 
@@ -1730,10 +1832,10 @@ pub(crate) mod tests {
         let reply = f.runner().run(&on(), &req()).unwrap();
         assert_eq!(reply.usage, Usage { input: 400, cache_creation: 0, cache_read: 17, output: 5 });
         assert!(!reply.usage_estimated && (reply.cost_usd - 0.000612).abs() < 1e-9);
-        let today = Ledger::open(&f.cache).today(usage::now());
+        let today = Ledger::open(&f.cache).today(usage::now(), Agent::Claude);
         assert_eq!((today.tokens(), today.calls, today.failed), (422, 1, 0));
         assert_eq!(today.features["names"].tokens, 422);
-        assert_eq!(Ledger::open(&f.cache).load().backoff, None);
+        assert_eq!(Ledger::open(&f.cache).load().claude.backoff, None);
         let text = fs::read_to_string(f.cache.join("ai-usage.json")).unwrap();
         assert!(!text.contains("Name these") && !text.contains("Be brief"), "prompt text is never saved");
         // Only the cache dir is written to.
@@ -1747,7 +1849,7 @@ pub(crate) mod tests {
         let reply = f.runner().run(&on(), &Request::new("names", "sys!", "a".repeat(400))).unwrap();
         assert!(reply.usage_estimated);
         assert_eq!((reply.usage.input, reply.usage.output), (101, 3));
-        assert_eq!(Ledger::open(&f.cache).today(usage::now()).tokens(), 104, "the limit still sees it");
+        assert_eq!(Ledger::open(&f.cache).today(usage::now(), Agent::Claude).tokens(), 104, "the limit still sees it");
     }
 
     #[test]
@@ -1761,8 +1863,8 @@ pub(crate) mod tests {
         // The token features off, and a back-off running: a smart feature would be refused; the task's check is not.
         let off = Settings::default();
         let ledger = Ledger::open(&f.cache);
-        ledger.note_failure(usage::now(), FailKind::Network).unwrap();
-        let before = ledger.load().backoff;
+        ledger.note_failure(usage::now(), Agent::Claude, FailKind::Network).unwrap();
+        let before = ledger.load().claude.backoff;
         assert!(before.is_some());
         let mut req = Request::new(crate::verdict::FEATURE, "sys", "prompt");
         req.model = Some("fable".into());
@@ -1778,8 +1880,8 @@ pub(crate) mod tests {
         }
         assert_eq!(f.rec("cwd").trim(), folder.canonicalize().unwrap().to_string_lossy());
         assert!(!f.rec("env").contains("MAX_THINKING_TOKENS="), "thinking allowed above low effort");
-        assert_eq!(ledger.load().backoff, before, "it neither waits for a back-off nor moves it");
-        let day = ledger.today(usage::now());
+        assert_eq!(ledger.load().claude.backoff, before, "it neither waits for a back-off nor moves it");
+        let day = ledger.today(usage::now(), Agent::Claude);
         assert_eq!(day.features.get(crate::verdict::FEATURE).map(|x| x.tokens), Some(15), "its tokens are in the ledger");
         assert_eq!(feature_label(crate::verdict::FEATURE), "Task checks");
         assert_eq!(f.runner().run(&off, &Request::new("names", "s", "p")), Err(AiError::Refused(Refusal::MasterOff)));
@@ -1828,8 +1930,10 @@ pub(crate) mod tests {
         // Codex's own instructions are most of what a call costs: every token it reports counts, cached ones too.
         assert_eq!(reply.usage, Usage { input: 8_200, cache_creation: 0, cache_read: 12_800, output: 40 });
         assert_eq!((reply.cost_usd, reply.usage_estimated), (0.0, false));
-        let day = Ledger::open(&f.cache).today(usage::now());
+        // Counted as Codex's, apart from Claude Code's.
+        let day = Ledger::open(&f.cache).today(usage::now(), Agent::Codex);
         assert_eq!((day.tokens(), day.calls), (21_040, 1));
+        assert_eq!(Ledger::open(&f.cache).today(usage::now(), Agent::Claude).tokens(), 0);
         // No schema file was left behind, and none was asked for.
         assert!(fs::read_dir(f.cache.join("ai-work")).unwrap().next().is_none(), "the work folder is left empty");
     }
@@ -1877,7 +1981,8 @@ pub(crate) mod tests {
         let e = runner.run(&s, &req()).unwrap_err();
         assert_eq!(e, AiError::Failed { agent: Agent::Codex, kind: FailKind::RateLimited, detail: "You've hit your usage limit.".into() });
         assert_eq!(e.plain(), "Your Codex plan limit was reached.");
-        assert!(Ledger::open(&f.cache).load().backoff.is_some(), "a failure backs off");
+        let data = Ledger::open(&f.cache).load();
+        assert!(data.codex.backoff.is_some() && data.claude.backoff.is_none(), "a failure backs off Codex's calls, not Claude's");
         // With a schema (a description search's ranking, say): the file goes whatever happened.
         let _ = fs::remove_file(f.cache.join("ai-usage.json"));
         let mut find = Request::new("find", "s", "p");
@@ -1904,6 +2009,124 @@ pub(crate) mod tests {
         assert!(matches!(&e, AiError::Failed { detail, .. } if detail.contains("couldn't find")), "{e:?}");
     }
 
+    // ---- limits and the ledger, per provider ----
+
+    /// Claude Code (a stand-in) and Codex at `root` (its list of models copied there).
+    fn both_at(root: &Path) -> Providers {
+        fs::create_dir_all(root).unwrap();
+        fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/models_cache.json"), root.join("models_cache.json")).unwrap();
+        Providers {
+            claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+            codex: Some(crate::agents::CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: root.to_path_buf() }),
+        }
+    }
+
+    #[test]
+    fn the_pause_follows_the_plan_of_the_program_the_call_would_use() {
+        let f = Fake::ok("pause-agent");
+        let p = both_at(&f.dir.join("codex"));
+        let root = p.codex_root().unwrap().to_path_buf();
+        let now = usage::now();
+        let window =
+            |pct: u64, minutes: u64| serde_json::json!({"used_percent": pct, "window_minutes": minutes, "resets_at": now + 86_400});
+        // Claude's plan nearly used up, Codex's 30-day window hardly.
+        plan_report(&f.cache, 95, None, now + 3600, now);
+        crate::agents::codex::tests::limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000c1", window(10, 43_200), Value::Null, 1);
+        let mut s = on();
+        assert!(matches!(gate(&s, "names", &f.cache, &p, now), Err(Refusal::PlanBusy { agent: Agent::Claude, pct: 95, .. })));
+        // The smart features on an OpenAI model: Codex's plan decides, and it has room.
+        s.ai_model = Some("gpt-6-luna".into());
+        assert_eq!(gate(&s, "names", &f.cache, &p, now), Ok(()));
+        // The notes on their own model (Sonnet): Claude's plan decides for them.
+        s.set_feature(crate::notesrun::FEATURE, true);
+        assert!(matches!(gate(&s, crate::notesrun::FEATURE, &f.cache, &p, now), Err(Refusal::PlanBusy { agent: Agent::Claude, .. })));
+        // Codex's 30-day window above the pause point, said as such.
+        crate::agents::codex::tests::limits_rollout(&root, "01a1517c-0000-7000-8000-0000000000c1", window(85, 43_200), Value::Null, 0);
+        let r = gate(&s, "names", &f.cache, &p, now).unwrap_err();
+        assert_eq!(r, Refusal::PlanBusy { agent: Agent::Codex, pct: 85, limit: 80, window: "30-day limit".into() });
+        assert_eq!(
+            r.plain(),
+            "Your Codex plan is 85% used (30-day limit), above the pause point of 80%. Smart features wait until it drops."
+        );
+        assert_eq!(r.short(), "smart features paused · your Codex plan is 85% used (30-day limit)");
+        // A window that has started over no longer counts.
+        assert_eq!(gate(&s, "names", &f.cache, &p, now + 2 * 86_400), Ok(()));
+        assert_eq!(plan_percent(Agent::Codex, &f.cache, &p, now), Some((85, "30-day limit".into())));
+        assert_eq!(plan_percent(Agent::Codex, &f.cache, &claude_here(), now), None, "no Codex installed: nothing said");
+    }
+
+    #[test]
+    fn the_ledger_counts_each_program_apart_and_the_daily_limit_and_back_off_are_each_its_own() {
+        let f = Fake::ok("ledger-agent");
+        let p = both_at(&f.dir.join("codex"));
+        let now = usage::now();
+        let mut s = on();
+        s.ai_daily_tokens = 20_000;
+        let l = Ledger::open(&f.cache);
+        l.record_call(now, Agent::Codex, "names", &Usage { input: 25_000, ..Usage::default() }, 0.0, true).unwrap();
+        // Codex's tokens are over the limit: its calls wait; Claude Code's have their own count.
+        assert_eq!(gate(&s, "names", &f.cache, &p, now), Ok(()));
+        s.ai_model = Some("gpt-6-luna".into());
+        assert_eq!(gate(&s, "names", &f.cache, &p, now), Err(Refusal::OverBudget { used: 25_000, cap: 20_000 }));
+        // A back-off is the program's that failed.
+        l.note_failure(now, Agent::Claude, FailKind::NotSignedIn).unwrap();
+        s.ai_daily_tokens = 100_000;
+        assert_eq!(gate(&s, "names", &f.cache, &p, now), Ok(()), "Claude Code signed out doesn't stop Codex");
+        s.ai_model = None;
+        let r = gate(&s, "names", &f.cache, &p, now).unwrap_err();
+        assert!(matches!(r, Refusal::BackedOff { agent: Agent::Claude, kind: FailKind::NotSignedIn, .. }));
+        assert!(r.plain().contains("Claude isn't signed in"), "{}", r.plain());
+        // On disk: Claude Code's numbers where they always were, Codex's under "codex", numbers only.
+        let v: Value = serde_json::from_str(&fs::read_to_string(f.cache.join("ai-usage.json")).unwrap()).unwrap();
+        assert!(v["days"].as_object().unwrap().is_empty() && v["backoff"]["kind"] == "not_signed_in", "{v}");
+        let day = local_day_of(now);
+        assert_eq!(v["codex"]["days"][&day]["usage"]["input"], 25_000, "{v}");
+        assert!(v["codex"].get("backoff").is_none());
+        // A file from before there were two programs reads as Claude Code's.
+        fs::write(f.cache.join("ai-usage.json"), format!(r#"{{"version":1,"days":{{"{day}":{{"usage":{{"input":7}},"calls":1}}}}}}"#))
+            .unwrap();
+        assert_eq!((l.today(now, Agent::Claude).tokens(), l.today(now, Agent::Codex).tokens()), (7, 0));
+    }
+
+    fn local_day_of(now: u64) -> String {
+        crate::ledger::local_day(now)
+    }
+
+    #[test]
+    fn tokens_says_each_programs_use_plan_and_back_off_when_both_are_installed() {
+        let f = Fake::ok("cli-both");
+        let p = both_at(&f.dir.join("codex"));
+        let root = p.codex_root().unwrap().to_path_buf();
+        let config = f.dir.join("config");
+        let now = usage::now();
+        crate::agents::codex::tests::limits_rollout(
+            &root,
+            "01a1517c-0000-7000-8000-0000000000d1",
+            serde_json::json!({"used_percent": 12, "window_minutes": 43_200, "resets_at": now + 86_400}),
+            Value::Null,
+            1,
+        );
+        let l = Ledger::open(&f.cache);
+        l.record_call(now, Agent::Claude, "names", &Usage { input: 844, ..Usage::default() }, 0.0, true).unwrap();
+        l.record_call(now, Agent::Codex, "project_notes", &Usage { input: 21_040, ..Usage::default() }, 0.0, true).unwrap();
+        l.note_failure(now, Agent::Codex, FailKind::NotSignedIn).unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(tokens_cli(&[], &f.cache, &config, &p, &mut out, &mut err), 0);
+        let out = String::from_utf8(out).unwrap();
+        for want in [
+            "Used today on Claude Code: 844 of 500,000 tokens\n  Smart names and summaries: 844 tokens in 1 call\n",
+            "Plan usage of Claude Code: no figure reported yet",
+            "Used today on Codex: 21,040 of 500,000 tokens\n  Project notes: 21,040 tokens in 1 call\n",
+            "Plan usage of Codex: 12% (30-day limit); pause above 80%",
+            "Paused after a failure (Codex isn't signed in)",
+        ] {
+            assert!(out.contains(want), "{want:?}:\n{out}");
+        }
+        let notice = backoff_notice(&on(), &f.cache, now).unwrap();
+        assert_eq!(notice.1, "Smart features paused: Codex isn't signed in");
+        assert!(notice.0.starts_with("codex:"), "{}", notice.0);
+    }
+
     #[test]
     fn a_refused_call_never_starts_anything() {
         let f = Fake::ok("refused");
@@ -1917,7 +2140,9 @@ pub(crate) mod tests {
         // Over the limit
         let mut s = on();
         s.ai_daily_tokens = 20_000;
-        Ledger::open(&f.cache).record_call(usage::now(), "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true).unwrap();
+        Ledger::open(&f.cache)
+            .record_call(usage::now(), Agent::Claude, "names", &Usage { input: 30_000, ..Usage::default() }, 0.0, true)
+            .unwrap();
         assert!(matches!(f.runner().run(&s, &req()), Err(AiError::Refused(Refusal::OverBudget { .. }))));
         assert!(!f.ran());
     }
@@ -1951,7 +2176,7 @@ pub(crate) mod tests {
         let Err(AiError::Refused(r)) = none.run(&on(), &req()) else { panic!("refused") };
         assert!(r.plain().starts_with("Neither Claude Code nor Codex is installed"), "{}", r.plain());
         assert!(!f.ran(), "nothing was started");
-        assert!(Ledger::open(&f.cache).load().backoff.is_none(), "not a failure: nothing backs off");
+        assert!(Ledger::open(&f.cache).load().claude.backoff.is_none(), "not a failure: nothing backs off");
     }
 
     #[test]
@@ -1987,9 +2212,9 @@ pub(crate) mod tests {
             assert!(matches!(&e, AiError::Failed { kind: k, .. } if *k == kind), "{name}: {e:?}");
             assert_eq!(e.plain(), message, "{name}");
             let data = Ledger::open(&f.cache).load();
-            let b = data.backoff.unwrap_or_else(|| panic!("{name}: no back-off"));
+            let b = data.claude.backoff.unwrap_or_else(|| panic!("{name}: no back-off"));
             assert_eq!((b.kind, b.failures), (kind, 1), "{name}");
-            let day = data.days.into_values().next();
+            let day = data.claude.days.into_values().next();
             if name == "signed-out" {
                 let day = day.expect("usage reported by a failed call is recorded");
                 assert_eq!((day.tokens(), day.calls, day.failed), (10, 1, 1));
@@ -2014,7 +2239,7 @@ pub(crate) mod tests {
             Err(AiError::Failed { kind: FailKind::Other, detail, .. }) => assert!(detail.contains("couldn't find"), "{detail}"),
             other => panic!("{other:?}"),
         }
-        assert!(Ledger::open(&f.cache).load().backoff.is_some(), "a program that can't be found backs off too");
+        assert!(Ledger::open(&f.cache).load().claude.backoff.is_some(), "a program that can't be found backs off too");
     }
 
     #[test]
@@ -2023,14 +2248,17 @@ pub(crate) mod tests {
         assert!(matches!(f.runner().run(&on(), &req()), Err(AiError::Failed { .. })));
         let _ = fs::remove_file(f.dir.join("rec.argv"));
         let again = f.runner().run(&on(), &req());
-        assert!(matches!(again, Err(AiError::Refused(Refusal::BackedOff { kind: FailKind::Other, .. }))), "{again:?}");
+        assert!(
+            matches!(again, Err(AiError::Refused(Refusal::BackedOff { agent: Agent::Claude, kind: FailKind::Other, .. }))),
+            "{again:?}"
+        );
         assert!(!f.ran(), "refused before spawning");
         // A wait that is over lets a call through, and a success clears the whole thing.
         let l = Ledger::open(&f.cache);
-        l.update(|d| d.backoff.as_mut().unwrap().until = 1).unwrap();
+        l.update(|d| d.claude.backoff.as_mut().unwrap().until = 1).unwrap();
         fs::write(&f.script, format!("#!/bin/sh\ncat >/dev/null\nprintf '%s' '{}'\n", ok_json("ok", 1, 0, 0, 1))).unwrap();
         assert_eq!(f.runner().run(&on(), &req()).unwrap().text, "ok");
-        assert_eq!(l.load().backoff, None, "a success resets the growth");
+        assert_eq!(l.load().claude.backoff, None, "a success resets the growth");
     }
 
     #[test]
@@ -2045,7 +2273,7 @@ pub(crate) mod tests {
         assert_eq!(e.plain(), "Claude took too long to answer.");
         wait_dead(&f.dir.join("pid"));
         wait_dead(&f.dir.join("sleep"));
-        assert_eq!(Ledger::open(&f.cache).load().backoff.unwrap().kind, FailKind::TimedOut);
+        assert_eq!(Ledger::open(&f.cache).load().claude.backoff.unwrap().kind, FailKind::TimedOut);
     }
 
     #[test]
@@ -2073,7 +2301,7 @@ pub(crate) mod tests {
         assert!(crate::procs::pid_alive(bystander.id()), "a process that isn't ours is left alone");
         let _ = bystander.kill();
         let _ = bystander.wait();
-        assert_eq!(Ledger::open(&f.cache).load().backoff, None, "cancelling is not a failure");
+        assert_eq!(Ledger::open(&f.cache).load().claude.backoff, None, "cancelling is not a failure");
     }
 
     #[test]

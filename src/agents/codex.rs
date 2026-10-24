@@ -567,6 +567,76 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
     }
 }
 
+/// How many of the rollouts written to last are looked through for the plan's limits.
+const LIMITS_FROM: usize = 8;
+
+/// The plan's limits as Codex last reported them: the `rate_limits` of the newest `token_count` record, in the rollout
+/// written to last that has one (any rollout: a conversation resumed months later writes to its old file). Each window
+/// (`primary`, `secondary`) with its length (`window_minutes`), the percent used and when it starts over; a window
+/// that is null is left out. None when no rollout says. Expired windows are the caller's to drop: it knows the time.
+/// A rollout is read again only when it changes (its time and size), so this can be asked every second.
+pub fn rate_limits(root: &Path) -> Option<Vec<crate::usage::Limit>> {
+    type Seen = ((std::time::SystemTime, u64), Option<Vec<crate::usage::Limit>>);
+    static CACHE: std::sync::LazyLock<Mutex<HashMap<PathBuf, Seen>>> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+    let mut newest: Vec<(std::time::SystemTime, u64, PathBuf)> = rollout_paths(root)
+        .into_iter()
+        .filter_map(|p| {
+            let m = fs::metadata(&p).ok()?;
+            Some((m.modified().ok()?, m.len(), p))
+        })
+        .collect();
+    newest.sort_by_key(|n| std::cmp::Reverse(n.0));
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    for (modified, len, path) in newest.into_iter().take(LIMITS_FROM) {
+        let found = match cache.get(&path) {
+            Some((stamp, found)) if *stamp == (modified, len) => found.clone(),
+            _ => {
+                let found = limits_in(&path);
+                cache.insert(path, ((modified, len), found.clone()));
+                found
+            }
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// The newest `rate_limits` in a rollout's tail (see `rate_limits`).
+fn limits_in(path: &Path) -> Option<Vec<crate::usage::Limit>> {
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    file.take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let lines: Vec<&str> = text.lines().skip(usize::from(start > 0)).collect();
+    lines.into_iter().rev().filter(|l| l.contains("\"rate_limits\"")).find_map(|line| {
+        let v = record(line)?;
+        let p = &v["payload"];
+        (payload_type(&v) == Some("token_count")).then_some(())?;
+        let at = v["timestamp"].as_str().and_then(parse_iso_ms).map_or(0, |ms| ms / 1000);
+        let windows: Vec<crate::usage::Limit> =
+            ["primary", "secondary"].iter().filter_map(|k| window_of(&p["rate_limits"][*k], at)).collect();
+        (!windows.is_empty()).then_some(windows)
+    })
+}
+
+/// One window of `rate_limits`: `used_percent`, `window_minutes`, and `resets_at` (or, from older Codex versions,
+/// `resets_in_seconds` after the record's time `at`).
+fn window_of(w: &Value, at: u64) -> Option<crate::usage::Limit> {
+    let pct = w.get("used_percent")?.as_f64().filter(|p| p.is_finite())?;
+    let minutes = w.get("window_minutes")?.as_u64().filter(|m| *m > 0)?;
+    let resets_at = w
+        .get("resets_at")
+        .and_then(Value::as_u64)
+        .or_else(|| w.get("resets_in_seconds").and_then(Value::as_u64).map(|s| at + s))
+        .unwrap_or(0);
+    Some(crate::usage::Limit { minutes, pct: pct.round().clamp(0.0, 100.0) as u8, resets_at })
+}
+
 /// Is the conversation in this rollout in the middle of a turn? Some(true) when the newest of `task_started`,
 /// `task_complete` and `turn_aborted` near its end is a start, Some(false) when it is an end; None when none of them
 /// is there (nothing can be said, so callers must not take it for idle).
@@ -965,7 +1035,7 @@ pub fn mcp_servers(text: &str) -> Result<Vec<McpServer>, String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const DATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex");
@@ -1392,5 +1462,62 @@ trust_level = "trusted"
         // Garbage lines are skipped.
         let o = interpret(&lines(&["not json", &said("[1]"), "{oops", done]), b"", true, true);
         assert_eq!(o.result, Ok("[1]".into()));
+    }
+
+    // ---- the plan's limits ----
+
+    /// A rollout holding one `token_count` record with these `rate_limits` windows, last written `age` seconds ago
+    /// (so the newest file is the one written to last).
+    pub(crate) fn limits_rollout(root: &Path, id: &str, primary: Value, secondary: Value, age: u64) -> PathBuf {
+        let dir = root.join("sessions/2026/10/18");
+        fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(format!("rollout-2026-10-18T20-07-40-{id}.jsonl"));
+        let lines = [
+            json!({"timestamp":"2026-10-18T20:07:40.000Z","type":"session_meta","payload":{"id":id,"cwd":"/work"}}),
+            json!({"timestamp":"2026-10-18T20:08:00.000Z","type":"event_msg","payload":{"type":"token_count","info":null,
+                "rate_limits":{"limit_id":"codex","primary":primary,"secondary":secondary,"plan_type":"plus"}}}),
+        ];
+        fs::write(&p, lines.iter().map(Value::to_string).collect::<Vec<_>>().join("\n") + "\n").unwrap();
+        let at = std::time::SystemTime::now() - std::time::Duration::from_secs(age);
+        File::options().write(true).open(&p).unwrap().set_modified(at).unwrap();
+        p
+    }
+
+    #[test]
+    fn the_plans_limits_come_from_the_newest_token_count_of_the_rollout_written_to_last() {
+        use crate::usage::Limit;
+        // The samples: a free plan, one 30-day window, nothing used, no second window.
+        assert_eq!(rate_limits(&data()), Some(vec![Limit { minutes: 43_200, pct: 0, resets_at: 1_794_959_888 }]));
+        let root = tmp("limits");
+        assert_eq!(rate_limits(&root), None, "no rollout: nothing said");
+        let a = "01a1517c-0000-7000-8000-00000000000a";
+        let b = "01a1517c-0000-7000-8000-00000000000b";
+        let w = |pct: f64, minutes: u64, resets: u64| json!({"used_percent": pct, "window_minutes": minutes, "resets_at": resets});
+        limits_rollout(&root, a, w(12.4, 300, 5_000), w(40.6, 10_080, 9_000), 60);
+        assert_eq!(
+            rate_limits(&root),
+            Some(vec![Limit { minutes: 300, pct: 12, resets_at: 5_000 }, Limit { minutes: 10_080, pct: 41, resets_at: 9_000 }])
+        );
+        // Another conversation written to since: its figures are the newest.
+        limits_rollout(&root, b, w(80.0, 43_200, 7_000), Value::Null, 5);
+        assert_eq!(rate_limits(&root), Some(vec![Limit { minutes: 43_200, pct: 80, resets_at: 7_000 }]));
+        // A rollout written to last with no figure of its own leaves the one before it; an older Codex's
+        // `resets_in_seconds` counts from the record's time.
+        let p = limits_rollout(&root, b, json!({"used_percent": 3, "window_minutes": 60, "resets_in_seconds": 100}), Value::Null, 1);
+        let at = parse_iso_ms("2026-10-18T20:08:00.000Z").unwrap() / 1000;
+        assert_eq!(rate_limits(&root), Some(vec![Limit { minutes: 60, pct: 3, resets_at: at + 100 }]));
+        fs::write(&p, "{\"type\":\"session_meta\",\"payload\":{}}\n").unwrap();
+        assert_eq!(rate_limits(&root).map(|l| l[0].minutes), Some(300), "the older rollout's figures");
+    }
+
+    #[test]
+    fn a_window_reads_as_its_length_in_plain_words() {
+        use crate::usage::Limit;
+        let l = |minutes| Limit { minutes, pct: 0, resets_at: 0 };
+        assert_eq!([l(300).short(), l(10_080).short(), l(43_200).short(), l(90).short()], ["5h", "7d", "30d", "90m"]);
+        assert_eq!(
+            [l(300).name(), l(10_080).name(), l(43_200).name(), l(1440).name(), l(90).name()],
+            ["5-hour limit", "weekly limit", "30-day limit", "1-day limit", "90-minute limit"]
+        );
     }
 }

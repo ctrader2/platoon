@@ -518,7 +518,11 @@ pub struct App {
     pub counts: Vec<usize>,
     /// Which of `TABS` is showing.
     pub tab: usize,
+    /// Claude Code's plan usage, from its status line.
     pub usage: Usage,
+    /// Codex's plan windows still running, as its saved sessions last reported them: None when Codex isn't installed,
+    /// empty while no session has said.
+    pub codex_limits: Option<Vec<crate::usage::Limit>>,
     /// Index into `visible()`.
     pub selected: usize,
     /// The words the list is narrowed by (the quick filter). Kept after the dialog closes, until Esc clears it.
@@ -672,8 +676,9 @@ pub struct App {
     pub setting_top: Cell<usize>,
     /// The cancel flags of calls to Claude in flight (step C's features): a switch turned off in settings cancels them.
     switchboard: Arc<ai::Switchboard>,
-    /// Tokens the smart features have used today, as the ledger says (shown in the settings).
-    pub tokens_today: u64,
+    /// Tokens the token features have used today on each AI program installed (on Claude Code alone when there is
+    /// none), as the ledger says (shown in the settings).
+    pub tokens_today: Vec<(Agent, u64)>,
     /// The run of failures whose "paused" notice was already shown, so it appears once.
     ai_notice_seen: Option<String>,
     /// The conversation opened in the attached view: never auto-archived, even before its process registers.
@@ -787,6 +792,7 @@ impl App {
             counts: vec![0; TABS.len()],
             tab: 0,
             usage: Usage::NotSetUp,
+            codex_limits: None,
             selected: 0,
             filter: String::new(),
             mode: Mode::List,
@@ -896,7 +902,7 @@ impl App {
             setting: 0,
             setting_top: Cell::new(0),
             switchboard: Arc::new(ai::Switchboard::new()),
-            tokens_today: 0,
+            tokens_today: Vec::new(),
             ai_notice_seen: None,
             viewing: None,
             last_auto_archive: None,
@@ -943,12 +949,6 @@ impl App {
         self.providers.catalog()
     }
 
-    /// Give a unit test's app other AI programs (a computer with only Codex, a stand-in `codex`).
-    #[cfg(test)]
-    pub fn set_providers_for_test(&mut self, providers: Providers) {
-        self.providers = providers;
-    }
-
     /// This window's own folders, which the hosts it looks for and starts use too (a unit test's are temporary).
     pub fn host_dirs(&self) -> host::Dirs {
         host::Dirs { cache: self.cache.clone(), config: self.config.clone() }
@@ -971,7 +971,13 @@ impl App {
         let settings = self.settings.get();
         self.switchboard.apply(&settings);
         let now = usage::now();
-        self.tokens_today = Ledger::open(&self.cache).today(now).tokens();
+        let catalog = self.catalog();
+        let mut agents: Vec<Agent> = Agent::ALL.into_iter().filter(|a| catalog.installed(*a)).collect();
+        if agents.is_empty() {
+            agents.push(Agent::Claude);
+        }
+        let data = Ledger::open(&self.cache).load();
+        self.tokens_today = agents.into_iter().map(|a| (a, data.of(a).day(now).tokens())).collect();
         if let Some((run, text)) = ai::backoff_notice(&settings, &self.cache, now)
             && self.ai_notice_seen.as_deref() != Some(run.as_str())
         {
@@ -1506,6 +1512,11 @@ impl App {
             None if setup::statusline_installed(self.reader.root()) => Usage::Waiting,
             None => Usage::NotSetUp,
         };
+        let now = usage::now();
+        self.codex_limits = self
+            .providers
+            .codex_root()
+            .map(|root| crate::agents::codex::rate_limits(root).unwrap_or_default().into_iter().filter(|l| l.resets_at > now).collect());
         self.rev += 1;
         self.update_view();
         if let Some(id) = selected_id
