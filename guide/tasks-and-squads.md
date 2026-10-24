@@ -173,8 +173,15 @@ is Done); what differs is how Codex does each thing.
   folder (the way Codex's own "Do you trust this folder?" does, written by Codex in its `config.toml`), and takes that
   trust away when it removes the worktree after the work. An entry of your own for that folder is left alone. If Codex
   can't be asked, the task starts all the same and says so: Codex asks you in the window.
-- **It can commit.** The main repository's `.git` folder is writable for it (Codex keeps `.git` read-only otherwise, and
-  a worktree's commits go there).
+- **platoon makes its commits.** Codex keeps git's data read-only in its sandbox (for a worktree also the main
+  repository's `.git/worktrees/…`), so the session can change files but can't commit them, and its instructions tell it
+  not to try. Each time the session stops, platoon commits everything it changed in the worktree on `task/<N>`: one
+  commit per stop, its message **#5 Add a basket** (the task's number and title), with your repository's own git
+  identity (only when git knows none at all is the commit made as `platoon <platoon@localhost>`, for that commit alone;
+  platoon never changes git's settings) and your repository's own hooks. Then the work is checked, and the check sees
+  the commit. A stop that changed nothing makes no commit. A commit that fails (a `pre-commit` hook that refuses it,
+  say) makes the task **Needs you · its work couldn't be committed**, with git's first lines; the changes stay in the
+  worktree, nothing is checked, and the next stop tries again once you have typed into the session.
 - **The network is on**, so it can fetch dependencies and run tests that need it. Pushing, pull requests and publishing
   still wait for you: platoon's hook reads each command the session runs (also inside `bash -lc '...'`, after `cd ... &&`,
   as `git -C <dir> push`, after `VAR=value`, and the like) and holds back the same commands Claude Code asks about. The

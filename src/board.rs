@@ -165,6 +165,7 @@ pub fn need_words(n: &Need) -> String {
         Need::Permission(m) => format!("waits at a permission prompt: {m}"),
         Need::Check(s) => format!("the check found {s}"),
         Need::CheckFailed(s) => format!("the check could not run: {s}"),
+        Need::CommitFailed(s) => format!("platoon couldn't commit its work (it is still in the worktree): {s}"),
     }
 }
 

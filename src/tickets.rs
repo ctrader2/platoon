@@ -109,6 +109,8 @@ pub enum Need {
     Check(String),
     /// The check of its work could not run (timed out, no answer it could read, no `claude`): why.
     CheckFailed(String),
+    /// platoon couldn't commit a Codex task's work when it stopped (`taskcommit.rs`): why. The work is in its worktree.
+    CommitFailed(String),
 }
 
 impl Need {
@@ -119,6 +121,7 @@ impl Need {
             Need::Permission(_) => "permission",
             Need::Check(_) => "check",
             Need::CheckFailed(_) => "check_failed",
+            Need::CommitFailed(_) => "commit_failed",
         }
     }
 
@@ -126,7 +129,7 @@ impl Need {
     pub fn text(&self) -> &str {
         match self {
             Need::Plan => "",
-            Need::Question(s) | Need::Permission(s) | Need::Check(s) | Need::CheckFailed(s) => s,
+            Need::Question(s) | Need::Permission(s) | Need::Check(s) | Need::CheckFailed(s) | Need::CommitFailed(s) => s,
         }
     }
 
@@ -138,6 +141,7 @@ impl Need {
             Need::Permission(_) => "asks permission",
             Need::Check(_) => "the check found problems",
             Need::CheckFailed(_) => "the check could not run",
+            Need::CommitFailed(_) => "its work couldn't be committed",
         }
     }
 
@@ -148,6 +152,7 @@ impl Need {
             "permission" => Need::Permission(text),
             "check" => Need::Check(text),
             "check_failed" => Need::CheckFailed(text),
+            "commit_failed" => Need::CommitFailed(text),
             _ => Need::Question(text),
         }
     }

@@ -84,6 +84,7 @@ mod squads_app_tests;
 #[cfg(test)]
 mod stop_app_tests;
 mod summaries;
+mod taskcommit;
 mod taskdraft;
 mod taskrun;
 #[cfg(test)]

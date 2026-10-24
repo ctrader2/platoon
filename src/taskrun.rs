@@ -103,6 +103,9 @@ pub struct Rules {
     /// The models a step's helpers may be started on, when a step asks for several (Codex's own list; Claude Code's
     /// are its aliases, named in its rules).
     pub helper_models: Vec<String>,
+    /// Each squad copied beside the task: its name and its file's name (`write_task_files` fills it in). Codex's rules
+    /// name them, so a step's "follow the Review squad" finds `review.md`.
+    pub squad_files: Vec<(String, String)>,
 }
 
 /// The rule on tests: platoon runs none itself, so the session finds the repo's own and reports them (the check of the
@@ -120,6 +123,12 @@ pub const QUESTION_MARK: &str = "Question for you:";
 pub fn rules(r: &Rules) -> String {
     let mut out = String::from("# How this task works\n\nYou are working on a task the user handed to platoon.\n\n");
     match &r.branch {
+        // Codex can't commit in its sandbox (it keeps git's data read-only): platoon commits for it at each stop.
+        Some(b) if r.agent == Agent::Codex => out.push_str(&format!(
+            "- You work in {} on the branch `{b}`, a git worktree made for this task. Don't commit, and don't run git commands that write (add, commit, stash, checkout, switch, branch, merge, rebase, reset, tag): git's data is read-only for you here, and platoon commits what you changed on `{b}` each time you stop.\n\
+             - The work stays on the branch `{b}`: it is not merged, and the user merges it. If you changed files, your final message says that the work is on the branch `{b}` and is not merged. If you changed nothing, leave the branch out of it.\n",
+            r.folder
+        )),
         Some(b) => out.push_str(&format!(
             "- You work in {} on the branch `{b}`, a git worktree made for this task. Commit what you change there.\n\
              - What you commit stays on the branch `{b}`: it is not merged, and the user merges it. If you committed, your final message says so: that the work is on the branch `{b}` and is not merged. If you changed nothing, leave the branch out of it.\n",
@@ -166,10 +175,17 @@ pub fn rules(r: &Rules) -> String {
         Agent::Claude => "- Each time you finish, another Claude that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
         Agent::Codex => "- Each time you finish, another AI that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
     });
-    out.push_str(&format!(
-        "- The squads are in {}, one file each. When a step says to follow another squad, read its file and follow its steps.\n",
-        r.squads_dir
-    ));
+    let files = r.squad_files.iter().map(|(name, file)| format!("{name}: `{file}`")).collect::<Vec<_>>().join(", ");
+    match r.agent {
+        Agent::Codex if !files.is_empty() => out.push_str(&format!(
+            "- The squads are in {}, one file each ({files}). When a step says to follow another squad, read its file and follow its steps.\n",
+            r.squads_dir
+        )),
+        _ => out.push_str(&format!(
+            "- The squads are in {}, one file each. When a step says to follow another squad, read its file and follow its steps.\n",
+            r.squads_dir
+        )),
+    }
     out
 }
 
@@ -180,6 +196,9 @@ pub fn write_task_files(task_dir: &Path, squad: &Squad, squads: &[Squad], r: &Ru
     for s in squads.iter().filter(|s| s.usable()) {
         crate::projects::write_atomic(&dir.join(format!("{}.md", s.id)), &s.text())?;
     }
+    let mut r = r.clone();
+    r.squad_files = squads.iter().filter(|s| s.usable()).map(|s| (s.name_or_id(), format!("{}.md", s.id))).collect();
+    let r = &r;
     let text = format!("{}\n# The squad: {}\n\n{}", rules(r), squad.name, squad.body);
     crate::projects::write_atomic(&task_dir.join(SQUAD_FILE), &text)?;
     // A Codex session can't be started in a plan mode: until the user answers its plan, platoon holds back its edits.
@@ -317,10 +336,14 @@ pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
             });
         }
         HookEvent::Stop(end) => {
-            if agent == Agent::Codex
-                && let Some(waits) = codex_stop(&end, &task_dir, config, &project, &mut store, &t)
-            {
-                return waits;
+            if agent == Agent::Codex {
+                held::turn_ended(&task_dir);
+                if let Some(failed) = commit_for_codex(&t, &mut store) {
+                    return failed;
+                }
+                if let Some(waits) = codex_stop(&end, &task_dir, config, &project, &mut store, &t) {
+                    return waits;
+                }
             }
             let reason = stop(&end, at, &project, &mut store, &t)?;
             return Some(agent.hook_answer(&HookReply::SendBack(reason)).stdout);
@@ -382,12 +405,37 @@ fn codex_first(input: &HookInput, at: &Places, project: &str, store: &mut Ticket
     }
 }
 
+/// The commit message of a Codex task's work: its number and title.
+pub fn commit_message(t: &Ticket) -> String {
+    format!("#{} {}", t.number, t.title)
+}
+
+/// A Codex task's stop, first: what it changed in its worktree is committed on its branch (`taskcommit.rs`: Codex's
+/// sandbox can't), whatever the stop turns out to be (plan, question, the end of the work), so the check sees it in the
+/// branch's diff and nothing is left only in the worktree; nothing changed, no commit. A commit that couldn't be made
+/// makes the task need the user with why (the work stays in the worktree) and the stop goes through unchecked: Some
+/// with what the hook says (nothing). None: committed, or nothing to commit, or no worktree (a folder not in git).
+fn commit_for_codex(t: &Ticket, store: &mut Tickets) -> Option<Said> {
+    let w = t.worktree.as_ref().filter(|w| !w.is_gone())?;
+    match crate::taskcommit::commit_all("git", Path::new(&w.path), &t.branch(), &commit_message(t), crate::taskcommit::BUDGET) {
+        crate::taskcommit::Committed::Failed(why) => {
+            let why = tickets::clean(&why, tickets::WHY_MAX);
+            let _ = store.update(t.number, |x| {
+                x.state = State::NeedsYou(Need::CommitFailed(why.clone()));
+                x.checking = None;
+                true
+            });
+            Some(None)
+        }
+        _ => None,
+    }
+}
+
 /// A Codex task's stop, before the check: while its plan waits for the user, the reply is the plan (written as
 /// `plan.md`; Needs you, a plan to approve), and a reply that ends with a question for the user (`QUESTION_MARK`) waits
 /// for the answer. Some when one of those, with what the hook says (nothing); None: the check goes on. A command the user
 /// let through once no longer is.
 fn codex_stop(end: &TurnEnd, task_dir: &Path, config: &Path, project: &str, store: &mut Tickets, t: &Ticket) -> Option<Said> {
-    held::turn_ended(task_dir);
     if t.state != State::Working {
         return None;
     }
@@ -597,7 +645,7 @@ mod tests {
     /// `check-reply` (else done) as `structured_output`; `check-hang` makes it hang, `check-fail` fail.
     const CHECKER: &str = r#"#!/bin/sh
 D='@D@'
-cat > /dev/null
+cat > "$D/check-stdin"
 echo x >> "$D/check-calls"
 printf '%s\n' "$@" > "$D/check-argv"
 pwd > "$D/check-cwd"
@@ -690,7 +738,6 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "the rules".into(),
-            git_dir: Some("/w/.git".into()),
             tag: "5:p1".into(),
         };
         let a = Agent::Claude.task_args(&l);
@@ -1289,8 +1336,17 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
                    - The squads are in /c/squads, one file each. When a step says to follow another squad, read its file and follow its steps.\n"
         );
         // Codex's: its own question tool or a last line, the plan as a reply, its own helpers, pushing held back.
-        let codex = rules(&Rules { agent: Agent::Codex, helper_models: vec!["gpt-6-luna".into(), "gpt-5.6-terra".into()], ..base.clone() });
+        let codex = rules(&Rules {
+            agent: Agent::Codex,
+            helper_models: vec!["gpt-6-luna".into(), "gpt-5.6-terra".into()],
+            squad_files: vec![("Feature".into(), "feature.md".into()), ("Plan first".into(), "planfirst.md".into())],
+            ..base.clone()
+        });
         for want in [
+            "Don't commit, and don't run git commands that write (add, commit, stash",
+            "platoon commits what you changed on `task/5` each time you stop",
+            "If you changed files, your final message says that the work is on the branch `task/5` and is not merged",
+            "one file each (Feature: `feature.md`, Plan first: `planfirst.md`)",
             "request_user_input tool when you have it",
             "starting with \"Question for you:\"",
             "write the plan as your reply and stop: change no files until the user answers it",
@@ -1304,10 +1360,97 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         ] {
             assert!(codex.contains(want), "{want}\n{codex}");
         }
-        for not in ["AskUserQuestion", "ExitPlanMode", "Agent tool", "plan mode", "another Claude"] {
+        for not in ["AskUserQuestion", "ExitPlanMode", "Agent tool", "plan mode", "another Claude", "Commit what you change"] {
             assert!(!codex.contains(not), "{not}\n{codex}");
         }
         let no_plan = rules(&Rules { agent: Agent::Codex, plan_first: false, ..base });
         assert!(!no_plan.contains("Plan first"), "{no_plan}");
+    }
+
+    fn git(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(["-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+            .args(args)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    /// A Codex task started in a worktree of the repository `<d>/shop` (its own git identity), its session known.
+    fn codex_git_world(name: &str) -> (PathBuf, String, u32, PathBuf, PathBuf) {
+        let d = dir(name);
+        let p = crate::projects::Projects::open(&d).create("Shop").unwrap();
+        let shop = d.join("shop");
+        fs::create_dir_all(&shop).unwrap();
+        git(&shop, &["init", "-q"]);
+        for (k, v) in [("user.name", "Shop Owner"), ("user.email", "owner@example.com"), ("commit.gpgsign", "false")] {
+            git(&shop, &["config", k, v]);
+        }
+        fs::write(shop.join("README"), "hi\n").unwrap();
+        git(&shop, &["add", "."]);
+        git(&shop, &["commit", "-q", "-m", "first"]);
+        let mut store = Tickets::open(&d, &p);
+        let n = store
+            .add(NewTicket { title: "Login".into(), folder: Some(shop.to_string_lossy().into_owned()), ..Default::default() })
+            .unwrap();
+        let w = crate::worktrees::prepare("git", &shop.to_string_lossy(), n, None).unwrap().unwrap();
+        store.start(n, "feature", CODEX_ID, Some(w.clone())).unwrap();
+        (d, p, n, shop, PathBuf::from(w.path))
+    }
+
+    #[test]
+    fn at_each_stop_platoon_commits_what_a_codex_task_changed_and_the_check_sees_it() {
+        let (d, p, n, shop, wt) = codex_git_world("codex-commit");
+        fs::write(wt.join("login.rs"), "fn login() {}\n").unwrap();
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Added login."})), &d, &p, n), None);
+        assert_eq!(git(&shop, &["log", "-1", "--format=%s|%an", "task/1"]), "#1 Login|Shop Owner", "one commit, the repo's own identity");
+        assert_eq!(git(&shop, &["rev-list", "--count", "main..task/1"]), "1");
+        assert_eq!(git(&wt, &["status", "--porcelain"]), "");
+        let asked = fs::read_to_string(d.join("check-stdin")).unwrap();
+        assert!(asked.contains("+fn login() {}"), "the check saw the commit in the branch's diff: {asked}");
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 1));
+        // Typed into again, a stop with nothing changed makes no commit; the check runs all the same.
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "anything else?"})), &d, &p, n);
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Nothing more."})), &d, &p, n);
+        assert_eq!(git(&shop, &["rev-list", "--count", "main..task/1"]), "1", "no empty commit");
+        assert_eq!(checks_made(&d), 2);
+    }
+
+    #[test]
+    fn a_commit_that_fails_needs_you_with_why_keeps_the_work_and_isnt_checked() {
+        let (d, p, n, shop, wt) = codex_git_world("codex-commit-fails");
+        let hook = shop.join(".git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\necho 'lint: login.rs has no tests' >&2\nexit 1\n").unwrap();
+        fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        fs::write(wt.join("login.rs"), "fn login() {}\n").unwrap();
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Added login."})), &d, &p, n), None);
+        let State::NeedsYou(Need::CommitFailed(why)) = state(&d, &p, n) else { panic!("{:?}", state(&d, &p, n)) };
+        assert!(why.contains("git commit failed") && why.contains("lint: login.rs has no tests"), "{why}");
+        assert_eq!(Need::CommitFailed(why).words(), "its work couldn't be committed");
+        assert_eq!(fs::read_to_string(wt.join("login.rs")).unwrap(), "fn login() {}\n", "the work is kept");
+        assert_eq!(git(&shop, &["rev-list", "--count", "main..task/1"]), "0");
+        assert_eq!(checks_made(&d), 0, "nothing checked on work that isn't on the branch");
+        // Fixed (the hook lets it through), the user types, the next stop commits and is checked.
+        fs::remove_file(&hook).unwrap();
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "try again"})), &d, &p, n);
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Done."})), &d, &p, n);
+        assert_eq!((git(&shop, &["rev-list", "--count", "main..task/1"]).as_str(), state(&d, &p, n)), ("1", State::Done));
+    }
+
+    #[test]
+    fn a_plan_stop_commits_nothing_when_nothing_changed() {
+        let (d, p, n, shop, _) = codex_git_world("codex-commit-plan");
+        let task_dir = tickets::task_dir(&d, &p, n);
+        let all = crate::squads::all(&d);
+        write_task_files(&task_dir, &all[0], &all, &Rules { agent: Agent::Codex, plan_first: true, ..Default::default() }).unwrap();
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "1. Add the form."})), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Plan));
+        assert_eq!(git(&shop, &["rev-list", "--count", "main..task/1"]), "0");
     }
 }

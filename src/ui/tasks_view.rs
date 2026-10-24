@@ -443,7 +443,8 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
         }
     }
     if let Some(s) = x.session.as_deref().and_then(|s| app.session_spent(s)) {
-        for (k, l) in wrap(&crate::spent::details_total(&s), room).into_iter().enumerate() {
+        let agent = app.task_program(project, x).unwrap_or_default();
+        for (k, l) in wrap(&crate::spent::details_total(&s, agent), room).into_iter().enumerate() {
             lines.push(Line::from(vec![
                 if k == 0 { label("Tokens") } else { Span::raw(" ".repeat(LABEL_W)) },
                 Span::styled(l, Style::new().fg(t.subtext)),

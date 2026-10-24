@@ -1260,7 +1260,6 @@ mod tests {
             exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "the rules".into(),
-            git_dir: Some("/w/.git".into()),
             tag: "5:p1".into(),
         };
         let settings = settings_json("/opt/platoon/bin/platoon");

@@ -1278,7 +1278,7 @@ mod tests {
             v["hooks"]["PreToolUse"],
             json!([{"matcher": "Bash|apply_patch|request_user_input", "hooks": [{"type": "command", "command": format!("{exe} hook task-before --agent codex")}]}])
         );
-        assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 660);
+        assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 720);
         assert!(v["hooks"]["Stop"][0]["hooks"][0].get("timeout").is_none() && v["hooks"]["PostToolUse"][0].get("matcher").is_none());
         let text = fs::read_to_string(codex.join("hooks.json")).unwrap();
         let again = run_codex(&codex);

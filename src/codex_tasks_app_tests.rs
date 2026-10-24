@@ -126,7 +126,7 @@ fn a_task_on_a_codex_model_starts_in_codex_in_its_trusted_worktree_with_the_task
     assert_eq!(t.session_id(), None);
     let w = t.worktree.clone().unwrap();
     let root = crate::worktrees::root_of(&w, 1);
-    assert!(root.ends_with("shop-worktrees/task-1") && root.is_dir(), "{root:?}");
+    assert!(root.ends_with("shop-worktrees/task-1") && root.is_dir() && root.starts_with(l.shop.parent().unwrap()), "{root:?}");
     // Codex was asked to trust the worktree's folder, exactly as its own window would, and the task says so.
     let folder_key = root.canonicalize().unwrap().to_string_lossy().into_owned();
     assert_eq!(w.codex_trust.as_deref(), Some(folder_key.as_str()));
@@ -139,17 +139,21 @@ fn a_task_on_a_codex_model_starts_in_codex_in_its_trusted_worktree_with_the_task
     let (dir, args) = &l.app.sq.launched_with[0];
     assert_eq!(dir, &w.path);
     assert_eq!(&args[..7], ["--no-daemon", "-m", "gpt-6-luna", "-s", "workspace-write", "-a", "on-request"]);
-    let git_dir = l.shop.join(".git").canonicalize().unwrap();
     let set = |k: &str| args.iter().find_map(|a| a.strip_prefix(&format!("{k}="))).map(String::from);
     assert_eq!(set("check_for_update_on_startup").as_deref(), Some("false"));
     assert_eq!(set("sandbox_workspace_write.network_access").as_deref(), Some("true"));
-    assert_eq!(set("sandbox_workspace_write.writable_roots"), Some(format!("[\"{}\"]", git_dir.display())));
+    assert_eq!(set("sandbox_workspace_write.writable_roots"), None, "platoon commits for it");
     let instructions: toml::Table = format!("x={}", set("developer_instructions").unwrap()).parse().unwrap();
     let instructions = instructions["x"].as_str().unwrap();
     assert!(
         instructions.contains("request_user_input") && instructions.contains("Plan first.") && instructions.contains("# The squad: Mine")
     );
     assert!(!instructions.contains("AskUserQuestion"));
+    assert!(instructions.contains("platoon commits what you changed on `task/1` each time you stop"), "{instructions}");
+    assert!(
+        instructions.contains("Feature: `feature.md`") && instructions.contains("Mine: `mine.md`"),
+        "the squads' files by name: {instructions}"
+    );
     assert!(args.last().unwrap().starts_with("Task #1: Add a basket"), "the first message: {args:?}");
     assert!(!args.iter().any(|a| a == "--session-id" || a == "-n" || a == "resume"), "{args:?}");
     let env = &l.app.sq.launched_env[0];

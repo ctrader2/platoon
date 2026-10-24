@@ -358,6 +358,7 @@ impl App {
             squads_dir: task_dir.join("squads").to_string_lossy().into_owned(),
             plan_first: squad.plan_first,
             helper_models: catalog.of_agent(agent).map(|m| m.id.clone()).filter(|_| agent == Agent::Codex).collect(),
+            squad_files: Vec::new(),
         };
         // Every squad as it would run here: a step that follows another squad follows what this computer runs.
         let all: Vec<Squad> = crate::squads::all(&self.config).iter().map(|s| s.as_run(&catalog)).collect();
@@ -426,10 +427,6 @@ impl App {
         let resume = resume && t.session_id().is_some();
         let exe = std::env::current_exe().map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|_| "platoon".into());
         let plan = squad.plan_first && (!resume || t.state == State::NeedsYou(crate::tickets::Need::Plan));
-        let git_dir = match (agent, &t.worktree) {
-            (Agent::Codex, Some(w)) => crate::worktrees::common_git_dir(&self.git_program, Path::new(&w.path)),
-            _ => None,
-        };
         let launch = TaskLaunch {
             session: t.session_id().unwrap_or_default().to_string(),
             resume,
@@ -440,7 +437,6 @@ impl App {
             task_dir,
             exe,
             first: (!resume).then(|| taskrun::first_message(&t, &store.body(&t))),
-            git_dir,
             tag: crate::tickets::task_tag(project, number),
         };
         let args = agent.task_args(&launch);

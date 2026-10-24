@@ -31,19 +31,20 @@ pub fn row_total(s: &Spent) -> String {
     format!("{} tokens", short(sent_and_written(s)))
 }
 
-/// The details' total: the row's number, said as what it is, then the cache reads beside it: "84K sent and written,
-/// plus 1.9M read again from Claude's cache".
-pub fn details_total(s: &Spent) -> String {
+/// The details' total: the row's number, said as what it is, then the cache reads beside it, naming the program whose
+/// cache it is (`Agent::short`): "84K sent and written, plus 1.9M read again from Claude's cache".
+pub fn details_total(s: &Spent, agent: crate::agents::Agent) -> String {
     let main = format!("{} sent and written", short(sent_and_written(s)));
     if s.cache_read == 0 {
         return main;
     }
-    format!("{main}, plus {} read again from Claude's cache", short(s.cache_read))
+    format!("{main}, plus {} read again from {}'s cache", short(s.cache_read), agent.short())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::Agent;
 
     fn spent(input: u64, output: u64, cache_read: u64) -> Spent {
         Spent { input, output, cache_read, subagents: false }
@@ -66,7 +67,8 @@ mod tests {
         }
         let s = spent(40_000, 44_000, 1_900_000);
         assert_eq!(row_total(&s), "84K tokens");
-        assert_eq!(details_total(&s), "84K sent and written, plus 1.9M read again from Claude's cache");
-        assert_eq!(details_total(&spent(900, 100, 0)), "1K sent and written");
+        assert_eq!(details_total(&s, Agent::Claude), "84K sent and written, plus 1.9M read again from Claude's cache");
+        assert_eq!(details_total(&s, Agent::Codex), "84K sent and written, plus 1.9M read again from Codex's cache");
+        assert_eq!(details_total(&spent(900, 100, 0), Agent::Codex), "1K sent and written");
     }
 }

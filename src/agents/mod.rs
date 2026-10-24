@@ -347,8 +347,6 @@ pub struct TaskLaunch {
     pub first: Option<String>,
     /// `squad.md`'s text: platoon's rules and the squad's steps (Claude Code reads the file, Codex takes the text).
     pub instructions: String,
-    /// The main repository's git folder when the task works in a worktree of it: the session commits there.
-    pub git_dir: Option<String>,
     /// The task, as the session's environment names it to its hooks (`TASK_ENV`, `tickets::task_tag`).
     pub tag: String,
 }

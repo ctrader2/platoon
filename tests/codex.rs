@@ -321,7 +321,7 @@ fn setup_adds_platoons_codex_hooks_has_codex_trust_them_and_never_blocks_on_them
         assert_eq!(v["hooks"][event][group]["hooks"][0]["command"], format!("{BIN} {args}"), "{event}");
     }
     assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "Bash|apply_patch|request_user_input");
-    assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 660);
+    assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 720);
     let sent = requests(&server);
     let methods: Vec<&str> = sent.iter().map(|r| r["method"].as_str().unwrap()).collect();
     assert_eq!(methods, ["initialize", "initialized", "hooks/list", "config/batchWrite", "hooks/list"]);

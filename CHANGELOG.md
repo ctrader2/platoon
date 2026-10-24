@@ -10,8 +10,9 @@ here.
 
 - **Tasks run in Codex.** A squad whose model is one of Codex's runs its task in Codex (the model decides the program;
   a squad's model now goes round every model installed). The session starts in Codex's `workspace-write` sandbox with
-  the network on, the main repository's `.git` writable so it can commit, the squad's steps as its instructions, and
-  no update question; platoon learns its id as it starts. platoon has Codex itself trust the task's worktree while it
+  the network on, the squad's steps as its instructions, and no update question; platoon learns its id as it starts.
+  Codex keeps git's data read-only in its sandbox, so platoon commits what the session changed each time it stops
+  (one commit, "#N title", with the repository's own identity and hooks) before the work is checked. platoon has Codex itself trust the task's worktree while it
   is there, and takes that trust away with it. Pushing, pull requests and publishing wait for your yes in the session
   (the same commands Claude Code asks about, read through `bash -lc`, `&&` and the like). A squad that plans first has
   Codex write its plan and stop, and its edits wait for your answer. On a computer with only Codex, the built-in squads

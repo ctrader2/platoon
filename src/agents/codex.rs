@@ -93,23 +93,20 @@ pub fn session_of_args(args: &[String]) -> Option<String> {
 /// - no update question at startup (`check_for_update_on_startup=false`: it would take the first keys typed);
 /// - the network on (`sandbox_workspace_write.network_access`, decided by the user 2026-10-24): pushing, pull requests
 ///   and publishing wait for the user through platoon's hook instead (`askmatch.rs`);
-/// - the main repository's git folder writable (`sandbox_workspace_write.writable_roots`), so a worktree can commit
-///   (Codex keeps `.git` read-only otherwise, and a permission profile naming it doesn't help);
 /// - platoon's rules and the squad's steps as `developer_instructions` (Codex has no file for them; its
 ///   `model_instructions_file` replaces Codex's own instructions, which OpenAI advises against);
 /// - the first message (a new session only).
 ///
 /// Codex takes no session id and no name: the task learns its id from its SessionStart hook, and platoon shows "#N
-/// title" itself.
+/// title" itself. The session can't commit: Codex keeps a writable root's git data read-only (for a worktree also the
+/// main repository's `.git/worktrees/<name>`, whatever `writable_roots` says: `protocol/src/permissions.rs`), so platoon
+/// commits for it when it stops (`taskrun::commit_for_codex`).
 pub fn task_args(l: &TaskLaunch) -> Vec<String> {
     let mut a: Vec<String> = if l.resume { vec!["resume".into(), l.session.clone()] } else { Vec::new() };
     a.extend(["--no-daemon", "-m", &l.model, "-s", "workspace-write", "-a", "on-request"].map(String::from));
     let mut set = |key: &str, value: String| a.extend(["-c".to_string(), format!("{key}={value}")]);
     set("check_for_update_on_startup", "false".into());
     set("sandbox_workspace_write.network_access", "true".into());
-    if let Some(git) = &l.git_dir {
-        set("sandbox_workspace_write.writable_roots", format!("[{}]", toml_string(git)));
-    }
     set("developer_instructions", toml_string(&l.instructions));
     if let (false, Some(m)) = (l.resume, &l.first) {
         a.push(m.clone());
@@ -153,8 +150,8 @@ pub const NOTES_HOOKS: [HookEntry; 3] = [
 pub const BEFORE_TOOLS: &str = "Bash|apply_patch|request_user_input";
 
 /// The task hooks: installed for every Codex session, they do nothing (at once, saying nothing) in a session that
-/// isn't a task's (no `PLATOON_TASK` in its environment). The `Stop` hook waits as long as the check of the work may
-/// take, and a minute more.
+/// isn't a task's (no `PLATOON_TASK` in its environment). The `Stop` hook waits as long as committing the work and the
+/// check of it may take, and a minute more.
 pub const TASK_HOOKS: [HookEntry; 6] = [
     hook("SessionStart", "hook task-start --agent codex"),
     HookEntry { event: "PreToolUse", args: "hook task-before --agent codex", matcher: Some(BEFORE_TOOLS), timeout: None },
@@ -164,8 +161,9 @@ pub const TASK_HOOKS: [HookEntry; 6] = [
     HookEntry { event: "Stop", args: "hook task-stop --agent codex", matcher: None, timeout: Some(STOP_TIMEOUT) },
 ];
 
-/// How long Codex waits for the task's `Stop` hook: the check of the work's time and a minute.
-pub const STOP_TIMEOUT: u64 = crate::verdict::TIMEOUT.as_secs() + 60;
+/// How long Codex waits for the task's `Stop` hook: the time platoon may take to commit the work, the check of the
+/// work's time, and a minute.
+pub const STOP_TIMEOUT: u64 = crate::taskcommit::BUDGET.as_secs() + crate::verdict::TIMEOUT.as_secs() + 60;
 
 /// Every hook `platoon setup` puts in Codex's `hooks.json`: the notes hooks, then the task hooks.
 pub fn hooks() -> impl Iterator<Item = &'static HookEntry> {
@@ -1477,7 +1475,7 @@ pub(crate) mod tests {
         }
         assert_eq!(hooks().count(), 9);
         let stop = TASK_HOOKS.iter().find(|h| h.event == "Stop").unwrap();
-        assert_eq!(stop.timeout, Some(660), "the check's ten minutes and one more");
+        assert_eq!(stop.timeout, Some(720), "the commit's minute, the check's ten minutes and one more");
     }
 
     #[test]
@@ -1513,13 +1511,12 @@ pub(crate) mod tests {
             exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
             instructions: "# How this task works\n\n- Say \"done\" at the end.\n".into(),
-            git_dir: Some("/w/my \"shop\"/.git".into()),
             tag: "5:p1".into(),
         }
     }
 
     #[test]
-    fn a_tasks_session_starts_in_codexs_sandbox_with_the_network_on_its_git_folder_writable_and_the_squad_as_instructions() {
+    fn a_tasks_session_starts_in_codexs_sandbox_with_the_network_on_and_the_squad_as_instructions() {
         let a = task_args(&launch(false));
         assert_eq!(
             a,
@@ -1536,16 +1533,12 @@ pub(crate) mod tests {
                 "-c",
                 "sandbox_workspace_write.network_access=true",
                 "-c",
-                r#"sandbox_workspace_write.writable_roots=["/w/my \"shop\"/.git"]"#,
-                "-c",
                 r##"developer_instructions="# How this task works\n\n- Say \"done\" at the end.\n""##,
                 "Task #5: Login\n\nDo it.",
             ]
         );
-        // The values are TOML, as Codex reads `-c key=value`: the path with its space and quotes comes back whole.
-        let roots: toml::Table = a[12].parse().unwrap();
-        assert_eq!(roots["sandbox_workspace_write"]["writable_roots"][0].as_str(), Some("/w/my \"shop\"/.git"));
-        let text: toml::Table = a[14].parse().unwrap();
+        // The values are TOML, as Codex reads `-c key=value`: the text with its quotes and lines comes back whole.
+        let text: toml::Table = a[12].parse().unwrap();
         assert_eq!(text["developer_instructions"].as_str(), Some(launch(false).instructions.as_str()));
         // Continued: `resume <id>` first, the same settings, no first message; a host's arguments name it.
         let again = task_args(&launch(true));
@@ -1553,9 +1546,8 @@ pub(crate) mod tests {
         assert_eq!(&again[3..], &a[1..a.len() - 1]);
         assert_eq!(session_of_args(&again).as_deref(), Some("01a1-real"));
         assert_eq!(session_of_args(&a), None, "a new one names no session: Codex says its id at its first hook");
-        // Not in a git worktree: no writable git folder.
-        let plain = task_args(&TaskLaunch { git_dir: None, ..launch(false) });
-        assert!(!plain.iter().any(|x| x.contains("writable_roots")), "{plain:?}");
+        // No writable git folder: it can't lift Codex's protection of a worktree's git data, platoon commits instead.
+        assert!(!a.iter().any(|x| x.contains("writable_roots")), "{a:?}");
         assert_eq!(launch(false).env(), [("PLATOON_TASK", "5:p1".to_string())]);
     }
 
