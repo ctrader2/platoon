@@ -8,6 +8,13 @@ here.
 
 ### Changed
 
+- **Codex conversations are named, found by description, handed off and drafted into tasks.** Smart names and
+  summaries, Describe it, the hand-off (`h`) and tasks from a conversation (`t`) read a Codex conversation as they read a
+  Claude Code one: what you typed and a line of Codex's last reply. The name Codex gives a conversation stays its
+  description line. A Codex conversation is handed on to a new Codex session (`codex --no-daemon` with the document as
+  its first message), in the same folder and project; when the conversation's program isn't installed any more, `h`
+  says so and starts nothing.
+
 - **Project notes have a model of their own, Sonnet by default.** Whatever the model for smart features is, a notes
   update uses **Model for project notes** (Settings, Projects tab), which is Sonnet unless you pick another. On Haiku, an
   update could leave out a change it had just been shown (a feature taken back out stayed in the notes), and shortening
@@ -16,8 +23,7 @@ here.
   notes, the hand-off, tasks from a conversation and a task's check run as `codex exec` when their model is one of
   OpenAI's: ephemeral, without your `config.toml`, in Codex's read-only sandbox (Codex can't switch its tools off), the
   request on standard input. Every token Codex reports counts against the daily limit; its own instructions are about
-  20,000 tokens a call. `platoon tokens test` says which program it asks. Conversations of Codex's still aren't
-  named, described or handed off.
+  20,000 tokens a call. `platoon tokens test` says which program it asks.
 - **platoon runs on a computer with only Codex.** Claude Code's setup steps are asked for, and block starting, only
   where Claude Code is installed (`claude` on the path, or `PLATOON_CLAUDE_BIN`); with only Codex, `platoon setup` leaves
   Claude Code's settings alone and sets up Codex's hooks, and platoon starts, lists Codex's conversations and offers

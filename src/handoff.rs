@@ -111,8 +111,10 @@ pub struct Material {
     pub summary: Option<String>,
     /// The messages the user typed, oldest first, each already cut.
     pub messages: Vec<String>,
-    /// One line of Claude's last reply.
+    /// One line of the agent's last reply.
     pub reply: Option<String>,
+    /// The agent the conversation is with (Claude Code or Codex): whose reply `reply` is.
+    pub agent: crate::agents::Agent,
 }
 
 impl Material {
@@ -164,7 +166,7 @@ pub fn prompt(m: &Material, git: Option<&GitFacts>) -> String {
         t.push('\n');
     }
     if let Some(r) = &m.reply {
-        t.push_str(&format!("Claude's last reply: {}\n\n", cut(r, MESSAGE_CHARS)));
+        t.push_str(&format!("{}'s last reply: {}\n\n", m.agent.short(), cut(r, MESSAGE_CHARS)));
     }
     match git {
         Some(g) if g.knows_files() => {
@@ -333,6 +335,8 @@ pub struct Facts {
     pub running: Option<bool>,
     /// What the previous session spent, from its transcript.
     pub tokens: Option<crate::agents::Spent>,
+    /// The agent the previous session ran on: how its id opens it, and whose tokens it spent.
+    pub agent: crate::agents::Agent,
 }
 
 /// A moment in the user's own time zone: `2026-09-25 14:03`. None if the system can't say (then it is left out).
@@ -392,7 +396,7 @@ pub fn facts_block(f: &Facts) -> String {
     }
     lines.push(prev);
     if let Some(id) = f.session_id.as_deref().map(|id| clean_text(id, NAME_MAX)).filter(|id| !id.is_empty()) {
-        lines.push(format!("- Previous session id: {id} (`claude --resume {id}` opens it)"));
+        lines.push(format!("- Previous session id: {id} (`{}` opens it)", f.agent.resume_command(&id)));
     }
     let when = |ms: Option<u64>| ms.and_then(|ms| local_time(ms / 1000));
     match (when(f.started_ms), when(f.last_ms)) {
@@ -417,7 +421,7 @@ pub fn facts_block(f: &Facts) -> String {
         lines.push(format!("- Messages from the user: {n} (short replies like \"yes\" not counted)"));
     }
     if let Some(t) = &f.tokens {
-        lines.push(tokens_line(t));
+        lines.push(tokens_line(t, f.agent));
     }
     if let Some(g) = &f.git {
         if let Some(b) = &g.branch {
@@ -461,11 +465,11 @@ pub fn facts_block(f: &Facts) -> String {
 
 /// What the previous session spent, in plain words: what went in and what came out, and - said apart, because it
 /// is mostly the same conversation sent again each turn - what was read back from the cache. Never money.
-fn tokens_line(t: &crate::agents::Spent) -> String {
-    let n = crate::settings::thousands;
-    let mut line = format!("- Tokens the previous session used: {} sent to Claude and {} written by Claude", n(t.input), n(t.output));
+fn tokens_line(t: &crate::agents::Spent, agent: crate::agents::Agent) -> String {
+    let (n, who) = (crate::settings::thousands, agent.short());
+    let mut line = format!("- Tokens the previous session used: {} sent to {who} and {} written by {who}", n(t.input), n(t.output));
     if t.cache_read > 0 {
-        line.push_str(&format!(", plus {} read again from Claude's cache", n(t.cache_read)));
+        line.push_str(&format!(", plus {} read again from {who}'s cache", n(t.cache_read)));
     }
     if t.subagents {
         line.push_str(" (its subagents included)");
@@ -555,16 +559,19 @@ pub fn document(f: &Facts, b: &Brief) -> String {
     t
 }
 
-/// Why this text can't be handed to a new session as it stands, in plain words. None when it can.
-pub fn why_not(text: &str) -> Option<String> {
+/// Why this text can't be handed to a new session of `agent`'s as it stands, in plain words. None when it can.
+pub fn why_not(text: &str, agent: crate::agents::Agent) -> Option<String> {
     let t = text.trim();
     if t.is_empty() {
         return Some("The brief is empty, so there is nothing to start the new session with.".into());
     }
-    // It goes to `claude` as the first thing it is given, and something starting with a dash would be read as an
-    // option rather than a message.
+    // It goes to the agent's program as the first thing it is given, and something starting with a dash would be read
+    // as an option rather than a message.
     if t.starts_with('-') {
-        return Some("The brief can't start with a dash: Claude would read it as an option. Change the first character.".into());
+        return Some(format!(
+            "The brief can't start with a dash: {} would read it as an option. Change the first character.",
+            agent.short()
+        ));
     }
     if t.chars().count() > TEXT_MAX {
         return Some(format!("The brief is longer than {TEXT_MAX} characters. Shorten it first."));
@@ -575,7 +582,7 @@ pub fn why_not(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agents::Spent;
+    use crate::agents::{Agent, Spent};
     use crate::gitfacts::{Change, Kind, Since, Upstream};
 
     fn material() -> Material {
@@ -586,6 +593,7 @@ mod tests {
             summary: Some("Building the basket and its totals.".into()),
             messages: vec!["Add a basket page".into(), "And make the totals add up".into()],
             reply: Some("I added the basket page.".into()),
+            agent: Agent::Claude,
         }
     }
 
@@ -627,6 +635,7 @@ mod tests {
             notes: Some("~/.config/platoon/projects/p1/project.md".into()),
             running: Some(false),
             tokens: Some(Spent { input: 45_210, output: 12_034, cache_read: 1_234_567, subagents: false }),
+            agent: Agent::Claude,
         }
     }
 
@@ -797,7 +806,7 @@ mod tests {
             t(1_789_997_500),
         );
         assert_eq!(doc, expected);
-        assert!(why_not(&doc).is_none(), "it can be handed on as it is");
+        assert!(why_not(&doc, Agent::Claude).is_none(), "it can be handed on as it is");
     }
 
     #[test]
@@ -1023,13 +1032,17 @@ mod tests {
 
     #[test]
     fn a_brief_that_cannot_be_handed_on_says_why_and_a_good_one_says_nothing() {
-        assert!(why_not(&document(&facts(), &brief())).is_none());
-        assert_eq!(why_not("   ").as_deref(), Some("The brief is empty, so there is nothing to start the new session with."));
-        assert_eq!(why_not("").as_deref(), Some("The brief is empty, so there is nothing to start the new session with."));
-        let dash = why_not("--resume something").unwrap();
+        assert!(why_not(&document(&facts(), &brief()), Agent::Claude).is_none());
+        assert_eq!(
+            why_not("   ", Agent::Claude).as_deref(),
+            Some("The brief is empty, so there is nothing to start the new session with.")
+        );
+        assert_eq!(why_not("", Agent::Claude).as_deref(), Some("The brief is empty, so there is nothing to start the new session with."));
+        let dash = why_not("--resume something", Agent::Claude).unwrap();
         assert!(dash.contains("can't start with a dash"), "{dash}");
-        assert!(why_not(" - a list item").is_some(), "leading space and a dash is still a dash");
-        assert!(why_not(&"x".repeat(TEXT_MAX + 1)).unwrap().contains("Shorten it"));
-        assert!(why_not(&"x".repeat(TEXT_MAX)).is_none());
+        assert!(why_not(" - a list item", Agent::Claude).is_some(), "leading space and a dash is still a dash");
+        assert!(why_not(&"x".repeat(TEXT_MAX + 1), Agent::Claude).unwrap().contains("Shorten it"));
+        assert!(why_not(&"x".repeat(TEXT_MAX), Agent::Claude).is_none());
+        assert!(why_not("-x", Agent::Codex).unwrap().contains("Codex would read it as an option"), "the program it goes to");
     }
 }

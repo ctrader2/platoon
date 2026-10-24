@@ -17,8 +17,8 @@
 //! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `HOOKS`).
 
 use super::{
-    HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, Start, TaskLaunch, Tool, Transcript, TurnEnd, one_line, parse_iso_ms,
-    tidy_reply, truncate_to,
+    HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, Spent, Start, TaskLaunch, Tool, Transcript, TurnEnd, one_line,
+    parse_iso_ms, tidy_reply, truncate_to,
 };
 use crate::ai::{Outcome, Request, classify, extract_json};
 use crate::ledger::{FailKind, Usage};
@@ -565,6 +565,68 @@ fn scan_tail<'a>(lines: impl Iterator<Item = &'a str>, t: &mut Transcript) {
             _ => {}
         }
     }
+}
+
+/// When the conversation started: the time of the first record that has one (its `session_meta`), ms since the epoch.
+pub fn started_ms(path: &Path) -> Option<u64> {
+    let file = File::open(path).ok()?;
+    let mut reader = BufReader::new(file.take(HEAD_BYTES));
+    let mut line = Vec::new();
+    for _ in 0..HEAD_LINES {
+        line.clear();
+        if !matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+            return None;
+        }
+        if let Some(ms) = record(&String::from_utf8_lossy(&line)).and_then(|v| v["timestamp"].as_str().and_then(parse_iso_ms)) {
+            return Some(ms);
+        }
+    }
+    None
+}
+
+/// What the conversation spent, from its newest `token_count` (Codex keeps a running total, `total_token_usage`, in
+/// each). Codex's `input_tokens` counts the cached part too: that part is `cache_read` here, the rest `input`, so the
+/// figures mean what Claude Code's do (`Spent`). Looked for near the end first; a rollout whose end is one huge
+/// output is read through. None when there is no total at all.
+pub fn spent(path: &Path) -> Option<Spent> {
+    let total_in = |line: &str| -> Option<Spent> {
+        if !line.contains("\"total_token_usage\"") {
+            return None;
+        }
+        let v = record(line)?;
+        (payload_type(&v) == Some("token_count")).then_some(())?;
+        let u = v["payload"]["info"].get("total_token_usage").filter(|u| u.is_object())?;
+        let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
+        Some(Spent {
+            input: n("input_tokens").saturating_sub(n("cached_input_tokens")),
+            output: n("output_tokens"),
+            cache_read: n("cached_input_tokens"),
+            subagents: false,
+        })
+    };
+    let mut file = File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let start = len.saturating_sub(TAIL_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut buf = Vec::new();
+    (&mut file).take(TAIL_BYTES).read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    if let Some(s) = text.lines().skip(usize::from(start > 0)).collect::<Vec<_>>().into_iter().rev().find_map(total_in) {
+        return Some(s);
+    }
+    if start == 0 {
+        return None;
+    }
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut reader = BufReader::new(file);
+    let (mut line, mut last) = (Vec::new(), None);
+    while matches!(reader.read_until(b'\n', &mut line), Ok(n) if n > 0) {
+        if let Some(s) = total_in(&String::from_utf8_lossy(&line)) {
+            last = Some(s);
+        }
+        line.clear();
+    }
+    last
 }
 
 /// How many of the rollouts written to last are looked through for the plan's limits.
@@ -1184,6 +1246,76 @@ pub(crate) mod tests {
         assert_eq!(reply_in_line(two, 100).as_deref(), Some("First line. Second."));
         let tool = src.lines().find(|l| l.contains("custom_tool_call")).unwrap();
         assert!(!may_be_reply(tool) && prompt_in_line(tool, 300).is_none());
+    }
+
+    /// A longer conversation in real Codex 0.163 record shapes, with made-up content (`testdata/codex/conversation`):
+    /// three turns ("yes" the second), Codex's own blocks, tool calls with a huge output, a broken line and an unknown
+    /// record.
+    fn conversation() -> PathBuf {
+        data().join("conversation/rollout-2026-10-20T09-00-00-01a20000-1111-7000-8000-00000000c0de.jsonl")
+    }
+
+    #[test]
+    fn platoons_ai_features_read_a_codex_conversation_as_they_read_a_claude_one() {
+        use crate::agents::Agent;
+        let read = crate::notesrun::read_session(Agent::Codex, &conversation(), 300);
+        assert_eq!(read.first.as_deref(), Some("Add a basket page to the shop, with sizes and colours for each item."));
+        assert_eq!(
+            read.recent,
+            [
+                "Add a basket page to the shop, with sizes and colours for each item.",
+                "Now make the checkout remember the basket between visits; card payments can wait for later."
+            ],
+            "\"yes\" is not a message that says anything; Codex's own blocks and a hook's prompt are not the user's"
+        );
+        assert_eq!(read.total, 2, "the substantive messages");
+        assert_eq!(
+            read.reply.as_deref(),
+            Some(
+                "The checkout now keeps the basket between visits. I ran cargo test: 12 passed. Card payments are left for later, \
+                 as you asked; they need a payment provider first."
+            ),
+            "the last thing Codex said in words, on one line: never a tool's output"
+        );
+        // Each message is cut as Claude's are.
+        let short = crate::notesrun::read_session(Agent::Codex, &conversation(), 20);
+        assert_eq!(short.first.as_deref(), Some("Add a basket page to"));
+        assert_eq!(Agent::Codex.find_transcript(&data().join("nothing-here"), "01a20000-1111-7000-8000-00000000c0de"), None);
+
+        // When it started, and what it spent: Codex's running total, its cached part apart.
+        assert_eq!(Agent::Codex.started_ms(&conversation()), parse_iso_ms("2026-10-20T09:00:00.000Z"));
+        assert_eq!(
+            Agent::Codex.spent(&conversation()),
+            Some(Spent { input: 20_000, output: 900, cache_read: 40_000, subagents: false }),
+            "60,000 sent of which 40,000 cached"
+        );
+        assert_eq!(spent(&rollout(FINISHED)), Some(Spent { input: 17_690, output: 48, cache_read: 24_576, subagents: false }));
+        assert_eq!(started_ms(&rollout(FINISHED)), parse_iso_ms("2026-10-19T00:07:40.187Z"));
+    }
+
+    #[test]
+    fn a_huge_record_a_broken_one_or_none_at_all_is_passed_over_never_an_error() {
+        use crate::agents::Agent;
+        let d = tmp("reader-edges");
+        let p = d.join("rollout-2026-10-20T09-00-00-01a20000-1111-7000-8000-00000000c0de.jsonl");
+        // A message longer than anyone types (a pasted log, 5 MB) is skipped, the conversation around it still read; a
+        // total far from the end (a long output after it) is still found.
+        let mut text = fs::read_to_string(conversation()).unwrap();
+        let huge = json!({"timestamp":"2026-10-20T09:20:00.000Z","type":"response_item","payload":{"type":"message","role":"user",
+            "content":[{"type":"input_text","text":"x".repeat(5 << 20)}]}});
+        let output = json!({"timestamp":"2026-10-20T09:21:00.000Z","type":"response_item","payload":{"type":"function_call_output",
+            "call_id":"c9","output":"y".repeat(TAIL_BYTES as usize + 1000)}});
+        text.push_str(&format!("{huge}\n{output}\n"));
+        fs::write(&p, &text).unwrap();
+        let read = crate::notesrun::read_session(Agent::Codex, &p, 300);
+        assert_eq!(read.total, 2, "the huge one isn't counted");
+        assert_eq!(spent(&p).map(|s| s.input), Some(20_000), "found before the long output");
+        // Nothing that says anything.
+        fs::write(&p, "{ broken\n[1,2]\n{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":null}}\n").unwrap();
+        let read = crate::notesrun::read_session(Agent::Codex, &p, 300);
+        assert_eq!((read.first, read.total, read.reply), (None, 0, None));
+        assert_eq!((spent(&p), started_ms(&p)), (None, None));
+        assert_eq!((spent(&d.join("missing.jsonl")), started_ms(&d.join("missing.jsonl"))), (None, None));
     }
 
     #[test]

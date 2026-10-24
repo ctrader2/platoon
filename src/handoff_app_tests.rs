@@ -115,7 +115,7 @@ fn h_asks_for_a_brief_and_shows_it_for_the_user_to_edit_before_anything_starts()
     assert!(!text.contains("Git branch"), "{text}");
     assert!(text.contains("As Claude described them (this folder is not a git repository):\n- claude-says.rs: made up"), "{text}");
     assert!(!text.contains("Sell socks."), "the project's notes are not repeated: {text}");
-    assert!(handoff::why_not(&text).is_none());
+    assert!(handoff::why_not(&text, crate::agents::Agent::Claude).is_none());
 
     // What was sent: this conversation, its folder and its project, and never its session id.
     assert_eq!(fake.calls(), 1);

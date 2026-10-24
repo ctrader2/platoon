@@ -7,7 +7,7 @@
 //! its project, or in none.
 //!
 //! What is sent, what a reply may be and what a task's text looks like are in `taskdraft.rs`; reading the
-//! conversation is the hand-off's way (`notesrun::read_session`).
+//! conversation is the hand-off's way (`notesrun::read_session`), for a Claude Code conversation or a Codex one alike.
 
 use super::*;
 use crate::ai::{AiError, Reply, Request};
@@ -59,10 +59,10 @@ pub struct DraftState {
     pub draft: Option<TaskDraft>,
 }
 
-/// A conversation as the drafting gets it, read from its transcript the way the hand-off reads one: the first message
-/// and the last few (each cut as the hand-off cuts them), and one line of Claude's last reply.
-fn read_conversation(path: &Path, material: &mut Material) {
-    let read = crate::notesrun::read_session(path, crate::handoff::MESSAGE_CHARS);
+/// A conversation of `agent`'s as the drafting gets it, read from its transcript the way the hand-off reads one: the
+/// first message and the last few (each cut as the hand-off cuts them), and one line of the agent's last reply.
+fn read_conversation(agent: Agent, path: &Path, material: &mut Material) {
+    let read = crate::notesrun::read_session(agent, path, crate::handoff::MESSAGE_CHARS);
     let mut messages: Vec<String> = read.recent.iter().rev().take(crate::handoff::MESSAGES).rev().cloned().collect();
     if let Some(first) = &read.first
         && !messages.first().is_some_and(|x| x == first)
@@ -112,7 +112,7 @@ impl App {
         }
     }
 
-    /// Ask Claude for tasks from conversation `id`, in the background. Everything that would make it pointless is
+    /// Ask for tasks from conversation `id` (Claude Code's or Codex's), in the background. Everything that would make it pointless is
     /// said in one line and nothing is asked: another draft under way, a project that takes no new tasks, no folder to
     /// work in, or the gate says no.
     pub(super) fn start_task_draft(&mut self, id: &str) {
@@ -130,11 +130,7 @@ impl App {
             self.notify("That session isn't in platoon's list any more.");
             return;
         };
-        if !s.agent.smart_reads() {
-            self.notify(format!("Tasks are drafted from Claude Code conversations only, for now: \"{}\" is {}'s.", s.name, s.agent.name()));
-            return;
-        }
-        let (name, cwd) = (s.name.clone(), s.cwd.clone());
+        let (name, cwd, agent) = (s.name.clone(), s.cwd.clone(), s.agent);
         let project = match self.projects.of(id) {
             Some(p) if p.archived => {
                 let why = tickets::archived_refusal(&p.name);
@@ -168,6 +164,7 @@ impl App {
             project: if project == tickets::NO_PROJECT_ID { String::new() } else { self.task_project_name(&project) },
             folders: vec![Path::new(&cwd).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()],
             kinds: kinds.clone(),
+            agent,
             ..Material::default()
         };
         let mut req = Request::new(
@@ -178,7 +175,7 @@ impl App {
         req.user_initiated = true;
         req.timeout = DRAFT_TIMEOUT;
         req.cancel = self.switchboard.token(taskdraft::FEATURE);
-        let rx = self.spawn_task_draft(settings, req, material, (self.reader.root().to_path_buf(), id.to_string()));
+        let rx = self.spawn_task_draft(settings, req, material, (self.agent_root(agent), id.to_string()));
         let draft = TaskDraft {
             session: id.to_string(),
             session_name: name.clone(),
@@ -200,7 +197,7 @@ impl App {
         settings: Settings,
         mut req: Request,
         mut material: Material,
-        transcript: (PathBuf, String),
+        transcript: (Option<PathBuf>, String),
     ) -> Receiver<DraftAnswer> {
         let (tx, rx) = channel();
         let program = self.ai_program();
@@ -208,8 +205,9 @@ impl App {
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
         let never = cfg!(test) && program == "claude";
         thread::spawn(move || {
-            if let Some(path) = crate::agents::claude::find_transcript(&transcript.0, &transcript.1) {
-                read_conversation(&path, &mut material);
+            let agent = material.agent;
+            if let Some(path) = transcript.0.and_then(|root| agent.find_transcript(&root, &transcript.1)) {
+                read_conversation(agent, &path, &mut material);
             }
             if material.is_empty() {
                 let _ = tx.send(DraftAnswer::Nothing);

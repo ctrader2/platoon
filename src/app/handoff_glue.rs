@@ -1,7 +1,8 @@
 //! The hand-off inside the app: `h` on a session that is in a project reads what git says about its folder, asks
-//! Claude for its part of a hand-off document (summary, work completed, gotchas, next steps), shows the whole
-//! document in a box the user can edit, and on accept starts a **new** session in the same folder and the same
-//! project with that text as its first message. The old session is left exactly as it is: nothing is archived and
+//! the smart features' model for its part of a hand-off document (summary, work completed, gotchas, next steps), shows
+//! the whole document in a box the user can edit, and on accept starts a **new** session in the same folder and the
+//! same project with that text as its first message, on the same agent as the conversation it came from (a Codex
+//! conversation hands on to a new Codex session). The old session is left exactly as it is: nothing is archived and
 //! nothing is stopped.
 //!
 //! Reading the transcript, its token count, git and the call run on a thread of their own, one after the other (git
@@ -72,6 +73,8 @@ pub struct HandoffBox {
     pub project_name: String,
     /// The folder the new session starts in: the old one's.
     pub cwd: String,
+    /// The agent the conversation is with, and so the one the new session starts on.
+    pub agent: Agent,
     pub state: HandoffState,
     /// The document, as the user may edit it.
     pub text: String,
@@ -96,6 +99,7 @@ impl HandoffBox {
             project: String::new(),
             project_name: String::new(),
             cwd: String::new(),
+            agent: Agent::Claude,
             state: HandoffState::Asking,
             text: String::new(),
             cursor: 0,
@@ -263,11 +267,7 @@ impl App {
             self.notify("No session selected");
             return;
         };
-        if !s.agent.smart_reads() {
-            self.notify(format!("The hand-off reads Claude Code conversations only, for now: \"{}\" is {}'s.", s.name, s.agent.name()));
-            return;
-        }
-        let (session, session_name, cwd) = (s.id.clone(), s.name.clone(), s.cwd.clone());
+        let (session, session_name, cwd, agent) = (s.id.clone(), s.name.clone(), s.cwd.clone(), s.agent);
         // What the list already knows about it, for the facts. A figure it doesn't have is left out.
         let mut facts = Facts {
             session: session_name.clone(),
@@ -280,6 +280,7 @@ impl App {
             session_id: Some(s.id.clone()).filter(|id| !id.is_empty()),
             // The list's own knowledge of the processes running it, as of the last refresh.
             running: Some(!s.procs.is_empty()),
+            agent,
             ..Facts::default()
         };
         let Some(project) = self.projects.of(&session).cloned() else {
@@ -291,6 +292,12 @@ impl App {
             return;
         }
         if !self.cwd_exists(&session_name, &cwd) {
+            return;
+        }
+        // The new session runs on the conversation's own agent: one that isn't here any more can't take it on, so
+        // nothing is asked for.
+        if let Some(why) = self.agent_gone(agent, &session_name) {
+            self.notify(why);
             return;
         }
         let settings = self.settings.get();
@@ -306,8 +313,8 @@ impl App {
         facts.project = project.name.clone();
         let notes = self.projects.notes_path(&project.id);
         facts.notes = notes.is_file().then(|| crate::dirs::tilde(&notes.to_string_lossy(), &self.home));
-        let material = self.handoff_material(&session, &session_name, &cwd, &project.name);
-        let transcript = (self.reader.root().to_path_buf(), session.clone());
+        let material = handoff::Material { agent, ..self.handoff_material(&session, &session_name, &cwd, &project.name) };
+        let transcript = (self.agent_root(agent), session.clone());
         let mut req = Request::new(
             handoff::FEATURE,
             handoff::system_with(&instructions::guidance(&self.config, instructions::HANDOFF)),
@@ -323,6 +330,7 @@ impl App {
             project: project.id.clone(),
             project_name: project.name.clone(),
             cwd,
+            agent,
             facts,
             ..HandoffBox::empty()
         };
@@ -334,14 +342,15 @@ impl App {
     /// own: the whole transcript is read (a long conversation takes a moment) and git can block (a huge repository,
     /// a network folder); git goes before the call so the files it names can be given to Claude.
     ///
-    /// `transcript` is Claude's config folder and the session id: even finding the file is left to the thread.
+    /// `transcript` is the folder of the agent's saved conversations and the session id: even finding the file is
+    /// left to the thread. `material.agent` says whose conversation it is.
     fn spawn_handoff(
         &self,
         settings: Settings,
         mut req: Request,
         mut material: handoff::Material,
         cwd: String,
-        transcript: (PathBuf, String),
+        transcript: (Option<PathBuf>, String),
     ) -> Receiver<HandoffAnswer> {
         let (tx, rx) = channel();
         let program = self.ai_program();
@@ -350,8 +359,11 @@ impl App {
         // A unit test that forgot to name a stand-in must never reach the real `claude`: the call is simply not made.
         let never = cfg!(test) && program == "claude";
         thread::spawn(move || {
-            let transcript =
-                if req.cancel.is_cancelled() { None } else { crate::agents::claude::find_transcript(&transcript.0, &transcript.1) };
+            let agent = material.agent;
+            let transcript = match transcript.0 {
+                Some(root) if !req.cancel.is_cancelled() => agent.find_transcript(&root, &transcript.1),
+                _ => None,
+            };
             let (started_ms, messages) = match transcript.as_deref() {
                 Some(path) if !req.cancel.is_cancelled() => read_transcript(path, &mut material),
                 _ => (None, None),
@@ -360,7 +372,7 @@ impl App {
                 let _ = tx.send(HandoffAnswer::Nothing);
                 return;
             }
-            let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(crate::agents::claude::spent) };
+            let spent = if req.cancel.is_cancelled() { None } else { transcript.as_deref().and_then(|p| agent.spent(p)) };
             let git = if req.cancel.is_cancelled() {
                 None
             } else {
@@ -461,7 +473,8 @@ impl App {
             return;
         }
         let text = self.handoff.text.trim().to_string();
-        if let Some(why) = handoff::why_not(&text) {
+        let agent = self.handoff.agent;
+        if let Some(why) = handoff::why_not(&text, agent) {
             self.notify(why);
             return; // the box stays open, with the text exactly as it was
         }
@@ -474,8 +487,12 @@ impl App {
             return;
         }
         self.mode = Mode::List;
-        // The new session is Claude Code's.
-        if self.launch_in(Agent::Claude, cwd, Start::New(Some(&text)), Some(&project), true) {
+        if let Some(why) = self.agent_gone(agent, &self.handoff.session_name.clone()) {
+            self.notify(why);
+            return;
+        }
+        // The new session runs on the agent the conversation was with.
+        if self.launch_in(agent, cwd, Start::New(Some(&text)), Some(&project), true) {
             self.notify(format!("Started a new session in the project \"{name}\" with the hand-off as its first message."));
         }
     }
@@ -559,16 +576,17 @@ impl App {
     }
 }
 
-/// Read the conversation from its transcript: the first message, the last few, one line of Claude's last reply go
-/// into `material`; when it started and how many messages the user sent come back for the facts.
+/// Read the conversation from its transcript (of `material.agent`'s): the first message, the last few, one line of the
+/// agent's last reply go into `material`; when it started and how many messages the user sent come back for the facts.
 ///
 /// It is read there and then, not from the prompt index: the document has to reflect what was said a moment ago,
 /// and a session platoon has only just noticed may not be indexed yet.
 fn read_transcript(path: &Path, material: &mut handoff::Material) -> (Option<u64>, Option<usize>) {
     #[cfg(test)]
     wait_at_read_gate(path);
-    let started_ms = crate::agents::claude::started_ms(path);
-    let read = crate::notesrun::read_session(path, handoff::MESSAGE_CHARS);
+    let agent = material.agent;
+    let started_ms = agent.started_ms(path);
+    let read = crate::notesrun::read_session(agent, path, handoff::MESSAGE_CHARS);
     let mut messages: Vec<String> = read.recent.iter().rev().take(handoff::MESSAGES).rev().cloned().collect();
     // What it set out to do matters as much as what was said last, so the first message comes too.
     if let Some(first) = &read.first

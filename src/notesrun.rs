@@ -321,11 +321,11 @@ pub struct Read1 {
     pub reply: Option<String>,
 }
 
-/// Read a transcript for what an update may send: the user's substantive messages (each cut to `cap` characters)
-/// and Claude's last reply. Only the last `KEEP_RECENT` messages are held, so a huge conversation costs no more
-/// memory than a small one.
-pub fn read_session(path: &Path, cap: usize) -> Read1 {
-    read_session_with(Agent::Claude, path, cap, None)
+/// Read a transcript of `agent`'s for what an update may send: the user's substantive messages (each cut to `cap`
+/// characters) and one line of the agent's last reply. Only the last `KEEP_RECENT` messages are held, so a huge
+/// conversation costs no more memory than a small one.
+pub fn read_session(agent: Agent, path: &Path, cap: usize) -> Read1 {
+    read_session_with(agent, path, cap, None)
 }
 
 /// `read_session` of a transcript of `agent`'s, with the agent's last reply read the way the notes need it: up to
@@ -1268,7 +1268,7 @@ mod tests {
         }
         // Everything else that reads a session still gets one line of the reply.
         let path = claude::find_transcript(&r.env.root, "s1").unwrap();
-        let one = read_session(&path, 300).reply.unwrap();
+        let one = read_session(Agent::Claude, &path, 300).reply.unwrap();
         assert_eq!((one.lines().count(), one.chars().count()), (1, claude::REPLY_CHARS));
     }
 

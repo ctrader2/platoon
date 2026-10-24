@@ -707,6 +707,20 @@ pub struct App {
     stops_tx: Sender<StopDone>,
     stops_rx: Receiver<StopDone>,
     stop_times: StopTimes,
+    /// A unit test's sessions are never started: what `launch_in` would have started is noted here instead (the
+    /// agent, the folder, the arguments and the environment it adds).
+    #[cfg(test)]
+    pub launched: Vec<Launched>,
+}
+
+/// One session a unit test's app would have started (see `App::launched`).
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Launched {
+    pub agent: Agent,
+    pub dir: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
 }
 
 /// The option `step` leads to from `id` among `options` (id, name): back and on stop at the ends, `Cycle` goes round;
@@ -918,6 +932,8 @@ impl App {
             stops_tx,
             stops_rx,
             stop_times: StopTimes { stop: host::STOP_WAIT, quit: QUIT_WAITS_FOR_STOPS },
+            #[cfg(test)]
+            launched: Vec::new(),
         };
         app.theme = app.settings.get().theme(&app.themes);
         // A unit test's app has Claude Code, and Codex when it was given a Codex folder that is there; never the real
@@ -2659,11 +2675,29 @@ impl App {
         self.launch_in(agent, dir, start, None, false)
     }
 
-    /// The program that runs `agent`'s sessions.
+    /// The program that runs `agent`'s sessions. (A unit test starts none: `launched`.)
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn program_of(&self, agent: Agent) -> String {
         match agent {
             Agent::Claude => self.program.clone(),
             Agent::Codex => self.codex_program.clone(),
+        }
+    }
+
+    /// Why a new session of `agent`'s can't be started for the conversation named `name`, in plain words: the agent
+    /// isn't installed here (any more). None when it is.
+    pub(crate) fn agent_gone(&self, agent: Agent, name: &str) -> Option<String> {
+        self.providers.program(agent).is_none().then(|| {
+            format!("\"{name}\" is a {0} conversation, and {0} isn't installed on this computer, so nothing was started.", agent.name())
+        })
+    }
+
+    /// The folder `agent` keeps its saved conversations under, as this window reads it; None for Codex when this
+    /// window reads no Codex folder (a unit test that gave it none).
+    pub(crate) fn agent_root(&self, agent: Agent) -> Option<PathBuf> {
+        match agent {
+            Agent::Claude => Some(self.reader.root().to_path_buf()),
+            Agent::Codex => self.codex.as_ref().map(|c| c.root().to_path_buf()),
         }
     }
 
@@ -2689,6 +2723,16 @@ impl App {
             env.push((crate::sessionhook::OFFER_ENV, "1"));
         }
         let at_ms = usage::now().saturating_sub(2) * 1000;
+        // A unit test's program would be the real one: nothing is started, what would have been is noted.
+        #[cfg(test)]
+        {
+            let _ = (rows, cols, at_ms, place);
+            let env = env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+            self.launched.push(Launched { agent, dir, args: agent.args(start), env });
+            self.mode = Mode::List;
+            true
+        }
+        #[cfg(not(test))]
         match host::launch(&self.host_dirs(), agent, &self.program_of(agent), &dir, &agent.args(start), &env, rows, cols) {
             Ok((info, child)) => {
                 let pid = info.claude_pid;

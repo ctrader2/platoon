@@ -15,9 +15,11 @@ pub mod codex;
 pub mod codex_server;
 
 /// An AI coding agent platoon runs. Closed on purpose: a new agent makes the compiler name every place that must
-/// answer for it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// answer for it. The default is Claude Code, the agent platoon ran before agents were named anywhere (in a host's
+/// file, a hook's command line, the prompt index).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum Agent {
+    #[default]
     Claude,
     Codex,
 }
@@ -255,12 +257,28 @@ impl Agent {
         }
     }
 
-    /// Do platoon's own AI features (smart names and summaries, "Describe it", the hand-off, tasks drafted from a
-    /// conversation) read this agent's conversations? Not Codex's yet: those features are built on Claude Code's.
-    pub fn smart_reads(self) -> bool {
+    /// When the conversation in a saved transcript started, ms since the epoch.
+    pub fn started_ms(self, path: &Path) -> Option<u64> {
         match self {
-            Agent::Claude => true,
-            Agent::Codex => false,
+            Agent::Claude => claude::started_ms(path),
+            Agent::Codex => codex::started_ms(path),
+        }
+    }
+
+    /// What the conversation in a saved transcript spent (its subagents' too, where the agent keeps them apart); None
+    /// when it records no usage at all.
+    pub fn spent(self, path: &Path) -> Option<Spent> {
+        match self {
+            Agent::Claude => claude::spent(path),
+            Agent::Codex => codex::spent(path),
+        }
+    }
+
+    /// How a new conversation is opened again later from a terminal: `claude --resume <id>`, `codex resume <id>`.
+    pub fn resume_command(self, id: &str) -> String {
+        match self {
+            Agent::Claude => format!("claude --resume {id}"),
+            Agent::Codex => format!("codex resume {id}"),
         }
     }
 

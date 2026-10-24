@@ -56,8 +56,8 @@ box; then [the check of the work](#the-check-of-the-work) judges each box itself
 
 ### Making tasks from a conversation
 
-`t` on a session's row asks Claude (with the smart features on) to read the conversation and suggest tasks, each with
-the squad that suits it. They open in a popup: `↑` `↓` move, `e` edits one in your editor, `x` removes one, `enter` makes
+`t` on a session's row (a Claude Code conversation or a Codex one) asks Claude (with the smart features on) to read the
+conversation and suggest tasks, each with the squad that suits it. They open in a popup: `↑` `↓` move, `e` edits one in your editor, `x` removes one, `enter` makes
 them all as **Not started**, `esc` makes nothing. Nothing starts until you press `s` on each.
 
 ### Claude offers to make them

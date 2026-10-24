@@ -166,9 +166,12 @@ window** (in another terminal, or in Codex's own background server) shows as run
 `"repo" is open in another Codex window. Close it there to open it here.` platoon never opens it a second time, never
 stops it, and won't archive it while it is open there (`a` says so); archiving a project leaves it out.
 
-Not for Codex conversations yet: the [smart features](tokens.md) (generated names and summaries, "Describe it"), the
-hand-off (`h`) and drafting tasks (`t`) work on Claude Code conversations only, and say so on a Codex row. New sessions
-(`n`, `platoon open` with no id) and [tasks](tasks-and-squads.md) are Claude Code's.
+The [smart features](tokens.md) (generated names and summaries, "Describe it"), the
+[hand-off](projects.md#handing-work-on-to-a-new-session) (`h`) and [drafting tasks](tasks-and-squads.md#making-tasks-from-a-conversation)
+(`t`) work on Codex conversations as on Claude Code's: they read what you typed and a line of Codex's last reply, never
+a tool's output. The name Codex gives a conversation stays its description line, as Claude Code's own title does, and
+platoon's generated name is its name. A Codex conversation is handed on to a new **Codex** session. New sessions (`n`,
+`platoon open` with no id) and [tasks](tasks-and-squads.md) are Claude Code's.
 
 ## Background sessions
 

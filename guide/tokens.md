@@ -55,7 +55,8 @@ code, or stops platoon from starting.
 ## What is sent
 
 For each conversation: its first message, its last few messages (8 by default, each cut to 300 characters), the name and
-summary platoon made last time (if any) and one line (200 characters) of Claude's last reply. The conversations are
+summary platoon made last time (if any) and one line (200 characters) of the last reply (Claude's, or Codex's for a
+Codex conversation). The conversations are
 numbered 1, 2, 3 in the request (never their ids or folders), up to 30 to a call. Never tool output, file contents, or
 anything else.
 
@@ -69,7 +70,7 @@ the model skips is tried in a later batch at most twice, then left until it chan
 
 What the project notes, the project description and the hand-off send is described with each of them on the
 [Projects](projects.md) page. Tasks from a conversation send what the hand-off sends of it (its first message, the last
-twelve, each cut to 300 characters, and a line of Claude's last reply), its folders' own names, and your squads' ids
+twelve, each cut to 300 characters, and a line of Claude's or Codex's last reply), its folders' own names, and your squads' ids
 with their descriptions: see [Making tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation).
 
 ## When

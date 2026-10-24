@@ -79,8 +79,10 @@ pub struct Material {
     pub kinds: Vec<Kind>,
     /// The messages the user typed, oldest first, each already cut.
     pub messages: Vec<String>,
-    /// One line of Claude's last reply.
+    /// One line of the agent's last reply.
     pub reply: Option<String>,
+    /// The agent the conversation is with (Claude Code or Codex): whose reply `reply` is.
+    pub agent: crate::agents::Agent,
 }
 
 impl Material {
@@ -124,7 +126,7 @@ pub fn prompt(m: &Material) -> String {
         t.push('\n');
     }
     if let Some(r) = &m.reply {
-        t.push_str(&format!("Claude's last reply: {}\n", cut(r, MESSAGE_CHARS)));
+        t.push_str(&format!("{}'s last reply: {}\n", m.agent.short(), cut(r, MESSAGE_CHARS)));
     }
     t
 }
@@ -385,6 +387,7 @@ mod tests {
             kinds: kinds(),
             messages: vec!["The order email is HTML only.".into(), "x".repeat(2000)],
             reply: Some("Noted.".into()),
+            agent: crate::agents::Agent::Claude,
         };
         let p = prompt(&m);
         let feature = &kinds()[0];

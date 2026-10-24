@@ -355,4 +355,10 @@ The old conversation is left exactly as it is: not archived, not stopped. If Cla
 off, the day's limit is spent, a failure has paused things), the conversation has nothing in it yet, or the answer isn't
 understood, platoon says so plainly and nothing is started.
 
+**A Codex conversation is handed on the same way, to a new Codex session.** The document is made from the Codex
+conversation (what you typed, a line of Codex's last reply, the tokens it used as Codex counted them), its id line says
+`codex resume <id>` opens it, and `ctrl+s` starts `codex --no-daemon` with the document as its first message, in the same
+folder and project. The new session always runs on the same program as the conversation it came from; if that program
+isn't installed on this computer any more, `h` says so and nothing is asked or started.
+
 The hand-off has no switch of its own: see [Features that use tokens](tokens.md#the-features).

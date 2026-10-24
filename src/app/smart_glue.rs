@@ -215,15 +215,22 @@ impl App {
         self.smart.prev_archived = Some(now);
     }
 
-    /// Everything the scheduler looks at: the conversations that have a transcript with something in it (of an agent
-    /// whose conversations the smart features read: `Agent::smart_reads`).
+    /// Everything the scheduler looks at: the conversations, Claude Code's and Codex's, that have a transcript with
+    /// something in it. (A name an agent gave a conversation itself, Claude Code's title or Codex's thread name, is its
+    /// description line, never its name: it doesn't make a generated name any less due.)
     fn convs(&self) -> Vec<smart::Conv<'_>> {
         self.sessions
             .iter()
-            .filter(|s| s.agent.smart_reads())
             .filter_map(|s| {
                 let fp = self.prompts.get(&s.id)?;
-                Some(smart::Conv { id: &s.id, fp, archived: s.archived, last_active_ms: s.last_active, busy: s.status == Status::Busy })
+                Some(smart::Conv {
+                    id: &s.id,
+                    agent: s.agent,
+                    fp,
+                    archived: s.archived,
+                    last_active_ms: s.last_active,
+                    busy: s.status == Status::Busy,
+                })
             })
             .collect()
     }
@@ -256,7 +263,7 @@ impl App {
                     }
                     let prev = self.summaries.get(c.id);
                     p.ids.push(c.id.to_string());
-                    p.digests.push(smart::digest(c.fp, prev, settings));
+                    p.digests.push(smart::digest(c.agent, c.fp, prev, settings));
                     p.totals.push(c.fp.prompts.len());
                     p.covers.push(c.fp.substantive);
                     p.prev_names.push(prev.map(|e| e.name.clone()));
@@ -525,7 +532,7 @@ impl App {
         (0..self.sessions.len())
             .filter(|&i| {
                 let s = &self.sessions[i];
-                !(s.archived && !settings.search_archived) && self.in_scope(s) && s.agent.smart_reads()
+                !(s.archived && !settings.search_archived) && self.in_scope(s)
             })
             .collect()
     }

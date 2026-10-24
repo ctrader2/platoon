@@ -25,8 +25,12 @@ struct World {
 /// A stand-in `codex`: writes the arguments it was started with to `FAKE_CODEX_ARGS`, says so, and waits.
 fn fake_codex(dir: &Path) -> PathBuf {
     let p = dir.join("fake-codex.sh");
-    fs::write(&p, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_CODEX_ARGS\"\necho \"fake-codex args:$* cwd:$(pwd)\"\nexec sleep 60\n")
-        .unwrap();
+    fs::write(
+        &p,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$FAKE_CODEX_ARGS\"\necho \"fake-codex args:$* cwd:$(pwd)\"\n\
+         echo \"fake-codex env project:${PLATOON_PROJECT:-none} offer:${PLATOON_OFFER_TASKS:-none}\"\nexec sleep 60\n",
+    )
+    .unwrap();
     fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
     p
 }
@@ -122,6 +126,66 @@ fn a_codex_conversation_open_elsewhere_is_never_opened_a_second_time() {
     assert!(running(holder.id()), "never signalled");
     let _ = holder.kill();
     let _ = holder.wait();
+}
+
+/// `h` on a Codex conversation in a project: the document is made from the Codex conversation (a stand-in `claude -p`
+/// writes its part, as the smart features' model is Claude Code's Haiku here), and `ctrl+s` starts a new Codex session
+/// in a platoon host: `codex --no-daemon <the document>`, in the conversation's folder, carrying its project.
+#[test]
+fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_document_as_its_first_message() {
+    let w = World::new("codex-handoff");
+    let projects = serde_json::json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": {FINISHED: "pweb"}});
+    fs::write(w.base.join("config/projects.json"), projects.to_string()).unwrap();
+    let settings = serde_json::json!({"auto_archive_days": 0, "tokens_enabled": true, "token_features": {"project_notes": false, "project_description": false}});
+    fs::write(w.base.join("config/settings.json"), settings.to_string()).unwrap();
+    // The stand-in for `claude -p` (`fake-claude.sh`): records each call and answers with `reply.default`.
+    let fake = w.base.join("fake-claude");
+    fs::create_dir_all(fake.join("calls")).unwrap();
+    let script = fake.join("claude");
+    fs::write(&script, include_str!("fake-claude.sh").replace("@DIR@", &fake.to_string_lossy())).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::write(fake.join("reply.default"), r#"{"summary":"The colour is known: teal.","next":["Write it down."]}"#).unwrap();
+    let mut env = w.env();
+    env.push(("PLATOON_CLAUDE_BIN", script.to_string_lossy().into()));
+    env.push(("PLATOON_NOTES_HELPER", "off".into()));
+
+    let mut t = Term::spawn(&[], &env, &w.work, 40, 140);
+    t.wait_for_all(&["Identify colour from notes.txt", "Active  3"]);
+    t.send(b"\x1b[B\x1b[B"); // the oldest of the three, the conversation in the project
+    t.send(b"h");
+    // (Long lines wrap in the box: the whole document is checked below, as the new session gets it.)
+    t.wait_for_all(&[
+        "# Session hand-off: work",
+        &format!("- Previous session id: {FINISHED} (`codex resume"),
+        "17,690 sent to Codex and 48 written by Codex, plus 24,576",
+        "The colour is known: teal.",
+        "ctrl+s start the new session",
+    ]);
+    let sent = fs::read_to_string(fake.join("calls/1.stdin")).unwrap();
+    assert!(sent.contains("Read notes.txt and tell me the colour.") && sent.contains("Codex's last reply: CHECKED"), "{sent}");
+    t.send(b"\x13");
+    t.wait_for_all(&["fake-codex args:--no-daemon # Session hand-off: work", "fake-codex env project:pweb"]);
+    let args = fs::read_to_string(w.base.join("codex-args")).unwrap();
+    assert!(
+        args.starts_with("--no-daemon\n# Session hand-off: work\n\nThis is context for this session."),
+        "one argument, the document: {args}"
+    );
+    assert!(args.contains(&format!("(`codex resume {FINISHED}` opens it)")) && args.trim_end().ends_with("1. Write it down."), "{args}");
+    assert!(
+        args.contains(
+            "- Tokens the previous session used: 17,690 sent to Codex and 48 written by Codex, plus 24,576 read again from Codex's cache\n"
+        ),
+        "{args}"
+    );
+    let (pid, sock) = find_host(&w.cache).expect("a host runs it");
+    let info: serde_json::Value = serde_json::from_str(&fs::read_to_string(sock.with_extension("json")).unwrap()).unwrap();
+    assert_eq!((info["agent"].as_str(), info["dir"].as_str()), (Some("codex"), w.work.to_str()));
+    t.send(&[0]); // ctrl+space: back to the list
+    t.wait_for("enter open");
+    t.send(b"q");
+    t.wait_exit();
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    until("the stand-in to exit", || !alive(pid));
 }
 
 /// `platoon <args>` with `input` on stdin, in this world, with no terminal: (exit code, stdout, stderr).

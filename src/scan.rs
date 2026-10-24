@@ -7,6 +7,7 @@
 //! terminal, and everything that goes wrong (a refusal, a failed call, an unreadable file) ends in a plain line of
 //! text and "platoon will carry on later". The work itself is the same code the app's worker uses (`smart.rs`).
 
+use crate::agents::Agent;
 use crate::ai::{self, AiError, Request, Runner};
 use crate::archive::Archive;
 use crate::index::Scanner;
@@ -87,7 +88,10 @@ fn load_world(env: &ScanEnv, settings: &Settings) -> Vec<Held> {
 }
 
 fn convs(held: &[Held]) -> Vec<Conv<'_>> {
-    held.iter().map(|h| Conv { id: &h.id, fp: &h.fp, archived: h.archived, last_active_ms: h.last_active_ms, busy: false }).collect()
+    // Setup's first pass reads Claude Code's conversations (`ScanEnv::root`); Codex's are named in the app.
+    held.iter()
+        .map(|h| Conv { id: &h.id, agent: Agent::Claude, fp: &h.fp, archived: h.archived, last_active_ms: h.last_active_ms, busy: false })
+        .collect()
 }
 
 /// (conversations, estimate) of the pending work of one tier group, from what is on this computer.
@@ -218,7 +222,7 @@ fn name_active(
             smart::next_batch(&pending, settings.ai_batch_size as usize).map(|(idx, _)| {
                 idx.into_iter()
                     .filter(|&i| all[i].fp.path.exists())
-                    .map(|i| (i, smart::digest(all[i].fp, sums.get(all[i].id), settings)))
+                    .map(|i| (i, smart::digest(all[i].agent, all[i].fp, sums.get(all[i].id), settings)))
                     .collect::<Vec<(usize, Digest)>>()
             })
         };
