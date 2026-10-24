@@ -277,13 +277,13 @@ fn every_refusal_is_one_line_and_asks_nothing() {
     fake.reply(1, "Sure, here are some tasks.");
     key(&mut app, KeyCode::Char('t'));
     app.refresh_until_for_test(20, "the answer", |a| a.drafting_from().is_none());
-    assert_eq!(app.active_notice(), Some(crate::taskdraft::NoDraft::NotUnderstood.words()));
+    assert_eq!(app.active_notice(), Some(crate::taskdraft::NoDraft::NotUnderstood.words(crate::agents::Agent::Claude).as_str()));
     assert!(matches!(app.mode, Mode::List) && app.task_draft().is_none());
     // No work left for later.
     fake.reply(2, r#"{"tasks":[]}"#);
     key(&mut app, KeyCode::Char('t'));
     app.refresh_until_for_test(20, "the answer", |a| a.drafting_from().is_none());
-    assert_eq!(app.active_notice(), Some(crate::taskdraft::NoDraft::Nothing.words()));
+    assert_eq!(app.active_notice(), Some(crate::taskdraft::NoDraft::Nothing.words(crate::agents::Agent::Claude).as_str()));
 }
 
 #[test]

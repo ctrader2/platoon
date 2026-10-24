@@ -342,10 +342,12 @@ pub struct SessionMaterial {
     pub folder: String,
     /// The messages the user typed, oldest first, each already cut to the configured length.
     pub messages: Vec<String>,
-    /// Claude's last reply, as much of it as the settings say, its lines kept.
+    /// The agent's last reply, as much of it as the settings say, its lines kept.
     pub reply: Option<String>,
     /// This session had never been read before, so it was read in full.
     pub first_read: bool,
+    /// The agent the session is with (Claude Code or Codex): whose reply `reply` is.
+    pub agent: crate::agents::Agent,
 }
 
 /// Everything one update is about.
@@ -518,7 +520,7 @@ pub fn prompt(doc: &Doc, state: &State, m: &Material) -> String {
         }
         if let Some(r) = &s.reply {
             // Every line of it set in, so no line of a reply can pass for a heading of the notes above.
-            t.push_str("Claude's last reply:\n");
+            t.push_str(&format!("{}'s last reply:\n", s.agent.short()));
             for line in r.lines() {
                 t.push_str(if line.is_empty() { "\n" } else { "  " });
                 if !line.is_empty() {
@@ -1582,8 +1584,15 @@ My own notes, in my own words.
                     messages: vec!["Add a basket page".into()],
                     reply: Some("I added it.".into()),
                     first_read: false,
+                    agent: crate::agents::Agent::Claude,
                 },
-                SessionMaterial { folder: "api".into(), messages: vec!["Write the orders endpoint".into()], reply: None, first_read: true },
+                SessionMaterial {
+                    folder: "api".into(),
+                    messages: vec!["Write the orders endpoint".into()],
+                    reply: None,
+                    first_read: true,
+                    agent: crate::agents::Agent::Claude,
+                },
             ],
         };
         let p = prompt(&doc, &state, &m);
@@ -1863,7 +1872,13 @@ My own notes, in my own words.
         }
         let m = Material {
             project: "P".into(),
-            sessions: vec![SessionMaterial { folder: "f".into(), messages: vec![], reply: None, first_read: false }],
+            sessions: vec![SessionMaterial {
+                folder: "f".into(),
+                messages: vec![],
+                reply: None,
+                first_read: false,
+                agent: crate::agents::Agent::Claude,
+            }],
         };
         let p = prompt(&Doc::parse(&big), &State::default(), &m);
         // Over the cap: more of it is shown, to be condensed, but still a bounded amount.

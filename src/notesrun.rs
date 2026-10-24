@@ -448,7 +448,7 @@ pub fn gather(
             .unwrap_or(0);
         sessions.push((
             modified,
-            SessionMaterial { folder: folder_of(&path, agent.transcript_cwd(&path)), messages, reply: read.reply, first_read },
+            SessionMaterial { folder: folder_of(&path, agent.transcript_cwd(&path)), messages, reply: read.reply, first_read, agent },
         ));
     }
     // The most recently used session first: if anything has to be cut, it is the stalest.
@@ -1439,6 +1439,27 @@ mod tests {
         let Round::Refused(why) = update_once(&r.env, &id) else { panic!("refused") };
         assert!(why.starts_with("GPT-6-Luna needs Codex") && why.contains("Model for project notes"), "{why}");
         assert_eq!(r.fake.calls(), 1);
+    }
+
+    #[test]
+    fn a_codex_members_reply_is_named_codexs_in_the_notes_request() {
+        let r = Rig::new("notes-codex-member");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let codex = crate::agents::tests::codex_with_models("notes-codex-member").root;
+        let sid = "01a20000-1111-7000-8000-00000000c0de";
+        let day = codex.join("sessions/2026/10/20");
+        fs::create_dir_all(&day).unwrap();
+        let name = format!("rollout-2026-10-20T09-00-00-{sid}.jsonl");
+        fs::copy(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/conversation")).join(&name), day.join(&name)).unwrap();
+        Projects::open(&r.env.config).assign(sid, Some(&id)).unwrap();
+        let settings = crate::settings::load(&r.env.config).0;
+        let (m, _) = gather(&r.env.config, &r.env.root, Some(&codex), &id, "Web shop", &State::default(), &settings);
+        let agents: Vec<Agent> = m.sessions.iter().map(|s| s.agent).collect();
+        assert!(agents.contains(&Agent::Claude) && agents.contains(&Agent::Codex), "{agents:?}");
+        let p = notesupdate::prompt(&Doc::parse(NOTES), &State::default(), &m);
+        assert!(p.contains("Codex's last reply:\n  The checkout now keeps the basket between visits."), "{p}");
+        assert!(p.contains("Claude's last reply:\n  Done."), "the Claude session's as ever: {p}");
     }
 
     #[test]

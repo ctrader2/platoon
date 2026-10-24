@@ -75,6 +75,8 @@ pub struct HandoffBox {
     pub cwd: String,
     /// The agent the conversation is with, and so the one the new session starts on.
     pub agent: Agent,
+    /// The agent asked for the document (the smart features' model's), as the box says it.
+    pub asked: Agent,
     pub state: HandoffState,
     /// The document, as the user may edit it.
     pub text: String,
@@ -100,6 +102,7 @@ impl HandoffBox {
             project_name: String::new(),
             cwd: String::new(),
             agent: Agent::Claude,
+            asked: Agent::Claude,
             state: HandoffState::Asking,
             text: String::new(),
             cursor: 0,
@@ -142,7 +145,7 @@ impl HandoffBox {
     /// The text the box shows: the document, or what is happening, or why there is no document.
     pub fn shown(&self) -> String {
         match &self.state {
-            HandoffState::Asking => format!("Asking Claude what to hand on from \"{}\"…", self.session_name),
+            HandoffState::Asking => format!("Asking {} what to hand on from \"{}\"…", self.asked.short(), self.session_name),
             HandoffState::Failed(why) => why.clone(),
             HandoffState::Ready => self.text.clone(),
         }
@@ -334,6 +337,7 @@ impl App {
             project_name: project.name.clone(),
             cwd,
             agent,
+            asked: self.smart_agent(),
             facts,
             ..HandoffBox::empty()
         };
@@ -440,8 +444,10 @@ impl App {
             Ok(reply) => match handoff::parse(&reply.text, !handoff::git_lists_files(git.as_ref())) {
                 Some(brief) => self.show_brief(&brief, git, spent),
                 None => {
-                    self.handoff.state =
-                        HandoffState::Failed("Claude's answer couldn't be understood, so there is no brief. Nothing has changed.".into())
+                    self.handoff.state = HandoffState::Failed(format!(
+                        "{}'s answer couldn't be understood, so there is no brief. Nothing has changed.",
+                        self.handoff.asked.short()
+                    ))
                 }
             },
             Err(AiError::Cancelled) => self.mode = Mode::List,
@@ -453,6 +459,7 @@ impl App {
         let mut facts = self.handoff.facts.clone();
         facts.git = git;
         facts.tokens = spent;
+        facts.described_by = self.handoff.asked;
         facts.written = Some(self.clock());
         self.handoff.text = handoff::document(&facts, brief);
         self.handoff.facts = facts;

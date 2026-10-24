@@ -337,6 +337,8 @@ pub struct Facts {
     pub tokens: Option<crate::agents::Spent>,
     /// The agent the previous session ran on: how its id opens it, and whose tokens it spent.
     pub agent: crate::agents::Agent,
+    /// The agent that wrote the brief (the smart features' model's): whose account of the files it is, when git can't say.
+    pub described_by: crate::agents::Agent,
 }
 
 /// A moment in the user's own time zone: `2026-09-25 14:03`. None if the system can't say (then it is left out).
@@ -528,7 +530,7 @@ pub fn files_block(f: &Facts, b: &Brief) -> Option<String> {
     if b.files.is_empty() {
         return None;
     }
-    let mut t = String::from("As Claude described them (this folder is not a git repository):\n");
+    let mut t = format!("As {} described them (this folder is not a git repository):\n", f.described_by.short());
     for file in &b.files {
         t.push_str(&format!("- {file}\n"));
     }
@@ -636,6 +638,7 @@ mod tests {
             running: Some(false),
             tokens: Some(Spent { input: 45_210, output: 12_034, cache_read: 1_234_567, subagents: false }),
             agent: Agent::Claude,
+            described_by: Agent::Claude,
         }
     }
 

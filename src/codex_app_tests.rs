@@ -620,3 +620,132 @@ fn once_codex_saves_the_new_conversation_its_row_takes_over_from_the_new_session
     let _ = codex.kill();
     let _ = codex.wait();
 }
+
+// ---- the screens name the program that answers ----------------------------------------------------------------------
+
+/// The smart features' model one of Codex's (GPT-6-Luna), answered by a stand-in `codex exec`; Claude Code installed
+/// beside it (its stand-in is never asked).
+fn on_codex(w: &World, app: &mut App, claude: &AiFake) -> AiFake {
+    let codex = AiFake::codex(&format!("{}-exec", w.base.file_name().unwrap().to_string_lossy()));
+    let mut s = settings::load(&w.config).0;
+    s.ai_model = Some("gpt-6-luna".into());
+    settings::save(&w.config, &s).unwrap();
+    app.refresh_for_test(); // the settings file is read again
+    app.set_ai_program_for_test(&claude.script);
+    app.set_providers_for_test(crate::agents::Providers { claude: Some(claude.script.clone()), codex: Some(codex.as_codex(&w.codex())) });
+    assert_eq!(app.smart_agent(), Agent::Codex);
+    codex
+}
+
+#[test]
+fn with_a_codex_model_the_hand_off_says_it_asks_codex_and_whose_answer_it_couldnt_read() {
+    let (w, mut app, claude, _, _) = handoff_world("codex-asks-handoff");
+    let codex = on_codex(&w, &mut app, &claude);
+    codex.reply(1, "not json at all");
+    select(&mut app, SHOP);
+    key(&mut app, KeyCode::Char('h'));
+    assert_eq!(app.handoff.shown(), "Asking Codex what to hand on from \"shop\"…");
+    app.refresh_until_for_test(10, "the answer", |a| a.handoff.state != HandoffState::Asking);
+    assert_eq!(app.handoff.shown(), "Codex's answer couldn't be understood, so there is no brief. Nothing has changed.");
+    assert_eq!((claude.calls(), codex.calls()), (0, 1));
+    // When git can't say which files changed, the document says whose account of them it is.
+    key(&mut app, KeyCode::Esc);
+    codex.reply(2, r#"{"summary":"The basket is in.","files":["src/basket.rs: new"]}"#);
+    key(&mut app, KeyCode::Char('h'));
+    app.refresh_until_for_test(10, "the brief", |a| a.handoff.state != HandoffState::Asking);
+    assert!(
+        app.handoff
+            .text
+            .contains("## Files affected\n\nAs Codex described them (this folder is not a git repository):\n- src/basket.rs: new\n"),
+        "{}",
+        app.handoff.text
+    );
+}
+
+#[test]
+fn with_a_codex_model_a_draft_that_comes_back_empty_or_unreadable_says_codex() {
+    let w = World::new("codex-asks-draft");
+    shop_conversation(&w, &w.base.join("shop"));
+    let claude = smart_on(&w, false, false);
+    let mut app = w.codex_app();
+    let codex = on_codex(&w, &mut app, &claude);
+    codex.reply(1, "not json");
+    codex.reply(2, r#"{"tasks":[]}"#);
+    select(&mut app, SHOP);
+    for want in [
+        "Codex's answer couldn't be understood, so no tasks were drafted. Nothing was written.",
+        "Codex found no work left for later in this conversation, so there are no tasks to make.",
+    ] {
+        key(&mut app, KeyCode::Char('t'));
+        app.refresh_until_for_test(20, "the answer", |a| a.drafting_from().is_none());
+        assert_eq!(app.active_notice(), Some(want));
+    }
+    assert_eq!(claude.calls(), 0);
+}
+
+#[test]
+fn with_a_codex_model_describe_it_says_codex_and_with_both_installed_the_full_text_search_names_both() {
+    let w = world("codex-asks-find");
+    let claude = smart_on(&w, false, true);
+    let mut app = w.codex_app();
+    let codex = on_codex(&w, &mut app, &claude);
+    codex.reply(1, "[]");
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    key(&mut app, KeyCode::Char('/'));
+    app.set_search_kind(1);
+    assert!(screen(&mut term, &app).contains("Type words you asked Claude or Codex about, in any order."));
+    app.set_search_kind(crate::app::FIND_KIND);
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Describe it in your own words; Codex picks the likely ones."), "{shown}");
+    for c in "the colour in the notes".chars() {
+        key(&mut app, KeyCode::Char(c));
+    }
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("Press enter to ask Codex.") && shown.contains("ask Codex"), "{shown}");
+    key(&mut app, KeyCode::Enter);
+    app.refresh_until_for_test(10, "the answer", |a| *a.find_state() == FindState::Done);
+    assert!(screen(&mut term, &app).contains("Codex found no likely match."));
+    assert_eq!((claude.calls(), codex.calls()), (0, 1));
+}
+
+#[test]
+fn the_settings_name_the_program_each_setting_is_about() {
+    let w = world("codex-asks-settings");
+    let claude = smart_on(&w, false, false);
+    let mut app = w.codex_app();
+    let item = |name: &str| crate::settings::TABS.iter().flat_map(|t| t.items.iter()).find(|i| i.name == name).unwrap();
+    let prompt_item = |action: &'static str| {
+        crate::settings::TABS.iter().flat_map(|t| t.items.iter()).find(|i| i.kind == crate::settings::Kind::Instructions(action)).unwrap()
+    };
+    // Claude's models, both programs installed: as written, but where the sessions can be either program's.
+    assert_eq!(app.setting_explain(prompt_item(crate::instructions::NAMES)), prompt_item(crate::instructions::NAMES).explain);
+    assert_eq!(app.setting_name(item("Read Claude's last reply up to")), "Read Claude's or Codex's last reply up to");
+    assert!(app.setting_explain(item("Read Claude's last reply up to")).starts_with("How much of Claude's or Codex's last answer"));
+    // The smart features on Codex: their prompts and numbers say Codex; the notes, still on Sonnet, say Claude.
+    on_codex(&w, &mut app, &claude);
+    assert_eq!(
+        app.setting_explain(prompt_item(crate::instructions::NAMES)),
+        "What platoon asks Codex for when it names and summarizes your sessions."
+    );
+    assert_eq!(
+        app.setting_explain(prompt_item(crate::instructions::HANDOFF)),
+        "What platoon asks Codex for when it writes a hand-off to a new session."
+    );
+    assert_eq!(app.setting_explain(prompt_item(crate::instructions::NOTES)), prompt_item(crate::instructions::NOTES).explain);
+    assert_eq!(
+        app.setting_explain(item("Sessions per call")),
+        "How many sessions one request to Codex covers. Larger batches use less of your plan overall."
+    );
+    let mut term = Terminal::new(TestBackend::new(110, 44)).unwrap();
+    key(&mut app, KeyCode::Char('s'));
+    let (tab, at) = settings::find_item("System prompt for naming").unwrap();
+    while app.settings_tab != tab {
+        key(&mut app, KeyCode::Tab);
+    }
+    key(&mut app, KeyCode::Home);
+    for _ in 0..at {
+        key(&mut app, KeyCode::Down);
+    }
+    let shown = screen(&mut term, &app);
+    assert!(shown.contains("What platoon asks Codex for when it names"), "drawn as said:\n{shown}");
+}

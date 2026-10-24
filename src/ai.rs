@@ -1118,7 +1118,7 @@ pub fn tokens_cli(args: &[String], cache: &Path, config: &Path, providers: &Prov
         Some(_) => {
             let _ = writeln!(
                 err,
-                "usage: platoon tokens [status | test]\n  status  show whether the features are on and how many tokens were used today\n  test    make one tiny call to Claude through the same gates the features use"
+                "usage: platoon tokens [status | test]\n  status  show whether the features are on and how many tokens were used today\n  test    make one tiny call on the smart features' model (Claude's or Codex's) through the same gates the features use"
             );
             2
         }

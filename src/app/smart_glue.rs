@@ -151,9 +151,64 @@ impl App {
         Runner::new(&self.cache, providers).with_clock_offset(self.smart.offset)
     }
 
-    /// The agent the smart features' calls run on: their model's (Claude Code when it can't be told).
-    pub(super) fn smart_agent(&self) -> Agent {
+    /// The agent the smart features' calls run on: their model's (Claude Code when it can't be told). What the screen
+    /// says it asks ("Asking Codex...") follows it.
+    pub fn smart_agent(&self) -> Agent {
         ai::smart_agent(&self.settings.get(), &self.catalog())
+    }
+
+    /// The agent the call of AI action `id` (`instructions::ACTIONS`) runs on: the notes' model for a project's notes,
+    /// the smart features' model for everything else.
+    pub fn action_agent(&self, id: &str) -> Agent {
+        if id != instructions::NOTES {
+            return self.smart_agent();
+        }
+        let catalog = self.catalog();
+        crate::settings::ModelFor::Notes
+            .in_effect(&self.settings.get(), &catalog)
+            .and_then(|m| catalog.agent_of(&m))
+            .unwrap_or(Agent::Claude)
+    }
+
+    /// The agents whose conversations are in the list, as a sentence names them: "Claude", "Codex" or "Claude or Codex".
+    pub fn agents_said(&self) -> &'static str {
+        match (self.providers.claude.is_some(), self.providers.codex.is_some()) {
+            (false, true) => "Codex",
+            (true, true) => "Claude or Codex",
+            _ => "Claude",
+        }
+    }
+
+    /// `agents_said` as a possessive: "Claude's", "Codex's" or "Claude's or Codex's".
+    pub fn agents_possessive(&self) -> String {
+        self.agents_said().split(" or ").map(|a| format!("{a}'s")).collect::<Vec<_>>().join(" or ")
+    }
+
+    /// A setting's name as the screen shows it: one about the sessions' replies names the agents there are.
+    pub fn setting_name(&self, it: &crate::settings::Item) -> String {
+        it.name.replace("Claude's", &self.agents_possessive())
+    }
+
+    /// A setting's explanation as the screen shows it, naming the agent that really runs what it is about: an AI
+    /// action's system prompt the agent of that action's model, the smart features' numbers the smart features'
+    /// agent, and the notes' share of each reply the agents whose sessions there are. With Claude's models and only
+    /// Claude Code installed, it reads as written.
+    pub fn setting_explain(&self, it: &crate::settings::Item) -> String {
+        let agent = |a: Agent| a.short();
+        match it.kind {
+            crate::settings::Kind::Instructions(id) => it.explain.replace("asks Claude", &format!("asks {}", agent(self.action_agent(id)))),
+            _ if it.explain.contains("to Claude") => it.explain.replace("to Claude", &format!("to {}", agent(self.smart_agent()))),
+            _ if it.explain.contains("Claude's last answer") => it.explain.replace("Claude's", &self.agents_possessive()),
+            _ => it.explain.to_string(),
+        }
+    }
+
+    /// The words of search kind `k` (`SEARCH_KINDS`): its line under the kinds and what its empty box asks for, naming
+    /// the agents there are (Full-text) and the one the smart features ask (Describe it).
+    pub fn search_words(&self, k: usize) -> (String, String) {
+        let kind = &SEARCH_KINDS[k];
+        let who = if k == FIND_KIND { self.smart_agent().short() } else { self.agents_said() };
+        (kind.explain.replace("Claude", who), kind.prompt.replace("Claude", who))
     }
 
     /// Run `req` on a thread of its own. The answer comes back through the returned receiver.

@@ -277,7 +277,8 @@ control character and escape sequence removed before it is drawn. It is kept bes
 ## Handing work on to a new session
 
 `h` on a conversation that is in a project - on the Sessions tab or in the project's own screen - hands that work on to a
-fresh conversation. A box opens straight away and says it is asking Claude; meanwhile platoon reads the conversation and,
+fresh conversation. A box opens straight away and says it is asking Claude (or Codex, when the model for smart features
+is one of Codex's); meanwhile platoon reads the conversation and,
 if the folder is a git repository, what git says about it (only reading, never changing anything, and giving up after 5
 seconds). Then it shows a **hand-off document** with a fixed shape, like this one:
 

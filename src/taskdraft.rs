@@ -152,10 +152,12 @@ pub enum NoDraft {
 }
 
 impl NoDraft {
-    pub fn words(&self) -> &'static str {
+    /// Said of the answer of `asked`, the agent the drafting call ran on.
+    pub fn words(&self, asked: crate::agents::Agent) -> String {
+        let who = asked.short();
         match self {
-            NoDraft::NotUnderstood => "Claude's answer couldn't be understood, so no tasks were drafted. Nothing was written.",
-            NoDraft::Nothing => "Claude found no work left for later in this conversation, so there are no tasks to make.",
+            NoDraft::NotUnderstood => format!("{who}'s answer couldn't be understood, so no tasks were drafted. Nothing was written."),
+            NoDraft::Nothing => format!("{who} found no work left for later in this conversation, so there are no tasks to make."),
         }
     }
 }
@@ -355,7 +357,10 @@ mod tests {
         }
         assert_eq!(parse(&reply(json!([])), &kinds()), Err(NoDraft::Nothing));
         for why in [NoDraft::NotUnderstood, NoDraft::Nothing] {
-            assert!(why.words().ends_with('.') && !why.words().contains('\n'), "one line: {:?}", why.words());
+            for asked in [crate::agents::Agent::Claude, crate::agents::Agent::Codex] {
+                let words = why.words(asked);
+                assert!(words.ends_with('.') && !words.contains('\n') && words.starts_with(asked.short()), "one line: {words:?}");
+            }
         }
         let many: Vec<Value> = (1..=10).map(|i| json!({"title": format!("T{i}"), "does": "x"})).collect();
         assert_eq!(parse(&reply(Value::Array(many)), &kinds()).unwrap().len(), MOST);

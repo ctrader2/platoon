@@ -19,6 +19,10 @@ here.
   (`new_session_agent`); `esc` starts nothing. With one installed, that one starts without a question. `platoon open`
   with no id starts the one chosen last. A new Codex session (`codex --no-daemon`) has its row, running and open to
   `enter`, from the start, before Codex saves the conversation with your first message.
+- **The screens name the program that answers.** With a Codex model, the hand-off box ("Asking Codex what to hand
+  on…"), Describe it, tasks from a conversation, the system-prompt settings and the notice after editing one say Codex,
+  not Claude; a project's notes request names Codex's reply for a Codex session; with both programs installed, the
+  notes' reply setting and the full-text search name both.
 - **The settings warn what a call on Codex costs.** While the model for smart features, or for project notes, is one of
   Codex's, its tab says under the entries that each call costs about 13,000 to 20,000 tokens of Codex's own
   instructions, however small the question.

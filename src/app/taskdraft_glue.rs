@@ -45,10 +45,11 @@ pub struct TaskDraft {
     told: bool,
 }
 
-/// The call out, and the draft it is for.
+/// The call out, the draft it is for, and the agent it asks.
 struct Flight {
     rx: Receiver<DraftAnswer>,
     draft: TaskDraft,
+    asked: Agent,
 }
 
 /// Everything about drafting tasks the app keeps.
@@ -190,7 +191,7 @@ impl App {
             top: Cell::new(0),
             told: false,
         };
-        self.td.flight = Some(Flight { rx, draft });
+        self.td.flight = Some(Flight { rx, draft, asked: self.smart_agent() });
         self.notify(format!("Drafting tasks from \"{name}\"…"));
     }
 
@@ -237,7 +238,7 @@ impl App {
                 }))),
             };
             if let Some(answer) = got
-                && let Some(Flight { mut draft, .. }) = self.td.flight.take()
+                && let Some(Flight { mut draft, asked, .. }) = self.td.flight.take()
             {
                 match answer {
                     DraftAnswer::Nothing => {
@@ -248,7 +249,7 @@ impl App {
                             draft.tasks = tasks;
                             self.td.draft = Some(draft);
                         }
-                        Err(why) => self.notify(why.words()),
+                        Err(why) => self.notify(why.words(asked)),
                     },
                     DraftAnswer::Done(Err(AiError::Cancelled)) => {}
                     DraftAnswer::Done(Err(e)) => self.notify(format!("No tasks drafted: {} Nothing was written.", e.plain())),

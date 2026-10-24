@@ -601,7 +601,7 @@ impl App {
             instructions::Edited::Unchanged => return,
             instructions::Edited::BuiltIn => format!("The system prompt for {what} is platoon's default again."),
             instructions::Edited::Changed => {
-                format!("Saved: platoon uses your system prompt for {what} from the next time it asks Claude.")
+                format!("Saved: platoon uses your system prompt for {what} from the next time it asks {}.", self.action_agent(id).short())
             }
         };
         self.notify(said);

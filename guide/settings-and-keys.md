@@ -64,6 +64,11 @@ The model decides the program: a Claude model runs on Claude Code, an OpenAI mod
 features' model (or the notes' model, on the Projects tab) is one of Codex's, the tab warns under its entries that **a
 call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question**.
 
+The screens name the program that really answers. These pages say "Claude", but with a Codex model platoon says
+"Codex" instead: in the settings ("What platoon asks Codex for…"), in Describe it ("Asking Codex..."), in the hand-off
+box, and in what tasks from a conversation say when no tasks come back. With both programs installed, the settings and
+lines about your sessions name both ("Read Claude's or Codex's last reply up to").
+
 A model you picked stays exactly as you picked it. If it can't run here any more (say Codex was uninstalled), the setting
 says so, for example **GPT-6-Luna (needs Codex, not installed)**, and what would use it stops and says what is missing;
 platoon never swaps in another model by itself. Pick another to go on.

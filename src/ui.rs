@@ -938,7 +938,8 @@ fn draw_notes(f: &mut Frame, app: &App, area: Rect) {
         // A project with no file gets one when a turn ends in one of its sessions; notes the user emptied, or the
         // switch off, wait for `e`.
         if app.notes_start_by_themselves() {
-            lines.push(Line::styled(NOTES_START_THEMSELVES, Style::new().fg(t.text)));
+            // The sessions of a project can be either agent's.
+            lines.push(Line::styled(NOTES_START_THEMSELVES.replace("Claude", app.agents_said()), Style::new().fg(t.text)));
             lines.push(Line::styled("Or press e to start them now from a short template.", Style::new().fg(t.text)));
         } else {
             lines.push(Line::styled("Press e to start them from a short template.", Style::new().fg(t.text)));
@@ -1893,7 +1894,7 @@ fn draw_settings(f: &mut Frame, app: &App, area: Rect) {
     // A warning or an error is never dropped.
     if !store.is_corrupt() && app.active_notice().is_none() {
         let text_w = (area.width as usize).saturating_sub(4);
-        let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
+        let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(&app.setting_explain(it), text_w)).collect();
         let room = |notes: usize| {
             path_y.saturating_sub(notes as u16 + 1).max(top + items.len().min(SETTINGS_MIN_ROWS) as u16).min(path_y.max(top)) - top
         };
@@ -1998,7 +1999,7 @@ fn settings_content_height(app: &App, w: usize) -> u16 {
     let text_w = w.saturating_sub(4);
     let need = |tab: usize| {
         let items = &SETTINGS_TABS[tab].items;
-        let entries: usize = items.iter().map(|it| 1 + wrap(it.explain, text_w).len()).sum::<usize>()
+        let entries: usize = items.iter().map(|it| 1 + wrap(&app.setting_explain(it), text_w).len()).sum::<usize>()
             + items.len().saturating_sub(1)
             + SETTINGS_TABS[tab].headings.len();
         entries + 1 + settings_notes(app, tab, w).len()
@@ -2069,7 +2070,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     let text_w = (area.width as usize).saturating_sub(4);
     let items = app.items();
     let tab = settings_tab(app);
-    let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(it.explain, text_w)).collect();
+    let explained: Vec<Vec<String>> = items.iter().map(|it| wrap(&app.setting_explain(it), text_w)).collect();
 
     let level = explain_level(&explained, app.setting, area.height as usize, tab.headings.len());
     let show = |i: usize| level == 0 || (level == 1 && i == app.setting);
@@ -2093,7 +2094,8 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
     // Every chooser of the tab is as wide as the widest of them, so their arrows line up down the tab, as long as that
     // leaves every entry's name whole; a value longer than that (a theme's name, an editor's) is cut with "…".
     // (A system prompt's entry has no chooser: "Enter to change" is short, and its long name is cut as it always was.)
-    let names_w = items.iter().filter(|it| !matches!(it.kind, Kind::Instructions(_))).map(|it| it.name.width()).max().unwrap_or(0);
+    let names_w =
+        items.iter().filter(|it| !matches!(it.kind, Kind::Instructions(_))).map(|it| app.setting_name(it).width()).max().unwrap_or(0);
     let shared = items
         .iter()
         .filter_map(|it| match it.kind {
@@ -2155,7 +2157,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             // A model nothing here runs says so in full, as far as the row has room beside the name.
             Kind::Model(which) => {
                 let (label, _, at_start, at_end) = app.model_setting(which);
-                let room = (row.width as usize).saturating_sub(item.name.width() + 9);
+                let room = (row.width as usize).saturating_sub(app.setting_name(item).width() + 9);
                 let vw = shared.max(label.width().min(room)).max(4);
                 (fit_end(&label, vw), vw, at_start, at_end, false)
             }
@@ -2223,7 +2225,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
 
         let name_w = (cx as usize).saturating_sub(row.x as usize + 3);
         let lead = Span::styled(if selected { "▎ " } else { "  " }, Style::new().fg(t.accent).bg(bg));
-        let name = Span::styled(fit_end(item.name, name_w), Style::new().fg(t.text).bg(bg).add_modifier(Modifier::BOLD));
+        let name = Span::styled(fit_end(&app.setting_name(item), name_w), Style::new().fg(t.text).bg(bg).add_modifier(Modifier::BOLD));
         f.render_widget(Paragraph::new(Line::from(vec![lead, name])), Rect::new(row.x, row.y, (cx - row.x).max(1), 1));
         if show(i) {
             for (n, line) in explained[i].iter().enumerate() {
@@ -2589,7 +2591,8 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
         x += cw + 1;
     }
     f.render_widget(Paragraph::new(Line::from(spans)), chips);
-    f.render_widget(Paragraph::new(Span::styled(fit_end(kind.explain, explain.width as usize), Style::new().fg(t.dim))), explain);
+    let (kind_explain, _) = app.search_words(s.kind);
+    f.render_widget(Paragraph::new(Span::styled(fit_end(&kind_explain, explain.width as usize), Style::new().fg(t.dim))), explain);
     f.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled("❯ ", Style::new().fg(t.accent)),
@@ -2615,11 +2618,12 @@ fn draw_search(f: &mut Frame, app: &App, area: Rect) {
     };
     // Whatever the results area holds, a click on its empty part is not a click outside the dialog.
     app.hits.borrow_mut().push((list, Hit::Inert));
+    let ask = format!("ask {}", app.smart_agent().short());
     let (enter, esc) = if kind.narrows_list {
         ("keep filter", "clear")
     } else if s.kind == FIND_KIND {
         match app.find_state() {
-            FindState::Idle | FindState::Failed(_) => ("ask Claude", "close"),
+            FindState::Idle | FindState::Failed(_) => (ask.as_str(), "close"),
             FindState::Done => ("open", "close"),
             FindState::Confirm { .. } => ("go ahead", "back"),
             FindState::Waiting | FindState::Asking => ("", "cancel"),
@@ -2799,6 +2803,8 @@ fn draw_quick_project_rows(f: &mut Frame, app: &App, area: Rect) {
 fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
     let t = app.effective_theme();
     let s = &app.search;
+    // The agent the description search asks: the smart features' model's.
+    let who = app.smart_agent().short();
     let mut lines: Vec<(String, Color)> = Vec::new();
     if !app.search_kinds().contains(&FIND_KIND) {
         let text = format!(
@@ -2808,28 +2814,29 @@ fn draw_find_message(f: &mut Frame, app: &App, area: Rect) -> bool {
         lines.push((text, t.warn));
     } else {
         match app.find_state() {
-            FindState::Idle if s.text.trim().is_empty() => lines.push((SEARCH_KINDS[FIND_KIND].prompt.to_string(), hint_fg(t))),
-            FindState::Idle => lines
-                .push(("Press enter to ask Claude. It uses some of your plan, and nothing is sent until you do.".to_string(), hint_fg(t))),
+            FindState::Idle if s.text.trim().is_empty() => lines.push((app.search_words(FIND_KIND).1, hint_fg(t))),
+            FindState::Idle => {
+                lines.push((format!("Press enter to ask {who}. It uses some of your plan, and nothing is sent until you do."), hint_fg(t)))
+            }
             FindState::Waiting => {
-                lines.push(("Asking Claude...".to_string(), t.subtext));
+                lines.push((format!("Asking {who}..."), t.subtext));
                 lines.push(("Waiting for the names being made to finish first. Press esc to cancel.".to_string(), hint_fg(t)));
             }
             FindState::Asking => {
-                lines.push(("Asking Claude...".to_string(), t.subtext));
+                lines.push((format!("Asking {who}..."), t.subtext));
                 lines.push(("Press esc to cancel.".to_string(), hint_fg(t)));
             }
             FindState::Confirm { estimate, count } => {
                 lines.push((
                     format!(
-                        "Search wider? This sends {count} sessions to Claude, about {} tokens (an estimate). Press enter to go ahead or esc to go back.",
+                        "Search wider? This sends {count} sessions to {who}, about {} tokens (an estimate). Press enter to go ahead or esc to go back.",
                         crate::settings::thousands(estimate.tokens)
                     ),
                     t.text,
                 ));
             }
             FindState::Done if s.results.is_empty() => {
-                lines.push(("Claude found no likely match. Try other words, or press ctrl+w to search wider.".to_string(), hint_fg(t)));
+                lines.push((format!("{who} found no likely match. Try other words, or press ctrl+w to search wider."), hint_fg(t)));
             }
             FindState::Done => return false,
             FindState::Failed(msg) => lines.push((msg.clone(), t.warn)),
@@ -2858,8 +2865,9 @@ fn draw_result_rows(f: &mut Frame, app: &App, area: Rect) {
             return;
         }
     } else if s.results.is_empty() {
+        let prompt = app.search_words(s.kind).1;
         let msg = if s.text.trim().is_empty() {
-            SEARCH_KINDS[s.kind].prompt
+            prompt.as_str()
         } else if app.search_catching_up() {
             "Still reading your sessions…"
         } else {
