@@ -427,9 +427,9 @@ fn with_only_codex_platoon_starts_without_claude_codes_setup_and_setup_leaves_cl
     let shown = text(&out.stdout);
     assert!(shown.contains("Claude Code isn't installed on this computer, so there is nothing to set up for it."), "{shown}");
     assert!(!shown.contains("Status line") && !shown.contains("Session guard"), "no Claude Code steps: {shown}");
-    assert!(shown.contains("Codex") && shown.matches("added").count() == 3 && shown.contains("All set"), "{shown}");
+    assert!(shown.contains("Codex") && shown.matches("added").count() == 4 && shown.contains("All set"), "{shown}");
     assert!(!claude.join("settings.json").exists(), "Claude Code's settings are left alone");
-    assert!(codex.join("hooks.json").exists(), "Codex's notes hooks are in");
+    assert!(codex.join("hooks.json").exists(), "Codex's notes and task hooks are in");
     // And platoon starts: no setup gate for a program that isn't there, and Codex's plan in the header.
     let screen = run_in_terminal_on(&claude, &cache, &env, "No sessions yet");
     assert!(screen.contains("No sessions yet") && !screen.contains("one-time setup"), "{screen}");

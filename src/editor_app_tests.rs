@@ -186,6 +186,7 @@ impl Lab {
             dir: s(&self.wt),
             args: vec!["--resume".into(), "sess-1".into()],
             sock: PathBuf::new(),
+            task: None,
         };
         self.app.refresh_with(vec![host], false);
     }
@@ -228,7 +229,8 @@ fn v_on_a_task_opens_its_worktree_and_on_one_not_started_its_folder() {
 fn the_session_still_working_is_said_before_opening() {
     let mut l = lab("ed-working", State::Working);
     l.session_hosted();
-    assert!(l.app.task_session_running("sess-1"));
+    let t = l.app.every_ticket_for_test().into_iter().find(|(_, t)| t.number == 1).unwrap();
+    assert!(l.app.task_running(&t.0, &t.1));
     v(&mut l.app);
     assert!(matches!(&l.app.mode, Mode::Confirm(Confirm::EditorWhileWorking { number: 1, .. })));
     assert!(l.app.take_own_editor_request().is_none());

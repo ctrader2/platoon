@@ -1,6 +1,7 @@
 //! What tasks' sessions have spent, for the Tasks tab: each session's transcript (and its subagents' beside it) read by
 //! `claude::read_session_log` on a thread of its own, every couple of seconds, and only again when a file changed (by size
-//! and time). Only the sessions of the tasks on the board are read. What is shown from it is worked out in `spent.rs`.
+//! and time); a Codex task's session from its rollout (`Agent::spent`, Codex's running total). Only the sessions of the
+//! tasks on the board are read. What is shown from it is worked out in `spent.rs`.
 
 use super::*;
 use crate::agents::{SessionLog, Spent};
@@ -45,13 +46,26 @@ fn stamp_of(path: &Path) -> Stamp {
     out
 }
 
-/// Read what changed (off the UI thread): each session's transcript found under `root`, read again only when its
-/// files are not as they were.
-fn read_all(root: &Path, sessions: &[String], prev: &HashMap<String, Reading>) -> HashMap<String, Reading> {
+/// What a Codex rollout says a session spent, as a `SessionLog`: its running total, and when the file was last written.
+fn codex_log(path: &Path) -> Option<SessionLog> {
+    let last_at = std::fs::metadata(path).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok());
+    Some(SessionLog { spent: Agent::Codex.spent(path)?, last_at: last_at.map(|d| d.as_millis() as u64) })
+}
+
+/// Read what changed (off the UI thread): each session's transcript found under `root` (Claude Code's folder), else its
+/// rollout under `codex_root`, read again only when its files are not as they were.
+fn read_all(root: &Path, codex_root: Option<&Path>, sessions: &[String], prev: &HashMap<String, Reading>) -> HashMap<String, Reading> {
     let mut out = prev.clone();
     for id in sessions {
         let known = prev.get(id).map(|r| r.path.clone()).filter(|p| p.is_file());
-        let Some(path) = known.or_else(|| claude::find_transcript(root, id)) else {
+        let found = known
+            .map(|p| {
+                let codex = codex_root.is_some_and(|c| p.starts_with(c));
+                (p, codex)
+            })
+            .or_else(|| claude::find_transcript(root, id).map(|p| (p, false)))
+            .or_else(|| codex_root.and_then(|c| Agent::Codex.find_transcript(c, id)).map(|p| (p, true)));
+        let Some((path, codex)) = found else {
             out.remove(id);
             continue;
         };
@@ -59,7 +73,8 @@ fn read_all(root: &Path, sessions: &[String], prev: &HashMap<String, Reading>) -
         if prev.get(id).is_some_and(|r| r.stamp == stamp) {
             continue;
         }
-        out.insert(id.clone(), Reading { log: claude::read_session_log(&path), path, stamp });
+        let log = if codex { codex_log(&path) } else { claude::read_session_log(&path) };
+        out.insert(id.clone(), Reading { log, path, stamp });
     }
     out
 }
@@ -87,10 +102,11 @@ impl App {
         }
         self.sw.last = Some(Instant::now());
         let root = self.reader.root().to_path_buf();
+        let codex_root = self.providers.codex_root().map(Path::to_path_buf);
         let prev = self.sw.logs.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(read_all(&root, &sessions, &prev));
+            let _ = tx.send(read_all(&root, codex_root.as_deref(), &sessions, &prev));
         });
         self.sw.rx = Some(rx);
     }
@@ -99,7 +115,12 @@ impl App {
     fn sessions_to_read(&self) -> Vec<String> {
         let now = usage::now();
         let on_board = |t: &Ticket| !t.state.closed() || now.saturating_sub(t.updated) < crate::board::FINISHED_FOR;
-        self.all_tasks().iter().flat_map(|(_, list)| list.iter()).filter(|t| on_board(t)).filter_map(|t| t.session.clone()).collect()
+        self.all_tasks()
+            .iter()
+            .flat_map(|(_, list)| list.iter())
+            .filter(|t| on_board(t))
+            .filter_map(|t| t.session_id().map(String::from))
+            .collect()
     }
 
     /// What was last read of this session's transcript.

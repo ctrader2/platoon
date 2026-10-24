@@ -6,8 +6,8 @@
 - Claude Code (installed as `claude`), OpenAI's Codex CLI (`codex`), or both, signed in. platoon runs your sessions
   with them and reads their files (see [What platoon changes](what-platoon-changes.md)). With Claude Code, everything
   works; with only Codex, platoon lists and opens Codex's conversations (see
-  [Codex conversations](sessions.md#codex-conversations)), keeps projects and their notes, and runs its smart features
-  on Codex's models, but tasks need Claude Code for now (see [A computer with only Codex](#a-computer-with-only-codex)).
+  [Codex conversations](sessions.md#codex-conversations)), keeps projects and their notes, runs its smart features on
+  Codex's models, and runs tasks in Codex (see [A computer with only Codex](#a-computer-with-only-codex)).
   With neither, `platoon` says what to install instead of starting.
 - Only to build it yourself (`cargo install`, or from source): Rust 1.88 or newer, with `cargo`.
 - A terminal of at least 60 columns by 14 rows.
@@ -61,24 +61,27 @@ platoon.
 ### Codex
 
 When Codex is on this computer (its folder `~/.codex`, or `$CODEX_HOME`, is there, or `codex` is on your path), setup also
-adds three hooks to Codex's `hooks.json` in that folder, so a [project's](projects.md) notes reach its Codex sessions as
-they reach Claude Code's:
+adds platoon's hooks to Codex's `hooks.json` in that folder, so a [project's](projects.md) notes reach its Codex sessions as
+they reach Claude Code's, and a [task](tasks-and-squads.md#tasks-on-codex) can run in Codex:
 
 | Step | Why |
 | --- | --- |
 | Project notes | Hands a project's notes to its Codex sessions when they start (Codex starts them with your first message) |
 | Changed notes | Passes notes that changed since to a running Codex session, with your next message |
 | Notes updates | Lets platoon keep a project's notes up to date after its Codex sessions stop |
+| Tasks | Six hooks that let a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you. In any Codex session that isn't a task's they end at once and do nothing |
 
 Each is a fixed command, the same for every session (`<platoon> hook session-start --agent codex`, `hook guard --agent
-codex`, `hook stop --agent codex`). A file that is already there is backed up first (`hooks.json.platoon-bak`), and
+codex`, `hook stop --agent codex`, and `hook task-start`, `task-before`, `task-notify`, `task-tool`, `task-prompt`,
+`task-stop`, each with `--agent codex`). A file that is already there is backed up first (`hooks.json.platoon-bak`), and
 everything else in it is left as it was. None of these steps is needed to start platoon, and if `hooks.json` can't be read setup says so and
-leaves it alone.
+leaves it alone. **If you ran setup before platoon could run tasks in Codex, run `platoon setup` again**: it adds the
+task hooks beside the three it added then.
 
 **Setup marks them trusted in Codex.** Codex runs a hook only once it is trusted. Running `platoon setup` is your
-say-so for these three, so setup asks Codex itself to trust them, the way Codex's own "Trust" does: it starts Codex's
+say-so for these, so setup asks Codex itself to trust them, the way Codex's own "Trust" does: it starts Codex's
 app-server for a moment, and Codex works out each hook's fingerprint and writes the record in its own `config.toml`.
-Only the three hooks setup wrote are trusted, never another hook in the file or anywhere else. Each step's line says
+Only the hooks setup wrote are trusted, never another hook in the file or anywhere else. Each step's line says
 whether Codex trusts it now; running setup again when they are trusted changes nothing.
 
 If Codex can't be asked (it doesn't start, doesn't answer within 20 seconds, or answers something platoon doesn't
@@ -96,8 +99,9 @@ Claude Code is installed when `claude` is on your path (or `PLATOON_CLAUDE_BIN` 
 says so and leaves Claude Code's settings alone (it doesn't create `~/.claude/settings.json`), and `platoon` starts
 without asking for Claude Code's steps: only Codex's hooks are set up, and they never block starting. The models offered
 are Codex's own (the first one Codex lists is the default for the smart features and the notes), the header shows Codex's
-plan, and the check for a newer Claude Code is skipped. A task's session runs on Claude Code for now, so starting a task
-says it needs Claude Code.
+plan, and the check for a newer Claude Code is skipped. Tasks run in Codex: the built-in squads you haven't changed use
+Codex's first model, for the session and for the check of its work, and the Squads tab says so ("GPT-6-Luna, since
+Claude Code isn't installed"). A squad of your own that names one of Claude's models says it isn't installed.
 
 With neither Claude Code nor Codex, `platoon` and `platoon setup` say plainly that there is nothing to manage and where to
 get each, and change nothing.
@@ -186,11 +190,12 @@ where it is, so you can run it again.
    hook event, or the whole `hooks` entry, goes only when platoon's hook was the last thing in it. A status line or
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
-   **Codex's hooks.** It takes the three hooks setup added out of Codex's `hooks.json` the same way (backup first, as
+   **Codex's hooks.** It takes the hooks setup added out of Codex's `hooks.json` the same way (backup first, as
    `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks included. Codex's records that
-   those three hooks are trusted go too, taken out through Codex itself as setup put them in (the records of any other
-   hook stay); if Codex can't be asked, uninstall says the records were left (they are harmless: the hooks they name
-   are gone) and carries on. If `hooks.json` can't be read, it says so and leaves it as it is.
+   those hooks are trusted go too, taken out through Codex itself as setup put them in (the records of any other
+   hook stay), and so does Codex's trust in the folders of tasks' worktrees that platoon had it trust and that the tasks
+   still record (only those: never a folder you trusted yourself); if Codex can't be asked, uninstall says what was
+   left (it is harmless) and carries on. If `hooks.json` can't be read, it says so and leaves it as it is.
 4. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
    said yes. Folders older platoons made are removed too, if they are there: `~/.local/share/platoon` and
    `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment

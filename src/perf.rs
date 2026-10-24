@@ -456,6 +456,7 @@ fn archiving_never_waits_for_a_process_and_stays_quick_with_five_thousand_rows()
         dir: "/tmp".into(),
         args: Vec::new(),
         sock: Default::default(),
+        task: None,
     };
     let limit = Duration::from_millis(500);
 

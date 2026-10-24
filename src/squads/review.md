@@ -12,11 +12,12 @@ plan or a diff) and take the verdict back to that step.
 1. Scope: the files, plan or diff the task names. With nothing named, on a branch, review
    `git diff <default branch>...HEAD`. Gather the context files a reviewer needs to follow the change.
 2. Intent: write one paragraph on what the change is for, from the task, the commit messages and the code. If you
-   can't tell, ask with `AskUserQuestion`.
-3. Spawn four reviewers in one message with the `Agent` tool (`subagent_type: "general-purpose"`), Reviewer A on
-   `model: "opus"`, B on `"fable"`, C on `"sonnet"`, D on `"haiku"`. If a model is refused, use the nearest one and
-   say so. Give each the same prompt: you are an adversarial reviewer; here is the intent, do not question it,
-   challenge how well the code achieves it; here is the diff. Look through whichever of these lenses apply:
+   can't tell, ask the user.
+3. Start four reviewers (helpers), A to D, all at once, each on a different model where you can. If a model is
+   refused, use the nearest one and say so. If you can't start helpers, review it yourself from each reviewer's
+   angle in turn, one pass each, and say so. Give each the same prompt: you are an adversarial reviewer; here is the
+   intent, do not question it, challenge how well the code achieves it; here is the diff. Look through whichever of
+   these lenses apply:
    correctness (edge cases, errors swallowed, concurrency, what happens if it runs twice or crashed halfway), root
    cause or symptom, fit with the system around it, whether it is verified by tests of behaviour, complexity that
    isn't earned, and security (trace each input to its sink). For each finding give a severity (critical, warning or

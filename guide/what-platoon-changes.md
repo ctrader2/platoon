@@ -23,7 +23,7 @@ message typed into a second copy of a conversation).
 
 ## In Codex's hooks
 
-When Codex is on this computer, [`platoon setup`](install-and-setup.md#codex) adds three hooks to Codex's `hooks.json`
+When Codex is on this computer, [`platoon setup`](install-and-setup.md#codex) adds nine hooks to Codex's `hooks.json`
 (`~/.codex/hooks.json`, or the one in `CODEX_HOME`), each running the platoon that ran setup by its full path, and the
 same for every session:
 
@@ -32,16 +32,22 @@ same for every session:
 | Project notes | a `SessionStart` hook: `<platoon> hook session-start --agent codex` | hands a project's notes to its Codex session when it starts (at most 8,000 characters) |
 | Changed notes | a `UserPromptSubmit` hook: `<platoon> hook guard --agent codex` | passes a project's changed notes to a running Codex session; it never refuses a message (Codex keeps one window per conversation itself) |
 | Notes updates | a `Stop` hook: `<platoon> hook stop --agent codex` | notes that a project's Codex session finished answering, so its notes can be brought up to date later |
+| Tasks | `SessionStart`, `PreToolUse` (on `Bash`, `apply_patch` and `request_user_input` only), `PermissionRequest`, `PostToolUse`, `UserPromptSubmit` and `Stop` (given 11 minutes) hooks: `<platoon> hook task-start --agent codex`, `hook task-before`, `hook task-notify`, `hook task-tool`, `hook task-prompt`, `hook task-stop`, each with `--agent codex` | run a [task in Codex](tasks-and-squads.md#tasks-on-codex): write down its session, hold back a push until you say yes, hold back edits while a plan waits for you, and move the task along. In a Codex session that isn't a task's (no `PLATOON_TASK` in its environment) each ends at once without reading anything |
 
 Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it (when there was one); everything else
 in the file stays as it was.
 
 Codex runs a hook only once it is trusted, and keeps that record in its `config.toml` (under `[hooks.state]`, one entry
-per hook with its fingerprint). Setup has Codex write those records for its own three hooks, so Codex doesn't ask you
-about them: it asks Codex's app-server (`codex app-server`, started for a moment) to trust exactly those three, the way
+per hook with its fingerprint). Setup has Codex write those records for its own hooks, so Codex doesn't ask you
+about them: it asks Codex's app-server (`codex app-server`, started for a moment) to trust exactly those, the way
 Codex's own "Trust" does, and Codex works out the fingerprints and writes the file itself. platoon never edits
-`config.toml`, and never trusts any other hook. [Uninstall](install-and-setup.md#uninstall) has Codex take the three
+`config.toml`, and never trusts any other hook. [Uninstall](install-and-setup.md#uninstall) has Codex take those
 records out again. If Codex can't be asked, setup says so and Codex asks you the next time it starts.
+
+A task that runs in Codex has its worktree's folder trusted in Codex the same way, through its app-server, so Codex
+doesn't ask about it in the window: one entry, `[projects."<the worktree's folder>"] trust_level = "trusted"`, written by
+Codex itself when platoon makes the worktree, and taken out again when platoon removes the worktree after the work. An
+entry of your own for that folder is left as it is. Uninstall takes out any that are left.
 
 ## No Claude Code skill
 
@@ -117,8 +123,9 @@ small marks its parts leave for each other.
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 
-**In Codex's folder**: only what setup adds to `hooks.json`, the backup beside it, and the records that Codex trusts
-platoon's three hooks, which Codex writes in its `config.toml` when setup asks it to.
+**In Codex's folder**: only what setup adds to `hooks.json`, the backup beside it, the records that Codex trusts
+platoon's hooks, and the trust in the folders of tasks' worktrees while they are there, which Codex writes in its
+`config.toml` when platoon asks it to.
 
 **In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it.
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
@@ -186,9 +193,10 @@ If you'd rather do it yourself, or the uninstaller can't:
 1. **The settings.** Open Claude Code's `settings.json` and delete the `statusLine` entry (if its command ends in
    `platoon statusline`) and each hook whose command ends in `platoon hook guard`, `platoon hook session-start` or
    `platoon hook stop`. In Codex's `hooks.json`, delete each hook whose command ends in `platoon hook guard --agent
-   codex`, `platoon hook session-start --agent codex` or `platoon hook stop --agent codex`; Codex's records that you
-   trusted them (the `[hooks.state."<...>/hooks.json:..."]` entries in its `config.toml`) are harmless once the hooks are
-   gone, and can go too. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
+   codex`, `platoon hook session-start --agent codex`, `platoon hook stop --agent codex` or `platoon hook task-...
+   --agent codex`; Codex's records that you trusted them (the `[hooks.state."<...>/hooks.json:..."]` entries in its
+   `config.toml`) are harmless once the hooks are gone, and can go too, as can the `[projects."<...>-worktrees/task-N"]`
+   entries of tasks' worktrees. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
    copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
 2. **The skill**, if an earlier platoon installed it: delete `~/.claude/skills/to-tickets/`.

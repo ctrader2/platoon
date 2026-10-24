@@ -44,8 +44,9 @@ pub const STEPS: [Step; 4] = [
     },
 ];
 
-/// The steps for Codex, in `codex::HOOKS` order. None of them blocks starting platoon.
-pub const CODEX_STEPS: [Step; 3] = [
+/// The steps for Codex, each one or more of its hooks (`CODEX_STEP_HOOKS`, in `codex::hooks` order). None of them
+/// blocks starting platoon.
+pub const CODEX_STEPS: [Step; 4] = [
     Step {
         name: "Project notes",
         what: "hands a project's notes to its Codex sessions when they start",
@@ -59,7 +60,22 @@ pub const CODEX_STEPS: [Step; 3] = [
         blocking: false,
         missing_note: "",
     },
+    Step {
+        name: "Tasks",
+        what: "lets a task run in Codex: its questions and plans, the check of its work, and pushing that waits for you",
+        blocking: false,
+        missing_note: "",
+    },
 ];
+
+/// How many of `codex::hooks()` each of `CODEX_STEPS` is, in order: the three notes hooks, then the six task hooks.
+const CODEX_STEP_HOOKS: [usize; 4] = [1, 1, 1, 6];
+
+/// `codex::hooks()` cut into `CODEX_STEPS`.
+fn codex_steps() -> Vec<Vec<&'static codex::HookEntry>> {
+    let mut all = codex::hooks();
+    CODEX_STEP_HOOKS.iter().map(|&n| all.by_ref().take(n).collect()).collect()
+}
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum State {
@@ -116,7 +132,7 @@ pub struct CodexReport {
 /// What became of asking Codex to trust platoon's hooks.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Trust {
-    /// What Codex says of each hook now, in `codex::HOOKS` order.
+    /// What Codex says of each step's hooks now, in `CODEX_STEPS` order (a step is trusted when all its hooks are).
     Asked(Vec<HookTrust>),
     /// Codex couldn't be asked, or its answers made no sense: why, plainly.
     Failed(String),
@@ -329,14 +345,24 @@ pub fn take_out(v: &mut Value) -> TakenOut {
     out
 }
 
-/// What Codex's hooks are called when `platoon uninstall` says what it took out, in `codex::HOOKS` order.
-pub const CODEX_ENTRIES: [&str; 3] = ["the Codex project notes hook", "the Codex changed notes hook", "the Codex notes updates hook"];
+/// What Codex's hooks are called when `platoon uninstall` says what it took out, in `codex::hooks` order.
+pub const CODEX_ENTRIES: [&str; 9] = [
+    "the Codex project notes hook",
+    "the Codex changed notes hook",
+    "the Codex notes updates hook",
+    "the Codex task start hook",
+    "the Codex task tool check",
+    "the Codex task permission hook",
+    "the Codex task tool hook",
+    "the Codex task prompt hook",
+    "the Codex task stop hook",
+];
 
 /// Take platoon's own hooks out of Codex's `hooks.json` (read into `v`): exactly the commands setup writes there
-/// (`codex::HOOKS`), and the groups, events and `hooks` they leave empty, as `take_out` does. Every other key stays.
+/// (`codex::hooks`), and the groups, events and `hooks` they leave empty, as `take_out` does. Every other key stays.
 pub fn take_out_codex(v: &mut Value) -> TakenOut {
     let mut out = TakenOut::default();
-    let hooks: Vec<(&str, &str, &'static str)> = codex::HOOKS.iter().zip(CODEX_ENTRIES).map(|((e, a), label)| (*e, *a, label)).collect();
+    let hooks: Vec<(&str, &str, &'static str)> = codex::hooks().zip(CODEX_ENTRIES).map(|(h, label)| (h.event, h.args, label)).collect();
     take_out_hooks(v, &hooks, &mut out);
     out
 }
@@ -346,8 +372,15 @@ pub fn take_out_codex(v: &mut Value) -> TakenOut {
 fn take_out_hooks(v: &mut Value, hooks: &[(&str, &str, &'static str)], out: &mut TakenOut) {
     for (event, args, label) in hooks {
         let all: Vec<String> = hook_commands(v, event, |c| c.contains("platoon")).into_iter().map(String::from).collect();
-        let (mine, theirs): (Vec<String>, Vec<String>) = all.into_iter().partition(|c| exactly(c, args));
-        out.left.extend(theirs);
+        let (mine, others): (Vec<String>, Vec<String>) = all.into_iter().partition(|c| exactly(c, args));
+        // Several of platoon's hooks can share an event: a command that is another of them isn't the user's, and one of
+        // the user's there is listed once.
+        let another_of_ours = |c: &str| hooks.iter().any(|(e, a, _)| e == event && exactly(c, a));
+        for c in others {
+            if !another_of_ours(&c) && !out.left.contains(&c) {
+                out.left.push(c);
+            }
+        }
         if mine.is_empty() {
             continue;
         }
@@ -530,10 +563,12 @@ fn this_program() -> Result<(String, String), String> {
     Ok((exe, quoted))
 }
 
-/// Codex's steps in its `hooks.json` under `codex_root` (`codex::HOOKS`, each a fixed command running this platoon):
-/// whatever is missing, or points at a platoon that no longer exists, is put in; everything else in the file stays as
-/// it was. A file that is there but can't be read or isn't a JSON object is reported and left alone. Never written
-/// when nothing changed; otherwise backed up first (`hooks.json.platoon-bak`).
+/// Codex's steps in its `hooks.json` under `codex_root` (`codex::hooks`, each a fixed command running this platoon,
+/// with its matcher and time where it has them): whatever is missing, points at a platoon that no longer exists, or
+/// has another matcher or time than this platoon gives it, is put in; everything else in the file stays as it was. A
+/// file that is there but can't be read or isn't a JSON object is reported and left alone. Never written when nothing
+/// changed; otherwise backed up first (`hooks.json.platoon-bak`). A file with only the notes hooks (an older platoon's
+/// setup) gets the task hooks added.
 pub fn run_codex(codex_root: &Path) -> CodexReport {
     let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, backed_up: false, error: Some(error), trust: None };
     let path = codex::hooks_path(codex_root);
@@ -551,18 +586,31 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
         Err(e) => return fail(e),
     };
     let mut outcomes = Vec::new();
-    for (event, args) in codex::HOOKS {
-        let ours = |c: &str| c.contains("platoon") && args_of(c) == args;
-        let state = commands_state(&hook_commands(&v, event, ours));
-        outcomes.push(match state {
-            State::Done | State::Skipped(_) => Outcome::AlreadyDone,
-            State::Missing | State::Broken(_) => {
-                remove_hook(&mut v, event, ours);
-                if let Err(e) = add_hook(&mut v, event, format!("{quoted} {args}"), "hooks.json") {
-                    return fail(e);
+    for step in codex_steps() {
+        let mut each = Vec::new();
+        for h in step {
+            let ours = |c: &str| c.contains("platoon") && args_of(c) == h.args;
+            let state = match commands_state(&hook_commands(&v, h.event, ours)) {
+                State::Done if !codex_hook_as_written(&v, h) => State::Broken("its matcher or time changed".into()),
+                other => other,
+            };
+            each.push(match state {
+                State::Done | State::Skipped(_) => Outcome::AlreadyDone,
+                State::Missing | State::Broken(_) => {
+                    remove_hook(&mut v, h.event, ours);
+                    if let Err(e) = add_codex_hook(&mut v, h, format!("{quoted} {}", h.args)) {
+                        return fail(e);
+                    }
+                    if state == State::Missing { Outcome::Added } else { Outcome::Repaired }
                 }
-                if state == State::Missing { Outcome::Added } else { Outcome::Repaired }
-            }
+            });
+        }
+        outcomes.push(if each.contains(&Outcome::Added) {
+            Outcome::Added
+        } else if each.contains(&Outcome::Repaired) {
+            Outcome::Repaired
+        } else {
+            Outcome::AlreadyDone
         });
     }
     if outcomes.iter().all(|o| *o == Outcome::AlreadyDone) {
@@ -584,9 +632,37 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
     }
 }
 
+/// Is every one of platoon's commands for `h` in `v` (Codex's hooks file) in a group with `h`'s matcher, and given
+/// `h`'s time? (An older platoon's hook without them is put in again.)
+fn codex_hook_as_written(v: &Value, h: &codex::HookEntry) -> bool {
+    let groups = v.get("hooks").and_then(|x| x.get(h.event)).and_then(Value::as_array).into_iter().flatten();
+    groups
+        .flat_map(|g| {
+            let matcher = g.get("matcher").and_then(Value::as_str).filter(|m| !m.is_empty());
+            g.get("hooks").and_then(Value::as_array).into_iter().flatten().map(move |x| (matcher, x))
+        })
+        .filter(|(_, x)| x.get("command").and_then(Value::as_str).is_some_and(|c| c.contains("platoon") && args_of(c) == h.args))
+        .all(|(matcher, x)| matcher == h.matcher && x.get("timeout").and_then(Value::as_u64) == h.timeout)
+}
+
+/// Add one of platoon's Codex hooks to `v`, in a group of its own with its matcher, and its time when it has one.
+fn add_codex_hook(v: &mut Value, h: &codex::HookEntry, command: String) -> Result<(), String> {
+    add_hook(v, h.event, command, "hooks.json")?;
+    let group = v.get_mut("hooks").and_then(|x| x.get_mut(h.event)).and_then(Value::as_array_mut).and_then(|g| g.last_mut());
+    if let Some(g) = group.and_then(Value::as_object_mut) {
+        if let Some(m) = h.matcher {
+            g.insert("matcher".into(), json!(m));
+        }
+        if let (Some(t), Some(handler)) = (h.timeout, g.get_mut("hooks").and_then(|x| x.get_mut(0)).and_then(Value::as_object_mut)) {
+            handler.insert("timeout".into(), json!(t));
+        }
+    }
+    Ok(())
+}
+
 /// Have Codex trust platoon's own hooks in its `hooks.json` under `codex_root`, as Codex's own "Trust" does (running
 /// setup is the user's say-so): Codex's app-server (`program`) lists the hooks a session in `cwd` would run, and those
-/// in that very file whose event and command are exactly what this setup writes (`codex::HOOKS`, running this
+/// in that very file whose event and command are exactly what this setup writes (`codex::hooks`, running this
 /// platoon), and that Codex doesn't trust yet or that changed since, are trusted in one write. No other hook is ever
 /// trusted, whoever wrote it. Codex is then asked again what it says of each. The whole exchange ends within `timeout`.
 pub fn trust_codex(codex_root: &Path, program: &str, cwd: &Path, timeout: Duration) -> Trust {
@@ -600,9 +676,8 @@ pub fn trust_codex(codex_root: &Path, program: &str, cwd: &Path, timeout: Durati
         let trusted = |hs: &[codex_server::Hook]| !hs.is_empty() && hs.iter().all(|h| h.trust == codex_server::TrustStatus::Trusted);
         let mut server = codex_server::Server::start(program, codex_root, timeout)?;
         let before = server.hooks(cwd)?;
-        let to_trust: Vec<codex_server::Hook> = codex::HOOKS
-            .iter()
-            .flat_map(|(event, args)| mine(&before, event, args))
+        let to_trust: Vec<codex_server::Hook> = codex::hooks()
+            .flat_map(|h| mine(&before, h.event, h.args))
             .filter(|h| matches!(h.trust, codex_server::TrustStatus::Untrusted | codex_server::TrustStatus::Modified))
             .collect();
         let after = if to_trust.is_empty() {
@@ -611,9 +686,10 @@ pub fn trust_codex(codex_root: &Path, program: &str, cwd: &Path, timeout: Durati
             server.trust(&to_trust)?;
             server.hooks(cwd)?
         };
-        Ok(codex::HOOKS
+        let all = |hs: &[codex_server::Hook], step: &[&codex::HookEntry]| step.iter().all(|h| trusted(&mine(hs, h.event, h.args)));
+        Ok(codex_steps()
             .iter()
-            .map(|(event, args)| match (trusted(&mine(&before, event, args)), trusted(&mine(&after, event, args))) {
+            .map(|step| match (all(&before, step), all(&after, step)) {
                 (true, true) => HookTrust::Already,
                 (false, true) => HookTrust::Now,
                 (_, false) => HookTrust::Not,
@@ -637,7 +713,7 @@ pub fn forget_codex_trust(codex_root: &Path, program: &str, cwd: &Path, timeout:
     let ours: Vec<String> = server
         .hooks(cwd)?
         .into_iter()
-        .filter(|h| h.is_in(&file) && codex::HOOKS.iter().any(|(event, args)| h.is_event(event) && exactly(&h.command, args)))
+        .filter(|h| h.is_in(&file) && codex::hooks().any(|x| h.is_event(x.event) && exactly(&h.command, x.args)))
         .map(|h| h.key)
         .collect();
     if ours.is_empty() {
@@ -1184,21 +1260,29 @@ mod tests {
     }
 
     #[test]
-    fn codexs_three_hooks_are_added_once_as_fixed_commands_and_a_second_run_changes_nothing() {
+    fn codexs_notes_and_task_hooks_are_added_once_as_fixed_commands_and_a_second_run_changes_nothing() {
         let codex = tmp("codex-fresh").join("codex");
         let r = run_codex(&codex);
-        assert_eq!((r.outcomes, r.error), (vec![Outcome::Added; 3], None));
+        assert_eq!((r.outcomes, r.error), (vec![Outcome::Added; 4], None));
         assert_eq!(r.saved.as_deref(), Some(codex.join("hooks.json").as_path()));
         assert!(!codex.join("hooks.json.platoon-bak").exists(), "there was nothing to back up");
         let v = codex_hooks(&codex);
         let (exe, _) = this_program().unwrap();
-        for (event, args) in codex::HOOKS {
-            assert_eq!(codex_commands(&v, event), [format!("{exe} {args}")], "{event}");
+        for h in codex::hooks() {
+            assert!(codex_commands(&v, h.event).contains(&format!("{exe} {}", h.args)), "{}", h.args);
         }
+        assert_eq!(codex_commands(&v, "SessionStart").len(), 2, "the notes hook and the task one");
         assert_eq!(v["hooks"]["SessionStart"][0]["hooks"][0]["type"], "command");
+        // The task hooks: the tools that matter, and the check's time for the stop. Nothing else has a matcher.
+        assert_eq!(
+            v["hooks"]["PreToolUse"],
+            json!([{"matcher": "Bash|apply_patch|request_user_input", "hooks": [{"type": "command", "command": format!("{exe} hook task-before --agent codex")}]}])
+        );
+        assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 660);
+        assert!(v["hooks"]["Stop"][0]["hooks"][0].get("timeout").is_none() && v["hooks"]["PostToolUse"][0].get("matcher").is_none());
         let text = fs::read_to_string(codex.join("hooks.json")).unwrap();
         let again = run_codex(&codex);
-        assert_eq!((again.outcomes, again.saved), (vec![Outcome::AlreadyDone; 3], None));
+        assert_eq!((again.outcomes, again.saved), (vec![Outcome::AlreadyDone; 4], None));
         assert_eq!(fs::read_to_string(codex.join("hooks.json")).unwrap(), text, "not written again");
         assert!(!codex.join("hooks.json.platoon-bak").exists());
     }
@@ -1209,20 +1293,52 @@ mod tests {
         let original = r#"{"version":2,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-stop","timeout":5}]}],"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}],"SessionStart":[{"hooks":[{"type":"command","command":"/gone/platoon hook session-start --agent codex"}]}]},"other":{"x":[1,2]}}"#;
         fs::write(codex.join("hooks.json"), original).unwrap();
         let r = run_codex(&codex);
-        assert_eq!(r.outcomes, [Outcome::Repaired, Outcome::Added, Outcome::Added]);
+        assert_eq!(r.outcomes, [Outcome::Repaired, Outcome::Added, Outcome::Added, Outcome::Added]);
         assert_eq!(fs::read_to_string(codex.join("hooks.json.platoon-bak")).unwrap(), original, "backed up first");
         let v = codex_hooks(&codex);
         assert_eq!((v["version"].clone(), v["other"].clone()), (json!(2), json!({"x": [1, 2]})));
-        assert_eq!(v["hooks"]["PreToolUse"], json!([{"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}]));
+        assert_eq!(v["hooks"]["PreToolUse"][0], json!({"matcher":"Bash","hooks":[{"type":"command","command":"check"}]}));
         let stops = codex_commands(&v, "Stop");
         assert_eq!(stops[0], "my-stop");
-        assert!(stops.len() == 2 && stops[1].ends_with(" hook stop --agent codex"), "{stops:?}");
+        assert!(stops.len() == 3 && stops[1].ends_with(" hook stop --agent codex"), "{stops:?}");
         assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["timeout"], 5);
         let starts = codex_commands(&v, "SessionStart");
-        assert!(starts.len() == 1 && !starts[0].starts_with("/gone/"), "repaired in place, not doubled: {starts:?}");
+        assert!(starts.len() == 2 && !starts[0].starts_with("/gone/"), "repaired in place, not doubled: {starts:?}");
         // The keys stay in the order they were in.
         let keys: Vec<&String> = v.as_object().unwrap().keys().collect();
         assert_eq!(keys, ["version", "hooks", "other"]);
+    }
+
+    #[test]
+    fn an_older_setups_three_notes_hooks_get_the_task_hooks_beside_them_and_a_changed_matcher_is_put_right() {
+        let codex = tmp("codex-upgrade");
+        let (_, quoted) = this_program().unwrap();
+        let notes = json!({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": format!("{quoted} hook session-start --agent codex")}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!("{quoted} hook guard --agent codex")}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": format!("{quoted} hook stop --agent codex")}]}]
+        }});
+        fs::write(codex.join("hooks.json"), notes.to_string()).unwrap();
+        let r = run_codex(&codex);
+        assert_eq!(r.outcomes, [Outcome::AlreadyDone, Outcome::AlreadyDone, Outcome::AlreadyDone, Outcome::Added]);
+        assert!(r.backed_up);
+        let v = codex_hooks(&codex);
+        for (event, i) in [("SessionStart", 0), ("UserPromptSubmit", 0), ("Stop", 0)] {
+            assert_eq!(v["hooks"][event][i], notes["hooks"][event][0], "{event}: the notes hook as it was, first");
+        }
+        assert_eq!(codex_commands(&v, "PermissionRequest"), [format!("{quoted} hook task-notify --agent codex")]);
+        // A task hook whose matcher isn't this platoon's (an older one's, or edited by hand) is put back as written.
+        let mut changed = v.clone();
+        *changed
+            .get_mut("hooks")
+            .and_then(|h| h.get_mut("PreToolUse"))
+            .and_then(|g| g.get_mut(0))
+            .and_then(|g| g.get_mut("matcher"))
+            .unwrap() = json!("Bash");
+        fs::write(codex.join("hooks.json"), changed.to_string()).unwrap();
+        let r = run_codex(&codex);
+        assert_eq!(r.outcomes[3], Outcome::Repaired);
+        assert_eq!(codex_hooks(&codex)["hooks"]["PreToolUse"][0]["matcher"], codex::BEFORE_TOOLS);
     }
 
     #[test]
@@ -1278,8 +1394,8 @@ mod tests {
             "PreToolUse": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook guard"}]}]
         }, "keep": true});
         let taken = take_out_codex(&mut v);
-        assert_eq!(taken.removed, CODEX_ENTRIES);
-        assert_eq!(taken.left, ["my-wrapper; platoon hook stop --agent codex"]);
+        assert_eq!(taken.removed, CODEX_ENTRIES[..3]);
+        assert_eq!(taken.left, ["my-wrapper; platoon hook stop --agent codex", "/opt/x/bin/platoon hook guard"], "each once");
         assert_eq!(
             v,
             json!({"hooks": {
@@ -1292,6 +1408,16 @@ mod tests {
             json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]}});
         assert_eq!(take_out_codex(&mut only).removed, [CODEX_ENTRIES[2]]);
         assert_eq!(only, json!({}), "what platoon's hook left empty goes");
+        // The task hooks go too, with their matchers and times; a file setup wrote whole is left with nothing of it.
+        // (Setup's file as an installed platoon writes it: a unit test's own program isn't called `platoon`.)
+        let codex = tmp("codex-take-out-all").join("codex");
+        run_codex(&codex);
+        let (_, quoted) = this_program().unwrap();
+        let text = fs::read_to_string(codex.join("hooks.json")).unwrap().replace(&quoted, "/opt/x/bin/platoon");
+        let mut all: Value = serde_json::from_str(&text).unwrap();
+        let taken = take_out_codex(&mut all);
+        assert_eq!(taken.removed, CODEX_ENTRIES);
+        assert_eq!((all, taken.left), (json!({}), Vec::<String>::new()));
     }
 
     // ---- Codex trusting platoon's hooks, through a stand-in for its app-server ----
@@ -1317,17 +1443,29 @@ mod tests {
         format!("{} {args}", this_program().unwrap().1)
     }
 
-    /// Codex's list of platoon's three hooks, with these trust states.
-    fn our_hooks(codex: &Path, trust: [&str; 3]) -> Vec<Value> {
+    /// Codex's list of platoon's hooks (`codex::hooks`), with these trust states, one for each step's hooks
+    /// (`CODEX_STEPS`).
+    fn our_hooks(codex: &Path, trust: [&str; 4]) -> Vec<Value> {
         let file = codex.join("hooks.json");
-        let events = [("sessionStart", "session_start"), ("userPromptSubmit", "user_prompt_submit"), ("stop", "stop")];
-        codex::HOOKS
-            .iter()
-            .zip(events)
-            .zip(trust)
+        let each: Vec<&str> = trust.iter().zip(CODEX_STEP_HOOKS).flat_map(|(t, n)| std::iter::repeat_n(*t, n)).collect();
+        let mut groups: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        codex::hooks()
+            .zip(each)
             .enumerate()
-            .map(|(i, (((_, args), (event, snake)), t))| {
-                codex_hook(&format!("{}:{snake}:0:0", file.display()), event, &ours(args), &file, &format!("sha256:h{i}"), t)
+            .map(|(i, (h, t))| {
+                let camel = format!("{}{}", h.event[..1].to_lowercase(), &h.event[1..]);
+                let snake: String = h
+                    .event
+                    .chars()
+                    .enumerate()
+                    .flat_map(
+                        |(k, c)| if c.is_uppercase() && k > 0 { vec!['_', c.to_ascii_lowercase()] } else { vec![c.to_ascii_lowercase()] },
+                    )
+                    .collect();
+                let group = groups.entry(h.event).or_default();
+                let key = format!("{}:{snake}:{group}:0", file.display());
+                *group += 1;
+                codex_hook(&key, &camel, &ours(h.args), &file, &format!("sha256:h{i}"), t)
             })
             .collect()
     }
@@ -1348,7 +1486,7 @@ mod tests {
     fn setup_has_codex_trust_exactly_its_own_new_or_changed_hooks_and_says_so() {
         let (codex, cwd, mut report, fake) = codex_world("codex-trust");
         let file = codex.join("hooks.json");
-        let mut before = our_hooks(&codex, ["untrusted", "modified", "trusted"]);
+        let mut before = our_hooks(&codex, ["untrusted", "modified", "trusted", "untrusted"]);
         // Never setup's to trust: the user's own hook in the same file, setup's very command in another file (a
         // project's), and setup's session-start command under another event.
         before.push(codex_hook(&format!("{}:stop:1:0", file.display()), "stop", "my-stop", &file, "sha256:u", "untrusted"));
@@ -1366,11 +1504,11 @@ mod tests {
         // Codex's own chatter before the answer, and an answer to another id, are passed over.
         let chatter = format!("{}\n{}", json!({"method": "configWarning", "params": {"summary": "x"}}), json!({"id": 99, "result": {}}));
         fake.answer("hooks/list", Some(1), &format!("{chatter}\n{}", CodexServerFake::reply("result", listed(&before, &cwd))));
-        fake.result("hooks/list", Some(2), listed(&trusted_now(&before, 3), &cwd));
+        fake.result("hooks/list", Some(2), listed(&trusted_now(&before, 9), &cwd));
         fake.result("config/batchWrite", None, json!({"status": "ok", "version": "sha256:v2", "filePath": codex.join("config.toml")}));
 
         let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
-        assert_eq!(trust, Trust::Asked(vec![HookTrust::Now, HookTrust::Now, HookTrust::Already]));
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Now, HookTrust::Now, HookTrust::Already, HookTrust::Now]));
         let args: Vec<String> = ["app-server", "--listen", "stdio://"].map(String::from).to_vec();
         assert_eq!(fake.started_with(), (args, codex.display().to_string()), "Codex's own folder, by CODEX_HOME");
         assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list", "config/batchWrite", "hooks/list"]);
@@ -1380,7 +1518,7 @@ mod tests {
         assert_eq!(sent[1], json!({"method": "initialized"}));
         assert_eq!(sent[2], json!({"id": 2, "method": "hooks/list", "params": {"cwds": [cwd]}}));
         let mut records = serde_json::Map::new();
-        for h in &before[..2] {
+        for h in before[..2].iter().chain(&before[3..9]) {
             records.insert(h["key"].as_str().unwrap().to_string(), json!({"trusted_hash": h["currentHash"]}));
         }
         let edit = json!({"keyPath": "hooks.state", "value": records, "mergeStrategy": "upsert"});
@@ -1401,7 +1539,8 @@ mod tests {
             &codex,
             false,
         );
-        assert_eq!(shown.matches("added; now trusted in Codex").count(), 2, "{shown}");
+        assert_eq!(shown.matches("added; now trusted in Codex").count(), 3, "{shown}");
+        assert!(shown.contains("Tasks") && shown.contains("pushing that waits for you"), "{shown}");
         assert!(shown.contains("added; Codex trusts it"), "{shown}");
         assert!(shown.contains("Setup had Codex mark them trusted, so they run in your Codex sessions without asking."), "{shown}");
         assert!(!shown.contains("Codex asks you once") && !shown.contains("Nothing to change"), "{shown}");
@@ -1410,9 +1549,9 @@ mod tests {
     #[test]
     fn hooks_codex_already_trusts_are_not_written_again_and_setup_says_nothing_changed() {
         let (codex, cwd, _, fake) = codex_world("codex-trusted");
-        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["trusted"; 3]), &cwd));
+        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["trusted"; 4]), &cwd));
         let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
-        assert_eq!(trust, Trust::Asked(vec![HookTrust::Already; 3]));
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Already; 4]));
         assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list"], "nothing written");
         let mut again = run_codex(&codex);
         again.trust = Some(trust);
@@ -1428,7 +1567,7 @@ mod tests {
             &codex,
             false,
         );
-        assert_eq!(shown.matches("already done; Codex trusts it").count(), 3, "{shown}");
+        assert_eq!(shown.matches("already done; Codex trusts it").count(), 4, "{shown}");
         assert!(shown.contains("Nothing to change.") && !shown.contains("Codex asks you once") && !shown.contains("Saved"), "{shown}");
     }
 
@@ -1445,7 +1584,7 @@ mod tests {
             (
                 "refuses",
                 |f, codex, cwd| {
-                    f.result("hooks/list", None, listed(&our_hooks(codex, ["untrusted"; 3]), cwd));
+                    f.result("hooks/list", None, listed(&our_hooks(codex, ["untrusted"; 4]), cwd));
                     f.answer("config/batchWrite", None, &CodexServerFake::reply("error", json!({"message": "config.toml is read-only"})));
                 },
                 ENOUGH,
@@ -1476,17 +1615,17 @@ mod tests {
         }
         // Asked, but Codex still doesn't say it trusts them.
         let (codex, cwd, mut report, fake) = codex_world("codex-fail-untrusted");
-        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["untrusted"; 3]), &cwd));
+        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["untrusted"; 4]), &cwd));
         fake.result("config/batchWrite", None, json!({"status": "ok"}));
         let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
-        assert_eq!(trust, Trust::Asked(vec![HookTrust::Not; 3]));
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Not; 4]));
         report.trust = Some(trust);
         let shown = render_codex(&report, false).join("\n");
-        assert_eq!(shown.matches("added; not trusted in Codex yet").count(), 3, "{shown}");
+        assert_eq!(shown.matches("added; not trusted in Codex yet").count(), 4, "{shown}");
         assert!(shown.contains("Codex didn't confirm it trusts every one of them.") && shown.contains(CODEX_WILL_ASK), "{shown}");
         // Codex couldn't be asked on a later run that changed nothing: said without claiming they are untrusted.
         let again = CodexReport {
-            outcomes: vec![Outcome::AlreadyDone; 3],
+            outcomes: vec![Outcome::AlreadyDone; 4],
             saved: None,
             backed_up: false,
             error: None,

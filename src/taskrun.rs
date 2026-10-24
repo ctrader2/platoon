@@ -1,27 +1,40 @@
 //! A task's session: what it is started with, and the hooks that move the task along while it works.
 //!
 //! A task runs as one ordinary interactive session of its agent in a platoon host, in the task's worktree (or its
-//! folder, when that is not in git). It is started (`agents::TaskLaunch`, `Agent::task_args`; Claude Code's flags are
-//! in `agents/claude.rs`) with the id platoon chose for it, its name "#N title", the squad's model, plan mode for a
-//! squad that plans first, the hooks below for this session only, `<task folder>/squad.md` added to its system prompt:
-//! platoon's fixed rules (`rules`) and the squad's steps, frozen when the task starts, with every squad copied beside
-//! it (`<task folder>/squads/<id>.md`) so a step can name one; the task's folder readable; and the task's text as its
-//! first message.
+//! folder, when that is not in git): Claude Code or Codex, as the squad's model decides. It is started
+//! (`agents::TaskLaunch`, `Agent::task_args`; each agent's flags are in its module) with the squad's model, platoon's
+//! fixed rules (`rules`, worded for the agent) and the squad's steps (`<task folder>/squad.md`, frozen when the task
+//! starts, with every squad copied beside it, `<task folder>/squads/<id>.md`, so a step can name one), the task's
+//! folder readable, and the task's text as its first message. Claude Code also gets the id platoon chose for it, its
+//! name "#N title", plan mode for a squad that plans first and the hooks below for this session only (`--settings`).
+//! Codex takes none of those: its hooks are installed once for every Codex session (`platoon setup`) and act only in a
+//! session whose environment names a task (`agents::TASK_ENV`); its id comes from its first hook; and a squad that
+//! plans first is told to write its plan and stop.
 //!
-//! The hooks (`platoon hook task-...`), each reading the hook's JSON on stdin and finding the task by its session:
-//! - `task-plan`, `PreToolUse` on `ExitPlanMode`: the plan is saved as the task's `plan.md`; Needs you, a plan to approve.
-//! - `task-question`, `PreToolUse` on `AskUserQuestion`: Needs you, with the question.
-//! - `task-notify`, `Notification`: a permission prompt makes a Working task Needs you.
+//! The hooks (`platoon hook task-...`; Codex's say `--agent codex`), each reading the hook's JSON on stdin and finding
+//! the task by its session (Claude Code) or by the task its environment names (Codex):
+//! - `task-start`, `SessionStart` (Codex): the session's id, written on the task.
+//! - `task-plan`, `PreToolUse` on `ExitPlanMode` (Claude Code): the plan is saved as the task's `plan.md`; Needs you, a
+//!   plan to approve.
+//! - `task-question`, `PreToolUse` on `AskUserQuestion` (Claude Code), and `request_user_input` through `task-before`
+//!   (Codex): Needs you, with the question.
+//! - `task-before`, `PreToolUse` on shell commands, file edits and the question tool (Codex): a command that pushes or
+//!   publishes (`askmatch.rs`, Claude Code's `ask` rules) is refused until the user says yes in the session, and file
+//!   edits are refused while a plan waits for the user.
+//! - `task-notify`, `Notification` (Claude Code) or `PermissionRequest` (Codex): a permission prompt makes a Working
+//!   task Needs you.
 //! - `task-tool`, `PostToolUse` on every tool: the answer came (the plan approved, the question answered, the
 //!   permission given): Working again.
-//! - `task-prompt`, `UserPromptSubmit`: the user typed: Working, and the count of refused stops starts again.
+//! - `task-prompt`, `UserPromptSubmit`: the user typed: Working, and the count of refused stops starts again. On Codex
+//!   it is also the user's answer to a plan (approved: edits may start) and to a command held back (it may run once).
 //! - `task-stop`, `Stop`: the work is checked (`verdict.rs`; the task is Working, "checking the work", meanwhile):
 //!   done, the task is Done; not done, the stop is refused once with what the check found, and the next "not done"
 //!   makes the task need the user; a check that could not run makes it need the user with why. platoon runs no tests
 //!   itself: the rules (`rules`) tell the session to find and run the repo's tests and report them, and the check
-//!   holds it to that.
+//!   holds it to that. On Codex a stop with the plan still to approve is the plan (Needs you, no check), and a reply
+//!   that ends with a question for the user (`QUESTION_MARK`) waits for the answer.
 
-use crate::agents::{Agent, HookEvent, HookKind, HookReply, Tool, TurnEnd};
+use crate::agents::{Agent, HookEvent, HookInput, HookKind, HookReply, Tool, TurnEnd};
 use crate::squads::Squad;
 use crate::tickets::{self, Need, State, Ticket, Tickets};
 use crate::verdict;
@@ -35,8 +48,9 @@ use std::{
 
 // ---- what the session is started with -----------------------------------------------------------------------------
 
-/// The hooks, by the name `platoon hook <name>` takes.
-pub const HOOKS: [&str; 6] = ["task-plan", "task-question", "task-notify", "task-tool", "task-prompt", "task-stop"];
+/// The hooks, by the name `platoon hook <name>` takes (the last two are Codex's only).
+pub const HOOKS: [&str; 8] =
+    ["task-plan", "task-question", "task-notify", "task-tool", "task-prompt", "task-stop", "task-start", "task-before"];
 
 /// The session's name.
 pub fn session_name(t: &Ticket) -> String {
@@ -77,6 +91,8 @@ pub const SQUAD_FILE: &str = "squad.md";
 /// What platoon's fixed rules say about a task.
 #[derive(Clone, Debug, Default)]
 pub struct Rules {
+    /// The agent the task's session runs on: the rules say how to do things in its own ways.
+    pub agent: Agent,
     /// Where the session works.
     pub folder: String,
     /// In git, on this branch (None: the folder is not in git).
@@ -84,13 +100,23 @@ pub struct Rules {
     /// Where the squads are copied (`<task folder>/squads`).
     pub squads_dir: String,
     pub plan_first: bool,
+    /// The models a step's helpers may be started on, when a step asks for several (Codex's own list; Claude Code's
+    /// are its aliases, named in its rules).
+    pub helper_models: Vec<String>,
 }
 
 /// The rule on tests: platoon runs none itself, so the session finds the repo's own and reports them (the check of the
 /// work holds a change to code to it: `verdict::SYSTEM`).
 pub const TESTS_RULE: &str = "- When you change code, find how this repo runs its tests (its CLAUDE.md, README, or build files), run them before you finish, and name the command and its result in your final message. If the repo has no tests, say so and how you checked the change instead.\n";
 
-/// platoon's fixed rules, above the squad's steps in `squad.md`. Not the user's to change.
+/// How a Codex task's session ends a reply that waits for the user's answer (Codex has no question tool platoon can
+/// rely on: `request_user_input` is in its plan mode only): the last line starts with this, and the stop waits for the
+/// answer instead of checking the work.
+pub const QUESTION_MARK: &str = "Question for you:";
+
+/// platoon's fixed rules, above the squad's steps in `squad.md`. Not the user's to change. The squads' steps say what
+/// to do in plain words ("ask the user", "present the plan and wait", "if you can start helpers"); these say how, in
+/// the agent's own ways.
 pub fn rules(r: &Rules) -> String {
     let mut out = String::from("# How this task works\n\nYou are working on a task the user handed to platoon.\n\n");
     match &r.branch {
@@ -101,18 +127,45 @@ pub fn rules(r: &Rules) -> String {
         )),
         None => out.push_str(&format!("- You work in {}. It is not a git repository.\n", r.folder)),
     }
-    out.push_str(
-        "- Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.\n\
-         - Ask the user questions with the AskUserQuestion tool, not in prose.\n",
-    );
-    if r.plan_first {
-        out.push_str("- You start in plan mode. Present the plan with ExitPlanMode; the user approves it before you change anything.\n");
+    match r.agent {
+        Agent::Claude => {
+            out.push_str(
+                "- Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.\n\
+                 - Ask the user questions with the AskUserQuestion tool, not in prose.\n",
+            );
+            if r.plan_first {
+                out.push_str(
+                    "- You start in plan mode. Present the plan with ExitPlanMode; the user approves it before you change anything.\n",
+                );
+            }
+            out.push_str(
+                "- To start helpers (subagents), use the Agent tool with `subagent_type: \"general-purpose\"` and `model: \"opus\"` (`\"sonnet\"` for mechanical edits). When a step asks for helpers on several models, give them `\"opus\"`, `\"fable\"`, `\"sonnet\"` and `\"haiku\"`, one each; if a model is refused, use the nearest one and say so.\n",
+            );
+        }
+        Agent::Codex => {
+            out.push_str(
+                "- Never push, open or merge pull requests, or publish anything unless the user asks for it in this session. Even then platoon holds the command back the first time and tells you so: stop, ask the user, and when they say yes, run exactly the same command again.\n",
+            );
+            out.push_str(&format!(
+                "- Ask the user with your request_user_input tool when you have it. Otherwise end your reply with the question on its own last line, starting with \"{QUESTION_MARK}\", and stop there until the user answers.\n"
+            ));
+            if r.plan_first {
+                out.push_str(
+                    "- Plan first. Look around (read files, run commands that change nothing), then write the plan as your reply and stop: change no files until the user answers it. platoon holds back file edits until then. Their answer is their say on the plan: go ahead as they say.\n",
+                );
+            }
+            let models = if r.helper_models.is_empty() { String::new() } else { format!(" (from {})", r.helper_models.join(", ")) };
+            out.push_str(&format!(
+                "- To start helpers (subagents), use your spawn_agent tool where you have it, give each one an exact scope, and wait for them all before you finish. When a step asks for helpers on several models, give each a different model{models} where you can. Without that tool, do each helper's part yourself, one pass each.\n"
+            ));
+        }
     }
     out.push_str("- When you finish, end with what you did and how you checked each \"Done when\" box of the task.\n");
     out.push_str(TESTS_RULE);
-    out.push_str(
-        "- Each time you finish, another Claude that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
-    );
+    out.push_str(match r.agent {
+        Agent::Claude => "- Each time you finish, another Claude that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
+        Agent::Codex => "- Each time you finish, another AI that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n",
+    });
     out.push_str(&format!(
         "- The squads are in {}, one file each. When a step says to follow another squad, read its file and follow its steps.\n",
         r.squads_dir
@@ -128,7 +181,12 @@ pub fn write_task_files(task_dir: &Path, squad: &Squad, squads: &[Squad], r: &Ru
         crate::projects::write_atomic(&dir.join(format!("{}.md", s.id)), &s.text())?;
     }
     let text = format!("{}\n# The squad: {}\n\n{}", rules(r), squad.name, squad.body);
-    crate::projects::write_atomic(&task_dir.join(SQUAD_FILE), &text)
+    crate::projects::write_atomic(&task_dir.join(SQUAD_FILE), &text)?;
+    // A Codex session can't be started in a plan mode: until the user answers its plan, platoon holds back its edits.
+    if r.agent == Agent::Codex && r.plan_first {
+        crate::projects::write_atomic(&task_dir.join(tickets::PLAN_PENDING_FILE), "")?;
+    }
+    Ok(())
 }
 
 // ---- the hooks -----------------------------------------------------------------------------------------------------
@@ -136,13 +194,15 @@ pub fn write_task_files(task_dir: &Path, squad: &Squad, squads: &[Squad], r: &Ru
 /// What a hook says back: the text for its stdout (None: nothing).
 pub type Said = Option<String>;
 
-/// Where a hook finds what it needs: platoon's folders, the `claude` the check of the work runs, and how long it may.
+/// Where a hook finds what it needs: platoon's folders, the programs the check of the work may run on, how long it may,
+/// and the task the session's environment names (`agents::TASK_ENV`; Codex's task hooks act only with it).
 pub struct Places {
     pub config: PathBuf,
     pub cache: PathBuf,
     /// The AI programs the check of the work may run on.
     pub providers: crate::agents::Providers,
     pub check_timeout: Duration,
+    pub task: Option<String>,
 }
 
 /// The kind of hook each of the task's hook commands is installed as (see `HOOKS`).
@@ -150,26 +210,56 @@ fn kind(name: &str) -> Option<HookKind> {
     Some(match name {
         "task-plan" => HookKind::BeforeTool(Tool::Plan),
         "task-question" => HookKind::BeforeTool(Tool::Question),
+        "task-before" => HookKind::BeforeAnyTool,
         "task-notify" => HookKind::PermissionWait,
         "task-tool" => HookKind::AfterTool,
         "task-prompt" => HookKind::Prompt,
         "task-stop" => HookKind::Stop,
+        "task-start" => HookKind::SessionStart,
         _ => return None,
     })
 }
 
-/// Run hook `name` on its JSON `input` (Claude Code's: its hooks are the ones that call these): what it says back.
-/// Nothing happens for a session that is no task's.
-pub fn hook(name: &str, input: &str, at: &Places) -> Said {
-    let agent = Agent::Claude;
+/// What the task needs while a command it wants to run is held back for the user.
+fn held_words(command: &str) -> String {
+    tickets::clean(&format!("It wants to run `{command}`: say yes in its session to let it, or tell it not to."), tickets::WHY_MAX)
+}
+
+/// Why a command that pushes or publishes didn't run (Codex's hook; Claude Code asks with its own prompt).
+fn held_reason(command: &str) -> String {
+    format!(
+        "platoon held this back: `{command}` pushes or publishes, and that waits for the user. Stop here and ask the user \
+         whether to run it (end your reply with a line starting \"{QUESTION_MARK}\"). If they say yes, run exactly the same \
+         command again; it goes through once. If they say no, don't run it."
+    )
+}
+
+/// Why an edit didn't run while the plan waits.
+const PLAN_WAITS: &str = "platoon held this back: this task plans first, and the user hasn't answered the plan yet. \
+Change no files: write the plan as your reply and stop. Once the user answers, go ahead as they say.";
+
+/// Run hook `name` of `agent` on its JSON `input`: what it says back. Claude Code's task hooks are given to a task's
+/// session only, and find the task by the session; Codex's run in every Codex session, and act only where the
+/// session's environment names a task (`at.task`). Nothing happens for a session that is no task's.
+pub fn hook(name: &str, agent: Agent, input: &str, at: &Places) -> Said {
     let config = at.config.as_path();
     let input = agent.hook_input(kind(name)?, input)?;
-    let (project, number) = tickets::find_session(config, &input.session)?;
+    let (project, number) = match agent {
+        Agent::Claude => tickets::find_session(config, &input.session)?,
+        Agent::Codex => tickets::parse_tag(at.task.as_deref()?)?,
+    };
     let mut store = Tickets::open(config, &project);
     let t = store.get(number)?.clone();
     if matches!(t.state, State::NotStarted | State::Cancelled) {
         return None;
     }
+    if agent == Agent::Codex {
+        match codex_first(&input, at, &project, &mut store, &t) {
+            Gate::Answer(said) => return said,
+            Gate::Own => {}
+        }
+    }
+    let task_dir = tickets::task_dir(config, &project, number);
     let set = |store: &mut Tickets, f: &dyn Fn(&Ticket) -> Option<State>| {
         let _ = store.update(number, |t| match f(t) {
             Some(s) if s != t.state => {
@@ -205,6 +295,13 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
             _ => None,
         }),
         HookEvent::PromptSubmitted => {
+            if agent == Agent::Codex {
+                // The user's answer: to the plan (edits may start now), and to a command held back (it may run once).
+                if t.state == State::NeedsYou(Need::Plan) {
+                    let _ = fs::remove_file(task_dir.join(tickets::PLAN_PENDING_FILE));
+                }
+                held::answered(&task_dir);
+            }
             let _ = store.update(number, |t| {
                 let reopen = matches!(t.state, State::NeedsYou(_) | State::Done);
                 if !reopen && t.checks_refused == 0 && t.checking.is_none() {
@@ -220,12 +317,146 @@ pub fn hook(name: &str, input: &str, at: &Places) -> Said {
             });
         }
         HookEvent::Stop(end) => {
+            if agent == Agent::Codex
+                && let Some(waits) = codex_stop(&end, &task_dir, config, &project, &mut store, &t)
+            {
+                return waits;
+            }
             let reason = stop(&end, at, &project, &mut store, &t)?;
             return Some(agent.hook_answer(&HookReply::SendBack(reason)).stdout);
         }
-        HookEvent::BeforeTool { tool: Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
+        HookEvent::BeforeTool { tool: Tool::Shell | Tool::Edit | Tool::Other, .. } | HookEvent::SessionStart { .. } => {}
     }
     None
+}
+
+/// What a Codex task hook does before the steps every agent shares.
+enum Gate {
+    /// Done: say this (or nothing).
+    Answer(Said),
+    /// The task's own session, with an event the shared steps take.
+    Own,
+}
+
+/// A Codex task's hook, first: its session's id written on the task (`SessionStart`); a tool about to run held back
+/// when it pushes or publishes, or edits while the plan waits (whichever session of the task's process asks: a
+/// helper's too); and anything else only for the task's own session.
+fn codex_first(input: &HookInput, at: &Places, project: &str, store: &mut Tickets, t: &Ticket) -> Gate {
+    let task_dir = tickets::task_dir(&at.config, project, t.number);
+    match &input.event {
+        HookEvent::SessionStart { .. } => {
+            if store.record_session(t.number, &input.session).unwrap_or(false) && project != tickets::NO_PROJECT_ID {
+                let _ = crate::projects::Projects::open(&at.config).place(&input.session, project);
+            }
+            Gate::Answer(None)
+        }
+        HookEvent::BeforeTool { tool, said } => {
+            let plan_waits = task_dir.join(tickets::PLAN_PENDING_FILE).exists();
+            let refuse = |why: String| Gate::Answer(Some(Agent::Codex.hook_answer(&HookReply::Deny(why)).stdout));
+            match tool {
+                Tool::Edit if plan_waits => return refuse(PLAN_WAITS.into()),
+                Tool::Shell if plan_waits && crate::askmatch::runs_any(said, &["apply_patch", "applypatch"]) => {
+                    return refuse(PLAN_WAITS.into());
+                }
+                Tool::Shell => {
+                    if let Some(command) = crate::askmatch::waits(said) {
+                        if held::take_if_allowed(&task_dir, said) {
+                            return Gate::Answer(None);
+                        }
+                        held::hold(&task_dir, said);
+                        let need = State::NeedsYou(Need::Question(held_words(&command)));
+                        let _ = store.update(t.number, |x| {
+                            let change = x.state != need;
+                            x.state = need.clone();
+                            change
+                        });
+                        return refuse(held_reason(&command));
+                    }
+                }
+                _ => {}
+            }
+            if t.session_id() == Some(input.session.as_str()) && *tool == Tool::Question { Gate::Own } else { Gate::Answer(None) }
+        }
+        _ if t.session_id() == Some(input.session.as_str()) => Gate::Own,
+        _ => Gate::Answer(None),
+    }
+}
+
+/// A Codex task's stop, before the check: while its plan waits for the user, the reply is the plan (written as
+/// `plan.md`; Needs you, a plan to approve), and a reply that ends with a question for the user (`QUESTION_MARK`) waits
+/// for the answer. Some when one of those, with what the hook says (nothing); None: the check goes on. A command the user
+/// let through once no longer is.
+fn codex_stop(end: &TurnEnd, task_dir: &Path, config: &Path, project: &str, store: &mut Tickets, t: &Ticket) -> Option<Said> {
+    held::turn_ended(task_dir);
+    if t.state != State::Working {
+        return None;
+    }
+    let said = end.last_message.as_deref().unwrap_or_default();
+    if task_dir.join(tickets::PLAN_PENDING_FILE).exists() {
+        if !said.trim().is_empty() {
+            let file = tickets::plan_file(config, project, t.number);
+            let _ = crate::projects::write_atomic(&file, said);
+        }
+        let _ = store.update(t.number, |x| {
+            x.state = State::NeedsYou(Need::Plan);
+            true
+        });
+        return Some(None);
+    }
+    let last = said.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or_default();
+    let q = last.trim_start_matches(['*', '_', '#', ' ', '>']).strip_prefix(QUESTION_MARK)?.trim_start_matches(['*', '_', ' ']).trim();
+    let q = if q.is_empty() { "It asked you something: see its session.".to_string() } else { tickets::clean(q, tickets::WHY_MAX) };
+    let _ = store.update(t.number, |x| {
+        x.state = State::NeedsYou(Need::Question(q.clone()));
+        true
+    });
+    Some(None)
+}
+
+/// A command held back for the user (`tickets::HELD_FILE` in the task's own folder): the command as Codex gave it,
+/// and whether the user has typed since. The user's next message lets that exact command through once; the end of
+/// the turn after it takes that away again.
+mod held {
+    use serde_json::{Value, json};
+    use std::{fs, path::Path};
+
+    fn read(task_dir: &Path) -> Option<(String, bool)> {
+        let v: Value = serde_json::from_str(&fs::read_to_string(task_dir.join(crate::tickets::HELD_FILE)).ok()?).ok()?;
+        Some((v.get("command")?.as_str()?.to_string(), v.get("answered").and_then(Value::as_bool).unwrap_or(false)))
+    }
+
+    fn write(task_dir: &Path, command: &str, answered: bool) {
+        let _ = fs::create_dir_all(task_dir);
+        let text = json!({"command": command, "answered": answered}).to_string();
+        let _ = crate::projects::write_atomic(&task_dir.join(crate::tickets::HELD_FILE), &text);
+    }
+
+    pub fn hold(task_dir: &Path, command: &str) {
+        write(task_dir, command, false);
+    }
+
+    /// The user typed: a command held back may now run once.
+    pub fn answered(task_dir: &Path) {
+        if let Some((command, false)) = read(task_dir) {
+            write(task_dir, &command, true);
+        }
+    }
+
+    /// Is `command` the one held back, answered since? Then it runs, and only this once.
+    pub fn take_if_allowed(task_dir: &Path, command: &str) -> bool {
+        let ok = read(task_dir).is_some_and(|(held, answered)| answered && held == command);
+        if ok {
+            let _ = fs::remove_file(task_dir.join(crate::tickets::HELD_FILE));
+        }
+        ok
+    }
+
+    /// A turn ended: a command the user let through and that wasn't run again is held back again next time.
+    pub fn turn_ended(task_dir: &Path) {
+        if let Some((_, true)) = read(task_dir) {
+            let _ = fs::remove_file(task_dir.join(crate::tickets::HELD_FILE));
+        }
+    }
 }
 
 /// The `Stop` hook: the end of a turn. Some reason when the stop is refused.
@@ -247,17 +478,19 @@ fn stop(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, t: &Tick
 }
 
 /// The model a task's work is checked with: the `verdict_model` of the squad it started with (its copy in the task's
-/// own folder, else the squad as it is now), else that squad's own model.
-fn verdict_model(config: &Path, project: &str, t: &Ticket) -> String {
+/// own folder, as it ran: `squads::Squad::as_run`, else the squad as it is now, the same way), else that squad's own
+/// model.
+fn verdict_model(config: &Path, project: &str, t: &Ticket, catalog: &crate::agents::Catalog) -> String {
     let copy = tickets::task_dir(config, project, t.number).join("squads").join(format!("{}.md", t.squad));
     let squad = fs::read_to_string(&copy)
         .ok()
         .map(|text| crate::squads::parse(&t.squad, &text, crate::squads::Origin::Own))
-        .or_else(|| crate::squads::get(config, &t.squad));
-    squad
+        .or_else(|| crate::squads::get(config, &t.squad).map(|s| s.as_run(catalog)));
+    let model = squad
         .map(|s| if s.verdict_model.is_empty() { s.model } else { s.verdict_model })
         .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| "opus".into())
+        .unwrap_or_else(|| "opus".into());
+    catalog.stand_in_for(&model).filter(|_| model == "opus").unwrap_or(model)
 }
 
 /// The end of a turn: check the work (`verdict.rs`). Done, refused once with what it found, or
@@ -270,7 +503,7 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
         true
     });
     let t = store.get(number)?.clone();
-    let model = verdict_model(&at.config, project, &t);
+    let model = verdict_model(&at.config, project, &t, &at.providers.catalog());
     let claim = end.last_message.as_deref().unwrap_or_default();
     let m = verdict::gather("git", &t, &store.body(&t), claim);
     let runner = crate::ai::Runner::new(&at.cache, at.providers.clone());
@@ -316,8 +549,14 @@ fn check(end: &TurnEnd, at: &Places, project: &str, store: &mut Tickets, number:
     refuse.then(|| verdict::refusal(&found))
 }
 
-/// `platoon hook <name>`: always 0, with what the hook says on stdout. It never fails the session.
-pub fn run_hook(name: &str) -> i32 {
+/// `platoon hook <name>` (of `agent`): always 0, with what the hook says on stdout. It never fails the session. A
+/// Codex task hook in a session that is no task's (most of them: these hooks are every Codex session's) ends at once,
+/// without reading anything.
+pub fn run_hook(name: &str, agent: Agent) -> i32 {
+    let task = std::env::var(crate::agents::TASK_ENV).ok().filter(|t| !t.is_empty());
+    if agent == Agent::Codex && task.is_none() {
+        return 0;
+    }
     let said = std::panic::catch_unwind(|| {
         let mut input = String::new();
         std::io::stdin().take(1 << 20).read_to_string(&mut input).ok()?;
@@ -326,8 +565,9 @@ pub fn run_hook(name: &str) -> i32 {
             cache: crate::usage::cache_dir(),
             providers: crate::agents::Providers::here(),
             check_timeout: verdict::TIMEOUT,
+            task: task.clone(),
         };
-        hook(name, &input, &at)
+        hook(name, agent, &input, &at)
     })
     .ok()
     .flatten();
@@ -380,12 +620,13 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             cache: d.join("cache"),
             providers: crate::agents::Providers { claude: Some(script.to_string_lossy().into_owned()), codex: None },
             check_timeout: Duration::from_secs(20),
+            task: None,
         }
     }
 
     /// The hook, with the stand-in checker.
     fn hook(name: &str, input: &str, d: &Path) -> Said {
-        super::hook(name, input, &places(d))
+        super::hook(name, Agent::Claude, input, &places(d))
     }
 
     fn checks_made(d: &Path) -> usize {
@@ -448,6 +689,9 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             task_dir: PathBuf::from("/c/tasks/05-work"),
             exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
+            instructions: "the rules".into(),
+            git_dir: Some("/w/.git".into()),
+            tag: "5:p1".into(),
         };
         let a = Agent::Claude.task_args(&l);
         assert_eq!(&a[..2], ["--add-dir", "/c/tasks/05-work"], "first, so it can't take the message");
@@ -509,9 +753,10 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             assert!(!asks(cmd), "{cmd}");
         }
         assert!(!ask.contains(&"Bash(gh api:*)"), "reading with gh api doesn't ask");
-        for h in HOOKS {
-            assert!(s.to_string().contains(&format!("hook {h}")), "{h}");
+        for h in &HOOKS[..6] {
+            assert!(s.to_string().contains(&format!("hook {h} ")) || s.to_string().contains(&format!("hook {h}\"")), "{h}");
         }
+        assert!(!s.to_string().contains("task-start") && !s.to_string().contains("task-before"), "Codex's only");
         // Not plan first: acceptEdits. Continued: --resume, no name, no first message.
         let mut again = l.clone();
         again.plan = false;
@@ -535,6 +780,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
             branch: Some("task/5".into()),
             squads_dir: task_dir.join("squads").to_string_lossy().into_owned(),
             plan_first: true,
+            ..Default::default()
         };
         write_task_files(&task_dir, &feature, &all, &r).unwrap();
         let text = fs::read_to_string(task_dir.join("squad.md")).unwrap();
@@ -763,7 +1009,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         hook("task-prompt", &input("UserPromptSubmit", json!({})), &d);
         let started = std::time::Instant::now();
         let at = Places { check_timeout: Duration::from_secs(1), ..places(&d) };
-        assert_eq!(super::hook("task-stop", &input("Stop", json!({})), &at), None);
+        assert_eq!(super::hook("task-stop", Agent::Claude, &input("Stop", json!({})), &at), None);
         assert!(started.elapsed() < Duration::from_secs(10));
         assert!(matches!(&task(&d, &p, n).state, State::NeedsYou(Need::CheckFailed(why)) if why.contains("no answer within 1 seconds")));
         let pid: i32 = fs::read_to_string(d.join("check-pid")).unwrap().trim().parse().unwrap();
@@ -773,5 +1019,295 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         let before = checks_made(&d);
         hook("task-stop", &other, &d);
         assert_eq!(checks_made(&d), before);
+    }
+
+    // ---- a task's session on Codex ----
+
+    /// A project, and a task of it started on Codex in `<d>/work`: its session not yet known (`tickets::PENDING`).
+    fn codex_world(name: &str) -> (PathBuf, String, u32) {
+        let d = dir(name);
+        let p = crate::projects::Projects::open(&d).create("Shop").unwrap();
+        let folder = d.join("work");
+        fs::create_dir_all(&folder).unwrap();
+        let mut store = Tickets::open(&d, &p);
+        let n = store
+            .add(NewTicket { title: "Login".into(), folder: Some(folder.to_string_lossy().into_owned()), ..Default::default() })
+            .unwrap();
+        let pending = format!("{}{}", tickets::PENDING, tickets::task_tag(&p, n));
+        store.start(n, "feature", &pending, None).unwrap();
+        (d, p, n)
+    }
+
+    /// Codex's hook `name` for the task (`PLATOON_TASK` names it), with the stand-in checker.
+    fn chook(name: &str, input: &str, d: &Path, p: &str, n: u32) -> Said {
+        let at = Places { task: Some(tickets::task_tag(p, n)), ..places(d) };
+        super::hook(name, Agent::Codex, input, &at)
+    }
+
+    /// One of Codex's hook inputs for session `session`, with Codex's field names.
+    fn cinput(session: &str, event: &str, extra: Value) -> String {
+        let mut v = json!({"session_id": session, "turn_id": "t1", "transcript_path": null, "cwd": "/w", "hook_event_name": event,
+            "model": "gpt-6-luna", "permission_mode": "default"});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        v.to_string()
+    }
+
+    const CODEX_ID: &str = "01a1aaaa-0000-7000-8000-000000000001";
+
+    fn shell(command: &str) -> Value {
+        json!({"tool_name": "Bash", "tool_input": {"command": command}, "tool_use_id": "c1"})
+    }
+
+    fn denied(said: &Said) -> Option<String> {
+        let v: Value = serde_json::from_str(said.as_ref()?).ok()?;
+        (v["hookSpecificOutput"]["permissionDecision"] == "deny")
+            .then(|| v["hookSpecificOutput"]["permissionDecisionReason"].as_str().unwrap().to_string())
+    }
+
+    #[test]
+    fn a_codex_task_learns_its_session_from_its_first_hook_and_a_session_that_is_no_tasks_is_left_alone() {
+        let (d, p, n) = codex_world("codex-start");
+        let start = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/SessionStart.json")).unwrap();
+        // Without the task in its environment (any other Codex session): nothing, said or written.
+        assert_eq!(super::hook("task-start", Agent::Codex, &start, &places(&d)), None);
+        assert!(task(&d, &p, n).session_id().is_none());
+        assert_eq!(chook("task-start", &start, &d, &p, n), None);
+        let t = task(&d, &p, n);
+        assert_eq!(t.session_id(), Some("01a15181-dc6f-7b73-81cf-c041b14f6432"), "the real Codex 0.163 SessionStart's id");
+        assert_eq!(crate::projects::Projects::open(&d).of("01a15181-dc6f-7b73-81cf-c041b14f6432").map(|x| x.id.clone()), Some(p.clone()));
+        // A later start (the user's /new, or resumed) doesn't take the task over.
+        chook("task-start", &cinput("someone-else", "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        assert_eq!(task(&d, &p, n).session_id(), Some("01a15181-dc6f-7b73-81cf-c041b14f6432"));
+        // Another task's tag, a tag of no task, or one that isn't one: nothing.
+        for tag in ["99:".to_string(), format!("{n}:no-such-project"), "nonsense".into(), String::new()] {
+            let at = Places { task: Some(tag.clone()), ..places(&d) };
+            assert_eq!(super::hook("task-stop", Agent::Codex, &cinput(CODEX_ID, "Stop", json!({})), &at), None, "{tag}");
+        }
+        assert_eq!(checks_made(&d), 0);
+    }
+
+    #[test]
+    fn codexs_events_move_its_task_as_claude_codes_do() {
+        let (d, p, n) = codex_world("codex-events");
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        // Its question tool: Needs you with its words, until the tool is done.
+        let q = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/PreToolUse.json"))
+            .unwrap()
+            .replace("01a15181-dc6f-7b73-81cf-c041b14f6432", CODEX_ID);
+        assert_eq!(chook("task-before", &q, &d, &p, n), None);
+        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("What should the second line of notes.txt say?".into())));
+        chook("task-tool", &cinput(CODEX_ID, "PostToolUse", json!({"tool_name": "request_user_input", "tool_response": "{}"})), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        // A permission prompt: Needs you with Codex's reason, until a tool runs.
+        let perm = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/PermissionRequest.json"))
+            .unwrap()
+            .replace("01a15181-5d10-7fc3-8da2-6d27c8100fb6", CODEX_ID);
+        chook("task-notify", &perm, &d, &p, n);
+        assert!(matches!(state(&d, &p, n), State::NeedsYou(Need::Permission(why)) if why.starts_with("May I rerun the exact curl")));
+        chook("task-tool", &cinput(CODEX_ID, "PostToolUse", shell("curl -sS https://example.com")), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        // Another session's events (a helper's, another conversation in the same window) move nothing.
+        chook("task-notify", &perm.replace(CODEX_ID, "helper-thread"), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        // The stop: checked; not done sends it back once, in Codex's words, then Needs you; typing starts again.
+        fs::write(d.join("check-reply"), r#"{"done":false,"boxes":[{"text":"It logs in","met":false,"evidence":"none"}],"findings":[]}"#)
+            .unwrap();
+        let first = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/Stop-first.json")).unwrap();
+        let said = chook("task-stop", &first, &d, &p, n);
+        assert_eq!(said, None, "the sample is another session's: no check");
+        let said = chook("task-stop", &first.replace("01a1517c-414d-7902-93d1-efa74830493d", CODEX_ID), &d, &p, n).expect("sent back");
+        let v: Value = serde_json::from_str(&said).unwrap();
+        assert_eq!(v["decision"], "block");
+        assert!(v["reason"].as_str().unwrap().contains("\"It logs in\": not met"), "{said}");
+        let again = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/Stop-after-block.json"))
+            .unwrap()
+            .replace("01a1517c-414d-7902-93d1-efa74830493d", CODEX_ID);
+        assert_eq!(chook("task-stop", &again, &d, &p, n), None);
+        assert!(matches!(state(&d, &p, n), State::NeedsYou(Need::Check(_))));
+        assert_eq!(checks_made(&d), 2);
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "look again"})), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        let _ = fs::remove_file(d.join("check-reply"));
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Done."})), &d, &p, n), None);
+        assert_eq!(state(&d, &p, n), State::Done);
+    }
+
+    #[test]
+    fn a_plan_first_codex_task_writes_its_plan_stops_and_edits_wait_for_the_users_answer() {
+        let (d, p, n) = codex_world("codex-plan");
+        let task_dir = tickets::task_dir(&d, &p, n);
+        let all = crate::squads::all(&d);
+        let r = Rules { agent: Agent::Codex, folder: "/w".into(), plan_first: true, squads_dir: "/s".into(), ..Default::default() };
+        write_task_files(&task_dir, &all[0], &all, &r).unwrap();
+        assert!(task_dir.join(tickets::PLAN_PENDING_FILE).exists());
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        let patch =
+            fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/hooks/PreToolUse-apply_patch.from-source.json"))
+                .unwrap();
+        // Looking around goes through; an edit doesn't, whichever way it comes (a helper's too).
+        assert_eq!(chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell("rg -n login src")), &d, &p, n), None);
+        let why = denied(&chook("task-before", &patch, &d, &p, n)).expect("an edit waits for the plan's answer");
+        assert!(why.contains("hasn't answered the plan") && why.contains("write the plan as your reply and stop"), "{why}");
+        assert!(
+            denied(&chook(
+                "task-before",
+                &cinput("helper", "PreToolUse", shell("cd /w && apply_patch <<'EOF'\n*** Begin Patch\nEOF")),
+                &d,
+                &p,
+                n
+            ))
+            .is_some()
+        );
+        // The stop with the plan: Needs you, the plan kept, no check.
+        let plan = "1. Add the form.\n2. Test it.";
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": plan})), &d, &p, n), None);
+        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Plan));
+        assert_eq!(Tickets::open(&d, &p).plan(n).as_deref(), Some(plan));
+        assert_eq!(checks_made(&d), 0, "a plan isn't checked as work");
+        // The user answers: Working, and edits go through from now on; the next stop is checked.
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "go ahead"})), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        assert!(!task_dir.join(tickets::PLAN_PENDING_FILE).exists());
+        assert_eq!(chook("task-before", &patch, &d, &p, n), None);
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Built it."})), &d, &p, n), None);
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 1));
+        // A Claude Code task's files have no such mark: its plan mode is Claude Code's own.
+        let claude_dir = d.join("claude-task");
+        write_task_files(&claude_dir, &all[0], &all, &Rules { plan_first: true, ..r }).unwrap();
+        let _ = &claude_dir;
+    }
+
+    #[test]
+    fn typing_before_the_plan_comes_is_no_answer_to_it() {
+        let (d, p, n) = codex_world("codex-plan-early");
+        let task_dir = tickets::task_dir(&d, &p, n);
+        let all = crate::squads::all(&d);
+        write_task_files(&task_dir, &all[0], &all, &Rules { agent: Agent::Codex, plan_first: true, ..Default::default() }).unwrap();
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "also look at the signup page"})), &d, &p, n);
+        assert!(task_dir.join(tickets::PLAN_PENDING_FILE).exists(), "still waiting for a plan to answer");
+        assert!(
+            denied(&chook(
+                "task-before",
+                &cinput(CODEX_ID, "PreToolUse", json!({"tool_name": "apply_patch", "tool_input": {"command": "x"}})),
+                &d,
+                &p,
+                n
+            ))
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn pushing_waits_for_the_users_yes_in_the_session_and_then_runs_once() {
+        let (d, p, n) = codex_world("codex-push");
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        let push = "git -C /w push -u origin task/1";
+        let why = denied(&chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell(push)), &d, &p, n)).expect("held back");
+        assert!(
+            why.contains("`git push -u origin task/1` pushes or publishes") && why.contains("run exactly the same command again"),
+            "{why}"
+        );
+        assert_eq!(
+            state(&d, &p, n),
+            State::NeedsYou(Need::Question(
+                "It wants to run `git push -u origin task/1`: say yes in its session to let it, or tell it not to.".into()
+            ))
+        );
+        // Its turn ends asking: no check; trying again before the user answers is held back again.
+        assert_eq!(
+            chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Question for you: push it?"})), &d, &p, n),
+            None
+        );
+        assert_eq!(checks_made(&d), 0);
+        assert!(denied(&chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell(push)), &d, &p, n)).is_some());
+        // The user says yes: that very command goes through, once; another one is held back.
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "yes, push it"})), &d, &p, n);
+        assert_eq!(state(&d, &p, n), State::Working);
+        assert!(denied(&chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell("git push --force")), &d, &p, n)).is_some());
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "yes"})), &d, &p, n);
+        assert_eq!(chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell("git push --force")), &d, &p, n), None, "the one answered");
+        assert!(denied(&chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell("git push --force")), &d, &p, n)).is_some(), "once");
+        // A yes not used in the turn after it is gone when that turn ends.
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "ok"})), &d, &p, n);
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Question for you: really?"})), &d, &p, n);
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "later"})), &d, &p, n);
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": "Question for you: now?"})), &d, &p, n);
+        assert!(denied(&chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell("git push --force")), &d, &p, n)).is_some());
+        // Whichever session of the task's process runs it (a helper's), and whatever the shell around it.
+        for cmd in ["bash -lc 'cd /w && git push'", "gh pr create --fill", "npm publish"] {
+            assert!(denied(&chook("task-before", &cinput("a-helper", "PreToolUse", shell(cmd)), &d, &p, n)).is_some(), "{cmd}");
+        }
+        // Everything else goes through, saying nothing.
+        for cmd in ["git commit -m 'push the login'", "cargo test", "echo git push"] {
+            assert_eq!(chook("task-before", &cinput(CODEX_ID, "PreToolUse", shell(cmd)), &d, &p, n), None, "{cmd}");
+        }
+    }
+
+    #[test]
+    fn a_codex_reply_ending_with_a_question_waits_for_the_answer_without_a_check() {
+        let (d, p, n) = codex_world("codex-question");
+        chook("task-start", &cinput(CODEX_ID, "SessionStart", json!({"source": "startup"})), &d, &p, n);
+        let said = "I looked at both pages.\n\n**Question for you:** Should the button be red or blue?\n";
+        assert_eq!(chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": said})), &d, &p, n), None);
+        assert_eq!(state(&d, &p, n), State::NeedsYou(Need::Question("Should the button be red or blue?".into())));
+        assert_eq!(checks_made(&d), 0);
+        // A question in the middle of a finished reply is no question for the user: the work is checked.
+        chook("task-prompt", &cinput(CODEX_ID, "UserPromptSubmit", json!({"prompt": "blue"})), &d, &p, n);
+        let done = "Why red? Blue reads better.\nThe button is blue now. cargo test: 3 passed.";
+        chook("task-stop", &cinput(CODEX_ID, "Stop", json!({"last_assistant_message": done})), &d, &p, n);
+        assert_eq!((state(&d, &p, n), checks_made(&d)), (State::Done, 1));
+    }
+
+    #[test]
+    fn the_rules_say_how_in_each_programs_own_ways() {
+        let base = Rules {
+            folder: "/w/shop-worktrees/task-5".into(),
+            branch: Some("task/5".into()),
+            squads_dir: "/c/squads".into(),
+            plan_first: true,
+            ..Default::default()
+        };
+        // Claude Code's: as they were, with one line on starting helpers (the squads no longer name its tool and
+        // models).
+        let claude = rules(&base);
+        assert_eq!(
+            claude,
+            "# How this task works\n\nYou are working on a task the user handed to platoon.\n\n\
+             - You work in /w/shop-worktrees/task-5 on the branch `task/5`, a git worktree made for this task. Commit what you change there.\n\
+             - What you commit stays on the branch `task/5`: it is not merged, and the user merges it. If you committed, your final message says so: that the work is on the branch `task/5` and is not merged. If you changed nothing, leave the branch out of it.\n\
+             - Never push, open or merge pull requests, or publish anything unless the user asks for it in this session.\n\
+             - Ask the user questions with the AskUserQuestion tool, not in prose.\n\
+             - You start in plan mode. Present the plan with ExitPlanMode; the user approves it before you change anything.\n\
+             - To start helpers (subagents), use the Agent tool with `subagent_type: \"general-purpose\"` and `model: \"opus\"` (`\"sonnet\"` for mechanical edits). When a step asks for helpers on several models, give them `\"opus\"`, `\"fable\"`, `\"sonnet\"` and `\"haiku\"`, one each; if a model is refused, use the nearest one and say so.\n\
+             - When you finish, end with what you did and how you checked each \"Done when\" box of the task.\n"
+                .to_string()
+                + TESTS_RULE
+                + "- Each time you finish, another Claude that can only read checks your work against the task and its \"Done when\" boxes. If it finds problems, you get them back (file:line first) and carry on.\n\
+                   - The squads are in /c/squads, one file each. When a step says to follow another squad, read its file and follow its steps.\n"
+        );
+        // Codex's: its own question tool or a last line, the plan as a reply, its own helpers, pushing held back.
+        let codex = rules(&Rules { agent: Agent::Codex, helper_models: vec!["gpt-6-luna".into(), "gpt-5.6-terra".into()], ..base.clone() });
+        for want in [
+            "request_user_input tool when you have it",
+            "starting with \"Question for you:\"",
+            "write the plan as your reply and stop: change no files until the user answers it",
+            "spawn_agent tool where you have it",
+            "a different model (from gpt-6-luna, gpt-5.6-terra) where you can",
+            "do each helper's part yourself, one pass each",
+            "platoon holds the command back the first time",
+            "another AI that can only read",
+            "branch `task/5`",
+            TESTS_RULE,
+        ] {
+            assert!(codex.contains(want), "{want}\n{codex}");
+        }
+        for not in ["AskUserQuestion", "ExitPlanMode", "Agent tool", "plan mode", "another Claude"] {
+            assert!(!codex.contains(not), "{not}\n{codex}");
+        }
+        let no_plan = rules(&Rules { agent: Agent::Codex, plan_first: false, ..base });
+        assert!(!no_plan.contains("Plan first"), "{no_plan}");
     }
 }

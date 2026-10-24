@@ -8,7 +8,7 @@ group them into projects with shared notes, and start tasks that follow a squad'
 [Full tour (MP4)](demo/platoon-tour.mp4)
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) today, on Linux and macOS, and lists, opens and
-starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is installed.
+starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is installed, tasks included.
 
 ## What it does
 
@@ -21,12 +21,13 @@ starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is
   and can keep themselves up to date as you work. When a conversation gets long, hand the work on to a fresh session
   with one key. → [Projects](guide/projects.md)
 - **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude drafts tasks from
-  the conversation, each with the squad that suits it), then start it: one Claude Code session in a copy of your folder
-  (a git worktree on the branch `task/<N>`), following a squad, a short Markdown file of steps for that kind of work
-  (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or your own). It can show you its plan first and wait
-  for your yes, and it asks you before a push, a pull request or a release. It runs your repo's tests itself, and when
-  it stops a fresh Claude checks its work against the task before it is Done. The Tasks tab shows every task across
-  your projects and what each one needs from you.
+  the conversation, each with the squad that suits it), then start it: one Claude Code or Codex session (the squad's
+  model decides) in a copy of your folder (a git worktree on the branch `task/<N>`), following a squad, a short
+  Markdown file of steps for that kind of work (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or your
+  own). It can show you its plan first and wait for your yes, and it waits for you before a push, a pull request or a
+  release. It runs your repo's tests itself, and when it stops a fresh check that can only read goes over its work
+  against the task before it is Done. The Tasks tab shows every task across your projects and what each one needs
+  from you.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
   and others. → [Sessions](guide/sessions.md#opening-the-editor-v)
@@ -34,8 +35,8 @@ starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is
 
 ## Install
 
-You need Linux or macOS, Claude Code (`claude`) or Codex (`codex`) installed and signed in (tasks need Claude Code for
-now), and a terminal of at least 60 by 14. Any one of these:
+You need Linux or macOS, Claude Code (`claude`) or Codex (`codex`) installed and signed in, and a terminal of at least
+60 by 14. Any one of these:
 
 ```
 brew install ctrader2/tap/platoon                    # Homebrew (macOS, Linux)
@@ -61,17 +62,19 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
 - **Claude Code's `settings.json`**: a status line and three hooks (a guard against two copies of one conversation,
   and two that carry a project's notes to its sessions). Nothing else in the file is touched, and a status line of your
   own is left alone.
-- **Codex's `hooks.json`**, only when Codex is installed: three hooks that carry a project's notes to its Codex sessions.
-  Setup has Codex mark them trusted, so Codex doesn't ask (Codex writes that record in its own `config.toml`).
+- **Codex's `hooks.json`**, only when Codex is installed: three hooks that carry a project's notes to its Codex sessions,
+  and six that run a task in Codex (they do nothing in any other Codex session). Setup has Codex mark them trusted, so
+  Codex doesn't ask (Codex writes that record in its own `config.toml`), and a task's worktree is trusted in Codex the
+  same way while it is there.
 - **Its own folders**: `~/.config/platoon` and `~/.cache/platoon`, and a `<repo>-worktrees` folder beside a repository
   when a task works on it.
 - **Your plan's tokens: nothing until you say yes.** Smart names, search by description and notes that update
   themselves use your Claude plan (or your ChatGPT plan through Codex, for an OpenAI model), so they are off until you
   turn them on, with a daily limit.
 - **A task's session edits files without asking** (Claude Code's "accept edits" mode, after plan mode for a squad that
-  plans first), inside the task's copy of the folder. It still asks before a push, a pull request or a release. When
-  the session stops, a fresh Claude that can only read checks the work against the task before it is Done (it uses
-  your plan, whatever the switches say).
+  plans first; Codex's `workspace-write` sandbox, with the network on), inside the task's copy of the folder. It still
+  waits for you before a push, a pull request or a release. When the session stops, a fresh check that can only read
+  goes over the work against the task before it is Done (it uses your plan, whatever the switches say).
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
   (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
 

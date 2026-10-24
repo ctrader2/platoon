@@ -828,6 +828,9 @@ impl Runner {
         for k in crate::agents::inherited_session_markers() {
             cmd.env_remove(k);
         }
+        // Run from a task's hook (the check of its work), platoon has the task in its environment: the call is no part
+        // of the task's session, and Codex's task hooks must not take it for one.
+        cmd.env_remove(crate::agents::TASK_ENV);
         let mut child = match spawn_retrying(&mut cmd) {
             Ok(c) => c,
             Err(e) => {

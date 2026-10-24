@@ -201,7 +201,7 @@ impl State {
 /// The git worktree platoon made for a task.
 ///
 /// In the file: `{"path", "branch", "base"}`, then only when there is something to say `"removed"`,
-/// `"kept_uncommitted"` and `"opened_in"`.
+/// `"kept_uncommitted"`, `"opened_in"` and `"codex_trust"`.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Worktree {
     /// Where the session works: the task's folder inside the worktree.
@@ -217,6 +217,9 @@ pub struct Worktree {
     /// Opened in an editor with a window of its own (its name), which platoon cannot tell has closed: kept after the
     /// work until the user removes it.
     pub opened_in: Option<String>,
+    /// The folder platoon had Codex trust for the task's session (Codex's own key for it, `projects.<key>` in its
+    /// `config.toml`), while that trust is there: taken away with the worktree, and by `platoon uninstall`.
+    pub codex_trust: Option<String>,
 }
 
 impl Worktree {
@@ -365,7 +368,8 @@ pub struct Ticket {
     pub folder: Option<String>,
     /// The squad suggested for it (before it starts), or the one it runs with: its id. Empty: none.
     pub squad: String,
-    /// Its Claude Code session, once started.
+    /// Its session, once started: its id, or for a Codex task whose session hasn't said its id yet `PENDING` and the
+    /// task's tag.
     pub session: Option<String>,
     /// When it was started (seconds since the epoch).
     pub started: u64,
@@ -400,7 +404,36 @@ impl Ticket {
     pub fn started(&self) -> bool {
         self.session.is_some()
     }
+
+    /// Its session's id, once known (not while a Codex session hasn't said it: `PENDING`).
+    pub fn session_id(&self) -> Option<&str> {
+        self.session.as_deref().filter(|s| !s.starts_with(PENDING))
+    }
 }
+
+/// What a Codex task's session is written down as from its start until its first hook says its id (Codex can't be
+/// given one), followed by the task's tag (`task_tag`).
+pub const PENDING: &str = "pending:";
+
+/// How a task's session's environment names the task to its hooks (`agents::TASK_ENV`): its number, then its project's
+/// id (empty for a task in no project).
+pub fn task_tag(project: &str, number: u32) -> String {
+    format!("{number}:{project}")
+}
+
+/// The project and number a tag names (`task_tag`).
+pub fn parse_tag(tag: &str) -> Option<(String, u32)> {
+    let (n, project) = tag.split_once(':')?;
+    Some((project.to_string(), n.parse().ok().filter(|n| *n > 0)?))
+}
+
+/// The file in a task's own folder that says its plan is still to be approved (a Codex task whose squad plans first:
+/// Codex has no plan mode platoon can start it in, `taskrun.rs`). Gone once the user answers the plan.
+pub const PLAN_PENDING_FILE: &str = "plan-pending";
+
+/// The file in a task's own folder holding the command platoon held back for the user (pushing, publishing): what it
+/// was, and whether the user has answered since (`taskrun.rs`).
+pub const HELD_FILE: &str = "held-command.json";
 
 /// The branch a task's work goes on.
 pub fn task_branch(number: u32) -> String {
@@ -463,6 +496,7 @@ fn ticket_from(v: &Value) -> Option<Ticket> {
                 removed: w.get("removed").and_then(Value::as_u64),
                 kept_uncommitted: w.get("kept_uncommitted").and_then(Value::as_bool).unwrap_or(false),
                 opened_in: s("opened_in").filter(|n| !n.is_empty()),
+                codex_trust: s("codex_trust").filter(|n| !n.is_empty()),
             })
         }),
         created: o.get("created").and_then(Value::as_u64).unwrap_or(0),
@@ -536,6 +570,10 @@ fn ticket_into(t: &Ticket, o: &mut Map<String, Value>) {
         match &w.opened_in {
             Some(n) => x.insert("opened_in".into(), json!(n)),
             None => x.remove("opened_in"),
+        };
+        match &w.codex_trust {
+            Some(k) => x.insert("codex_trust".into(), json!(k)),
+            None => x.remove("codex_trust"),
         };
         Value::Object(x)
     });
@@ -865,6 +903,29 @@ impl Tickets {
             true
         })
         .map(|_| ())
+    }
+
+    /// Task `number`'s Codex session said its id (`session`): written in place of `PENDING`. True when it changed.
+    pub fn record_session(&mut self, number: u32, session: &str) -> io::Result<bool> {
+        let session = session.to_string();
+        self.update_at(number, true, |t| {
+            if !t.session.as_deref().is_some_and(|s| s.starts_with(PENDING)) {
+                return false;
+            }
+            t.session = Some(session);
+            true
+        })
+    }
+
+    /// Write down the folder platoon had Codex trust for task `number`'s worktree (None: that trust is gone). True when
+    /// it changed.
+    pub fn set_codex_trust(&mut self, number: u32, key: Option<&str>) -> io::Result<bool> {
+        let key = key.map(String::from);
+        self.update_at(number, true, |t| {
+            let Some(w) = t.worktree.as_mut().filter(|w| w.codex_trust != key) else { return false };
+            w.codex_trust = key;
+            true
+        })
     }
 
     /// The session couldn't be started after all: back to Not started, without it.

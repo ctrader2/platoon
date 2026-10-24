@@ -347,6 +347,7 @@ fn a_draft_ready_while_you_are_in_a_session_waits_and_says_so_once() {
         dir: "/tmp".into(),
         args: vec![],
         sock: w.base.join("none.sock"),
+        task: None,
     }];
     app.refresh_until_for_test(20, "the draft", |a| a.task_draft().is_some());
     assert!(matches!(app.mode, Mode::Attached(_)), "a session isn't taken over");

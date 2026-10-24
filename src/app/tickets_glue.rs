@@ -119,13 +119,13 @@ impl App {
 
     /// `c`: cancel the task, after asking. When its session is running the question says it will be stopped too.
     fn ask_cancel_ticket(&mut self, number: u32) {
-        let Some(t) = self.ticket(number) else { return };
+        let (Some(project), Some(t)) = (self.task_scope(), self.ticket(number).cloned()) else { return };
         if t.state == State::Cancelled {
             self.notify(format!("#{number} is cancelled already."));
             return;
         }
         let title = t.title.clone();
-        let pid = t.session.clone().and_then(|s| self.task_host(&s).map(|h| h.claude_pid));
+        let pid = t.started().then(|| self.task_host(&project, &t).map(|h| h.claude_pid)).flatten();
         let uncommitted = self.has_uncommitted_worktree(number);
         self.mode = Mode::Confirm(Confirm::CancelTicket { number, title, pid, uncommitted });
     }

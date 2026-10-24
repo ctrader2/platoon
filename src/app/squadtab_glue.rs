@@ -143,10 +143,7 @@ impl App {
             Err(ChangeError::NoFrontMatter) => {
                 self.notify(format!("{name}'s file has no settings at its top to change: e opens it to fix that."))
             }
-            Err(ChangeError::NoModels(Setting::Model)) => self.notify(
-                "A task's session runs on Claude Code for now, and Claude Code isn't installed on this computer: there is no model to pick.",
-            ),
-            Err(ChangeError::NoModels(_)) => {
+            Err(ChangeError::NoModels) => {
                 self.notify("Neither Claude Code nor Codex is installed on this computer: there is no model to pick.")
             }
             Err(ChangeError::Io(e)) => self.notify(format!("Couldn't change {name}: {}", plain_io(&e))),

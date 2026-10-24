@@ -135,6 +135,9 @@ pub struct HostInfo {
     /// What was run inside: the arguments after the program (`--resume <id>`, `attach <id>`, none for a new session).
     pub args: Vec<String>,
     pub sock: PathBuf,
+    /// The task whose session this is, as its environment names it (`agents::TASK_ENV`, `tickets::task_tag`): how a
+    /// Codex task's session is found before (and after) Codex says its id.
+    pub task: Option<String>,
 }
 
 impl HostInfo {
@@ -187,6 +190,7 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
             dir: v["dir"].as_str().unwrap_or("").to_string(),
             args,
             sock,
+            task: v["task"].as_str().filter(|t| !t.is_empty()).map(String::from),
         });
     }
     out
@@ -195,8 +199,8 @@ pub fn discover_in(cache: &Path) -> Vec<HostInfo> {
 /// Start a detached host running `program args` (a session of `agent`) in `dir` and wait until it is ready to connect
 /// to.
 /// The returned `Child` should be polled with `try_wait` so it is reaped when the host exits.
-/// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT` and
-/// `PLATOON_OFFER_TASKS` are only ever what `env` says: ones platoon itself inherited (say, started from inside a
+/// `env` is added to the environment claude runs with (the host passes its own on). `PLATOON_PROJECT`,
+/// `PLATOON_OFFER_TASKS` and `PLATOON_TASK` are only ever what `env` says: ones platoon itself inherited (say, started from inside a
 /// project's session) are not passed on.
 /// The host keeps its files in `dirs.cache`, and is told so when that is not the one its environment names.
 #[allow(clippy::too_many_arguments)]
@@ -216,6 +220,7 @@ pub fn launch(
     let mut cmd = Command::new(exe);
     cmd.env_remove("PLATOON_PROJECT");
     cmd.env_remove(crate::sessionhook::OFFER_ENV);
+    cmd.env_remove(crate::agents::TASK_ENV);
     // A unit test's folders are never the real ones (and a test must not look the real ones up).
     #[cfg(not(test))]
     let real = Dirs::from_env();
@@ -342,7 +347,10 @@ pub fn run(args: &[String]) -> i32 {
     }
 
     // Publish only once the socket is listening, so a discovered host is always connectable.
-    let info = json!({ "agent": agent.id(), "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
+    let mut info = json!({ "agent": agent.id(), "claude_pid": claude_pid, "host_pid": me, "dir": dir, "args": rest });
+    if let (Ok(task), Some(o)) = (std::env::var(crate::agents::TASK_ENV), info.as_object_mut()) {
+        o.insert("task".into(), json!(task));
+    }
     let tmp = hdir.join(format!(".{claude_pid}.tmp"));
     if fs::write(&tmp, info.to_string()).and_then(|_| fs::rename(&tmp, &info_path)).is_err() {
         return fail("couldn't write host info".into());
@@ -833,6 +841,7 @@ mod tests {
             dir: String::new(),
             args: args.iter().map(|a| a.to_string()).collect(),
             sock: PathBuf::new(),
+            task: None,
         };
         assert!(info(&["attach", "dffac639"]).attaches_to("dffac639"));
         assert!(!info(&["attach", "dffac639"]).attaches_to("dffac63"));

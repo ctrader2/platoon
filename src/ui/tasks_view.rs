@@ -387,7 +387,15 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
     // Its squad (suggested, before it starts).
     let squad = match (x.squad.is_empty(), x.started()) {
         (true, _) => Span::styled("none picked yet: s picks one", Style::new().fg(t.subtext)),
-        (false, true) => Span::styled(fit_end(&app.squad_name(&x.squad), room), Style::new().fg(t.text)),
+        (false, true) => {
+            // The program its session runs in, when both are here to tell apart.
+            let on = app.task_program(project, x).filter(|_| app.providers().installed().len() > 1);
+            let name = match on {
+                Some(a) => format!("{} · in {}", app.squad_name(&x.squad), a.name()),
+                None => app.squad_name(&x.squad),
+            };
+            Span::styled(fit_end(&name, room), Style::new().fg(t.text))
+        }
         (false, false) => Span::styled(fit_end(&format!("{} (suggested)", app.squad_name(&x.squad)), room), Style::new().fg(t.text)),
     };
     lines.push(Line::from(vec![label("Squad"), squad]));
@@ -614,7 +622,7 @@ pub(super) fn draw_squad_list(f: &mut Frame, app: &App, area: Rect) {
         Some(s) => {
             let mut v = wrap(&s.description, iw);
             let plan = if s.plan_first { "plans first, then waits for your yes" } else { "starts working at once" };
-            v.push(format!("Model {} · {plan}", app.catalog().label(&s.model)));
+            v.push(format!("Model {} · {plan}", crate::squads::Setting::Model.words(s, &app.catalog())));
             v
         }
         None => Vec::new(),

@@ -15,8 +15,9 @@
 //! 1. ...
 //! ```
 //!
-//! `model` is the session's model (a Claude Code alias such as `opus`, `sonnet`, `fable`, or a full model name),
-//! `plan_first` starts it in plan mode, `description` (one line: what kind of work it is for) is what a squad is
+//! `model` is the session's model (a Claude Code alias such as `opus`, `sonnet`, `fable`, a full model name, or one of
+//! Codex's: the model decides whether the task runs in Claude Code or Codex), `plan_first` has it plan first and wait
+//! for the user's yes, `description` (one line: what kind of work it is for) is what a squad is
 //! suggested by, and `verdict_model` is the model of the check of a task's work before it is Done (`verdict.rs`). Each thing wrong with a file is
 //! one line that says where (`problems`); a squad with problems can't be started.
 
@@ -76,6 +77,22 @@ impl Squad {
     /// Its name, or its file's name when it has none.
     pub fn name_or_id(&self) -> String {
         if self.name.is_empty() { self.id.clone() } else { self.name.clone() }
+    }
+
+    /// The squad as a task runs it on this computer: a built-in the user hasn't changed, on a computer without Claude
+    /// Code, runs on Codex's own model instead of its Claude one (`Catalog::stand_in_for`), for its session and its
+    /// check alike, and the Squads tab says so (`Setting::words`). Any other squad runs as its file says (a Claude
+    /// model the computer can't run is said not to be installed).
+    pub fn as_run(&self, catalog: &Catalog) -> Squad {
+        let mut s = self.clone();
+        if s.origin == Origin::BuiltIn {
+            for m in [&mut s.model, &mut s.verdict_model] {
+                if let Some(other) = catalog.stand_in_for(m) {
+                    *m = other;
+                }
+            }
+        }
+        s
     }
 
     /// Its whole file, as `parse` reads it (the copy beside a task).
@@ -334,41 +351,58 @@ impl Setting {
         }
     }
 
-    /// What `s` has for it, in the pane's words: a model by its name, and said when nothing here runs it
-    /// (`Catalog::label`).
+    /// What `s` has for it, in the pane's words: a model by its name, with the program that runs it while both are
+    /// installed ("Opus (Claude Code)", "GPT-6-Luna (Codex)"), said when nothing here runs it (`Catalog::label`), and
+    /// said openly when a built-in runs on Codex's model because Claude Code isn't installed (`Squad::as_run`).
     pub fn words(self, s: &Squad, catalog: &Catalog) -> String {
+        let model = |m: &str| {
+            let run = s.as_run(catalog);
+            let ran = match self {
+                Setting::VerdictModel => run.verdict_model,
+                _ => run.model,
+            };
+            if ran != m {
+                return format!("{}, since Claude Code isn't installed", catalog.name(&ran));
+            }
+            match catalog.agent_of(m) {
+                Some(a) if catalog.installed(Agent::Claude) && catalog.installed(Agent::Codex) => {
+                    format!("{} ({})", catalog.name(m), a.name())
+                }
+                _ => catalog.label(m),
+            }
+        };
         match self {
             Setting::Model if s.model.is_empty() => String::new(),
-            Setting::Model => catalog.label(&s.model),
+            Setting::Model => model(&s.model),
             Setting::VerdictModel if s.verdict_model.is_empty() => "the same as the model".into(),
-            Setting::VerdictModel => catalog.label(&s.verdict_model),
+            Setting::VerdictModel => model(&s.verdict_model),
             Setting::PlanFirst => if s.plan_first { "yes, then waits for your yes" } else { "no" }.into(),
         }
     }
 
-    /// The models it goes round: for the verdict model, every model of this computer's (the check is a one-shot call,
-    /// which any agent can make); for the session's own model, Claude Code's only, until a task's session can run on
-    /// Codex (phase 3 of Codex support). Empty for plans first.
+    /// The models it goes round: every model of this computer's, in the catalog's order (the model decides the program:
+    /// a task whose squad has one of Codex's models runs in Codex). Empty for plans first.
     pub fn models(self, catalog: &Catalog) -> Vec<&str> {
         match self {
-            Setting::Model => catalog.of_agent(Agent::Claude).map(|m| m.id.as_str()).collect(),
-            Setting::VerdictModel => catalog.models().iter().map(|m| m.id.as_str()).collect(),
+            Setting::Model | Setting::VerdictModel => catalog.models().iter().map(|m| m.id.as_str()).collect(),
             Setting::PlanFirst => Vec::new(),
         }
     }
 
     /// The value after `s`'s, as its file writes it: the models in the catalog's order (`models`; its file may name
-    /// any other), round (a model not in it goes to the first); the verdict model the same, then "the same as the
-    /// model" (None: no `verdict_model` line); plans first yes or no. Err when there is no model to go to.
+    /// any other), round (a model not in it goes to the first), going on from the model the squad runs on here
+    /// (`Squad::as_run`); the verdict model the same, then "the same as the model" (None: no `verdict_model` line);
+    /// plans first yes or no. Err when there is no model to go to.
     pub fn next(self, s: &Squad, catalog: &Catalog) -> Result<Option<String>, ChangeError> {
         let models = self.models(catalog);
         let after = |m: &str| models.iter().position(|x| *x == m).map(|i| i + 1);
+        let run = s.as_run(catalog);
         Ok(match self {
             Setting::PlanFirst => Some((!s.plan_first).to_string()),
-            _ if models.is_empty() => return Err(ChangeError::NoModels(self)),
-            Setting::Model => Some(models[after(&s.model).unwrap_or(0) % models.len()].to_string()),
+            _ if models.is_empty() => return Err(ChangeError::NoModels),
+            Setting::Model => Some(models[after(&run.model).unwrap_or(0) % models.len()].to_string()),
             Setting::VerdictModel if s.verdict_model.is_empty() => Some(models[0].to_string()),
-            Setting::VerdictModel => models.get(after(&s.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
+            Setting::VerdictModel => models.get(after(&run.verdict_model).unwrap_or(0)).map(|m| m.to_string()),
         })
     }
 }
@@ -436,8 +470,8 @@ pub enum Became {
 pub enum ChangeError {
     /// The file has no front matter to change (it needs the editor).
     NoFrontMatter,
-    /// There is no model to go to for this setting on this computer (`Setting::models` is empty).
-    NoModels(Setting),
+    /// There is no model to go to on this computer (`Setting::models` is empty).
+    NoModels,
     Io(std::io::Error),
 }
 
@@ -511,7 +545,7 @@ mod tests {
             "You do not fix it",
             "change nothing",
             "MCP tools",
-            "`Agent` tool",
+            "start helpers (subagents)",
             "timeline",
             "Prove the cause before you believe it",
             "the causes you ruled out",
@@ -529,6 +563,18 @@ mod tests {
         }
         let docs = by("docs");
         assert_eq!((docs.model.as_str(), docs.verdict_model.as_str(), docs.plan_first), ("sonnet", "opus", false));
+        // In words both programs can follow: no tool of one program's, no model of one program's in the steps (how is
+        // in platoon's rules for each program, `taskrun::rules`).
+        for s in all.iter().filter(|s| s.origin == Origin::BuiltIn) {
+            for tool in ["AskUserQuestion", "ExitPlanMode", "`Agent`", "subagent_type", "model: \"", "request_user_input", "spawn_agent"] {
+                assert!(!s.body.contains(tool), "{}: {tool}", s.id);
+            }
+        }
+        for id in ["feature", "bug-fix", "refactor"] {
+            assert!(by(id).body.contains("wait for the user's yes"), "{id}: the plan is presented, and waits");
+        }
+        let review = by("review").body.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(review.contains("each on a different model where you can") && review.contains("one pass each"), "{review}");
         assert_eq!(get(&d, DEFAULT).map(|s| s.name), Some("Feature".to_string()));
     }
 
@@ -760,5 +806,57 @@ mod tests {
         assert!(all.iter().all(|s| s.id != "mine"), "a .bak is not a squad");
         assert_eq!(all.iter().find(|s| s.id == "review").map(|s| (s.name.as_str(), s.origin)), Some(("Review", Origin::BuiltIn)));
         assert!(delete(&d, "mine").is_err(), "nothing left to delete");
+    }
+
+    #[test]
+    fn a_squads_model_goes_round_every_installed_model_and_says_which_program_runs_it() {
+        let both = crate::agents::Providers {
+            claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+            codex: Some(crate::agents::tests::codex_with_models("squad-both")),
+        }
+        .catalog();
+        let mut s = parse("x", "---\nname: X\ndescription: D\nmodel: fable\n---\nGo.\n", Origin::Own);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            let next = Setting::Model.next(&s, &both).unwrap().unwrap();
+            seen.push(next.clone());
+            s.model = next;
+        }
+        assert_eq!(seen, ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "opus"], "Claude's, then Codex's, round");
+        s.model = "gpt-6-luna".into();
+        assert_eq!(Setting::Model.words(&s, &both), "GPT-6-Luna (Codex)");
+        s.model = "opus".into();
+        assert_eq!(Setting::Model.words(&s, &both), "Opus (Claude Code)");
+        s.verdict_model = "gpt-5.6-terra".into();
+        assert_eq!(Setting::VerdictModel.words(&s, &both), "GPT-5.6-Terra (Codex)");
+        // With one program there is nothing to tell apart.
+        assert_eq!(Setting::Model.words(&s, &crate::agents::tests::claude_catalog()), "Opus");
+    }
+
+    #[test]
+    fn on_a_computer_with_only_codex_a_built_in_runs_on_codexs_model_and_says_so_while_a_users_own_squad_doesnt() {
+        let d = dir_for("codex-only");
+        let codex_only =
+            crate::agents::Providers { claude: None, codex: Some(crate::agents::tests::codex_with_models("squad-codex-only")) }.catalog();
+        let feature = get(&d, "feature").unwrap();
+        assert_eq!((feature.model.as_str(), feature.verdict_model.as_str()), ("opus", "fable"), "the file as it is");
+        let run = feature.as_run(&codex_only);
+        assert_eq!((run.model.as_str(), run.verdict_model.as_str()), ("gpt-6-luna", "gpt-6-luna"), "Codex's first model");
+        assert_eq!(Setting::Model.words(&feature, &codex_only), "GPT-6-Luna, since Claude Code isn't installed");
+        assert_eq!(Setting::VerdictModel.words(&feature, &codex_only), "GPT-6-Luna, since Claude Code isn't installed");
+        // enter goes on from the model it runs on; the change is the user's copy, which then says what it is.
+        let (mine, became) = change(&d, "feature", Setting::Model, &codex_only).unwrap();
+        assert_eq!((mine.model.as_str(), became), ("gpt-5.6-terra", Became::Yours));
+        assert_eq!(Setting::Model.words(&mine, &codex_only), "GPT-5.6-Terra");
+        assert_eq!(
+            Setting::VerdictModel.words(&mine, &codex_only),
+            "Fable (needs Claude Code, not installed)",
+            "a squad of the user's says plainly what it can't run"
+        );
+        assert_eq!(mine.as_run(&codex_only).verdict_model, "fable");
+        // With Claude Code installed nothing stands in.
+        let claude = crate::agents::tests::claude_catalog();
+        assert_eq!(get(&d, "docs").unwrap().as_run(&claude).model, "sonnet");
+        assert_eq!(Setting::Model.words(&get(&d, "docs").unwrap(), &claude), "Sonnet");
     }
 }

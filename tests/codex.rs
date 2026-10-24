@@ -272,19 +272,27 @@ fn requests(dir: &Path) -> Vec<serde_json::Value> {
     fs::read_to_string(dir.join("requests")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
 }
 
-const OURS: [(&str, &str, &str, &str); 3] = [
-    ("SessionStart", "sessionStart", "session_start", "hook session-start --agent codex"),
-    ("UserPromptSubmit", "userPromptSubmit", "user_prompt_submit", "hook guard --agent codex"),
-    ("Stop", "stop", "stop", "hook stop --agent codex"),
+/// platoon's hooks in Codex's `hooks.json`: (event, Codex's name for it, its key's part, the command's arguments). The
+/// first three carry the notes, the rest run tasks; a key's part is the event and its group there.
+const OURS: [(&str, &str, &str, &str); 9] = [
+    ("SessionStart", "sessionStart", "session_start:0", "hook session-start --agent codex"),
+    ("UserPromptSubmit", "userPromptSubmit", "user_prompt_submit:0", "hook guard --agent codex"),
+    ("Stop", "stop", "stop:0", "hook stop --agent codex"),
+    ("SessionStart", "sessionStart", "session_start:1", "hook task-start --agent codex"),
+    ("PreToolUse", "preToolUse", "pre_tool_use:0", "hook task-before --agent codex"),
+    ("PermissionRequest", "permissionRequest", "permission_request:0", "hook task-notify --agent codex"),
+    ("PostToolUse", "postToolUse", "post_tool_use:0", "hook task-tool --agent codex"),
+    ("UserPromptSubmit", "userPromptSubmit", "user_prompt_submit:1", "hook task-prompt --agent codex"),
+    ("Stop", "stop", "stop:1", "hook task-stop --agent codex"),
 ];
 
-/// What Codex's `hooks/list` says of platoon's three hooks in this world, each `trust`.
+/// What Codex's `hooks/list` says of platoon's hooks in this world, each `trust`.
 fn listed(w: &World, trust: &str) -> serde_json::Value {
     let file = w.codex.join("hooks.json");
     let hooks: Vec<serde_json::Value> = OURS
         .iter()
         .map(|(_, event, snake, args)| {
-            serde_json::json!({"key": format!("{}:{snake}:0:0", file.display()), "eventName": event, "handlerType": "command",
+            serde_json::json!({"key": format!("{}:{snake}:0", file.display()), "eventName": event, "handlerType": "command",
                 "command": format!("{BIN} {args}"), "sourcePath": file, "source": "user", "isManaged": false,
                 "currentHash": format!("sha256:{snake}"), "trustStatus": trust})
         })
@@ -293,7 +301,7 @@ fn listed(w: &World, trust: &str) -> serde_json::Value {
 }
 
 #[test]
-fn setup_adds_platoons_three_codex_hooks_has_codex_trust_them_and_never_blocks_on_them() {
+fn setup_adds_platoons_codex_hooks_has_codex_trust_them_and_never_blocks_on_them() {
     let w = World::new("codex-setup");
     let server = fake_server(&w, "server");
     answer(&server, "hooks-list.1", "result", listed(&w, "untrusted"));
@@ -302,14 +310,18 @@ fn setup_adds_platoons_three_codex_hooks_has_codex_trust_them_and_never_blocks_o
     let codex_bin = [("PLATOON_CODEX_BIN", server.join("codex").to_string_lossy().into_owned())];
     let (code, out, err) = run_with(&w, &codex_bin, &["setup"], "");
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("\nCodex\n") && out.matches("added; now trusted in Codex").count() == 3, "{out}");
+    assert!(out.contains("\nCodex\n") && out.matches("added; now trusted in Codex").count() == 4, "{out}");
+    assert!(out.contains("Tasks") && out.contains("pushing that waits for you"), "{out}");
     assert!(out.contains("Setup had Codex mark them trusted, so they run in your Codex sessions without asking."), "{out}");
     assert!(!out.contains("Codex asks you once"), "{out}");
     assert!(out.contains(&format!("Saved {}.\n", w.codex.join("hooks.json").display())), "no file before, no backup named: {out}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.codex.join("hooks.json")).unwrap()).unwrap();
-    for (event, _, _, args) in OURS {
-        assert_eq!(v["hooks"][event][0]["hooks"][0]["command"], format!("{BIN} {args}"), "{event}");
+    for (event, _, snake, args) in OURS {
+        let group: usize = snake.rsplit(':').next().unwrap().parse().unwrap();
+        assert_eq!(v["hooks"][event][group]["hooks"][0]["command"], format!("{BIN} {args}"), "{event}");
     }
+    assert_eq!(v["hooks"]["PreToolUse"][0]["matcher"], "Bash|apply_patch|request_user_input");
+    assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["timeout"], 660);
     let sent = requests(&server);
     let methods: Vec<&str> = sent.iter().map(|r| r["method"].as_str().unwrap()).collect();
     assert_eq!(methods, ["initialize", "initialized", "hooks/list", "config/batchWrite", "hooks/list"]);
@@ -318,15 +330,15 @@ fn setup_adds_platoons_three_codex_hooks_has_codex_trust_them_and_never_blocks_o
     let file = w.codex.join("hooks.json");
     let want: serde_json::Map<String, serde_json::Value> = OURS
         .iter()
-        .map(|(_, _, snake, _)| (format!("{}:{snake}:0:0", file.display()), serde_json::json!({"trusted_hash": format!("sha256:{snake}")})))
+        .map(|(_, _, snake, _)| (format!("{}:{snake}:0", file.display()), serde_json::json!({"trusted_hash": format!("sha256:{snake}")})))
         .collect();
-    assert_eq!(records, &serde_json::Value::Object(want), "exactly platoon's three");
+    assert_eq!(records, &serde_json::Value::Object(want), "exactly platoon's own");
     assert!(!w.codex.join("config.toml").exists(), "platoon itself never writes Codex's config.toml");
 
     // Again: Codex already trusts them, so nothing is written anywhere.
     let (_, again, _) = run_with(&w, &codex_bin, &["setup"], "");
-    assert!(again.matches("already done").count() >= 7, "{again}");
-    assert_eq!(again.matches("already done; Codex trusts it").count(), 3, "{again}");
+    assert!(again.matches("already done").count() >= 8, "{again}");
+    assert_eq!(again.matches("already done; Codex trusts it").count(), 4, "{again}");
     assert!(again.contains("Nothing to change.") && !again.contains("trust these hooks"), "nothing new to trust: {again}");
     assert_eq!(requests(&server).len(), 8, "only asked: initialize, initialized, hooks/list");
 

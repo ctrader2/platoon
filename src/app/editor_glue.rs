@@ -250,7 +250,7 @@ impl App {
                 self.ed.flow = None;
                 return;
             };
-            if !flow.warned && t.state == State::Working && t.session.as_deref().is_some_and(|s| self.task_session_running(s)) {
+            if !flow.warned && t.state == State::Working && self.task_running(&project, &t) {
                 self.mode = Mode::Confirm(Confirm::EditorWhileWorking { number, title: t.title.clone() });
                 return;
             }

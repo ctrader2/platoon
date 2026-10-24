@@ -178,8 +178,9 @@ impl Server {
         self.request("config/batchWrite", json!({"edits": [edit], "reloadUserConfig": true})).map(|_| ())
     }
 
-    /// The `hooks.state` table of the user's own `config.toml` (empty when there is none), as Codex reads it.
-    pub fn hook_state(&mut self) -> Result<HookState, String> {
+    /// A table of the user's own `config.toml` (`path`, its keys; empty when there is none), as Codex reads it, and
+    /// that file's version.
+    fn user_table(&mut self, path: &[&str]) -> Result<(Map<String, Value>, Option<String>), String> {
         let answer = self.request("config/read", json!({"includeLayers": true}))?;
         let layers = answer.get("layers").and_then(Value::as_array).ok_or_else(unexpected)?;
         let user = layers.iter().find(|l| {
@@ -187,13 +188,46 @@ impl Server {
             name.and_then(|n| n.get("type")).and_then(Value::as_str) == Some("user")
                 && name.and_then(|n| n.get("profile")).is_none_or(Value::is_null)
         });
-        let Some(user) = user else { return Ok(HookState { records: Map::new(), version: None }) };
-        let records = match user.get("config").and_then(|c| c.get("hooks")).and_then(|h| h.get("state")) {
+        let Some(user) = user else { return Ok((Map::new(), None)) };
+        let table = path.iter().try_fold(user.get("config"), |v, k| Some(v?.get(*k)));
+        let records = match table.flatten() {
             None | Some(Value::Null) => Map::new(),
             Some(Value::Object(m)) => m.clone(),
             Some(_) => return Err(unexpected()),
         };
-        Ok(HookState { records, version: user.get("version").and_then(Value::as_str).map(String::from) })
+        Ok((records, user.get("version").and_then(Value::as_str).map(String::from)))
+    }
+
+    /// The `hooks.state` table of the user's own `config.toml` (empty when there is none), as Codex reads it.
+    pub fn hook_state(&mut self) -> Result<HookState, String> {
+        let (records, version) = self.user_table(&["hooks", "state"])?;
+        Ok(HookState { records, version })
+    }
+
+    /// The `projects` table of the user's own `config.toml` (each folder's `trust_level`), and that file's version.
+    pub fn projects(&mut self) -> Result<(Map<String, Value>, Option<String>), String> {
+        self.user_table(&["projects"])
+    }
+
+    /// Trust the folder Codex knows as `key`, as Codex's own folder-trust question does when the user says yes
+    /// (`tui/src/config_update.rs`: `projects."<key>".trust_level = "trusted"`, replaced).
+    pub fn trust_project(&mut self, key: &str) -> Result<(), String> {
+        let edit = json!({"keyPath": format!("projects.{}.trust_level", quoted_key(key)), "value": "trusted", "mergeStrategy": "replace"});
+        self.request("config/batchWrite", json!({"edits": [edit], "reloadUserConfig": true})).map(|_| ())
+    }
+
+    /// Take the folders Codex knows as `keys` out of its `projects` table (each a `null` in its place: Codex's way of
+    /// clearing a value, `clear_config_value`), only if the file is still the `version` it was read at.
+    pub fn forget_projects(&mut self, keys: &[String], version: Option<&str>) -> Result<(), String> {
+        let edits: Vec<Value> = keys
+            .iter()
+            .map(|k| json!({"keyPath": format!("projects.{}", quoted_key(k)), "value": Value::Null, "mergeStrategy": "replace"}))
+            .collect();
+        let mut params = json!({"edits": edits, "reloadUserConfig": true});
+        if let (Some(v), Some(p)) = (version, params.as_object_mut()) {
+            p.insert("expectedVersion".into(), json!(v));
+        }
+        self.request("config/batchWrite", params).map(|_| ())
     }
 
     /// Replace `hooks.state` with `records`, only if the file is still the `version` it was read at.
@@ -205,6 +239,74 @@ impl Server {
         }
         self.request("config/batchWrite", params).map(|_| ())
     }
+}
+
+/// A folder as one segment of a `config/batchWrite` key path: in double quotes, its `\\` and `"` escaped, as Codex's
+/// own window writes it (`tui/src/config_update.rs`).
+fn quoted_key(key: &str) -> String {
+    format!("\"{}\"", key.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The name Codex knows a folder by in its `projects` table: the folder as the file system resolves it
+/// (`config/src/loader/mod.rs`: `project_trust_key`, a canonical path).
+pub fn project_key(folder: &Path) -> String {
+    folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf()).to_string_lossy().into_owned()
+}
+
+/// What a folder's entry in Codex's `projects` table says about trusting it, if it has one.
+fn trust_level(projects: &Map<String, Value>, key: &str) -> Option<String> {
+    Some(projects.get(key)?.get("trust_level")?.as_str()?.to_string())
+}
+
+/// Have Codex (`program`, its folder `codex_root`) trust `folder` for sessions started in it, as the user's yes to
+/// Codex's own question would (a task's worktree, which is the user's repository: Codex trusts it, and would only ask).
+/// `ours`: the name platoon already wrote down for it, when it had Codex trust it before. Ok(Some(name)) when the
+/// trust is platoon's (written now, or already there under `ours`); Ok(None) when the folder already had an entry of
+/// the user's (trusted or not), which is left exactly as it is and never taken away by platoon. Err when Codex
+/// couldn't be asked: it asks the user in the window then. The whole exchange ends within `timeout`.
+pub fn trust_folder(
+    program: &str,
+    codex_root: &Path,
+    folder: &Path,
+    ours: Option<&str>,
+    timeout: Duration,
+) -> Result<Option<String>, String> {
+    let key = project_key(folder);
+    let mut server = Server::start(program, codex_root, timeout)?;
+    let (projects, _) = server.projects()?;
+    match trust_level(&projects, &key) {
+        Some(level) if level == "trusted" && ours == Some(key.as_str()) => Ok(Some(key)),
+        Some(_) => Ok(None),
+        None => {
+            server.trust_project(&key)?;
+            Ok(Some(key))
+        }
+    }
+}
+
+/// Is `key` the folder of a task's worktree platoon made: `<repo>-worktrees/task-<N>`? Only such a folder's trust is
+/// ever taken away by platoon.
+pub fn is_task_worktree(key: &str) -> bool {
+    let p = Path::new(key);
+    let task = p.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("task-")).is_some_and(|n| n.parse::<u32>().is_ok());
+    let parent = p.parent().and_then(Path::file_name).and_then(|n| n.to_str()).is_some_and(|n| n.ends_with("-worktrees") && n.len() > 10);
+    task && parent && p.is_absolute()
+}
+
+/// Have Codex forget its trust in the folders platoon had it trust (`keys`, as `trust_folder` named them), when their
+/// entries still say so and they are task worktrees' (`is_task_worktree`); every other entry stays, and the file is
+/// written only if it hasn't changed since it was read. Ok: how many entries went (one already gone, or that the user
+/// changed to "untrusted", is left as it is and counts as done).
+pub fn forget_folders(program: &str, codex_root: &Path, keys: &[String], timeout: Duration) -> Result<usize, String> {
+    let mut server = Server::start(program, codex_root, timeout)?;
+    let (projects, version) = server.projects()?;
+    let gone: Vec<String> =
+        keys.iter().filter(|k| is_task_worktree(k) && trust_level(&projects, k).as_deref() == Some("trusted")).cloned().collect();
+    if gone.is_empty() {
+        return Ok(0);
+    }
+    server.forget_projects(&gone, version.as_deref())?;
+    Ok(gone.len())
 }
 
 impl Drop for Server {
@@ -328,5 +430,96 @@ mod tests {
         assert_eq!(s.hook_state().err().unwrap(), "Codex answered something platoon doesn't understand");
         drop(s);
         assert_eq!(fake.requests()[2]["params"], json!({"includeLayers": true}));
+    }
+
+    /// Codex's answer to `config/read` with the user's own `projects` table and file version.
+    fn user_projects(projects: Value, version: &str) -> Value {
+        json!({"config": {}, "origins": {}, "layers": [
+            {"name": {"type": "system", "file": "/etc/codex/config.toml"}, "version": "v0", "config": {"projects": {"/sys": {"trust_level": "trusted"}}}},
+            {"name": {"type": "user", "file": "/x/config.toml"}, "version": version, "config": {"projects": projects, "model": "gpt-6-luna"}},
+        ]})
+    }
+
+    #[test]
+    fn a_task_worktree_is_trusted_as_codexs_own_question_would_and_the_users_own_say_is_left_alone() {
+        let codex = home("trust-folder");
+        let base = home("trust-folder-work");
+        let folder = base.join("my \"shop\"-worktrees/task-5");
+        fs::create_dir_all(&folder).unwrap();
+        let key = project_key(&folder);
+        assert_eq!(key, folder.canonicalize().unwrap().to_string_lossy(), "the folder as the file system resolves it");
+        // Not there yet: written, exactly as Codex's window writes it.
+        let fake = CodexServerFake::new("trust-folder", &codex);
+        fake.result("config/read", None, user_projects(json!({"/elsewhere": {"trust_level": "trusted"}}), "sha256:v1"));
+        fake.result("config/batchWrite", None, json!({"status": "ok", "version": "sha256:v2"}));
+        assert_eq!(trust_folder(&fake.program, &codex, &folder, None, TIME_BOX), Ok(Some(key.clone())));
+        assert_eq!(fake.methods(), ["initialize", "initialized", "config/read", "config/batchWrite"]);
+        let sent = fake.requests();
+        assert_eq!(sent[2]["params"], json!({"includeLayers": true}));
+        let path = format!("projects.\"{}\".trust_level", key.replace('\\', "\\\\").replace('"', "\\\""));
+        assert_eq!(
+            sent[3],
+            json!({"id": 3, "method": "config/batchWrite", "params": {
+                "edits": [{"keyPath": path, "value": "trusted", "mergeStrategy": "replace"}], "reloadUserConfig": true}})
+        );
+        assert!(path.contains("my \\\"shop\\\"-worktrees"), "{path}");
+        // platoon's own entry, there from before: nothing written. The user's own entry (trusted or not): left alone,
+        // and never platoon's.
+        for (projects, ours, want) in [
+            (json!({(key.clone()): {"trust_level": "trusted"}}), Some(key.as_str()), Some(key.clone())),
+            (json!({(key.clone()): {"trust_level": "trusted"}}), None, None),
+            (json!({(key.clone()): {"trust_level": "untrusted"}}), Some(key.as_str()), None),
+        ] {
+            let fake = CodexServerFake::new("trust-folder-there", &codex);
+            fake.result("config/read", None, user_projects(projects.clone(), "v"));
+            assert_eq!(trust_folder(&fake.program, &codex, &folder, ours, TIME_BOX), Ok(want), "{projects}");
+            assert!(!fake.methods().contains(&"config/batchWrite".to_string()), "{projects}");
+        }
+        // Codex can't be asked: said, for the window's own question to take over.
+        let gone = trust_folder("/nonexistent/platoon-unit-test/codex", &codex, &folder, None, TIME_BOX);
+        assert!(gone.as_ref().is_err_and(|e| e.contains("isn't there")), "{gone:?}");
+    }
+
+    #[test]
+    fn only_trust_platoon_gave_a_task_worktree_is_taken_away_and_only_if_the_file_is_as_it_was_read() {
+        let codex = home("forget-folder");
+        let fake = CodexServerFake::new("forget-folder", &codex);
+        let ours = "/home/u/shop-worktrees/task-5".to_string();
+        let untrusted_since = "/home/u/shop-worktrees/task-6".to_string();
+        let gone_already = "/home/u/shop-worktrees/task-7".to_string();
+        let not_a_worktree = "/home/u/shop".to_string();
+        fake.result(
+            "config/read",
+            None,
+            user_projects(
+                json!({(ours.clone()): {"trust_level": "trusted"}, (untrusted_since.clone()): {"trust_level": "untrusted"},
+                       (not_a_worktree.clone()): {"trust_level": "trusted"}}),
+                "sha256:v7",
+            ),
+        );
+        fake.result("config/batchWrite", None, json!({"status": "ok"}));
+        let keys = [ours.clone(), untrusted_since, gone_already, not_a_worktree];
+        assert_eq!(forget_folders(&fake.program, &codex, &keys, TIME_BOX), Ok(1));
+        let sent = fake.requests();
+        assert_eq!(
+            sent[3]["params"],
+            json!({"edits": [{"keyPath": "projects.\"/home/u/shop-worktrees/task-5\"", "value": null, "mergeStrategy": "replace"}],
+                   "reloadUserConfig": true, "expectedVersion": "sha256:v7"})
+        );
+        // Nothing of platoon's left: nothing written.
+        let fake = CodexServerFake::new("forget-folder-none", &codex);
+        fake.result("config/read", None, user_projects(json!({}), "v"));
+        assert_eq!(forget_folders(&fake.program, &codex, &[ours], TIME_BOX), Ok(0));
+        assert_eq!(fake.methods(), ["initialize", "initialized", "config/read"]);
+        for (key, is) in [
+            ("/r/shop-worktrees/task-5", true),
+            ("/r/shop-worktrees/task-5/sub", false),
+            ("/r/shop/task-5", false),
+            ("/r/-worktrees/task-5", false),
+            ("/r/shop-worktrees/task-x", false),
+            ("shop-worktrees/task-5", false),
+        ] {
+            assert_eq!(is_task_worktree(key), is, "{key}");
+        }
     }
 }

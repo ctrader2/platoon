@@ -326,8 +326,9 @@ pub enum Start<'a> {
     Attach(&'a str),
 }
 
-/// What a task's session is started (or continued) with. Its id is chosen by platoon before it starts, so the task
-/// names its session from the first moment.
+/// What a task's session is started (or continued) with. Claude Code takes an id platoon chooses, so the task names
+/// its session from the first moment; Codex can't, so a Codex task's session is found by `tag` until its first hook
+/// says its id (`tickets::PENDING`).
 #[derive(Clone, Debug)]
 pub struct TaskLaunch {
     pub session: String,
@@ -344,6 +345,23 @@ pub struct TaskLaunch {
     pub exe: String,
     /// The first message (a new session only).
     pub first: Option<String>,
+    /// `squad.md`'s text: platoon's rules and the squad's steps (Claude Code reads the file, Codex takes the text).
+    pub instructions: String,
+    /// The main repository's git folder when the task works in a worktree of it: the session commits there.
+    pub git_dir: Option<String>,
+    /// The task, as the session's environment names it to its hooks (`TASK_ENV`, `tickets::task_tag`).
+    pub tag: String,
+}
+
+/// The variable in a task's session's environment that names the task (`tickets::task_tag`). Codex's task hooks are
+/// installed for every Codex session (`platoon setup`) and do nothing without it.
+pub const TASK_ENV: &str = "PLATOON_TASK";
+
+impl TaskLaunch {
+    /// What the session's environment gets besides platoon's own: the task it works on (`TASK_ENV`).
+    pub fn env(&self) -> Vec<(&'static str, String)> {
+        vec![(TASK_ENV, self.tag.clone())]
+    }
 }
 
 // ---- a one-shot call (platoon's own: names, notes, the check of a task's work) ---------------------------------------
@@ -366,6 +384,8 @@ pub enum HookKind {
     Prompt,
     /// The agent is about to use this tool.
     BeforeTool(Tool),
+    /// The agent is about to use a tool, the one its input names (one hook installed for several tools).
+    BeforeAnyTool,
     /// The agent has used a tool.
     AfterTool,
     /// The agent says it is waiting, perhaps for the user's permission.
@@ -381,6 +401,10 @@ pub enum Tool {
     Plan,
     /// Asks the user a question.
     Question,
+    /// Runs a shell command (its text is what it `said`).
+    Shell,
+    /// Edits files (Codex's `apply_patch`, Claude Code's `Edit` and `Write`).
+    Edit,
     Other,
 }
 
@@ -399,7 +423,8 @@ pub enum HookEvent {
         source: String,
     },
     PromptSubmitted,
-    /// The agent is about to use `tool`; `said` is the plan it presents or the question it asks ("" when none).
+    /// The agent is about to use `tool`; `said` is the plan it presents, the question it asks or the command it runs
+    /// ("" when none).
     BeforeTool {
         tool: Tool,
         said: String,
@@ -432,6 +457,8 @@ pub enum HookReply {
     Refuse(String),
     /// The stop is refused: the agent carries on, with this as its reason.
     SendBack(String),
+    /// The tool it is about to use is refused, and the agent is told why.
+    Deny(String),
 }
 
 /// What a hook's process says back: its standard output and error ("" for nothing) and its exit code.
@@ -453,6 +480,13 @@ impl HookAnswer {
         }
         self.code
     }
+}
+
+/// A `PreToolUse` hook's refusal of the tool, with why, in the shape both agents read
+/// (`hookSpecificOutput.permissionDecision: "deny"`; Codex: `hooks/src/engine/output_parser.rs`).
+fn deny_json(why: &str) -> String {
+    serde_json::json!({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": why}})
+        .to_string()
 }
 
 // ---- models ---------------------------------------------------------------------------------------------------------
@@ -666,6 +700,16 @@ impl Catalog {
     /// (decided 2026-10-18), else the first model Codex lists.
     pub fn default_notes(&self) -> Option<String> {
         self.default_with(claude::SONNET)
+    }
+
+    /// What a built-in squad's model (`model`, one of Claude's) runs as on a computer without Claude Code: the first
+    /// model Codex lists, as `default_smart` would pick. None when Claude Code is installed, `model` isn't one of
+    /// Claude's, or Codex lists none (then the model stays as it is, and is said not to be installed).
+    pub fn stand_in_for(&self, model: &str) -> Option<String> {
+        if self.claude || needs(model) != Some(Agent::Claude) {
+            return None;
+        }
+        self.of_agent(Agent::Codex).next().map(|m| m.id.clone())
     }
 
     fn default_with(&self, claude_model: &str) -> Option<String> {

@@ -8,6 +8,17 @@ here.
 
 ### Changed
 
+- **Tasks run in Codex.** A squad whose model is one of Codex's runs its task in Codex (the model decides the program;
+  a squad's model now goes round every model installed). The session starts in Codex's `workspace-write` sandbox with
+  the network on, the main repository's `.git` writable so it can commit, the squad's steps as its instructions, and
+  no update question; platoon learns its id as it starts. platoon has Codex itself trust the task's worktree while it
+  is there, and takes that trust away with it. Pushing, pull requests and publishing wait for your yes in the session
+  (the same commands Claude Code asks about, read through `bash -lc`, `&&` and the like). A squad that plans first has
+  Codex write its plan and stop, and its edits wait for your answer. On a computer with only Codex, the built-in squads
+  run on Codex's first model, and the Squads tab says so. Run `platoon setup` once more to add the task hooks to Codex.
+- **The built-in squads are worded for both programs**: "ask the user", "present the plan and wait for the user's yes",
+  helpers "if you can start them". platoon's own rules for each task say how in each program's ways (Claude Code's
+  tools as before).
 - **Codex conversations are named, found by description, handed off and drafted into tasks.** Smart names and
   summaries, Describe it, the hand-off (`h`) and tasks from a conversation (`t`) read a Codex conversation as they read a
   Claude Code one: what you typed and a line of Codex's last reply. The name Codex gives a conversation stays its

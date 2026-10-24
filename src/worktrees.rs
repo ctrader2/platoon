@@ -63,6 +63,22 @@ pub(crate) fn same_place(a: &Path, b: &Path) -> bool {
     }
 }
 
+/// The folder platoon made for task `number`'s worktree `w`: the `task-<N>` folder its path is in (the path itself when
+/// there is none).
+pub fn root_of(w: &Worktree, number: u32) -> PathBuf {
+    let name = format!("task-{number}");
+    let path = Path::new(&w.path);
+    path.ancestors().find(|a| a.file_name().is_some_and(|n| n.to_string_lossy() == name)).unwrap_or(path).to_path_buf()
+}
+
+/// The git folder a worktree's commits go to: its main repository's (`git rev-parse --git-common-dir`), as a full path.
+/// None when git can't say.
+pub fn common_git_dir(program: &str, dir: &Path) -> Option<String> {
+    let out = git(program, dir, &["rev-parse", "--path-format=absolute", "--git-common-dir"]).ok()?;
+    let p = PathBuf::from(out.trim());
+    (p.is_absolute() && p.is_dir()).then(|| fs::canonicalize(&p).unwrap_or(p).to_string_lossy().into_owned())
+}
+
 /// Where the worktree of repository `root` on `branch` goes: `<parent>/<name>-worktrees/<branch>`, the branch's `/`
 /// as `-` (`task-5`).
 pub fn worktree_dir(root: &Path, branch: &str) -> PathBuf {

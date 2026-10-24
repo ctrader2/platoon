@@ -11,13 +11,13 @@ Be scientific: every claim about the cause traces to evidence you saw. Copy thes
 mark each one done or skipped with a one-line reason.
 
 1. Pin down the symptom: what is broken, for whom, since when, and how it shows (an error, a wrong result, slowness).
-   If the task does not say enough, ask the user with `AskUserQuestion`.
+   If the task does not say enough, ask the user.
 2. Gather the evidence. Use whatever tools this session has: error tracking, logs, metrics, team chat, recent deploys
    (MCP tools), and the repository's history (`git log` around the time it started, `git blame` on the lines
-   involved, reverts and "fix for" commits). When there are several sources, spawn one explorer per source in a
-   single message with the `Agent` tool (`subagent_type: "general-purpose"`, `model: "opus"`), each told the time
-   window and the symptom and asked for what it found with links or file:line, and told to change nothing. Record
-   what a source did not have too.
+   involved, reverts and "fix for" commits). When there are several sources and you can start helpers (subagents),
+   start one explorer per source, all at once, each told the time window and the symptom and asked for what it found
+   with links or file:line, and told to change nothing; otherwise go through the sources yourself. Record what a
+   source did not have too.
 3. Build the timeline: when it started, what changed just before, when it was noticed. Times with their source.
 4. Prove the cause before you believe it. Write down the candidate causes, then cut them down with evidence: reproduce
    it without changing anything, or show it in the logs or the code. The most recent change is not the cause until

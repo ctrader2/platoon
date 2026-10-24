@@ -15,14 +15,14 @@ skipped with a one-line reason.
 2. Name the structure the code is missing: a state machine, a table, a typed model, a boundary. The reshape must
    delete branches or impossible states, not add indirection. Code whose shape is already clear stays.
 3. Name the target: the module layout, the types and the call graph as you would write them today. Present the plan
-   with `ExitPlanMode`: the pin, the target, the steps.
+   and wait for the user's yes: the pin, the target, the steps.
 4. Subtract first. Delete dead code, collapse wrappers with one caller, drop redundant checks and stale references,
    then reshape. The smallest change that reaches the target ships.
 5. Move in small steps that each keep the pin green, and commit each one. When an internal API changes, move every
    caller and delete the old API in the same change: no shims, no old and new paths side by side. Search for each
    renamed name in strings, docs and comments too.
-6. If you hand mechanical edits to a subagent (`Agent` tool, `subagent_type: "general-purpose"`, `model: "sonnet"`),
-   give it the files, the names and the behaviour to hold, and check its diff yourself.
+6. If you hand mechanical edits to a helper (a subagent, where you can start one), give it the files, the names and
+   the behaviour to hold, and check its diff yourself.
 7. Prove the behaviour is unchanged on the real thing: run the pin, and for a larger reshape compare old and new
    outputs or run the program end to end. Then find how this repo runs its tests (its CLAUDE.md, README, or build
    files) and run them all; fix what fails.

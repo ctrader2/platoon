@@ -11,11 +11,11 @@ first, and mark each one done or skipped with a one-line reason.
 1. Decide how big the question is. A single module, function or narrow question: explore and answer it yourself.
    A subsystem across several files or services, or a whole architecture: go on to step 2. When in doubt, take the
    simple path.
-2. Split the question into two to four angles, each a different slice. Spawn one explorer per angle, all in one
-   message, with the `Agent` tool (`subagent_type: "general-purpose"`, `model: "opus"`). Give each the question, its
-   angle, and ask for these sections: components found (name, file path, one sentence each), the flow step by step
-   with the data that moves between steps, the files it read, the boundaries with the rest of the code, non-obvious
-   things, and open questions. Tell it to go deep on its angle and leave the rest to the others.
+2. Split the question into two to four angles, each a different slice. If you can start helpers (subagents), start
+   one explorer per angle, all at once; otherwise explore each angle yourself, one after another. Give each the
+   question, its angle, and ask for these sections: components found (name, file path, one sentence each), the flow
+   step by step with the data that moves between steps, the files it read, the boundaries with the rest of the code,
+   non-obvious things, and open questions. Tell it to go deep on its angle and leave the rest to the others.
 3. Reconcile what comes back. Merge what overlaps and settle contradictions by reading the code yourself.
 4. Write the explanation for a senior engineer new to this area, in these sections, dropping any that don't apply:
    Overview (one or two paragraphs: what it is and why it exists), Key concepts, How it works (the longest: what

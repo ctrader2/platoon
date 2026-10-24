@@ -38,13 +38,17 @@ struct Out<T> {
     rx: Receiver<T>,
 }
 
-/// What making a worktree again comes back with (see `worktrees::prepare`).
-type Made = Result<Option<Worktree>, String>;
+/// What making a worktree again comes back with (see `squads_glue::make_worktree`).
+type Made = super::squads_glue::Made;
+
+/// What removing a worktree comes back with: the removal, and for a folder platoon had Codex trust, what came of
+/// taking that trust away (how many entries went, or why Codex couldn't be asked).
+type Removed = (Removal, Option<Result<usize, String>>);
 
 #[derive(Default)]
 pub struct WtState {
     /// A worktree being removed.
-    removing: Option<Out<Removal>>,
+    removing: Option<Out<Removed>>,
     /// A removed worktree being made again from its branch.
     back: Option<(Out<Made>, After)>,
     /// Worktrees already looked at for the task as it stood (project, number, the task's `updated`): each is tried once,
@@ -53,14 +57,6 @@ pub struct WtState {
     last: Option<Instant>,
     /// The folders sessions are working in now (every running claude's, every platoon host's, every open editor's).
     busy_dirs: Vec<PathBuf>,
-}
-
-/// The folder platoon made for task `number`'s worktree `w`: the `task-<N>` folder its path is in (the path itself when
-/// there is none).
-fn worktree_root(w: &Worktree, number: u32) -> PathBuf {
-    let name = format!("task-{number}");
-    let path = Path::new(&w.path);
-    path.ancestors().find(|a| a.file_name().is_some_and(|n| n.to_string_lossy() == name)).unwrap_or(path).to_path_buf()
 }
 
 impl App {
@@ -78,7 +74,7 @@ impl App {
 
     /// A session is working in task `number`'s worktree `w` (or a folder inside it).
     fn someone_in(&self, w: &Worktree, number: u32) -> bool {
-        let root = worktree_root(w, number);
+        let root = worktrees::root_of(w, number);
         self.wt.busy_dirs.iter().any(|d| d.starts_with(&root))
     }
 
@@ -100,7 +96,7 @@ impl App {
         let pick = self.every_ticket().iter().find_map(|(project, t)| {
             let w = t.worktree.as_ref()?;
             let skip = !t.state.closed()
-                || t.session.as_deref().is_some_and(|s| self.task_session_running(s))
+                || self.task_running(project, t)
                 || self.working_on(project, t.number)
                 || self.editor_holds(project, t.number)
                 // (One opened in a windowed editor is the user's to remove: platoon can't tell when that closes.)
@@ -116,13 +112,23 @@ impl App {
         }
     }
 
+    /// Remove task `t`'s worktree off the UI thread, and once it is gone take away the trust platoon had Codex give
+    /// its folder (`codex_server::forget_folders`), when it did.
     fn start_removing(&mut self, project: String, t: &Ticket) {
         let (Some(w), Some(folder)) = (t.worktree.clone(), t.folder.clone()) else { return };
         let git = self.git_program.clone();
         let number = t.number;
+        let forget = w.codex_trust.clone().zip(self.providers.codex.clone());
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(worktrees::remove(&git, &folder, &w, number, false));
+            let removal = worktrees::remove(&git, &folder, &w, number, false);
+            let forgot = match (&removal, forget) {
+                (Removal::Removed, Some((key, c))) => {
+                    Some(crate::agents::codex_server::forget_folders(&c.program, &c.root, &[key], crate::agents::codex_server::TIME_BOX))
+                }
+                _ => None,
+            };
+            let _ = tx.send((removal, forgot));
         });
         self.wt.removing = Some(Out { project, number, rx });
     }
@@ -131,14 +137,20 @@ impl App {
     /// to touch is only noted in memory (tried once).
     fn take_removal(&mut self) {
         let Some(out) = &self.wt.removing else { return };
-        let got = match out.rx.try_recv() {
+        let (got, forgot) = match out.rx.try_recv() {
             Ok(got) => got,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Removal::Refused("it stopped half way".into()),
+            Err(TryRecvError::Disconnected) => (Removal::Refused("it stopped half way".into()), None),
         };
         let (project, number) = (out.project.clone(), out.number);
         self.wt.removing = None;
         let mut store = Tickets::open(&self.config, &project);
+        // Codex no longer trusts the folder: nothing of platoon's is left in its settings for it. (When Codex couldn't
+        // be asked, the record stays: making the worktree again finds its trust there, and `platoon uninstall` takes it
+        // away.)
+        if let Some(Ok(_)) = forgot {
+            let _ = store.set_codex_trust(number, None);
+        }
         let branch = store.get(number).map(Ticket::branch).unwrap_or_else(|| crate::tickets::task_branch(number));
         let said = match got {
             Removal::Removed => store
@@ -183,9 +195,12 @@ impl App {
             return true;
         }
         let git = self.git_program.clone();
+        // A Codex task's folder is trusted in Codex again, as when it was first made.
+        let on_codex = self.task_squad(&project, &t).and_then(|s| self.task_agent(&s)) == Ok(Agent::Codex);
+        let codex = self.providers.codex.clone().filter(|_| on_codex);
         let (tx, rx) = channel();
         thread::spawn(move || {
-            let _ = tx.send(worktrees::prepare(&git, &folder, number, Some(&w)));
+            let _ = tx.send(super::squads_glue::make_worktree(&git, &folder, number, Some(&w), codex.as_ref()));
         });
         self.notify(format!("Bringing #{number}'s worktree back from its branch first…"));
         self.wt.back = Some((Out { project, number, rx }, then));
@@ -209,21 +224,34 @@ impl App {
     fn take_back(&mut self) {
         let Some((out, then)) = &self.wt.back else { return };
         let then = *then;
-        let got = match out.rx.try_recv() {
+        let (got, trust) = match out.rx.try_recv() {
             Ok(got) => got,
             Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err("it stopped half way".into()),
+            Err(TryRecvError::Disconnected) => (Err("it stopped half way".into()), None),
         };
         let (project, number) = (out.project.clone(), out.number);
         self.wt.back = None;
-        if let Err(e) = got {
-            self.notify(format!("Couldn't bring #{number}'s worktree back: {e}"));
-            if then == After::Editor {
-                self.editor_cancel();
+        let made = match got {
+            Ok(made) => made,
+            Err(e) => {
+                self.notify(format!("Couldn't bring #{number}'s worktree back: {e}"));
+                if then == After::Editor {
+                    self.editor_cancel();
+                }
+                return;
             }
-            return;
+        };
+        let mut store = Tickets::open(&self.config, &project);
+        let _ = store.mark_worktree(number, WtMark::Present);
+        match (trust, made) {
+            (Some(Ok(key)), _) => {
+                let _ = store.set_codex_trust(number, key.as_deref());
+            }
+            (Some(Err(why)), Some(w)) => {
+                self.notify(super::squads_glue::trust_failed(number, &worktrees::root_of(&w, number), &why, &self.home));
+            }
+            _ => {}
         }
-        let _ = Tickets::open(&self.config, &project).mark_worktree(number, WtMark::Present);
         self.reread_tickets();
         if let Some(s) = self.tk.store.as_mut() {
             s.reload_if_changed();

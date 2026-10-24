@@ -2,6 +2,7 @@ mod agents;
 mod ai;
 mod app;
 mod archive;
+mod askmatch;
 mod board;
 #[cfg(test)]
 mod clarity_app_tests;
@@ -9,6 +10,8 @@ mod client;
 mod clipboard;
 #[cfg(test)]
 mod codex_app_tests;
+#[cfg(test)]
+mod codex_tasks_app_tests;
 mod colordepth;
 #[cfg(test)]
 mod contrast_app_tests;
@@ -145,9 +148,10 @@ fn main() -> io::Result<()> {
         Some("hook") if std::env::args().nth(2).as_deref() == Some("guard") => std::process::exit(guard::run_guard(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("session-start") => std::process::exit(sessionhook::run(hook_agent())),
         Some("hook") if std::env::args().nth(2).as_deref() == Some("stop") => std::process::exit(notesrun::run_hook(hook_agent())),
-        // Given only to a task's session, with `--settings` (never installed in the user's own settings).
+        // Claude Code's are given only to a task's session, with `--settings` (never installed in the user's own
+        // settings); Codex's are in its hooks file for every session and act only in a task's (`PLATOON_TASK`).
         Some("hook") if std::env::args().nth(2).is_some_and(|h| taskrun::HOOKS.contains(&h.as_str())) => {
-            std::process::exit(taskrun::run_hook(&std::env::args().nth(2).unwrap_or_default()))
+            std::process::exit(taskrun::run_hook(&std::env::args().nth(2).unwrap_or_default(), hook_agent()))
         }
         Some("notes-update") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
@@ -224,7 +228,7 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
   setup           add platoon to Claude Code: plan usage in the status line, a guard that
                   stops two copies of one session from overwriting each other, and two hooks
                   that hand a project's notes to its sessions and keep them up to date; and,
-                  when Codex is installed, the notes hooks to Codex's hooks.json
+                  when Codex is installed, the notes and task hooks to Codex's hooks.json
   task add [--project <name>] --title <text> [--body-file <path>] [--folder <path>] [--squad <id>]
                   make a task and print its number (#N); with no --folder it works in the
                   current folder; --squad suggests the squad that starts it
@@ -236,9 +240,10 @@ const USAGE: &str = "usage: platoon [setup | open [id] | open --project <name> |
                   asking) and before stopping the sessions it runs (--stop-sessions: without asking)
   --version, -V   print platoon's version
   statusline, hook guard, hook session-start, hook stop, hook task-plan, hook task-question,
-                  hook task-notify, hook task-tool, hook task-prompt, hook task-stop,
-                  notes-update   internal: run by Claude Code (and by Codex: hook guard,
-                  hook session-start and hook stop with --agent codex), or by platoon itself";
+                  hook task-notify, hook task-tool, hook task-prompt, hook task-stop, hook task-start,
+                  hook task-before, notes-update   internal: run by Claude Code (and by Codex, with
+                  --agent codex: hook guard, hook session-start, hook stop and the task hooks),
+                  or by platoon itself";
 
 /// Run by Claude Code as its status line command. Must be quick and must never fail loudly.
 fn statusline() -> io::Result<()> {
@@ -641,6 +646,7 @@ mod tests {
             dir: "/tmp".into(),
             args: Vec::new(),
             sock: Default::default(),
+            task: None,
         }
     }
 

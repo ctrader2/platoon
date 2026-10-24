@@ -12,8 +12,9 @@
 //! 3. Act: stop the sessions (SIGTERM to the `claude` each host runs, as the app's own stop does), take the entries out
 //!    of settings.json (backup first, as setup does), have Codex forget it trusted platoon's hooks
 //!    (`setup::forget_codex_trust`, through Codex's app-server: Codex's other records stay, and when Codex can't be
-//!    asked they are left and said to be harmless) and take them out of `hooks.json`, delete the cache folder, the
-//!    config folder when asked, and older platoons' leftovers.
+//!    asked they are left and said to be harmless) and take them out of `hooks.json`, have Codex forget its trust in
+//!    the folders of tasks' worktrees platoon had it trust (`codex_server::forget_folders`, only those the tasks
+//!    record), delete the cache folder, the config folder when asked, and older platoons' leftovers.
 //! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
 //! Claude Code's and Codex's conversations are never touched.
@@ -263,7 +264,22 @@ pub struct Plan {
     codex_error: Option<String>,
     pub running: Vec<Running>,
     worktrees: Vec<KeptWorktree>,
+    /// The task worktrees' folders platoon had Codex trust and that its task records still name (`codex_trust_left`).
+    codex_trust: Vec<String>,
     config_there: bool,
+}
+
+/// The folders platoon had Codex trust for tasks' worktrees, as the tasks in `config` record them, while those records
+/// say the trust is still there: only folders of task worktrees platoon made (`codex_server::is_task_worktree`).
+pub fn codex_trust_left(config: &Path) -> Vec<String> {
+    let mut out: Vec<String> = tickets::every_ticket(config)
+        .into_iter()
+        .filter_map(|(_, t)| t.worktree?.codex_trust)
+        .filter(|k| codex_server::is_task_worktree(k))
+        .collect();
+    out.sort();
+    out.dedup();
+    out
 }
 
 pub fn look(places: &Places, git: &str) -> Plan {
@@ -302,6 +318,7 @@ pub fn look(places: &Places, git: &str) -> Plan {
         codex_error,
         running: running_sessions(&places.cache, &places.root),
         worktrees: kept_worktrees(&places.config, git),
+        codex_trust: codex_trust_left(&places.config),
         config_there: places.config.exists(),
     }
 }
@@ -510,6 +527,24 @@ pub fn run(
             kept.push(format!("in Codex's hooks, your own command that runs platoon: {c} (take the platoon part out by hand)"));
         }
     }
+    // The folders of tasks' worktrees platoon had Codex trust: Codex itself takes them out of its settings.
+    if !plan.codex_trust.is_empty() {
+        let n = plan.codex_trust.len();
+        let folders = if n == 1 { "one task worktree's folder".to_string() } else { format!("{n} task worktrees' folders") };
+        match codex_server::forget_folders(&places.codex_program, &places.codex, &plan.codex_trust, codex_server::TIME_BOX) {
+            Ok(_) => removed.push(format!(
+                "from Codex's settings ({}), by Codex itself: its trust in {folders} platoon had it trust",
+                codex::config_path(&places.codex).display()
+            )),
+            Err(why) => kept.push(format!(
+                "Codex's trust in {folders} platoon had it trust, in {}: Codex couldn't be asked to remove it ({why}). It is \
+                 harmless; to take it out by hand, remove these [projects] entries: {}",
+                codex::config_path(&places.codex).display(),
+                plan.codex_trust.join(", ")
+            )),
+        }
+    }
+
     if let Some(e) = &plan.codex_error {
         failed.push(format!(
             "Codex's hooks were left alone, so platoon's may still be in them: {e}. Fix the file, or take them out by hand ({GUIDE})"
@@ -1146,5 +1181,58 @@ mod tests {
         assert!(program_line(&versions::Install::Other, Path::new("/a b/platoon")).contains("rm '/a b/platoon'"));
         assert_eq!(worktree_root(Path::new("/r-worktrees/task-3/sub/x"), 3), Some(PathBuf::from("/r-worktrees/task-3")));
         assert_eq!(worktree_root(Path::new("/r/task-3/sub"), 3), None);
+    }
+
+    #[test]
+    fn codex_forgets_only_the_task_worktree_folders_platoon_had_it_trust() {
+        let mut p = places(&tmp("codex-folders"));
+        fs::create_dir_all(&p.codex).unwrap();
+        // Two tasks whose worktrees platoon had Codex trust, one whose record names a folder that isn't a task
+        // worktree (never taken away), and one with no such record.
+        let project = crate::projects::Projects::open(&p.config).create("Shop").unwrap();
+        let mut store = tickets::Tickets::open(&p.config, &project);
+        let trusted = |k: Option<&str>| tickets::Worktree {
+            path: k.unwrap_or("/home/u/shop-worktrees/task-9").into(),
+            branch: "task/1".into(),
+            codex_trust: k.map(String::from),
+            ..Default::default()
+        };
+        for k in [Some("/home/u/shop-worktrees/task-1"), Some("/home/u/web-worktrees/task-2"), Some("/home/u/shop"), None] {
+            let n = store.add(tickets::NewTicket { title: "T".into(), ..Default::default() }).unwrap();
+            store.start(n, "feature", &format!("s-{n}"), Some(trusted(k))).unwrap();
+        }
+        assert_eq!(codex_trust_left(&p.config), ["/home/u/shop-worktrees/task-1", "/home/u/web-worktrees/task-2"]);
+        let fake = crate::testkit::CodexServerFake::new("uninstall-folders", &p.codex);
+        p.codex_program = fake.program.clone();
+        let projects = json!({"/home/u/shop-worktrees/task-1": {"trust_level": "trusted"}, "/home/u/web-worktrees/task-2": {"trust_level": "trusted"},
+            "/home/u/shop": {"trust_level": "trusted"}});
+        fake.result("config/read", None, json!({"config": {}, "origins": {}, "layers": [{"name": {"type": "user"}, "version": "sha256:p1", "config": {"projects": projects}}]}));
+        fake.result("config/batchWrite", None, json!({"status": "ok"}));
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 0, "{out}");
+        let sent = fake.requests();
+        let write = sent.iter().find(|r| r["method"] == "config/batchWrite").expect("written");
+        assert_eq!(
+            write["params"],
+            json!({"edits": [
+                {"keyPath": "projects.\"/home/u/shop-worktrees/task-1\"", "value": null, "mergeStrategy": "replace"},
+                {"keyPath": "projects.\"/home/u/web-worktrees/task-2\"", "value": null, "mergeStrategy": "replace"}],
+                "reloadUserConfig": true, "expectedVersion": "sha256:p1"})
+        );
+        assert!(out.contains("its trust in 2 task worktrees' folders platoon had it trust"), "{out}");
+        // Codex can't be asked: said, with what to take out by hand, and harmless.
+        let mut p2 = places(&tmp("codex-folders-gone"));
+        fs::create_dir_all(&p2.codex).unwrap();
+        let project = crate::projects::Projects::open(&p2.config).create("Shop").unwrap();
+        let mut store = tickets::Tickets::open(&p2.config, &project);
+        let n = store.add(tickets::NewTicket { title: "T".into(), ..Default::default() }).unwrap();
+        store.start(n, "feature", "s-1", Some(trusted(Some("/home/u/shop-worktrees/task-1")))).unwrap();
+        p2.codex_program = "/nonexistent/platoon-test/codex".into();
+        let (_, out) = uninstall(&p2, &Options::default(), None, &mut no_stop());
+        assert!(
+            out.contains("Codex's trust in one task worktree's folder platoon had it trust")
+                && out.contains("remove these [projects] entries: /home/u/shop-worktrees/task-1"),
+            "{out}"
+        );
     }
 }

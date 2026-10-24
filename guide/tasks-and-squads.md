@@ -1,7 +1,8 @@
 # Tasks and squads
 
 A **task** is one piece of work, usually in a [project](projects.md). When you start one, platoon opens one ordinary
-Claude Code session for it, in a copy of its folder (a git worktree on the branch `task/<N>`), following a **squad**: a
+Claude Code or Codex session for it (the squad's model decides which: see [Tasks on Codex](#tasks-on-codex)), in a copy
+of its folder (a git worktree on the branch `task/<N>`), following a **squad**: a
 short Markdown file of steps that says how this kind of work is done (plan, build, check, report). The session is a
 session like any other: it shows on the Sessions tab, marked with the task's number, and you can open it and talk to it.
 
@@ -86,7 +87,8 @@ that command: allow it, and the tasks are made. Sessions you start with plain `c
    squad in `squads/`, so a step can say "follow the Review squad";
 3. starts `claude` in the worktree, in a platoon host, with the squad's model, in plan mode when the squad plans first
    (otherwise it edits files without asking), `squad.md` added to its system prompt, and the task's text as its first
-   message, and takes you into it.
+   message, and takes you into it. On one of Codex's models it starts `codex` instead (see
+   [Tasks on Codex](#tasks-on-codex)).
 
 ### How the task follows its session
 
@@ -139,7 +141,8 @@ Typing into the session counts the tries from nothing again. The check's whole a
 The session may change files and commit in its worktree without asking, but Claude Code asks you before `git push` (also
 when it is written `git -C <dir> push` or `cd <dir> && git push`),
 `gh pr create`, `gh pr merge`, `gh release`, `gh api` calls that write, `glab`, `cargo publish` and `npm publish`.
-Merging, pushing and opening pull requests are yours to do (or to ask the session for).
+Merging, pushing and opening pull requests are yours to do (or to ask the session for). A task on Codex holds the
+same commands back until you say yes in its session (see [Tasks on Codex](#tasks-on-codex)).
 
 ### After the work
 
@@ -153,6 +156,53 @@ commits the default branch hasn't (here, or on `origin` as git last fetched it),
 merged** and its details say how many, **Branch task/5 has 2 commits not in main.** Merge it (or ask the session to
 open a pull request) and it reads plain **Done**. A branch merged by squashing or rebasing gets new commits on the
 default branch, so it says not merged until you delete `task/<N>`.
+
+## Tasks on Codex
+
+A squad whose model is one of Codex's (**GPT-6-Luna**, say) runs its task in Codex instead of Claude Code: the model
+decides the program. Everything above holds (the worktree, the squad, the Tasks tab, the check of the work before it
+is Done); what differs is how Codex does each thing.
+
+- **Run `platoon setup` once more** after updating platoon: it adds platoon's task hooks to Codex's `hooks.json` and has
+  Codex trust them, as it did for the notes hooks (see [Codex](install-and-setup.md#codex)). Without them the task still
+  runs, but its state doesn't follow the session.
+- **It starts in Codex's `workspace-write` sandbox**, asking you when it wants more (`-a on-request`), with the task in
+  its environment (`PLATOON_TASK`) and without Codex's update question. Codex takes no name and no session id from
+  platoon: platoon learns the session's id from Codex as the session starts, and marks its row `#N` itself.
+- **Its folder is trusted in Codex for you.** When platoon makes the task's worktree, it has Codex itself trust that
+  folder (the way Codex's own "Do you trust this folder?" does, written by Codex in its `config.toml`), and takes that
+  trust away when it removes the worktree after the work. An entry of your own for that folder is left alone. If Codex
+  can't be asked, the task starts all the same and says so: Codex asks you in the window.
+- **It can commit.** The main repository's `.git` folder is writable for it (Codex keeps `.git` read-only otherwise, and
+  a worktree's commits go there).
+- **The network is on**, so it can fetch dependencies and run tests that need it. Pushing, pull requests and publishing
+  still wait for you: platoon's hook reads each command the session runs (also inside `bash -lc '...'`, after `cd ... &&`,
+  as `git -C <dir> push`, after `VAR=value`, and the like) and holds back the same commands Claude Code asks about. The
+  task shows **Needs you · a question**: "It wants to run `git push origin task/5`: say yes in its session to let it, or
+  tell it not to." Say yes in the session and the session runs that same command once more; it goes through, once. What
+  isn't caught: a script or program that pushes for you, a git alias, and an MCP tool that publishes. This is weaker than
+  Codex's sandbox with the network off, by choice: fewer interruptions.
+- **Plans first, without Codex's plan mode.** A squad that plans first tells Codex to look around, write the plan as its
+  reply and stop. The task shows **Needs you · a plan to approve**, with the plan beside the list (and no check of the
+  work, since nothing was done yet). Answer in the session ("go ahead", or what to change): your answer is your say on
+  the plan, and the task is Working again. Until you answer, platoon refuses the session's file edits (Codex's
+  `apply_patch`, also run from the shell) and tells it to present the plan and wait. Other shell commands can still
+  write files; the instructions are what keeps it from that.
+- **Questions.** Codex asks with its question tool where it has one (in its own plan mode), else in its reply: it ends
+  the reply with a line starting **Question for you:**, and the task shows **Needs you · a question** with it, without
+  checking the work. Answer in the session.
+- **A permission prompt** (Codex asking to run something outside its sandbox) shows **Needs you · asks permission**, as
+  on Claude Code.
+- **Helpers.** Where a squad's step starts helpers (subagents), Codex uses its own (`spawn_agent`), on its own models;
+  where it can't, it does each helper's part itself, one pass each. The **Review** squad's four reviewers are Codex
+  helpers on Codex's models, or four passes by the session itself.
+- **The check of the work** runs on the squad's verdict model, Claude's or Codex's, as for any task.
+
+### On a computer with only Codex
+
+Without Claude Code, the built-in squads you haven't changed run on Codex's first model, for the session and for the
+check of its work. The Squads tab and the list `s` opens say so: **Model GPT-6-Luna, since Claude Code isn't installed**.
+A squad of your own that names one of Claude's models says **(needs Claude Code, not installed)** and doesn't start.
 
 ## Squads
 
@@ -184,8 +234,8 @@ it in plan mode; `verdict_model` is the model that [checks the work](#the-check-
 when it has none). A model is written as its program names it (`opus`, a full Claude model name, or one of Codex's such
 as `gpt-6-luna`) and kept exactly so; the model decides the program that runs it.
 
-- **The session's model is one of Claude's, for now.** A task's session runs on Claude Code; running one on Codex comes
-  later. A squad whose model is a Codex model, or one this computer can't run (say Claude Code isn't installed), doesn't
+- **The session's model is any model installed**, Claude's or Codex's: a Claude model runs the task in Claude Code, one
+  of Codex's in Codex (see [Tasks on Codex](#tasks-on-codex)). A squad whose model this computer can't run doesn't
   start: `s` says why, and nothing is made.
 - **The verdict model can be any model installed**, Claude's or Codex's (see
   [Choosing a model](settings-and-keys.md#choosing-a-model)): the check is one call, which either program can make. On
@@ -198,14 +248,15 @@ task; the list says what is wrong. A started task keeps the squad it started wit
 The fourth tab, `4` **Squads**, lists every squad: the built-ins first, then yours by name, each with what it is for and
 where it comes from (**built in**, **yours**, or **yours, replaces the built-in**), and **needs fixing** when its file has
 something wrong. From 80 columns the picked squad is beside the list: what it is for, its model and verdict model (by
-their names, and **(needs Codex, not installed)** or the like for one this computer can't run), whether it plans first,
+their names; with both programs installed, the one that runs each, **Opus (Claude Code)**, **GPT-6-Luna (Codex)**; and
+**(needs Codex, not installed)** or the like for one this computer can't run), whether it plans first,
 its steps, and under them what is wrong with its file, one line each.
 
 | Key (Squads tab) | Does |
 | --- | --- |
 | `enter` | the squad in the whole width, with its **Model** line picked; `esc` goes back to the list |
 | `↑` `↓` (squad open) | pick its **Model**, **Verdict model** or **Plans first** line; past them, scroll the squad |
-| `enter` (squad open) | change the picked line to the next choice: the model goes Opus, Sonnet, Haiku, Fable (Claude's models only, for now); the verdict model goes round every model installed, Claude's then Codex's, then **the same as the model**; plans first yes or no. A click on a line picks it, a click on the picked one changes it |
+| `enter` (squad open) | change the picked line to the next choice: the model goes round every model installed, Claude's then Codex's (the model decides the program the task runs in); the verdict model the same, then **the same as the model**; plans first yes or no. A click on a line picks it, a click on the picked one changes it |
 | `e` | open its file in your editor (the same list of editors as the notes); the tab reads it again when the editor is done. On a built-in, its text is copied to `~/.config/platoon/squads/<id>.md` first, and if you leave it unchanged the copy goes again, so a built-in becomes yours only when you change it |
 | `n` | a new squad: its name, then its file (`~/.config/platoon/squads/<name>.md`, the Feature squad's settings and one step to write over) opens in your editor |
 | `d` | delete one of yours, after asking. The file is kept as `<id>.md.bak`; a built-in it replaced comes back |

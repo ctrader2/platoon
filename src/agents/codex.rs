@@ -16,7 +16,7 @@
 //!   Codex's own update and folder-trust questions), before any message and so before its rollout exists: such a
 //!   conversation is `Live::unsaved`, its folder the holder's own (`procs::cwd`).
 //! - `config.toml`: the MCP servers (`[mcp_servers.<name>]`), for idle stop. Read only: Codex rewrites it itself.
-//! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `HOOKS`).
+//! - `hooks.json`: hooks for every session; `platoon setup` adds its own there (see `hooks`).
 
 use super::{
     HookAnswer, HookEvent, HookInput, HookKind, HookReply, Live, Spent, Start, TaskLaunch, Tool, Transcript, TurnEnd, one_line,
@@ -87,14 +87,33 @@ pub fn session_of_args(args: &[String]) -> Option<String> {
     }
 }
 
-/// The arguments of a task's session. No task runs on Codex yet (the squads' models are Claude Code's): this is only
-/// the session itself, its model and its first message, without the squad's steps, plan mode or the task's hooks.
+/// The arguments of a task's session (or of its continuation, `resume <id>`): always `--no-daemon` (its hooks run in
+/// the process the host started, with `PLATOON_TASK` in their environment), the squad's model, Codex's
+/// `workspace-write` sandbox with approvals the model asks for (`-a on-request`: what lets Codex ask the user), and:
+/// - no update question at startup (`check_for_update_on_startup=false`: it would take the first keys typed);
+/// - the network on (`sandbox_workspace_write.network_access`, decided by the user 2026-10-24): pushing, pull requests
+///   and publishing wait for the user through platoon's hook instead (`askmatch.rs`);
+/// - the main repository's git folder writable (`sandbox_workspace_write.writable_roots`), so a worktree can commit
+///   (Codex keeps `.git` read-only otherwise, and a permission profile naming it doesn't help);
+/// - platoon's rules and the squad's steps as `developer_instructions` (Codex has no file for them; its
+///   `model_instructions_file` replaces Codex's own instructions, which OpenAI advises against);
+/// - the first message (a new session only).
+///
+/// Codex takes no session id and no name: the task learns its id from its SessionStart hook, and platoon shows "#N
+/// title" itself.
 pub fn task_args(l: &TaskLaunch) -> Vec<String> {
-    if l.resume {
-        return start_args(Start::Resume(&l.session));
+    let mut a: Vec<String> = if l.resume { vec!["resume".into(), l.session.clone()] } else { Vec::new() };
+    a.extend(["--no-daemon", "-m", &l.model, "-s", "workspace-write", "-a", "on-request"].map(String::from));
+    let mut set = |key: &str, value: String| a.extend(["-c".to_string(), format!("{key}={value}")]);
+    set("check_for_update_on_startup", "false".into());
+    set("sandbox_workspace_write.network_access", "true".into());
+    if let Some(git) = &l.git_dir {
+        set("sandbox_workspace_write.writable_roots", format!("[{}]", toml_string(git)));
     }
-    let mut a: Vec<String> = vec!["--no-daemon".into(), "-m".into(), l.model.clone()];
-    a.extend(l.first.clone());
+    set("developer_instructions", toml_string(&l.instructions));
+    if let (false, Some(m)) = (l.resume, &l.first) {
+        a.push(m.clone());
+    }
     a
 }
 
@@ -105,14 +124,53 @@ pub fn task_args(l: &TaskLaunch) -> Vec<String> {
 // `tool_input`), and reads context from stdout (`hookSpecificOutput.additionalContext`) or a decision. Its
 // SessionStart fires when the first message is sent, not when the window opens.
 
-/// The hooks `platoon setup` puts in Codex's `hooks.json`: (event, what the command says after the program). Fixed
-/// text: Codex asks the user to trust each hook once, by its exact command, so one that changed would be asked about
-/// again.
-pub const HOOKS: [(&str, &str); 3] = [
-    ("SessionStart", "hook session-start --agent codex"),
-    ("UserPromptSubmit", "hook guard --agent codex"),
-    ("Stop", "hook stop --agent codex"),
+/// One hook `platoon setup` puts in Codex's `hooks.json`: its event, what its command says after the program, the
+/// tools it is for (a matcher; Codex's names, `hooks/src/engine/matcher.rs`: `a|b` is exactly one of them), and how
+/// long Codex waits for it (seconds; Codex's own default is 600). Fixed text: Codex asks the user to trust each hook
+/// once, by its exact command, so one that changed would be asked about again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HookEntry {
+    pub event: &'static str,
+    pub args: &'static str,
+    pub matcher: Option<&'static str>,
+    pub timeout: Option<u64>,
+}
+
+const fn hook(event: &'static str, args: &'static str) -> HookEntry {
+    HookEntry { event, args, matcher: None, timeout: None }
+}
+
+/// The notes hooks: a project's notes at the start, changed notes with a prompt, and notes kept up to date after a stop.
+pub const NOTES_HOOKS: [HookEntry; 3] = [
+    hook("SessionStart", "hook session-start --agent codex"),
+    hook("UserPromptSubmit", "hook guard --agent codex"),
+    hook("Stop", "hook stop --agent codex"),
 ];
+
+/// The tools platoon's task hook looks at before they run: shell commands (pushing waits for the user), file edits
+/// (refused until a plan is approved) and Codex's question tool. `apply_patch` also answers to `Write` and `Edit`
+/// in a matcher (`core/src/tools/hook_names.rs`).
+pub const BEFORE_TOOLS: &str = "Bash|apply_patch|request_user_input";
+
+/// The task hooks: installed for every Codex session, they do nothing (at once, saying nothing) in a session that
+/// isn't a task's (no `PLATOON_TASK` in its environment). The `Stop` hook waits as long as the check of the work may
+/// take, and a minute more.
+pub const TASK_HOOKS: [HookEntry; 6] = [
+    hook("SessionStart", "hook task-start --agent codex"),
+    HookEntry { event: "PreToolUse", args: "hook task-before --agent codex", matcher: Some(BEFORE_TOOLS), timeout: None },
+    hook("PermissionRequest", "hook task-notify --agent codex"),
+    hook("PostToolUse", "hook task-tool --agent codex"),
+    hook("UserPromptSubmit", "hook task-prompt --agent codex"),
+    HookEntry { event: "Stop", args: "hook task-stop --agent codex", matcher: None, timeout: Some(STOP_TIMEOUT) },
+];
+
+/// How long Codex waits for the task's `Stop` hook: the check of the work's time and a minute.
+pub const STOP_TIMEOUT: u64 = crate::verdict::TIMEOUT.as_secs() + 60;
+
+/// Every hook `platoon setup` puts in Codex's `hooks.json`: the notes hooks, then the task hooks.
+pub fn hooks() -> impl Iterator<Item = &'static HookEntry> {
+    NOTES_HOOKS.iter().chain(TASK_HOOKS.iter())
+}
 
 /// Codex's hooks file under its folder.
 pub fn hooks_path(root: &Path) -> PathBuf {
@@ -129,10 +187,16 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
     let event = match kind {
         HookKind::SessionStart => HookEvent::SessionStart { source: text("source").unwrap_or("startup").to_string() },
         HookKind::Prompt => HookEvent::PromptSubmitted,
-        HookKind::BeforeTool(tool) => {
-            // Codex has no plan tool: a plan is the last message of a turn in plan mode.
-            let said = if tool == Tool::Question { questions(tool_input) } else { String::new() };
-            HookEvent::BeforeTool { tool, said }
+        HookKind::BeforeTool(tool) => HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) },
+        // Codex has no plan tool: a plan is the last message of a turn (`taskrun.rs`).
+        HookKind::BeforeAnyTool => {
+            let tool = match text("tool_name").unwrap_or_default() {
+                "request_user_input" => Tool::Question,
+                "Bash" | "shell" | "exec_command" | "local_shell" => Tool::Shell,
+                "apply_patch" | "Write" | "Edit" => Tool::Edit,
+                _ => Tool::Other,
+            };
+            HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) }
         }
         HookKind::AfterTool => HookEvent::AfterTool(match text("tool_name").unwrap_or_default() {
             "request_user_input" => Tool::Question,
@@ -152,6 +216,22 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
     Some(HookInput { session, cwd, event })
 }
 
+/// What a tool's input says for platoon: the question asked, or the command (a shell line; an argument vector is
+/// joined with its words quoted as a shell would need them; `apply_patch`'s is the patch).
+fn tool_said(tool: Tool, input: &Value) -> String {
+    match tool {
+        Tool::Question => questions(input),
+        Tool::Shell | Tool::Edit => match input.get("command") {
+            Some(Value::String(c)) => c.clone(),
+            Some(Value::Array(words)) => {
+                words.iter().filter_map(Value::as_str).map(super::claude::shell_word).collect::<Vec<_>>().join(" ")
+            }
+            _ => String::new(),
+        },
+        Tool::Plan | Tool::Other => String::new(),
+    }
+}
+
 /// The questions of a `request_user_input` call: each question's text, joined ("" when it has none).
 fn questions(input: &Value) -> String {
     let qs: Vec<&str> = input
@@ -164,14 +244,17 @@ fn questions(input: &Value) -> String {
     qs.join(" / ")
 }
 
-/// What a hook says back (see `Agent::hook_answer`): context as `hookSpecificOutput.additionalContext`, and a stop
-/// sent back or a prompt refused as `{"decision": "block", "reason": ...}`.
+/// What a hook says back (see `Agent::hook_answer`): context as `hookSpecificOutput.additionalContext`, a stop sent
+/// back or a prompt refused as `{"decision": "block", "reason": ...}`, and a tool refused as `permissionDecision:
+/// "deny"` with its reason (Codex can't be told to ask the user instead: it reads `permissionDecision: "ask"` as a
+/// hook that failed, `hooks/src/engine/output_parser.rs`).
 pub fn hook_answer(reply: &HookReply) -> HookAnswer {
     let context = |event: &str, text: &str| json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}).to_string();
     let stdout = match reply {
         HookReply::StartContext(text) => context("SessionStart", text),
         HookReply::PromptContext(text) => context("UserPromptSubmit", text),
         HookReply::SendBack(reason) | HookReply::Refuse(reason) => json!({"decision": "block", "reason": reason}).to_string(),
+        HookReply::Deny(why) => super::deny_json(why),
     };
     HookAnswer { stdout, stderr: String::new(), code: 0 }
 }
@@ -1359,8 +1442,6 @@ pub(crate) mod tests {
             let end = TurnEnd { planning: false, last_message: Some(last.into()), subagents_working: false };
             assert_eq!(stop.event, HookEvent::Stop(end), "{name}");
         }
-        let q = hook_input(HookKind::BeforeTool(Tool::Question), &hook("PreToolUse")).unwrap();
-        assert_eq!(q.event, HookEvent::BeforeTool { tool: Tool::Question, said: "What should the second line of notes.txt say?".into() });
         let perm = hook_input(HookKind::PermissionWait, &hook("PermissionRequest")).unwrap();
         assert_eq!(
             perm.event,
@@ -1383,9 +1464,99 @@ pub(crate) mod tests {
         assert_eq!(a.stdout, r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"newer notes"}}"#);
         let a = hook_answer(&HookReply::SendBack("Run the tests.".into()));
         assert_eq!((a.stdout.as_str(), a.code), (r#"{"decision":"block","reason":"Run the tests."}"#, 0));
-        for (event, args) in HOOKS {
-            assert!(args.ends_with("--agent codex") && !args.contains('\''), "{event}: fixed text, the same for every session");
+        let a = hook_answer(&HookReply::Deny("Wait for the user.".into()));
+        assert_eq!(
+            (a.stdout.as_str(), a.code),
+            (
+                r#"{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Wait for the user."}}"#,
+                0
+            )
+        );
+        for h in hooks() {
+            assert!(h.args.ends_with("--agent codex") && !h.args.contains('\''), "{}: fixed text, the same for every session", h.event);
         }
+        assert_eq!(hooks().count(), 9);
+        let stop = TASK_HOOKS.iter().find(|h| h.event == "Stop").unwrap();
+        assert_eq!(stop.timeout, Some(660), "the check's ten minutes and one more");
+    }
+
+    #[test]
+    fn a_tool_about_to_run_is_read_by_the_name_codex_gives_it() {
+        let shell = hook_input(HookKind::BeforeAnyTool, &hook("PreToolUse-Bash.from-source")).unwrap();
+        assert_eq!(shell.event, HookEvent::BeforeTool { tool: Tool::Shell, said: "git -C /work/repo push -u origin task/5".into() });
+        let edit = hook_input(HookKind::BeforeAnyTool, &hook("PreToolUse-apply_patch.from-source")).unwrap();
+        assert!(matches!(&edit.event, HookEvent::BeforeTool { tool: Tool::Edit, said } if said.starts_with("*** Begin Patch")));
+        let q = hook_input(HookKind::BeforeAnyTool, &hook("PreToolUse")).unwrap();
+        assert_eq!(q.event, HookEvent::BeforeTool { tool: Tool::Question, said: "What should the second line of notes.txt say?".into() });
+        let after = hook_input(HookKind::AfterTool, &hook("PostToolUse.from-source")).unwrap();
+        assert_eq!((after.session.as_str(), after.event), (PLANNING, HookEvent::AfterTool(Tool::Other)));
+        // A command given as its words reads as the line a shell would run.
+        let argv = r#"{"session_id":"s","tool_name":"Bash","tool_input":{"command":["bash","-lc","git push origin 'my branch'"]}}"#;
+        let HookEvent::BeforeTool { tool: Tool::Shell, said } = hook_input(HookKind::BeforeAnyTool, argv).unwrap().event else { panic!() };
+        assert_eq!(said, r#"bash -lc 'git push origin '\''my branch'\'''"#);
+        assert!(crate::askmatch::waits(&said).is_some());
+        let other = r#"{"session_id":"s","tool_name":"mcp__github__create_pull_request","tool_input":{}}"#;
+        assert_eq!(
+            hook_input(HookKind::BeforeAnyTool, other).unwrap().event,
+            HookEvent::BeforeTool { tool: Tool::Other, said: String::new() }
+        );
+    }
+
+    fn launch(resume: bool) -> TaskLaunch {
+        TaskLaunch {
+            session: "01a1-real".into(),
+            resume,
+            name: "#5 Login".into(),
+            model: "gpt-6-luna".into(),
+            plan: true,
+            task_dir: PathBuf::from("/c/tasks/05-login"),
+            exe: "/opt/platoon/bin/platoon".into(),
+            first: Some("Task #5: Login\n\nDo it.".into()),
+            instructions: "# How this task works\n\n- Say \"done\" at the end.\n".into(),
+            git_dir: Some("/w/my \"shop\"/.git".into()),
+            tag: "5:p1".into(),
+        }
+    }
+
+    #[test]
+    fn a_tasks_session_starts_in_codexs_sandbox_with_the_network_on_its_git_folder_writable_and_the_squad_as_instructions() {
+        let a = task_args(&launch(false));
+        assert_eq!(
+            a,
+            [
+                "--no-daemon",
+                "-m",
+                "gpt-6-luna",
+                "-s",
+                "workspace-write",
+                "-a",
+                "on-request",
+                "-c",
+                "check_for_update_on_startup=false",
+                "-c",
+                "sandbox_workspace_write.network_access=true",
+                "-c",
+                r#"sandbox_workspace_write.writable_roots=["/w/my \"shop\"/.git"]"#,
+                "-c",
+                r##"developer_instructions="# How this task works\n\n- Say \"done\" at the end.\n""##,
+                "Task #5: Login\n\nDo it.",
+            ]
+        );
+        // The values are TOML, as Codex reads `-c key=value`: the path with its space and quotes comes back whole.
+        let roots: toml::Table = a[12].parse().unwrap();
+        assert_eq!(roots["sandbox_workspace_write"]["writable_roots"][0].as_str(), Some("/w/my \"shop\"/.git"));
+        let text: toml::Table = a[14].parse().unwrap();
+        assert_eq!(text["developer_instructions"].as_str(), Some(launch(false).instructions.as_str()));
+        // Continued: `resume <id>` first, the same settings, no first message; a host's arguments name it.
+        let again = task_args(&launch(true));
+        assert_eq!(&again[..3], ["resume", "01a1-real", "--no-daemon"]);
+        assert_eq!(&again[3..], &a[1..a.len() - 1]);
+        assert_eq!(session_of_args(&again).as_deref(), Some("01a1-real"));
+        assert_eq!(session_of_args(&a), None, "a new one names no session: Codex says its id at its first hook");
+        // Not in a git worktree: no writable git folder.
+        let plain = task_args(&TaskLaunch { git_dir: None, ..launch(false) });
+        assert!(!plain.iter().any(|x| x.contains("writable_roots")), "{plain:?}");
+        assert_eq!(launch(false).env(), [("PLATOON_TASK", "5:p1".to_string())]);
     }
 
     #[test]

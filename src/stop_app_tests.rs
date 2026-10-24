@@ -30,6 +30,7 @@ fn hosted(pid: u32) -> HostInfo {
         dir: "/tmp".into(),
         args: Vec::new(),
         sock: Default::default(),
+        task: None,
     }
 }
 

@@ -230,17 +230,24 @@ fn with_codex(app: &mut App, name: &str) {
 }
 
 #[test]
-fn the_verdict_model_goes_round_every_model_and_the_sessions_model_round_claudes_only() {
+fn both_models_go_round_every_model_and_say_which_program_runs_them() {
     let (w, mut app) = open("squad-settings-all", "feature");
     with_codex(&mut app, "squad-settings-all");
     let mut term = Terminal::new(TestBackend::new(110, 30)).unwrap();
-    // Feature runs on opus: its own model goes round Claude Code's four, never a Codex model (until Codex tasks).
+    // Feature runs on opus: its own model goes round every model here, Claude's then Codex's (the model decides
+    // where the task runs), and says on screen which program runs it.
     let mut seen = Vec::new();
-    for _ in 0..4 {
+    for _ in 0..7 {
         key(&mut app, KeyCode::Enter);
         seen.push(app.sqt.picked().unwrap().model.clone());
+        if seen.len() == 4 {
+            let shown = draw(&mut term, &app);
+            assert!(shown.contains("Model          GPT-6-Luna (Codex)"), "{shown}");
+            assert_eq!(app.active_notice(), Some("Feature: Model GPT-6-Luna (Codex)."), "the copy was made on the first enter");
+        }
     }
-    assert_eq!(seen, ["sonnet", "haiku", "fable", "opus"]);
+    assert_eq!(seen, ["sonnet", "haiku", "fable", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", "opus"]);
+    assert!(draw(&mut term, &app).contains("Model          Opus (Claude Code)"));
     // Its verdict model (fable) goes on to Codex's, by name on screen, then "the same as the model".
     key(&mut app, KeyCode::Down);
     let mut seen = Vec::new();
@@ -249,8 +256,8 @@ fn the_verdict_model_goes_round_every_model_and_the_sessions_model_round_claudes
         seen.push(app.sqt.picked().unwrap().verdict_model.clone());
         if seen.len() == 1 {
             let shown = draw(&mut term, &app);
-            assert!(shown.contains("Verdict model  GPT-6-Luna"), "{shown}");
-            assert_eq!(app.active_notice(), Some("Feature: Verdict model GPT-6-Luna. Yours now, in place of the built-in."));
+            assert!(shown.contains("Verdict model  GPT-6-Luna (Codex)"), "{shown}");
+            assert_eq!(app.active_notice(), Some("Feature: Verdict model GPT-6-Luna (Codex). Yours now, in place of the built-in."));
         }
     }
     assert_eq!(seen, ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna", ""]);
@@ -272,20 +279,42 @@ fn a_model_this_computer_cant_run_is_said_on_the_squad_and_with_no_claude_code_t
     let shown = draw(&mut term, &app);
     assert!(shown.contains("Verdict model  GPT-6-Luna (needs Codex, not installed)"), "{shown}");
     assert_eq!(colors(&term, &shown, "GPT-6-Luna (needs").0, app.effective_theme().text);
-    // On a computer with only Codex: Claude Code's models are the ones not installed, and a session's model has
-    // nothing to go to; the verdict model has Codex's.
+    // On a computer with only Codex: Claude Code's models are the ones not installed (the user's own squad says so),
+    // and both models go round Codex's.
     with_codex(&mut app, "squad-settings-missing");
     app.set_providers_for_test(crate::agents::Providers { claude: None, ..app.providers().clone() });
     let shown = draw(&mut term, &app);
     assert!(shown.contains("Model          Opus (needs Claude Code, not installed)"), "{shown}");
     assert!(shown.contains("Verdict model  GPT-6-Luna") && !shown.contains("GPT-6-Luna (needs"), "{shown}");
     key(&mut app, KeyCode::Enter);
-    assert_eq!(
-        app.active_notice(),
-        Some("A task's session runs on Claude Code for now, and Claude Code isn't installed on this computer: there is no model to pick.")
-    );
-    assert!(fs::read_to_string(squads::path(&w.config, "feature")).unwrap().contains("\nmodel: opus\n"), "the file as it was");
+    assert_eq!(app.active_notice(), Some("Feature: Model GPT-6-Luna."));
+    assert!(fs::read_to_string(squads::path(&w.config, "feature")).unwrap().contains("\nmodel: gpt-6-luna\n"));
     key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     assert_eq!(app.sqt.picked().unwrap().verdict_model, "gpt-5.6-terra");
+    // Neither program: nothing to pick, said plainly.
+    app.set_providers_for_test(crate::agents::Providers::default());
+    key(&mut app, KeyCode::Up);
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.active_notice(), Some("Neither Claude Code nor Codex is installed on this computer: there is no model to pick."));
+}
+
+#[test]
+fn on_a_computer_with_only_codex_a_built_in_squad_says_it_runs_on_codexs_model_since_claude_code_isnt_installed() {
+    let (w, mut app) = open("squad-settings-codex-only", "docs");
+    with_codex(&mut app, "squad-settings-codex-only");
+    app.set_providers_for_test(crate::agents::Providers { claude: None, ..app.providers().clone() });
+    let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+    let shown = draw(&mut term, &app);
+    assert!(shown.contains("Model          GPT-6-Luna, since Claude Code isn't installed"), "{shown}");
+    assert!(shown.contains("Verdict model  GPT-6-Luna, since Claude Code isn't installed"), "{shown}");
+    assert!(!fs::exists(squads::path(&w.config, "docs")).unwrap(), "nothing written: the built-in stays built in");
+    // enter goes on from there, and the user's copy says plainly what it runs on.
+    key(&mut app, KeyCode::Enter);
+    assert_eq!(app.active_notice(), Some("Docs: Model GPT-5.6-Terra. Yours now, in place of the built-in."));
+    let shown = draw(&mut term, &app);
+    assert!(
+        shown.contains("Model          GPT-5.6-Terra") && shown.contains("Verdict model  Opus (needs Claude Code, not installed)"),
+        "{shown}"
+    );
 }

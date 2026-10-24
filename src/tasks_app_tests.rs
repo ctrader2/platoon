@@ -219,24 +219,20 @@ fn a_squad_whose_model_cant_run_a_tasks_session_here_starts_nothing_and_says_why
     let (w, mut app, project, _) = lab("tasks-model", &[("Write the guide", "mine", State::NotStarted)]);
     fs::create_dir_all(w.config.join("squads")).unwrap();
     let squad = |model: &str| format!("---\nname: Mine\ndescription: Ours\nmodel: {model}\n---\n\n1. Do it.\n");
-    // A Codex model: a task's session runs on Claude Code for now.
+    // A model Codex doesn't offer.
     let codex = crate::agents::tests::codex_with_models("tasks-model");
     app.set_providers_for_test(crate::agents::Providers {
         claude: Some("/nonexistent/platoon-unit-test/claude".into()),
         codex: Some(codex),
     });
-    for (model, said) in [
-        ("gpt-6-luna", "The Mine squad's model, GPT-6-Luna, runs on Codex, and a task's session runs on Claude Code for now."),
-        ("gpt-9", "The Mine squad's model can't be used: Codex doesn't offer GPT-9 on this computer."),
-    ] {
-        fs::write(w.config.join("squads/mine.md"), squad(model)).unwrap();
-        key(&mut app, KeyCode::Char('s'));
-        app.sq.pick_selected = app.sq.pick.iter().position(|s| s.id == "mine").unwrap();
-        key(&mut app, KeyCode::Enter);
-        assert!(app.active_notice().is_some_and(|n| n.starts_with(said)), "{model}: {:?}", app.active_notice());
-        assert!(app.sq.launched.is_empty() && !app.squads_busy(), "nothing made, nothing started");
-        key(&mut app, KeyCode::Esc);
-    }
+    fs::write(w.config.join("squads/mine.md"), squad("gpt-9")).unwrap();
+    key(&mut app, KeyCode::Char('s'));
+    app.sq.pick_selected = app.sq.pick.iter().position(|s| s.id == "mine").unwrap();
+    key(&mut app, KeyCode::Enter);
+    let said = "The Mine squad's model can't be used: Codex doesn't offer GPT-9 on this computer.";
+    assert!(app.active_notice().is_some_and(|n| n.starts_with(said)), "{:?}", app.active_notice());
+    assert!(app.sq.launched.is_empty() && !app.squads_busy(), "nothing made, nothing started");
+    key(&mut app, KeyCode::Esc);
     // Claude Code not installed: its model is said to need it.
     app.set_providers_for_test(crate::agents::Providers::default());
     fs::write(w.config.join("squads/mine.md"), squad("opus")).unwrap();

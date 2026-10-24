@@ -43,13 +43,18 @@ platoon never opens it a second time or stops that window. Close it there (or qu
 platoon. Codex's shared background server can hold conversations too: quitting Codex lets them go. See
 [Codex conversations](sessions.md#codex-conversations).
 
-**Codex says platoon's hooks need review.** `platoon setup` normally has Codex trust its three hooks; when it couldn't,
+**Codex says platoon's hooks need review.** `platoon setup` normally has Codex trust its hooks; when it couldn't,
 it said why. Approve them in Codex, or run `platoon setup` again once Codex works. A moved or reinstalled platoon changes
 the hooks' command, so Codex asks about them again: `platoon setup` repairs them and has Codex trust them again. See
 [Codex](install-and-setup.md#codex).
 
 **A Codex conversation opened in platoon asks whether to trust its folder.** That is Codex's own question, asked once
-per folder: answer it there, in the session. See [Codex conversations](sessions.md#codex-conversations).
+per folder: answer it there, in the session. See [Codex conversations](sessions.md#codex-conversations). A task's
+worktree is trusted in Codex by platoon when it makes it; if Codex couldn't be asked then, the task said so, and Codex
+asks you this once.
+
+**A task on Codex stays Working whatever its session does.** Its hooks aren't in Codex yet: run `platoon setup`
+once more (it adds the task hooks and has Codex trust them). See [Tasks on Codex](tasks-and-squads.md#tasks-on-codex).
 
 **My Codex conversations aren't listed.** platoon reads them from `~/.codex` (or `$CODEX_HOME` when it is set): check
 that it is the folder your Codex uses. platoon reads only the saved sessions in its `sessions` folder.

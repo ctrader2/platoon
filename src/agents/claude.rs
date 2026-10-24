@@ -179,13 +179,16 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
     let event = match kind {
         HookKind::SessionStart => HookEvent::SessionStart { source: text("source").unwrap_or("startup").to_string() },
         HookKind::Prompt => HookEvent::PromptSubmitted,
-        HookKind::BeforeTool(tool) => {
-            let said = match tool {
-                Tool::Plan => tool_input.get("plan").and_then(Value::as_str).unwrap_or_default().to_string(),
-                Tool::Question => questions(tool_input),
-                Tool::Other => String::new(),
+        HookKind::BeforeTool(tool) => HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) },
+        HookKind::BeforeAnyTool => {
+            let tool = match text("tool_name").unwrap_or_default() {
+                "ExitPlanMode" => Tool::Plan,
+                "AskUserQuestion" => Tool::Question,
+                "Bash" => Tool::Shell,
+                "Edit" | "Write" | "MultiEdit" | "NotebookEdit" => Tool::Edit,
+                _ => Tool::Other,
             };
-            HookEvent::BeforeTool { tool, said }
+            HookEvent::BeforeTool { tool, said: tool_said(tool, tool_input) }
         }
         HookKind::AfterTool => HookEvent::AfterTool(match text("tool_name").unwrap_or_default() {
             "ExitPlanMode" => Tool::Plan,
@@ -203,8 +206,20 @@ pub fn hook_input(kind: HookKind, input: &str) -> Option<HookInput> {
     Some(HookInput { session, cwd, event })
 }
 
+/// What a tool's input says for platoon: the plan it presents, the question it asks, the command it runs.
+fn tool_said(tool: Tool, input: &Value) -> String {
+    let field = |k: &str| input.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+    match tool {
+        Tool::Plan => field("plan"),
+        Tool::Question => questions(input),
+        Tool::Shell => field("command"),
+        Tool::Edit | Tool::Other => String::new(),
+    }
+}
+
 /// What a hook says back (see `Agent::hook_answer`): context as `hookSpecificOutput.additionalContext`, a stop sent
-/// back as `{"decision": "block", "reason": ...}`, and a refused prompt as its reason on stderr with exit code 2.
+/// back as `{"decision": "block", "reason": ...}`, a refused prompt as its reason on stderr with exit code 2, and a
+/// refused tool as `permissionDecision: deny` with its reason.
 pub fn hook_answer(reply: &HookReply) -> HookAnswer {
     let context = |event: &str, text: &str| json!({"hookSpecificOutput": {"hookEventName": event, "additionalContext": text}}).to_string();
     let out = |stdout: String| HookAnswer { stdout, stderr: String::new(), code: 0 };
@@ -213,6 +228,7 @@ pub fn hook_answer(reply: &HookReply) -> HookAnswer {
         HookReply::PromptContext(text) => out(context("UserPromptSubmit", text)),
         HookReply::SendBack(reason) => out(json!({"decision": "block", "reason": reason}).to_string()),
         HookReply::Refuse(why) => HookAnswer { stdout: String::new(), stderr: why.clone(), code: 2 },
+        HookReply::Deny(why) => out(super::deny_json(why)),
     }
 }
 
@@ -1223,6 +1239,15 @@ mod tests {
         assert_eq!((refused.stdout.as_str(), refused.stderr.as_str(), refused.code), ("", "Exit this copy", 2));
     }
 
+    /// A Claude Code task's `--settings`, byte for byte as platoon 1.0 wrote it (taken from a running task's arguments):
+    /// Codex's tasks share its `ASK` table and change nothing of it.
+    const SETTINGS_BEFORE: &str = r##"{"permissions":{"ask":["Bash(git push:*)","Bash(git -C * push)","Bash(git -C * push *)","Bash(git -c * push)","Bash(git -c * push *)","Bash(git --git-dir* push)","Bash(git --git-dir* push *)","Bash(git --work-tree* push)","Bash(git --work-tree* push *)","Bash(gh pr create:*)","Bash(gh pr merge:*)","Bash(gh release:*)","Bash(gh api -X *)","Bash(gh api --method *)","Bash(gh api -f *)","Bash(gh api -F *)","Bash(gh api --field *)","Bash(gh api --raw-field *)","Bash(gh api --input *)","Bash(gh api * -X *)","Bash(gh api * --method *)","Bash(gh api * -f *)","Bash(gh api * -F *)","Bash(gh api * --field *)","Bash(gh api * --raw-field *)","Bash(gh api * --input *)","Bash(glab:*)","Bash(cargo publish:*)","Bash(npm publish:*)"]},"hooks":{"PreToolUse":[{"matcher":"ExitPlanMode","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-plan"}]},{"matcher":"AskUserQuestion","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-question"}]}],"Notification":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-notify"}]}],"PostToolUse":[{"matcher":"*","hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-tool"}]}],"UserPromptSubmit":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-prompt"}]}],"Stop":[{"hooks":[{"type":"command","command":"/opt/platoon/bin/platoon hook task-stop","timeout":660}]}]}}"##;
+
+    #[test]
+    fn a_claude_tasks_settings_are_byte_for_byte_what_they_were() {
+        assert_eq!(settings_json("/opt/platoon/bin/platoon"), SETTINGS_BEFORE);
+    }
+
     #[test]
     fn a_tasks_session_gets_exactly_these_arguments_in_this_order() {
         let l = TaskLaunch {
@@ -1234,6 +1259,9 @@ mod tests {
             task_dir: PathBuf::from("/c/tasks/05-work"),
             exe: "/opt/platoon/bin/platoon".into(),
             first: Some("Task #5: Login\n\nDo it.".into()),
+            instructions: "the rules".into(),
+            git_dir: Some("/w/.git".into()),
+            tag: "5:p1".into(),
         };
         let settings = settings_json("/opt/platoon/bin/platoon");
         let v = |a: &[&str]| a.iter().map(|x| x.to_string()).collect::<Vec<_>>();
