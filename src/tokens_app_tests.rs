@@ -489,6 +489,52 @@ fn codex_without_a_model_list_says_why_its_models_are_missing() {
     assert!(!screen(&mut term, &app).contains("Codex's models"), "only where the model settings are");
 }
 
+#[test]
+fn a_codex_model_for_the_smart_features_or_the_notes_says_what_each_call_costs_in_a_warning() {
+    let w = World::new("tok-models-cost");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(true, Some("tok-models-cost")));
+    let mut term = Terminal::new(TestBackend::new(110, 44)).unwrap();
+    let cost = "A call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question.";
+    // The popup's text with its borders out and every run of blanks one space (the line wraps).
+    let flat = |shown: String| shown.replace(['│', '╭', '╮', '╰', '╯', '─', '▎'], " ").split_whitespace().collect::<Vec<_>>().join(" ");
+    // Claude's models: nothing to say.
+    select(&mut app, "Model for smart features");
+    assert!(!screen(&mut term, &app).contains("A call on Codex"));
+    select(&mut app, "Model for project notes");
+    assert!(!screen(&mut term, &app).contains("A call on Codex"));
+    // One of Codex's for the smart features: said under that tab's entries, as a warning; not on the notes' tab.
+    select(&mut app, "Model for smart features");
+    key(&mut app, KeyCode::Right);
+    key(&mut app, KeyCode::Right);
+    assert_eq!(on_disk(&w).ai_model.as_deref(), Some("gpt-6-luna"));
+    let shown = screen(&mut term, &app);
+    assert!(flat(shown.clone()).contains(cost), "{shown}");
+    assert_eq!(word_fg(&term, "A call on Codex"), Some(app.theme.warn));
+    select(&mut app, "Model for project notes");
+    assert!(!screen(&mut term, &app).contains("A call on Codex"), "the notes' model is still Sonnet");
+    // And for the notes (the smart features back on Haiku).
+    select(&mut app, "Model for smart features");
+    key(&mut app, KeyCode::Left);
+    key(&mut app, KeyCode::Left);
+    select(&mut app, "Model for project notes");
+    for _ in 0..3 {
+        key(&mut app, KeyCode::Right);
+    }
+    assert_eq!((on_disk(&w).ai_model.as_deref(), on_disk(&w).notes_model.as_deref()), (Some("haiku"), Some("gpt-6-luna")));
+    let shown = screen(&mut term, &app);
+    assert!(flat(shown.clone()).contains(cost), "{shown}");
+    assert_eq!(word_fg(&term, "A call on Codex"), Some(app.theme.warn));
+    select(&mut app, "Model for smart features");
+    assert!(!screen(&mut term, &app).contains("A call on Codex"));
+    // On a computer with only Codex, its first model is the default: said without anything picked.
+    let w = World::new("tok-models-cost-codex");
+    let mut app = w.app();
+    app.set_providers_for_test(providers(false, Some("tok-models-cost-codex")));
+    select(&mut app, "Model for smart features");
+    assert!(flat(screen(&mut term, &app)).contains(cost));
+}
+
 // ---- each program's plan and spend ----------------------------------------------------------------------------------
 
 /// The header's first line at `cols` columns.

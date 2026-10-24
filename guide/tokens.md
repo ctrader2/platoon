@@ -136,10 +136,14 @@ the switches, the daily limit and the back-off. The call is `codex exec` with yo
   profiles of yours) and keeps no session, so it never shows in Codex's history or in platoon's list. The system prompt
   goes in as the call's instructions and the request on its standard input; with an answer shaped by a JSON Schema,
   the schema is written to a file in the work folder for the call and removed after it.
-- **Each call costs about 20,000 tokens before it starts.** Codex sends its own instructions with every call: 17,000 to
-  26,000 tokens even for a one-word question (most of them cached, which Codex still counts). Every token Codex reports
-  is counted against the daily limit, cached ones included, so on a small plan the smart features use it up much sooner
-  than on Claude: a project's notes or a hand-off now and then is fine, naming every session in the background is not.
+- **It needs Codex signed in with ChatGPT.** Because the call leaves your `config.toml` out, it also leaves out a model
+  provider or API key you set up there: if that is how you use Codex (rather than signing in with your ChatGPT
+  account), platoon's calls on Codex fail. Pick a Claude model for them, or sign Codex in with ChatGPT.
+- **Each call costs about 13,000 to 20,000 tokens before it starts.** Codex sends its own instructions with every call,
+  even for a one-word question (13,287 tokens for one, measured; most of them cached, which Codex still counts). Every
+  token Codex reports is counted against the daily limit, cached ones included, so on a small plan the smart features
+  use it up much sooner than on Claude: a project's notes or a hand-off now and then is fine, naming every session in the
+  background is not. The settings say so under the model settings while one of Codex's models is picked.
 - **Codex reports no cost**, only tokens.
 
 ## `platoon tokens`

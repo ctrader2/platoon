@@ -1043,7 +1043,7 @@ mod tests {
         let q = ask_about_tokens(&c, true, Agent::Codex, &mut std::io::Cursor::new(b"\n".to_vec()), &mut out);
         assert_eq!(q, TokenQuestion::Answered(false));
         let shown = String::from_utf8(out).unwrap();
-        for want in ["your own ChatGPT plan, through Codex, to add", "sends Codex the prompts you typed", "about 20,000 tokens"] {
+        for want in ["your own ChatGPT plan, through Codex, to add", "sends Codex the prompts you typed", "about 13,000 to 20,000 tokens"] {
             assert!(shown.contains(want), "{want:?}: {shown}");
         }
         assert!(!shown.contains("Claude"), "{shown}");

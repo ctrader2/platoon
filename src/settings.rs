@@ -523,6 +523,11 @@ impl ModelFor {
     }
 }
 
+/// Said under the model settings while the model in effect is one of Codex's: whatever the call asks, Codex sends its own
+/// instructions with it (measured on Codex 0.163: a one-word answer cost 13,287 tokens). The guide says the same
+/// (`guide/tokens.md`, "Calls on Codex").
+pub const CODEX_COST: &str = "A call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question.";
+
 /// The two model settings' names on the settings screen.
 pub const SMART_MODEL_NAME: &str = "Model for smart features";
 pub const NOTES_MODEL_NAME: &str = "Model for project notes";

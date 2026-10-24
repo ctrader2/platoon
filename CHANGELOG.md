@@ -19,6 +19,9 @@ here.
   (`new_session_agent`); `esc` starts nothing. With one installed, that one starts without a question. `platoon open`
   with no id starts the one chosen last. A new Codex session (`codex --no-daemon`) has its row, running and open to
   `enter`, from the start, before Codex saves the conversation with your first message.
+- **The settings warn what a call on Codex costs.** While the model for smart features, or for project notes, is one of
+  Codex's, its tab says under the entries that each call costs about 13,000 to 20,000 tokens of Codex's own
+  instructions, however small the question.
 - **Codex sessions platoon starts offer to make tasks too.** A Codex session platoon starts or resumes is told, through
   platoon's Codex hook, to ask once, in its reply, "Ready to create tasks?" when the conversation settles on work to
   hand off, and on a yes to make them with `platoon task add` (Codex asks you to allow that command).
@@ -31,7 +34,7 @@ here.
   notes, the hand-off, tasks from a conversation and a task's check run as `codex exec` when their model is one of
   OpenAI's: ephemeral, without your `config.toml`, in Codex's read-only sandbox (Codex can't switch its tools off), the
   request on standard input. Every token Codex reports counts against the daily limit; its own instructions are about
-  20,000 tokens a call. `platoon tokens test` says which program it asks.
+  13,000 to 20,000 tokens a call. `platoon tokens test` says which program it asks.
 - **platoon runs on a computer with only Codex.** Claude Code's setup steps are asked for, and block starting, only
   where Claude Code is installed (`claude` on the path, or `PLATOON_CLAUDE_BIN`); with only Codex, `platoon setup` leaves
   Claude Code's settings alone and sets up Codex's hooks, and platoon starts, lists Codex's conversations and offers

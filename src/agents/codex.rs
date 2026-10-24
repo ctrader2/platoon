@@ -275,7 +275,8 @@ pub fn interpret(stdout: &[u8], stderr: &[u8], exited_ok: bool, wants_json: bool
 /// `turn.completed`'s usage as platoon counts it. Codex's `input_tokens` is everything sent, its cached part
 /// (`cached_input_tokens`, and `cache_write_input_tokens`) included, so those are taken out of `input` and counted
 /// apart: the total is every token sent plus every one written (`output_tokens`, its reasoning included). Codex's own
-/// instructions are most of a call: about 17,000 to 26,000 tokens even for a tiny question, mostly cached.
+/// instructions are most of a call: about 13,000 to 20,000 tokens even for a tiny question, mostly cached
+/// (`settings::CODEX_COST`).
 fn usage_of(u: &Value) -> Usage {
     let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
     let (sent, cached, written) = (n("input_tokens"), n("cached_input_tokens"), n("cache_write_input_tokens"));

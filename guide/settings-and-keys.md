@@ -60,7 +60,9 @@ The model settings (this one, **Model for project notes** on the Projects tab, a
   can't be read, the tab says so under the entries.
 
 The model decides the program: a Claude model runs on Claude Code, an OpenAI model on Codex (see
-[Calls on Codex](tokens.md#calls-on-codex)). `←` `→` step through them in that order, Claude's first.
+[Calls on Codex](tokens.md#calls-on-codex)). `←` `→` step through them in that order, Claude's first. While the smart
+features' model (or the notes' model, on the Projects tab) is one of Codex's, the tab warns under its entries that **a
+call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question**.
 
 A model you picked stays exactly as you picked it. If it can't run here any more (say Codex was uninstalled), the setting
 says so, for example **GPT-6-Luna (needs Codex, not installed)**, and what would use it stops and says what is missing;

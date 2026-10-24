@@ -1954,6 +1954,19 @@ fn settings_notes(app: &App, tab: usize, w: usize) -> Vec<(String, Color)> {
     {
         notes.extend(wrap(&why, w).into_iter().map(|l| (l, t.subtext)));
     }
+    // The tab's model is one of Codex's: what each call costs before it asks anything.
+    let model_for = match tab {
+        crate::settings::TAB_SMART => Some(crate::settings::ModelFor::Smart),
+        crate::settings::TAB_PROJECTS => Some(crate::settings::ModelFor::Notes),
+        _ => None,
+    };
+    let catalog = app.catalog();
+    if model_for
+        .and_then(|m| m.in_effect(&app.settings().get(), &catalog))
+        .is_some_and(|m| catalog.agent_of(&m) == Some(crate::agents::Agent::Codex))
+    {
+        notes.extend(wrap(crate::settings::CODEX_COST, w).into_iter().map(|l| (l, t.warn)));
+    }
     if tab == crate::settings::TAB_SESSIONS {
         let e = app.archived_estimate();
         let archived = if e.conversations == 0 {

@@ -10,7 +10,7 @@
 //!   by the caller and low effort (Claude's own system prompt alone costs ~6,600 tokens a call). Never `--bare`: it
 //!   needs an API key, which subscribers don't have. An OpenAI model's call is `codex exec` (`codex::one_shot`):
 //!   ephemeral, without the user's config, in Codex's read-only sandbox (Codex can't switch its tools off), and about
-//!   17,000 to 26,000 tokens a call of Codex's own instructions, mostly cached. A model no installed program runs is
+//!   13,000 to 20,000 tokens a call of Codex's own instructions, mostly cached (`settings::CODEX_COST`). A model no installed program runs is
 //!   refused before anything starts (`model_of`).
 //! - It always runs in one fixed neutral folder (`work_dir`: `<cache dir>/ai-work`) with `PLATOON_AI=1` in its
 //!   environment, because Claude makes an empty folder under `~/.claude/projects` for every working directory it is
@@ -173,7 +173,7 @@ pub fn consent_text(agent: Agent) -> String {
             .to_string(),
         Agent::Codex => "\nIf you say yes, platoon sends Codex the prompts you typed plus one line of the last reply for each session (for a \
              project's notes, more of that reply), in small batches, and it counts against your plan's Codex limits; each call also \
-             costs about 20,000 tokens of Codex's own instructions. Nothing is sent if you say no.\n"
+             costs about 13,000 to 20,000 tokens of Codex's own instructions. Nothing is sent if you say no.\n"
             .to_string(),
     });
     t.push_str(&format!(
