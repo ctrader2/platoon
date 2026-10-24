@@ -10,7 +10,7 @@ homepage = "https://github.com/ctrader2/platoon"
 readme = "README.md"
 keywords = ["tui", "claude-code", "codex", "ai", "terminal"]
 categories = ["command-line-utilities", "development-tools"]
-# What the crate on crates.io leaves out: the README animation and video (16 MB, over crates.io's limit), CI, and
+# What the crate on crates.io leaves out: the README animation, video and social preview (about 8 MB), CI, and
 # the release and Nix files, which only the repository uses.
 exclude = ["/demo", "/.github", "/.config", "/flake.nix", "/flake.lock", "/dist-workspace.toml"]
 

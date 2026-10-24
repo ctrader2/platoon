@@ -125,7 +125,9 @@ here.
 - **Docs for both programs.** The README says platoon works with Claude Code and Codex, on Linux and macOS, with a
   table of what works on each (everything but the status line, which is Claude Code's). The guide, CONTRIBUTING (the
   Codex stand-ins, and never the real `codex` in a test) and SECURITY cover Codex beside Claude Code; the bug report
-  asks which program and its version. The daily watch opens an issue for a new Codex as it does for a new Claude Code
+  asks which program and its version. The README animation is recorded again: Codex conversations beside Claude
+  Code's, a task running in Codex, in Dracula, without the title card, and as a GIF a third the size that plays at an
+  even pace. The daily watch opens an issue for a new Codex as it does for a new Claude Code
   (`version-watch.yml`), and CI checks that the docs name the Codex version platoon was checked with
   (`scripts/check-versions.sh`).
 - **Codex conversations in the list.** When OpenAI's Codex CLI is installed, its conversations show beside Claude

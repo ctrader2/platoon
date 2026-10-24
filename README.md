@@ -3,7 +3,7 @@
 Every AI coding session you have, in one terminal app. See them all at a glance, pick up any one where you left it,
 group them into projects with shared notes, and start tasks that follow a squad's way of working.
 
-![platoon: the Sessions list with running and finished sessions, a project's notes, a task handed to a squad of agents, a squad's workflow, and a switch to a light theme](demo/platoon.gif)
+![platoon: Claude Code and Codex sessions in one list with both plans' usage, a project's notes, the Tasks tab with a task running in Codex and one waiting for an answer, starting a task with a squad, the Squads tab, and the list of themes](demo/platoon.gif)
 
 [Full tour (MP4)](demo/platoon-tour.mp4)
 
