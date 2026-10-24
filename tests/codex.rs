@@ -414,3 +414,49 @@ fn codexs_hooks_hand_a_projects_notes_to_its_sessions_and_mark_the_notes_due_aft
     assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""));
     assert!(w.cache.join("notes-due/pweb").exists());
 }
+
+/// A stand-in `codex` that only answers `--version` with `codex-cli <version>`, and records each call in `<dir>/calls`.
+fn versioned_codex(dir: &Path, version: &str) -> PathBuf {
+    let p = dir.join(format!("codex-{version}.sh"));
+    let calls = dir.join("calls");
+    fs::write(&p, format!("#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\necho 'codex-cli {version}'\n", calls.display())).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    p
+}
+
+#[test]
+fn a_codex_newer_than_platoon_was_checked_with_is_said_once_above_the_key_hints() {
+    let w = World::new("codex-version");
+    // GitHub is never asked (the setting), and the version checks are on for this test only.
+    fs::write(w.base.join("config/settings.json"), r#"{"auto_archive_days":0,"update_check":false}"#).unwrap();
+    let checked = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/checked-with/codex")).unwrap().trim().to_string();
+    let mut env = w.env();
+    env.push(("PLATOON_CODEX_BIN", versioned_codex(&w.base, "9.0.0").to_string_lossy().into()));
+    env.push(("PLATOON_NO_UPDATE_CHECK", "0".into()));
+    let notice = format!("Codex 9.0.0 is newer than this platoon was checked with ({checked}). If something looks wrong, update platoon.");
+    let mut t = Term::spawn(&[], &env, &w.work, 30, 140);
+    t.wait_for_all(&["Identify colour from notes.txt", &notice]);
+    assert_eq!(fs::read_to_string(w.base.join("calls")).unwrap(), "--version\n");
+    // A key puts it away.
+    t.send(b"j");
+    t.wait_gone("Codex 9.0.0 is newer");
+    t.send(b"q");
+    t.wait_exit();
+    // The next start: asked again, but the same version is not said twice.
+    let mut t = Term::spawn(&[], &env, &w.work, 30, 140);
+    t.wait_for("Identify colour from notes.txt");
+    until("codex asked a second time", || fs::read_to_string(w.base.join("calls")).unwrap_or_default().lines().count() == 2);
+    // The answer arrives off the UI thread: give it time to show, had it been going to.
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    assert!(!t.stable().contains("Codex 9.0.0 is newer"), "said once per version");
+    t.send(b"q");
+    t.wait_exit();
+    // With PLATOON_NO_UPDATE_CHECK=1 (as every other test runs) Codex isn't even asked.
+    env.retain(|(k, _)| *k != "PLATOON_NO_UPDATE_CHECK");
+    let mut t = Term::spawn(&[], &env, &w.work, 30, 140);
+    t.wait_for("Identify colour from notes.txt");
+    std::thread::sleep(std::time::Duration::from_millis(800));
+    t.send(b"q");
+    t.wait_exit();
+    assert_eq!(fs::read_to_string(w.base.join("calls")).unwrap().lines().count(), 2, "not asked with the checks off");
+}

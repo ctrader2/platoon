@@ -36,9 +36,10 @@ Any one of these. Each puts the `platoon` command on your path (the package is c
 - `cargo install` and building from source need Rust 1.88 or newer.
 - `platoon --version` says which version you have.
 
-Whichever you choose, platoon was last checked with the Claude Code version named in
-[What platoon changes](what-platoon-changes.md#it-reads-claude-codes-own-files), and it
-[tells you](#when-claude-code-or-platoon-is-newer) when your Claude Code is newer, or when a newer platoon is out.
+Whichever you choose, platoon was last checked with the Claude Code and Codex versions named in
+[What platoon changes](what-platoon-changes.md#it-reads-claude-codes-and-codexs-own-files), and it
+[tells you](#when-claude-code-codex-or-platoon-is-newer) when your Claude Code or Codex is newer, or when a newer platoon is
+out.
 
 ## Set it up: `platoon setup`
 
@@ -99,7 +100,7 @@ Claude Code is installed when `claude` is on your path (or `PLATOON_CLAUDE_BIN` 
 says so and leaves Claude Code's settings alone (it doesn't create `~/.claude/settings.json`), and `platoon` starts
 without asking for Claude Code's steps: only Codex's hooks are set up, and they never block starting. The models offered
 are Codex's own (the first one Codex lists is the default for the smart features and the notes), the header shows Codex's
-plan, and the check for a newer Claude Code is skipped. Tasks run in Codex: the built-in squads you haven't changed use
+plan, and the check for a newer Claude Code is skipped (the one for a newer Codex isn't). Tasks run in Codex: the built-in squads you haven't changed use
 Codex's first model, for the session and for the check of its work, and the Squads tab says so ("GPT-6-Luna, since
 Claude Code isn't installed"). A squad of your own that names one of Claude's models says it isn't installed.
 
@@ -120,23 +121,26 @@ Earlier platoons also installed a Claude Code skill, `/to-tickets` (`skills/to-t
 folder). platoon now drafts tasks from a conversation itself ([`t` on a session](tasks-and-squads.md#making-tasks-from-a-conversation)),
 and neither setup nor the uninstall touches that skill any more: delete the folder if you have it and don't want it.
 
-## When Claude Code or platoon is newer
+## When Claude Code, Codex or platoon is newer
 
-platoon knows the Claude Code version it was last checked with. When it starts, it asks your `claude` for its version
-(`claude --version`), and if yours is newer it says so once, in a line above the key hints:
+platoon knows the Claude Code and Codex versions it was last checked with. When it starts, it asks your `claude` and
+your `codex` for their versions (`claude --version`, `codex --version`; each only if it is installed), and if yours is
+newer it says so once, in a line above the key hints:
 
 ```
 Claude Code 2.2.0 is newer than this platoon was checked with (2.1.288). If something looks wrong, update platoon.
+Codex 0.164.0 is newer than this platoon was checked with (0.163.0). If something looks wrong, update platoon.
 ```
 
-`platoon setup` prints the same line each time it runs.
+When both are newer, it is one line that names both. `platoon setup` prints the same each time it runs.
 
 Once a day at most, platoon also asks GitHub whether a newer platoon is out (see
 [What platoon changes](what-platoon-changes.md#one-network-request-no-telemetry) for exactly what that sends). When one
 is, it says so once, with the command that updates the way you installed it: `brew upgrade platoon`, `cargo install
-platoon-tui`, the install script again, or else a link to the releases page. When both apply, it is one line. Each new
-version is said once; the line goes at your next key or click. "Check for a newer platoon" on the General tab of the
-[settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off both checks.
+platoon-tui`, the install script again, or else a link to the releases page. Whatever applies goes in one line. Each
+new version is said once; the line goes at your next key or click. "Check for a newer platoon" on the General tab of the
+[settings](settings-and-keys.md#general) turns the GitHub check off, and `PLATOON_NO_UPDATE_CHECK=1` turns off every
+check: platoon then runs neither `claude --version` nor `codex --version`.
 
 ## Uninstall
 

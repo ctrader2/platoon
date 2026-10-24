@@ -38,8 +38,8 @@ jobs:
           rustup default stable
           rustc --version
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - name: Docs name the same Claude Code version as checked-with/claude-code
-        run: scripts/check-claude-version.sh
+      - name: Docs name the same Claude Code and Codex versions as checked-with/
+        run: scripts/check-versions.sh
       - name: shellcheck the scripts (the uninstall script must stay POSIX sh)
         # The runner's own shellcheck, which may be older than yours: older ones warn about more.
         run: |

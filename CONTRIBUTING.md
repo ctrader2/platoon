@@ -17,7 +17,7 @@ Found a security problem? Don't open an issue: see [SECURITY.md](SECURITY.md).
 ## Set up and build
 
 You need Linux or macOS, Rust 1.88 or newer, and git with a `user.name` and `user.email` set (the tests make
-repositories and commits in temp folders). You don't need Claude Code to build or test platoon.
+repositories and commits in temp folders). You don't need Claude Code or Codex to build or test platoon.
 
 ```
 git clone https://github.com/ctrader2/platoon
@@ -30,22 +30,28 @@ cargo clippy --all-targets -- -D warnings    # no clippy warnings, tests include
 
 Run your build as `target/release/platoon`.
 
-### Your own Claude Code setup is not a test bed
+### Your own Claude Code and Codex setups are not a test bed
 
-platoon runs against your real Claude Code setup: it reads `~/.claude`, writes hooks into Claude Code's
-`settings.json`, and keeps its own files in `~/.config/platoon` and `~/.cache/platoon`. So:
+platoon runs against your real Claude Code and Codex setups: it reads `~/.claude` and `~/.codex`, writes hooks into
+Claude Code's `settings.json` and Codex's `hooks.json`, and keeps its own files in `~/.config/platoon` and
+`~/.cache/platoon`. So:
 
-- **The tests are hermetic.** Every test uses temp folders (`CLAUDE_CONFIG_DIR`, `PLATOON_CONFIG_DIR`,
-  `PLATOON_CACHE_DIR`) and a stand-in for `claude` (`tests/fake-claude.sh`). A test must never read or write your real
-  files, start a real `claude` or editor, or touch your clipboard. New tests follow the same rule: CLAUDE.md lists the
-  environment variables that make this possible.
-- **Don't run `platoon setup` on your real config while developing.** It points Claude Code's hooks at the binary that
-  ran it, so a setup run from `target/` would leave your Claude Code depending on a build folder. To try setup, point
-  the three variables above at temp folders first.
+- **The tests are hermetic.** Every test uses temp folders (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PLATOON_CONFIG_DIR`,
+  `PLATOON_CACHE_DIR`) and stand-ins for the programs: `tests/fake-claude.sh` for `claude`, and for `codex`
+  `tests/fake-codex-exec.sh` (a one-shot `codex exec --json`) and `tests/fake-codex-server.sh` (Codex's app-server),
+  named by `PLATOON_CLAUDE_BIN` and `PLATOON_CODEX_BIN`. A test must never read or write your real files (never even read
+  `~/.codex`: your Codex sessions and login are there), start a real `claude`, `codex` or editor, or touch your
+  clipboard. **Never run the real `codex` in a test**, not even `codex --version`: it can spend your plan's allowance.
+  Every test that starts the binary sets `CODEX_HOME` and `PLATOON_CODEX_BIN`. New tests follow the same rule:
+  CLAUDE.md lists the environment variables that make this possible.
+- **Don't run `platoon setup` on your real config while developing.** It points Claude Code's and Codex's hooks at the
+  binary that ran it, so a setup run from `target/` would leave them depending on a build folder (and it has Codex
+  trust those hooks). To try setup, point `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PLATOON_CONFIG_DIR` and
+  `PLATOON_CACHE_DIR` at temp folders first.
 - **Don't replace an installed `platoon`** with `cargo install` from a work-in-progress checkout: Claude Code's settings
-  may point at it.
+  and Codex's hooks may point at it.
 - **Never kill processes you didn't start.** Sessions platoon runs keep running in the background
-  (`platoon host ...`).
+  (`platoon host ...`), and Codex may have its own background server running (`codex app-server`).
 
 ## A good pull request
 

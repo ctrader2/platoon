@@ -311,9 +311,12 @@ fn setup() -> io::Result<()> {
                 }
                 report.codex = Some(c);
             }
-            // A Claude Code newer than the one this platoon was checked with is said here every time (where it is installed).
+            // A Claude Code or Codex newer than the one this platoon was checked with is said here every time (each where it
+            // is installed).
             let claude_program = providers.claude.as_ref().and(versions::claude_program());
             report.notes.extend(versions::setup_line(claude_program.as_deref(), versions::off_by_env()));
+            let codex_program = providers.codex.as_ref().map(|c| c.program.as_str());
+            report.notes.extend(versions::codex_setup_line(codex_program, versions::off_by_env()));
             println!("{}", setup::render_report(&report, &root, use_color(false)));
         }
         Err(e) => {

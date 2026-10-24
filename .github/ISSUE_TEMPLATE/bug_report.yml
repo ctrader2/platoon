@@ -47,14 +47,24 @@ body:
       placeholder: platoon 1.0.0, installed with Homebrew
     validations:
       required: true
-  - type: input
-    id: claude-version
+  - type: dropdown
+    id: program
     attributes:
-      label: Claude Code version
-      description: The output of `claude --version`.
-      placeholder: 2.1.288 (Claude Code)
+      label: Which program is it about?
+      description: The coding agent whose sessions or tasks show the problem.
+      options:
+        - Claude Code
+        - Codex
+        - Both
+        - Neither (platoon itself)
     validations:
       required: true
+  - type: input
+    id: program-version
+    attributes:
+      label: Its version
+      description: The output of `claude --version`, `codex --version`, or both. Leave it empty for "Neither".
+      placeholder: 2.1.288 (Claude Code), codex-cli 0.163.0
   - type: input
     id: os
     attributes:

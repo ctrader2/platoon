@@ -160,3 +160,24 @@ fn a_test_app_starts_no_version_checks() {
     assert_eq!(app.news_showing(), None);
     assert!(!w.cache.join("version-check.json").exists());
 }
+
+#[test]
+fn a_newer_codex_has_its_own_notice_whole_at_110_and_80_columns_and_joins_the_others_in_one() {
+    const CODEX: &str = "Codex 0.164.0 is newer than this platoon was checked with (0.163.0). If something looks wrong, update platoon.";
+    const ALL: &str = "Claude Code 2.2.0 and Codex 0.164.0 are newer than this platoon was checked with (2.1.288 and 0.163.0). platoon \
+                       1.1.0 is out. To update: brew upgrade platoon";
+    let w = world("vn-codex");
+    for (text, first) in [(CODEX, "Codex 0.164.0 is newer"), (ALL, "Claude Code 2.2.0 and Codex")] {
+        let app = with_news(&w, text);
+        for width in [110u16, 80] {
+            let lines = shown(&app, width, 24);
+            let rows = notice_rows(&lines, first);
+            assert_eq!(words(&lines[rows.clone()]), text, "{width} columns:\n{}", lines.join("\n"));
+            assert!(!lines[rows.clone()].iter().any(|l| l.contains('…')), "{width}: not cut");
+            // The Codex notice fits two lines; all three parts take a third at 80 columns.
+            let most = if text == CODEX || width == 110 { 2 } else { 3 };
+            assert!(rows.len() <= most, "{width}: {most} lines at most: {}", rows.len());
+            assert!(lines[lines.len() - 1].contains("? help"), "{width}: {:?}", lines[lines.len() - 1]);
+        }
+    }
+}

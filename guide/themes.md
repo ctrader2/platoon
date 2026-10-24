@@ -36,8 +36,8 @@ You can also set it by hand with `theme` in [`settings.json`](settings-and-keys.
 ```
 
 A running platoon picks the change up within a couple of seconds. A theme id platoon doesn't know shows the default and is
-left in the file as it is. The theme also recolors the Claude session you view inside platoon (its 16 terminal colors
-become the theme's); `platoon open` in a regular terminal is unaffected.
+left in the file as it is. The theme also recolors the Claude Code or Codex session you view inside platoon (its 16
+terminal colors become the theme's); `platoon open` in a regular terminal is unaffected.
 
 ## Your own themes
 
@@ -90,9 +90,9 @@ goes in `settings.json`. The id keeps only plain letters and digits: an accented
 ## Light themes
 
 On a light theme everything platoon draws is dark on light. The light themes' ids are made from their names
-(`catppuccin-latte`, `rose-pine-dawn`). The Claude session you view inside platoon gets the theme's background and colors
-too, but Claude Code picks some colors of its own: with a light theme in platoon, choose a light theme in Claude Code as
-well (its `/theme` command).
+(`catppuccin-latte`, `rose-pine-dawn`). The session you view inside platoon gets the theme's background and colors too, but
+Claude Code picks some colors of its own: with a light theme in platoon, choose a light theme in Claude Code as well
+(its `/theme` command).
 
 ## Terminal colors
 

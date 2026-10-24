@@ -1,7 +1,7 @@
 # What platoon changes on your computer
 
-platoon runs against your real Claude Code setup. This page says plainly what it adds, what it writes, what it starts,
-and how to take it out again.
+platoon runs against your real Claude Code and Codex setups. This page says plainly what it adds to each, what it
+writes, what it starts, and how to take it out again.
 
 ## In Claude Code's settings
 
@@ -54,17 +54,21 @@ entry of your own for that folder is left as it is. Uninstall takes out any that
 platoon adds no skill to Claude Code. Earlier platoons installed one, `/to-tickets` (`~/.claude/skills/to-tickets/`);
 platoon no longer touches it: delete that folder if you have it and don't want it.
 
-## Your Claude plan: nothing until you say yes
+## Your plan: nothing until you say yes
 
-The features that ask Claude through your plan (`claude -p`) are **off until you say yes**, in `platoon setup` or in the
-settings: smart names and summaries, find a session by description, project notes, project descriptions, and, only when you
-ask for them, the hand-off and tasks from a conversation. Each call runs with no tools, no
-settings and no saved session, under a daily token limit. What each one sends is on
-[Features that use tokens](tokens.md). The one call that is not a smart feature is the check of a task's work, below.
+The features that ask an AI through your plan (`claude -p` with a Claude model, `codex exec` with one of OpenAI's) are
+**off until you say yes**, in `platoon setup` or in the settings: smart names and summaries, find a session by
+description, project notes, project descriptions, and, only when you ask for them, the hand-off and tasks from a
+conversation. Each call runs with no tools (on Codex: in its read-only sandbox), no settings of yours and no saved
+session, under a daily token limit. What each one sends is on [Features that use tokens](tokens.md). The one call that
+is not a smart feature is the check of a task's work, below.
 
 ## Tasks
 
-A task's session is a Claude Code session that platoon starts for the task, in a platoon host. It is started with:
+A task's session is a Claude Code or Codex session that platoon starts for the task, in a platoon host: the squad's
+model decides which. What a task on Codex is started with, and how platoon commits for it and holds back its pushes,
+is in [Tasks on Codex](tasks-and-squads.md#tasks-on-codex) and [In Codex's hooks](#in-codexs-hooks) above. A task on
+Claude Code is started with:
 
 - `--permission-mode acceptEdits` (or `plan` first, for a squad that plans first): **Claude edits files without asking
   you first**, in the task's copy of its folder (a git worktree), or, for a folder that isn't in git, **in the folder as
@@ -81,8 +85,9 @@ A task's session is a Claude Code session that platoon starts for the task, in a
   sandbox: something they don't name (another tool, a script that pushes, `sh -c 'git push'`, `/usr/bin/git push`, or
   an MCP server that publishes) is not stopped by them.
 
-**When a task's session stops, Claude checks the work.** From the session's `Stop` hook platoon runs
-`claude -p` on the squad's `verdict_model`, in the task's worktree, with only the tools that read files (`Read`, `Grep`,
+**When a task's session stops, a fresh call checks the work.** From the session's `Stop` hook platoon runs, on the
+squad's `verdict_model`, `claude -p` (or, for one of OpenAI's models, `codex exec` in Codex's read-only sandbox) in the
+task's worktree, with only the tools that read files (`Read`, `Grep`,
 `Glob`: no shell, no edits), no settings (`--setting-sources ""`), no saved session, for 10 minutes at most. It is sent
 the task's text, the session's last message and the change on the task's branch (`git diff`), and its answer is kept as
 `verdict.json` in the task's own folder. It runs for every task whatever the smart features' switches say (it is part of
@@ -113,13 +118,14 @@ small marks its parts leave for each other.
   and the messages you typed, for the list and search. Deleting them is harmless: they are rebuilt.
 - `hosts/`: one small file and one socket per session platoon runs, in a folder only you can enter
 - `status/`: the figures the status line reports, per session
-- `ai-usage.json`: tokens used per day (numbers only), and `ai-work/`, the empty folder the `claude -p` calls run in
+- `ai-usage.json`: tokens used per day (numbers only), and `ai-work/`, the empty folder the `claude -p` and `codex exec`
+  calls run in
 - `notes-sent/`, `notes-due/`, `notes-updating/`, `notes-editing/`, `notes-helper/`: marks for the project notes
 - `project-launches/`, `editor-open/`, `stale/`: marks for sessions started in a project, folders open in an editor, and
   copies of a conversation the guard has turned away
 - `deleted-projects/`: one backup of each project you deleted
-- `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon and
-  Claude Code versions it has already told you about (see [below](#one-network-request-no-telemetry))
+- `version-check.json`: when platoon last asked GitHub for its latest version, what it said, and which new platoon,
+  Claude Code and Codex versions it has already told you about (see [below](#one-network-request-no-telemetry))
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 
@@ -155,17 +161,17 @@ whether a newer platoon is out:
 - **How often**: once a day at most, when platoon starts, off to the side (the list never waits for it), and it gives
   up after five seconds. The time of the last try is kept in `version-check.json` in the cache folder.
 - **What comes of it**: if GitHub names a newer version, platoon says so once, with the command that updates it (see
-  [When Claude Code or platoon is newer](install-and-setup.md#when-claude-code-or-platoon-is-newer)). If the request
+  [When Claude Code, Codex or platoon is newer](install-and-setup.md#when-claude-code-codex-or-platoon-is-newer)). If the request
   fails for any reason, nothing is said.
 - **Switching it off**: "Check for a newer platoon" on the General tab of the settings (`"update_check": false` in
-  `settings.json`), or `PLATOON_NO_UPDATE_CHECK=1` in the environment, which also stops platoon asking `claude` for its
-  version. With either, platoon makes no network request at all.
+  `settings.json`), or `PLATOON_NO_UPDATE_CHECK=1` in the environment, which also stops platoon asking `claude` and
+  `codex` for their versions. With either, platoon makes no network request at all.
 
-Otherwise platoon talks only to the programs it starts on your computer (`claude`, `git`, `curl` for the check above,
-your editors) and, over sockets in its cache folder, to its own session hosts. `claude` itself talks to Anthropic, as
-it always does, and so do the `claude -p` calls of the features you switch on.
+Otherwise platoon talks only to the programs it starts on your computer (`claude`, `codex`, `git`, `curl` for the check
+above, your editors) and, over sockets in its cache folder, to its own session hosts. `claude` itself talks to
+Anthropic and `codex` to OpenAI, as they always do, and so do the calls of the features you switch on.
 
-## It reads Claude Code's own files
+## It reads Claude Code's and Codex's own files
 
 To list your conversations, platoon reads Claude Code's files: the transcripts under `~/.claude/projects`, the registry of
 running sessions in `~/.claude/sessions`, and your MCP servers in `~/.claude.json` (for idle stop it matches their
@@ -174,10 +180,10 @@ sessions under `sessions/`, the names in `session_index.jsonl`, which conversati
 `thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`), and, for idle
 stop, the MCP servers in `config.toml`. It never writes Codex's conversations, and never edits `config.toml` itself
 (Codex writes the trust records for platoon's hooks, see [above](#in-codexs-hooks)). These files are
-not a documented interface, so **a Claude Code (or Codex) update can break platoon**. Codex support was checked with Codex
-0.163.0. It was last checked with Claude Code 2.1.288.
-When your Claude Code is newer than that, platoon says so once (it runs `claude --version` when it starts), and
-`platoon setup` says so each time it runs.
+not a documented interface, so **a Claude Code or Codex update can break platoon**. It was last checked with Claude
+Code 2.1.288 and Codex 0.163.0. When your Claude Code or Codex is newer than that, platoon says so once (it runs
+`claude --version` and `codex --version` when it starts, each where it is installed), and `platoon setup` says so each
+time it runs.
 
 ## Removing platoon
 
@@ -211,4 +217,4 @@ If you'd rather do it yourself, or the uninstaller can't:
    configuration.
 
 Sessions platoon was running keep running until they stop on their own or you end them; your conversations themselves
-are Claude Code's and stay where they are.
+are Claude Code's and Codex's and stay where they are.

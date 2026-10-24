@@ -1148,20 +1148,16 @@ impl App {
 
     /// Start the version checks off the UI thread (`versions.rs`). Nothing at all with `PLATOON_NO_UPDATE_CHECK` set.
     fn start_version_checks(&mut self) {
-        if versions::off_by_env() {
-            return;
-        }
-        self.news_rx = Some(versions::spawn(versions::Checks {
-            cache: self.cache.clone(),
-            // Claude Code's version only where it is installed.
-            claude: self.providers.claude.as_ref().and(versions::claude_program()),
-            curl: "curl".into(),
-            url: versions::RELEASES_API.into(),
-            update_check: self.settings.get().update_check,
-            off: false,
-            now: usage::now(),
-            install: versions::install_here(),
-        }));
+        // Claude Code's and Codex's versions only where each is installed.
+        let checks = versions::checks_for(
+            &self.providers,
+            versions::claude_program(),
+            self.settings.get().update_check,
+            versions::off_by_env(),
+            &self.cache,
+            versions::install_here,
+        );
+        self.news_rx = checks.map(versions::spawn);
     }
 
     /// How a model setting reads on the settings screen: the model in effect (the one picked, else this computer's

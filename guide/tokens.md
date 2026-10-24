@@ -27,7 +27,7 @@ switch on and still count against the daily limit, like everything else:
 - [Tasks from a conversation](tasks-and-squads.md#making-tasks-from-a-conversation) (`t`).
 - `platoon tokens test` (see [below](#platoon-tokens)).
 
-A task's own work is different: its session is an ordinary Claude Code session. It uses your plan like any session you
+A task's own work is different: its session is an ordinary Claude Code or Codex session. It uses your plan like any session you
 run yourself, and platoon's daily limit does not cover it; the tokens it used show beside the task on the
 [Tasks tab](tasks-and-squads.md#the-tasks-tab). So does the [check of its work](tasks-and-squads.md#the-check-of-the-work)
 when its session stops: it runs whatever the switches say, the daily limit and the pause don't stop it, and its tokens
@@ -36,7 +36,8 @@ are counted in `platoon tokens` as **Task checks**.
 ## Turning them on
 
 `platoon setup` asks once, in a terminal, with the default "no". It lists the features and says that platoon would send
-Claude the prompts you typed plus one line of Claude's last reply for each session (for a project's notes, more of that
+Claude (or Codex, when the smart features' model is one of Codex's) the prompts you typed plus one line of the last
+reply for each session (for a project's notes, more of that
 reply), in small batches, and that you can switch it off any time (`s`, then the Smart features tab, then the master
 switch). Without a terminal setup asks nothing, leaves everything off and prints one line saying how to turn them on.
 
@@ -89,10 +90,10 @@ is work.
 ## Where it is kept
 
 Names and summaries are in `~/.config/platoon/summaries.json` (`$PLATOON_CONFIG_DIR`): per conversation the name, the
-summary, how many messages it covers, the model and the time, never a message you typed or a reply from Claude. It is
-written atomically, kept as it was if platoon can't understand it (a `.bak` copy first), other things in it are left alone,
-and it is in the config folder (not the cache) because making it again costs tokens. platoon never writes to Claude's own
-files.
+summary, how many messages it covers, the model and the time, never a message you typed or a reply from Claude or
+Codex. It is written atomically, kept as it was if platoon can't understand it (a `.bak` copy first), other things in it
+are left alone, and it is in the config folder (not the cache) because making it again costs tokens. platoon never
+writes to Claude Code's or Codex's own files.
 
 ## What keeps it safe
 
@@ -111,7 +112,7 @@ All of this is enforced in one place before any call starts:
   on that program for a while (30 seconds doubling up to 30 minutes; 15 or 30 minutes doubling up to 2 hours when signed
   out or over the plan limit); the other program's calls go on. A success ends it. The footer says `Smart features paused: <reason>` once, not once per failed call, and the
   worker looks again every 30 seconds without repeating itself.
-- **Small calls**: `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and
+- **Small calls**: on Claude Code, `claude -p` with your normal login, no tools, no settings, no saved session, a short system prompt and
   low effort, run in `~/.cache/platoon/ai-work` (Claude makes one empty folder under `~/.claude/projects` for it, and only
   one), with `PLATOON_AI=1` set. `MAX_THINKING_TOKENS=0` is set too, so the model doesn't spend hidden "thinking" tokens on
   a job that only needs a short answer (about half the cost of a naming call). The helper Claude process that runs there is
@@ -119,7 +120,7 @@ All of this is enforced in one place before any call starts:
 
 The limit, the pause point, the models (see [Choosing a model](settings-and-keys.md#choosing-a-model)) and how much is
 read are all [settings](settings-and-keys.md#smart-features), and
-what platoon asks Claude for each feature can be changed too: see
+what platoon asks Claude or Codex for each feature can be changed too: see
 [System prompts](settings-and-keys.md#system-prompts-for-each-smart-feature).
 
 ## Calls on Codex

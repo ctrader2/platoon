@@ -117,6 +117,17 @@ here.
 
 ### Added
 
+- **A notice when your Codex is newer than platoon was checked with**, as for Claude Code: platoon asks `codex
+  --version` when it starts (only where Codex is installed, off to the side) and says once per version "Codex 0.164.0
+  is newer than this platoon was checked with (0.163.0). If something looks wrong, update platoon."; `platoon setup`
+  says it each time. When Claude Code, Codex and platoon itself have news at once, it is one line.
+  `PLATOON_NO_UPDATE_CHECK=1` stops this check too. platoon was last checked with Codex 0.163.0.
+- **Docs for both programs.** The README says platoon works with Claude Code and Codex, on Linux and macOS, with a
+  table of what works on each (everything but the status line, which is Claude Code's). The guide, CONTRIBUTING (the
+  Codex stand-ins, and never the real `codex` in a test) and SECURITY cover Codex beside Claude Code; the bug report
+  asks which program and its version. The daily watch opens an issue for a new Codex as it does for a new Claude Code
+  (`version-watch.yml`), and CI checks that the docs name the Codex version platoon was checked with
+  (`scripts/check-versions.sh`).
 - **Codex conversations in the list.** When OpenAI's Codex CLI is installed, its conversations show beside Claude
   Code's, newest activity first, with their model's name (`GPT-6-Luna`, or `Codex` before the first reply), the name
   Codex gave them, how full their context is and whether they are working. Search, archive, projects, rename and `v`

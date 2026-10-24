@@ -7,8 +7,21 @@ group them into projects with shared notes, and start tasks that follow a squad'
 
 [Full tour (MP4)](demo/platoon-tour.mp4)
 
-platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) today, on Linux and macOS, and lists, opens and
-starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is installed, tasks included.
+platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
+[Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
+list, and everything below works with each, but for the status line.
+
+| | Claude Code | Codex |
+| --- | --- | --- |
+| Every conversation in one list: search, rename, archive | Yes | Yes |
+| Open, resume and start sessions that keep running after platoon closes, shared live | Yes | Yes |
+| Plan usage in the header, and how full each conversation's context is | Yes | Yes |
+| Projects, with notes that reach every session and keep themselves up to date | Yes | Yes |
+| Smart names and summaries, search by description (on the model you pick) | Yes | Yes |
+| Hand a conversation on to a fresh session (`h`), draft tasks from it (`t`) | Yes | Yes |
+| Tasks run by a squad (the squad's model decides which program runs it) | Yes | Yes |
+| Open the work in your own editor (`v`) | Yes | Yes |
+| platoon's status line (plan usage and context, inside the session) | Yes | No |
 
 ## What it does
 
@@ -20,13 +33,13 @@ starts [Codex](https://github.com/openai/codex) sessions beside it when Codex is
 - **Projects** group conversations from as many folders as you like. A project's notes reach every one of its sessions,
   and can keep themselves up to date as you work. When a conversation gets long, hand the work on to a fresh session
   with one key. → [Projects](guide/projects.md)
-- **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude drafts tasks from
-  the conversation, each with the squad that suits it), then start it: one Claude Code or Codex session (the squad's
-  model decides) in a copy of your folder (a git worktree on the branch `task/<N>`), following a squad, a short
-  Markdown file of steps for that kind of work (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or your
-  own). It can show you its plan first and wait for your yes, and it waits for you before a push, a pull request or a
-  release. It runs your repo's tests itself, and when it stops a fresh check that can only read goes over its work
-  against the task before it is Done. The Tasks tab shows every task across your projects and what each one needs
+- **Tasks and squads**: write down a piece of work as a task (or press `t` on a session and Claude or Codex drafts
+  tasks from the conversation, each with the squad that suits it), then start it: one Claude Code or Codex session
+  (the squad's model decides) in a copy of your folder (a git worktree on the branch `task/<N>`), following a squad, a
+  short Markdown file of steps for that kind of work (Feature, Bug fix, Incident, Refactor, Explain, Review, Docs, or
+  your own). It can show you its plan first and wait for your yes, and it waits for you before a push, a pull request
+  or a release. It runs your repo's tests itself, and when it stops a fresh check that can only read goes over its
+  work against the task before it is Done. The Tasks tab shows every task across your projects and what each one needs
   from you.
   → [Tasks and squads](guide/tasks-and-squads.md)
 - **Your own editor** opens a session's or a task's folders with `v`: VS Code, Zed, JetBrains IDEs, Helix, Neovim
@@ -52,7 +65,8 @@ platoon setup
 platoon
 ```
 
-`platoon setup` shows what it will add to Claude Code's settings, backs the file up first, and is safe to run again.
+`platoon setup` shows what it will add to Claude Code's settings and Codex's hooks (for each one you have), backs the
+files up first, and is safe to run again.
 → [Install and set up](guide/install-and-setup.md)
 
 Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quits from the main lists.
@@ -76,10 +90,12 @@ Press `?` anywhere in platoon to see every key. `ctrl+space` goes back; `q` quit
   waits for you before a push, a pull request or a release. When the session stops, a fresh check that can only read
   goes over the work against the task before it is Done (it uses your plan, whatever the switches say).
 - **No telemetry, and one network request**: once a day at most, platoon asks GitHub whether a newer platoon is out
-  (it sends only platoon's version number; a setting turns it off). Claude Code does its own talking to Anthropic.
+  (it sends only platoon's version number; a setting turns it off). Claude Code and Codex do their own talking to
+  Anthropic and OpenAI.
 
-platoon reads Claude Code's own files, which aren't a documented format, so a Claude Code update can break something.
-It was last checked with Claude Code 2.1.288. → [What platoon changes](guide/what-platoon-changes.md)
+platoon reads Claude Code's and Codex's own files, which aren't a documented format, so an update of either can break
+something. It was last checked with Claude Code 2.1.288 and Codex 0.163.0, and says so when yours is newer.
+→ [What platoon changes](guide/what-platoon-changes.md)
 
 ## Uninstall
 
@@ -87,10 +103,11 @@ It was last checked with Claude Code 2.1.288. → [What platoon changes](guide/w
 curl -LsSf https://raw.githubusercontent.com/ctrader2/platoon/main/scripts/uninstall.sh | sh
 ```
 
-It takes platoon's status line and hooks out of Claude Code (backing `settings.json` up first), deletes platoon's cache, asks before deleting your projects, notes, tasks and
-settings (`| sh -s -- --all` deletes them without asking) and before stopping any session platoon is running, then
-removes the program however you installed it. Your conversations are Claude Code's and are never touched; task
-worktrees are listed, not deleted.
+It takes platoon's status line and hooks out of Claude Code and its hooks out of Codex (backing each file up first),
+deletes platoon's cache, asks before deleting your projects, notes, tasks and settings (`| sh -s -- --all` deletes
+them without asking) and before stopping any session platoon is running, then removes the program however you
+installed it. Your conversations are Claude Code's and Codex's and are never touched; task worktrees are listed, not
+deleted.
 → [Uninstall](guide/install-and-setup.md#uninstall)
 
 ## Learn more

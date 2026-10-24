@@ -73,11 +73,13 @@ rename changes nothing there). **Every session in the project has them in its co
   gets the notes when it starts, when it is resumed after they changed, and again after Claude compacts the conversation.
 - While a session is running, the **Session guard** step hands them over again with your next message whenever they have
   changed since that conversation last got them - so notes written an hour into a session still reach it.
+- A Codex session gets them the same way through Codex's hooks (see [Codex](install-and-setup.md#codex)): with your
+  first message, since that is when Codex starts a session's hooks, and again with your next message whenever they changed.
 
 Either way they are only ever sent when they are **new or changed for that conversation** (platoon keeps the version each
 session has, as a short hash in `~/.cache/platoon/notes-sent/<session id>`), so the same words are never sent twice and the
 two hooks never both send the same version. About 2 KB of notes is roughly 500 tokens, on the changes only. It works for
-every session in the project, including ones you run with plain `claude`, and the notes pane says how many of the
+every session in the project, including ones you run with plain `claude` or `codex`, and the notes pane says how many of the
 project's sessions have the version that is on disk now:
 
 ```
@@ -174,8 +176,8 @@ has to come across with it or the change is thrown away (see [What it may write]
 
 With **Project notes** on (see [Features that use tokens](tokens.md)), platoon writes the notes for you from what your
 sessions actually did. It needs the **Notes updates** line of
-[`platoon setup`](install-and-setup.md#set-it-up-platoon-setup), which adds a `Stop` hook to Claude Code; without it
-nothing happens automatically.
+[`platoon setup`](install-and-setup.md#set-it-up-platoon-setup), which adds a `Stop` hook to Claude Code (and one to
+Codex, for its sessions); without it nothing happens automatically.
 
 **How it runs.** Every time a session in a project finishes answering, the hook makes a note of it - instantly, silently,
 no tokens - and starts a small helper in the background. Putting a conversation **into** a project does the same: `m`, a
@@ -183,17 +185,18 @@ session started under a project, or one the SessionStart hook places there all m
 few minutes later without you having to resume anything (a conversation you never open again would otherwise never be read
 at all). The helper waits until the project has been quiet for as long as **Update notes after** says (3 minutes unless you
 change it, in the [settings](settings-and-keys.md#projects) on the Projects tab: 1, 3, 5, 15 or 30 minutes; another turn
-starts that timer over) and then makes **one** request to Claude, always on Sonnet whatever the model for smart features is (the notes go into
-every session, and Haiku left out changes it had been shown). Only one helper runs per project, and it works whether
+starts that timer over) and then makes **one** request, on the **Model for project notes** (Sonnet unless you pick
+another, or Codex's first model on a computer with only Codex; the notes go into every session, and Haiku left out
+changes it had been shown). Only one helper runs per project, and it works whether
 the platoon window is open or closed. **A project with no notes file yet gets one**: the hook writes the template
 first, then marks the project as above, so the first update has something to fill in. Archived projects and archived
 sessions are skipped entirely, and so is a notes file that is there but empty: if you emptied it, platoon leaves it to
 you (`e` starts it again).
 
 **What it reads.** Only what is new since the last update: for each active session in the project, the messages you typed
-since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus Claude's last reply, up to
-**Read Claude's last reply up to** characters (1500 unless you change it), because what is still open in a conversation is
-usually in Claude's answers. A session that platoon has never read before - a new project, or one you have just added a
+since then (at most 8, each cut to 300 characters - the same settings the smart names use) plus its last reply
+(Claude's or Codex's), up to **Read Claude's last reply up to** characters (1500 unless you change it), because what is
+still open in a conversation is usually in the answers. A session that platoon has never read before - a new project, or one you have just added a
 session to - is read in full once: its first message and its last 20.
 
 ### What it may write
@@ -215,7 +218,7 @@ own words as its own.
 ### Kept short
 
 The notes stay under **8,000 characters**, the most that goes to a session. Each request says how long the notes are;
-the instructions ask Claude to condense when they near it: shorter and merged older detail in platoon's own sections,
+the instructions ask the model to condense when they near it: shorter and merged older detail in platoon's own sections,
 sections folded together, older Decisions merged, and what was decided and what is still open kept. An answer that
 leaves the notes over 8,000 characters (and no shorter than they were) is asked for again **once**, condensed; if the
 second answer is still too long, the notes stay as they were. Notes that are over because of what you wrote are let
@@ -253,7 +256,7 @@ where that feature lives, as above.
 
 The times and the copy of platoon's own sentences, heading by heading, live in
 `~/.config/platoon/projects/<id>/notes-state.json` (numbers and platoon's own text only - never a message you typed, never
-a reply from Claude). When a heading is renamed, its record moves with it; when a section is folded into another, its
+a reply from Claude or Codex). When a heading is renamed, its record moves with it; when a section is folded into another, its
 record goes.
 
 ## The line that says what a project is
@@ -335,12 +338,12 @@ Committed since the session started:
   folder, id, whether it is still running, when it started and was last used, its model, how many messages you sent, the
   tokens it used, and the git branch, uncommitted changes, last commit and the commits made during the session. A fact
   platoon can't find out is left out, never guessed.
-- **Files affected** comes from git too. When the folder is not a git repository, Claude lists the files instead, and the
-  section says so.
-- **Claude writes only** the executive summary, the work completed, the current state and known gotchas, and the numbered
+- **Files affected** comes from git too. When the folder is not a git repository, the model lists the files instead, and
+  the section says so.
+- **The model writes only** the executive summary, the work completed, the current state and known gotchas, and the numbered
   next steps. A section with nothing in it is left out.
 
-Claude is sent the project's name, the folder's name, the conversation's name and summary, your first message and your last
+The model is sent the project's name, the folder's name, the conversation's name and summary, your first message and your last
 few (each cut short), one line of its last reply and the file names git gave. It is never sent the session id, and the
 project's notes are not repeated: the new session is given those by the hooks, as every session in a project is.
 
@@ -352,7 +355,7 @@ lines above", "↓ 12 more lines below"). The document can be up to 20,000 chara
 `ctrl+s` starts a **new** session in the same folder and the same project, with the document as its **first message**,
 visible in the conversation like anything else you typed. `esc` calls the whole thing off and changes nothing.
 
-The old conversation is left exactly as it is: not archived, not stopped. If Claude can't be asked (the master switch is
+The old conversation is left exactly as it is: not archived, not stopped. If the model can't be asked (the master switch is
 off, the day's limit is spent, a failure has paused things), the conversation has nothing in it yet, or the answer isn't
 understood, platoon says so plainly and nothing is started.
 

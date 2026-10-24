@@ -14,11 +14,11 @@ run `platoon statusline`. See [Set it up](install-and-setup.md#set-it-up-platoon
 **It says `platoon needs at least 60×14`.** Make the window bigger: everything comes back as it was. Until then only `q` or
 `ctrl+c` does anything. See [The list](sessions.md#the-list).
 
-**Claude Code was updated and something looks wrong** (sessions missing, wrong status, no context figure). platoon reads
-Claude Code's files, which are not a documented interface; a new version can change them. It was last checked with Claude
-Code 2.1.288 (platoon says so once when yours is newer). Update platoon (a newer one may be checked with your Claude Code:
-see [Install](install-and-setup.md#install) for the command), and if that doesn't help, see
-[It reads Claude Code's own files](what-platoon-changes.md#it-reads-claude-codes-own-files).
+**Claude Code or Codex was updated and something looks wrong** (sessions missing, wrong status, no context figure).
+platoon reads their files, which are not a documented interface; a new version can change them. It was last checked
+with Claude Code 2.1.288 and Codex 0.163.0 (platoon says so once when yours is newer). Update platoon (a newer one may be
+checked with your version: see [Install](install-and-setup.md#install) for the command), and if that doesn't help, see
+[It reads Claude Code's and Codex's own files](what-platoon-changes.md#it-reads-claude-codes-and-codexs-own-files).
 
 ## The list and search
 

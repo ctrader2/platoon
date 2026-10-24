@@ -64,8 +64,8 @@ The model decides the program: a Claude model runs on Claude Code, an OpenAI mod
 features' model (or the notes' model, on the Projects tab) is one of Codex's, the tab warns under its entries that **a
 call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question**.
 
-The screens name the program that really answers. These pages say "Claude", but with a Codex model platoon says
-"Codex" instead: in the settings ("What platoon asks Codex for…"), in Describe it ("Asking Codex..."), in the hand-off
+The screens name the program that really answers. Where these pages say platoon asks "Claude" for something, read
+"Codex" when the model is one of Codex's, as the screens do: in the settings ("What platoon asks Codex for…"), in Describe it ("Asking Codex..."), in the hand-off
 box, and in what tasks from a conversation say when no tasks come back. With both programs installed, the settings and
 lines about your sessions name both ("Read Claude's or Codex's last reply up to").
 
@@ -172,11 +172,11 @@ is never replaced without keeping a `.bak` copy first.
 
 ## System prompts for each smart feature
 
-Each thing platoon asks Claude for - names and summaries, Describe it, a project's notes, a project's description, the
+Each thing platoon asks Claude or Codex for - names and summaries, Describe it, a project's notes, a project's description, the
 hand-off and tasks from a conversation - comes with a system prompt,
 and each has an entry on the tab it belongs to. It reads **Enter to change** while it is platoon's default, and **User
 Modified** once you have changed it. Only the part that says what to aim for is yours to change: the tone, what to put in
-and what to leave out. The exact shape of Claude's answer, which platoon checks, and the rule that what Claude is shown is
+and what to leave out. The exact shape of the answer, which platoon checks, and the rule that what the model is shown is
 data and never orders, are kept by platoon and always sent after your text, so an edit can't break the replies.
 
 - `enter` (or a click on the value) opens the same list of editors as a project's notes. The file starts as platoon's
@@ -243,4 +243,4 @@ Each is explained where it matters; this is the list.
 | `PLATOON_CLIPBOARD` | `system`, `osc52` or `none`: see [Copying text from a session](sessions.md#copying-text-from-a-session) |
 | `VISUAL`, `EDITOR` | looked at first for the [notes editor](projects.md#editing-the-notes) |
 | `NO_COLOR` | set to anything, platoon draws without colors |
-| `PLATOON_NO_UPDATE_CHECK` | `1` (anything but empty or `0`): no [version checks](install-and-setup.md#when-claude-code-or-platoon-is-newer) at all, whatever the setting says: no request to GitHub, and `claude --version` is not run |
+| `PLATOON_NO_UPDATE_CHECK` | `1` (anything but empty or `0`): no [version checks](install-and-setup.md#when-claude-code-codex-or-platoon-is-newer) at all, whatever the setting says: no request to GitHub, and neither `claude --version` nor `codex --version` is run |
