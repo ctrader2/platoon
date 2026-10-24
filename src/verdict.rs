@@ -56,8 +56,10 @@ line, and copy the exact text of that line as `quote`; say the problem in one se
 - done is true when the work does what the task asks and every box is met.
 - Answer only with the JSON asked for.";
 
-/// The answer's JSON Schema (`--json-schema`).
-pub const SCHEMA: &str = r#"{"type":"object","properties":{"done":{"type":"boolean"},"boxes":{"type":"array","items":{"type":"object","properties":{"text":{"type":"string"},"met":{"type":"boolean"},"evidence":{"type":"string"}},"required":["text","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","properties":{"file":{"type":"string"},"line":{"type":"integer"},"quote":{"type":"string"},"problem":{"type":"string"}},"required":["file","line","quote","problem"]}}},"required":["done","boxes","findings"]}"#;
+/// The answer's JSON Schema (Claude Code's `--json-schema`, Codex's `--output-schema` file). Strict as OpenAI's
+/// structured answers need it, which Codex asks for: every object closed (`additionalProperties: false`) with all of its
+/// properties required.
+pub const SCHEMA: &str = r#"{"type":"object","additionalProperties":false,"properties":{"done":{"type":"boolean"},"boxes":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"text":{"type":"string"},"met":{"type":"boolean"},"evidence":{"type":"string"}},"required":["text","met","evidence"]}},"findings":{"type":"array","items":{"type":"object","additionalProperties":false,"properties":{"file":{"type":"string"},"line":{"type":"integer"},"quote":{"type":"string"},"problem":{"type":"string"}},"required":["file","line","quote","problem"]}}},"required":["done","boxes","findings"]}"#;
 
 /// What the check is given.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -476,5 +478,12 @@ mod tests {
         assert!(SYSTEM.contains("If it names no test run, done is false, and add the box \"Tests run and reported\""), "{SYSTEM}");
         let schema: Value = serde_json::from_str(SCHEMA).unwrap();
         assert_eq!(schema["required"], serde_json::json!(["done", "boxes", "findings"]));
+        // Strict, as Codex's structured answers need: every object closed, every property required.
+        for object in [&schema, &schema["properties"]["boxes"]["items"], &schema["properties"]["findings"]["items"]] {
+            assert_eq!(object["additionalProperties"], false, "{object}");
+            let props: Vec<&String> = object["properties"].as_object().unwrap().keys().collect();
+            let required: Vec<&str> = object["required"].as_array().unwrap().iter().filter_map(Value::as_str).collect();
+            assert_eq!(props, required, "{object}");
+        }
     }
 }
