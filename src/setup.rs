@@ -112,6 +112,8 @@ pub struct Report {
     pub notes: Vec<String>,
     /// Codex's part, when Codex is on this computer.
     pub codex: Option<CodexReport>,
+    /// The programs installed but switched off in platoon's settings: skipped, and said so.
+    pub off: Vec<Agent>,
 }
 
 /// What setup did in Codex's `hooks.json`.
@@ -537,13 +539,13 @@ pub fn run(root: &Path) -> Result<Report, String> {
         }
     }
 
-    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None })
+    Ok(Report { claude: true, outcomes, saved, backed_up, notes, codex: None, off: Vec::new() })
 }
 
 impl Report {
     /// Setup on a computer without Claude Code: its settings are left alone, and nothing of it blocks starting.
     pub fn without_claude() -> Report {
-        Report { claude: false, outcomes: Vec::new(), saved: None, backed_up: false, notes: Vec::new(), codex: None }
+        Report { claude: false, outcomes: Vec::new(), saved: None, backed_up: false, notes: Vec::new(), codex: None, off: Vec::new() }
     }
 }
 
@@ -820,7 +822,9 @@ fn row(ok: Option<bool>, step: &Step, detail: &str, color: bool) -> String {
 /// What `platoon setup` prints after running.
 pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     let mut out = vec!["platoon setup".to_string(), String::new()];
-    if !r.claude {
+    if r.off.contains(&Agent::Claude) {
+        out.push(switched_off_line(Agent::Claude));
+    } else if !r.claude {
         out.push("Claude Code isn't installed on this computer, so there is nothing to set up for it.".into());
     }
     for (step, o) in STEPS.iter().zip(&r.outcomes) {
@@ -846,9 +850,20 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
     if let Some(c) = &r.codex {
         out.extend(render_codex(c, color));
     }
+    if r.off.contains(&Agent::Codex) {
+        out.extend([String::new(), "Codex".to_string(), switched_off_line(Agent::Codex), String::new()]);
+    }
     out.extend(r.notes.iter().cloned());
     out.push("All set. Run `platoon`.".into());
     out.join("\n")
+}
+
+/// What setup says of a program switched off in platoon's settings: skipped, and what it added before is left in place.
+pub fn switched_off_line(agent: Agent) -> String {
+    format!(
+        "{0} is switched off in platoon's settings, so setup skipped it. What platoon added to {0} before stays as it is.",
+        agent.name()
+    )
 }
 
 /// "Saved <file>.", naming the backup only when one was made.
@@ -1129,6 +1144,28 @@ mod tests {
     }
 
     #[test]
+    fn a_program_switched_off_is_skipped_and_the_report_says_why() {
+        let r = Report { off: vec![Agent::Claude], ..Report::without_claude() };
+        let shown = render_report(&r, Path::new("/nowhere"), false);
+        assert!(
+            shown.contains(
+                "Claude Code is switched off in platoon's settings, so setup skipped it. What platoon added to Claude Code before stays as it is."
+            ),
+            "{shown}"
+        );
+        assert!(!shown.contains("isn't installed") && STEPS.iter().all(|s| !shown.contains(s.name)), "{shown}");
+        let r = Report { off: vec![Agent::Codex], ..Report::without_claude() };
+        let shown = render_report(&r, Path::new("/nowhere"), false);
+        assert!(
+            shown.contains(
+                "Codex is switched off in platoon's settings, so setup skipped it. What platoon added to Codex before stays as it is."
+            ),
+            "{shown}"
+        );
+        assert!(shown.contains("All set"), "{shown}");
+    }
+
+    #[test]
     fn without_claude_code_the_report_says_so_and_lists_no_claude_steps() {
         let r = Report::without_claude();
         let shown = render_report(&r, Path::new("/nowhere"), false);
@@ -1358,6 +1395,7 @@ mod tests {
                 backed_up: false,
                 notes: vec![],
                 codex: Some(r),
+                off: Vec::new(),
             };
             let shown = render_report(&report, &codex, false);
             assert!(shown.contains("[–] Codex hooks") && shown.contains("left the file alone"), "{shown}");
@@ -1367,8 +1405,15 @@ mod tests {
     #[test]
     fn the_report_says_what_codex_will_ask_and_a_claude_only_report_is_as_before() {
         let root = tmp("codex-report");
-        let claude_only =
-            Report { claude: true, outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: None };
+        let claude_only = Report {
+            claude: true,
+            outcomes: vec![Outcome::AlreadyDone; 4],
+            saved: None,
+            backed_up: false,
+            notes: vec![],
+            codex: None,
+            off: Vec::new(),
+        };
         let shown = render_report(&claude_only, &root, false);
         assert!(!shown.contains("Codex") && shown.contains("Nothing to change"), "{shown}");
         let codex = run_codex(&root.join("codex"));
@@ -1535,6 +1580,7 @@ mod tests {
                 backed_up: false,
                 notes: vec![],
                 codex: Some(report),
+                off: Vec::new(),
             },
             &codex,
             false,
@@ -1563,6 +1609,7 @@ mod tests {
                 backed_up: false,
                 notes: vec![],
                 codex: Some(again),
+                off: Vec::new(),
             },
             &codex,
             false,

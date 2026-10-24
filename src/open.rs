@@ -60,7 +60,7 @@ fn ask(question: &str) -> bool {
 /// else the one installed (Claude Code first). There is no question to ask in a plain terminal.
 fn new_session_agent() -> Result<Agent, String> {
     let remembered = crate::settings::load(&crate::archive::config_dir()).0.new_session_agent;
-    crate::agents::Providers::here()
+    crate::agents::Providers::here(&crate::archive::config_dir())
         .new_session_agent(remembered.as_deref())
         .ok_or_else(|| "neither Claude Code nor Codex is installed on this computer".to_string())
 }
@@ -96,6 +96,11 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
     known.extend(background.iter().map(|l| l.id.clone()));
     known.extend(codex_ids.iter().cloned());
     let id = resolve_id(arg, known)?;
+    // A conversation of a program switched off in platoon's settings is left alone, as if that program weren't installed.
+    let of = if codex_ids.contains(&id) { Agent::Codex } else { Agent::Claude };
+    if crate::agents::switched_off(&crate::archive::config_dir(), of) {
+        return Err(switched_off_refusal(&id, of));
+    }
     if codex_ids.contains(&id) {
         return codex_host_for(&id, &codex, &codex_live, &hosts, rows, cols);
     }
@@ -148,6 +153,14 @@ fn host_for(arg: Option<&str>, rows: u16, cols: u16) -> Result<HostInfo, String>
         env.push((crate::sessionhook::OFFER_ENV, "1"));
     }
     host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &agent.args(Start::Resume(&id)), &env, rows, cols).map(|(h, _)| h)
+}
+
+/// Why `platoon open` leaves conversation `id` of `agent` alone while `agent` is switched off.
+fn switched_off_refusal(id: &str, agent: Agent) -> String {
+    format!(
+        "session {id} is a {0} conversation, and {0} is switched off in platoon's settings. Switch it back on there (Settings, General, \"Use {0}\") to open it.",
+        agent.name()
+    )
 }
 
 /// `host_for` a conversation of Codex's. Codex keeps one window per conversation itself: one platoon hosts is joined,

@@ -385,8 +385,10 @@ fn a_popup_and_the_settings_in_a_light_theme() {
     assert_legible(&term, &app.theme, "the folder picker");
     key(&mut app, KeyCode::Esc);
 
-    // The settings: the popup, its tabs, the Theme row selected on a surface band.
+    // The settings: the popup, its tabs, the Theme row (below the two Programs) selected on a surface band.
     key(&mut app, KeyCode::Char('s'));
+    key(&mut app, KeyCode::Down);
+    key(&mut app, KeyCode::Down);
     assert!(matches!(app.mode, Mode::Settings));
     let shown = draw(&mut term, &app);
     assert!(shown.contains("Solarized Light"), "{shown}");
@@ -477,7 +479,7 @@ fn every_light_built_in_draws_every_main_screen_legibly() {
         // (the keys from the Sessions tab, what it is, something only that screen shows)
         let screens: [(&[KeyCode], &str, &str); 10] = [
             (&[c('s')], "settings", "╭ Settings"),
-            (&[c('s'), KeyCode::Enter], "the theme list", "╭ Theme"),
+            (&[c('s'), KeyCode::Down, KeyCode::Down, KeyCode::Enter], "the theme list", "╭ Theme"),
             (&[c('n')], "the folder picker", "pick a folder"),
             (&[c('m')], "the project picker", "╭ Project"),
             (&[c('r')], "rename", "╭ Rename session"),
@@ -541,7 +543,7 @@ fn a_light_theme_of_the_users_own_draws_the_main_screens_legibly() {
     let screens: [(&[KeyCode], &str, &str); 5] = [
         (&[], "the Sessions list", "refactor the parser"),
         (&[c('s')], "settings", "╭ Settings"),
-        (&[c('s'), KeyCode::Enter], "the theme list", "Crème Brûlée"),
+        (&[c('s'), KeyCode::Down, KeyCode::Down, KeyCode::Enter], "the theme list", "Crème Brûlée"),
         (&[c('n')], "the folder picker", "pick a folder"),
         (&[c('3')], "tasks", "No tasks yet"),
     ];

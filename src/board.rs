@@ -105,6 +105,15 @@ pub trait Facts {
     fn not_merged(&self, _project: &str, _number: u32) -> bool {
         false
     }
+    /// The program a started task's session runs in, when that program is switched off in platoon's settings.
+    fn switched_off(&self, _project: &str, _t: &Ticket) -> Option<crate::agents::Agent> {
+        None
+    }
+}
+
+/// What a task whose program is switched off says on its row: "Codex is switched off".
+pub fn switched_off_words(agent: crate::agents::Agent) -> String {
+    format!("{} is switched off", agent.name())
 }
 
 /// What a Done task whose work is not merged says on its row.
@@ -270,6 +279,13 @@ pub fn row(i: &In, section: Section, f: &dyn Facts) -> Row {
                 second.push(piece(format!(" · {n}"), Tone::Dim));
             }
         }
+    }
+    // Its program is switched off: it stays on the board (it may still be running), and says so first.
+    if i.busy.is_none()
+        && t.state != State::Cancelled
+        && let Some(agent) = f.switched_off(i.project, t)
+    {
+        second.insert(0, piece(format!("{} · ", switched_off_words(agent)), Tone::Warn));
     }
     Row {
         project: i.project.to_string(),

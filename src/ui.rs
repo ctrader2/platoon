@@ -2104,6 +2104,7 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
             // The names of the models there are; a long "(needs Codex, not installed)" widens only its own value.
             Kind::Model(_) => Some(app.catalog().models().iter().map(|m| m.name.width()).max().unwrap_or(0).min(26)),
             Kind::Theme => Some(app.themes().all().iter().map(|t| t.name.width()).max().unwrap_or(0).min(24)),
+            Kind::Program(_) => Some(crate::app::ProgramState::NotInstalled.label().width()),
             Kind::Instructions(_) => None,
         })
         .max()
@@ -2160,6 +2161,20 @@ fn draw_setting_rows(f: &mut Frame, app: &App, current: &crate::settings::Settin
                 let room = (row.width as usize).saturating_sub(app.setting_name(item).width() + 9);
                 let vw = shared.max(label.width().min(room)).max(4);
                 (fit_end(&label, vw), vw, at_start, at_end, false)
+            }
+            // On or Off; "Not installed" can't be changed, so it has no arrows to offer, and reads muted like Off.
+            Kind::Program(agent) => {
+                let state = app.program_state(agent);
+                let label = state.label().to_string();
+                let vw = shared.max(label.width());
+                let fixed = state == crate::app::ProgramState::NotInstalled;
+                (
+                    label,
+                    vw,
+                    fixed || state == crate::app::ProgramState::Off,
+                    fixed || state == crate::app::ProgramState::On,
+                    state != crate::app::ProgramState::On,
+                )
             }
             Kind::Theme => {
                 let all = app.themes().all();

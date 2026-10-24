@@ -224,6 +224,7 @@ fn a_squad_whose_model_cant_run_a_tasks_session_here_starts_nothing_and_says_why
     app.set_providers_for_test(crate::agents::Providers {
         claude: Some("/nonexistent/platoon-unit-test/claude".into()),
         codex: Some(codex),
+        off: Vec::new(),
     });
     fs::write(w.config.join("squads/mine.md"), squad("gpt-9")).unwrap();
     key(&mut app, KeyCode::Char('s'));

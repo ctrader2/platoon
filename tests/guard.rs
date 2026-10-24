@@ -66,6 +66,11 @@ struct Fake {
 
 impl Fake {
     fn start(env: &Env, tag: &str, started_at: u64, register: bool) -> Self {
+        Self::start_with(env, tag, started_at, register, &[])
+    }
+
+    /// `start`, with `extra` added to the hook's environment.
+    fn start_with(env: &Env, tag: &str, started_at: u64, register: bool, extra: &[(&str, String)]) -> Self {
         let results = env.cache.join(format!("{tag}.status"));
         let errors = env.cache.join(format!("{tag}.err"));
         let output = env.cache.join(format!("{tag}.out"));
@@ -83,6 +88,7 @@ impl Fake {
             .env("CLAUDE_CONFIG_DIR", &env.root)
             .env("PLATOON_CACHE_DIR", &env.cache)
             .env("PLATOON_CONFIG_DIR", &env.config)
+            .envs(extra.iter().cloned())
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .spawn()
@@ -255,6 +261,36 @@ fn the_guard_hands_the_projects_notes_to_the_conversation_when_they_change_and_o
     assert!(v["hookSpecificOutput"]["additionalContext"].as_str().unwrap().contains("hats"));
     assert_eq!(only.prompt().0, 0);
     assert_eq!(only.printed().lines().count(), 2, "and not again");
+}
+
+#[test]
+fn with_claude_code_switched_off_the_guard_still_refuses_a_second_copy_but_hands_over_no_notes() {
+    let env = Env::new("claude-off");
+    env.project("sess-1", "# Overview\nSell socks.\n");
+    // Claude Code switched off in platoon's settings, with Codex installed (its folder is there), so it really is off.
+    fs::write(env.config.join("settings.json"), r#"{"use_claude_code": false}"#).unwrap();
+    let codex = env.root.parent().unwrap().join("codex");
+    fs::create_dir_all(&codex).unwrap();
+    let extra = [("CODEX_HOME", codex.to_string_lossy().into_owned()), (common::NO_REAL_CLAUDE.0, common::NO_REAL_CLAUDE.1.to_string())];
+    let mut owner = Fake::start_with(&env, "a", 1, false, &extra);
+    let mut second = Fake::start_with(&env, "b", 2, false, &extra);
+    for (f, t) in [(&owner, 1u64), (&second, 2)] {
+        fs::write(
+            env.root.join("sessions").join(format!("{}.json", f.pid())),
+            format!(r#"{{"pid":{},"sessionId":"sess-1","cwd":"/tmp","kind":"interactive","startedAt":{t}}}"#, f.pid()),
+        )
+        .unwrap();
+    }
+    assert_eq!(owner.prompt().0, 0, "the owner goes on");
+    assert_eq!(owner.printed(), "", "no notes while Claude Code is switched off");
+    assert!(!env.cache.join("notes-sent").join("sess-1").exists(), "nothing is marked as sent");
+    let (code, err) = second.prompt();
+    assert_eq!(code, 2, "the guard still keeps one writer per conversation: {err}");
+    assert!(err.contains("already open in another terminal"), "{err}");
+    // Switched on again: the notes come with the next prompt.
+    fs::write(env.config.join("settings.json"), r#"{"use_claude_code": true}"#).unwrap();
+    assert_eq!(owner.prompt().0, 0);
+    assert!(owner.printed().contains("Sell socks."), "{}", owner.printed());
 }
 
 #[test]

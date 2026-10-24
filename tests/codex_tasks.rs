@@ -128,3 +128,48 @@ fn in_a_tasks_session_the_first_hook_names_the_session_and_a_push_waits_for_the_
         with(json!({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "git log -3"}, "tool_use_id": "c"}));
     assert_eq!(lab.hook("task-before", reading), "");
 }
+
+#[test]
+fn with_codex_switched_off_a_tasks_hooks_end_at_once_saying_nothing_and_changing_nothing() {
+    let lab = Lab::new("codex-hooks-off");
+    // Codex installed (its folder is there) beside Claude Code, and switched off in platoon's settings.
+    let codex = lab.config.parent().unwrap().join("codex");
+    fs::create_dir_all(&codex).unwrap();
+    fs::write(lab.config.join("settings.json"), r#"{"use_codex": false}"#).unwrap();
+    let id = "01a1aaaa-0000-7000-8000-000000000002";
+    let input = json!({"session_id": id, "turn_id": "t", "transcript_path": null, "cwd": "/w", "model": "gpt-6-luna",
+        "permission_mode": "default", "hook_event_name": "SessionStart", "source": "startup"});
+    let run = |name: &str| {
+        let started = Instant::now();
+        let mut child = lab.cmd(name, Some("1:pweb")).env("CODEX_HOME", &codex).env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1).spawn().unwrap();
+        // Ended without reading anything: it doesn't wait for its input.
+        let stdin = child.stdin.take();
+        let status = loop {
+            if let Some(s) = child.try_wait().unwrap() {
+                break s;
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "{name} waited");
+            std::thread::sleep(Duration::from_millis(5));
+        };
+        if let Some(mut stdin) = stdin {
+            let _ = stdin.write_all(input.to_string().as_bytes());
+        }
+        let out = child.wait_with_output().unwrap();
+        (status, out)
+    };
+    let tasks = || fs::read_to_string(lab.config.join("projects/pweb/tasks.json")).unwrap();
+    let (before, cache_before) = (tasks(), fs::read_dir(&lab.cache).unwrap().count());
+    for name in HOOKS {
+        let (status, out) = run(name);
+        assert!(status.success() && out.stdout.is_empty() && out.stderr.is_empty(), "{name}: {out:?}");
+    }
+    assert_eq!(tasks(), before, "the task is as it was: its session still not known");
+    assert_eq!(fs::read_dir(&lab.cache).unwrap().count(), cache_before, "nothing written");
+    // Switched on again, the first hook names the session as ever.
+    fs::write(lab.config.join("settings.json"), r#"{"use_codex": true}"#).unwrap();
+    let mut child =
+        lab.cmd("task-start", Some("1:pweb")).env("CODEX_HOME", &codex).env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1).spawn().unwrap();
+    child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+    assert!(child.wait_with_output().unwrap().status.success());
+    assert_eq!(lab.task()["session"], id);
+}

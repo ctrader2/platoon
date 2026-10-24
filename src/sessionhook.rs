@@ -172,6 +172,10 @@ pub fn offer_text(agent: Agent, exe: &str, project: Option<&str>, folder: Option
 
 /// `platoon hook session-start [--agent codex]`: the hook of `agent`'s sessions.
 pub fn run(agent: Agent) -> i32 {
+    // A program switched off in platoon's settings gets no notes and no offer.
+    if crate::agents::switched_off(&crate::archive::config_dir(), agent) {
+        return 0;
+    }
     let _ = std::panic::catch_unwind(|| {
         let mut input = String::new();
         if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() {

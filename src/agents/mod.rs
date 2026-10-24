@@ -501,13 +501,25 @@ pub struct Model {
     pub window: Option<u64>,
 }
 
-/// The AI programs on this computer that platoon can use. What models there are follows from it (`Catalog`).
+/// The AI programs on this computer that platoon can use. What models there are follows from it (`Catalog`). A program
+/// the user switched off in platoon's settings (Settings, General, Programs) is not in it, exactly as if it weren't
+/// installed (`switched`); `off` says which, so what can't run is said plainly ("Codex is switched off in Settings").
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Providers {
-    /// Claude Code's program, when Claude Code is installed.
+    /// Claude Code's program, when Claude Code is installed (and not switched off).
     pub claude: Option<String>,
-    /// Codex's program and folder, when Codex is installed.
+    /// Codex's program and folder, when Codex is installed (and not switched off).
     pub codex: Option<CodexAt>,
+    /// The programs installed here that the user switched off: left out of `claude` and `codex` above.
+    pub off: Vec<Agent>,
+}
+
+/// Is `agent` switched off in platoon's settings in `config`, as platoon acts on it (`Providers::switched`)? For the hooks,
+/// which run often: one small file is read, and what is installed is looked at only when that file switches a program
+/// off. Reads the user's real folders: never in a unit test.
+pub fn switched_off(config: &Path, agent: Agent) -> bool {
+    let off = crate::settings::load(config).0.switched_off();
+    off.contains(&agent) && Providers::installed_here().switched(&off).is_off(agent)
 }
 
 /// Where Codex is: its program, and its folder (`codex::codex_root`).
@@ -518,14 +530,44 @@ pub struct CodexAt {
 }
 
 impl Providers {
-    /// What this computer has: Claude Code when `PLATOON_CLAUDE_BIN` names it or `claude` is on the PATH, Codex as
-    /// `codex::installed` decides. Reads the user's real Codex folder: never in a unit test.
-    pub fn here() -> Providers {
+    /// What platoon uses here: the programs installed (`installed_here`), less the ones the settings in `config` switch
+    /// off (`switched`). Reads the user's real Codex folder: never in a unit test.
+    pub fn here(config: &Path) -> Providers {
+        Providers::installed_here().switched(&crate::settings::load(config).0.switched_off())
+    }
+
+    /// What this computer has, whatever the settings say: Claude Code when `PLATOON_CLAUDE_BIN` names it or `claude` is
+    /// on the PATH, Codex as `codex::installed` decides. Reads the user's real Codex folder: never in a unit test.
+    pub fn installed_here() -> Providers {
         let path = std::env::var("PATH").unwrap_or_default();
         let claude = claude::installed(&path).then(claude::program);
         let (root, program) = (codex::codex_root(), codex::program());
         let codex = codex::installed(&root, &program, &path).then_some(CodexAt { program, root });
-        Providers { claude, codex }
+        Providers { claude, codex, off: Vec::new() }
+    }
+
+    /// These programs with the ones in `off` switched off: taken out, as if they weren't installed, and named in `off`.
+    /// A program that isn't here stays not installed (it is never "off"), and the last program here is never switched
+    /// off: platoon needs one (the settings screen refuses it; a hand-edited file that switches off every one is
+    /// ignored).
+    pub fn switched(mut self, off: &[Agent]) -> Providers {
+        let off: Vec<Agent> = Agent::ALL.into_iter().filter(|a| off.contains(a) && self.program(*a).is_some()).collect();
+        if off.len() >= self.installed().len() {
+            return self;
+        }
+        for a in &off {
+            match a {
+                Agent::Claude => self.claude = None,
+                Agent::Codex => self.codex = None,
+            }
+        }
+        self.off.extend(off);
+        self
+    }
+
+    /// Is `agent` installed here but switched off in platoon's settings?
+    pub fn is_off(&self, agent: Agent) -> bool {
+        self.off.contains(&agent)
     }
 
     /// The program that is `agent` here, when it is installed.
@@ -567,6 +609,9 @@ impl Providers {
 pub struct Catalog {
     models: Vec<Model>,
     claude: bool,
+    /// The programs installed here but switched off (`Providers::off`): their models are not offered, and are said to
+    /// be switched off rather than not installed.
+    off: Vec<Agent>,
     /// Codex's list as it was read: None while Codex isn't installed.
     codex: Option<CodexList>,
 }
@@ -598,7 +643,7 @@ impl Catalog {
             }
             Err(problem) => CodexList::Unread(problem),
         });
-        Catalog { models, claude: p.claude.is_some(), codex }
+        Catalog { models, claude: p.claude.is_some(), off: p.off.clone(), codex }
     }
 
     /// The models to offer, in order.
@@ -611,7 +656,18 @@ impl Catalog {
         self.models.iter().filter(move |m| m.agent == agent)
     }
 
-    /// Is `agent` installed here?
+    /// Is `agent` installed here but switched off in platoon's settings?
+    pub fn is_off(&self, agent: Agent) -> bool {
+        self.off.contains(&agent)
+    }
+
+    /// Why `agent` can't run anything here, in a few words to follow its name: "isn't installed", or "is switched off"
+    /// (in platoon's settings). Meant for an agent that isn't `installed`.
+    pub fn absent(&self, agent: Agent) -> &'static str {
+        if self.is_off(agent) { "is switched off" } else { "isn't installed" }
+    }
+
+    /// Is `agent` installed here (and not switched off)?
     pub fn installed(&self, agent: Agent) -> bool {
         match agent {
             Agent::Claude => self.claude,
@@ -654,7 +710,7 @@ impl Catalog {
     }
 
     /// `model` as a setting shows it: its name, and, when nothing here runs it, why in a few words
-    /// ("GPT-6-Luna (needs Codex, not installed)").
+    /// ("GPT-6-Luna (needs Codex, not installed)", "GPT-6-Luna (Codex is switched off in Settings)").
     pub fn label(&self, model: &str) -> String {
         match self.missing_words(model) {
             None => self.name(model),
@@ -668,6 +724,7 @@ impl Catalog {
             return None;
         }
         Some(match needs(model) {
+            Some(a) if self.is_off(a) => format!("{} is switched off in Settings", a.name()),
             Some(a) if !self.installed(a) => format!("needs {}, not installed", a.name()),
             Some(a) => format!("{} doesn't offer it", a.name()),
             None => "not a model platoon knows".into(),
@@ -681,6 +738,7 @@ impl Catalog {
         }
         let name = self.name(model);
         Some(match needs(model) {
+            Some(a) if self.is_off(a) => format!("{name} runs on {}, which is switched off in platoon's settings.", a.name()),
             Some(a) if !self.installed(a) => format!("{name} needs {}, which isn't installed on this computer.", a.name()),
             Some(a) => format!("{} doesn't offer {name} on this computer.", a.name()),
             None if model.is_empty() => "No model is chosen.".to_string(),
@@ -700,7 +758,8 @@ impl Catalog {
         self.default_with(claude::SONNET)
     }
 
-    /// What a built-in squad's model (`model`, one of Claude's) runs as on a computer without Claude Code: the first
+    /// What a built-in squad's model (`model`, one of Claude's) runs as on a computer without Claude Code (not installed,
+    /// or switched off): the first
     /// model Codex lists, as `default_smart` would pick. None when Claude Code is installed, `model` isn't one of
     /// Claude's, or Codex lists none (then the model stays as it is, and is said not to be installed).
     pub fn stand_in_for(&self, model: &str) -> Option<String> {
@@ -1011,7 +1070,7 @@ pub(crate) mod tests {
 
     /// A computer with Claude Code (a stand-in that is never run) and no Codex.
     pub(crate) fn claude_catalog() -> Catalog {
-        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None }.catalog()
+        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None, off: Vec::new() }.catalog()
     }
 
     /// A Codex folder (a temp dir) holding the sample `models_cache.json`, as a real Codex 0.163 wrote it (account
@@ -1052,7 +1111,7 @@ pub(crate) mod tests {
     #[test]
     fn with_only_codex_the_catalog_is_its_listed_models_in_its_order_and_a_claude_model_is_not_installed() {
         let codex = codex_with_models("codex-only");
-        let c = Providers { claude: None, codex: Some(codex) }.catalog();
+        let c = Providers { claude: None, codex: Some(codex), off: Vec::new() }.catalog();
         assert_eq!(ids(&c), ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"], "by priority; the hidden ones are not offered");
         assert_eq!(c.models().iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["GPT-6-Luna", "GPT-5.6-Terra", "GPT-5.6-Luna"]);
         assert!(c.models().iter().all(|m| m.agent == Agent::Codex && m.window == Some(272_000)));
@@ -1072,7 +1131,7 @@ pub(crate) mod tests {
     #[test]
     fn with_both_claudes_models_come_first_and_the_defaults_stay_claudes() {
         let codex = codex_with_models("both");
-        let c = Providers { claude: Some("claude".into()), codex: Some(codex) }.catalog();
+        let c = Providers { claude: Some("claude".into()), codex: Some(codex), off: Vec::new() }.catalog();
         assert_eq!(ids(&c), ["opus", "sonnet", "haiku", "fable", "gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"]);
         assert_eq!(c.agent_of("haiku"), Some(Agent::Claude));
         assert_eq!(c.agent_of("gpt-6-luna"), Some(Agent::Codex));
@@ -1083,16 +1142,59 @@ pub(crate) mod tests {
     #[test]
     fn a_new_session_starts_in_the_agent_last_chosen_while_it_is_installed_else_in_the_first_installed() {
         let codex = || Some(CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: PathBuf::from("/nonexistent") });
-        let both = Providers { claude: Some("claude".into()), codex: codex() };
+        let both = Providers { claude: Some("claude".into()), codex: codex(), off: Vec::new() };
         assert_eq!(both.installed(), [Agent::Claude, Agent::Codex]);
         assert_eq!(both.new_session_agent(None), Some(Agent::Claude), "nothing chosen yet: Claude Code first");
         assert_eq!(both.new_session_agent(Some("codex")), Some(Agent::Codex));
         assert_eq!(both.new_session_agent(Some("gemini")), Some(Agent::Claude), "a word platoon doesn't know is no choice");
-        let only_codex = Providers { claude: None, codex: codex() };
+        let only_codex = Providers { claude: None, codex: codex(), off: Vec::new() };
         assert_eq!(only_codex.new_session_agent(Some("claude")), Some(Agent::Codex), "the one chosen isn't here any more");
-        let only_claude = Providers { claude: Some("claude".into()), codex: None };
+        let only_claude = Providers { claude: Some("claude".into()), codex: None, off: Vec::new() };
         assert_eq!(only_claude.new_session_agent(Some("codex")), Some(Agent::Claude));
         assert_eq!(Providers::default().new_session_agent(Some("claude")), None);
+    }
+
+    #[test]
+    fn a_program_switched_off_is_left_out_as_if_it_werent_installed_and_said_to_be_off() {
+        let both = || Providers { claude: Some("claude".into()), codex: Some(codex_with_models("switch")), off: Vec::new() };
+        // Codex off: its program, folder and models are gone, Claude Code's stay; Codex is named as off.
+        let p = both().switched(&[Agent::Codex]);
+        assert_eq!((p.installed(), p.codex_root(), p.off.as_slice()), (vec![Agent::Claude], None, &[Agent::Codex][..]));
+        assert!(p.is_off(Agent::Codex) && !p.is_off(Agent::Claude));
+        assert_eq!(p.new_session_agent(Some("codex")), Some(Agent::Claude), "the one chosen last is off: Claude Code");
+        let c = p.catalog();
+        assert_eq!(ids(&c), ["opus", "sonnet", "haiku", "fable"]);
+        assert!(!c.installed(Agent::Codex) && c.is_off(Agent::Codex));
+        assert_eq!(c.agent_of("gpt-6-luna"), None, "nothing runs it");
+        assert_eq!(c.label("gpt-6-luna"), "GPT-6-Luna (Codex is switched off in Settings)");
+        assert_eq!(c.missing("gpt-6-luna").as_deref(), Some("GPT-6-Luna runs on Codex, which is switched off in platoon's settings."));
+        assert_eq!((c.absent(Agent::Codex), c.absent(Agent::Claude)), ("is switched off", "isn't installed"));
+        assert_eq!(c.stand_in_for("opus"), None, "Claude Code is on: a built-in keeps its model");
+        // Claude Code off: Codex's models only, the defaults and a built-in's stand-in are Codex's first, said as off.
+        let p = both().switched(&[Agent::Claude]);
+        assert_eq!((p.installed(), p.off.as_slice()), (vec![Agent::Codex], &[Agent::Claude][..]));
+        let c = p.catalog();
+        assert_eq!(ids(&c), ["gpt-6-luna", "gpt-5.6-terra", "gpt-5.6-luna"]);
+        assert_eq!((c.default_smart().as_deref(), c.default_notes().as_deref()), (Some("gpt-6-luna"), Some("gpt-6-luna")));
+        assert_eq!(c.stand_in_for("opus").as_deref(), Some("gpt-6-luna"));
+        assert_eq!(c.label("haiku"), "Haiku (Claude Code is switched off in Settings)");
+        assert_eq!(c.label("claude-opus-4-1"), "Opus 4.1 (Claude Code is switched off in Settings)");
+        // Nothing switched off: as before.
+        assert_eq!(both().switched(&[]), both());
+    }
+
+    #[test]
+    fn the_last_program_on_is_never_switched_off_and_one_not_installed_is_never_off() {
+        let both = || Providers { claude: Some("claude".into()), codex: Some(codex_with_models("last")), off: Vec::new() };
+        // Both off (a file edited by hand): platoon needs one, so the switches are left aside.
+        assert_eq!(both().switched(&[Agent::Claude, Agent::Codex]), both());
+        // Codex not installed: Claude Code is the only one, and stays on; Codex is not installed rather than off.
+        let claude_only = Providers { claude: Some("claude".into()), codex: None, off: Vec::new() };
+        assert_eq!(claude_only.clone().switched(&[Agent::Claude]), claude_only.clone());
+        let p = claude_only.clone().switched(&[Agent::Codex]);
+        assert_eq!(p, claude_only);
+        assert!(!p.is_off(Agent::Codex));
+        assert_eq!(p.catalog().label("gpt-6-luna"), "GPT-6-Luna (needs Codex, not installed)");
     }
 
     #[test]
@@ -1109,7 +1211,7 @@ pub(crate) mod tests {
     fn a_missing_or_broken_model_list_adds_no_codex_models_says_why_and_leaves_codexs_own_names_to_codex() {
         let root = tmp("codex-no-list");
         let codex = CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: root.clone() };
-        let p = Providers { claude: None, codex: Some(codex) };
+        let p = Providers { claude: None, codex: Some(codex), off: Vec::new() };
         let c = p.catalog();
         assert!(c.models().is_empty() && c.installed(Agent::Codex));
         let why = c.codex_problem().unwrap();

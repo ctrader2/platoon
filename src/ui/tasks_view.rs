@@ -388,11 +388,12 @@ fn detail_lines(app: &App, project: &str, x: &Ticket, w: usize, plan_most: Optio
     let squad = match (x.squad.is_empty(), x.started()) {
         (true, _) => Span::styled("none picked yet: s picks one", Style::new().fg(t.subtext)),
         (false, true) => {
-            // The program its session runs in, when both are here to tell apart.
+            // The program its session runs in, when both are here to tell apart, or when it is switched off.
             let on = app.task_program(project, x).filter(|_| app.providers().installed().len() > 1);
-            let name = match on {
-                Some(a) => format!("{} · in {}", app.squad_name(&x.squad), a.name()),
-                None => app.squad_name(&x.squad),
+            let name = match (app.task_switched_off(project, x), on) {
+                (Some(a), _) => format!("{} · in {}, which is switched off", app.squad_name(&x.squad), a.name()),
+                (None, Some(a)) => format!("{} · in {}", app.squad_name(&x.squad), a.name()),
+                (None, None) => app.squad_name(&x.squad),
             };
             Span::styled(fit_end(&name, room), Style::new().fg(t.text))
         }

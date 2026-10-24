@@ -9,7 +9,7 @@
 //! re-reads the file when it changes (`SettingsStore::refresh`), so an edit applies without restarting
 //! anything, including the session hosts that outlive platoon.
 
-use crate::agents::Catalog;
+use crate::agents::{Agent, Catalog};
 use crate::ai::{FEATURES, MASTER_LABEL};
 use crate::archive::keep_backup;
 use crate::theme::{DEFAULT_ID, Theme};
@@ -169,6 +169,11 @@ pub struct Settings {
     /// file says (`Agent::id`), picked in advance the next time. None until the user has chosen once; a word platoon
     /// doesn't know reads as none and stays in the file until they choose.
     pub new_session_agent: Option<String>,
+    /// Use Claude Code (Settings, General, Programs). Off: platoon leaves it out as if it weren't installed
+    /// (`agents::Providers::switched`). On unless the user switched it off.
+    pub use_claude_code: bool,
+    /// Use Codex, the same way.
+    pub use_codex: bool,
 }
 
 impl Default for Settings {
@@ -206,6 +211,8 @@ impl Default for Settings {
             ai_find_wide_candidates: DEFAULT_FIND_WIDE,
             update_check: true,
             new_session_agent: None,
+            use_claude_code: true,
+            use_codex: true,
         }
     }
 }
@@ -236,6 +243,26 @@ impl Settings {
             ai_find_results: self.ai_find_results.clamp(MIN_FIND_RESULTS, MAX_FIND_RESULTS),
             ai_find_wide_candidates: self.ai_find_wide_candidates.clamp(MIN_FIND_WIDE, MAX_FIND_WIDE),
             ..self
+        }
+    }
+
+    /// The programs the user switched off (Settings, General, Programs), Claude Code first.
+    pub fn switched_off(&self) -> Vec<Agent> {
+        Agent::ALL.into_iter().filter(|&a| !self.uses(a)).collect()
+    }
+
+    /// Is `agent` switched on (whether or not it is installed)?
+    pub fn uses(&self, agent: Agent) -> bool {
+        match agent {
+            Agent::Claude => self.use_claude_code,
+            Agent::Codex => self.use_codex,
+        }
+    }
+
+    pub fn set_uses(&mut self, agent: Agent, on: bool) {
+        match agent {
+            Agent::Claude => self.use_claude_code = on,
+            Agent::Codex => self.use_codex = on,
         }
     }
 
@@ -350,6 +377,8 @@ fn parse(text: &str) -> Option<Settings> {
             ai_find_wide_candidates: number("ai_find_wide_candidates", d.ai_find_wide_candidates),
             update_check: o.get("update_check").and_then(Value::as_bool).unwrap_or(d.update_check),
             new_session_agent: o.get("new_session_agent").and_then(Value::as_str).map(str::to_string),
+            use_claude_code: o.get("use_claude_code").and_then(Value::as_bool).unwrap_or(d.use_claude_code),
+            use_codex: o.get("use_codex").and_then(Value::as_bool).unwrap_or(d.use_codex),
         }
         .clamped(),
     )
@@ -437,6 +466,8 @@ pub fn save(dir: &Path, settings: &Settings) -> io::Result<()> {
     object.insert("ai_find_results".into(), json!(s.ai_find_results));
     object.insert("ai_find_wide_candidates".into(), json!(s.ai_find_wide_candidates));
     object.insert("update_check".into(), json!(s.update_check));
+    object.insert("use_claude_code".into(), json!(s.use_claude_code));
+    object.insert("use_codex".into(), json!(s.use_codex));
     // Written only once the user has chosen (`n`'s question): until then nothing is remembered.
     if let Some(a) = &s.new_session_agent {
         object.insert("new_session_agent".into(), json!(a));
@@ -487,6 +518,10 @@ pub enum Kind {
     /// A model, chosen among the models of the AI programs this computer has (`agents::Catalog`, known only at run
     /// time, like the themes): the app steps through them, and `choices`, `get`, `set` and `label` are unused.
     Model(ModelFor),
+    /// Whether platoon uses one program (Claude Code or Codex): On or Off, or "Not installed" (which can't be changed).
+    /// What it can be depends on what this computer has, so the app reads and changes it (`App::program_setting`), and
+    /// `choices`, `get`, `set` and `label` are unused.
+    Program(Agent),
 }
 
 /// What a model setting picks the model of.
@@ -527,6 +562,10 @@ impl ModelFor {
 /// instructions with it (measured on Codex 0.163: a one-word answer cost 13,287 tokens). The guide says the same
 /// (`guide/tokens.md`, "Calls on Codex").
 pub const CODEX_COST: &str = "A call on Codex costs about 13,000 to 20,000 tokens of Codex's own instructions, however small the question.";
+
+/// The two program switches' names on the settings screen.
+pub const USE_CLAUDE_CODE: &str = "Use Claude Code";
+pub const USE_CODEX: &str = "Use Codex";
 
 /// The two model settings' names on the settings screen.
 pub const SMART_MODEL_NAME: &str = "Model for smart features";
@@ -669,7 +708,7 @@ pub fn find_item(name: &str) -> Option<(usize, usize)> {
 
 fn tabs() -> Vec<Tab> {
     vec![
-        Tab { title: "General", items: general_items(), headings: &[] },
+        Tab { title: "General", items: general_items(), headings: &[(0, "Programs"), (2, "Everything else")] },
         Tab { title: "Search", items: search_items(), headings: &[] },
         Tab { title: "Smart features", items: smart_items(), headings: &[] },
         Tab { title: "Sessions", items: sessions_items(), headings: &[] },
@@ -746,9 +785,32 @@ fn instructions_item(id: &'static str) -> Item {
     }
 }
 
-/// Everyday behaviour: the colors, the two automatic clean-ups and the check for a newer platoon.
+/// The two programs platoon can use, then everyday behaviour: the colors, the two automatic clean-ups and the check for
+/// a newer platoon.
 fn general_items() -> Vec<Item> {
+    let program = |name, explain, agent| Item {
+        name,
+        explain,
+        kind: Kind::Program(agent),
+        choices: &[],
+        get: |_| 0,
+        set: |_, _| {},
+        label: |_| String::new(),
+        off: None,
+    };
     vec![
+        program(
+            USE_CLAUDE_CODE,
+            "Off: platoon leaves Claude Code out, as if it weren't installed. Its sessions leave the lists and its models \
+             every model choice, and its sessions get no project notes. Sessions and tasks already running keep running.",
+            Agent::Claude,
+        ),
+        program(
+            USE_CODEX,
+            "Off: platoon leaves Codex out, as if it weren't installed. Its sessions leave the lists and its models every \
+             model choice, and its sessions get no project notes. Sessions and tasks already running keep running.",
+            Agent::Codex,
+        ),
         Item {
             name: "Theme",
             explain: "The colors platoon is drawn in. Press enter to try them on your real screen: up and down preview one, \
@@ -1175,8 +1237,9 @@ mod tests {
         &TABS.iter().find(|t| t.title == title).unwrap_or_else(|| panic!("no tab called {title}")).items
     }
 
+    /// The General tab's entries below its Programs (the two program switches come first).
     fn general() -> &'static [Item] {
-        tab("General")
+        &tab("General")[2..]
     }
 
     fn write(d: &Path, text: &str) {
@@ -1316,7 +1379,10 @@ mod tests {
         assert_eq!((ask.label)(ask.value(&s)), "Off");
         ask.assign(&mut s, 1);
         assert!(s.files_editor_ask);
-        assert!(TABS.iter().enumerate().all(|(i, t)| i == TAB_EDITORS || t.headings.is_empty()), "only this tab has groups");
+        assert!(
+            TABS.iter().enumerate().all(|(i, t)| i == TAB_EDITORS || i == 0 || t.headings.is_empty()),
+            "only this tab and General have groups"
+        );
     }
 
     #[test]
@@ -1364,6 +1430,8 @@ mod tests {
                 "ai_find_results",
                 "ai_find_wide_candidates",
                 "update_check",
+                "use_claude_code",
+                "use_codex",
                 "token_features",
                 "theme"
             ],
@@ -1576,9 +1644,10 @@ mod tests {
         assert!(items[1..].iter().all(|i| i.kind == Kind::Steps), "after it only stepped entries");
         assert!(!all_items().any(|i| i.name == "Edit notes with"), "the old name of the notes editor's setting is gone");
         assert!(
-            all_items()
-                .skip(1)
-                .all(|i| matches!(i.kind, Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_) | Kind::Model(_))),
+            all_items().filter(|i| i.name != "Theme").all(|i| matches!(
+                i.kind,
+                Kind::Steps | Kind::Feature(_) | Kind::Instructions(_) | Kind::Editor(_) | Kind::Model(_) | Kind::Program(_)
+            )),
             "the theme is the only one of its kind"
         );
         assert!(!items[0].explain.is_empty() && items[0].explain.len() < 300);
@@ -1598,7 +1667,15 @@ mod tests {
         let names = |title: &str| tab(title).iter().map(|i| i.name).collect::<Vec<_>>();
         assert_eq!(
             names("General"),
-            ["Theme", "Stop idle sessions after", "Archive sessions after", "Idle stop and MCP servers", "Check for a newer platoon"]
+            [
+                "Use Claude Code",
+                "Use Codex",
+                "Theme",
+                "Stop idle sessions after",
+                "Archive sessions after",
+                "Idle stop and MCP servers",
+                "Check for a newer platoon"
+            ]
         );
         assert_eq!(
             names("Search"),
@@ -1789,7 +1866,7 @@ mod tests {
         assert_eq!((d.ai_refresh_messages, d.ai_batch_size, d.ai_daily_tokens, d.ai_pause_percent), (5, 30, 500_000, 80));
         // No model picked: each follows what this computer has (where Claude Code is: Haiku, and Sonnet for the notes).
         assert_eq!((d.ai_model.as_deref(), d.notes_model.as_deref()), (None, None));
-        let claude = crate::agents::Providers { claude: Some("claude-stand-in".into()), codex: None }.catalog();
+        let claude = crate::agents::Providers { claude: Some("claude-stand-in".into()), codex: None, off: Vec::new() }.catalog();
         assert_eq!((d.smart_model_in(&claude).as_deref(), d.notes_model_in(&claude).as_deref()), (Some("haiku"), Some("sonnet")));
         for f in FEATURES {
             // The master switch is off, so nothing may spend anything; a feature added later is on once it is on.
@@ -1901,6 +1978,30 @@ mod tests {
         save(&d, &Settings { ai_daily_tokens: 5, ai_batch_size: 0, ..s }).unwrap();
         let v = saved(&d);
         assert_eq!((v["ai_daily_tokens"].as_u64(), v["ai_batch_size"].as_u64()), (Some(MIN_DAILY_TOKENS), Some(MIN_BATCH)));
+    }
+
+    #[test]
+    fn both_programs_are_on_unless_switched_off_and_only_a_real_boolean_switches_one() {
+        let d = dir("programs");
+        let s = load(&d).0;
+        assert!(s.use_claude_code && s.use_codex && s.switched_off().is_empty(), "on by default");
+        write(&d, r#"{"use_codex": false, "mine": [1]}"#);
+        let s = load(&d).0;
+        assert_eq!((s.use_claude_code, s.use_codex, s.switched_off()), (true, false, vec![Agent::Codex]));
+        assert!(s.uses(Agent::Claude) && !s.uses(Agent::Codex));
+        let mut both = s.clone();
+        both.set_uses(Agent::Claude, false);
+        assert_eq!(both.switched_off(), [Agent::Claude, Agent::Codex], "Claude Code first");
+        // Saved as JSON booleans, every other key kept.
+        save(&d, &Settings { use_codex: true, use_claude_code: false, ..s }).unwrap();
+        assert_eq!((saved(&d)["use_claude_code"].clone(), saved(&d)["use_codex"].clone()), (json!(false), json!(true)));
+        assert_eq!(saved(&d)["mine"], json!([1]));
+        assert_eq!(load(&d).0.switched_off(), [Agent::Claude]);
+        // Anything but true or false is no choice: on.
+        for odd in ["0", "\"off\"", "null", "[]"] {
+            write(&d, &format!(r#"{{"use_claude_code": {odd}, "use_codex": {odd}}}"#));
+            assert!(load(&d).0.switched_off().is_empty(), "{odd}");
+        }
     }
 
     #[test]

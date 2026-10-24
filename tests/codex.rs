@@ -460,3 +460,81 @@ fn a_codex_newer_than_platoon_was_checked_with_is_said_once_above_the_key_hints(
     t.wait_exit();
     assert_eq!(fs::read_to_string(w.base.join("calls")).unwrap().lines().count(), 2, "not asked with the checks off");
 }
+
+/// Codex switched off in platoon's settings (Settings, General, Programs), beside Claude Code.
+fn switch_codex_off(w: &World) {
+    fs::write(w.base.join("config/settings.json"), r#"{"auto_archive_days":0,"use_codex":false}"#).unwrap();
+}
+
+#[test]
+fn with_codex_switched_off_its_notes_hooks_end_at_once_saying_nothing_and_claude_codes_still_work() {
+    let w = World::new("codex-off-hooks");
+    let members = serde_json::json!({FINISHED: "pweb", "cccc-1": "pweb"});
+    let projects = serde_json::json!({"version": 1, "projects": {"pweb": {"name": "Web", "color": "blue", "badge": "WB", "archived": false, "created": 1, "archived_sessions": []}}, "sessions": members});
+    fs::write(w.base.join("config/projects.json"), projects.to_string()).unwrap();
+    fs::create_dir_all(w.base.join("config/projects/pweb")).unwrap();
+    fs::write(w.base.join("config/projects/pweb/project.md"), "# Web\n\nThe shop's notes.\n").unwrap();
+    fs::write(
+        w.base.join("config/settings.json"),
+        r#"{"auto_archive_days":0,"use_codex":false,"tokens_enabled":true,"token_features":{"project_notes":true}}"#,
+    )
+    .unwrap();
+    let sample =
+        |name: &str| fs::read_to_string(Path::new(SAMPLES).join("hooks").join(format!("{name}.json"))).unwrap().replace(PLANNING, FINISHED);
+    let cache_before = fs::read_dir(&w.cache).unwrap().count();
+    for (args, input) in [
+        (["hook", "session-start", "--agent", "codex"], sample("SessionStart")),
+        (["hook", "guard", "--agent", "codex"], sample("UserPromptSubmit")),
+        (["hook", "stop", "--agent", "codex"], sample("Stop-first")),
+    ] {
+        let started = std::time::Instant::now();
+        let (code, out, err) = run_with(&w, &[("PLATOON_OFFER_TASKS", "1".to_string())], &args, &input);
+        assert_eq!((code, out.as_str(), err.as_str()), (0, "", ""), "{args:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "{args:?} took {:?}", started.elapsed());
+    }
+    assert_eq!(fs::read_dir(&w.cache).unwrap().count(), cache_before, "nothing written: no notes sent, none due");
+    assert!(!w.cache.join("notes-due/pweb").exists() && !w.cache.join("notes-sent").exists());
+    // Claude Code's own hook still hands over the notes.
+    let claude = serde_json::json!({"session_id": "cccc-1", "source": "startup", "cwd": w.work, "hook_event_name": "SessionStart"});
+    let (code, out, _) = run(&w, &["hook", "session-start"], &claude.to_string());
+    assert_eq!(code, 0);
+    assert!(out.contains("The shop's notes."), "{out}");
+}
+
+#[test]
+fn with_codex_switched_off_setup_skips_it_and_says_why_and_leaves_its_hooks_file_alone() {
+    let w = World::new("codex-off-setup");
+    switch_codex_off(&w);
+    let hooks = r#"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "mine"}]}]}}"#;
+    fs::write(w.codex.join("hooks.json"), hooks).unwrap();
+    let (code, out, err) = run(&w, &["setup"], "");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(
+        out.contains(
+            "Codex is switched off in platoon's settings, so setup skipped it. What platoon added to Codex before stays as it is."
+        ),
+        "{out}"
+    );
+    assert!(out.contains("Status line") && out.contains("Session guard"), "Claude Code's steps as ever: {out}");
+    assert!(!out.contains("Codex hooks") && !out.contains("trusted in Codex"), "{out}");
+    assert_eq!(fs::read_to_string(w.codex.join("hooks.json")).unwrap(), hooks, "left as it was");
+    assert!(!w.base.join("codex-args").exists(), "Codex wasn't run");
+}
+
+#[test]
+fn with_codex_switched_off_its_conversations_leave_the_list_and_platoon_open_refuses_one() {
+    let w = World::new("codex-off-open");
+    switch_codex_off(&w);
+    let mut t = Term::spawn(&[], &w.env(), &w.work, 30, 140);
+    t.wait_for("Active  0");
+    let shown = t.stable();
+    assert!(!shown.contains("Identify colour") && !shown.contains("GPT-6-Luna"), "{shown}");
+    t.send(b"q");
+    t.wait_exit();
+    let mut t = Term::spawn(&["open", FINISHED], &w.env(), &w.work, 24, 120);
+    t.wait_for_flat("is a Codex conversation, and Codex is switched off in platoon's settings.");
+    t.wait_for_flat("Switch it back on there (Settings, General, \"Use Codex\") to open it.");
+    t.wait_exit();
+    assert!(!w.base.join("codex-args").exists(), "nothing was started");
+    assert!(find_host(&w.cache).is_none());
+}

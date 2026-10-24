@@ -95,6 +95,7 @@ fn lab(name: &str) -> Lab {
     app.set_providers_for_test(Providers {
         claude: Some("/nonexistent/platoon-unit-test/claude".into()),
         codex: Some(CodexAt { program: fake.program.clone(), root: codex.root }),
+        off: Vec::new(),
     });
     app.reload_for_test();
     key(&mut app, KeyCode::Char('3'));

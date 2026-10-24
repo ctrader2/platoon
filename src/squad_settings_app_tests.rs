@@ -226,6 +226,7 @@ fn with_codex(app: &mut App, name: &str) {
     app.set_providers_for_test(crate::agents::Providers {
         claude: Some("/nonexistent/platoon-unit-test/claude".into()),
         codex: Some(codex),
+        off: Vec::new(),
     });
 }
 

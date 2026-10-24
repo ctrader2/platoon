@@ -181,7 +181,8 @@ marked with the task's number like any task's.
 With both installed, `n` asks after the folder: **Start in Claude Code or Codex?** The one you chose last time is starred
 and already picked, so `enter` starts it again; `↑` `↓` (or a click) pick the other, and `esc` starts nothing. Your
 choice is remembered (`new_session_agent` in the [settings file](settings-and-keys.md#the-settings-file)). With only one
-of them installed there is no question: that one starts. `platoon open` with no id starts the one you chose last.
+of them installed (or one [switched off](settings-and-keys.md#switching-a-program-off) in the settings) there is no
+question: that one starts. `platoon open` with no id starts the one you chose last.
 
 A new Codex session starts as `codex --no-daemon` in the folder, under platoon, like any session. Codex saves a
 conversation only when you send your first message, so until then its row stands for the session itself: its folder's

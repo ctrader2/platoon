@@ -197,8 +197,9 @@ pub enum Refusal {
     OverBudget { used: u64, cap: u64 },
     /// The plan of the agent the call would use is used above the pause point, in this window.
     PlanBusy { agent: Agent, pct: u8, limit: u64, window: String },
-    /// No installed agent runs the model it would use: what is missing, in a sentence or two.
-    NoModel(String),
+    /// No installed agent runs the model it would use: what is missing, in a sentence or two, and the program that would
+    /// run it when that program is installed but switched off in platoon's settings.
+    NoModel(String, Option<Agent>),
 }
 
 pub fn wait_text(secs: u64) -> String {
@@ -243,7 +244,7 @@ impl Refusal {
                     agent.short()
                 )
             }
-            Refusal::NoModel(why) => why.clone(),
+            Refusal::NoModel(why, _) => why.clone(),
         }
     }
 
@@ -259,7 +260,7 @@ impl Refusal {
         match self {
             Refusal::MasterOff | Refusal::FeatureOff(_) => "Press s for the settings to switch it back on.",
             Refusal::PlanBusy { .. } => "Press s for the settings to change the pause point.",
-            Refusal::BackedOff { .. } | Refusal::OverBudget { .. } | Refusal::UnknownFeature(_) | Refusal::NoModel(_) => "",
+            Refusal::BackedOff { .. } | Refusal::OverBudget { .. } | Refusal::UnknownFeature(_) | Refusal::NoModel(..) => "",
         }
     }
 
@@ -285,7 +286,8 @@ impl Refusal {
             Refusal::PlanBusy { agent, pct, window, .. } => {
                 format!("smart features paused · your {} plan is {pct}% used ({window})", agent.short())
             }
-            Refusal::NoModel(_) => "smart features stopped · their model isn't installed".into(),
+            Refusal::NoModel(_, Some(off)) => format!("smart features stopped · {} is switched off", off.name()),
+            Refusal::NoModel(_, None) => "smart features stopped · their model isn't installed".into(),
         }
     }
 }
@@ -735,18 +737,13 @@ pub struct Runner {
 }
 
 impl Runner {
-    /// The AI programs this computer has (`Providers::here`).
-    pub fn from_env(cache: &Path) -> Runner {
-        Runner::new(cache, Providers::here())
-    }
-
     pub fn new(cache: &Path, providers: Providers) -> Runner {
         Runner { providers, cache: cache.to_path_buf(), offset: 0 }
     }
 
     /// Claude Code only, run as `program` (a stand-in, in tests).
     pub fn with_program(cache: &Path, program: &str) -> Runner {
-        Runner::new(cache, Providers { claude: Some(program.to_string()), codex: None })
+        Runner::new(cache, Providers { claude: Some(program.to_string()), ..Providers::default() })
     }
 
     /// The same runner with its clock `secs` seconds ahead.
@@ -949,16 +946,26 @@ fn model_for(settings: &Settings, feature: &str, own: Option<&str>, catalog: &Ca
         }
     };
     let Some(model) = model else {
-        return Err(Refusal::NoModel("Neither Claude Code nor Codex is installed on this computer, so there is no model to ask.".into()));
+        return Err(Refusal::NoModel(
+            "Neither Claude Code nor Codex is installed on this computer, so there is no model to ask.".into(),
+            None,
+        ));
     };
     match catalog.agent_of(&model) {
         Some(agent) => Ok((model, agent)),
         None => {
             let mut why = catalog.missing(&model).unwrap_or_default();
-            if let Some(which) = setting {
-                why.push_str(&format!(" Pick another for \"{}\" in platoon's settings.", which.setting_name()));
+            let off = crate::agents::needs(&model).filter(|a| catalog.is_off(*a));
+            match (setting, off) {
+                (Some(which), Some(a)) => why.push_str(&format!(
+                    " Pick another for \"{}\" in platoon's settings, or switch {} back on there.",
+                    which.setting_name(),
+                    a.name()
+                )),
+                (Some(which), None) => why.push_str(&format!(" Pick another for \"{}\" in platoon's settings.", which.setting_name())),
+                (None, _) => {}
             }
-            Err(Refusal::NoModel(why))
+            Err(Refusal::NoModel(why, off))
         }
     }
 }
@@ -1306,7 +1313,7 @@ pub(crate) mod tests {
 
     /// This computer as a test's gate sees it: Claude Code (a stand-in, never run by the gate) and no Codex.
     pub(crate) fn claude_here() -> Providers {
-        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None }
+        Providers { claude: Some("/nonexistent/platoon-unit-test/claude".into()), codex: None, off: Vec::new() }
     }
 
     pub(crate) fn on() -> Settings {
@@ -1906,7 +1913,7 @@ pub(crate) mod tests {
     /// A runner with Claude Code's stand-in `f` and Codex's stand-in `codex` (its folder holding the sample model list).
     fn with_codex(f: &Fake, codex: &crate::testkit::AiFake, name: &str) -> Runner {
         let root = crate::agents::tests::codex_with_models(name).root;
-        Runner::new(&f.cache, Providers { claude: Some(f.script.clone()), codex: Some(codex.as_codex(&root)) })
+        Runner::new(&f.cache, Providers { claude: Some(f.script.clone()), codex: Some(codex.as_codex(&root)), off: Vec::new() })
     }
 
     #[test]
@@ -2014,6 +2021,7 @@ pub(crate) mod tests {
             Providers {
                 claude: None,
                 codex: Some(crate::agents::CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: f.dir.clone() }),
+                off: Vec::new(),
             },
         );
         let _ = fs::remove_file(f.cache.join("ai-usage.json"));
@@ -2032,6 +2040,7 @@ pub(crate) mod tests {
         Providers {
             claude: Some("/nonexistent/platoon-unit-test/claude".into()),
             codex: Some(crate::agents::CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: root.to_path_buf() }),
+            off: Vec::new(),
         }
     }
 
@@ -2159,6 +2168,29 @@ pub(crate) mod tests {
             .unwrap();
         assert!(matches!(f.runner().run(&s, &req()), Err(AiError::Refused(Refusal::OverBudget { .. }))));
         assert!(!f.ran());
+    }
+
+    #[test]
+    fn a_model_of_a_program_switched_off_is_refused_saying_so_and_nothing_starts() {
+        let f = Fake::ok("model-off");
+        let codex = crate::agents::tests::codex_with_models("ai-model-off");
+        let off = Providers { claude: Some(f.script.clone()), codex: Some(codex), off: Vec::new() }.switched(&[Agent::Codex]);
+        let runner = Runner::new(&f.cache, off);
+        let mut s = on();
+        s.ai_model = Some("gpt-6-luna".into());
+        let Err(AiError::Refused(r)) = runner.run(&s, &req()) else { panic!("refused") };
+        assert_eq!(
+            r.plain(),
+            "GPT-6-Luna runs on Codex, which is switched off in platoon's settings. Pick another for \"Model for smart features\" in \
+             platoon's settings, or switch Codex back on there."
+        );
+        assert_eq!(r.short(), "smart features stopped · Codex is switched off");
+        // A call's own model (a task's check): said, without a setting to change.
+        let mut check = Request::new(crate::verdict::FEATURE, "s", "p");
+        check.model = Some("gpt-5.6-terra".into());
+        let Err(AiError::Refused(r)) = runner.run(&Settings::default(), &check) else { panic!("refused") };
+        assert_eq!(r.plain(), "GPT-5.6-Terra runs on Codex, which is switched off in platoon's settings.");
+        assert!(!f.ran(), "nothing was started");
     }
 
     #[test]
@@ -2361,7 +2393,7 @@ pub(crate) mod tests {
     fn cli(args: &[&str], f: &Fake, config: &Path) -> (i32, String, String) {
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
-        let providers = Providers { claude: Some(f.script.clone()), codex: None };
+        let providers = Providers { claude: Some(f.script.clone()), codex: None, off: Vec::new() };
         let code = tokens_cli(&args, &f.cache, config, &providers, &mut out, &mut err);
         (code, String::from_utf8(out).unwrap(), String::from_utf8(err).unwrap())
     }

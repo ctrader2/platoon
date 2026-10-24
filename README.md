@@ -9,7 +9,8 @@ group them into projects with shared notes, and start tasks that follow a squad'
 
 platoon works with [Claude Code](https://docs.anthropic.com/en/docs/claude-code) and
 [Codex](https://github.com/openai/codex), on Linux and macOS. Have either one, or both: their conversations share one
-list, and everything below works with each, but for the status line.
+list, and everything below works with each, but for the status line. With both installed, either can be switched off in
+platoon's settings. → [Switching a program off](guide/settings-and-keys.md#switching-a-program-off)
 
 | | Claude Code | Codex |
 | --- | --- | --- |

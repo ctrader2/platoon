@@ -199,6 +199,12 @@ pub fn run_guard(agent: Agent) -> i32 {
 }
 
 fn guard_inner(agent: Agent) -> i32 {
+    // A program switched off in platoon's settings gets no notes. Codex's own hook carries only those (Codex keeps one
+    // writer per conversation itself), so it ends here; Claude Code's still guards the conversation below.
+    let off = crate::agents::switched_off(&crate::archive::config_dir(), agent);
+    if off && agent.keeps_one_writer() {
+        return 0;
+    }
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
         return 0;
@@ -211,6 +217,9 @@ fn guard_inner(agent: Agent) -> i32 {
         return refused;
     }
     // Allowed. Anything that goes wrong from here on is simply no notes; the prompt goes through either way.
+    if off {
+        return 0;
+    }
     let _ = std::panic::catch_unwind(|| {
         let ai_child = std::env::var_os("PLATOON_AI").is_some();
         if let Some(context) = notes_context(&input, &crate::archive::config_dir(), &cache, ai_child) {

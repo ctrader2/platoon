@@ -59,6 +59,8 @@ mod perf;
 #[cfg(test)]
 mod polish_app_tests;
 mod procs;
+#[cfg(test)]
+mod programs_app_tests;
 mod projects;
 #[cfg(test)]
 mod projects_app_tests;
@@ -137,7 +139,7 @@ fn main() -> io::Result<()> {
         Some("tokens") => {
             let args: Vec<String> = std::env::args().skip(2).collect();
             let (mut out, mut err) = (io::stdout(), io::stderr());
-            let providers = agents::Providers::here();
+            let providers = agents::Providers::here(&archive::config_dir());
             std::process::exit(ai::tokens_cli(&args, &usage::cache_dir(), &archive::config_dir(), &providers, &mut out, &mut err));
         }
         Some("open") => {
@@ -256,13 +258,13 @@ fn statusline() -> io::Result<()> {
 
 /// Refuse to continue until setup is complete. Only the UI and `open` are gated; the commands Claude
 /// Code and the session hosts run behind the scenes never are. PLATOON_SKIP_SETUP_CHECK is for tests and CI.
-/// Claude Code's steps are asked for only where Claude Code is installed (Codex's never block); with neither Claude
-/// Code nor Codex there is nothing to manage, and platoon says what to install.
+/// Claude Code's steps are asked for only where Claude Code is installed and not switched off in platoon's settings
+/// (Codex's never block); with neither Claude Code nor Codex there is nothing to manage, and platoon says what to install.
 fn require_setup() {
     if std::env::var_os("PLATOON_SKIP_SETUP_CHECK").is_some() {
         return;
     }
-    let providers = agents::Providers::here();
+    let providers = agents::Providers::here(&archive::config_dir());
     if providers.claude.is_none() && providers.codex.is_none() {
         eprintln!("{}", setup::NOTHING_INSTALLED);
         std::process::exit(1);
@@ -292,7 +294,9 @@ fn themes() -> io::Result<()> {
 
 fn setup() -> io::Result<()> {
     let root = agents::claude::claude_root();
-    let providers = agents::Providers::here();
+    // A program switched off in platoon's settings is skipped as if it weren't installed: what setup put in it before
+    // stays as it is (taking it out is `platoon uninstall`'s job), and the report says why it was skipped.
+    let providers = agents::Providers::here(&archive::config_dir());
     if providers.claude.is_none() && providers.codex.is_none() {
         eprintln!("{}", setup::NOTHING_INSTALLED);
         std::process::exit(1);
@@ -301,6 +305,7 @@ fn setup() -> io::Result<()> {
     let claude = if providers.claude.is_some() { setup::run(&root) } else { Ok(setup::Report::without_claude()) };
     match claude {
         Ok(mut report) => {
+            report.off.clone_from(&providers.off);
             // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
             if let Some(agents::CodexAt { program, root: codex }) = &providers.codex {
                 let mut c = setup::run_codex(codex);
@@ -330,7 +335,8 @@ fn setup() -> io::Result<()> {
     let agent = ai::smart_agent(&settings::load(&archive::config_dir()).0, &providers.catalog());
     let answer = setup::ask_about_tokens(&archive::config_dir(), interactive, agent, &mut io::stdin().lock(), &mut io::stdout());
     // Yes now, or yes before and nothing named yet: the first pass over the active conversations, right here.
-    if matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
+    // (It reads Claude Code's conversations: none to read where Claude Code isn't installed or is switched off.)
+    if providers.claude.is_some() && matches!(answer, setup::TokenQuestion::Answered(true) | setup::TokenQuestion::AlreadyAsked) {
         let (config, cache) = (archive::config_dir(), usage::cache_dir());
         let env = scan::ScanEnv { config: &config, cache: &cache, root: &root, providers, interactive };
         scan::offer_scan(&env, &mut io::stdin().lock(), &mut io::stdout(), &ai::interrupted);
@@ -1871,6 +1877,8 @@ mod tests {
 
     /// The General tab: the one the settings open on.
     static ITEMS: std::sync::LazyLock<&'static [settings::Item]> = std::sync::LazyLock::new(|| &settings::TABS[0].items);
+    /// The General tab's Programs entries ("Use Claude Code", "Use Codex"), above the Theme entry.
+    const P: usize = 2;
 
     fn config_file(w: &World) -> std::path::PathBuf {
         w.config.join("settings.json")
@@ -1888,13 +1896,15 @@ mod tests {
         app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: x, row: y, modifiers: KeyModifiers::NONE });
     }
 
-    /// The settings open on "Stop idle sessions after", the first of the numeric entries (the Theme entry above
-    /// it is what the settings open on).
+    /// The settings open on "Stop idle sessions after", the first of the numeric entries (the settings open on the
+    /// first of the Programs, above the Theme entry).
     fn open_numeric_settings(app: &mut App) {
         ch(app, 's');
-        assert_eq!(app.setting, 0, "the settings open on the Theme entry");
-        key(app, KeyCode::Down);
-        assert_eq!(app.setting, 1);
+        assert_eq!(app.setting, 0, "the settings open on the first of the Programs");
+        for _ in 0..=P {
+            key(app, KeyCode::Down);
+        }
+        assert_eq!(app.setting, P + 1);
     }
 
     /// A screen on which the settings are open on the first numeric entry, after `draw` so clicks have
@@ -2007,7 +2017,7 @@ mod tests {
 
         // Down / j select the next setting, up / k the previous; the second one changes the other value.
         key(&mut app, KeyCode::Down);
-        assert_eq!(app.setting, 2);
+        assert_eq!(app.setting, P + 2);
         key(&mut app, KeyCode::Right);
         assert_eq!(
             on_disk(&w),
@@ -2015,11 +2025,11 @@ mod tests {
             "the other setting is left alone"
         );
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.setting, 1);
+        assert_eq!(app.setting, P + 1);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Up);
-        assert_eq!(app.setting, 1);
-        assert_eq!(ITEMS.len(), 5, "the General tab: the theme, three numbers and the check for a newer platoon");
+        assert_eq!(app.setting, P + 1);
+        assert_eq!(ITEMS.len(), 7, "the General tab: the two programs, the theme, three numbers and the check for a newer platoon");
         for _ in 0..ITEMS.len() + 2 {
             key(&mut app, KeyCode::Down);
         }
@@ -2380,7 +2390,7 @@ mod tests {
         assert_eq!(cell_fg("Off"), Some(t.readable_on(t.dim, t.surface, crate::theme::MIN_DIM)), "Off is muted (on the selected row)");
         assert_eq!(cell_fg("2 days"), Some(app.theme.accent), "an active value stands out");
         // Every step reads as words a person would say.
-        let labels: Vec<Vec<String>> = ITEMS[1..].iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
+        let labels: Vec<Vec<String>> = ITEMS[P + 1..].iter().map(|i| i.choices.iter().map(|&c| (i.label)(c)).collect()).collect();
         assert_eq!(labels[0], ["Off", "30 minutes", "1 hour", "2 hours", "4 hours", "8 hours", "1 day"]);
         assert_eq!(labels[1], ["Off", "1 day", "2 days", "7 days", "14 days", "30 days"]);
         w.settings(1440 * 3, 1);
@@ -2395,37 +2405,37 @@ mod tests {
         let (mut app, mut term) = settings_screen(&w, 100, 30);
         let surface = app.theme.surface;
         let bg = app.theme.bg;
-        let row1 = hit_rect(&app, |h| matches!(h, Hit::Setting(2)));
+        let row1 = hit_rect(&app, |h| matches!(h, Hit::Setting(i) if *i == P + 2));
 
         // Hover lights the row up; the selected row is lit too.
         assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, bg);
         hover(&mut app, row1.x + 5, row1.y);
         draw(&mut term, &app);
         assert_eq!(term.backend().buffer()[(row1.x + 5, row1.y)].bg, surface, "hovered row");
-        let row0 = hit_rect(&app, |h| matches!(h, Hit::Setting(1)));
+        let row0 = hit_rect(&app, |h| matches!(h, Hit::Setting(i) if *i == P + 1));
         assert_eq!(term.backend().buffer()[(row0.x + 5, row0.y)].bg, surface, "selected row");
 
         // A click on a row selects it and changes nothing.
         click(&mut app, row1.x + 5, row1.y);
-        assert_eq!((app.setting, on_disk(&w)), (2, Settings { idle_stop_minutes: 120, auto_archive_days: 2, ..Settings::default() }));
+        assert_eq!((app.setting, on_disk(&w)), (P + 2, Settings { idle_stop_minutes: 120, auto_archive_days: 2, ..Settings::default() }));
         draw(&mut term, &app);
 
         // The buttons step; clicking one on another row selects that row and steps it.
-        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Next) if *i == P + 1));
         click(&mut app, next0.x + 1, next0.y);
-        assert_eq!((app.setting, on_disk(&w).idle_stop_minutes), (1, 240));
+        assert_eq!((app.setting, on_disk(&w).idle_stop_minutes), (P + 1, 240));
         draw(&mut term, &app);
-        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Prev)));
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Prev) if *i == P + 2));
         click(&mut app, prev1.x + 1, prev1.y);
-        assert_eq!((app.setting, on_disk(&w).auto_archive_days), (2, 1));
+        assert_eq!((app.setting, on_disk(&w).auto_archive_days), (P + 2, 1));
         draw(&mut term, &app);
-        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Prev)));
+        let prev1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Prev) if *i == P + 2));
         click(&mut app, prev1.x + 1, prev1.y);
         assert_eq!(on_disk(&w).auto_archive_days, 0);
         draw(&mut term, &app);
 
         // Clicking the value cycles (and wraps).
-        let value1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Cycle)));
+        let value1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 2));
         click(&mut app, value1.x + 1, value1.y);
         assert_eq!(on_disk(&w).auto_archive_days, 1);
         draw(&mut term, &app);
@@ -2436,7 +2446,7 @@ mod tests {
 
         // The wheel moves between the settings.
         app.on_mouse(MouseEvent { kind: MouseEventKind::ScrollUp, column: 5, row: 5, modifiers: KeyModifiers::NONE });
-        assert_eq!(app.setting, 1);
+        assert_eq!(app.setting, P + 1);
     }
 
     #[test]
@@ -2447,9 +2457,9 @@ mod tests {
         let border = app.theme.border;
         let accent = app.theme.accent;
         let buf = term.backend().buffer();
-        let prev0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Prev)));
-        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(1, settings::Step::Next)));
-        let next1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(2, settings::Step::Next)));
+        let prev0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Prev) if *i == P + 1));
+        let next0 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Next) if *i == P + 1));
+        let next1 = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Next) if *i == P + 2));
         assert_eq!(buf[(prev0.x + 1, prev0.y)].fg, border, "nothing below Off");
         assert_eq!(buf[(next0.x + 1, next0.y)].fg, accent);
         assert_eq!(buf[(next1.x + 1, next1.y)].fg, border, "nothing above 30 days");
@@ -2626,10 +2636,10 @@ mod tests {
         let mut app = w.app();
         ch(&mut app, 's');
         for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 26), (60, 24)] {
-            for _ in 0..3 {
+            for _ in 0..P + 3 {
                 key(&mut app, KeyCode::Down); // the MCP entry is the one under test, and (small terminals) the one explained
             }
-            assert_eq!(app.setting, 3);
+            assert_eq!(app.setting, P + 3);
             let mut term = Terminal::new(TestBackend::new(cols, rows)).unwrap();
             let shown = draw(&mut term, &app);
             let text = popup_flat(&shown);
@@ -2641,7 +2651,7 @@ mod tests {
                 "they are ignored",
                 "start again when you open it",
                 "Count MCP servers",
-                ITEMS[3].explain,
+                ITEMS[P + 3].explain,
             ] {
                 assert!(text.contains(want), "{want:?} missing at {ctx}");
             }
@@ -2668,7 +2678,7 @@ mod tests {
         for _ in 0..2 {
             key(&mut app, KeyCode::Down);
         }
-        assert_eq!(app.setting, 3);
+        assert_eq!(app.setting, P + 3);
         assert!(draw(&mut term, &app).contains("Ignore MCP servers"), "the default");
         assert!(!config_file(&w).exists() || on_disk(&w).idle_stop_ignores_mcp, "looking at it changes nothing");
 
@@ -2694,22 +2704,22 @@ mod tests {
         // The mouse: the buttons step, the value toggles, a click on the row selects it.
         ch(&mut app, 'g');
         draw(&mut term, &app);
-        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Prev)));
+        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Prev) if *i == P + 3));
         click(&mut app, prev.x + 1, prev.y);
-        assert_eq!((app.setting, on_disk(&w).idle_stop_ignores_mcp), (3, false), "a button on another row selects it and steps");
+        assert_eq!((app.setting, on_disk(&w).idle_stop_ignores_mcp), (P + 3, false), "a button on another row selects it and steps");
         draw(&mut term, &app);
-        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Cycle)));
+        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 3));
         click(&mut app, value.x + 1, value.y);
         assert!(on_disk(&w).idle_stop_ignores_mcp);
         draw(&mut term, &app);
-        let next = hit_rect(&app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Next)));
+        let next = hit_rect(&app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Next) if *i == P + 3));
         click(&mut app, next.x + 1, next.y);
         assert!(on_disk(&w).idle_stop_ignores_mcp, "already at the end");
         let buf = term.backend().buffer();
         assert_eq!(buf[(next.x + 1, next.y)].fg, app.theme.border, "the button that can't go further is muted");
         // Neither choice is drawn as "off": both read as a live value.
         let accent_of = |app: &App, term: &Terminal<TestBackend>| {
-            let row = hit_rect(app, |h| matches!(h, Hit::SettingStep(3, settings::Step::Cycle)));
+            let row = hit_rect(app, |h| matches!(h, Hit::SettingStep(i, settings::Step::Cycle) if *i == P + 3));
             term.backend().buffer()[(row.x + 2, row.y)].fg
         };
         assert_eq!(accent_of(&app, &term), app.theme.accent);
@@ -2752,35 +2762,33 @@ mod tests {
                 assert!(flat(&text).contains(&format!("platoon needs at least 60×14 — this window is 60×{rows}")), "60x{rows}\n{text}");
                 continue;
             }
-            assert!(text.contains("Theme") && text.contains("esc back"), "60x{rows}\n{text}");
+            assert!(text.contains("Use Claude Code") && text.contains("esc back"), "60x{rows}\n{text}");
             if rows >= 10 {
-                assert!(text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
-            }
-            if rows >= 12 {
-                assert!(text.contains("Archive sessions after"), "60x{rows}\n{text}");
+                assert!(text.contains("Use Codex"), "60x{rows}\n{text}");
             }
         }
         // With little room only the selected setting explains itself, and moving on moves the explanation.
+        to_theme_row(&mut app);
         let mut term = Terminal::new(TestBackend::new(60, 18)).unwrap();
         let first = flat(&draw(&mut term, &app));
-        assert!(first.contains(ITEMS[0].explain) && !first.contains(ITEMS[1].explain), "{first}");
+        assert!(first.contains(ITEMS[P].explain) && !first.contains(ITEMS[P + 1].explain), "{first}");
         key(&mut app, KeyCode::Down);
         let mut term = Terminal::new(TestBackend::new(60, 19)).unwrap();
         let second = flat(&draw(&mut term, &app));
-        assert!(second.contains(ITEMS[1].explain) && !second.contains(ITEMS[0].explain), "{second}");
-        // The long MCP explanation needs a few more lines: the reassurance line steps aside for it at 18.
+        assert!(second.contains(ITEMS[P + 1].explain) && !second.contains(ITEMS[P].explain), "{second}");
+        // The long MCP explanation needs a few more lines (and the tab's two headings two more): the reassurance line steps aside for it at 21.
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Down);
-        let mut term = Terminal::new(TestBackend::new(60, 18)).unwrap();
+        let mut term = Terminal::new(TestBackend::new(60, 21)).unwrap();
         let third = draw(&mut term, &app);
-        assert!(flat(&third).contains(ITEMS[3].explain) && !third.contains("apply immediately"), "{third}");
+        assert!(flat(&third).contains(ITEMS[P + 3].explain) && !third.contains("apply immediately"), "{third}");
         // Too cramped to explain it (the smallest size platoon draws in): the entries and the way back are still whole.
         let mut term = Terminal::new(TestBackend::new(60, 14)).unwrap();
         let cramped = flat(&draw(&mut term, &app));
-        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("esc back"), "{cramped}");
+        assert!(cramped.contains(ITEMS[P + 3].name) && cramped.contains("esc back"), "{cramped}");
         let mut term = Terminal::new(TestBackend::new(60, 20)).unwrap();
         let cramped = draw(&mut term, &app);
-        assert!(cramped.contains(ITEMS[3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
+        assert!(cramped.contains(ITEMS[P + 3].name) && cramped.contains("Ignore MCP servers") && cramped.contains("esc back"), "{cramped}");
     }
 
     #[test]
@@ -3023,11 +3031,20 @@ mod tests {
         std::fs::write(w.config.join("themes").join(name), text).unwrap();
     }
 
+    /// From the settings as they open (on the first of the Programs), down to the Theme entry.
+    fn to_theme_row(app: &mut App) {
+        for _ in 0..P {
+            key(app, KeyCode::Down);
+        }
+        assert_eq!(app.items()[app.setting].name, "Theme");
+    }
+
     fn open_themes(app: &mut App) {
         if matches!(app.mode, Mode::List) {
             ch(app, 's');
+            to_theme_row(app);
         }
-        assert!(matches!(app.mode, Mode::Settings) && app.setting == 0, "the settings are open on the Theme entry");
+        assert!(matches!(app.mode, Mode::Settings) && app.setting == P, "the settings are open on the Theme entry");
         key(app, KeyCode::Enter);
         assert!(matches!(app.mode, Mode::Themes));
     }
@@ -3072,13 +3089,14 @@ mod tests {
 
         // Space opens it too, so does ctrl+c close it, and so does clicking the value.
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         ch(&mut app, ' ');
         assert!(matches!(app.mode, Mode::Themes));
         app.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         assert!(matches!(app.mode, Mode::Settings) && !app.quit);
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         draw(&mut term, &app);
-        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Cycle)));
+        let value = hit_rect(&app, |h| matches!(h, Hit::SettingStep(P, settings::Step::Cycle)));
         click(&mut app, value.x + 2, value.y);
         assert!(matches!(app.mode, Mode::Themes), "the value is a button that opens the list");
         // The other rows' Enter still steps their own value and never opens the list.
@@ -3116,12 +3134,13 @@ mod tests {
         app.act(Action::Confirm);
         assert!(!opened(&mut app));
         // And a stale click on the theme row's value can't open it from the list either.
-        app.hits.borrow_mut().push((ratatui::layout::Rect::new(0, 0, 200, 50), Hit::SettingStep(0, settings::Step::Cycle)));
+        app.hits.borrow_mut().push((ratatui::layout::Rect::new(0, 0, 200, 50), Hit::SettingStep(P, settings::Step::Cycle)));
         click(&mut app, 3, 3);
         assert!(!opened(&mut app));
         // From the settings, only the Theme row opens it.
         app.mode = Mode::List;
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Enter);
         assert!(!opened(&mut app));
@@ -3142,6 +3161,7 @@ mod tests {
             snapshot(&term)
         };
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         let settings_before = {
             draw(&mut term, &app);
             snapshot(&term)
@@ -3190,6 +3210,7 @@ mod tests {
 
         // Reopening starts from the same picture as the first time.
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         key(&mut app, KeyCode::Enter);
         draw(&mut term, &app);
         assert_eq!(snapshot(&term), picker_before);
@@ -3305,6 +3326,7 @@ mod tests {
         let w = theme_world("tl-arrows");
         let mut app = w.app();
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         let stamp = std::fs::metadata(config_file(&w)).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         key(&mut app, KeyCode::Left);
@@ -3336,12 +3358,12 @@ mod tests {
         let (_, row) = locate(term.backend().buffer(), "My Theme");
         assert_eq!(term.backend().buffer()[(locate(term.backend().buffer(), "My Theme").0, row)].fg, app.theme.accent);
         // The buttons on the row do the same, and Enter still opens the list rather than stepping.
-        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Prev)));
+        let prev = hit_rect(&app, |h| matches!(h, Hit::SettingStep(P, settings::Step::Prev)));
         click(&mut app, prev.x + 1, prev.y);
         assert_eq!(saved_theme(&w).as_deref(), Some("terminal"));
         let next = {
             draw(&mut term, &app);
-            hit_rect(&app, |h| matches!(h, Hit::SettingStep(0, settings::Step::Next)))
+            hit_rect(&app, |h| matches!(h, Hit::SettingStep(P, settings::Step::Next)))
         };
         click(&mut app, next.x + 1, next.y);
         assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"));
@@ -3355,6 +3377,7 @@ mod tests {
         let mut app = w.app();
         assert_eq!(app.theme.id, "catppuccin-mocha", "shown as the default");
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         key(&mut app, KeyCode::Left);
         assert_eq!(saved_theme(&w).as_deref(), Some("from-the-future"), "nothing lies before the default");
         // Opening the list and leaving it, or keeping what it opened on, is not a choice either.
@@ -3374,6 +3397,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(120, 32)).unwrap();
         let t = app.theme.clone();
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         draw(&mut term, &app);
         let buf = snapshot(&term);
         let (gx, gy) = locate(&buf, "gamma");
@@ -3602,6 +3626,7 @@ mod tests {
         let mut term = Terminal::new(TestBackend::new(100, 30)).unwrap();
         let start = |app: &mut App, term: &mut Terminal<TestBackend>| {
             app.mode = Mode::Settings;
+            app.setting = P;
             open_themes(app);
             draw(term, app);
         };
@@ -3734,6 +3759,7 @@ mod tests {
         assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"));
         key(&mut app, KeyCode::Esc);
         ch(&mut app, 's');
+        to_theme_row(&mut app);
         key(&mut app, KeyCode::Down);
         key(&mut app, KeyCode::Right);
         assert_eq!(saved_theme(&w).as_deref(), Some("user:my-theme"), "changing another setting keeps the id of a theme that is gone");

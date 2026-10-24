@@ -12,6 +12,15 @@ scrolls, and on a small terminal only the selected entry is explained.
 
 ### General
 
+In two groups. **Programs** comes first: which of the two AI programs platoon uses.
+
+| Group | Setting | What it does | Choices |
+| --- | --- | --- | --- |
+| Programs | Use Claude Code | Off: platoon leaves Claude Code out, as if it weren't installed (see [Switching a program off](#switching-a-program-off)). Sessions and tasks already running keep running. | On (default), Off; **Not installed** where it isn't, and then it can't be changed |
+| Programs | Use Codex | The same, for Codex. | On (default), Off; **Not installed** where it isn't |
+
+The other group, **Everything else**:
+
 | Setting | What it does | Choices |
 | --- | --- | --- |
 | Theme | The colors platoon is drawn in. `enter` on it opens a list that previews each theme on your real screen (see [Themes](themes.md)). | The [built-in themes](themes.md#the-built-in-themes) (Catppuccin Mocha by default) and your own |
@@ -22,6 +31,36 @@ scrolls, and on a small terminal only the selected entry is explained.
 
 Choose Count MCP servers if you'd rather a session with any program running under it, MCP servers included, was never
 stopped: that is how idle stop worked before this choice existed.
+
+#### Switching a program off
+
+With Claude Code and Codex both installed, you can have platoon use only one of them. A program switched off is left out
+exactly as if it weren't installed:
+
+- Its sessions leave the Sessions list, the project screens, the counts and the search, and its plan usage leaves the
+  header.
+- `n` doesn't ask which program: the other one starts. `platoon open` with no id starts the other one too, and
+  `platoon open <id>` of one of its conversations says it is switched off and opens nothing.
+- Its models leave every model choice: the smart features', the notes', and a squad's Model and Verdict model.
+- `platoon setup` skips it and says so: **Codex is switched off in platoon's settings, so setup skipped it.** What setup
+  added to it before stays as it is; taking that out is [`platoon uninstall`](install-and-setup.md#uninstall)'s job.
+  The notice about a newer version skips it too.
+- Its hooks stay installed but do nothing while it is off: no notes are handed to its sessions, its sessions' turns don't
+  update a project's notes, and a task's hooks in it do nothing (its state doesn't change and its work isn't checked).
+  Claude Code's session guard keeps working all the same: one copy of a conversation writing at a time is about safety.
+
+Nothing is quietly swapped. A setting or a squad of your own that names one of its models says so, for example **GPT-6-Luna
+(Codex is switched off in Settings)**, and what would use it is refused, saying why, until you pick another model or
+switch the program back on. The built-in squads you haven't changed run on the other program's model, and say so: **GPT-6-Luna,
+since Claude Code is switched off** (as on a [computer with only Codex](tasks-and-squads.md#on-a-computer-with-only-codex)).
+
+Nothing that is running is stopped. Its sessions keep running in platoon; a running task of it stays on the
+[Tasks tab](tasks-and-squads.md#the-tasks-tab), marked **Codex is switched off**, and `enter` still opens its session and
+`c` still cancels it. A task in it that isn't running isn't started or continued: `enter` says why.
+
+The last program on can't be switched off, since platoon needs one: the screen says so ("Claude Code can't be switched
+off while Codex is off too: platoon needs one of them. Switch Codex on first."). A program that isn't installed can't be
+switched at all.
 
 ### Search
 
@@ -69,8 +108,9 @@ The screens name the program that really answers. Where these pages say platoon 
 box, and in what tasks from a conversation say when no tasks come back. With both programs installed, the settings and
 lines about your sessions name both ("Read Claude's or Codex's last reply up to").
 
-A model you picked stays exactly as you picked it. If it can't run here any more (say Codex was uninstalled), the setting
-says so, for example **GPT-6-Luna (needs Codex, not installed)**, and what would use it stops and says what is missing;
+A model you picked stays exactly as you picked it. If it can't run here any more (say Codex was uninstalled, or
+[switched off](#switching-a-program-off)), the setting says so, for example **GPT-6-Luna (needs Codex, not installed)** or
+**GPT-6-Luna (Codex is switched off in Settings)**, and what would use it stops and says what is missing;
 platoon never swaps in another model by itself. Pick another to go on.
 
 Until you pick one, the default follows what this computer has: Haiku for the smart features and Sonnet for the notes
@@ -113,8 +153,9 @@ In two groups:
 
 ### Moving around the settings
 
-`↑` `↓` pick a setting on the tab showing (the popup opens on Theme); `←` `→` (or `h` `l`, `-` `+`) step through its
-choices; `enter` goes to the next choice and wraps around to the first one (Off, or Count MCP servers). On Theme, `enter`
+`↑` `↓` pick a setting on the tab showing (the popup opens on Use Claude Code, the first of the Programs); `←` `→` (or `h`
+`l`, `-` `+`) step through its choices (on a program, `←` is Off and `→` On); `enter` goes to the next choice and wraps
+around to the first one (Off, or Count MCP servers). On Theme, `enter`
 opens the theme list instead, and `←` `→` switch to the previous or next theme and save it at once. With the mouse: click a
 row to select it, the `‹` `›` buttons to step, or the value itself to go to the next choice (on Theme, to open the list).
 
@@ -137,7 +178,7 @@ shows the exact path). platoon doesn't create it until you change something, and
  "ai_model": "haiku", "ai_batch_size": 30, "ai_refresh_messages": 5, "ai_quiet_seconds": 60, "ai_prompts_per_session": 8,
  "ai_prompt_chars": 300, "ai_archived": "off", "ai_archived_share": 50, "ai_find_candidates": 50, "ai_find_results": 10,
  "ai_find_wide_candidates": 200, "notes_editor": "ask", "files_editor": "", "files_editor_ask": false, "notes_quiet_minutes": 3,
- "notes_reply_chars": 1500, "update_check": true}
+ "notes_reply_chars": 1500, "update_check": true, "use_claude_code": true, "use_codex": true}
 ```
 
 A value that isn't one of the steps (say `90` minutes) is shown as it is and left alone until you change that setting, when
@@ -160,6 +201,9 @@ it moves to the nearest step. Off is the same as `0` in the file. The limits:
   `files_editor_ask` is `true` or `false`.
 - `notes_quiet_minutes` is 1 to 60; `notes_reply_chars` is 200 to 5000.
 - `update_check` is `true` or `false`; anything else there means the default (`true`).
+- `use_claude_code` and `use_codex` are `true` (the default) or `false`: whether platoon uses each program (see
+  [Switching a program off](#switching-a-program-off)); anything else there means `true`. A file that switches off every
+  program this computer has is ignored, since platoon needs one.
 - `new_session_agent` is `claude` or `codex`: the program you last started a new session in when `n` asked (with both
   installed). It isn't in the file until you have chosen once, and it is picked in advance the next time; `platoon open`
   with no id starts a new session in it too.

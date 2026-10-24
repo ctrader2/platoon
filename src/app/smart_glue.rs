@@ -60,7 +60,7 @@ pub struct Engine {
     find_flight: Option<FindFlight>,
     find_waiting: Option<FindWaiting>,
     /// Do nothing until the clock reaches this (seconds since the epoch).
-    retry_at: u64,
+    pub(super) retry_at: u64,
     /// Why nothing is being done right now, in plain words, when that is a refusal or an error.
     idle: Option<String>,
     /// Conversations done in this run of work, and how many there are in all (done + still to do).
@@ -146,8 +146,7 @@ impl App {
     /// The runner every call of the app goes through: Claude Code run as `program` (the stand-in `claude` in tests),
     /// Codex as this computer has it, and the test clock.
     pub(super) fn ai_runner(&self, program: &str) -> Runner {
-        let providers =
-            Providers { claude: self.providers().claude.as_ref().map(|_| program.to_string()), codex: self.providers().codex.clone() };
+        let providers = Providers { claude: self.providers().claude.as_ref().map(|_| program.to_string()), ..self.providers().clone() };
         Runner::new(&self.cache, providers).with_clock_offset(self.smart.offset)
     }
 
@@ -733,7 +732,8 @@ impl App {
     /// looks again at once: what stopped it may have been the programs.
     #[cfg(test)]
     pub fn set_providers_for_test(&mut self, providers: Providers) {
-        self.providers = providers;
+        self.installed = providers;
+        self.sync_providers();
         self.smart.retry_at = 0;
     }
 

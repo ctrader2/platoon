@@ -188,7 +188,11 @@ fn with_an_openai_model_claude_code_conversations_are_named_by_codex() {
     let codex = AiFake::codex("sm-codex");
     let mut app = app_with(&w, &fake);
     let root = crate::agents::tests::codex_with_models("sm-codex").root;
-    app.set_providers_for_test(crate::agents::Providers { claude: Some(fake.script.clone()), codex: Some(codex.as_codex(&root)) });
+    app.set_providers_for_test(crate::agents::Providers {
+        claude: Some(fake.script.clone()),
+        codex: Some(codex.as_codex(&root)),
+        off: Vec::new(),
+    });
     app.settle_ai_for_test(10);
     assert_eq!((fake.calls(), codex.calls()), (0, 1), "the model decides the program: {:?}", app.smart_idle());
     assert_eq!(&codex.argv(1)[..8], ["exec", "--json", "--ephemeral", "--ignore-user-config", "-s", "read-only", "-m", "gpt-6-luna"]);

@@ -324,7 +324,7 @@ mod tests {
 
     /// Claude Code run as `program`, no Codex.
     fn claude_only(program: &str) -> crate::agents::Providers {
-        crate::agents::Providers { claude: Some(program.to_string()), codex: None }
+        crate::agents::Providers { claude: Some(program.to_string()), codex: None, off: Vec::new() }
     }
 
     fn on(w: &World, change: impl FnOnce(&mut Settings)) {

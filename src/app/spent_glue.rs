@@ -102,7 +102,8 @@ impl App {
         }
         self.sw.last = Some(Instant::now());
         let root = self.reader.root().to_path_buf();
-        let codex_root = self.providers.codex_root().map(Path::to_path_buf);
+        // A task of a program switched off is still on the board: what it spent is read all the same.
+        let codex_root = self.installed.codex_root().map(Path::to_path_buf);
         let prev = self.sw.logs.clone();
         let (tx, rx) = channel();
         thread::spawn(move || {

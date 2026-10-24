@@ -211,6 +211,13 @@ Without Claude Code, the built-in squads you haven't changed run on Codex's firs
 check of its work. The Squads tab and the list `s` opens say so: **Model GPT-6-Luna, since Claude Code isn't installed**.
 A squad of your own that names one of Claude's models says **(needs Claude Code, not installed)** and doesn't start.
 
+The same goes for a program [switched off](settings-and-keys.md#switching-a-program-off) in platoon's settings: the
+built-ins say **GPT-6-Luna, since Claude Code is switched off**, and a squad of your own on one of its models says
+**(Codex is switched off in Settings)** and doesn't start. A task already running in a program switched off keeps
+running: its row on the Tasks tab says **Codex is switched off**, `enter` opens its session and `c` cancels it, but it
+isn't started or continued again until you switch the program back on. Its hooks do nothing meanwhile, so its state
+stays as it was and its work isn't checked.
+
 ## Squads
 
 | Squad | For | Model | Plans first |

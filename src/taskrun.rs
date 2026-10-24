@@ -126,7 +126,7 @@ pub fn rules(r: &Rules) -> String {
         // Codex can't commit in its sandbox (it keeps git's data read-only): platoon commits for it at each stop.
         Some(b) if r.agent == Agent::Codex => out.push_str(&format!(
             "- You work in {} on the branch `{b}`, a git worktree made for this task. Don't commit, and don't run git commands that write (add, commit, stash, checkout, switch, branch, merge, rebase, reset, tag): git's data is read-only for you here, and platoon commits what you changed on `{b}` each time you stop.\n\
-             - The work stays on the branch `{b}`: it is not merged, and the user merges it. If you changed files, your final message says that the work is on the branch `{b}` and is not merged. If you changed nothing, leave the branch out of it.\n",
+             - The work stays on the branch `{b}`: it is not merged, and the user merges it. If you changed files, your final message says that the work is on the branch `{b}`, is not merged, and that platoon commits it when you stop: don't say it isn't committed. If you changed nothing, leave the branch out of it.\n",
             r.folder
         )),
         Some(b) => out.push_str(&format!(
@@ -605,13 +605,19 @@ pub fn run_hook(name: &str, agent: Agent) -> i32 {
     if agent == Agent::Codex && task.is_none() {
         return 0;
     }
+    // A program switched off in platoon's settings: its tasks' sessions keep running, and their hooks do nothing (no
+    // state changes, no check of the work, no tokens).
+    let config = crate::archive::config_dir();
+    if crate::agents::switched_off(&config, agent) {
+        return 0;
+    }
     let said = std::panic::catch_unwind(|| {
         let mut input = String::new();
         std::io::stdin().take(1 << 20).read_to_string(&mut input).ok()?;
         let at = Places {
-            config: crate::archive::config_dir(),
+            providers: crate::agents::Providers::here(&config),
+            config: config.clone(),
             cache: crate::usage::cache_dir(),
-            providers: crate::agents::Providers::here(),
             check_timeout: verdict::TIMEOUT,
             task: task.clone(),
         };
@@ -666,7 +672,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         Places {
             config: d.to_path_buf(),
             cache: d.join("cache"),
-            providers: crate::agents::Providers { claude: Some(script.to_string_lossy().into_owned()), codex: None },
+            providers: crate::agents::Providers { claude: Some(script.to_string_lossy().into_owned()), codex: None, off: Vec::new() },
             check_timeout: Duration::from_secs(20),
             task: None,
         }
@@ -1345,7 +1351,7 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"","struc
         for want in [
             "Don't commit, and don't run git commands that write (add, commit, stash",
             "platoon commits what you changed on `task/5` each time you stop",
-            "If you changed files, your final message says that the work is on the branch `task/5` and is not merged",
+            "If you changed files, your final message says that the work is on the branch `task/5`, is not merged, and that platoon commits it when you stop: don't say it isn't committed.",
             "one file each (Feature: `feature.md`, Plan first: `planfirst.md`)",
             "request_user_input tool when you have it",
             "starting with \"Question for you:\"",

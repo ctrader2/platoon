@@ -300,7 +300,7 @@ fn h_hands_a_codex_conversation_on_to_a_new_codex_session_with_the_document_as_i
 #[test]
 fn a_codex_conversation_is_not_handed_on_when_codex_is_not_installed_and_nothing_is_asked() {
     let (_w, mut app, fake, _, _) = handoff_world("codex-handoff-gone");
-    app.set_providers_for_test(crate::agents::Providers { claude: Some(fake.script.clone()), codex: None });
+    app.set_providers_for_test(crate::agents::Providers { claude: Some(fake.script.clone()), codex: None, off: Vec::new() });
     key(&mut app, KeyCode::Char('h'));
     assert!(matches!(app.mode, Mode::List));
     let notice = app.active_notice().unwrap_or_default().to_string();
@@ -512,7 +512,7 @@ fn with_one_agent_installed_n_starts_it_without_asking() {
     fs::create_dir_all(&work).unwrap();
     let mut app = w.codex_app();
     let codex = app.providers().codex.clone();
-    app.set_providers_for_test(crate::agents::Providers { claude: None, codex });
+    app.set_providers_for_test(crate::agents::Providers { claude: None, codex, off: Vec::new() });
     new_session_in(&mut app, &work);
     assert!(matches!(app.mode, Mode::List), "no question");
     assert_eq!(
@@ -726,7 +726,11 @@ fn on_codex(w: &World, app: &mut App, claude: &AiFake) -> AiFake {
     settings::save(&w.config, &s).unwrap();
     app.refresh_for_test(); // the settings file is read again
     app.set_ai_program_for_test(&claude.script);
-    app.set_providers_for_test(crate::agents::Providers { claude: Some(claude.script.clone()), codex: Some(codex.as_codex(&w.codex())) });
+    app.set_providers_for_test(crate::agents::Providers {
+        claude: Some(claude.script.clone()),
+        codex: Some(codex.as_codex(&w.codex())),
+        off: Vec::new(),
+    });
     assert_eq!(app.smart_agent(), Agent::Codex);
     codex
 }

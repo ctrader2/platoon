@@ -353,7 +353,8 @@ impl Setting {
 
     /// What `s` has for it, in the pane's words: a model by its name, with the program that runs it while both are
     /// installed ("Opus (Claude Code)", "GPT-6-Luna (Codex)"), said when nothing here runs it (`Catalog::label`), and
-    /// said openly when a built-in runs on Codex's model because Claude Code isn't installed (`Squad::as_run`).
+    /// said openly when a built-in runs on Codex's model because Claude Code isn't installed or is switched off
+    /// (`Squad::as_run`).
     pub fn words(self, s: &Squad, catalog: &Catalog) -> String {
         let model = |m: &str| {
             let run = s.as_run(catalog);
@@ -362,7 +363,7 @@ impl Setting {
                 _ => run.model,
             };
             if ran != m {
-                return format!("{}, since Claude Code isn't installed", catalog.name(&ran));
+                return format!("{}, since Claude Code {}", catalog.name(&ran), catalog.absent(Agent::Claude));
             }
             match catalog.agent_of(m) {
                 Some(a) if catalog.installed(Agent::Claude) && catalog.installed(Agent::Codex) => {
@@ -813,6 +814,7 @@ mod tests {
         let both = crate::agents::Providers {
             claude: Some("/nonexistent/platoon-unit-test/claude".into()),
             codex: Some(crate::agents::tests::codex_with_models("squad-both")),
+            off: Vec::new(),
         }
         .catalog();
         let mut s = parse("x", "---\nname: X\ndescription: D\nmodel: fable\n---\nGo.\n", Origin::Own);
@@ -836,8 +838,12 @@ mod tests {
     #[test]
     fn on_a_computer_with_only_codex_a_built_in_runs_on_codexs_model_and_says_so_while_a_users_own_squad_doesnt() {
         let d = dir_for("codex-only");
-        let codex_only =
-            crate::agents::Providers { claude: None, codex: Some(crate::agents::tests::codex_with_models("squad-codex-only")) }.catalog();
+        let codex_only = crate::agents::Providers {
+            claude: None,
+            codex: Some(crate::agents::tests::codex_with_models("squad-codex-only")),
+            off: Vec::new(),
+        }
+        .catalog();
         let feature = get(&d, "feature").unwrap();
         assert_eq!((feature.model.as_str(), feature.verdict_model.as_str()), ("opus", "fable"), "the file as it is");
         let run = feature.as_run(&codex_only);
@@ -854,6 +860,27 @@ mod tests {
             "a squad of the user's says plainly what it can't run"
         );
         assert_eq!(mine.as_run(&codex_only).verdict_model, "fable");
+        // Claude Code installed but switched off: the same, said as switched off.
+        let claude_off = crate::agents::Providers {
+            claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+            codex: Some(crate::agents::tests::codex_with_models("squad-claude-off")),
+            off: Vec::new(),
+        }
+        .switched(&[Agent::Claude])
+        .catalog();
+        assert_eq!(feature.as_run(&claude_off).model, "gpt-6-luna");
+        assert_eq!(Setting::Model.words(&feature, &claude_off), "GPT-6-Luna, since Claude Code is switched off");
+        assert_eq!(Setting::VerdictModel.words(&mine, &claude_off), "Fable (Claude Code is switched off in Settings)");
+        // Codex switched off: a squad of the user's on one of its models says so, and isn't swapped.
+        let codex_off = crate::agents::Providers {
+            claude: Some("/nonexistent/platoon-unit-test/claude".into()),
+            codex: Some(crate::agents::tests::codex_with_models("squad-codex-off")),
+            off: Vec::new(),
+        }
+        .switched(&[Agent::Codex])
+        .catalog();
+        assert_eq!(Setting::Model.words(&mine, &codex_off), "GPT-5.6-Terra (Codex is switched off in Settings)");
+        assert_eq!(mine.as_run(&codex_off).model, "gpt-5.6-terra");
         // With Claude Code installed nothing stands in.
         let claude = crate::agents::tests::claude_catalog();
         assert_eq!(get(&d, "docs").unwrap().as_run(&claude).model, "sonnet");

@@ -257,6 +257,10 @@ pub fn spawn_helper(id: &str) -> io::Result<()> {
 /// `platoon hook stop`. Always 0, always silent: a hook that gets in a session's way is worse than no hook.
 /// `platoon hook stop [--agent codex]`: the hook of `agent`'s sessions.
 pub fn run_hook(agent: Agent) -> i32 {
+    // A program switched off in platoon's settings: its sessions' turns bring nothing to the notes.
+    if crate::agents::switched_off(&crate::archive::config_dir(), agent) {
+        return 0;
+    }
     let _ = std::panic::catch_unwind(|| {
         let mut input = String::new();
         if std::io::stdin().take(1 << 20).read_to_string(&mut input).is_err() {
@@ -391,7 +395,7 @@ fn folder_of(path: &Path, cwd: Option<String>) -> String {
 /// transcript is looked for in Claude Code's folder `root`, then in Codex's `codex` when there is one.
 pub fn gather(
     config: &Path,
-    root: &Path,
+    root: Option<&Path>,
     codex: Option<&Path>,
     id: &str,
     name: &str,
@@ -408,8 +412,8 @@ pub fn gather(
         if archive.contains(&sid) {
             continue; // archived sessions are skipped entirely
         }
-        let found = Agent::Claude
-            .find_transcript(root, &sid)
+        let found = root
+            .and_then(|r| Agent::Claude.find_transcript(r, &sid))
             .map(|p| (Agent::Claude, p))
             .or_else(|| codex.and_then(|c| Agent::Codex.find_transcript(c, &sid)).map(|p| (Agent::Codex, p)));
         let Some((agent, path)) = found else { continue };
@@ -467,7 +471,7 @@ pub struct Env {
     pub root: PathBuf,
     /// Codex's folder, where its sessions' rollouts are; None when there is none to read.
     pub codex: Option<PathBuf>,
-    /// The AI programs a call may run on; None means the ones this computer has (`Providers::here`).
+    /// The AI programs a call may run on; None means the ones platoon uses here (`Providers::here`).
     pub providers: Option<crate::agents::Providers>,
 }
 
@@ -484,7 +488,7 @@ impl Env {
 
     /// The AI programs a call may run on.
     fn providers(&self) -> crate::agents::Providers {
-        self.providers.clone().unwrap_or_else(crate::agents::Providers::here)
+        self.providers.clone().unwrap_or_else(|| crate::agents::Providers::here(&self.config))
     }
 
     fn runner(&self) -> Runner {
@@ -562,7 +566,11 @@ pub fn update_once(env: &Env, id: &str) -> Round {
         return Round::NoNotes;
     }
     let mut state = State::load(&env.config, id);
-    let (material, seen) = gather(&env.config, &env.root, env.codex.as_deref(), id, &project.name, &state, &settings);
+    // A program switched off in platoon's settings is left out as if it weren't installed: its sessions aren't read.
+    let providers = env.providers();
+    let root = (!providers.is_off(Agent::Claude)).then_some(env.root.as_path());
+    let codex = env.codex.as_deref().filter(|_| !providers.is_off(Agent::Codex));
+    let (material, seen) = gather(&env.config, root, codex, id, &project.name, &state, &settings);
     if material.is_empty() {
         return Round::NothingNew;
     }
@@ -822,7 +830,7 @@ mod tests {
                 fs::create_dir_all(d).unwrap();
             }
             let fake = AiFake::new(name);
-            let providers = crate::agents::Providers { claude: Some(fake.script.clone()), codex: None };
+            let providers = crate::agents::Providers { claude: Some(fake.script.clone()), codex: None, off: Vec::new() };
             let env = Env { config, cache, root, codex: None, providers: Some(providers) };
             let mut s = Settings { tokens_enabled: true, ..Settings::default() };
             s.set_feature(FEATURE, true);
@@ -1213,7 +1221,7 @@ mod tests {
         r.session(&id, "s1", &refs, "I did all of that.");
         let settings = crate::settings::load(&r.env.config).0;
         // Never read before: the first message and the latest ones, capped.
-        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
+        let (m, seen) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &State::default(), &settings);
         assert_eq!(seen.get("s1"), Some(&30));
         let sent = &m.sessions[0];
         assert!(sent.first_read);
@@ -1225,20 +1233,20 @@ mod tests {
         // Read before: only what came after, under the per-session cap.
         let mut state = State::default();
         state.seen.insert("s1".into(), 28);
-        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
+        let (m, _) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &state, &settings);
         assert!(!m.sessions[0].first_read);
         assert_eq!(m.sessions[0].messages, [many[28].clone(), many[29].clone()]);
         // Nothing new at all.
         state.seen.insert("s1".into(), 30);
-        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
+        let (m, _) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &state, &settings);
         assert!(m.is_empty() && m.sessions.is_empty());
         // Filler ("yes", "ok") is not new material.
         r.session(&id, "s2", &["ok", "yes please", "thanks"], "Right.");
-        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &state, &settings);
+        let (m, seen) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &state, &settings);
         assert!(m.sessions.is_empty() && !seen.contains_key("s2"), "{m:?}");
         // An archived session is skipped entirely.
         Archive::open(&r.env.config).archive("s1", usage::now()).unwrap();
-        let (m, seen) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
+        let (m, seen) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &State::default(), &settings);
         assert!(m.sessions.is_empty() && seen.is_empty());
     }
 
@@ -1253,7 +1261,7 @@ mod tests {
         r.session(&id, "s1", &["Add a basket page to the shop"], &reply);
         let mut settings = crate::settings::load(&r.env.config).0;
         assert_eq!(settings.notes_reply_chars, 1500, "about 1500 characters unless the user says otherwise");
-        let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
+        let (m, _) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &State::default(), &settings);
         let got = m.sessions[0].reply.clone().unwrap();
         assert!(got.starts_with("Done.\n\nStill open:\n- Which card provider?\n- Does VAT go in the total?"), "{got}");
         assert_eq!(got.chars().count(), 1501, "cut at the setting, with a mark where");
@@ -1263,7 +1271,7 @@ mod tests {
         assert!(p.contains("Claude's last reply:\n  Done.\n\n  Still open:\n  - Which card provider?"), "{p}");
         for chars in [500u64, 3000] {
             settings.notes_reply_chars = chars;
-            let (m, _) = gather(&r.env.config, &r.env.root, None, &id, "Web shop", &State::default(), &settings);
+            let (m, _) = gather(&r.env.config, Some(&r.env.root), None, &id, "Web shop", &State::default(), &settings);
             assert_eq!(m.sessions[0].reply.as_ref().unwrap().chars().count() as u64, chars + 1);
         }
         // Everything else that reads a session still gets one line of the reply.
@@ -1454,7 +1462,7 @@ mod tests {
         fs::copy(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/conversation")).join(&name), day.join(&name)).unwrap();
         Projects::open(&r.env.config).assign(sid, Some(&id)).unwrap();
         let settings = crate::settings::load(&r.env.config).0;
-        let (m, _) = gather(&r.env.config, &r.env.root, Some(&codex), &id, "Web shop", &State::default(), &settings);
+        let (m, _) = gather(&r.env.config, Some(&r.env.root), Some(&codex), &id, "Web shop", &State::default(), &settings);
         let agents: Vec<Agent> = m.sessions.iter().map(|s| s.agent).collect();
         assert!(agents.contains(&Agent::Claude) && agents.contains(&Agent::Codex), "{agents:?}");
         let p = notesupdate::prompt(&Doc::parse(NOTES), &State::default(), &m);
@@ -1463,11 +1471,39 @@ mod tests {
     }
 
     #[test]
+    fn with_codex_switched_off_the_update_reads_only_claude_codes_sessions() {
+        let mut r = Rig::new("notes-codex-off");
+        let id = r.project(NOTES);
+        r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
+        let codex = crate::agents::tests::codex_with_models("notes-codex-off").root;
+        let sid = "01a20000-1111-7000-8000-00000000c0de";
+        let day = codex.join("sessions/2026/10/20");
+        fs::create_dir_all(&day).unwrap();
+        let name = format!("rollout-2026-10-20T09-00-00-{sid}.jsonl");
+        fs::copy(Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/conversation")).join(&name), day.join(&name)).unwrap();
+        Projects::open(&r.env.config).assign(sid, Some(&id)).unwrap();
+        r.env.codex = Some(codex.clone());
+        let both = crate::agents::Providers {
+            claude: Some(r.fake.script.clone()),
+            codex: Some(crate::agents::CodexAt { program: "/nonexistent/platoon-unit-test/codex".into(), root: codex }),
+            off: Vec::new(),
+        };
+        r.env.providers = Some(both.switched(&[Agent::Codex]));
+        r.fake.reply(1, r#"{"decisions":["Baskets are session based"]}"#);
+        let _ = update_once(&r.env, &id);
+        assert_eq!(r.fake.calls(), 1);
+        let sent = r.fake.stdin(1);
+        assert!(sent.contains("Add a basket page to the shop"), "{sent}");
+        assert!(!sent.contains("keeps the basket between visits") && !sent.contains("Codex's last reply"), "{sent}");
+    }
+
+    #[test]
     fn with_an_openai_notes_model_the_update_runs_on_codex_read_only() {
         let mut r = Rig::new("notes-codex");
         let codex = AiFake::codex("notes-codex");
         let root = crate::agents::tests::codex_with_models("notes-codex").root;
-        r.env.providers = Some(crate::agents::Providers { claude: Some(r.fake.script.clone()), codex: Some(codex.as_codex(&root)) });
+        r.env.providers =
+            Some(crate::agents::Providers { claude: Some(r.fake.script.clone()), codex: Some(codex.as_codex(&root)), off: Vec::new() });
         let id = r.project(NOTES);
         r.session(&id, "s1", &["Add a basket page to the shop"], "Done.");
         let mut s = crate::settings::load(&r.env.config).0;

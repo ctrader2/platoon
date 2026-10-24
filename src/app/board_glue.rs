@@ -76,6 +76,9 @@ impl Facts for AppFacts<'_> {
     fn not_merged(&self, project: &str, number: u32) -> bool {
         self.app.not_merged(project, number).is_some()
     }
+    fn switched_off(&self, project: &str, t: &Ticket) -> Option<Agent> {
+        self.app.task_switched_off(project, t)
+    }
 }
 
 impl App {

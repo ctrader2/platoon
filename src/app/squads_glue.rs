@@ -493,6 +493,11 @@ impl App {
             self.attach(pid);
             return;
         }
+        // Its program is switched off: a running session is still opened (above), but none is started again.
+        if let Some(agent) = self.task_switched_off(&project, &t) {
+            self.notify(task_switched_off_refusal(number, agent));
+            return;
+        }
         // Running somewhere platoon doesn't host (someone resumed it by hand): a second copy would fight it.
         if let Some(session) = t.session_id()
             && let Some(l) = self.live_now().into_iter().find(|l| l.id == session)
@@ -521,6 +526,14 @@ impl App {
         });
         true
     }
+}
+
+/// What `enter` says on a task whose session isn't running, while the program it runs in is switched off.
+pub(super) fn task_switched_off_refusal(number: u32, agent: Agent) -> String {
+    format!(
+        "#{number} runs in {0}, which is switched off in platoon's settings, so its session wasn't started again. Switch {0} back on to go on with it.",
+        agent.name()
+    )
 }
 
 /// What `after_worktree` says when Codex couldn't be asked to trust task `number`'s worktree `root`: the task starts

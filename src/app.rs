@@ -47,6 +47,7 @@ mod handoff_glue;
 mod merged_glue;
 mod newsession_glue;
 mod notes_glue;
+mod programs_glue;
 mod projects_glue;
 mod smart_glue;
 mod spent_glue;
@@ -61,6 +62,7 @@ pub use editor_glue::{EdTarget, NO_EDITOR};
 pub use handoff_glue::{HandoffBox, HandoffState};
 pub use newsession_glue::AgentPick;
 pub use notes_glue::{Changes, EditorPick, FileEdit, FileOf, NotesEdit, NotesWindow};
+pub use programs_glue::ProgramState;
 pub use projects_glue::{
     AssignOpt, AssignPick, LookEdit, NameBox, NamePurpose, PStat, PTABS, Pane, TOP_SESSIONS, TOP_SQUADS, TOP_TASKS, TOPS,
 };
@@ -699,7 +701,11 @@ pub struct App {
     program: String,
     /// The program that runs a conversation of Codex's, read once too.
     codex_program: String,
-    /// The AI programs this computer has (read once): what decides the models offered and what a call runs on.
+    /// The AI programs this computer has (read once), whatever the settings say: what the settings screen's Programs
+    /// show, and where a running task of a program switched off is still found.
+    installed: Providers,
+    /// The AI programs platoon uses: `installed` less the ones switched off in the settings (`sync_providers`). What
+    /// decides the rows listed, the models offered and what a call runs on.
     providers: Providers,
     guard_on: bool,
     /// What `view` and `counts` were computed from: (filter, tab, generation, top tab, projects tab, open
@@ -791,7 +797,8 @@ impl App {
         let cache = usage::cache_dir();
         let indexer = Indexer::spawn(reader.root(), Some(codex.root()), &cache);
         let mut app = Self::build(reader, Some(codex), cache, archive::config_dir(), indexer, true);
-        app.providers = Providers::here();
+        app.installed = Providers::installed_here();
+        app.sync_providers();
         app.rounded = detect_rounded();
         app.plain_marker = detect_plain_marker_with(&|k| std::env::var(k).ok());
         app.clipboard = Clipboard::from_env();
@@ -965,6 +972,7 @@ impl App {
             apply_after: None,
             program: Agent::Claude.program(),
             codex_program: Agent::Codex.program(),
+            installed: Providers::default(),
             providers: Providers::default(),
             guard_on: false,
             view_for: (String::new(), usize::MAX, 0, 0, 0, None),
@@ -980,13 +988,15 @@ impl App {
         app.theme = app.settings.get().theme(&app.themes);
         // A unit test's app has Claude Code, and Codex when it was given a Codex folder that is there; never the real
         // `codex` (`set_providers_for_test` gives it a stand-in).
-        app.providers = Providers {
+        app.installed = Providers {
             claude: Some(app.program.clone()),
             codex: app.codex.as_ref().filter(|c| c.root().is_dir()).map(|c| CodexAt {
                 program: if cfg!(test) { "/nonexistent/platoon-unit-test/codex".into() } else { app.codex_program.clone() },
                 root: c.root().to_path_buf(),
             }),
+            off: Vec::new(),
         };
+        app.sync_providers();
         // Real inputs (running hosts, the guard setting) come with `refresh` (`new` calls it at once); until then assume none.
         app.refresh_with(Vec::new(), false);
         app.say_keys_problems();
@@ -997,7 +1007,7 @@ impl App {
         &self.settings
     }
 
-    /// The AI programs this computer has.
+    /// The AI programs platoon uses: the ones this computer has, less the ones switched off in the settings.
     pub fn providers(&self) -> &Providers {
         &self.providers
     }
@@ -1055,6 +1065,9 @@ impl App {
         let themes_changed = !matches!(self.mode, Mode::Themes) && self.themes.refresh();
         if changed || themes_changed {
             self.sync_theme();
+        }
+        if changed {
+            self.sync_providers();
         }
         changed
     }
@@ -1688,7 +1701,9 @@ impl App {
     fn build_sessions(&self, live: &HashMap<&str, Vec<&Live>>) -> Vec<Session> {
         // The same id can be saved under two project folders; the most recently active file wins.
         let mut latest: HashMap<&str, &Arc<Entry>> = HashMap::new();
-        for e in self.indexer.entries.values() {
+        // A program switched off in the settings is left out as if it weren't installed: its conversations aren't listed,
+        // running or not (a running task of its stays on the Tasks tab).
+        for e in self.indexer.entries.values().filter(|e| !self.providers.is_off(e.agent)) {
             let slot = latest.entry(e.id.as_str()).or_insert(e);
             if (e.last_active_ms(), e.mtime) > (slot.last_active_ms(), slot.mtime) {
                 *slot = e;
@@ -1700,7 +1715,7 @@ impl App {
             .map(|e| self.session_from(e))
             .collect();
         for (id, ls) in live {
-            if !latest.contains_key(id) {
+            if !latest.contains_key(id) && !self.providers.is_off(ls[0].agent) {
                 out.push(self.session_from_live(ls[0]));
             }
         }
@@ -2308,6 +2323,10 @@ impl App {
             self.step_model_setting(which, step);
             return;
         }
+        if let Kind::Program(agent) = item.kind {
+            self.step_program_setting(agent, step);
+            return;
+        }
         if item.kind == Kind::Theme {
             match step {
                 Step::Cycle => self.open_theme_list(),
@@ -2750,10 +2769,12 @@ impl App {
     }
 
     /// Why a new session of `agent`'s can't be started for the conversation named `name`, in plain words: the agent
-    /// isn't installed here (any more). None when it is.
+    /// isn't installed here (any more), or is switched off in the settings. None when it can be.
     pub(crate) fn agent_gone(&self, agent: Agent, name: &str) -> Option<String> {
         self.providers.program(agent).is_none().then(|| {
-            format!("\"{name}\" is a {0} conversation, and {0} isn't installed on this computer, so nothing was started.", agent.name())
+            let why =
+                if self.providers.is_off(agent) { "is switched off in platoon's settings" } else { "isn't installed on this computer" };
+            format!("\"{name}\" is a {0} conversation, and {0} {why}, so nothing was started.", agent.name())
         })
     }
 

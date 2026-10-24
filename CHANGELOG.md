@@ -6,7 +6,22 @@ here.
 
 ## [Unreleased]
 
+### Added
+
+- **Switch Claude Code or Codex off.** Settings → General has a **Programs** group at the top: **Use Claude Code** and
+  **Use Codex**, each On or Off (**Not installed** where it isn't). A program switched off is left out as if it weren't
+  installed: its sessions leave the lists and the search, its plan usage the header, its models every model choice, `n`
+  stops asking which program, and `platoon setup` and the version notice skip it (setup says so, and leaves what it
+  added before in place). Nothing set to one of its models is swapped: it says **(Codex is switched off in Settings)**
+  and is refused until you pick another or switch it back on; the built-in squads run on the other program's model,
+  said openly. Nothing running is stopped: a running task of it stays on the Tasks tab, marked, and can be opened or
+  cancelled. Its hooks stay installed but do nothing meanwhile (no notes, no notes updates, no task hooks); Claude
+  Code's session guard keeps working. The last program on can't be switched off.
+
 ### Changed
+
+- **A Codex task's last message no longer calls its work uncommitted.** Codex's rules now say that platoon commits the
+  work when the session stops, so its final message says so instead of "not committed".
 
 - **Tasks run in Codex.** A squad whose model is one of Codex's runs its task in Codex (the model decides the program;
   a squad's model now goes round every model installed). The session starts in Codex's `workspace-write` sandbox with

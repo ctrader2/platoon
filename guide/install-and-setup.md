@@ -106,6 +106,11 @@ Claude Code isn't installed"). A squad of your own that names one of Claude's mo
 
 With neither Claude Code nor Codex, `platoon` and `platoon setup` say plainly that there is nothing to manage and where to
 get each, and change nothing.
+
+With both installed, either one can be [switched off](settings-and-keys.md#switching-a-program-off) in platoon's settings
+(General, Programs): platoon then treats it as not installed. `platoon setup` skips it and says so ("Codex is switched off
+in platoon's settings, so setup skipped it"), leaving what it added there before as it is, and with Claude Code switched
+off `platoon` starts without asking for Claude Code's steps.
 ### Running it again
 
 Running `platoon setup` again is harmless: finished steps show as already done, and a step whose command points at a

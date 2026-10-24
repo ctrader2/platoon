@@ -638,9 +638,13 @@ mod tests {
     fn codex_is_asked_for_its_version_only_where_it_is_installed_and_never_with_the_checks_off() {
         use crate::agents::{CodexAt, Providers};
         let d = tmp("checks-for");
-        let codex = Providers { claude: Some("claude".into()), codex: Some(CodexAt { program: "/x/codex".into(), root: d.clone() }) };
-        let claude_only = Providers { claude: Some("claude".into()), codex: None };
-        let codex_only = Providers { claude: None, codex: codex.codex.clone() };
+        let codex = Providers {
+            claude: Some("claude".into()),
+            codex: Some(CodexAt { program: "/x/codex".into(), root: d.clone() }),
+            off: Vec::new(),
+        };
+        let claude_only = Providers { claude: Some("claude".into()), codex: None, off: Vec::new() };
+        let codex_only = Providers { claude: None, codex: codex.codex.clone(), off: Vec::new() };
         let install = || Install::Other;
         let c = checks_for(&codex, Some("claude".into()), true, false, &d, install).expect("checks");
         assert_eq!((c.claude.as_deref(), c.codex.as_deref()), (Some("claude"), Some("/x/codex")));
@@ -648,6 +652,13 @@ mod tests {
         assert_eq!((c.claude.as_deref(), c.codex), (Some("claude"), None));
         let c = checks_for(&codex_only, Some("claude".into()), false, false, &d, install).expect("checks");
         assert_eq!((c.claude, c.codex.as_deref(), c.update_check), (None, Some("/x/codex"), false));
+        // A program switched off in platoon's settings isn't asked either.
+        let c =
+            checks_for(&codex.clone().switched(&[crate::agents::Agent::Codex]), Some("claude".into()), true, false, &d, install).unwrap();
+        assert_eq!((c.claude.as_deref(), c.codex), (Some("claude"), None));
+        let c =
+            checks_for(&codex.clone().switched(&[crate::agents::Agent::Claude]), Some("claude".into()), true, false, &d, install).unwrap();
+        assert_eq!((c.claude, c.codex.as_deref()), (None, Some("/x/codex")));
         // PLATOON_NO_UPDATE_CHECK: nothing at all.
         assert!(checks_for(&codex, Some("claude".into()), true, true, &d, install).is_none());
     }

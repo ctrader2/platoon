@@ -379,6 +379,7 @@ fn providers(claude: bool, codex: Option<&str>) -> crate::agents::Providers {
     crate::agents::Providers {
         claude: claude.then(|| "/nonexistent/platoon-unit-test/claude".to_string()),
         codex: codex.map(crate::agents::tests::codex_with_models),
+        off: Vec::new(),
     }
 }
 
