@@ -67,8 +67,10 @@ here.
   is. A Codex session platoon runs stops itself when idle like any other, its MCP servers read from Codex's
   `config.toml`. The smart features, the hand-off and task drafts stay on Claude Code's conversations for now.
 - **Project notes reach Codex sessions too.** `platoon setup` adds three hooks to Codex's `hooks.json` when Codex is
-  installed (notes at the start, changed notes with a message, notes updates after a turn); Codex asks you once to trust
-  them. They never block starting platoon, and `platoon uninstall` takes them out again.
+  installed (notes at the start, changed notes with a message, notes updates after a turn), and has Codex itself mark
+  exactly those three trusted, so Codex doesn't ask you about them (Codex writes the record in its own `config.toml`;
+  when it can't be asked, setup says why and Codex asks you once). They never block starting platoon, and
+  `platoon uninstall` takes them out again, with Codex's records of trusting them.
 - **The Squads tab** (`4`) lists every squad, built in or yours, with where it comes from and **needs fixing** when its
   file has something wrong, and shows the picked one beside the list: what it is for, its models, whether it plans first,
   its steps and what is wrong with it. `e` opens a squad's file in your editor (a built-in's text is copied into

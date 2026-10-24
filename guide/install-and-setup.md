@@ -74,9 +74,16 @@ codex`, `hook stop --agent codex`). A file that is already there is backed up fi
 everything else in it is left as it was. None of these steps is needed to start platoon, and if `hooks.json` can't be read setup says so and
 leaves it alone.
 
-**Codex asks you once to trust them.** Codex runs a hook only after you have reviewed it: the next time you start Codex,
-it says the new hooks need review. Approve them there, once. Until you do they simply don't run; nothing else in platoon
-waits for them. platoon never marks them trusted itself.
+**Setup marks them trusted in Codex.** Codex runs a hook only once it is trusted. Running `platoon setup` is your
+say-so for these three, so setup asks Codex itself to trust them, the way Codex's own "Trust" does: it starts Codex's
+app-server for a moment, and Codex works out each hook's fingerprint and writes the record in its own `config.toml`.
+Only the three hooks setup wrote are trusted, never another hook in the file or anywhere else. Each step's line says
+whether Codex trusts it now; running setup again when they are trusted changes nothing.
+
+If Codex can't be asked (it doesn't start, doesn't answer within 20 seconds, or answers something platoon doesn't
+understand), setup says why, and Codex asks you once instead: the next time you start Codex it says the new hooks need
+review. Approve them there. Until you do they simply don't run; nothing else in platoon waits for them, and the rest of
+setup is unaffected.
 
 After the checklist, setup asks one more question: may platoon use your Claude plan for its
 [smart features](tokens.md)? The answer is "no" unless you say yes; see
@@ -168,8 +175,10 @@ where it is, so you can run it again.
    hook of your own that also runs platoon is left alone, and the end names it so you can take that part out yourself.
    If `settings.json` can't be read, it stops before changing anything.
    **Codex's hooks.** It takes the three hooks setup added out of Codex's `hooks.json` the same way (backup first, as
-   `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks and Codex's record of which hooks
-   you trusted included. If that file can't be read, it says so and leaves it as it is.
+   `hooks.json.platoon-bak`), and leaves everything else of Codex's alone, your own hooks included. Codex's records that
+   those three hooks are trusted go too, taken out through Codex itself as setup put them in (the records of any other
+   hook stay); if Codex can't be asked, uninstall says the records were left (they are harmless: the hooks they name
+   are gone) and carries on. If `hooks.json` can't be read, it says so and leaves it as it is.
 4. **Folders.** The cache folder (`~/.cache/platoon`) always goes; the config folder (`~/.config/platoon`) only if you
    said yes. Folders older platoons made are removed too, if they are there: `~/.local/share/platoon` and
    `~/.local/share/fonts/platoon` (on macOS also `~/Library/Application Support/platoon`). The same environment

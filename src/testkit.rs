@@ -371,3 +371,74 @@ impl Drop for AiFake {
         let _ = fs::remove_dir_all(&self.dir);
     }
 }
+
+/// A stand-in for Codex's app-server (`tests/fake-codex-server.sh`): it records how it was started and every line it
+/// was sent, and answers each request from what the test gave it (`answer`). `initialize` is answered for `codex_home`
+/// from the start.
+pub struct CodexServerFake {
+    pub dir: PathBuf,
+    pub program: String,
+}
+
+impl CodexServerFake {
+    pub fn new(name: &str, codex_home: &std::path::Path) -> CodexServerFake {
+        let dir = removed_at_exit(std::env::temp_dir().join(format!(
+            "platoon-codexfake-{name}-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        )));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let body = include_str!("../tests/fake-codex-server.sh").replace("@DIR@", &dir.display().to_string());
+        let script = dir.join("codex");
+        fs::write(&script, body).unwrap();
+        fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let fake = CodexServerFake { program: script.display().to_string(), dir };
+        fake.result(
+            "initialize",
+            None,
+            json!({"codexHome": codex_home, "platformFamily": "unix", "platformOs": "linux", "userAgent": "fake"}),
+        );
+        fake
+    }
+
+    /// Answer the `n`-th request of `method` (every one when None) with `lines`, `@ID@` standing for its id.
+    pub fn answer(&self, method: &str, n: Option<usize>, lines: &str) {
+        let name = method.replace('/', "-");
+        let file = n.map_or(name.clone(), |n| format!("{name}.{n}"));
+        fs::write(self.dir.join(file), format!("{lines}\n")).unwrap();
+    }
+
+    /// Answer the `n`-th request of `method` with this `result`.
+    pub fn result(&self, method: &str, n: Option<usize>, result: serde_json::Value) {
+        self.answer(method, n, &Self::reply("result", result));
+    }
+
+    /// The line that answers a request with `{kind: value}` (`result` or `error`).
+    pub fn reply(kind: &str, value: serde_json::Value) -> String {
+        json!({"id": 0, (kind): value}).to_string().replacen("{\"id\":0,", "{\"id\":@ID@,", 1)
+    }
+
+    /// Every line it was sent, read as JSON.
+    pub fn requests(&self) -> Vec<serde_json::Value> {
+        let text = fs::read_to_string(self.dir.join("requests")).unwrap_or_default();
+        text.lines().map(|l| serde_json::from_str(l).unwrap_or_else(|e| panic!("{e}: {l}"))).collect()
+    }
+
+    /// The methods it was sent, in order (`initialized` too).
+    pub fn methods(&self) -> Vec<String> {
+        self.requests().iter().map(|r| r["method"].as_str().unwrap_or("").to_string()).collect()
+    }
+
+    /// The arguments it was started with, and the `CODEX_HOME` it had.
+    pub fn started_with(&self) -> (Vec<String>, String) {
+        let args = fs::read_to_string(self.dir.join("args")).unwrap_or_default().lines().map(String::from).collect();
+        (args, fs::read_to_string(self.dir.join("codex-home")).unwrap_or_default().trim().to_string())
+    }
+}
+
+/// One hook as Codex's `hooks/list` gives it.
+pub fn codex_hook(key: &str, event: &str, command: &str, source: &std::path::Path, hash: &str, trust: &str) -> serde_json::Value {
+    json!({"key": key, "eventName": event, "handlerType": "command", "command": command, "matcher": null, "timeoutSec": 600,
+        "sourcePath": source, "source": "user", "isManaged": false, "currentHash": hash, "trustStatus": trust})
+}

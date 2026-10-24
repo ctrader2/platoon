@@ -12,6 +12,7 @@ use std::{
 
 pub mod claude;
 pub mod codex;
+pub mod codex_server;
 
 /// An AI coding agent platoon runs. Closed on purpose: a new agent makes the compiler name every place that must
 /// answer for it.

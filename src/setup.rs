@@ -4,15 +4,17 @@
 //! Every step's status is computed from the settings file itself, so "done" is always a fact about the
 //! files as they are now: `platoon` refuses to start until every step is done, running `setup` again
 //! is harmless, and it repairs a step whose command points at a platoon that no longer exists. Codex's steps never
-//! block starting platoon.
+//! block starting platoon. Codex runs a hook only once it is trusted: setup has Codex itself trust exactly the hooks it
+//! wrote (`trust_codex`), and uninstall has it forget them (`forget_codex_trust`).
 
-use crate::agents::codex;
+use crate::agents::{codex, codex_server};
 use crate::{ai, settings};
 use serde_json::{Value, json};
 use std::{
     fs,
     io::{BufRead, Write},
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 pub struct Step {
@@ -105,6 +107,27 @@ pub struct CodexReport {
     pub backed_up: bool,
     /// Why the file was left alone: it is there but can't be read, or isn't a JSON object.
     pub error: Option<String>,
+    /// What Codex says about trusting these hooks, once it has been asked (`trust_codex`).
+    pub trust: Option<Trust>,
+}
+
+/// What became of asking Codex to trust platoon's hooks.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// What Codex says of each hook now, in `codex::HOOKS` order.
+    Asked(Vec<HookTrust>),
+    /// Codex couldn't be asked, or its answers made no sense: why, plainly.
+    Failed(String),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HookTrust {
+    /// Codex trusted it before this run.
+    Already,
+    /// Codex trusts it now because setup asked.
+    Now,
+    /// Codex doesn't say it trusts it (or doesn't list it).
+    Not,
 }
 
 fn read_settings(root: &Path) -> Option<Value> {
@@ -494,7 +517,7 @@ fn this_program() -> Result<(String, String), String> {
 /// it was. A file that is there but can't be read or isn't a JSON object is reported and left alone. Never written
 /// when nothing changed; otherwise backed up first (`hooks.json.platoon-bak`).
 pub fn run_codex(codex_root: &Path) -> CodexReport {
-    let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, backed_up: false, error: Some(error) };
+    let fail = |error: String| CodexReport { outcomes: Vec::new(), saved: None, backed_up: false, error: Some(error), trust: None };
     let path = codex::hooks_path(codex_root);
     let mut v: Value = match fs::read_to_string(&path) {
         Ok(text) => match serde_json::from_str::<Value>(&text) {
@@ -525,7 +548,7 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
         });
     }
     if outcomes.iter().all(|o| *o == Outcome::AlreadyDone) {
-        return CodexReport { outcomes, saved: None, backed_up: false, error: None };
+        return CodexReport { outcomes, saved: None, backed_up: false, error: None, trust: None };
     }
     let written = (|| -> Result<bool, String> {
         fs::create_dir_all(codex_root).map_err(|e| format!("couldn't make {}: {e}", codex_root.display()))?;
@@ -538,9 +561,78 @@ pub fn run_codex(codex_root: &Path) -> CodexReport {
         Ok(backed_up)
     })();
     match written {
-        Ok(backed_up) => CodexReport { outcomes, saved: Some(path), backed_up, error: None },
+        Ok(backed_up) => CodexReport { outcomes, saved: Some(path), backed_up, error: None, trust: None },
         Err(e) => fail(e),
     }
+}
+
+/// Have Codex trust platoon's own hooks in its `hooks.json` under `codex_root`, as Codex's own "Trust" does (running
+/// setup is the user's say-so): Codex's app-server (`program`) lists the hooks a session in `cwd` would run, and those
+/// in that very file whose event and command are exactly what this setup writes (`codex::HOOKS`, running this
+/// platoon), and that Codex doesn't trust yet or that changed since, are trusted in one write. No other hook is ever
+/// trusted, whoever wrote it. Codex is then asked again what it says of each. The whole exchange ends within `timeout`.
+pub fn trust_codex(codex_root: &Path, program: &str, cwd: &Path, timeout: Duration) -> Trust {
+    let asked = (|| -> Result<Vec<HookTrust>, String> {
+        let (_, quoted) = this_program()?;
+        let file = codex::hooks_path(codex_root);
+        let mine = |hooks: &[codex_server::Hook], event: &str, args: &str| -> Vec<codex_server::Hook> {
+            let command = format!("{quoted} {args}");
+            hooks.iter().filter(|h| h.is_in(&file) && h.is_event(event) && h.command == command).cloned().collect()
+        };
+        let trusted = |hs: &[codex_server::Hook]| !hs.is_empty() && hs.iter().all(|h| h.trust == codex_server::TrustStatus::Trusted);
+        let mut server = codex_server::Server::start(program, codex_root, timeout)?;
+        let before = server.hooks(cwd)?;
+        let to_trust: Vec<codex_server::Hook> = codex::HOOKS
+            .iter()
+            .flat_map(|(event, args)| mine(&before, event, args))
+            .filter(|h| matches!(h.trust, codex_server::TrustStatus::Untrusted | codex_server::TrustStatus::Modified))
+            .collect();
+        let after = if to_trust.is_empty() {
+            before.clone()
+        } else {
+            server.trust(&to_trust)?;
+            server.hooks(cwd)?
+        };
+        Ok(codex::HOOKS
+            .iter()
+            .map(|(event, args)| match (trusted(&mine(&before, event, args)), trusted(&mine(&after, event, args))) {
+                (true, true) => HookTrust::Already,
+                (false, true) => HookTrust::Now,
+                (_, false) => HookTrust::Not,
+            })
+            .collect())
+    })();
+    match asked {
+        Ok(each) => Trust::Asked(each),
+        Err(why) => Trust::Failed(why),
+    }
+}
+
+/// Have Codex forget that it trusted platoon's hooks, before `platoon uninstall` takes them out of `hooks.json` under
+/// `codex_root` (Codex names a hook's record after its place in that file, so it is asked while they are still
+/// there): the hooks Codex lists in that file whose command is exactly one setup writes (by any platoon's path, as
+/// `take_out_codex` takes them out) lose their records in `hooks.state`; every other record is written back as Codex
+/// read it, only if the file hasn't changed since. Ok: how many records went.
+pub fn forget_codex_trust(codex_root: &Path, program: &str, cwd: &Path, timeout: Duration) -> Result<usize, String> {
+    let file = codex::hooks_path(codex_root);
+    let mut server = codex_server::Server::start(program, codex_root, timeout)?;
+    let ours: Vec<String> = server
+        .hooks(cwd)?
+        .into_iter()
+        .filter(|h| h.is_in(&file) && codex::HOOKS.iter().any(|(event, args)| h.is_event(event) && exactly(&h.command, args)))
+        .map(|h| h.key)
+        .collect();
+    if ours.is_empty() {
+        return Ok(0);
+    }
+    let state = server.hook_state()?;
+    let (gone, kept): (serde_json::Map<String, Value>, serde_json::Map<String, Value>) =
+        state.records.into_iter().partition(|(key, _)| ours.contains(key));
+    if gone.is_empty() {
+        return Ok(0);
+    }
+    server.replace_hook_state(kept, state.version.as_deref())?;
+    Ok(gone.len())
 }
 
 /// What became of the question about the features that use tokens.
@@ -646,8 +738,11 @@ pub fn render_report(r: &Report, root: &Path, color: bool) -> String {
         out.push(saved_line(&root.join("settings.json"), r.backed_up.then_some("settings.json.platoon-bak")));
         out.push("Claude Code picks up hook changes live. Restart running sessions for the status line.".into());
     }
-    let codex_saved = r.codex.as_ref().is_some_and(|c| c.saved.is_some());
-    if r.saved.is_none() && !codex_saved {
+    let codex_changed = r
+        .codex
+        .as_ref()
+        .is_some_and(|c| c.saved.is_some() || matches!(&c.trust, Some(Trust::Asked(each)) if each.contains(&HookTrust::Now)));
+    if r.saved.is_none() && !codex_changed {
         out.push("Nothing to change.".into());
     }
     if let Some(c) = &r.codex {
@@ -666,7 +761,12 @@ fn saved_line(path: &Path, backup: Option<&str>) -> String {
     }
 }
 
-/// Codex's part of the report: its steps, the file written, and the one thing Codex asks of the user about them.
+/// Said when Codex will ask the user to trust platoon's hooks itself.
+const CODEX_WILL_ASK: &str = "Codex asks you once to trust these hooks: the next time you start Codex it says they need \
+                              review. Approve them there; until you do they don't run (nothing else in platoon waits for them).";
+
+/// Codex's part of the report: its steps and whether Codex trusts each, the file written, and, when Codex couldn't be
+/// made to trust them, the one thing it will ask of the user.
 fn render_codex(c: &CodexReport, color: bool) -> Vec<String> {
     let mut out = vec![String::new(), "Codex".to_string()];
     if let Some(e) = &c.error {
@@ -674,22 +774,56 @@ fn render_codex(c: &CodexReport, color: bool) -> Vec<String> {
         out.push(row(None, &step, &format!("skipped: {e}. platoon left the file alone: fix it and run `platoon setup` again"), color));
         return out;
     }
-    for (step, o) in CODEX_STEPS.iter().zip(&c.outcomes) {
-        out.push(match o {
-            Outcome::AlreadyDone => row(Some(true), step, "already done", color),
-            Outcome::Added => row(Some(true), step, "added", color),
-            Outcome::Repaired => row(Some(true), step, "repaired: its command pointed at a platoon that no longer exists", color),
-            Outcome::Skipped(why) => row(None, step, &format!("skipped: {why}"), color),
-        });
+    let each = match &c.trust {
+        Some(Trust::Asked(each)) => each.as_slice(),
+        _ => &[],
+    };
+    for (i, (step, o)) in CODEX_STEPS.iter().zip(&c.outcomes).enumerate() {
+        let done = match o {
+            Outcome::AlreadyDone => "already done".to_string(),
+            Outcome::Added => "added".to_string(),
+            Outcome::Repaired => "repaired: its command pointed at a platoon that no longer exists".to_string(),
+            Outcome::Skipped(why) => format!("skipped: {why}"),
+        };
+        let trust = match each.get(i) {
+            Some(HookTrust::Already) => "; Codex trusts it",
+            Some(HookTrust::Now) => "; now trusted in Codex",
+            Some(HookTrust::Not) => "; not trusted in Codex yet",
+            None => "",
+        };
+        let ok = if matches!(o, Outcome::Skipped(_)) { None } else { Some(true) };
+        out.push(row(ok, step, &format!("{done}{trust}"), color));
     }
+    out.push(String::new());
     if let Some(path) = &c.saved {
-        out.push(String::new());
         out.push(saved_line(path, c.backed_up.then_some("hooks.json.platoon-bak")));
-        out.push(
-            "Codex asks you once to trust these hooks: the next time you start Codex it says they need review. Approve them \
-             there; until you do they don't run (nothing else in platoon waits for them)."
-                .into(),
-        );
+    }
+    match &c.trust {
+        Some(Trust::Asked(each)) if each.contains(&HookTrust::Not) => {
+            out.push("Codex didn't confirm it trusts every one of them.".into());
+            out.push(CODEX_WILL_ASK.into());
+        }
+        Some(Trust::Asked(each)) if each.contains(&HookTrust::Now) => {
+            out.push("Setup had Codex mark them trusted, so they run in your Codex sessions without asking.".into());
+        }
+        Some(Trust::Asked(_)) => {}
+        Some(Trust::Failed(why)) if c.saved.is_some() => {
+            out.push(format!("platoon couldn't ask Codex to trust them: {why}."));
+            out.push(CODEX_WILL_ASK.into());
+        }
+        Some(Trust::Failed(why)) => {
+            out.push(format!("platoon couldn't ask Codex whether it trusts them: {why}."));
+            out.push(
+                "If you haven't trusted them yet, Codex asks you once the next time it starts: approve them there; until \
+                 you do they don't run (nothing else in platoon waits for them)."
+                    .into(),
+            );
+        }
+        None if c.saved.is_some() => out.push(CODEX_WILL_ASK.into()),
+        None => {}
+    }
+    if out.last().is_some_and(String::is_empty) {
+        out.pop();
     }
     out
 }
@@ -1103,6 +1237,197 @@ mod tests {
             json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]}});
         assert_eq!(take_out_codex(&mut only).removed, [CODEX_ENTRIES[2]]);
         assert_eq!(only, json!({}), "what platoon's hook left empty goes");
+    }
+
+    // ---- Codex trusting platoon's hooks, through a stand-in for its app-server ----
+
+    use crate::testkit::{CodexServerFake, codex_hook};
+    use std::time::Instant;
+
+    const ENOUGH: Duration = Duration::from_secs(20);
+
+    /// A Codex folder with setup's hooks.json just written in it (the report says so), the home folder sessions start
+    /// in, and a stand-in app-server for that Codex folder.
+    fn codex_world(name: &str) -> (PathBuf, PathBuf, CodexReport, CodexServerFake) {
+        let base = tmp(name);
+        let codex = base.join("codex");
+        let report = run_codex(&codex);
+        assert!(report.saved.is_some());
+        let fake = CodexServerFake::new(name, &codex);
+        (codex, base.join("home"), report, fake)
+    }
+
+    /// The command this setup writes for `args`, as Codex lists it.
+    fn ours(args: &str) -> String {
+        format!("{} {args}", this_program().unwrap().1)
+    }
+
+    /// Codex's list of platoon's three hooks, with these trust states.
+    fn our_hooks(codex: &Path, trust: [&str; 3]) -> Vec<Value> {
+        let file = codex.join("hooks.json");
+        let events = [("sessionStart", "session_start"), ("userPromptSubmit", "user_prompt_submit"), ("stop", "stop")];
+        codex::HOOKS
+            .iter()
+            .zip(events)
+            .zip(trust)
+            .enumerate()
+            .map(|(i, (((_, args), (event, snake)), t))| {
+                codex_hook(&format!("{}:{snake}:0:0", file.display()), event, &ours(args), &file, &format!("sha256:h{i}"), t)
+            })
+            .collect()
+    }
+
+    fn listed(hooks: &[Value], cwd: &Path) -> Value {
+        json!({"data": [{"cwd": cwd, "hooks": hooks, "warnings": [], "errors": []}]})
+    }
+
+    fn trusted_now(hooks: &[Value], how_many: usize) -> Vec<Value> {
+        let mut after = hooks.to_vec();
+        for h in after.iter_mut().take(how_many) {
+            *h.get_mut("trustStatus").unwrap() = json!("trusted");
+        }
+        after
+    }
+
+    #[test]
+    fn setup_has_codex_trust_exactly_its_own_new_or_changed_hooks_and_says_so() {
+        let (codex, cwd, mut report, fake) = codex_world("codex-trust");
+        let file = codex.join("hooks.json");
+        let mut before = our_hooks(&codex, ["untrusted", "modified", "trusted"]);
+        // Never setup's to trust: the user's own hook in the same file, setup's very command in another file (a
+        // project's), and setup's session-start command under another event.
+        before.push(codex_hook(&format!("{}:stop:1:0", file.display()), "stop", "my-stop", &file, "sha256:u", "untrusted"));
+        let project = cwd.join("repo/.codex/hooks.json");
+        let start = ours("hook session-start --agent codex");
+        before.push(codex_hook(
+            &format!("{}:session_start:0:0", project.display()),
+            "sessionStart",
+            &start,
+            &project,
+            "sha256:p",
+            "untrusted",
+        ));
+        before.push(codex_hook(&format!("{}:stop:2:0", file.display()), "stop", &start, &file, "sha256:w", "modified"));
+        // Codex's own chatter before the answer, and an answer to another id, are passed over.
+        let chatter = format!("{}\n{}", json!({"method": "configWarning", "params": {"summary": "x"}}), json!({"id": 99, "result": {}}));
+        fake.answer("hooks/list", Some(1), &format!("{chatter}\n{}", CodexServerFake::reply("result", listed(&before, &cwd))));
+        fake.result("hooks/list", Some(2), listed(&trusted_now(&before, 3), &cwd));
+        fake.result("config/batchWrite", None, json!({"status": "ok", "version": "sha256:v2", "filePath": codex.join("config.toml")}));
+
+        let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Now, HookTrust::Now, HookTrust::Already]));
+        let args: Vec<String> = ["app-server", "--listen", "stdio://"].map(String::from).to_vec();
+        assert_eq!(fake.started_with(), (args, codex.display().to_string()), "Codex's own folder, by CODEX_HOME");
+        assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list", "config/batchWrite", "hooks/list"]);
+        let sent = fake.requests();
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(sent[0], json!({"id": 1, "method": "initialize", "params": {"clientInfo": {"name": "platoon", "version": version}}}));
+        assert_eq!(sent[1], json!({"method": "initialized"}));
+        assert_eq!(sent[2], json!({"id": 2, "method": "hooks/list", "params": {"cwds": [cwd]}}));
+        let mut records = serde_json::Map::new();
+        for h in &before[..2] {
+            records.insert(h["key"].as_str().unwrap().to_string(), json!({"trusted_hash": h["currentHash"]}));
+        }
+        let edit = json!({"keyPath": "hooks.state", "value": records, "mergeStrategy": "upsert"});
+        assert_eq!(sent[3], json!({"id": 3, "method": "config/batchWrite", "params": {"edits": [edit], "reloadUserConfig": true}}));
+        assert_eq!(sent[4]["params"], sent[2]["params"], "asked again after");
+
+        // The report: each step says what Codex says of it, and Codex won't ask.
+        report.trust = Some(trust);
+        let shown = render_report(
+            &Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(report) },
+            &codex,
+            false,
+        );
+        assert_eq!(shown.matches("added; now trusted in Codex").count(), 2, "{shown}");
+        assert!(shown.contains("added; Codex trusts it"), "{shown}");
+        assert!(shown.contains("Setup had Codex mark them trusted, so they run in your Codex sessions without asking."), "{shown}");
+        assert!(!shown.contains("Codex asks you once") && !shown.contains("Nothing to change"), "{shown}");
+    }
+
+    #[test]
+    fn hooks_codex_already_trusts_are_not_written_again_and_setup_says_nothing_changed() {
+        let (codex, cwd, _, fake) = codex_world("codex-trusted");
+        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["trusted"; 3]), &cwd));
+        let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Already; 3]));
+        assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list"], "nothing written");
+        let mut again = run_codex(&codex);
+        again.trust = Some(trust);
+        let shown = render_report(
+            &Report { outcomes: vec![Outcome::AlreadyDone; 4], saved: None, backed_up: false, notes: vec![], codex: Some(again) },
+            &codex,
+            false,
+        );
+        assert_eq!(shown.matches("already done; Codex trusts it").count(), 3, "{shown}");
+        assert!(shown.contains("Nothing to change.") && !shown.contains("Codex asks you once") && !shown.contains("Saved"), "{shown}");
+    }
+
+    #[test]
+    fn when_codex_cant_be_asked_or_doesnt_trust_them_setup_says_codex_will_ask_once() {
+        type Arrange = fn(&CodexServerFake, &Path, &Path);
+        let short = Duration::from_millis(500);
+        let cases: [(&str, Arrange, Duration, &str); 7] = [
+            ("gone", |f, _, _| fs::remove_file(f.dir.join("codex")).unwrap(), ENOUGH, "isn't there"),
+            ("exits", |f, _, _| fs::write(f.dir.join("exit-at-once"), "").unwrap(), ENOUGH, "Codex stopped before it answered"),
+            ("silent", |_, _, _| {}, short, "Codex didn't answer within"),
+            ("garbage", |f, _, _| f.answer("hooks/list", None, "Welcome to Codex!\n{\"id\":"), short, "Codex didn't answer within"),
+            ("strange", |f, _, _| f.result("hooks/list", None, json!({"nope": 1})), ENOUGH, "something platoon doesn't understand"),
+            (
+                "refuses",
+                |f, codex, cwd| {
+                    f.result("hooks/list", None, listed(&our_hooks(codex, ["untrusted"; 3]), cwd));
+                    f.answer("config/batchWrite", None, &CodexServerFake::reply("error", json!({"message": "config.toml is read-only"})));
+                },
+                ENOUGH,
+                "Codex refused: config.toml is read-only",
+            ),
+            (
+                "elsewhere",
+                |f, _, _| f.result("initialize", None, json!({"codexHome": "/somewhere/else", "userAgent": "x"})),
+                ENOUGH,
+                "Codex is using another folder (/somewhere/else)",
+            ),
+        ];
+        for (name, arrange, timeout, want) in cases {
+            let (codex, cwd, mut report, fake) = codex_world(&format!("codex-fail-{name}"));
+            arrange(&fake, &codex, &cwd);
+            let started = Instant::now();
+            let trust = trust_codex(&codex, &fake.program, &cwd, timeout);
+            assert!(started.elapsed() < timeout + Duration::from_secs(6), "{name}: {:?}", started.elapsed());
+            assert!(matches!(&trust, Trust::Failed(why) if why.contains(want)), "{name}: {trust:?}");
+            assert!(!fake.methods().contains(&"config/batchWrite".to_string()) || name == "refuses", "{name}");
+            if let Ok(pid) = fs::read_to_string(fake.dir.join("pid")) {
+                assert!(!crate::procs::pid_alive(pid.trim().parse().unwrap()), "{name}: the stand-in was left running");
+            }
+            report.trust = Some(trust);
+            let shown = render_codex(&report, false).join("\n");
+            assert!(shown.contains("platoon couldn't ask Codex to trust them: ") && shown.contains(want), "{name}: {shown}");
+            assert!(shown.contains(CODEX_WILL_ASK), "{name}: {shown}");
+        }
+        // Asked, but Codex still doesn't say it trusts them.
+        let (codex, cwd, mut report, fake) = codex_world("codex-fail-untrusted");
+        fake.result("hooks/list", None, listed(&our_hooks(&codex, ["untrusted"; 3]), &cwd));
+        fake.result("config/batchWrite", None, json!({"status": "ok"}));
+        let trust = trust_codex(&codex, &fake.program, &cwd, ENOUGH);
+        assert_eq!(trust, Trust::Asked(vec![HookTrust::Not; 3]));
+        report.trust = Some(trust);
+        let shown = render_codex(&report, false).join("\n");
+        assert_eq!(shown.matches("added; not trusted in Codex yet").count(), 3, "{shown}");
+        assert!(shown.contains("Codex didn't confirm it trusts every one of them.") && shown.contains(CODEX_WILL_ASK), "{shown}");
+        // Codex couldn't be asked on a later run that changed nothing: said without claiming they are untrusted.
+        let again = CodexReport {
+            outcomes: vec![Outcome::AlreadyDone; 3],
+            saved: None,
+            backed_up: false,
+            error: None,
+            trust: Some(Trust::Failed("x".into())),
+        };
+        let shown = render_codex(&again, false).join("\n");
+        assert!(
+            shown.contains("couldn't ask Codex whether it trusts them: x.") && shown.contains("If you haven't trusted them yet"),
+            "{shown}"
+        );
     }
 
     #[test]

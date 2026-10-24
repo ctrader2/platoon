@@ -272,6 +272,7 @@ by_hand_notes() {
         say ""
         say "Codex's hooks still mention platoon. Open $hooks and delete each hook whose command ends in"
         say "\`platoon hook guard --agent codex\`, \`platoon hook session-start --agent codex\` or \`platoon hook stop --agent codex\`."
+        say "Codex's records that you trusted them ([hooks.state] entries naming $hooks, in Codex's config.toml) are harmless once they are gone."
     fi
 }
 

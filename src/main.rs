@@ -280,8 +280,15 @@ fn setup() -> io::Result<()> {
             // Codex's hooks, when Codex is on this computer. They never block anything, Claude Code's steps included.
             let codex = agents::codex::codex_root();
             let path = std::env::var("PATH").unwrap_or_default();
-            if agents::codex::installed(&codex, &agents::codex::program(), &path) {
-                report.codex = Some(setup::run_codex(&codex));
+            let program = agents::codex::program();
+            if agents::codex::installed(&codex, &program, &path) {
+                let mut c = setup::run_codex(&codex);
+                // Running setup is the user's say-so: Codex itself is asked to trust the hooks setup wrote.
+                if c.error.is_none() {
+                    let home = std::env::var_os("HOME").filter(|h| !h.is_empty()).map_or_else(|| codex.clone(), std::path::PathBuf::from);
+                    c.trust = Some(setup::trust_codex(&codex, &program, &home, agents::codex_server::TIME_BOX));
+                }
+                report.codex = Some(c);
             }
             // A Claude Code newer than the one this platoon was checked with is said here every time.
             report.notes.extend(versions::setup_line(versions::claude_program().as_deref(), versions::off_by_env()));

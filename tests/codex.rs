@@ -124,11 +124,17 @@ fn a_codex_conversation_open_elsewhere_is_never_opened_a_second_time() {
 
 /// `platoon <args>` with `input` on stdin, in this world, with no terminal: (exit code, stdout, stderr).
 fn run(w: &World, args: &[&str], input: &str) -> (i32, String, String) {
+    run_with(w, &[], args, input)
+}
+
+/// The same, with `extra` added to (or replacing) the world's environment.
+fn run_with(w: &World, extra: &[(&str, String)], args: &[&str], input: &str) -> (i32, String, String) {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let mut child = Command::new(BIN)
         .args(args)
         .envs(w.env())
+        .envs(extra.iter().cloned())
         .env("PLATOON_NO_UPDATE_CHECK", "1")
         .env("PLATOON_NOTES_HELPER", "off")
         .env("NO_COLOR", "1")
@@ -145,30 +151,108 @@ fn run(w: &World, args: &[&str], input: &str) -> (i32, String, String) {
     (out.status.code().unwrap_or(-1), String::from_utf8_lossy(&out.stdout).into_owned(), String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
+/// A stand-in for Codex's app-server (`fake-codex-server.sh`) in `<base>/<name>`, answering `initialize` for this
+/// world's Codex folder; it records what it is sent in `requests`.
+fn fake_server(w: &World, name: &str) -> PathBuf {
+    let dir = w.base.join(name);
+    fs::create_dir_all(&dir).unwrap();
+    let p = dir.join("codex");
+    fs::write(&p, include_str!("fake-codex-server.sh").replace("@DIR@", &dir.to_string_lossy())).unwrap();
+    fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    answer(&dir, "initialize", "result", serde_json::json!({"codexHome": w.codex}));
+    dir
+}
+
+/// Have the stand-in in `dir` answer the requests the file `file` stands for (`hooks-list.1`) with `{kind: value}`.
+fn answer(dir: &Path, file: &str, kind: &str, value: serde_json::Value) {
+    let line = serde_json::json!({"id": 0, (kind): value}).to_string().replacen("{\"id\":0,", "{\"id\":@ID@,", 1);
+    fs::write(dir.join(file), line + "\n").unwrap();
+}
+
+fn requests(dir: &Path) -> Vec<serde_json::Value> {
+    fs::read_to_string(dir.join("requests")).unwrap_or_default().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+}
+
+const OURS: [(&str, &str, &str, &str); 3] = [
+    ("SessionStart", "sessionStart", "session_start", "hook session-start --agent codex"),
+    ("UserPromptSubmit", "userPromptSubmit", "user_prompt_submit", "hook guard --agent codex"),
+    ("Stop", "stop", "stop", "hook stop --agent codex"),
+];
+
+/// What Codex's `hooks/list` says of platoon's three hooks in this world, each `trust`.
+fn listed(w: &World, trust: &str) -> serde_json::Value {
+    let file = w.codex.join("hooks.json");
+    let hooks: Vec<serde_json::Value> = OURS
+        .iter()
+        .map(|(_, event, snake, args)| {
+            serde_json::json!({"key": format!("{}:{snake}:0:0", file.display()), "eventName": event, "handlerType": "command",
+                "command": format!("{BIN} {args}"), "sourcePath": file, "source": "user", "isManaged": false,
+                "currentHash": format!("sha256:{snake}"), "trustStatus": trust})
+        })
+        .collect();
+    serde_json::json!({"data": [{"cwd": "/", "hooks": hooks, "warnings": [], "errors": []}]})
+}
+
 #[test]
-fn setup_adds_platoons_three_codex_hooks_says_codex_will_ask_to_trust_them_and_never_blocks_on_them() {
+fn setup_adds_platoons_three_codex_hooks_has_codex_trust_them_and_never_blocks_on_them() {
     let w = World::new("codex-setup");
-    let (code, out, err) = run(&w, &["setup"], "");
+    let server = fake_server(&w, "server");
+    answer(&server, "hooks-list.1", "result", listed(&w, "untrusted"));
+    answer(&server, "hooks-list", "result", listed(&w, "trusted"));
+    answer(&server, "config-batchWrite", "result", serde_json::json!({"status": "ok", "version": "v2"}));
+    let codex_bin = [("PLATOON_CODEX_BIN", server.join("codex").to_string_lossy().into_owned())];
+    let (code, out, err) = run_with(&w, &codex_bin, &["setup"], "");
     assert_eq!(code, 0, "{out}{err}");
-    assert!(out.contains("\nCodex\n") && out.contains("Codex asks you once to trust these hooks"), "{out}");
+    assert!(out.contains("\nCodex\n") && out.matches("added; now trusted in Codex").count() == 3, "{out}");
+    assert!(out.contains("Setup had Codex mark them trusted, so they run in your Codex sessions without asking."), "{out}");
+    assert!(!out.contains("Codex asks you once"), "{out}");
+    assert!(out.contains(&format!("Saved {}.\n", w.codex.join("hooks.json").display())), "no file before, no backup named: {out}");
     let v: serde_json::Value = serde_json::from_str(&fs::read_to_string(w.codex.join("hooks.json")).unwrap()).unwrap();
-    for (event, args) in [
-        ("SessionStart", "hook session-start --agent codex"),
-        ("UserPromptSubmit", "hook guard --agent codex"),
-        ("Stop", "hook stop --agent codex"),
-    ] {
+    for (event, _, _, args) in OURS {
         assert_eq!(v["hooks"][event][0]["hooks"][0]["command"], format!("{BIN} {args}"), "{event}");
     }
-    let (_, again, _) = run(&w, &["setup"], "");
-    assert!(again.matches("already done").count() >= 7, "{again}");
-    assert!(!again.contains("trust these hooks"), "nothing new to trust: {again}");
+    let sent = requests(&server);
+    let methods: Vec<&str> = sent.iter().map(|r| r["method"].as_str().unwrap()).collect();
+    assert_eq!(methods, ["initialize", "initialized", "hooks/list", "config/batchWrite", "hooks/list"]);
+    assert_eq!(sent[2]["params"], serde_json::json!({"cwds": [std::env::var("HOME").unwrap()]}));
+    let records = &sent[3]["params"]["edits"][0]["value"];
+    let file = w.codex.join("hooks.json");
+    let want: serde_json::Map<String, serde_json::Value> = OURS
+        .iter()
+        .map(|(_, _, snake, _)| (format!("{}:{snake}:0:0", file.display()), serde_json::json!({"trusted_hash": format!("sha256:{snake}")})))
+        .collect();
+    assert_eq!(records, &serde_json::Value::Object(want), "exactly platoon's three");
+    assert!(!w.codex.join("config.toml").exists(), "platoon itself never writes Codex's config.toml");
 
-    // An unreadable hooks file is said and left alone; Claude Code's steps are done and platoon starts.
+    // Again: Codex already trusts them, so nothing is written anywhere.
+    let (_, again, _) = run_with(&w, &codex_bin, &["setup"], "");
+    assert!(again.matches("already done").count() >= 7, "{again}");
+    assert_eq!(again.matches("already done; Codex trusts it").count(), 3, "{again}");
+    assert!(again.contains("Nothing to change.") && !again.contains("trust these hooks"), "nothing new to trust: {again}");
+    assert_eq!(requests(&server).len(), 8, "only asked: initialize, initialized, hooks/list");
+
+    // An unreadable hooks file is said and left alone, and Codex isn't asked; Claude Code's steps are done and platoon starts.
     fs::write(w.codex.join("hooks.json"), "{ broken").unwrap();
-    let (code, out, _) = run(&w, &["setup"], "");
+    let (code, out, _) = run_with(&w, &codex_bin, &["setup"], "");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("Codex hooks") && out.contains("left the file alone"), "{out}");
     assert_eq!(fs::read_to_string(w.codex.join("hooks.json")).unwrap(), "{ broken");
+    assert_eq!(requests(&server).len(), 8);
+}
+
+#[test]
+fn when_codex_cant_trust_platoons_hooks_setup_says_codex_will_ask_once_and_still_succeeds() {
+    let w = World::new("codex-setup-refused");
+    let server = fake_server(&w, "server");
+    answer(&server, "hooks-list", "result", listed(&w, "untrusted"));
+    answer(&server, "config-batchWrite", "error", serde_json::json!({"code": -32600, "message": "config.toml is read-only"}));
+    let codex_bin = [("PLATOON_CODEX_BIN", server.join("codex").to_string_lossy().into_owned())];
+    let (code, out, err) = run_with(&w, &codex_bin, &["setup"], "");
+    assert_eq!(code, 0, "{out}{err}");
+    assert!(out.contains("[✓] Status line") && out.contains("[✓] Session guard"), "Claude Code's steps as ever: {out}");
+    assert!(out.contains("platoon couldn't ask Codex to trust them: Codex refused: config.toml is read-only."), "{out}");
+    assert!(out.contains("Codex asks you once to trust these hooks") && out.contains("Approve them there"), "{out}");
+    assert!(!out.contains("now trusted"), "{out}");
 }
 
 #[test]

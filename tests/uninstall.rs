@@ -65,6 +65,8 @@ impl World {
             .env("PLATOON_UNINSTALL_TEST_HOME", &self.base)
             .env("PLATOON_UNINSTALL_TTY", &tty)
             .env("PLATOON_NO_UPDATE_CHECK", "1")
+            // Never the real Codex (its folder here is this world's `~/.codex`).
+            .env("PLATOON_CODEX_BIN", common::NO_REAL_CODEX[1].1)
             .env("NO_COLOR", "1")
             .stdin(Stdio::null());
         c

@@ -34,8 +34,14 @@ same for every session:
 | Notes updates | a `Stop` hook: `<platoon> hook stop --agent codex` | notes that a project's Codex session finished answering, so its notes can be brought up to date later |
 
 Before it writes the file, setup copies it to `hooks.json.platoon-bak` beside it (when there was one); everything else
-in the file stays as it was. Codex runs a hook only once you have trusted it: it asks you the next time it starts. platoon never writes Codex's
-`config.toml`, where Codex keeps that record (and the rest of its settings).
+in the file stays as it was.
+
+Codex runs a hook only once it is trusted, and keeps that record in its `config.toml` (under `[hooks.state]`, one entry
+per hook with its fingerprint). Setup has Codex write those records for its own three hooks, so Codex doesn't ask you
+about them: it asks Codex's app-server (`codex app-server`, started for a moment) to trust exactly those three, the way
+Codex's own "Trust" does, and Codex works out the fingerprints and writes the file itself. platoon never edits
+`config.toml`, and never trusts any other hook. [Uninstall](install-and-setup.md#uninstall) has Codex take the three
+records out again. If Codex can't be asked, setup says so and Codex asks you the next time it starts.
 
 ## No Claude Code skill
 
@@ -111,7 +117,8 @@ small marks its parts leave for each other.
 
 **Beside your repositories**: the `<repo>-worktrees/` folders for tasks, described [above](#tasks).
 
-**In Codex's folder**: only what setup adds to `hooks.json`, and the backup beside it.
+**In Codex's folder**: only what setup adds to `hooks.json`, the backup beside it, and the records that Codex trusts
+platoon's three hooks, which Codex writes in its `config.toml` when setup asks it to.
 
 **In Claude Code's folder**: only what setup adds to `settings.json`, and the backup beside it.
 platoon never writes Claude Code's conversations or its other files. Claude Code itself makes one empty folder under
@@ -158,7 +165,8 @@ running sessions in `~/.claude/sessions`, and your MCP servers in `~/.claude.jso
 commands to running processes). When Codex is installed it reads Codex's too, in `~/.codex` (or `$CODEX_HOME`): the saved
 sessions under `sessions/`, the names in `session_index.jsonl`, which conversations are open (who holds the lock files in
 `thread-writer-locks/`, looked up without touching them: on Linux in `/proc/locks`, on macOS with `lsof`), and, for idle
-stop, the MCP servers in `config.toml`. It never writes Codex's conversations or `config.toml`. These files are
+stop, the MCP servers in `config.toml`. It never writes Codex's conversations, and never edits `config.toml` itself
+(Codex writes the trust records for platoon's hooks, see [above](#in-codexs-hooks)). These files are
 not a documented interface, so **a Claude Code (or Codex) update can break platoon**. Codex support was checked with Codex
 0.163.0. It was last checked with Claude Code 2.1.288.
 When your Claude Code is newer than that, platoon says so once (it runs `claude --version` when it starts), and
@@ -178,7 +186,9 @@ If you'd rather do it yourself, or the uninstaller can't:
 1. **The settings.** Open Claude Code's `settings.json` and delete the `statusLine` entry (if its command ends in
    `platoon statusline`) and each hook whose command ends in `platoon hook guard`, `platoon hook session-start` or
    `platoon hook stop`. In Codex's `hooks.json`, delete each hook whose command ends in `platoon hook guard --agent
-   codex`, `platoon hook session-start --agent codex` or `platoon hook stop --agent codex`. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
+   codex`, `platoon hook session-start --agent codex` or `platoon hook stop --agent codex`; Codex's records that you
+   trusted them (the `[hooks.state."<...>/hooks.json:..."]` entries in its `config.toml`) are harmless once the hooks are
+   gone, and can go too. `settings.json.platoon-bak` is the file as it was before the last run of setup that changed it;
    copy it back only if nothing else has changed the file since.
    platoon won't start again without the status line and the guard: running `platoon setup` puts them back.
 2. **The skill**, if an earlier platoon installed it: delete `~/.claude/skills/to-tickets/`.

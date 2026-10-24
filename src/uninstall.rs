@@ -3,20 +3,22 @@
 //!
 //! What it does, in this order, so a "no" leaves everything as it was:
 //! 1. Look: platoon's entries in Claude Code's `settings.json` (`setup::take_out`, exactly what setup writes) and in
-//!    Codex's `hooks.json` (`setup::take_out_codex`; Codex's own records of which hooks the user trusted stay), the
-//!    sessions platoon's hosts are running, the worktrees tasks recorded, and the folders.
+//!    Codex's `hooks.json` (`setup::take_out_codex`), the sessions platoon's hosts are running, the worktrees tasks
+//!    recorded, and the folders.
 //! 2. Ask: whether to stop the running sessions (no: stop here, nothing changed; `--stop-sessions` says yes), then
 //!    whether to delete the config folder (the user's projects, notes, tasks and settings: default keep; `--all`
 //!    deletes it without asking). Answers come from the terminal (`/dev/tty`, so `curl ... | sh` can still ask); with
 //!    no terminal the sessions question is a no and the config folder is kept.
 //! 3. Act: stop the sessions (SIGTERM to the `claude` each host runs, as the app's own stop does), take the entries out
-//!    of settings.json (backup first, as setup does), delete the cache folder, the config folder when asked, and
-//!    older platoons' leftovers.
+//!    of settings.json (backup first, as setup does), have Codex forget it trusted platoon's hooks
+//!    (`setup::forget_codex_trust`, through Codex's app-server: Codex's other records stay, and when Codex can't be
+//!    asked they are left and said to be harmless) and take them out of `hooks.json`, delete the cache folder, the
+//!    config folder when asked, and older platoons' leftovers.
 //! 4. Say what was removed and what was kept, with the git commands for the task worktrees (never deleted).
 //!
 //! Claude Code's and Codex's conversations are never touched.
 
-use crate::agents::{claude, codex};
+use crate::agents::{claude, codex, codex_server};
 use crate::{setup, tickets, versions};
 use serde_json::Value;
 use std::{
@@ -71,6 +73,8 @@ pub struct Places {
     pub root: PathBuf,
     /// Codex's folder (`CODEX_HOME`, else `~/.codex`), there or not.
     pub codex: PathBuf,
+    /// Codex's program (`PLATOON_CODEX_BIN`, else `codex`), asked to forget the hooks it trusted.
+    pub codex_program: String,
     pub config: PathBuf,
     pub cache: PathBuf,
     /// Older platoons' folders, removed when they are there: (folder, what it was).
@@ -93,6 +97,7 @@ impl Places {
         Self {
             root: claude::claude_root(),
             codex: codex::codex_root(),
+            codex_program: codex::program(),
             config: crate::archive::config_dir(),
             cache: crate::usage::cache_dir(),
             leftovers,
@@ -472,6 +477,19 @@ pub fn run(
 
     if let Some((path, v, taken)) = &plan.codex_hooks {
         if !taken.removed.is_empty() {
+            // Asked while platoon's hooks are still in the file: Codex names its records after their places there.
+            match setup::forget_codex_trust(&places.codex, &places.codex_program, &places.home, codex_server::TIME_BOX) {
+                Ok(0) => {}
+                Ok(_) => removed.push(format!(
+                    "from Codex's settings ({}), by Codex itself: its records that you trusted platoon's hooks",
+                    codex::config_path(&places.codex).display()
+                )),
+                Err(why) => kept.push(format!(
+                    "Codex's records of trusting platoon's hooks, in {}: Codex couldn't be asked to remove them ({why}). They \
+                     are harmless: the hooks they name are gone",
+                    codex::config_path(&places.codex).display()
+                )),
+            }
             let backup = places.codex.join("hooks.json.platoon-bak");
             let written = fs::copy(path, &backup)
                 .map_err(|e| format!("couldn't back up {}: {e}", path.display()))
@@ -545,9 +563,7 @@ pub fn run(
     }
     kept.push("your conversations: they are Claude Code's, and `claude --resume` opens any of them".into());
     if places.codex.is_dir() {
-        kept.push(
-            "your Codex conversations and Codex's own settings, including which hooks you trusted: `codex resume` opens any of them".into(),
-        );
+        kept.push("your Codex conversations and Codex's own settings: `codex resume` opens any of them".into());
     }
 
     // ---- say what happened ----
@@ -608,6 +624,8 @@ mod tests {
         Places {
             root: home.join(".claude"),
             codex: home.join(".codex"),
+            // Never the real one: a test that wants Codex asked gives its stand-in.
+            codex_program: "/nonexistent/platoon-test/codex".into(),
             config: home.join(".config/platoon"),
             cache: home.join(".cache/platoon"),
             leftovers: vec![(home.join(".local/share/platoon"), "an older platoon's data folder")],
@@ -744,10 +762,129 @@ mod tests {
         assert_eq!(code, 0, "{out}");
         assert!(out.contains("from Codex's hooks") && out.contains("the Codex notes updates hook"), "{out}");
         assert!(out.contains("your Codex conversations and Codex's own settings"), "{out}");
+        // No Codex to ask: its records are left, said to be harmless, and nothing else waits for them.
+        assert!(
+            out.contains("Codex couldn't be asked to remove them (Codex's program (/nonexistent/platoon-test/codex) isn't there)"),
+            "{out}"
+        );
+        assert!(out.contains("They are harmless: the hooks they name are gone"), "{out}");
         let v: Value = serde_json::from_str(&fs::read_to_string(p.codex.join("hooks.json")).unwrap()).unwrap();
         assert_eq!(v, json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop"}]}]}}));
         assert_eq!(fs::read_to_string(p.codex.join("hooks.json.platoon-bak")).unwrap(), before);
         assert_eq!(fs::read_to_string(p.codex.join("config.toml")).unwrap(), "[hooks.state]\ntrusted = true\n", "Codex's own records stay");
+    }
+
+    /// platoon's three hooks in Codex's hooks.json (as an installed platoon wrote them) beside the user's own; Codex's
+    /// list of them, as a stand-in app-server gives it, with a hook of a project's that runs the same command.
+    fn codex_with_trusted_hooks(p: &Places) -> (Vec<String>, Value) {
+        fs::create_dir_all(&p.codex).unwrap();
+        let file = p.codex.join("hooks.json");
+        let hooks = json!({"hooks": {
+            "SessionStart": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook session-start --agent codex"}]}],
+            "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook guard --agent codex"}]}],
+            "Stop": [{"hooks": [{"type": "command", "command": "my-stop"}]}, {"hooks": [{"type": "command", "command": "/opt/x/bin/platoon hook stop --agent codex"}]}]
+        }});
+        fs::write(&file, serde_json::to_string_pretty(&hooks).unwrap()).unwrap();
+        let k = |rest: &str| format!("{}:{rest}", file.display());
+        let project = p.home.join("repo/.codex/hooks.json");
+        let listed = vec![
+            crate::testkit::codex_hook(
+                &k("session_start:0:0"),
+                "sessionStart",
+                "/opt/x/bin/platoon hook session-start --agent codex",
+                &file,
+                "sha256:a",
+                "trusted",
+            ),
+            crate::testkit::codex_hook(
+                &k("user_prompt_submit:0:0"),
+                "userPromptSubmit",
+                "/opt/x/bin/platoon hook guard --agent codex",
+                &file,
+                "sha256:b",
+                "trusted",
+            ),
+            crate::testkit::codex_hook(&k("stop:0:0"), "stop", "my-stop", &file, "sha256:c", "trusted"),
+            crate::testkit::codex_hook(&k("stop:1:0"), "stop", "/opt/x/bin/platoon hook stop --agent codex", &file, "sha256:d", "modified"),
+            crate::testkit::codex_hook(
+                &format!("{}:stop:0:0", project.display()),
+                "stop",
+                "/opt/x/bin/platoon hook stop --agent codex",
+                &project,
+                "sha256:e",
+                "trusted",
+            ),
+        ];
+        let keys = vec![k("session_start:0:0"), k("user_prompt_submit:0:0"), k("stop:1:0")];
+        (keys, json!({"data": [{"cwd": p.home, "hooks": listed, "warnings": [], "errors": []}]}))
+    }
+
+    #[test]
+    fn codex_forgets_it_trusted_platoons_hooks_and_keeps_every_other_record() {
+        let mut p = places(&tmp("codex-forget"));
+        let (ours, listed) = codex_with_trusted_hooks(&p);
+        let fake = crate::testkit::CodexServerFake::new("uninstall-forget", &p.codex);
+        p.codex_program = fake.program.clone();
+        fake.result("hooks/list", None, listed);
+        let file = p.codex.join("hooks.json");
+        let others = json!({
+            format!("{}:stop:0:0", file.display()): {"trusted_hash": "sha256:c"},
+            format!("{}:stop:0:0", p.home.join("repo/.codex/hooks.json").display()): {"trusted_hash": "sha256:e"},
+            "/gone/hooks.json:stop:0:0": {"trusted_hash": "sha256:old", "enabled": false}
+        });
+        let mut state = others.as_object().unwrap().clone();
+        for k in &ours {
+            state.insert(k.clone(), json!({"trusted_hash": "sha256:x"}));
+        }
+        let user = json!({"name": {"type": "user", "file": codex::config_path(&p.codex), "profile": null}, "version": "sha256:v1",
+            "config": {"model": "x", "hooks": {"state": state}}});
+        let system = json!({"name": {"type": "system", "file": "/etc/codex/config.toml"}, "version": "s", "config": {"hooks": {"state": {(ours[0].clone()): {}}}}});
+        fake.result("config/read", None, json!({"config": {}, "origins": {}, "layers": [system, user]}));
+        fake.result("config/batchWrite", None, json!({"status": "ok", "version": "sha256:v2", "filePath": codex::config_path(&p.codex)}));
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list", "config/read", "config/batchWrite"]);
+        let sent = fake.requests();
+        assert_eq!(sent[2]["params"], json!({"cwds": [p.home]}));
+        assert_eq!(sent[3]["params"], json!({"includeLayers": true}));
+        let edit = json!({"keyPath": "hooks.state", "value": others, "mergeStrategy": "replace"});
+        assert_eq!(sent[4]["params"], json!({"edits": [edit], "reloadUserConfig": true, "expectedVersion": "sha256:v1"}));
+        assert!(out.contains("by Codex itself: its records that you trusted platoon's hooks"), "{out}");
+        assert!(!out.contains("couldn't be asked"), "{out}");
+        let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(v, json!({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "my-stop"}]}]}}), "and the hooks went too");
+        assert!(!codex::config_path(&p.codex).exists(), "platoon never writes Codex's config.toml itself");
+
+        // Nothing of platoon's recorded: nothing is written.
+        let mut p = places(&tmp("codex-forget-none"));
+        let (_, listed) = codex_with_trusted_hooks(&p);
+        let fake = crate::testkit::CodexServerFake::new("uninstall-forget-none", &p.codex);
+        p.codex_program = fake.program.clone();
+        fake.result("hooks/list", None, listed);
+        fake.result(
+            "config/read",
+            None,
+            json!({"config": {}, "origins": {}, "layers": [{"name": {"type": "user"}, "version": "v", "config": {}}]}),
+        );
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 0, "{out}");
+        assert_eq!(fake.methods(), ["initialize", "initialized", "hooks/list", "config/read"]);
+        assert!(!out.contains("records"), "{out}");
+    }
+
+    #[test]
+    fn when_codex_refuses_to_forget_the_records_are_said_to_be_left_and_the_rest_goes() {
+        let mut p = places(&tmp("codex-forget-refused"));
+        set_up(&p, json!({}));
+        let (_, listed) = codex_with_trusted_hooks(&p);
+        let fake = crate::testkit::CodexServerFake::new("uninstall-refused", &p.codex);
+        p.codex_program = fake.program.clone();
+        fake.result("hooks/list", None, listed);
+        fake.answer("config/read", None, &crate::testkit::CodexServerFake::reply("error", json!({"message": "no config for you"})));
+        let (code, out) = uninstall(&p, &Options::default(), None, &mut no_stop());
+        assert_eq!(code, 0, "{out}");
+        assert!(out.contains("Codex couldn't be asked to remove them (Codex refused: no config for you)"), "{out}");
+        assert!(out.contains("from Codex's hooks") && settings(&p).get("statusLine").is_none(), "{out}");
     }
 
     #[test]

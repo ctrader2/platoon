@@ -43,6 +43,11 @@ platoon never opens it a second time or stops that window. Close it there (or qu
 platoon. Codex's shared background server can hold conversations too: quitting Codex lets them go. See
 [Codex conversations](sessions.md#codex-conversations).
 
+**Codex says platoon's hooks need review.** `platoon setup` normally has Codex trust its three hooks; when it couldn't,
+it said why. Approve them in Codex, or run `platoon setup` again once Codex works. A moved or reinstalled platoon changes
+the hooks' command, so Codex asks about them again: `platoon setup` repairs them and has Codex trust them again. See
+[Codex](install-and-setup.md#codex).
+
 **A Codex conversation opened in platoon asks whether to trust its folder.** That is Codex's own question, asked once
 per folder: answer it there, in the session. See [Codex conversations](sessions.md#codex-conversations).
 
