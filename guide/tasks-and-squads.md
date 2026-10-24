@@ -71,6 +71,11 @@ none of them. It doesn't ask again in that conversation unless you bring it up. 
 [`platoon setup`](install-and-setup.md#set-it-up-platoon-setup) (that is the SessionStart hook); sessions you start with
 plain `claude` outside platoon are not asked.
 
+A Codex session platoon starts or resumes is told the same, through platoon's Codex hook (which Codex runs with your
+first message), except that it asks in its reply, in plain words, and you answer with your next message. Codex keeps
+its work inside the session's folder, and `platoon task add` writes in platoon's own folder, so Codex asks you to allow
+that command: allow it, and the tasks are made. Sessions you start with plain `codex` outside platoon are not asked.
+
 ## Starting a task
 
 `s`, then `enter` on a squad. platoon:

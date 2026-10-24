@@ -293,7 +293,7 @@ fn h_hands_a_codex_conversation_on_to_a_new_codex_session_with_the_document_as_i
     let l = &app.launched[0];
     assert_eq!((l.agent, l.dir.as_str()), (Agent::Codex, folder.to_string_lossy().as_ref()));
     assert_eq!(l.args, ["--no-daemon".to_string(), doc.trim().to_string()]);
-    assert!(l.env.contains(&("PLATOON_PROJECT".to_string(), project)), "{:?}", l.env);
+    assert_eq!(l.env, [("PLATOON_PROJECT".to_string(), project), ("PLATOON_OFFER_TASKS".to_string(), "1".to_string())]);
     assert!(app.active_notice().is_some_and(|n| n.contains("Started a new session in the project \"Web shop\"")));
 }
 

@@ -164,7 +164,7 @@ fn the_hand_off_of_a_codex_conversation_starts_a_new_codex_session_with_the_docu
     let sent = fs::read_to_string(fake.join("calls/1.stdin")).unwrap();
     assert!(sent.contains("Read notes.txt and tell me the colour.") && sent.contains("Codex's last reply: CHECKED"), "{sent}");
     t.send(b"\x13");
-    t.wait_for_all(&["fake-codex args:--no-daemon # Session hand-off: work", "fake-codex env project:pweb"]);
+    t.wait_for_all(&["fake-codex args:--no-daemon # Session hand-off: work", "fake-codex env project:pweb offer:1"]);
     let args = fs::read_to_string(w.base.join("codex-args")).unwrap();
     assert!(
         args.starts_with("--no-daemon\n# Session hand-off: work\n\nThis is context for this session."),
@@ -200,13 +200,13 @@ fn run_with(w: &World, extra: &[(&str, String)], args: &[&str], input: &str) -> 
     let mut child = Command::new(BIN)
         .args(args)
         .envs(w.env())
-        .envs(extra.iter().cloned())
         .env("PLATOON_NO_UPDATE_CHECK", "1")
         .env("PLATOON_NOTES_HELPER", "off")
         .env("NO_COLOR", "1")
         .env_remove("PLATOON_SKIP_SETUP_CHECK")
         .env_remove("PLATOON_PROJECT")
         .env_remove("PLATOON_OFFER_TASKS")
+        .envs(extra.iter().cloned())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -341,7 +341,18 @@ fn codexs_hooks_hand_a_projects_notes_to_its_sessions_and_mark_the_notes_due_aft
     assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart");
     let context = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
     assert!(context.contains("\"Web\"") && context.contains("The shop's notes."), "{context}");
-    assert!(!context.contains("Ready to create tasks"), "the offer is Claude Code's");
+    assert!(!context.contains("Ready to create tasks"), "only a session platoon started is told to offer tasks");
+
+    // One platoon started (`PLATOON_OFFER_TASKS=1`, which reaches Codex's hooks from the process platoon started):
+    // the offer, worded for Codex, by this platoon's full path.
+    let offer = [("PLATOON_OFFER_TASKS", "1".to_string())];
+    let (code, out, _) = run_with(&w, &offer, &["hook", "session-start", "--agent", "codex"], &sample("SessionStart"));
+    assert_eq!(code, 0);
+    let v: serde_json::Value = serde_json::from_str(out.trim()).unwrap_or_else(|e| panic!("{e}: {out}"));
+    let context = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+    assert!(context.contains("ask the user once, plainly, at the end of your reply: \"Ready to create tasks?\""), "{context}");
+    assert!(context.contains(&format!("{BIN} task add --project pweb --folder /work/repo --squad <squad>")), "{context}");
+    assert!(!context.contains("AskUserQuestion") && !context.contains("The shop's notes."), "the notes were given already: {context}");
 
     // A prompt: nothing until the notes change, then the new version; never refused (Codex keeps one window itself).
     let (code, out, _) = run(&w, &["hook", "guard", "--agent", "codex"], &sample("UserPromptSubmit"));

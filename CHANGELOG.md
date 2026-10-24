@@ -14,6 +14,9 @@ here.
   description line. A Codex conversation is handed on to a new Codex session (`codex --no-daemon` with the document as
   its first message), in the same folder and project; when the conversation's program isn't installed any more, `h`
   says so and starts nothing.
+- **Codex sessions platoon starts offer to make tasks too.** A Codex session platoon starts or resumes is told, through
+  platoon's Codex hook, to ask once, in its reply, "Ready to create tasks?" when the conversation settles on work to
+  hand off, and on a yes to make them with `platoon task add` (Codex asks you to allow that command).
 
 - **Project notes have a model of their own, Sonnet by default.** Whatever the model for smart features is, a notes
   update uses **Model for project notes** (Settings, Projects tab), which is Sonnet unless you pick another. On Haiku, an

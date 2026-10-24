@@ -170,7 +170,11 @@ fn codex_host_for(
         return Err(format!("session {id} was run in {cwd}, which no longer exists"));
     }
     let projects = Projects::open(&crate::archive::config_dir());
-    let env: Vec<(&str, &str)> = projects.project_id_of(id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    let mut env: Vec<(&str, &str)> = projects.project_id_of(id).map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
+    // A session that is not a task's own is told to offer making tasks, as a Claude Code one is.
+    if crate::tickets::find_session(&crate::archive::config_dir(), id).is_none() {
+        env.push((crate::sessionhook::OFFER_ENV, "1"));
+    }
     host::launch(&host::Dirs::from_env(), agent, &agent.program(), &cwd, &agent.args(Start::Resume(id)), &env, rows, cols).map(|(h, _)| h)
 }
 

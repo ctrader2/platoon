@@ -2718,8 +2718,8 @@ impl App {
     fn launch_in(&mut self, agent: Agent, dir: String, start: Start, project: Option<&str>, place: bool) -> bool {
         let (rows, cols) = self.pty_size();
         let mut env: Vec<(&str, &str)> = project.map(|p| ("PLATOON_PROJECT", p)).into_iter().collect();
-        // The offer is worded for Claude Code (it names its question tool).
-        if agent == Agent::Claude && self.offers_tasks(start) {
+        // (The hook words the offer for the agent: `sessionhook::offer_text`.)
+        if self.offers_tasks(start) {
             env.push((crate::sessionhook::OFFER_ENV, "1"));
         }
         let at_ms = usage::now().saturating_sub(2) * 1000;

@@ -8,10 +8,12 @@
 //! `startup` or `clear`) that is in no project yet is placed in that one here, before platoon itself has seen it.
 //!
 //! A session platoon started in one of its hosts (new or resumed, never a task's own session) also carries
-//! `PLATOON_OFFER_TASKS=1`: the hook then adds a short instruction (`offer_text`) telling Claude to ask once,
+//! `PLATOON_OFFER_TASKS=1`: the hook then adds a short instruction (`offer_text`) telling the agent to ask once,
 //! when the conversation settles on concrete work, "Ready to create tasks?" and on a yes to make them itself with
 //! `platoon task add`. It is context the hook gives at every start, like the notes, so it needs nothing on the
-//! command line and works with any stand-in for `claude`.
+//! command line and works with any stand-in for `claude` or `codex`. Claude Code is told to ask with its question tool;
+//! Codex (whose question tool is only there in plan mode) is told to ask in its reply. Codex's own hook gets the same
+//! variables from the process platoon started it in, and fires with the first message.
 //!
 //! It must never get in a session's way: it is quick, prints nothing unless it has notes to give, and exits 0
 //! whatever happens.
@@ -100,7 +102,7 @@ pub fn session_start(
     let notes = project.as_ref().and_then(|p| notes_context(&projects, p, session, source, cache));
     let offer = offer_by.map(|exe| {
         let folder = Some(input.cwd.as_str()).filter(|c| !c.is_empty());
-        offer_text(exe, project.as_ref().map(|p| p.id.as_str()), folder, &crate::squads::all(config))
+        offer_text(agent, exe, project.as_ref().map(|p| p.id.as_str()), folder, &crate::squads::all(config))
     });
     let context = [notes, offer].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
     (!context.is_empty()).then(|| agent.hook_answer(&HookReply::StartContext(context)).stdout)
@@ -130,11 +132,12 @@ fn sh_word(text: &str) -> String {
     }
 }
 
-/// The instruction a session platoon hosts is given: ask once, when the conversation settles on concrete work,
-/// "Ready to create tasks?", and on a yes make each task with `exe task add` (the session's project and folder, the
-/// squad that suits it), then say how many and where they are, without starting them. The squads are the ones
-/// there are when the session starts, each with its one-line description.
-pub fn offer_text(exe: &str, project: Option<&str>, folder: Option<&str>, squads: &[crate::squads::Squad]) -> String {
+/// The instruction a session of `agent`'s platoon hosts is given: ask once, when the conversation settles on concrete
+/// work, "Ready to create tasks?" (Claude Code with its question tool, Codex plainly in its reply), and on a yes make
+/// each task with `exe task add` (the session's project and folder, the squad that suits it), then say how many and
+/// where they are, without starting them. The squads are the ones there are when the session starts, each with its
+/// one-line description.
+pub fn offer_text(agent: Agent, exe: &str, project: Option<&str>, folder: Option<&str>, squads: &[crate::squads::Squad]) -> String {
     let mut cmd = format!("{} task add", sh_word(exe));
     if let Some(p) = project {
         cmd.push_str(&format!(" --project {}", sh_word(p)));
@@ -143,10 +146,16 @@ pub fn offer_text(exe: &str, project: Option<&str>, folder: Option<&str>, squads
         cmd.push_str(&format!(" --folder {}", sh_word(f)));
     }
     cmd.push_str(" --squad <squad> --title '<short title>' <<'TASK'");
-    let mut t = String::from(
+    let how = match agent {
+        Agent::Claude => "ask the user once, with the AskUserQuestion tool: \"Ready to create tasks?\"",
+        // Codex's question tool is there in plan mode only: the question goes in the reply, and the answer comes as
+        // the user's next message.
+        Agent::Codex => "ask the user once, plainly, at the end of your reply: \"Ready to create tasks?\" and wait for their answer.",
+    };
+    let mut t = format!(
         "Making tasks (platoon, the app that started this session, asks this): when this conversation settles on concrete \
-         work that could be handed off and done on its own, ask the user once, with the AskUserQuestion tool: \"Ready to \
-         create tasks?\" Don't ask again in this conversation unless the user brings it up.\n\
+         work that could be handed off and done on its own, {how} Don't ask again in this conversation unless the user \
+         brings it up.\n\
          If they say yes, make each task with one command:\n\n",
     );
     t.push_str(&format!("{cmd}\n## What it should do\n\n<what to do and why, enough for someone who hasn't seen this conversation>\n\n## Done when\n\n- [ ] <a check anyone can make>\n- [ ] <another>\nTASK\n\n"));
@@ -169,10 +178,9 @@ pub fn run(agent: Agent) -> i32 {
             return;
         }
         let env = std::env::var("PLATOON_PROJECT").ok();
-        // The program to run is this one, by its full path: it works without platoon on the PATH. The offer is worded
-        // for Claude Code (it names its question tool).
+        // The program to run is this one, by its full path: it works without platoon on the PATH.
         let offer_by = std::env::var(OFFER_ENV)
-            .is_ok_and(|v| v == "1" && agent == Agent::Claude)
+            .is_ok_and(|v| v == "1")
             .then(|| std::env::current_exe().ok().map(|p| p.to_string_lossy().into_owned()))
             .flatten();
         if let Some(out) =
@@ -342,6 +350,28 @@ mod tests {
         assert!(mine.contains("- triage: Sort the bug reports.") && !mine.contains("- broken"), "{mine}");
         // Without the variable nothing is offered (and a session with nothing else to be told gets nothing).
         assert_eq!(r.run("loose", "startup", None), None);
+    }
+
+    #[test]
+    fn a_codex_session_is_told_to_ask_in_its_reply_and_make_the_tasks_the_same_way() {
+        let r = Rig::new("offer-codex");
+        let input = json!({"session_id": "01a20000-1111-7000-8000-00000000c0de", "source": "startup", "cwd": "/home/u/shop",
+            "hook_event_name": "SessionStart", "model": "gpt-6-luna", "permission_mode": "default"})
+        .to_string();
+        let out = session_start(Agent::Codex, &input, None, Some("/opt/platoon"), &r.config, &r.cache).unwrap();
+        let v: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SessionStart", "Codex's own answer: {out}");
+        let text = v["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        for want in [
+            "ask the user once, plainly, at the end of your reply: \"Ready to create tasks?\" and wait for their answer. Don't ask again",
+            "/opt/platoon task add --folder /home/u/shop --squad <squad> --title '<short title>' <<'TASK'",
+            "## Done when",
+            "- feature: ",
+            "Don't start them",
+        ] {
+            assert!(text.contains(want), "{want:?} missing from:\n{text}");
+        }
+        assert!(!text.contains("AskUserQuestion"), "Codex has no such tool: {text}");
     }
 
     #[test]
