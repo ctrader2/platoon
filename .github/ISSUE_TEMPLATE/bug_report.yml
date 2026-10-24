@@ -64,7 +64,7 @@ body:
     attributes:
       label: Its version
       description: The output of `claude --version`, `codex --version`, or both. Leave it empty for "Neither".
-      placeholder: 2.1.288 (Claude Code), codex-cli 0.163.0
+      placeholder: 2.1.288 (Claude Code), codex-cli 0.164.0
   - type: input
     id: os
     attributes:
