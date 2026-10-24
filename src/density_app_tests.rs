@@ -289,10 +289,11 @@ fn j_and_k_move_in_every_list_and_page_keys_move_a_screenful() {
     assert_eq!(app.pselected, 0);
     // The settings' entries.
     ch(&mut app, 's');
+    let at = app.setting;
     ch(&mut app, 'j');
-    assert_eq!(app.setting, 1);
+    assert_eq!(app.setting, at + 1);
     ch(&mut app, 'k');
-    assert_eq!(app.setting, 0);
+    assert_eq!(app.setting, at);
     key(&mut app, KeyCode::Esc);
     // The Tasks tab.
     let (_w, mut app) = on_the_tasks("d-jk-tasks");

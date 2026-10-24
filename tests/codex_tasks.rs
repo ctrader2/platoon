@@ -129,47 +129,96 @@ fn in_a_tasks_session_the_first_hook_names_the_session_and_a_push_waits_for_the_
     assert_eq!(lab.hook("task-before", reading), "");
 }
 
+/// `git <args>` in `dir`, its output.
+fn git(dir: &std::path::Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", "-c", "commit.gpgsign=false"])
+        .args(args)
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 #[test]
-fn with_codex_switched_off_a_tasks_hooks_end_at_once_saying_nothing_and_changing_nothing() {
+fn with_codex_switched_off_a_started_codex_task_keeps_working_its_stop_commits_and_its_work_is_checked() {
     let lab = Lab::new("codex-hooks-off");
-    // Codex installed (its folder is there) beside Claude Code, and switched off in platoon's settings.
-    let codex = lab.config.parent().unwrap().join("codex");
+    let base = lab.config.parent().unwrap().to_path_buf();
+    // Codex installed (its folder, its models) beside Claude Code, and switched off in platoon's settings.
+    let codex = base.join("codex");
     fs::create_dir_all(&codex).unwrap();
+    fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/src/testdata/codex/models_cache.json"), codex.join("models_cache.json")).unwrap();
     fs::write(lab.config.join("settings.json"), r#"{"use_codex": false}"#).unwrap();
+    // A stand-in `codex exec` for the check of the work, which says the work is done.
+    let fake = base.join("fake");
+    fs::create_dir_all(fake.join("calls")).unwrap();
+    let script = fake.join("codex");
+    fs::write(&script, include_str!("fake-codex-exec.sh").replace("@DIR@", &fake.display().to_string())).unwrap();
+    fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    fs::write(fake.join("reply.default"), r#"{"done":true,"boxes":[],"findings":[]}"#).unwrap();
+    // The task's repository and its worktree on task/1, where the session changed a file.
+    let shop = base.join("shop");
+    fs::create_dir_all(&shop).unwrap();
+    fs::write(shop.join("README"), "a shop\n").unwrap();
+    git(&shop, &["init", "-q"]);
+    git(&shop, &["add", "."]);
+    git(&shop, &["commit", "-q", "-m", "first"]);
+    let first = git(&shop, &["rev-parse", "HEAD"]);
+    let wt = base.join("shop-worktrees/task-1");
+    git(&shop, &["worktree", "add", "-q", "-b", "task/1", &wt.to_string_lossy()]);
+    fs::write(wt.join("basket.txt"), "a basket\n").unwrap();
+    let tasks = json!({"next": 2, "tasks": [{"number": 1, "title": "Basket", "file": "01-basket.md", "state": "working",
+        "folder": shop, "squad": "mine", "session": "pending:1:pweb", "started": 1, "created": 1, "updated": 1,
+        "worktree": {"path": wt, "branch": "task/1", "base": first}}]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), tasks.to_string()).unwrap();
+    // The squad it started with, on Codex's models, kept beside it.
+    let squads = lab.config.join("projects/pweb/tasks/01-work/squads");
+    fs::create_dir_all(&squads).unwrap();
+    fs::write(
+        squads.join("mine.md"),
+        "---\nname: Mine\ndescription: Ours\nmodel: gpt-6-luna\nverdict_model: gpt-6-luna\n---\n\n1. Do it.\n",
+    )
+    .unwrap();
     let id = "01a1aaaa-0000-7000-8000-000000000002";
-    let input = json!({"session_id": id, "turn_id": "t", "transcript_path": null, "cwd": "/w", "model": "gpt-6-luna",
-        "permission_mode": "default", "hook_event_name": "SessionStart", "source": "startup"});
-    let run = |name: &str| {
-        let started = Instant::now();
-        let mut child = lab.cmd(name, Some("1:pweb")).env("CODEX_HOME", &codex).env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1).spawn().unwrap();
-        // Ended without reading anything: it doesn't wait for its input.
-        let stdin = child.stdin.take();
-        let status = loop {
-            if let Some(s) = child.try_wait().unwrap() {
-                break s;
-            }
-            assert!(started.elapsed() < Duration::from_secs(5), "{name} waited");
-            std::thread::sleep(Duration::from_millis(5));
-        };
-        if let Some(mut stdin) = stdin {
-            let _ = stdin.write_all(input.to_string().as_bytes());
-        }
+    let run = |name: &str, input: Value| {
+        let mut child = lab
+            .cmd(name, Some("1:pweb"))
+            .env("CODEX_HOME", &codex)
+            .env("PLATOON_CODEX_BIN", &script)
+            .env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1)
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
         let out = child.wait_with_output().unwrap();
-        (status, out)
+        assert!(out.status.success(), "{name}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let tasks = || fs::read_to_string(lab.config.join("projects/pweb/tasks.json")).unwrap();
-    let (before, cache_before) = (tasks(), fs::read_dir(&lab.cache).unwrap().count());
-    for name in HOOKS {
-        let (status, out) = run(name);
-        assert!(status.success() && out.stdout.is_empty() && out.stderr.is_empty(), "{name}: {out:?}");
-    }
-    assert_eq!(tasks(), before, "the task is as it was: its session still not known");
-    assert_eq!(fs::read_dir(&lab.cache).unwrap().count(), cache_before, "nothing written");
-    // Switched on again, the first hook names the session as ever.
-    fs::write(lab.config.join("settings.json"), r#"{"use_codex": true}"#).unwrap();
-    let mut child =
-        lab.cmd("task-start", Some("1:pweb")).env("CODEX_HOME", &codex).env(NO_REAL_CLAUDE.0, NO_REAL_CLAUDE.1).spawn().unwrap();
-    child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
-    assert!(child.wait_with_output().unwrap().status.success());
+    let event = |name: &str, extra: Value| {
+        let mut v = json!({"session_id": id, "turn_id": "t", "transcript_path": null, "cwd": wt, "model": "gpt-6-luna",
+            "permission_mode": "default", "hook_event_name": name});
+        for (k, x) in extra.as_object().unwrap() {
+            v.as_object_mut().unwrap().insert(k.clone(), x.clone());
+        }
+        v
+    };
+    // The first hook names the session, as ever.
+    assert_eq!(run("task-start", event("SessionStart", json!({"source": "startup"}))), "");
     assert_eq!(lab.task()["session"], id);
+    // A push is still held back for the user.
+    let push = event("PreToolUse", json!({"tool_name": "Bash", "tool_input": {"command": "git push origin task/1"}, "tool_use_id": "c"}));
+    assert!(run("task-before", push).contains("\"deny\""));
+    assert_eq!(run("task-prompt", event("UserPromptSubmit", json!({"prompt": "not yet, carry on"}))), "");
+    // The stop: platoon commits the work on task/1, then the check runs on Codex, and the task is Done.
+    let said = run("task-stop", event("Stop", json!({"stop_hook_active": false, "last_assistant_message": "Added a basket."})));
+    assert!(said.trim().is_empty(), "{said}");
+    assert_eq!(git(&shop, &["log", "-1", "--format=%s", "task/1"]), "#1 Basket", "committed for it");
+    assert_eq!(git(&wt, &["status", "--short"]), "", "nothing left uncommitted");
+    let argv = fs::read_to_string(fake.join("calls/1.argv")).unwrap();
+    assert!(argv.starts_with("exec\n") && argv.contains("gpt-6-luna"), "checked on Codex: {argv}");
+    assert_eq!(lab.task()["state"], "done");
 }

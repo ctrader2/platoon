@@ -14,9 +14,10 @@ here.
   stops asking which program, and `platoon setup` and the version notice skip it (setup says so, and leaves what it
   added before in place). Nothing set to one of its models is swapped: it says **(Codex is switched off in Settings)**
   and is refused until you pick another or switch it back on; the built-in squads run on the other program's model,
-  said openly. Nothing running is stopped: a running task of it stays on the Tasks tab, marked, and can be opened or
-  cancelled. Its hooks stay installed but do nothing meanwhile (no notes, no notes updates, no task hooks); Claude
-  Code's session guard keeps working. The last program on can't be switched off.
+  said openly. Nothing running is stopped: a task already started in it stays on the Tasks tab, marked, keeps working
+  in full (its hooks, the commit at each stop and the check of the work), and can be opened or cancelled; a new one
+  doesn't start. Its notes hooks go quiet meanwhile (no notes, no notes updates); Claude Code's session guard keeps
+  working. The last program on can't be switched off.
 
 ### Changed
 

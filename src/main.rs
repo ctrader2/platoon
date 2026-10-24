@@ -1896,14 +1896,12 @@ mod tests {
         app.on_mouse(MouseEvent { kind: MouseEventKind::Moved, column: x, row: y, modifiers: KeyModifiers::NONE });
     }
 
-    /// The settings open on "Stop idle sessions after", the first of the numeric entries (the settings open on the
-    /// first of the Programs, above the Theme entry).
+    /// The settings open on "Stop idle sessions after", the first of the numeric entries (the Theme entry above
+    /// it, below the Programs, is what the settings open on).
     fn open_numeric_settings(app: &mut App) {
         ch(app, 's');
-        assert_eq!(app.setting, 0, "the settings open on the first of the Programs");
-        for _ in 0..=P {
-            key(app, KeyCode::Down);
-        }
+        assert_eq!(app.setting, P, "the settings open on the Theme entry");
+        key(app, KeyCode::Down);
         assert_eq!(app.setting, P + 1);
     }
 
@@ -2351,6 +2349,7 @@ mod tests {
         // 80x24 has room for the selected entry and its explanation, whole, and a window of the others: the list
         // scrolls as the selection moves, and only the selected entry is explained.
         let mut term = Terminal::new(TestBackend::new(80, 24)).unwrap();
+        ch(&mut app, 'g');
         for (i, item) in ITEMS.iter().enumerate() {
             while app.setting < i {
                 key(&mut app, KeyCode::Down);
@@ -2596,11 +2595,12 @@ mod tests {
             let ctx = format!("{cols}x{rows}\n{shown}");
             // Where every explanation doesn't fit with room to breathe, the selected one does (and is whole).
             let roomy = rows >= 100;
-            // Below 30 rows the list scrolls: the selected entry (the first) is whole, the others come as far as there is room.
+            // Below 30 rows the list scrolls: the selected entry (Theme, which the settings open on) is whole, the others
+            // come as far as there is room.
             let all_names = rows >= 30;
             for (i, item) in ITEMS.iter().enumerate() {
-                assert!(text.contains(item.name) || !(all_names || i == 0), "{ctx}");
-                let must_explain = roomy || i == 0;
+                assert!(text.contains(item.name) || !(all_names || i == app.setting), "{ctx}");
+                let must_explain = roomy || i == app.setting;
                 assert!(!must_explain || text.contains(item.explain), "explanation cut off or mangled at {ctx}");
             }
             for want in ["2 hours", "2 days", "Ignore MCP servers", "‹", "›", "enter next choice", "esc back", file] {
@@ -2635,6 +2635,7 @@ mod tests {
         let w = World::new("set-mcp-render");
         let mut app = w.app();
         ch(&mut app, 's');
+        ch(&mut app, 'g');
         for (cols, rows) in [(80, 24), (100, 30), (140, 30), (60, 26), (60, 24)] {
             for _ in 0..P + 3 {
                 key(&mut app, KeyCode::Down); // the MCP entry is the one under test, and (small terminals) the one explained
@@ -2762,9 +2763,9 @@ mod tests {
                 assert!(flat(&text).contains(&format!("platoon needs at least 60×14 — this window is 60×{rows}")), "60x{rows}\n{text}");
                 continue;
             }
-            assert!(text.contains("Use Claude Code") && text.contains("esc back"), "60x{rows}\n{text}");
-            if rows >= 10 {
-                assert!(text.contains("Use Codex"), "60x{rows}\n{text}");
+            assert!(text.contains("Theme") && text.contains("esc back"), "the selected entry and the way back: 60x{rows}\n{text}");
+            if rows >= 16 {
+                assert!(text.contains("Use Claude Code") && text.contains("Stop idle sessions after"), "60x{rows}\n{text}");
             }
         }
         // With little room only the selected setting explains itself, and moving on moves the explanation.
@@ -3031,12 +3032,9 @@ mod tests {
         std::fs::write(w.config.join("themes").join(name), text).unwrap();
     }
 
-    /// From the settings as they open (on the first of the Programs), down to the Theme entry.
+    /// The settings open on the Theme entry: check it.
     fn to_theme_row(app: &mut App) {
-        for _ in 0..P {
-            key(app, KeyCode::Down);
-        }
-        assert_eq!(app.items()[app.setting].name, "Theme");
+        assert_eq!(app.items()[app.setting].name, "Theme", "the settings open on the Theme entry");
     }
 
     fn open_themes(app: &mut App) {

@@ -142,11 +142,8 @@ fn the_back_key_cancels_the_settings_the_theme_list_a_box_the_search_and_a_quest
     ctrl_space(&mut app);
     assert!(matches!(app.mode, Mode::List));
     assert_eq!(app.settings().get(), before, "nothing changed");
-    // The theme list (the Theme row is below the two Programs): back puts the old theme back, then back again closes the
-    // settings.
+    // The theme list: back puts the old theme back, then back again closes the settings.
     ch(&mut app, 's');
-    key(&mut app, KeyCode::Down);
-    key(&mut app, KeyCode::Down);
     key(&mut app, KeyCode::Enter);
     assert!(matches!(app.mode, Mode::Themes));
     key(&mut app, KeyCode::Down);

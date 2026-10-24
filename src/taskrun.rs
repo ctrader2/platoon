@@ -605,19 +605,15 @@ pub fn run_hook(name: &str, agent: Agent) -> i32 {
     if agent == Agent::Codex && task.is_none() {
         return 0;
     }
-    // A program switched off in platoon's settings: its tasks' sessions keep running, and their hooks do nothing (no
-    // state changes, no check of the work, no tokens).
-    let config = crate::archive::config_dir();
-    if crate::agents::switched_off(&config, agent) {
-        return 0;
-    }
     let said = std::panic::catch_unwind(|| {
         let mut input = String::new();
         std::io::stdin().take(1 << 20).read_to_string(&mut input).ok()?;
         let at = Places {
-            providers: crate::agents::Providers::here(&config),
-            config: config.clone(),
+            config: crate::archive::config_dir(),
             cache: crate::usage::cache_dir(),
+            // A task already started keeps working when its program is switched off in platoon's settings: its hooks
+            // and the check of its work run on what this computer has, whatever the switches say.
+            providers: crate::agents::Providers::installed_here(),
             check_timeout: verdict::TIMEOUT,
             task: task.clone(),
         };

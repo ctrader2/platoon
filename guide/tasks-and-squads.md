@@ -215,8 +215,9 @@ The same goes for a program [switched off](settings-and-keys.md#switching-a-prog
 built-ins say **GPT-6-Luna, since Claude Code is switched off**, and a squad of your own on one of its models says
 **(Codex is switched off in Settings)** and doesn't start. A task already running in a program switched off keeps
 running: its row on the Tasks tab says **Codex is switched off**, `enter` opens its session and `c` cancels it, but it
-isn't started or continued again until you switch the program back on. Its hooks do nothing meanwhile, so its state
-stays as it was and its work isn't checked.
+isn't started or continued again until you switch the program back on. While its session runs it keeps working in
+full: its state follows its session, pushing waits for your yes, a plan waits for your answer, a Codex task's work is
+committed at each stop, and the work is checked before it is Done.
 
 ## Squads
 

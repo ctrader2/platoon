@@ -916,11 +916,12 @@ fn the_settings_have_six_tabs_that_tab_shift_tab_and_a_click_switch_with_the_sho
     app.refresh_for_test();
     let smart_tab = screen(&mut term, &app);
     assert!(smart_tab.lines().find(|l| l.contains(settings::TABS[2].items[0].name)).unwrap().contains("On"), "{smart_tab}");
-    // Esc closes the settings from any tab, and they open again on the first.
+    // Esc closes the settings from any tab, and they open again on the first, on its Theme entry.
     key(&mut app, KeyCode::Esc);
     assert!(matches!(app.mode, Mode::List));
     key(&mut app, KeyCode::Char('s'));
-    assert_eq!((app.settings_tab, app.setting), (0, 0));
+    let theme = settings::TABS[0].items.iter().position(|i| i.name == "Theme").unwrap();
+    assert_eq!((app.settings_tab, app.setting), (0, theme));
 }
 
 #[test]

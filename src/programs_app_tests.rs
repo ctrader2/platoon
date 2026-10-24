@@ -81,7 +81,12 @@ fn the_settings_open_on_the_programs_each_on_off_or_not_installed_and_the_last_o
     let file = || fs::read_to_string(w.config.join("settings.json")).ok();
     let before = file();
     key(&mut app, KeyCode::Char('s'));
-    assert_eq!(app.setting, 0, "the settings open on the first of the Programs");
+    assert_eq!(app.items()[app.setting].name, "Theme", "the settings open on Theme, below the Programs");
+    // So a habitual `s` then `enter` opens the theme list, and never switches a program off.
+    key(&mut app, KeyCode::Enter);
+    assert!(matches!(app.mode, Mode::Themes));
+    key(&mut app, KeyCode::Esc);
+    assert!(matches!(app.mode, Mode::Settings));
     let mut term = Terminal::new(TestBackend::new(100, 40)).unwrap();
     let shown = screen(&mut term, &app);
     let lines: Vec<&str> = shown.lines().collect();
@@ -90,6 +95,8 @@ fn the_settings_open_on_the_programs_each_on_off_or_not_installed_and_the_last_o
     assert!(at("Use Codex") < at("Everything else") && at("Everything else") < at("Theme"), "{shown}");
     assert!(lines[at("Use Claude Code")].contains("‹") && lines[at("Use Claude Code")].contains(" On "), "{shown}");
     assert!(lines[at("Use Codex")].contains("Not installed"), "{shown}");
+    settings_on(&mut app, 0);
+    let shown = screen(&mut term, &app);
     assert!(flat(&shown).contains("Off: platoon leaves Claude Code out, as if it weren't installed."), "{shown}");
 
     key(&mut app, KeyCode::Left);

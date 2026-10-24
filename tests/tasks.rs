@@ -422,3 +422,56 @@ fn a_projects_screen_lists_its_sessions_and_tasks_apart_and_enter_shows_a_task_t
     t.send(&[3]);
     t.wait_exit();
 }
+
+#[test]
+fn with_claude_code_switched_off_a_started_claude_tasks_hooks_still_move_it_and_its_work_is_checked() {
+    let lab = Lab::new("tasks-claude-off");
+    // Claude Code switched off in platoon's settings, with Codex installed (its folder is there), so it really is off.
+    let mut settings: Value = serde_json::from_str(&fs::read_to_string(lab.config.join("settings.json")).unwrap()).unwrap();
+    settings.as_object_mut().unwrap().insert("use_claude_code".into(), json!(false));
+    fs::write(lab.config.join("settings.json"), settings.to_string()).unwrap();
+    let codex = lab.base.join("codex");
+    fs::create_dir_all(&codex).unwrap();
+    // A task at work in the shop on the Feature squad (Claude's models), as its session's hooks would have left it.
+    let v = json!({"next": 2, "tasks": [{"number": 1, "title": "Text mails", "file": "01-text-mails.md", "state": "working",
+        "folder": lab.shop, "squad": "feature", "session": "s-7", "started": 1, "created": 1, "updated": 1}]});
+    fs::write(lab.config.join("projects/pweb/tasks.json"), v.to_string()).unwrap();
+    fs::create_dir_all(lab.config.join("projects/pweb/tasks")).unwrap();
+    fs::write(lab.config.join("projects/pweb/tasks/01-text-mails.md"), "## What it should do\n\nOrder mails have a text part.\n").unwrap();
+    let hook = |name: &str, input: Value| {
+        let mut child = Command::new(BIN)
+            .args(["hook", name])
+            .envs(lab.env())
+            .envs(common::NO_REAL_CODEX)
+            .env("CODEX_HOME", &codex)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(input.to_string().as_bytes()).unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{name}: {out:?}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+    let ev = |name: &str, extra: Value| {
+        let mut v = json!({"session_id": "s-7", "hook_event_name": name, "cwd": lab.shop, "permission_mode": "plan"});
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        v
+    };
+    // Its plan: Needs you, a plan to approve, kept beside the task.
+    hook("task-plan", ev("PreToolUse", json!({"tool_name": "ExitPlanMode", "tool_input": {"plan": "## Plan\n\n1. Add the text part.\n"}})));
+    assert_eq!((lab.task(1)["state"].as_str(), lab.task(1)["need"].as_str()), (Some("needs_you"), Some("plan")));
+    let plan = lab.config.join("projects/pweb/tasks/01-work/plan.md");
+    assert_eq!(fs::read_to_string(plan).unwrap(), "## Plan\n\n1. Add the text part.\n");
+    // Approved: Working again. Then the turn ends and the check of the work, on Claude Code, says done.
+    hook("task-tool", ev("PostToolUse", json!({"tool_name": "ExitPlanMode"})));
+    assert_eq!(lab.task(1)["state"], "working");
+    fs::write(lab.fake.join("reply"), r#"{"done":true,"boxes":[],"findings":[]}"#).unwrap();
+    let said = hook("task-stop", ev("Stop", json!({"permission_mode": "acceptEdits", "last_assistant_message": "Added it."})));
+    assert!(said.trim().is_empty(), "{said}");
+    let argv = fs::read_to_string(lab.fake.join("calls/1.argv")).unwrap();
+    assert!(argv.contains("--model\nfable\n"), "checked on Feature's verdict model: {argv}");
+    assert_eq!(lab.task(1)["state"], "done");
+}

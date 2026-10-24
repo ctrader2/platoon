@@ -2195,11 +2195,12 @@ impl App {
         self.mode = Mode::Picker;
     }
 
-    /// Show the settings screen, starting from what is on disk now.
+    /// Show the settings screen, starting from what is on disk now, on the Theme entry (below the Programs, so a
+    /// habitual `s` then `enter` never switches a program off).
     fn open_settings(&mut self) {
         self.refresh_settings();
         self.settings_tab = 0;
-        self.setting = 0;
+        self.setting = SETTINGS_TABS[0].items.iter().position(|i| i.kind == Kind::Theme).unwrap_or(0);
         self.setting_top.set(0);
         self.mode = Mode::Settings;
     }

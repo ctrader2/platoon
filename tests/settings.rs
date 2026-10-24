@@ -50,9 +50,9 @@ fn s_opens_the_settings_a_change_is_saved_at_once_and_the_rest_of_the_file_is_ke
     assert!(text.contains("2 hours") && text.contains("Off") && text.contains("Archive sessions after"), "{text}");
     assert_eq!(saved(&base)["idle_stop_minutes"], 120, "opening the screen writes nothing");
 
-    // A key: down to the first of the numeric settings (the two Programs and the Theme are above it), then right arrow
-    // steps 2 hours -> 4 hours, saved straight away.
-    t.send(b"\x1b[B\x1b[B\x1b[B");
+    // A key: down to the first of the numeric settings (the Theme is above it), then right arrow steps 2 hours -> 4 hours,
+    // saved straight away.
+    t.send(b"\x1b[B");
     t.send(b"\x1b[C");
     t.wait_for("4 hours");
     until("the change to reach the file", || saved(&base)["idle_stop_minutes"] == 240);
@@ -90,7 +90,6 @@ fn a_damaged_file_opens_on_the_standard_values_and_the_first_change_keeps_a_copy
     t.send(b"s");
     t.wait_for("couldn't be read");
     assert_eq!(fs::read_to_string(base.join("config/settings.json")).unwrap(), "{ oops");
-    t.send(b"\x1b[B\x1b[B\x1b[B"); // to "Stop idle sessions after"
     t.send(b"l");
     until("a fresh file", || base.join("config/settings.json").exists() && saved_ok(&base));
     assert_eq!(fs::read_to_string(base.join("config/settings.json.bak")).unwrap(), "{ oops");
@@ -113,9 +112,9 @@ fn the_mcp_choice_is_listed_explained_and_saved_from_the_real_screen_at_80_colum
     t.send(b"s");
     t.wait_for("Idle stop and MCP servers");
     t.wait_for("Changes are saved and apply immediately.");
-    // With this many entries only the selected one is explained at this height: move to the MCP entry, the sixth
-    // (the two Programs and the theme are above it).
-    t.send(b"\x1b[B\x1b[B\x1b[B\x1b[B\x1b[B");
+    // With this many entries only the selected one is explained at this height: move to the MCP entry, three below the
+    // Theme entry the settings open on.
+    t.send(b"\x1b[B\x1b[B\x1b[B");
     t.wait_for("helper programs");
     let text = t.text();
     assert!(text.contains("Ignore MCP servers") && text.contains("MCP servers are"), "{text}");
@@ -161,7 +160,7 @@ fn the_theme_in_settings_json_colors_the_running_ui_and_an_edit_applies_without_
     t.wait_bg(1, 1, Rgb(0x1e, 0x1e, 0x2e));
     t.send(b"s");
     t.wait_for("Stop idle sessions after");
-    t.send(b"\x1b[B\x1b[B\x1b[B\x1b[C"); // down past the two Programs and the Theme row, then right
+    t.send(b"\x1b[B\x1b[C"); // down from the Theme row, then right
     until("the change to reach the file", || saved(&base)["idle_stop_minutes"] == 240);
     assert_eq!(saved(&base)["theme"], "one-i-made-up");
     assert_eq!(saved(&base)["keep"], "me");
@@ -211,10 +210,9 @@ fn the_theme_list_previews_on_the_real_screen_esc_puts_it_back_and_enter_saves_a
     t.wait_bg(1, 1, mocha.0);
     t.wait_fg(0, 1, mocha.1); // the "p" of the header's title
 
-    // s, then Enter on the Theme row (below the two Programs): the list opens beside the real screen, which stays as it was.
+    // s, then Enter on the Theme row (the first): the list opens beside the real screen, which stays as it was.
     t.send(b"s");
     t.wait_for("Settings file:");
-    t.send(b"\x1b[B\x1b[B");
     t.send(b"\r");
     t.wait_for("sample");
     t.wait_for_all(&["1 theme file skipped", "Bright Day:"]);

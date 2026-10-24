@@ -45,18 +45,21 @@ exactly as if it weren't installed:
 - `platoon setup` skips it and says so: **Codex is switched off in platoon's settings, so setup skipped it.** What setup
   added to it before stays as it is; taking that out is [`platoon uninstall`](install-and-setup.md#uninstall)'s job.
   The notice about a newer version skips it too.
-- Its hooks stay installed but do nothing while it is off: no notes are handed to its sessions, its sessions' turns don't
-  update a project's notes, and a task's hooks in it do nothing (its state doesn't change and its work isn't checked).
-  Claude Code's session guard keeps working all the same: one copy of a conversation writing at a time is about safety.
+- Its notes hooks stay installed but go quiet while it is off: no notes are handed to its sessions, and its sessions'
+  turns don't update a project's notes. Claude Code's session guard keeps working all the same: one copy of a
+  conversation writing at a time is about safety. A task already started in it keeps working in full (see below).
 
 Nothing is quietly swapped. A setting or a squad of your own that names one of its models says so, for example **GPT-6-Luna
 (Codex is switched off in Settings)**, and what would use it is refused, saying why, until you pick another model or
 switch the program back on. The built-in squads you haven't changed run on the other program's model, and say so: **GPT-6-Luna,
 since Claude Code is switched off** (as on a [computer with only Codex](tasks-and-squads.md#on-a-computer-with-only-codex)).
 
-Nothing that is running is stopped. Its sessions keep running in platoon; a running task of it stays on the
-[Tasks tab](tasks-and-squads.md#the-tasks-tab), marked **Codex is switched off**, and `enter` still opens its session and
-`c` still cancels it. A task in it that isn't running isn't started or continued: `enter` says why.
+Nothing that is running is stopped. Its sessions keep running in platoon. A task already started in it stays on the
+[Tasks tab](tasks-and-squads.md#the-tasks-tab), marked **Codex is switched off**, and keeps working as ever while its
+session runs: its state follows its session, pushing still waits for your yes, a plan still waits for your answer, a
+Codex task's work is still committed at each stop, and the work is still checked. `enter` still opens its session and `c`
+still cancels it. A task in it whose session isn't running isn't started or continued: `enter` says why. A new task on a
+squad whose model is one of its models doesn't start.
 
 The last program on can't be switched off, since platoon needs one: the screen says so ("Claude Code can't be switched
 off while Codex is off too: platoon needs one of them. Switch Codex on first."). A program that isn't installed can't be
@@ -153,9 +156,9 @@ In two groups:
 
 ### Moving around the settings
 
-`↑` `↓` pick a setting on the tab showing (the popup opens on Use Claude Code, the first of the Programs); `←` `→` (or `h`
-`l`, `-` `+`) step through its choices (on a program, `←` is Off and `→` On); `enter` goes to the next choice and wraps
-around to the first one (Off, or Count MCP servers). On Theme, `enter`
+`↑` `↓` pick a setting on the tab showing (the popup opens on Theme, below the Programs); `←` `→` (or `h` `l`, `-` `+`)
+step through its choices (on a program, `←` is Off and `→` On); `enter` goes to the next choice and wraps around to the
+first one (Off, or Count MCP servers). On Theme, `enter`
 opens the theme list instead, and `←` `→` switch to the previous or next theme and save it at once. With the mouse: click a
 row to select it, the `‹` `›` buttons to step, or the value itself to go to the next choice (on Theme, to open the list).
 
